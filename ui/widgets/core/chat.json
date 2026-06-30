@@ -1,0 +1,37 @@
+{
+  "type": "core.chat",
+  "version": "0.1.0",
+  "title": "对话",
+  "description": "Roleplay conversation view: streamed messages with virtualized scrollback.",
+  "propsSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "title": { "type": "string" },
+      "placeholder": { "type": "string" }
+    }
+  },
+  "stateSchema": {
+    "type": "object",
+    "properties": {
+      "messages": {
+        "type": "array",
+        "description": "Windowed message slice; full history lives in the Gateway.",
+        "items": {
+          "type": "object",
+          "required": ["id", "role", "text"],
+          "properties": {
+            "id": { "type": "string" },
+            "role": { "type": "string", "enum": ["user", "assistant", "system", "narrator"] },
+            "text": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "intents": ["chat.send", "chat.regenerate", "chat.loadMore"],
+  "capabilities": ["read:state"],
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}

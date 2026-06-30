@@ -1,0 +1,18 @@
+{
+  "type": "core.emotion",
+  "version": "0.1.0",
+  "title": "情绪",
+  "description": "Character emotion/affinity gauge.",
+  "stateSchema": {
+    "type": "object",
+    "properties": {
+      "emotion": { "type": "integer", "minimum": 0, "maximum": 100 },
+      "label": { "type": "string" },
+      "lastChange": { "type": "string" }
+    }
+  },
+  "capabilities": ["read:state"],
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}

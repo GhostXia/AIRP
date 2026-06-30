@@ -1,0 +1,106 @@
+[
+  {
+    "scriptName": "LENI::CoT思维链清除 (think)",
+    "findRegex": "<think>[\\s\\S]*?</think>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "隐藏 Gemini/Claude 原生 <think> 块。LLM 在思考时输出，用户不可见。"
+  },
+  {
+    "scriptName": "LENI::CoT思维链清除 (thinking)",
+    "findRegex": "<thinking>[\\s\\S]*?</thinking>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "LENI 人格化思维链用 <thinking> 包裹，同样需要清除。"
+  },
+  {
+    "scriptName": "LENI::状态栏清除 (magazine_header)",
+    "findRegex": "<magazine_header>[\\s\\S]*?</magazine_header>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": true,
+    "_comment": "🥤状态栏 prompt 开启时 AI 在正文前输出状态栏。默认禁用：状态栏本身有展示价值，由 UI 层决定是否渲染。如需纯文本流则启用此条。"
+  },
+  {
+    "scriptName": "LENI::小剧场清除 (wine)",
+    "findRegex": "<wine>[\\s\\S]*?</wine>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": true,
+    "_comment": "🍍微醺小剧场 fan-fiction 片段用 <wine>...</wine> 包裹。默认禁用：fan-fiction 有独立展示价值。如需主线纯净流则启用。"
+  },
+  {
+    "scriptName": "LENI::交互选择面板清除 (choice_panel)",
+    "findRegex": "<details>[\\s\\S]*?</details>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": true,
+    "_comment": "交互 choice_panel 嵌套在 <details> 内，含 A/B/C/D/E 剧情选项。禁用时由 xml_unpacker 或 UI 提取渲染为按钮；启用时从文本流中删除。"
+  },
+  {
+    "scriptName": "LENI::锚点日记YAML清除",
+    "findRegex": "```yaml[\\s\\S]*?```",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": true,
+    "_comment": "🥃锚点日记 prompt 触发时 AI 输出 YAML 格式存档。默认禁用：锚点日记应提取存入 memory/，而非直接删除。"
+  },
+  {
+    "scriptName": "LENI::Lenitxt包裹清除",
+    "findRegex": "<Lenitxt>[\\s\\S]*?</Lenitxt>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "LENI 用 <Lenitxt> 标记正文段落（某些配置下出现）。如内容为空则无副作用；如有内容则提取正文。"
+  },
+  {
+    "scriptName": "LENI::CoT过滤杂质前缀清除",
+    "findRegex": "「过滤杂质」[\\s\\S]*?(?=【|\\n\\n)",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "🍇cot-过滤杂质 prompt 的内部调酒壶思维链有时泄漏到正文。模式：「过滤杂质」开头到下一章节标记。"
+  },
+  {
+    "scriptName": "LENI::System标签清除 (Identity definition)",
+    "findRegex": "<Identity definition>[\\s\\S]*?</Identity definition>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "身份定义块意外输出时清除。正常情况下 LLM 不应输出 system prompt 内容。"
+  },
+  {
+    "scriptName": "LENI::认知差异标签清除",
+    "findRegex": "<认知差异>[\\s\\S]*?</认知差异>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "System instruction 标签泄漏防护。"
+  },
+  {
+    "scriptName": "LENI::防升华标签清除",
+    "findRegex": "<防升华>[\\s\\S]*?</防升华>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "System instruction 标签泄漏防护。"
+  },
+  {
+    "scriptName": "LENI::情感补正标签清除",
+    "findRegex": "<情感补正>[\\s\\S]*?</情感补正>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": false,
+    "_comment": "System instruction 标签泄漏防护。"
+  },
+  {
+    "scriptName": "LENI::HTML渲染输出清除 (html/head/body)",
+    "findRegex": "<!DOCTYPE[\\s\\S]*?</html>",
+    "replaceString": "",
+    "placement": [2],
+    "disabled": true,
+    "_comment": "🫐小剧场加强思维 / 论坛模板开启时可能输出完整 HTML。禁用：HTML 应由 UI 渲染，而非删除。FSM-safe：注意 HTML 可能很长，配合 char-level FSM 的 streaming 特性需测试。"
+  }
+]

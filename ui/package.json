@@ -1,0 +1,30 @@
+{
+  "name": "airp-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AIRP UI — Tauri + Vue display layer. Renders an AIRP State Protocol Blueprint through an open Widget Registry.",
+  "author": "GhostXia",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/GhostXia/AIRP-State-Protocol",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "vue": "^3.4.21"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.8",
+    "vitest": "^1.6.0",
+    "vue-tsc": "^2.0.13"
+  }
+}

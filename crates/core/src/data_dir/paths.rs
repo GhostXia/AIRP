@@ -1,0 +1,476 @@
+use crate::error::AirpError;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub fn resolve_data_root() -> PathBuf {
+    if let Ok(custom) = std::env::var("AIRP_DATA_DIR") {
+        PathBuf::from(custom)
+    } else {
+        PathBuf::from("data")
+    }
+}
+
+pub fn ensure_data_dirs(root: &Path) -> Result<(), AirpError> {
+    let dirs = [
+        root.to_path_buf(),
+        root.join("characters"),
+        root.join("styles"),
+        root.join("styles").join("profiles"),
+        root.join("presets"),
+    ];
+
+    for dir in &dirs {
+        if !dir.exists() {
+            fs::create_dir_all(dir)?;
+        }
+    }
+
+    let settings_path = root.join("settings.json");
+    if !settings_path.exists() {
+        let default_settings = serde_json::json!({
+            "provider": "OpenAI",
+            "endpoint": "",
+            "api_key": "",
+            "model": "gpt-4o",
+            "daemon_port": 8000,
+            "default_user_name": "User",
+            "default_filters": []
+        });
+        let content = serde_json::to_string_pretty(&default_settings)?;
+        fs::write(&settings_path, content)?;
+    }
+
+    let default_style = root.join("styles").join("profiles").join("default.md");
+    if !default_style.exists() {
+        let style_content = r#"# Default Narrative Style
+
+## Tone
+Warm, immersive, literary fiction tone with balanced pacing.
+
+## Sentence Patterns
+- Mix of short and medium-length sentences
+- Moderate use of sensory detail
+- Natural dialogue with character voice variation
+
+## Vocabulary
+- Prefer concrete, vivid language over abstract generalizations
+- Avoid clinical or overly formal vocabulary in narrative passages
+
+## Paragraph Structure
+- 2-4 sentences per paragraph in action scenes
+- Longer descriptive paragraphs for atmosphere building
+
+## Pacing
+- Vary rhythm between tension and release
+- Allow quiet moments between action beats
+"#;
+        fs::write(&default_style, style_content)?;
+    }
+
+    let world_path = root.join("world.md");
+    if !world_path.exists() {
+        let content = r#"# 世界观与场景状态 world
+
+## 区域与场景
+| 区域名称 | 当前状态 | 描述 | 在场NPC |
+| :--- | :--- | :--- | :--- |
+| 起始基地 | 安全 | 弥漫着微雾的钢铁甲板 | Emily, Companion |
+| 码头 | 锁闭 | 停靠着老旧巡逻艇的栈桥 | 无 |
+
+## 势力关系
+- 玩家 - 基地防卫队: 友善 (50/100)
+- 玩家 - 神秘组织: 敌对 (0/100)
+"#;
+        fs::write(&world_path, content)?;
+    }
+
+    let items_path = root.join("items.md");
+    if !items_path.exists() {
+        let content = r#"# 物品追踪清单 items
+
+| 物品名称 | 持有者 | 状态/位置 | 详细描述 |
+| :--- | :--- | :--- | :--- |
+| 神秘钥匙 | 基地保险箱 | 起始基地办公室 | 一把沾满锈迹、刻有古老花纹的黄铜钥匙 |
+| 战术手电 | 玩家 | 随身携带 | 强光军用手电，电量充足 |
+"#;
+        fs::write(&items_path, content)?;
+    }
+
+    if let Err(e) = super::migrations::migrate_legacy_presets(root) {
+        tracing::warn!(err = %e, "M_PR: 预设迁移部分失败");
+    }
+
+    let _ = crate::auto_converter::auto_convert_legacy_files(root);
+
+    if let Err(e) = super::migrations::migrate_legacy_char_dirs(root) {
+        tracing::warn!(err = %e, "CF-6: 角色目录迁移部分失败");
+    }
+
+    Ok(())
+}
+
+pub fn character_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root.join("characters").join(character_id);
+    if !dir.exists() {
+        fs::create_dir_all(&dir)?;
+    }
+
+    let sub_dirs = ["worldbooks", "memory"];
+    for sub in &sub_dirs {
+        let sub_path = dir.join(sub);
+        if !sub_path.exists() {
+            fs::create_dir_all(&sub_path)?;
+        }
+    }
+
+    let _ = char_gating_dir(root, character_id)?;
+
+    Ok(dir)
+}
+
+const CHECKPOINTS_TEMPLATE: &str = r#"# 剧情关卡 checkpoints (CP)
+
+## 当前进度
+- 当前关卡: CP-1
+- 进度百分比: 0%
+
+## 关卡清单
+- [ ] CP-1: 探索期。
+- [ ] CP-2: 对峙期。
+- [ ] CP-3: 决战期。
+"#;
+
+const TIMELINE_TEMPLATE: &str = r#"# 时间线与时槽追踪 timeline
+
+## 统计数据
+- 累计消耗时槽: 0
+
+## 历史事件日志
+"#;
+
+pub(crate) fn char_card_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root.join("characters").join(character_id).join("card");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+pub(crate) fn char_greetings_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root
+        .join("characters")
+        .join(character_id)
+        .join("card")
+        .join("greetings");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+pub(crate) fn char_world_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root.join("characters").join(character_id).join("world");
+    fs::create_dir_all(&dir)?;
+    let extra = dir.join("extra");
+    if !extra.exists() {
+        fs::create_dir_all(&extra)?;
+    }
+    Ok(dir)
+}
+
+pub(crate) fn char_world_lorebook_path(root: &Path, character_id: &str) -> PathBuf {
+    root.join("characters")
+        .join(character_id)
+        .join("world")
+        .join("lorebook.json")
+}
+
+#[allow(dead_code)]
+pub(crate) fn preset_dir(root: &Path, preset_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root.join("presets").join(preset_id);
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+pub(crate) fn preset_json_path(root: &Path, preset_id: &str) -> PathBuf {
+    root.join("presets").join(preset_id).join("preset.json")
+}
+
+#[allow(dead_code)]
+pub(crate) fn preset_regex_dir(root: &Path, preset_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root.join("presets").join(preset_id).join("regex");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+#[allow(dead_code)]
+pub(crate) fn preset_meta_path(root: &Path, preset_id: &str) -> PathBuf {
+    root.join("presets").join(preset_id).join("meta.json")
+}
+
+#[allow(dead_code)]
+pub(crate) fn char_history_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root.join("characters").join(character_id).join("history");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+#[allow(dead_code)]
+pub(crate) fn char_analysis_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = root.join("characters").join(character_id).join("analysis");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+pub(crate) fn char_gating_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let char_dir = root.join("characters").join(character_id);
+    fs::create_dir_all(&char_dir)?;
+    let gating = char_dir.join("gating");
+    fs::create_dir_all(&gating)?;
+
+    for fname in ["checkpoints.md", "timeline.md"] {
+        let old = char_dir.join(fname);
+        let new = gating.join(fname);
+        if old.exists() && !new.exists() {
+            super::utils::move_path(&old, &new)?;
+            tracing::info!(old = ?old, new = ?new, "CF-4: 迁移到 gating/");
+        }
+    }
+
+    let cp = gating.join("checkpoints.md");
+    if !cp.exists() {
+        fs::write(&cp, CHECKPOINTS_TEMPLATE)?;
+    }
+    let tl = gating.join("timeline.md");
+    if !tl.exists() {
+        fs::write(&tl, TIMELINE_TEMPLATE)?;
+    }
+    Ok(gating)
+}
+
+/// M_LS-3: `characters/{id}/state/` 目录路径（不自动创建）。
+pub fn char_state_dir(root: &Path, character_id: &str) -> PathBuf {
+    root.join("characters").join(character_id).join("state")
+}
+
+/// M_LS-3: `characters/{id}/state/history.jsonl` 路径（不自动创建）。
+pub fn char_state_history_path(root: &Path, character_id: &str) -> PathBuf {
+    char_state_dir(root, character_id).join("history.jsonl")
+}
+
+pub fn list_characters(root: &Path) -> Result<Vec<String>, AirpError> {
+    let chars_dir = root.join("characters");
+    if !chars_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut result = Vec::new();
+    let entries = fs::read_dir(&chars_dir)?;
+
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            if let Some(name) = entry.file_name().to_str() {
+                result.push(name.to_string());
+            }
+        }
+    }
+
+    result.sort();
+    Ok(result)
+}
+
+pub fn list_presets(root: &Path) -> Result<Vec<String>, AirpError> {
+    use std::collections::BTreeSet;
+
+    let presets_dir = root.join("presets");
+    if !presets_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for entry in fs::read_dir(&presets_dir)? {
+        let entry = entry?;
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        let name = match entry.file_name().to_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if ft.is_dir() {
+            let p = entry.path();
+            if p.join("preset.json").exists() || p.join("preset.md").exists() {
+                seen.insert(name);
+            }
+        } else if ft.is_file() {
+            if let Some(stem) = name
+                .strip_suffix(".json")
+                .or_else(|| name.strip_suffix(".md"))
+            {
+                seen.insert(stem.to_string());
+            }
+        }
+    }
+
+    Ok(seen.into_iter().collect())
+}
+
+// ── M_UP: User Persona path functions ─────────────────────────────────────────
+//
+// User personas mirror character cards: `persona.json` is the immutable
+// 元设定 (base setup), `state/live.json` is the mutable 变量设定 (drift
+// overlay), and `state/history.jsonl` records the timeline. A persona.lock
+// sentinel file marks a sealed (read-only) persona — further `import_user`
+// calls on a locked persona are rejected so the base contract stays stable
+// across an entire RP campaign.
+
+/// `users/{user_id}/` directory (not auto-created).
+///
+/// P1: signature takes `&UserId` so callers cannot bypass id validation.
+pub fn user_dir(root: &Path, user_id: &crate::types::UserId) -> PathBuf {
+    root.join("users").join(user_id.as_str())
+}
+
+/// `users/{user_id}/persona.json` — immutable base persona (元设定).
+pub fn user_persona_path(root: &Path, user_id: &crate::types::UserId) -> PathBuf {
+    user_dir(root, user_id).join("persona.json")
+}
+
+/// `users/{user_id}/persona.lock` — sentinel; existence = persona is sealed.
+pub fn user_persona_lock_path(root: &Path, user_id: &crate::types::UserId) -> PathBuf {
+    user_dir(root, user_id).join("persona.lock")
+}
+
+/// `users/{user_id}/state/` directory, created on demand.
+pub fn user_state_dir(root: &Path, user_id: &crate::types::UserId) -> Result<PathBuf, AirpError> {
+    let dir = user_dir(root, user_id).join("state");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// `users/{user_id}/state/live.json` — current 变量设定 (drift overlay).
+pub fn user_state_live_path(root: &Path, user_id: &crate::types::UserId) -> PathBuf {
+    user_dir(root, user_id).join("state").join("live.json")
+}
+
+/// `users/{user_id}/state/history.jsonl` — append-only snapshot timeline.
+pub fn user_state_history_path(root: &Path, user_id: &crate::types::UserId) -> PathBuf {
+    user_dir(root, user_id).join("state").join("history.jsonl")
+}
+
+/// List all user IDs present under `data/users/`.
+pub fn list_users(root: &Path) -> Result<Vec<String>, AirpError> {
+    let dir = root.join("users");
+    let mut out = Vec::new();
+    if !dir.exists() {
+        return Ok(out);
+    }
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if entry.path().is_dir() {
+            if let Some(name) = entry.file_name().to_str() {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+// ── M_MS: Scene path functions ────────────────────────────────────────────────
+//
+// AUDIT-2: signatures take `&SceneId` so the caller is forced to construct
+// (and thus validate) the ID before touching the filesystem. The compile-time
+// guarantee replaces the previous pattern of manual `validate_id_segment`
+// calls scattered through callers.
+
+/// `scenes/{scene_id}/` directory (not auto-created).
+pub fn scene_dir(root: &Path, scene_id: &crate::types::SceneId) -> PathBuf {
+    root.join("scenes").join(scene_id.as_str())
+}
+
+/// `scenes/{scene_id}/scene.json` path.
+pub fn scene_json_path(root: &Path, scene_id: &crate::types::SceneId) -> PathBuf {
+    scene_dir(root, scene_id).join("scene.json")
+}
+
+/// `scenes/{scene_id}/world/` directory, created on demand.
+pub fn scene_world_dir(
+    root: &Path,
+    scene_id: &crate::types::SceneId,
+) -> Result<PathBuf, AirpError> {
+    let dir = scene_dir(root, scene_id).join("world");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// `scenes/{scene_id}/world/lorebook.json` path (not auto-created).
+pub fn scene_world_lorebook_path(root: &Path, scene_id: &crate::types::SceneId) -> PathBuf {
+    scene_dir(root, scene_id)
+        .join("world")
+        .join("lorebook.json")
+}
+
+/// `scenes/{scene_id}/history/` directory, created on demand.
+pub fn scene_history_dir(
+    root: &Path,
+    scene_id: &crate::types::SceneId,
+) -> Result<PathBuf, AirpError> {
+    let dir = scene_dir(root, scene_id).join("history");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// `scenes/{scene_id}/memory/` directory, created on demand.
+pub fn scene_memory_dir(
+    root: &Path,
+    scene_id: &crate::types::SceneId,
+) -> Result<PathBuf, AirpError> {
+    let dir = scene_dir(root, scene_id).join("memory");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// DX-1: Compute per-request effective data root.
+///
+/// - `user_id` = Some(uid): `{root}/users/{uid}/` (created on demand, minimal subdirs).
+///   `uid` is validated by `validate_id_segment` — dots, slashes, empty strings rejected.
+/// - `user_id` = None: returns `root` unchanged (backward-compatible single-user mode).
+pub fn resolve_effective_root(root: &Path, user_id: Option<&str>) -> Result<PathBuf, AirpError> {
+    match user_id {
+        None | Some("") => Ok(root.to_path_buf()),
+        Some(uid) => {
+            super::security::validate_id_segment(uid)?;
+            let user_root = root.join("users").join(uid);
+            // Create minimal subdirs; skip migrations/settings for user roots.
+            for sub in &["characters", "presets", "scenes"] {
+                let p = user_root.join(sub);
+                if !p.exists() {
+                    fs::create_dir_all(&p)?;
+                }
+            }
+            Ok(user_root)
+        }
+    }
+}
+
+/// List all scene IDs (directory names under `scenes/`).
+pub fn list_scenes(root: &Path) -> Result<Vec<String>, AirpError> {
+    let scenes_dir = root.join("scenes");
+    if !scenes_dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut result = Vec::new();
+    for entry in fs::read_dir(&scenes_dir)? {
+        let entry = entry?;
+        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            let p = entry.path();
+            if p.join("scene.json").exists() {
+                if let Some(name) = entry.file_name().to_str() {
+                    result.push(name.to_string());
+                }
+            }
+        }
+    }
+    result.sort();
+    Ok(result)
+}

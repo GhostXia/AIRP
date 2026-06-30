@@ -1,0 +1,9 @@
+{
+  "type": "core.clock",
+  "version": "0.1.0",
+  "title": "时钟",
+  "description": "Vanilla-DOM sample widget (no framework) demonstrating the mount interface.",
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}

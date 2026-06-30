@@ -1,0 +1,29 @@
+{
+  "type": "core.card",
+  "version": "0.1.0",
+  "title": "卡牌",
+  "description": "Card display for card-based RP (hand, deck, played cards).",
+  "stateSchema": {
+    "type": "object",
+    "properties": {
+      "cards": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "name"],
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "zone": { "type": "string", "enum": ["hand", "deck", "discard", "played"] },
+            "image": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "intents": ["card.play", "card.draw"],
+  "capabilities": ["read:state"],
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}

@@ -1,0 +1,29 @@
+{
+  "type": "core.quest",
+  "version": "0.1.0",
+  "title": "任务",
+  "description": "Quest / objective tracker.",
+  "stateSchema": {
+    "type": "object",
+    "properties": {
+      "quests": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "title", "status"],
+          "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "status": { "type": "string", "enum": ["active", "done", "failed"] },
+            "steps": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  },
+  "intents": ["quest.select"],
+  "capabilities": ["read:state"],
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}
