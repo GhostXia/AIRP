@@ -1,0 +1,28 @@
+{
+  "type": "core.memory",
+  "version": "0.1.0",
+  "title": "记忆",
+  "description": "Long-term memory / archive entries for the current session.",
+  "stateSchema": {
+    "type": "object",
+    "properties": {
+      "entries": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "text"],
+          "properties": {
+            "id": { "type": "string" },
+            "text": { "type": "string" },
+            "pinned": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  },
+  "intents": ["memory.pin", "memory.delete"],
+  "capabilities": ["read:memory", "write:memory"],
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}

@@ -1,0 +1,29 @@
+{
+  "type": "core.inventory",
+  "version": "0.1.0",
+  "title": "物品栏",
+  "description": "Item inventory grid.",
+  "stateSchema": {
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "name"],
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "qty": { "type": "integer", "minimum": 0 },
+            "icon": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "intents": ["inventory.use", "inventory.drop"],
+  "capabilities": ["read:state"],
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}

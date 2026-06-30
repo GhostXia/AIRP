@@ -1,0 +1,55 @@
+[package]
+name = "airp-gateway"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Generic high-performance protocol bridge: frontend HTTP/SSE <-> MCP servers. Part of the AIRP ecosystem."
+
+# Library-only: the gateway is embedded directly into AIRP-Core (or any other
+# project) as a crate. No standalone binary. Host owns process startup and
+# calls `Gateway::build(cfg).run()`.
+[lib]
+name = "airp_gateway"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tower_governor = "0.4"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true, optional = true }
+url = "2"
+
+# The State-Protocol AgentBus adapter is an OPTIONAL frontend, gated off by
+# default so consumers using airp-gateway purely as an MCP bridge do not compile
+# any project-specific (State-Protocol) code. Enable with `--features agentbus`.
+[features]
+default = []
+agentbus = ["dep:uuid"]
+
+[[example]]
+name = "agentbus_sse"
+required-features = ["agentbus"]
+
+[[test]]
+name = "agentbus_adapter"
+required-features = ["agentbus"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tower = { workspace = true }
+async-trait = { workspace = true }

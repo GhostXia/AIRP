@@ -1,0 +1,13 @@
+{
+  "api_key": "***REMOVED-LEAKED-KEY***",
+  "endpoint": "https://nano-gpt.com/api/v1/chat/completions",
+  "model": "auto-model",
+  "provider": "OpenAI",
+  "volume": {
+    "hard_threshold_tokens": 3500,
+    "maintenance_interval": 20,
+    "seal_model": null,
+    "seal_temperature": 0.30000001192092896,
+    "soft_threshold_tokens": 2500
+  }
+}

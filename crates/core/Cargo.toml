@@ -1,0 +1,56 @@
+[package]
+name = "airp-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "AIRP-Core — independent Agent backend (self-invokes LLM, bounded server-side loop)"
+readme = "README.md"
+
+[lib]
+name = "airp_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "airp-core"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { version = "0.5", features = ["cors"] }
+tower_governor = "0.4"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+base64 = { workspace = true }
+futures-util = { workspace = true }
+regex = { workspace = true }
+async-stream = "0.3"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+once_cell = { workspace = true }
+thiserror = { workspace = true }
+# 6.0p：Aho-Corasick 自动机替代关键词 substring loop。
+aho-corasick = { workspace = true }
+# DX-5: SHA-256 for sync manifest
+sha2 = { workspace = true }
+# M_MCP：Rust 官方 MCP SDK（Model Context Protocol）
+rmcp = { version = "~1.7", features = ["server", "transport-io", "macros", "transport-streamable-http-server", "transport-streamable-http-server-session"] }
+schemars = { workspace = true }
+flate2 = { workspace = true }
+# M_AGENT-1: CancellationToken for agent loop cooperative cancellation.
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.0"
+proptest = "1.5"
+wiremock = { workspace = true }
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "time"] }
+tower = { workspace = true }

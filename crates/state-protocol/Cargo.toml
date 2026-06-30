@@ -1,0 +1,24 @@
+[package]
+name = "airp-state-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "AIRP State Protocol — wire types and the AgentBus trait. The contract between an AIRP UI and an AgentBus implementation (e.g. AIRP-Gateway)."
+
+[lib]
+name = "airp_state_protocol"
+path = "src/lib.rs"
+
+# Reference CLI: validates that a JSON document is a well-formed protocol Envelope.
+[[bin]]
+name = "airp-protocol"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+futures = "0.3"

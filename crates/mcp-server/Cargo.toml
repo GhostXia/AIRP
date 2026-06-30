@@ -1,0 +1,68 @@
+[package]
+name = "airp-mcp-server"
+version.workspace = true
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "AIRP MCP Server - Roleplay data management for MCP-aware clients"
+
+[[bin]]
+name = "airp-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "airp_mcp_server"
+path = "src/lib.rs"
+
+[dependencies]
+# MCP Protocol
+rmcp = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Web framework (for HTTP transport)
+axum = { version = "0.8", features = ["ws"] }
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = "1.0"
+async-trait = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# UUID generation
+uuid = { version = "1.15", features = ["v4", "serde"] }
+
+# Time handling
+chrono = { workspace = true }
+
+# PNG parsing for character cards
+png = { workspace = true }
+
+# Regex for lorebook matching
+regex = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Base64 encoding/decoding
+base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.9"
+wiremock = { workspace = true }
+flate2 = { workspace = true }
+# ServiceExt::oneshot for in-process HTTP transport tests
+tower = { workspace = true }
