@@ -22,28 +22,28 @@ rmcp = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-stream = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Web framework (for HTTP transport)
-axum = { version = "0.8", features = ["ws"] }
+axum = { workspace = true }
 tower = { workspace = true }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
-anyhow = "1.0"
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { workspace = true }
 
 # UUID generation
-uuid = { version = "1.15", features = ["v4", "serde"] }
+uuid = { workspace = true }
 
 # Time handling
 chrono = { workspace = true }
@@ -61,7 +61,7 @@ clap = { workspace = true }
 base64 = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.9"
+tempfile = { workspace = true }
 wiremock = { workspace = true }
 flate2 = { workspace = true }
 # ServiceExt::oneshot for in-process HTTP transport tests
