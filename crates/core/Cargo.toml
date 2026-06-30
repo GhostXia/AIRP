@@ -20,8 +20,8 @@ path = "src/main.rs"
 [dependencies]
 tokio = { workspace = true }
 axum = { workspace = true }
-tower-http = { version = "0.5", features = ["cors"] }
-tower_governor = "0.4"
+tower-http = { workspace = true }
+tower_governor = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,7 +29,7 @@ clap = { workspace = true }
 base64 = { workspace = true }
 futures-util = { workspace = true }
 regex = { workspace = true }
-async-stream = "0.3"
+async-stream = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 bytes = { workspace = true }
@@ -42,15 +42,15 @@ aho-corasick = { workspace = true }
 # DX-5: SHA-256 for sync manifest
 sha2 = { workspace = true }
 # M_MCP：Rust 官方 MCP SDK（Model Context Protocol）
-rmcp = { version = "~1.7", features = ["server", "transport-io", "macros", "transport-streamable-http-server", "transport-streamable-http-server-session"] }
+rmcp = { workspace = true }
 schemars = { workspace = true }
 flate2 = { workspace = true }
 # M_AGENT-1: CancellationToken for agent loop cooperative cancellation.
 tokio-util = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.0"
-proptest = "1.5"
+tempfile = { workspace = true }
+proptest = { workspace = true }
 wiremock = { workspace = true }
-tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { workspace = true }
 tower = { workspace = true }
