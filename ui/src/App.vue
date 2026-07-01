@@ -52,6 +52,9 @@ function onEnvelope(e: Envelope): void {
     return;
   }
   const body = e.body;
+  // Clear a stale backend-error banner once a good (non-error) envelope arrives,
+  // so a successful retry doesn't leave the old error visible (coderabbit finding).
+  if (body.kind !== "error" && busError.value) busError.value = null;
   if (body.kind === "manifest") {
     applyManifestMessage(body.op, body.manifests);
   } else if (body.kind === "blueprint") {
@@ -204,60 +207,6 @@ body {
   margin-left: auto;
   font-size: 12px;
   padding: 4px 8px;
-}
-.loading {
-  margin: auto;
-  opacity: 0.6;
-}
-.bus-error {
-  margin: 10px 14px;
-  padding: 6px 10px;
-  color: #ffb4b4;
-  background: rgba(255, 80, 80, 0.08);
-  border: 1px solid rgba(255, 80, 80, 0.25);
-  border-radius: 6px;
-  font-size: 13px;
-}
-input,
-button {
-  background: rgba(255, 255, 255, 0.06);
-  color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  padding: 6px 10px;
-}
-button {
-  cursor: pointer;
-}
-</style>
-
-<style>
-:root {
-  --accent: #00e5ff;
-}
-* {
-  box-sizing: border-box;
-}
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: #0b0e14;
-  color: #e6e6e6;
-}
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-}
-.topbar {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.topbar small {
-  opacity: 0.6;
 }
 .loading {
   margin: auto;

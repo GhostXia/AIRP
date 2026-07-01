@@ -58,6 +58,11 @@ function resolveParent(root: Json, toks: string[]): { parent: any; key: string }
     if (Array.isArray(parent) && toks[i] === "-") parent = parent[parent.length - 1];
     else parent = parent?.[toks[i]];
   }
+  // The final resolved parent may itself be null/undefined — e.g. `/messages/-/text`
+  // when `messages` is empty resolves `-` to `arr[-1] === undefined`. Returning it
+  // would make the caller do `undefined[key] = ...` → TypeError, crashing the UI
+  // (gemini-code-assist finding). Fail closed: no valid parent → no-op patch.
+  if (parent == null) return null;
   return { parent, key: toks[toks.length - 1] };
 }
 

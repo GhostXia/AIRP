@@ -35,12 +35,9 @@ function select(id: string): void {
     <div v-else-if="!loaded" class="hint">加载中…</div>
     <div v-else-if="ids.length === 0" class="hint">无角色。请先导入角色卡。</div>
     <ul v-else class="list">
-      <li
-        v-for="id in ids"
-        :key="id"
-        class="item"
-        @click="select(id)"
-      >{{ id }}</li>
+      <li v-for="id in ids" :key="id">
+        <button type="button" class="item" @click="select(id)">{{ id }}</button>
+      </li>
     </ul>
   </div>
 </template>
@@ -74,6 +71,12 @@ function select(id: string): void {
   gap: 2px;
 }
 .item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
   padding: 6px 8px;
   border-radius: 4px;
   cursor: pointer;
@@ -81,5 +84,9 @@ function select(id: string): void {
 }
 .item:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+.item:focus-visible {
+  outline: 2px solid var(--accent, #00e5ff);
+  outline-offset: -2px;
 }
 </style>
