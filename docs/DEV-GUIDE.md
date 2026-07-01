@@ -179,21 +179,40 @@ data/
 ## 8. 开发路线（分阶段 + 验收标准）
 
 > 原则：每阶段自身可跑、可测、可验收。**MVP 优先证明端到端，再谈扩展。**
+>
+> **📍 当前状态（2026-07-02）**：Phase 0 ✅ 已完成合并（PR #2）。**下一步 = Phase 1，从 Task 1.1（角色卡导入 UI）开始**，见下。
 
-### Phase 0 · 引擎+UI 直连，跑通一次干净对话（MVP 地基）
-- 引擎 = `engine` 起 daemon；UI 换掉 mock `BusRelay` 为**直连引擎**（SSEBus 或 IPC→引擎 HTTP）。
-- 导入一张真实酒馆角色卡（用 Core png_parser）→ 开会话 → 发一句 → 引擎装配干净 prompt → 调 LLM → 流式回 UI → 落库。
-- **验收**：UI 里跟一个真实导入的角色，完成一次真实 LLM 对话，消息持久化；`subagent_context_has_no_orchestrator_noise` CI 绿；跑一次 Perf Spike。
+### Phase 0 · 引擎+UI 直连，跑通一次干净对话（MVP 地基）—— ✅ 已完成（PR #2 合并入 main）
+- 已落地：`ui/src-tauri/src/bus.rs` 的 `BusRelay` 从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，消费 SSE、按 `w-chat` scope 流式回填；角色列表 `characters.list`。
+- 已验证：真实酒馆卡端到端对话通；`cargo test -p airp-ui`(5) + `vitest`(92) + `vue-tsc`(0) + **`subagent_context_has_no_orchestrator_noise` ✅**（神圣不变式）全绿。
+- **遗留到 Phase 1**：角色卡导入 UI（Phase 0 用预置 `data/characters/` 卡验证）；`.exe` 打包后真跑 GUI；Perf Spike 10 万条（§7）；reasoning/action 渲染；chat_lock → id-keyed 重构（Task 1.2）。
 
 ### Phase 1 · 酒馆导入完整 + 基础会话
-- 角色卡 V2/V3 导入稳（含 character_book）；**世界书引擎**（解析全字段 + 关键词触发，插入语义按建议元数据+检索 Tool 重组）；预设导入（建议素材 + 正则→格式化 Hook）。
-- 会话：swipe（多候选）、编辑、regen、继续、删除/隐藏；reasoning 块显示。
-- **【必做重构】chat scope 消息改按稳定 id 寻址（换掉 Phase 0 的 chat_lock 串行化）**：
-  - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁是治标：① **全局串行会挡住多角色场景的 N 个 NPC 并发流式**（§3.6 核心设计），② user_echo 在锁外同步发，消息顺序仍可能小错乱。
-  - **最优解（本 Phase 必须落地，先于多角色并发流式）**：chat scope 消息模型从数组改成 **id-keyed map + order 数组**（`{messages:{"a1":{...}}, order:["u1","a1"]}`）。每个流 patch 自己那条 `replace /messages/{assistant_id}/text`，不依赖 `-`/顺序；并发多流天然各改各的，**删掉 chat_lock**，多 NPC 并行流式自然成立。
-  - **改动面**：`ui/src-tauri/src/bus.rs`（patch 构造 + 去锁）、`ui/src/state/store.ts`、`ui/src/widgets/ChatWidget.vue`（渲染改 `order.map(id => messages[id])`，动 widget 数据契约）。
-  - **验收**：两条 chat.send 并发流式不互相串扰、顺序正确、无锁；多角色场景可多 NPC 同时流式。
-- **验收**：真实酒馆卡/世界书/预设文件能导入并生效；swipe/编辑/regen 可用；一次多轮 RP 顺畅。
+> 按下列顺序推进，每个 Task 自身可验收。**从 Task 1.1 开始。**
+
+**Task 1.1（👉 从这里开始）· 角色卡导入 UI** —— 补完 Phase 0 只用预置卡的缺口
+- UI 加"导入卡"：选 `.png`/`.json` 文件 → 经 BusRelay/引擎 `POST /v1/characters/import`（引擎已有 png_parser 正确解析）→ 成功后刷新 `characters.list`。
+- **验收**：从 UI 选一张真实酒馆 PNG 卡导入成功、出现在角色列表、可开始对话；含 `character_book` 的卡内嵌世界书一并入库。
+
+**Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
+- **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁治标：① 全局串行挡住多角色 N 个 NPC 并发流式（§3.6），② user_echo 锁外同步发、顺序仍可能小错乱。
+- **做法**：chat scope 消息模型数组 → **id-keyed map + order 数组**（`{messages:{"a1":{...}}, order:["u1","a1"]}`），每流 patch 自己那条 `replace /messages/{id}/text`，**删 chat_lock**。改动面：`ui/src-tauri/src/bus.rs`（patch 构造 + 去锁）、`ui/src/state/store.ts`、`ui/src/widgets/ChatWidget.vue`（渲染改 `order.map(id => messages[id])`）。
+- **验收**：两条 chat.send 并发不串扰、顺序对、无锁。
+
+**Task 1.3 · 世界书引擎（最大新建 · 关键路径）** —— 见 §5 + [PARTS.md](PARTS.md) F
+- 解析酒馆 world info（`{entries:{"0":{...}}}` uid-keyed object，全字段：keys/secondary_keys/position/depth/order/probability/selective/constant/递归…）入数据层；关键词触发用引擎已有 aho-corasick 扫描。
+- **解耦重组（守 §5 原则）**：position/depth/selective 等**机械插入语义降为"给 agent 的建议元数据 + 检索 Tool**（agent 生成中按需调 `lorebook_lookup`），非硬编注入管线。MVP 先"能解析 + 关键词触发注入"，插入语义增量补。
+- **验收**：真实酒馆世界书文件导入解析无丢字段；对话中相关条目按关键词命中注入角色平面；守干净提示词不变式。
+
+**Task 1.4 · 会话操作** —— 接引擎已有端点
+- swipe（多候选，engine 有 regen）、编辑、regen、继续、删除/隐藏；reasoning 块显示（engine SSE 的 `think_chunk` Phase 0 已解析未渲染，这里渲染 + 折叠）。接 `POST /v1/chat/{history,rollback,regen}`。
+- **验收**：swipe/编辑/regen 可用；一次多轮 RP 顺畅；reasoning 可折叠显示。
+
+**Task 1.5 · 预设导入** —— 见 §5 + §3.3
+- 正确解析酒馆预设（结构块 + 正则脚本），当**建议素材**交 agent；正则→消息格式化 Hook。杀掉重复的 `RegexScript` 冲突版，补 trimStrings/minDepth/maxDepth 等字段。
+- **验收**：真实酒馆预设文件导入；正则后处理生效；预设作 agent 适配素材（非机械回放）。
+
+**Phase 1 总验收**：从 UI 导入真实酒馆卡/世界书/预设并生效；swipe/编辑/regen 可用；一次多轮 RP 顺畅；干净提示词不变式全程绿。
 
 ### Phase 2 · 自进化记忆 + Soul + 扩展接口地基
 - 三层记忆（常驻有界 + 用户模型自动抽取 + session_search FTS5）；Soul base+drift 演化（第二档）。
