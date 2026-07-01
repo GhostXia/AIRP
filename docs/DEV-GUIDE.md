@@ -24,26 +24,28 @@
 
 ## 1. 现状（起点）
 
-工作区 `D:\AIRP-Dev` 是 Cargo workspace，四个原仓已拷入 + UI：
+工作区 `D:\AIRP-Dev` 已被 PR #1（目录对齐）收成"两盒"结构——workspace 只剩 engine+protocol+ui（gateway/mcp-server 已从工作区移除，退回原始独立仓当零件库）：
 
 ```
 D:\AIRP-Dev/
-├── Cargo.toml                 workspace（成员：crates/{core,gateway,mcp-server,state-protocol}, ui/src-tauri）
-├── crates/
-│   ├── core/                  ← 引擎雏形（源自 AIRPCLI）。自带 LLM adapter + agent loop 骨架 + orchestrator + 数据层 + 正确 png_parser + 完整 /v1/* HTTP+SSE
-│   ├── mcp-server/            ← 数据域零件来源（角色/世界书/state/预设域模型 + 沙箱 + 插件零schema）。注意其酒馆兼容有假（见 §4）
-│   ├── gateway/               ← MCP client/传输/安全硬化零件来源（第三方 MCP 生态用，非 MVP）
-│   └── state-protocol/        ← 线协议契约（Envelope/Blueprint/widget/capability + Rust/TS 绑定）
-└── ui/                        ← Tauri+Vue UI（源自 state-protocol 仓）。widget/Blueprint/RFC6902 patch/虚拟滚动/沙箱/consent/打包 全代码完成
+├── Cargo.toml    workspace（members：engine, protocol, ui/src-tauri）
+├── engine/       ← 引擎（crate airp-core，源自 AIRPCLI）。自带 LLM adapter + agent loop 骨架 + orchestrator + 数据层 + 正确 png_parser + 完整 /v1/* HTTP+SSE
+├── protocol/     ← 线协议契约（crate airp-state-protocol）：Envelope/Blueprint/widget/capability + Rust 绑定（TS 侧手镜像在 ui/src/protocol/types.ts）
+├── ui/           ← Tauri+Vue UI（crate airp-ui）。widget/Blueprint/RFC6902 patch/虚拟滚动/沙箱/consent/打包 全代码完成；src-tauri/src/bus.rs = UI↔引擎桥
+├── data/         ← 运行时 RP 数据（角色卡/预设/会话/世界书…；含个人数据，见 §0 泄露清理待办）
+└── docs/         ← 设计文档：本 DEV-GUIDE + PLAN + PARTS + TAVERN-PARITY + HERMES-MEMORY
+
+零件库（原始独立仓，随用随取，不在 workspace）：
+  D:\AIRP-Gateway     ← MCP client/传输/安全硬化（第三方 MCP 生态用，要时挖）
+  D:\airp-mcp-server  ← 数据域域模型 + 沙箱 + 插件零schema（酒馆兼容有假，见 §5，别直接用其解析）
 ```
 
 **关键事实（决定起点）：**
-- **四块从没端到端一起跑过**——各自 mock 自测：gateway e2e 用自带 mock、UI 用 MockBus、core daemon 自测、mcp-server 独立测。**"让它们真互相说话"是全新工作。**
-- **`engine` 已是完整 RP 后端**（80% 后端功能已实现且带测试）：`/v1/chat/completions`(单回合 SSE)、`/v1/agent/run`(多步 loop M_AGENT-1)、characters/sessions/scenes/state/history/rollback/regen/settings；adapter 双 provider(OpenAI+Anthropic)；orchestrator 装配；fsm+xml_unpacker 流过滤；封卷；**png_parser 正确解析酒馆卡（tEXt/zTXt/iTXt + ccv3>chara + v1归一化）**。
-- **`parts/mcp-server` 的酒馆兼容基本是假的**（角色卡 zTXt-only 读错、世界书 Vec 结构错）——**别用它的解析，用 core 的**。
-- **UI 的 `BusRelay` 是 mock**（`ui/src-tauri/src/bus.rs`，自发自收），待换成连真引擎。
+- **四块从没端到端一起跑过**（各自 mock 自测）——**Phase 0（本 PR #2）正是首次让 UI↔引擎真跑通**：UI `BusRelay` 已从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，流式回填 `w-chat`。
+- **`engine` 已是完整 RP 后端**（80% 后端功能已实现且带测试）：`/v1/chat/completions`(单回合 SSE)、`/v1/agent/run`(多步 loop M_AGENT-1)、characters/sessions/scenes/state/history/rollback/regen/settings；adapter 双 provider(OpenAI+Anthropic)；orchestrator 装配；fsm+xml_unpacker 流过滤；封卷；**png_parser 正确解析酒馆卡**。
+- **`D:\airp-mcp-server` 的酒馆兼容基本是假的**（角色卡 zTXt-only 读错、世界书 Vec 结构错）——**别用它的解析，用 engine 的 png_parser**。
 
-**起点决策（已定）：引擎 = 以 `engine` 为核演进**（它已是最完整、且 png_parser 正确），按需从 `parts/mcp-server` 吸收数据域优点；`gateway` 留作后期第三方 MCP 接入的零件来源；`ui/` 直接用。
+**起点决策（已落地）：引擎 = 以 `engine` 为核演进**；数据域优点按需从 `D:\airp-mcp-server` 挖；`D:\AIRP-Gateway` 留作后期第三方 MCP 接入零件；`ui/` 直接用。
 
 ---
 
@@ -209,17 +211,21 @@ data/
 
 ---
 
-## 10. 构建环境（本机坑，必读）
+## 10. 构建环境（本机 —— 已验证可本地 check+test）
 
-- **Windows 无 MSVC linker**，用 GNU 工具链：
+- **默认工具链 `stable-x86_64-pc-windows-gnu`**（本机无 MSVC linker，用 GNU）。**三个 env 必须都指 D 盘**，漏 `CARGO_HOME` 会让 cargo 落到 `C:\Users\<user>\.cargo` 用错工具链、build script 报 SxS `os error 14001`：
   ```powershell
   $env:RUSTUP_HOME = "D:\.rustup"
-  $env:PATH = "D:\msys64\mingw64\bin;" + $env:PATH
+  $env:CARGO_HOME  = "D:\.cargo"          # ← 关键，别漏（漏了就 SxS 14001）
+  $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;" + $env:PATH
+  cd D:\AIRP-Dev
+  cargo check -p airp-ui                                               # 已验证 exit 0
+  cargo test  -p airp-ui                                               # 已验证 5 passed
+  cargo test  -p airp-core subagent_context_has_no_orchestrator_noise  # 神圣不变式，已验证 ok
   ```
-  目标三元组 `x86_64-pc-windows-gnu`（`.cargo/config.toml` 已锁）。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
-- **`D:\` 盘构建脚本执行可能被系统策略拒**（os error 5）→ 需要时把 `CARGO_TARGET_DIR` 重定向到 `C:\`。
-- 本机可能缺 `dlltool` → 完整 `cargo test` 本地跑不动，**测试靠 CI 验证**；本地只做 `check`/`fmt`/`clippy`/读码。
-- Core 引擎启动：`cargo run -p airp-core -- daemon --port 8000`（或对应 crate 名）。配置三层合并 default→settings.json→env→request，env 有 `AIRP_ENDPOINT`/`AIRP_API_KEY`/`AIRP_MODEL`/`AIRP_ACCESS_KEY`。
+  用**默认 target dir**（`D:\AIRP-Dev\target`）即可，本轮无 os error 5、无需重定向 `CARGO_TARGET_DIR`。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
+- **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。仍推荐推送后让 CI + 审计 bot 复核。
+- 引擎启动：`cargo run -p airp-core -- daemon --port 8000`。配置三层合并 default→`data/settings.json`→env→request，env 有 `AIRP_ENDPOINT`/`AIRP_API_KEY`/`AIRP_MODEL`/`AIRP_ACCESS_KEY`。UI 侧 `BusRelay` 默认连 `http://127.0.0.1:8000`，`AIRP_ENGINE_URL` 可覆盖。
 
 ---
 
