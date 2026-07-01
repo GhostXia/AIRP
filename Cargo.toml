@@ -1,10 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/state-protocol",
-    "crates/gateway",
-    "crates/mcp-server",
-    "crates/core",
+    "engine",
+    "protocol",
     "ui/src-tauri",
 ]
 
@@ -65,10 +63,8 @@ url = "2"
 tower_governor = "0.4"
 
 # Internal crates — path deps resolved inside the workspace.
-airp-state-protocol = { path = "crates/state-protocol" }
-airp-gateway = { path = "crates/gateway" }
-airp-mcp-server = { path = "crates/mcp-server" }
-airp-core = { path = "crates/core" }
+airp-state-protocol = { path = "protocol" }
+airp-core = { path = "engine" }
 
 # NOTE on `time` pin (Cargo.lock only, no version change here):
 # Tauri 2 pulls `cookie 0.18.1`, whose parse.rs calls `time::Parsable::parse`
