@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, shallowRef, ref } from "vue";
 import type { Blueprint, Envelope, Json } from "./protocol/types";
 import type { AgentBus } from "./protocol/bus";
-import { createBus } from "./protocol/bus-factory";
+import { createBus, isTauriEnvironment } from "./protocol/bus-factory";
 import { validateEnvelope } from "./protocol/guard";
 import { stateStore, setState, patchState, applyJsonPatch } from "./state/store";
 import { registerBuiltins, applyManifestMessage } from "./registry";
@@ -13,24 +13,37 @@ registerBuiltins();
 
 const blueprint = shallowRef<Blueprint | null>(null);
 
+// Phase 0: in the Tauri shell the engine does not push a blueprint, so the UI
+// self-builds a minimal one (chat + a character picker sidebar). Outside Tauri
+// the MockBus still primes its own sample blueprint, which we honor as-is.
+const isTauri = isTauriEnvironment();
+const selectedCharacterId = ref<string>("");
+
+const MINIMAL_BLUEPRINT: Blueprint = {
+  version: "bp-phase0",
+  profile: "rp:phase0",
+  theme: { name: "phase0", tokens: { accent: "#00e5ff" } },
+  layout: {
+    type: "dock",
+    areas: [
+      { id: "main", widgets: ["w-chat"] },
+      { id: "sidebar", widgets: ["w-characters"], props: { side: "right" } },
+    ],
+  },
+  widgets: [
+    { id: "w-chat", type: "core.chat", props: { title: "对话" }, state: "w-chat" },
+    { id: "w-characters", type: "core.characters", state: "w-characters", capabilities: ["read:state"] },
+  ],
+};
+
 // The bus is picked per environment: Tauri shell → TauriBus over IPC to the
-// Rust core (→ AIRP-Gateway); everywhere else → MockBus (no backend). Built in
+// Rust core (→ AIRP engine); everywhere else → MockBus (no backend). Built in
 // onMounted because the Tauri transport is async to construct.
-//
-// `disposed` guards the async completion: if the component unmounts before
-// `createBus()` resolves, the late continuation exits without subscribing,
-// so no listener is left attached to a dead instance.
 let bus: AgentBus | null = null;
 let unsubscribe: (() => void) | null = null;
 let disposed = false;
 
 function onEnvelope(e: Envelope): void {
-  // Boundary guard: a real IPC/Gateway feed is untyped JSON. Validate the wire
-  // shape BEFORE letting it touch the registry/store — a malformed envelope
-  // (missing scope, a patch that isn't an array, an unknown body kind) would
-  // otherwise corrupt state silently. Rejected envelopes are surfaced as an
-  // `error` upstream and recorded in `busError` so the user sees the boundary
-  // failure instead of an empty/half-applied UI. See docs/PLAN.md §2.6 #4.
   const guard = validateEnvelope(e);
   if (!guard.ok) {
     console.error("[App] rejected envelope:", guard.error, e);
@@ -39,16 +52,12 @@ function onEnvelope(e: Envelope): void {
     return;
   }
   const body = e.body;
-  // Manifests are processed BEFORE blueprint: the renderer resolves a widget
-  // type once at mount, so a third-party esm widget must be registered before
-  // the blueprint that references it arrives.
   if (body.kind === "manifest") {
     applyManifestMessage(body.op, body.manifests);
   } else if (body.kind === "blueprint") {
     if (body.op === "set" && body.blueprint) {
       blueprint.value = body.blueprint;
     } else if (body.op === "patch" && body.patch && blueprint.value) {
-      // shallowRef: patch a clone then reassign so the renderer updates.
       const next = structuredClone(blueprint.value);
       applyJsonPatch(next as unknown as Json, body.patch);
       blueprint.value = next;
@@ -56,6 +65,8 @@ function onEnvelope(e: Envelope): void {
   } else if (body.kind === "state") {
     if (body.op === "set") setState(body.scope, body.state ?? null);
     else if (body.op === "patch" && body.patch) patchState(body.scope, body.patch);
+  } else if (body.kind === "error") {
+    busError.value = `${body.code}: ${body.message}`;
   }
 }
 
@@ -68,12 +79,7 @@ function reportError(rejected: Envelope, reason: string): void {
       id: `err-${Date.now()}`,
       ts: Date.now(),
       src: "ui",
-      body: {
-        kind: "error",
-        code: "ENVELOPE_INVALID",
-        message: reason,
-        detail: { ref: rejected.id },
-      },
+      body: { kind: "error", code: "ENVELOPE_INVALID", message: reason, detail: { ref: rejected.id } },
     }),
   ).catch((err: unknown) => {
     console.error("[App] reportError dispatch failed:", err);
@@ -85,18 +91,26 @@ const busError = ref<string | null>(null);
 
 function onIntent(name: string, params?: Json): void {
   if (!bus) return;
-  // `dispatch` is async on TauriBus (awaits the IPC round-trip) and sync on
-  // MockBus (`void`). Normalize to a promise so a rejection — e.g. the Rust
-  // `airp_dispatch` command returns Err on version mismatch or a serde/IPC
-  // failure — is caught instead of becoming an unhandled promise rejection
-  // and silently dropping the user's intent.
+  // Phase 0: characters.select just records the selection locally (the engine
+  // is stateless per-call; the chosen id rides on each chat.send). chat.send is
+  // tagged with the current selection so the engine knows which card to assemble.
+  if (name === "characters.select") {
+    const id = (params as { character_id?: string } | undefined)?.character_id;
+    if (id) selectedCharacterId.value = id;
+    return;
+  }
+  let finalParams = params;
+  if (name === "chat.send" && selectedCharacterId.value) {
+    const obj = (params ?? {}) as Record<string, Json>;
+    finalParams = { ...obj, character_id: selectedCharacterId.value } as Json;
+  }
   Promise.resolve(
     bus.dispatch({
       v: 1,
       id: `ui-${Date.now()}`,
       ts: Date.now(),
       src: "ui",
-      body: { kind: "intent", name, params },
+      body: { kind: "intent", name, params: finalParams },
     }),
   ).catch((err: unknown) => {
     console.error("[App] dispatch failed:", err);
@@ -104,18 +118,26 @@ function onIntent(name: string, params?: Json): void {
   });
 }
 
+function refreshCharacters(): void {
+  onIntent("characters.list", {});
+}
+
 onMounted(async () => {
-  // `createBus()` is async because the Tauri transport dynamically imports
-  // `@tauri-apps/api`. That import (or the IPC handshake) can reject inside the
-  // shell — without a catch Vue surfaces an unhandled promise rejection and the
-  // user gets an empty shell with no indication of why. Wrap and record it.
   try {
     const built = await createBus();
-    // If the component unmounted while the bus was being built, drop the bus
-    // without subscribing — otherwise the listener would outlive the instance.
     if (disposed) return;
     bus = built;
     unsubscribe = bus.subscribe(onEnvelope);
+    // In the Tauri shell the engine does not push a blueprint — self-build the
+    // minimal one and ask the engine for the character list. MockBus (non-Tauri)
+    // keeps its own sample blueprint via its subscribe priming.
+    if (isTauri) {
+      blueprint.value = MINIMAL_BLUEPRINT;
+      // Prime an empty chat scope so the first patch (add /messages/-) applies.
+      setState("w-chat", { messages: [] });
+      setState("w-characters", { ids: [], loaded: false });
+      refreshCharacters();
+    }
   } catch (err) {
     console.error("[App] createBus failed:", err);
     busError.value = String(err ?? "createBus failed");
@@ -131,7 +153,9 @@ onUnmounted(() => {
   <main class="app">
     <header class="topbar">
       <strong>AIRP&nbsp;UI</strong>
-      <small>scaffold · {{ blueprint?.theme?.name ?? "—" }}</small>
+      <small>{{ isTauri ? "phase0 · engine live" : "scaffold · mock" }}</small>
+      <small v-if="isTauri && selectedCharacterId" class="char-badge">角色: {{ selectedCharacterId }}</small>
+      <button v-if="isTauri" class="refresh" @click="refreshCharacters">刷新角色</button>
     </header>
     <div v-if="busError" class="bus-error">bus: {{ busError }}</div>
     <BlueprintRenderer
@@ -143,6 +167,69 @@ onUnmounted(() => {
     <div v-else class="loading">等待 Blueprint…</div>
   </main>
 </template>
+
+<style>
+:root {
+  --accent: #00e5ff;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #0b0e14;
+  color: #e6e6e6;
+}
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.topbar small {
+  opacity: 0.6;
+}
+.topbar .char-badge {
+  color: var(--accent);
+  opacity: 0.9;
+}
+.topbar .refresh {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.loading {
+  margin: auto;
+  opacity: 0.6;
+}
+.bus-error {
+  margin: 10px 14px;
+  padding: 6px 10px;
+  color: #ffb4b4;
+  background: rgba(255, 80, 80, 0.08);
+  border: 1px solid rgba(255, 80, 80, 0.25);
+  border-radius: 6px;
+  font-size: 13px;
+}
+input,
+button {
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+button {
+  cursor: pointer;
+}
+</style>
 
 <style>
 :root {
