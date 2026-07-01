@@ -21,10 +21,10 @@ AIRP 是一套面向 AI 角色扮演（RP）的乐高式平台。每个模块只
 
 | 模块 | 路径 | 角色 | 技术栈 |
 |------|------|------|--------|
-| **airp-state-protocol** | `crates/state-protocol` | 协议契约：Envelope wire 类型 + AgentBus trait。UI 与 Gateway 之间的合同。 | Rust lib + 验证 CLI |
-| **airp-gateway** | `crates/gateway` | 通用协议桥：前端 HTTP/SSE ↔ MCP 服务器。可选 `agentbus` feature 暴露 State-Protocol 接口。 | Rust lib |
-| **airp-mcp-server** | `crates/mcp-server` | 纯咨询式 MCP 服务器：角色卡 / 世界书 / 预设 / 会话的数据工具，不调用 AI。 | Rust bin (`airp-mcp`) |
-| **airp-core** | `crates/core` | Agent 后端：自调 LLM 的流式 RP 守护进程，注入上下文 + FSM 过滤 + XML 解包。 | Rust bin (`airp-core`) |
+| **airp-state-protocol** | `state-protocol` | 协议契约：Envelope wire 类型 + AgentBus trait。UI 与 Gateway 之间的合同。 | Rust lib + 验证 CLI |
+| **airp-gateway** | `gateway` | 通用协议桥：前端 HTTP/SSE ↔ MCP 服务器。可选 `agentbus` feature 暴露 State-Protocol 接口。 | Rust lib |
+| **airp-mcp-server** | `mcp-server` | 纯咨询式 MCP 服务器：角色卡 / 世界书 / 预设 / 会话的数据工具，不调用 AI。 | Rust bin (`airp-mcp`) |
+| **airp-core** | `core` | Agent 后端：自调 LLM 的流式 RP 守护进程，注入上下文 + FSM 过滤 + XML 解包。 | Rust bin (`airp-core`) |
 | **airp-ui** | `ui/` | 桌面 shell：Tauri + Vue 渲染 State Protocol Blueprint，开放 Widget Registry。 | TS/Vue + Rust/Tauri |
 
 ## 目录结构
@@ -33,7 +33,7 @@ AIRP 是一套面向 AI 角色扮演（RP）的乐高式平台。每个模块只
 AIRP/
 ├── Cargo.toml              # workspace 根，统一依赖版本
 ├── Cargo.lock              # workspace 级锁文件
-├── crates/
+├── 
 │   ├── state-protocol/     # airp-state-protocol (lib + airp-protocol bin)
 │   ├── gateway/            # airp-gateway (lib, 可选 agentbus feature)
 │   ├── mcp-server/         # airp-mcp-server (lib + airp-mcp bin)
@@ -94,10 +94,10 @@ npm run build      # 前端生产构建
 
 | 原仓库 | 整合位置 |
 |--------|----------|
-| [AIRP-State-Protocol](https://github.com/GhostXia/AIRP-State-Protocol) | `crates/state-protocol/` + `ui/` |
-| [AIRP-Gateway](https://github.com/GhostXia/AIRP-Gateway) | `crates/gateway/` |
-| [AIRP-MCP-Server](https://github.com/GhostXia/AIRP-MCP-Server) | `crates/mcp-server/` |
-| [AIRP-Core](https://github.com/GhostXia/AIRP-Core) | `crates/core/` |
+| [AIRP-State-Protocol](https://github.com/GhostXia/AIRP-State-Protocol) | `state-protocol/` + `ui/` |
+| [AIRP-Gateway](https://github.com/GhostXia/AIRP-Gateway) | `gateway/` |
+| [AIRP-MCP-Server](https://github.com/GhostXia/AIRP-MCP-Server) | `mcp-server/` |
+| [AIRP-Core](https://github.com/GhostXia/AIRP-Core) | `core/` |
 
 整合时所做的改动：
 - 建立顶层 `Cargo.toml` workspace，5 个 crate 作为成员。
