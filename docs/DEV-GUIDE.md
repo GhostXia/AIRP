@@ -188,6 +188,11 @@ data/
 ### Phase 1 · 酒馆导入完整 + 基础会话
 - 角色卡 V2/V3 导入稳（含 character_book）；**世界书引擎**（解析全字段 + 关键词触发，插入语义按建议元数据+检索 Tool 重组）；预设导入（建议素材 + 正则→格式化 Hook）。
 - 会话：swipe（多候选）、编辑、regen、继续、删除/隐藏；reasoning 块显示。
+- **【必做重构】chat scope 消息改按稳定 id 寻址（换掉 Phase 0 的 chat_lock 串行化）**：
+  - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁是治标：① **全局串行会挡住多角色场景的 N 个 NPC 并发流式**（§3.6 核心设计），② user_echo 在锁外同步发，消息顺序仍可能小错乱。
+  - **最优解（本 Phase 必须落地，先于多角色并发流式）**：chat scope 消息模型从数组改成 **id-keyed map + order 数组**（`{messages:{"a1":{...}}, order:["u1","a1"]}`）。每个流 patch 自己那条 `replace /messages/{assistant_id}/text`，不依赖 `-`/顺序；并发多流天然各改各的，**删掉 chat_lock**，多 NPC 并行流式自然成立。
+  - **改动面**：`ui/src-tauri/src/bus.rs`（patch 构造 + 去锁）、`ui/src/state/store.ts`、`ui/src/widgets/ChatWidget.vue`（渲染改 `order.map(id => messages[id])`，动 widget 数据契约）。
+  - **验收**：两条 chat.send 并发流式不互相串扰、顺序正确、无锁；多角色场景可多 NPC 同时流式。
 - **验收**：真实酒馆卡/世界书/预设文件能导入并生效；swipe/编辑/regen 可用；一次多轮 RP 顺畅。
 
 ### Phase 2 · 自进化记忆 + Soul + 扩展接口地基
