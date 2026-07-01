@@ -17,7 +17,7 @@
 //! headless engine service — see DEV-GUIDE §3.3).
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use futures_util::StreamExt;
 use tauri::{AppHandle, Emitter};
@@ -43,17 +43,33 @@ pub struct BusRelay {
     seq: AtomicU64,
     engine_url: String,
     http: reqwest::Client,
+    /// Serializes chat.send streams so `/messages/-/text` always targets the
+    /// in-flight assistant row. Without this, two concurrent streams would both
+    /// append then race on `replace /messages/-/text`, corrupting each other's
+    /// reply (CodeRabbit finding). An **async** mutex held for the whole SSE
+    /// consumption: a std Mutex guard is `!Send` and can't cross the `.await` in
+    /// the spawned task, so we use `tokio::sync::Mutex` + `Arc` and lock *inside*
+    /// the task (dispatch stays non-blocking; streams queue instead of racing).
+    chat_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BusRelay {
     pub fn new() -> Self {
         let engine_url = std::env::var("AIRP_ENGINE_URL")
             .unwrap_or_else(|_| DEFAULT_ENGINE_URL.to_string());
+        // Bounded HTTP client: connect + request timeouts prevent spawned
+        // tasks hanging forever if the engine stalls (CodeRabbit finding).
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             subscriber: OnceLock::new(),
             seq: AtomicU64::new(0),
             engine_url,
-            http: reqwest::Client::new(),
+            http,
+            chat_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -126,11 +142,17 @@ impl BusRelay {
 
                 // Spawn the engine call so dispatch returns immediately; the
                 // streaming patches are emitted from the task as chunks arrive.
+                // The chat_lock is acquired *inside* the task (async, awaited) so
+                // concurrent chat.send streams serialize — `/messages/-/text` must
+                // always target this stream's assistant row, not a later stream's
+                // (CodeRabbit finding). dispatch itself never blocks.
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
                 let engine_url = self.engine_url.clone();
                 let assistant_id = format!("a{n}");
+                let chat_lock = self.chat_lock.clone();
                 tokio::spawn(async move {
+                    let _guard = chat_lock.lock().await; // held until stream ends
                     if let Err(e) = run_chat_stream(
                         app_opt.clone(), http, &engine_url, &character_id, &text, &assistant_id, n,
                     )
@@ -261,18 +283,29 @@ async fn run_chat_stream(
 
     // axum SSE: stream of `Result<Event, Infallible>`. Each `event: message`
     // carries a JSON `EngineChunk`; `event: error` carries an error JSON.
+    //
+    // Buffer raw **bytes**, not a String: a multi-byte UTF-8 char (CJK is 3
+    // bytes — the common case for RP) can be split across two network chunks.
+    // Decoding each chunk eagerly with `from_utf8` would fail on the split and
+    // drop data (garbled/missing characters). We only decode at `\n\n` frame
+    // boundaries, where the bytes form a complete (valid-UTF-8) SSE frame.
     let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
+    let mut buf: Vec<u8> = Vec::new();
     let mut assistant_started = false;
     let mut acc = String::new();
+    // Per-chunk counter so every emitted envelope has a unique id (the protocol
+    // requires unique message ids; reusing `state-a{n}-body` for every streamed
+    // chunk violated that and would break any downstream ack/dedup).
+    let mut chunk_seq: u64 = 0;
 
     while let Some(chunk) = stream.next().await {
         let bytes = chunk?;
-        buf.push_str(std::str::from_utf8(&bytes).unwrap_or(""));
+        buf.extend_from_slice(&bytes);
 
         // SSE frames are separated by blank lines. Process all complete frames.
-        while let Some(pos) = buf.find("\n\n") {
-            let frame: String = buf.drain(..pos + 2).collect();
+        while let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
+            let frame_bytes: Vec<u8> = buf.drain(..pos + 2).collect();
+            let frame = String::from_utf8_lossy(&frame_bytes);
             // Each frame is `event: <name>\ndata: <json>`. Parse lines.
             let mut event_name = "message".to_string();
             let mut data_line = String::new();
@@ -324,9 +357,10 @@ async fn run_chat_stream(
                         );
                     }
                     acc.push_str(&piece);
+                    chunk_seq += 1;
                     emit_state_patch(
                         &app,
-                        format!("state-a{n}-body"),
+                        format!("state-a{n}-body-{chunk_seq}"),
                         "w-chat",
                         vec![PatchOp {
                             op: PatchOpKind::Replace,
