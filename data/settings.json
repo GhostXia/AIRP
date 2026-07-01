@@ -1,13 +1,13 @@
 {
-  "api_key": "***REMOVED-LEAKED-KEY***",
-  "endpoint": "https://nano-gpt.com/api/v1/chat/completions",
-  "model": "auto-model",
+  "api_key": "any",
+  "endpoint": "http://127.0.0.1:8889/v1/chat/completions",
+  "model": "gemini-3.1-pro-preview",
   "provider": "OpenAI",
   "volume": {
     "hard_threshold_tokens": 3500,
     "maintenance_interval": 20,
     "seal_model": null,
-    "seal_temperature": 0.30000001192092896,
+    "seal_temperature": 0.3,
     "soft_threshold_tokens": 2500
   }
 }

@@ -51,9 +51,18 @@ function getAtPointer(root: Json, toks: string[]): Json | undefined {
 function resolveParent(root: Json, toks: string[]): { parent: any; key: string } | null {
   let parent: any = root;
   for (let i = 0; i < toks.length - 1; i++) {
-    parent = parent?.[toks[i]];
     if (parent == null) return null;
+    // RFC 6902: "-" means "last element" of an array. Resolve it to the real
+    // index so downstream Number(key) / property access works on deep paths
+    // like /messages/-/text (used by streaming chat: replace last message text).
+    if (Array.isArray(parent) && toks[i] === "-") parent = parent[parent.length - 1];
+    else parent = parent?.[toks[i]];
   }
+  // The final resolved parent may itself be null/undefined — e.g. `/messages/-/text`
+  // when `messages` is empty resolves `-` to `arr[-1] === undefined`. Returning it
+  // would make the caller do `undefined[key] = ...` → TypeError, crashing the UI
+  // (gemini-code-assist finding). Fail closed: no valid parent → no-op patch.
+  if (parent == null) return null;
   return { parent, key: toks[toks.length - 1] };
 }
 
