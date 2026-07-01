@@ -39,5 +39,8 @@ crates/core/data/sessions/
 # history/ turn_counter/ quota.json 是会话/封卷/quota 计数器，均不入库。
 config.json
 data/quota.json
-data/characters/*/history/
-data/characters/*/memory/turn_counter.txt
+
+# 个人 RP 数据不入库（角色卡/预设含个人内容，历史泄露已用 filter-repo 清除）。
+# 引擎运行时会在这两个目录下读写用户导入的卡/预设；测试用合成 fixture 另置，勿放个人数据。
+data/characters/
+data/presets/
