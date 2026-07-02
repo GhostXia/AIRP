@@ -204,6 +204,11 @@ data/
   - **Q2 = 合规**（见不变式6 精化）：fallback base64 经 intent→bus→HTTP 立即转发引擎、不 setState = 不违纪律；**不必**另开 intent 之外通道。
   - **Q3 = 引擎从 `card.name` 派生 id + UI 可选覆盖**（采该 agent 的 (b) 变体）：`character_id` 从必填改**可选**；不传时引擎解析卡后 slugify `data.name` 当默认 id 并返回，传了则用 UI 的。**注意**：① slugify 须 sanitize 成合法 id_segment（`validate_id_segment` 实测：点号非行首 OK 如 `v1.2`，只拒空/行首点/`..`/`/ \ : \0`——比该 agent 以为的宽松，主要处理 `/ \ :`、空格、行首点）；② **重名碰撞**须处理（已存在则加后缀 `-2` 等，勿覆盖）。
   - 范围认可该 agent 的"五"：改引擎端点(加path+id可选) + bus 加 `characters.import` 分支 + CharactersWidget 导入按钮 + 确认 `card/raw.json` 已写（**已核实 `handlers.rs:273` 确在写，最小 sidecar 满足**）。不做 agent 分析/完整 canonical 骨架/base64 UI。
+- **实施裁定 2（审计 2026-07-02，回 Q4-Q6 · UI 拿路径方式）**（引擎+bus 已改完且与此解耦，仅动 CharactersWidget + 依赖）：
+  - **Q4 = 批准选项 A（装 `@tauri-apps/plugin-dialog` + `tauri-plugin-dialog`）为主入口**。它是 Tauri 2 拿"用户主动选文件路径"的官方一等正路，风险低；选项 B（HTML file input）技术上拿不到绝对路径，**排除**；选项 C（拖放 `onDragDropEvent`，零新依赖）**批为可选辅助入口、后补**，不作主入口（点按钮选文件才是预期 UX）。不强制 D。已核实：plugin-dialog 未装、`capabilities/` 目录不存在——确是真依赖引入，改 4 处（package.json / Cargo.toml / main.rs `.plugin(init())` / capabilities）属预期工作量。（Tauri 打包出 .exe 已验证通过，此路可测。）
+  - **Q5 = 只授 `dialog:allow-open`（最小权限，守不变式3）**。`allow-save` 等真做导出 round-trip 时再加，现在不预授。
+  - **Q6 = 桌面期 path 直喂引擎合规**（引擎是本地 sidecar 进程、同机同盘，`fs::read(abs_path)` 有效）。web 期引擎远端时 path-first 失效 → 走 base64/multipart fallback（引擎已保留 `card_json`/`card_png_base64` 入参，未来无需改契约，✅ 前瞻对了）。
+  - **🔒 审计追加护栏（该 agent 没提，但必须记）**：`card_path` = **引擎侧读任意绝对路径**。当前"本地可信 UI + 用户经对话框亲选"模型下可接受；但**严禁暴露给不可信调用方**（未来 web 客户端 / 能发 import intent 的第三方 widget）——否则是任意文件读漏洞。**规则**：`card_path`（服务端任意路径读）只给**可信本地 UI**；不可信/远端调用方一律只能 base64/multipart 上传，**不得走服务端任意路径读**。引擎转多客户端/web、或放开第三方 widget 发 import intent 时，`card_path` 必须 capability 门控或对不可信方禁用。
 - **验收**：从 UI 选真实酒馆 PNG 卡导入成功、出现在列表、可对话；`character_book` 一并入库；**传给引擎的是路径非 base64**（大卡不卡顿、store 无大字符串）；`card/raw.json` 有原始留存（sidecar）。
 
 **Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
