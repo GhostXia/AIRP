@@ -282,6 +282,19 @@ data/
 - `estimate_tokens` 是 ±30% 启发式（非真 tiktoken）；预算阈值留安全边际，或接真 tokenizer。
 - 三处对齐（改线协议时）：`protocol/schema`（真相）→ Rust 绑定 → TS 绑定 → 更新 spec + examples。
 
+### 11.1 工作流与提交纪律（硬约束，所有实施 agent 必守）
+
+- **一 Task 一分支 → PR，禁止把代码 WIP 摊在 `main` 工作树上**：
+  - 动手前 `git checkout -b <phase-x-task-name>`（如 `phase-1-card-import`）。
+  - **代码改动**（`engine/` `ui/` `protocol/` 等）**一律走分支 → 本地测试绿 → PR → 审计 → 合并**，**绝不直接 commit/推 `main`**，更不许把改了一半的代码留在 `main` 的工作树里（会跟别的 agent 踩脚、污染共享树）。
+  - **仅文档**（`docs/`、`*.md`）改动可直接 commit `main`（低风险、无 CI），但保持独立 commit、别夹带代码。
+  - AIRP 仓**无 CI**，本地测试 = 唯一门：PR 前必跑 `cargo test -p airp-core`（动引擎时）+ `subagent_context_has_no_orchestrator_noise`（神圣不变式）+ 相关 `cargo test -p airp-ui` / `vitest` / `vue-tsc`。
+- **提交卫生**：
+  - **只 `git add <明确文件>`，禁止 `git add -A` / `git add .`**——会把垃圾/临时文件（如 `nul`、`_check.bat`、编辑器/构建产物）扫进提交。
+  - 提交前 `git status` 核对暂存清单；发现游离垃圾文件先清（Windows 保留名 `nul` 用 `del \\.\nul`）或加 `.gitignore`。
+  - 引擎运行时产物（`config.json`/`quota.json`/`data/*/history/` 等）已在 `.gitignore`，别再入库。
+- **个人/敏感数据不入库**：角色卡/预设/真实聊天记录/API key 不进提交（历史泄露教训见记忆库；`data/` 下个人数据待清理）。
+
 ---
 
 ## 12. 动手前必须拿到用户拍板的开放决策（不要擅自定，见 PLAN §4）
