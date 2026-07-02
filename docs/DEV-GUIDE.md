@@ -37,15 +37,15 @@ D:\AIRP-Dev/
 
 零件库（原始独立仓，随用随取，不在 workspace）：
   D:\AIRP-Gateway     ← MCP client/传输/安全硬化（第三方 MCP 生态用，要时挖）
-  D:\airp-mcp-server  ← 数据域域模型 + 沙箱 + 插件零schema（酒馆兼容有假，见 §5，别直接用其解析）
+  D:\airp-mcp-server  ← ★核心·未来刚需★ 完整 RP 数据管理面（38工具/12工作流提示词/19资源+数据模型）= engine 数据层+agent工具的规格。**能力要融进 engine**（非外部连），见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)。仅局部解析有 bug（见 §5/§6），修不是丢。
 ```
 
 **关键事实（决定起点）：**
 - **四块从没端到端一起跑过**（各自 mock 自测）——**Phase 0（本 PR #2）正是首次让 UI↔引擎真跑通**：UI `BusRelay` 已从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，流式回填 `w-chat`。
 - **`engine` 已是完整 RP 后端**（80% 后端功能已实现且带测试）：`/v1/chat/completions`(单回合 SSE)、`/v1/agent/run`(多步 loop M_AGENT-1)、characters/sessions/scenes/state/history/rollback/regen/settings；adapter 双 provider(OpenAI+Anthropic)；orchestrator 装配；fsm+xml_unpacker 流过滤；封卷；**png_parser 正确解析酒馆卡**。
-- **`D:\airp-mcp-server` 的酒馆兼容基本是假的**（角色卡 zTXt-only 读错、世界书 Vec 结构错）——**别用它的解析，用 engine 的 png_parser**。
+- **`D:\airp-mcp-server` = 未来刚需·能力要融进 engine**（用户 2026-07-02）：它的 38 工具/12 工作流提示词/19 资源 + 数据模型是 engine 数据层 + agent 内置工具的**完整规格**（engine 现只重实现了子集）。**融入=M_AGENT-2 把数据操作包成 agent 工具**，详见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)。**注意区分**：它的**角色卡/世界书解析确有 bug**（zTXt-only、Vec 结构错）——移植时改用 engine 的 png_parser、修解析；但这是局部要修的点，**不是丢掉整个 MCP-Server 的理由**。
 
-**起点决策（已落地）：引擎 = 以 `engine` 为核演进**；数据域优点按需从 `D:\airp-mcp-server` 挖；`D:\AIRP-Gateway` 留作后期第三方 MCP 接入零件；`ui/` 直接用。
+**起点决策（已落地）：引擎 = 以 `engine` 为核演进，并把 `D:\airp-mcp-server` 的完整能力面（38工具/12提示词/19资源+数据模型）逐步融入 engine 成原生 agent 工具+工作流+数据层**（主载体 = M_AGENT-2，见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)）；`D:\AIRP-Gateway` 留作 engine 作 MCP client 接**第三方** MCP 的参考；`ui/` 直接用。
 
 ---
 
