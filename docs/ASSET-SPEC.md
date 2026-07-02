@@ -40,6 +40,43 @@
 - **预设特殊（§3.3）**：预设是运行时给 Agent 的**建议素材**——导入只**存**，Agent 在**使用时**按当前模型适配，**不在导入时分析**。
 - 一句话：**导入=代码确定性归一化成规格文件(+sidecar 留全)；Agent 分析是可选/按需/旁路的语义层，不在导入主干、不看原始大 blob。**
 
+## 模板与 schema（必须交付物 —— 规格的具体形态）
+规格不能只是抽象文字，必须给出**模板三件套**（卡/世界书/预设各一份）：
+1. **JSON Schema**（机器真相，同 `protocol/` 模式）——校验 + 生成 Rust/TS 绑定。
+2. **填充示例**（一个真实 canonical 实例，给人看懂）。
+3. **空骨架 blank skeleton**（authoring 用）。
+
+**模板身兼多职**：① 导入的**归一化目标**（代码把 ST 文件重组成这个形状）；② **从零创作**模板（用户不导入、直接按模板新建）；③ **第三方契约**（扩展/工具按 schema 读写，§3.8）。
+
+**关键区分（承角色成长模型 §PLAN 3.4）**：
+- **authoring 模板 = 只含 base 字段**（作者写死的：name/description/personality/scenario/first_mes/mes_example/alternate_greetings/system_prompt/post_history_instructions/character_book/tags/creator/character_version/extensions）。
+- **drift/成长维（知识/soul/关系/进度）不在创作模板**——运行时累积生成，模板里为空/不出现。
+- **sidecar（raw + 未知字段）不在创作模板**——导入时才有的 passthrough。
+
+**v0 卡 canonical 骨架（草案·会随 Task 长，勿当冻结）**：
+```jsonc
+{
+  "airp_asset_spec": "0",              // 版本号，增删字段走版本+迁移
+  "kind": "character",
+  "base": {                            // 作者写死（authoring 模板 = 这层）
+    "name": "", "description": "", "personality": "", "scenario": "",
+    "first_mes": "", "mes_example": "", "alternate_greetings": [],
+    "system_prompt": "", "post_history_instructions": "",
+    "character_book": null,            // 内嵌世界书（V3）
+    "tags": [], "creator": "", "character_version": "",
+    "assets": [],                      // V3 assets
+    "extensions": {}                   // V3 扩展命名空间，第三方在此扩字段
+  },
+  "growth": {                          // 运行时累积，非作者写、非 authoring 模板
+    "knowledge": null, "soul_drift": null, "state_ref": null, "gating_ref": null
+  },
+  "_sidecar": {                        // 导入 passthrough，永不丢
+    "source_format": "chara_card_v3", "raw": {}, "unknown_fields": {}
+  }
+}
+```
+> 说明：`base` 是 V3 超集 + 我们的字段；`growth` 对应成长模型四维（多为引用，实体存 state/memory）；`_sidecar` 存原始 + 未知（规则2 存储层留全）。字段随 Task 1.1/1.3/1.5 逐类固化，schema 定版本。
+
 ## 可扩展 / 版本化
 - 规格带版本号（如 `airp_asset_spec: "1"`），字段增删走版本 + 迁移（类比 `protocol/` 的协议 v + State-Protocol 迁移纪律）。
 - 开源（MIT/Apache，与仓库一致），发布为社区可引用的 schema（JSON Schema 真相 + Rust/TS 绑定，同 `protocol/` 模式）。
