@@ -202,6 +202,79 @@ impl BusRelay {
                         }
                     }
                 });
+            } else if i.name == "characters.import" {
+                // Task 1.1: import a character card, path-first (守不变式6).
+                // params: { card_path: string (绝对路径), character_id?: string }
+                // 只传路径这个几十字节小串——引擎读盘+解析；绝不把 base64 大 blob 塞进
+                // intent/store。导入是转瞬即转发引擎的请求，不 setState 存 blob。
+                let params = i.params.clone().unwrap_or(serde_json::Value::Null);
+                let card_path = params
+                    .get("card_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let character_id = params
+                    .get("character_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if card_path.is_empty() {
+                    tracing::warn!("characters.import missing card_path");
+                    emit_state_set(
+                        &self.subscriber.get().cloned(),
+                        format!("state-chars-{n}"),
+                        "w-characters",
+                        serde_json::json!({ "loaded": true, "importing": false, "error": "缺少 card_path" }),
+                    );
+                    return;
+                }
+                let app_opt = self.subscriber.get().cloned();
+                let http = self.http.clone();
+                let engine_url = self.engine_url.clone();
+                tokio::spawn(async move {
+                    // 标记导入中，UI 可显示进度/禁用按钮。
+                    emit_state_set(
+                        &app_opt,
+                        format!("state-chars-imp-{n}"),
+                        "w-characters",
+                        serde_json::json!({ "importing": true }),
+                    );
+                    match import_character_via_path(
+                        &http, &engine_url, &card_path, character_id.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(imported_id) => {
+                            tracing::info!(path = %card_path, id = %imported_id, "character imported");
+                            // 刷新列表让新 id 出现。
+                            match fetch_character_list(&http, &engine_url).await {
+                                Ok(ids) => emit_state_set(
+                                    &app_opt,
+                                    format!("state-chars-{n}"),
+                                    "w-characters",
+                                    serde_json::json!({ "ids": ids, "loaded": true, "importing": false, "last_imported": imported_id }),
+                                ),
+                                Err(e) => {
+                                    tracing::warn!(err = %e, "post-import list refresh failed");
+                                    emit_state_set(
+                                        &app_opt,
+                                        format!("state-chars-{n}"),
+                                        "w-characters",
+                                        serde_json::json!({ "loaded": true, "importing": false, "error": e.to_string() }),
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(err = %e, "characters.import failed");
+                            emit_state_set(
+                                &app_opt,
+                                format!("state-chars-{n}"),
+                                "w-characters",
+                                serde_json::json!({ "loaded": true, "importing": false, "error": e.to_string() }),
+                            );
+                        }
+                    }
+                });
             }
         }
     }
@@ -447,6 +520,39 @@ async fn fetch_character_list(
     }
     let ids: Vec<String> = resp.json().await?;
     Ok(ids)
+}
+
+/// POST `/v1/characters/import` with a **path** (path-first, 守不变式6).
+/// `character_id` 为 None 时引擎从卡内 name slugify 派生。返回引擎落盘的最终 id。
+/// 不接收/不返回大 blob——只传路径字符串。
+async fn import_character_via_path(
+    http: &reqwest::Client,
+    engine_url: &str,
+    card_path: &str,
+    character_id: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut body = serde_json::json!({ "card_path": card_path });
+    if let Some(id) = character_id {
+        body["character_id"] = serde_json::json!(id);
+    }
+    let resp = http
+        .post(format!("{}/v1/characters/import", engine_url))
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("engine HTTP {status}: {text}").into());
+    }
+    // 引擎返回 { character_id, card_format }。
+    let v: serde_json::Value = resp.json().await?;
+    let id = v
+        .get("character_id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(id)
 }
 
 fn now_ms() -> i64 {
