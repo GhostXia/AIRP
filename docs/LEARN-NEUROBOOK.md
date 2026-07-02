@@ -72,7 +72,7 @@
 - License 非商用——只学理念，不复制其代码。
 
 ## 落地建议（**只列净新，去掉与自有重合的**）
-- **Task 1.3 世界书/角色模型**：引入 **per-角色视角知识层**（点 2·净新）——注入角色平面的是"该角色该知道的子集"，超出现有关键词懒加载。（`retrieval`/`inject` 语义 §5 已有，不重复列。）
+- **Task 1.3 世界书/角色模型**：per-角色视角知识层（点 2·净新）**不做成独立静态隔离，而是并入"角色成长模型"的知识维**（用户 2026-07-02）——角色随剧情成长、非一成不变，知识只是成长的一个维度。**复用已有 User Persona M_UP 的 base+drift 模式套到角色上**（不建平行系统），与 Soul 演化（人格维）、state（关系维）、gating（进度维）统一。详见 [PLAN.md](PLAN.md) §3.4「角色成长模型」。
 - **Phase 2 orchestrator 重构（非新增）**：借鉴 **TSX 三层 + 运行时合同的形态**（点 1·半新）重构 Core orchestrator 装配——**不建平行装配系统**，避免与现有 orchestrator 冲突。
 - **可观测（小）**：SSE 事件包装成用户可读 **walkthrough** + 支持 loop 中途 pause 问人（点 6·半新）。
 - **不做**：三段导入（点 7 已有 `validate_card`/`decompose_character`/`import_card`，Task 1.1 直接复用）、内容边界断言（点 4 已有 CI 不变式）、重建/分层记忆（点 5 已有 + Hermes 已定）、retrieval/inject 语义（点 3 §5 已定）——**这些 NeuroBook 只作外部佐证，不重造。**

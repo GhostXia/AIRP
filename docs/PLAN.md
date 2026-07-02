@@ -169,8 +169,13 @@
   - **历史检索 session_search（🆕）**：SQLite FTS5 全文 + LLM 摘要，回忆任意历史片段。**Hermes 证明这是非向量的轻量长程记忆，正合"RAG 暂缓、先简单检索"**。
   - **RP 技能自建**：怎么写角色/场景套路/用户文风，从经验自建、反馈更新——接进 agent loop 工具/技能注册表（与 §3.8 扩展面共底座）。**兼容 agentskills.io 开放标准**（Hermes 也用）→ 白捡第三方技能生态，不自造标准。
   - **subagent + RPC 零上下文成本工具调用**（Hermes 印证 Core"loop=纯净 subagent 编排器"）：多步工具压成脚本一次调、不堆主上下文——合干净提示词，设计时纳入。
-  - **Soul 动态人格演化（已确认加入，第二档优先级）**：角色性格深度/说话习惯/关系态度随剧情+反馈演化 + agent 书写风格贴合用户。用 **base+drift overlay 双层**调和"卡作者写死"——原卡是不可变 base（`persona.lock` 式契约），soul-drift 是学习 overlay 叠加注入、不改原卡（复用 Core User Persona M_UP 模式）。可读/可审/可回滚，守干净提示词。详见 [HERMES-MEMORY.md](HERMES-MEMORY.md) §四。
-- **状态**：封卷/persona 框架在；常驻有界记忆+用户自动抽取+session_search 需新建。**优先级：MVP 后紧接做**（核心卖点，不宜太后）。
+  - **角色成长模型（统一 · base + 多维 drift）—— 角色随剧情成长、非一成不变（用户 2026-07-02）**：不建新系统，**复用已有的 User Persona M_UP 双层模式（base=persona.json 可 lock 的不可变契约 / drift=累积变化，Agent 自推断 base-vs-drift 冲突，如"不会打篮球(base) vs 学会了(drift)"）套到角色上**。角色 = 作者写死的卡（base）+ **成长 drift overlay**，drift 多维度，把 NeuroBook 净新点 + 我们已有零件统一：
+    - **知识维（净新·来自 NeuroBook 点2）**：该角色"已知/被告知/观察/推断/误解"的——随剧情增长。注入角色平面的是 **base + 该角色视角的知识子集**，非全知世界书（治"角色知道太多"，超出现有关键词懒加载）。
+    - **人格/文风维（= Soul 演化，已定·第二档）**：性格深度/说话习惯/关系态度随剧情+反馈演化 + agent 书写风格贴合用户。
+    - **关系/状态维（已有）**：好感度/HP/location（`state/live.json` + `history.jsonl`）。
+    - **剧情进度维（已有）**：gating/checkpoints/timeline。
+  - 统一原则：base 不可变（`persona.lock` 式），drift 叠加注入、不改原卡、可读/可审/可回滚；Agent 自推断冲突（不判定语义、守戒律）；全程守干净提示词。详见 [HERMES-MEMORY.md](HERMES-MEMORY.md) §四 + [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md) 点2。
+- **状态**：封卷/persona/state/gating 框架在（成长零件已散在各处，需**统一成角色 base+drift 模型**）；常驻有界记忆+用户自动抽取+session_search+角色知识维需新建。**优先级：MVP 后紧接做**（核心卖点，不宜太后）。
 
 ### 3.5 Prompt 装配管线（承 §1）
 - **需求**：card+preset+gating+memory+lorebook+history+用户输入的拼装、token 预算、**零脚手架**。
