@@ -17,7 +17,9 @@
 3. **工具受控**：allowlist + capability 门；破坏性工具默认 dry-run 需确认；幂等键去重；同角色/资源并发写串行化。
 4. **数据单一真相**：RP 数据引擎内一处存、一个真相（不要 Core 一份 + MCP-Server 一份并存——那是原仓为独立分发的设计，对我们是负担）。
 5. **性能有界**（防重蹈酒馆覆辙）：见 §7 性能契约 7 条硬约束。**酒馆崩因是无界 DOM+单线程阻塞+内存泄漏，非算力；Tauri WebView2=Chromium，不会多吃硬件。**
-6. **数据传输纪律（大数据不走窄管）**：大文件/大 blob（角色卡 PNG、世界书、预设、插件 blob、任何可能 >~64KB 的内容）**一律 path-first 或流式**——传**文件路径**让引擎读盘（引擎有磁盘访问），或分块/流式。**严禁**把大 blob（base64 或原文）灌进这三处窄管：① **模型上下文**（烧 token，社区实测"蓝屏级卡死"——MCP `png_path` 设计的由来，SKILL.md:118）；② **intent/Envelope 线协议 + reactive store**（内存/性能/envelope 膨胀，13MiB 串进 JS+IPC+状态树）；③ 任何逐字节复制进日志/历史。base64 仅在**无真实路径**（未来 web/拖拽内存文件）时作 fallback，且走**直接引擎调用**、不进 store。**判据：数据要去模型/线协议/前端状态树之前，先问"它多大？大就传引用不传内容"。**
+6. **数据传输纪律（大数据不走窄管）**：大文件/大 blob（角色卡 PNG、世界书、预设、插件 blob、任何可能 >~64KB 的内容）**一律 path-first 或流式**——传**文件路径**让引擎读盘（引擎有磁盘访问），或分块/流式。**严禁大 blob 落进/驻留这三处**：① **模型上下文**（烧 token，社区实测"蓝屏级卡死"——MCP `png_path` 设计的由来，SKILL.md:118）；② **reactive store / Blueprint / 渲染树**（13MiB 串进状态树=内存/性能爆）；③ 日志/历史逐字节复制。
+   - **精化（裁定 2026-07-02）**：被禁的是"**落进/驻留** store/模型/日志"，**不是"经过传输通道"**。一个**转瞬即转发给引擎、不 setState/不渲染/不落日志**的请求负载不算违反——即 base64 fallback 经 `intent`→bus→HTTP 立即转发引擎、结果只存 id，**合规**。**不必**为此另开 intent 之外的通道（Tauri 壳里 UI→引擎唯一通道就是 bus.dispatch(intent)，path 只是几十字节小串，照走 intent）。
+   - base64 仅在**无真实路径**（未来 web/拖拽内存文件）时作 fallback；web 期优先用 multipart/二进制上传避 base64 的 33% 膨胀（延后）。**判据：数据要落进模型/store/日志之前，先问"它多大？大就传引用、且别驻留"。**
 
 **扩展开放模型**：受控开放——丰富结构化钩子（工具/事件/宏/命令/技能）对第三方开放，但过 capability 门 + 沙箱；**拒执行 agent/第三方生成的任意代码**（UI 只渲染声明式 Blueprint，esm 第三方 widget 走 opaque-origin iframe 沙箱 + 用户同意）。
 
@@ -192,13 +194,17 @@ data/
 > 按下列顺序推进，每个 Task 自身可验收。**从 Task 1.1 开始。**
 
 **Task 1.1（👉 从这里开始）· 角色卡导入 UI** —— 补完 Phase 0 只用预置卡的缺口
-- UI 加"导入卡"：选 `.png`/`.json` 文件 → 经 BusRelay/引擎 `POST /v1/characters/import`（引擎已有 png_parser 正确解析）→ 成功后刷新 `characters.list`。
-- **⚠️ 必须 path-first，禁止把整卡 base64 塞进 intent/store（对齐 MCP `png_path` 设计，SKILL.md:118）**：
-  - **做法**：Tauri 文件对话框（`@tauri-apps/plugin-dialog` open）拿文件**绝对路径** → 传**路径**（几十字节）给引擎 → **引擎读盘 + png_parser 解析**（引擎已内化 MCP `import_card` 的 png_path 语义）。
-  - **禁止**：在 UI/webview 里 `FileReader`→base64 整张卡（10MiB 卡≈13MiB 串）走 `emit intent` / 进 reactive store——那是内存/性能/envelope 膨胀反模式；本链路虽不经 LLM（不烧模型 token），但仍要避免。
-  - **base64 仅作 fallback**：未来 web UI / 拖拽内存文件、无真实路径时才用，且走直接引擎调用、不进 state store。
-  - 导入是**直接引擎调用**（路径引用），**不走 Envelope 大字符串 / reactive store**；store 只放结果（角色 id 列表）。
-- **验收**：从 UI 选一张真实酒馆 PNG 卡导入成功、出现在角色列表、可开始对话；含 `character_book` 的卡内嵌世界书一并入库；**确认传给引擎的是路径而非 base64（大卡导入不卡顿、store 无大字符串）**。
+- UI 加"导入卡"：Tauri 文件对话框拿路径 → `characters.import` intent（只带路径）→ 引擎读盘 + png_parser 解析落盘 → 刷新 `characters.list`。
+- **⚠️ 必须 path-first，禁止把整卡 base64 塞进 store（对齐 MCP `png_path` 设计，SKILL.md:118）**：
+  - **做法**：`@tauri-apps/plugin-dialog` open 拿**绝对路径** → 传**路径**（几十字节）给引擎 → **引擎读盘 + png_parser 解析**。
+  - **禁止**：UI 里 `FileReader`→base64 整卡进 reactive store/渲染树。base64 仅无路径（未来 web）时 fallback，转瞬转发引擎、不 setState。
+  - 路径小串照走 `intent` 通道即可（不必另开通道）；store 只放结果（角色 id 列表）。
+- **实施裁定（审计 2026-07-02，回该实施 agent 的 Q1-Q3）**：
+  - **Q1 = 是，须改引擎端点**（我此前"引擎已内化 png_path"是想当然，已核实 `handlers.rs:22` `ImportCharacterRequest` 只有 `card_json`/`card_png_base64`、无 path）。给它加 `card_path: Option<PathBuf>`（主路径），handler `fs::read(path)` 后复用现有 `import_card_to_disk` 解析；保留 base64/json 作 fallback。
+  - **Q2 = 合规**（见不变式6 精化）：fallback base64 经 intent→bus→HTTP 立即转发引擎、不 setState = 不违纪律；**不必**另开 intent 之外通道。
+  - **Q3 = 引擎从 `card.name` 派生 id + UI 可选覆盖**（采该 agent 的 (b) 变体）：`character_id` 从必填改**可选**；不传时引擎解析卡后 slugify `data.name` 当默认 id 并返回，传了则用 UI 的。**注意**：① slugify 须 sanitize 成合法 id_segment（`validate_id_segment` 实测：点号非行首 OK 如 `v1.2`，只拒空/行首点/`..`/`/ \ : \0`——比该 agent 以为的宽松，主要处理 `/ \ :`、空格、行首点）；② **重名碰撞**须处理（已存在则加后缀 `-2` 等，勿覆盖）。
+  - 范围认可该 agent 的"五"：改引擎端点(加path+id可选) + bus 加 `characters.import` 分支 + CharactersWidget 导入按钮 + 确认 `card/raw.json` 已写（**已核实 `handlers.rs:273` 确在写，最小 sidecar 满足**）。不做 agent 分析/完整 canonical 骨架/base64 UI。
+- **验收**：从 UI 选真实酒馆 PNG 卡导入成功、出现在列表、可对话；`character_book` 一并入库；**传给引擎的是路径非 base64**（大卡不卡顿、store 无大字符串）；`card/raw.json` 有原始留存（sidecar）。
 
 **Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
 - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁治标：① 全局串行挡住多角色 N 个 NPC 并发流式（§3.6），② user_echo 锁外同步发、顺序仍可能小错乱。
