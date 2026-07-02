@@ -141,6 +141,7 @@
 
 ### 3.1 角色卡（导入，兼容酒馆）
 - **需求**：用户手动导入文件，必须兼容酒馆 Character Card V2/V3。
+- **规格策略（用户 2026-07-02，覆盖卡/世界书/预设三类）**：建**我们自己的开源版本化"AIRP 资产规格"= engine canonical 数据模型的正式化**，但**超集 V3 不重造 + 剔除≠销毁（存储层 passthrough sidecar 全保留、只在活动/装配层剔无用参数）**。详见 [ASSET-SPEC.md](ASSET-SPEC.md)。字段随导入 Task 增量固化，不前置写死。
 - **文档解法**：`AIRPCLI/README.md:361` 定规范——PNG 覆盖 `tEXt`/`zTXt`/`iTXt`（含 zlib）、`ccv3`(V3) 优先 `chara`(V2) 回退、v1 平铺卡归一化 v2。归属 MCP-Server（数据层）。
 - **状态**：✅ 正确实现已存在于 `engine/src/png_parser.rs`(262行) + `AIRPCLI/src/types.rs:37-62`(`TavernCardV2`/spec+data 封装/`normalize_v1_to_v2`)，且在 Core 里是列入 built-in 工具的（`AGENT_BACKEND_PLAN §4.1`）。mcp-server 那份是自己 zTXt-only 坏解析器（`character_store.rs:217`），从没接对。**工作量=接线**：把 Core 已验证的 png_parser 接到"最终定为数据真相的那一层"（Core 自带 vs 归 MCP-Server，取决于 §4-1 拍板），杀掉 mcp-server 的坏实现。
 
