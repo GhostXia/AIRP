@@ -192,7 +192,12 @@ data/
 
 **Task 1.1（👉 从这里开始）· 角色卡导入 UI** —— 补完 Phase 0 只用预置卡的缺口
 - UI 加"导入卡"：选 `.png`/`.json` 文件 → 经 BusRelay/引擎 `POST /v1/characters/import`（引擎已有 png_parser 正确解析）→ 成功后刷新 `characters.list`。
-- **验收**：从 UI 选一张真实酒馆 PNG 卡导入成功、出现在角色列表、可开始对话；含 `character_book` 的卡内嵌世界书一并入库。
+- **⚠️ 必须 path-first，禁止把整卡 base64 塞进 intent/store（对齐 MCP `png_path` 设计，SKILL.md:118）**：
+  - **做法**：Tauri 文件对话框（`@tauri-apps/plugin-dialog` open）拿文件**绝对路径** → 传**路径**（几十字节）给引擎 → **引擎读盘 + png_parser 解析**（引擎已内化 MCP `import_card` 的 png_path 语义）。
+  - **禁止**：在 UI/webview 里 `FileReader`→base64 整张卡（10MiB 卡≈13MiB 串）走 `emit intent` / 进 reactive store——那是内存/性能/envelope 膨胀反模式；本链路虽不经 LLM（不烧模型 token），但仍要避免。
+  - **base64 仅作 fallback**：未来 web UI / 拖拽内存文件、无真实路径时才用，且走直接引擎调用、不进 state store。
+  - 导入是**直接引擎调用**（路径引用），**不走 Envelope 大字符串 / reactive store**；store 只放结果（角色 id 列表）。
+- **验收**：从 UI 选一张真实酒馆 PNG 卡导入成功、出现在角色列表、可开始对话；含 `character_book` 的卡内嵌世界书一并入库；**确认传给引擎的是路径而非 base64（大卡导入不卡顿、store 无大字符串）**。
 
 **Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
 - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁治标：① 全局串行挡住多角色 N 个 NPC 并发流式（§3.6），② user_echo 锁外同步发、顺序仍可能小错乱。
