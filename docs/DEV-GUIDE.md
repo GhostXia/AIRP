@@ -11,12 +11,13 @@
 
 **我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（当前 Tauri 桌面优先，未来暴露端口接 web），专精 RP。
 
-**五条不变式（红线，实现中永不许破）：**
+**六条不变式（红线，实现中永不许破）：**
 1. **干净提示词（灵魂）**：喂模型的**角色平面**只装 RP 数据（卡/世界书/预设/state/记忆/历史），**零 agent 脚手架**；工具定义/调用/结果走**控制平面**=模型 API 原生结构化字段（OpenAI `tools`/`tool_calls`/`tool` role；Anthropic `tools`/`tool_use`/`tool_result`），**永不拼进角色平面自然语言**。**不用 in-prompt ReAct**（把工具说明写进 prompt 文本 = 自我污染）。**CI 守 `subagent_context_has_no_orchestrator_noise`——违反即红，这个测试神圣不可删。**
 2. **有界 agent**：loop 必有 step/token/成本/墙钟上限，任一触顶即停；可取消；每步流式可观测（不黑箱）。
 3. **工具受控**：allowlist + capability 门；破坏性工具默认 dry-run 需确认；幂等键去重；同角色/资源并发写串行化。
 4. **数据单一真相**：RP 数据引擎内一处存、一个真相（不要 Core 一份 + MCP-Server 一份并存——那是原仓为独立分发的设计，对我们是负担）。
 5. **性能有界**（防重蹈酒馆覆辙）：见 §7 性能契约 7 条硬约束。**酒馆崩因是无界 DOM+单线程阻塞+内存泄漏，非算力；Tauri WebView2=Chromium，不会多吃硬件。**
+6. **数据传输纪律（大数据不走窄管）**：大文件/大 blob（角色卡 PNG、世界书、预设、插件 blob、任何可能 >~64KB 的内容）**一律 path-first 或流式**——传**文件路径**让引擎读盘（引擎有磁盘访问），或分块/流式。**严禁**把大 blob（base64 或原文）灌进这三处窄管：① **模型上下文**（烧 token，社区实测"蓝屏级卡死"——MCP `png_path` 设计的由来，SKILL.md:118）；② **intent/Envelope 线协议 + reactive store**（内存/性能/envelope 膨胀，13MiB 串进 JS+IPC+状态树）；③ 任何逐字节复制进日志/历史。base64 仅在**无真实路径**（未来 web/拖拽内存文件）时作 fallback，且走**直接引擎调用**、不进 store。**判据：数据要去模型/线协议/前端状态树之前，先问"它多大？大就传引用不传内容"。**
 
 **扩展开放模型**：受控开放——丰富结构化钩子（工具/事件/宏/命令/技能）对第三方开放，但过 capability 门 + 沙箱；**拒执行 agent/第三方生成的任意代码**（UI 只渲染声明式 Blueprint，esm 第三方 widget 走 opaque-origin iframe 沙箱 + 用户同意）。
 
@@ -236,6 +237,9 @@ data/
 - **干净提示词 CI 不变式**：`subagent_context_has_no_orchestrator_noise`——断言送进 adapter 的角色平面 prompt 无脚手架标记。**神圣，不许删/改弱。**
 - **格式导入 fixture**：用**真实酒馆导出文件**（PNG 卡/世界书 JSON/预设 JSON）做测试样本，不是自造的。
 - **Perf Spike**：10 万条假消息 60fps + 内存封顶。
+- **数据传输纪律门（§0 不变式6）——现为 review 门，未来落 workflow**：
+  - **现在（AIRP 无 CI）= 强制 PR review 检查项**：任何导入/大数据改动，review 必须核对——传给引擎/模型/前端的是**路径/引用**还是**大 blob**？intent/Envelope/store 里有没有塞 base64 或大字符串？有=打回。
+  - **未来 = 自动化门禁（workflow）**：立 CI/lint 检查——(a) 静态扫：`emit(intent…)` / `dispatch` / setState 的 payload 不得含 base64 大字段或 >阈值字符串；(b) 测试：导入大文件后断言 state store 无大字符串、intent 体积有上限；(c) 引擎侧断言 import 接口收路径而非内容。**这条纪律优先级足够高，应尽早从"review 门"升级为"自动门"。**
 - 沿用 Core 现有：FSM proptest（chunk 边界独立）、wiremock mock 上游 SSE 集成测试。
 
 ---
