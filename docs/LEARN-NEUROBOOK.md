@@ -46,14 +46,33 @@
 - NeuroBook 导入酒馆卡走"检查 → 拆包 → 导入"三段（landing 页所述）。
 - **对我们的意义（Task 1.1）**：不盲导——先 **inspect**（校验格式/未知宏，对应我们 `validate_card`）→ **unpack**（拆成结构化字段/分解，对应 decompose）→ **import** 入库。建议 Task 1.1 导入 UI 采这种分段，给用户可见的校验反馈。
 
+## 与自有项目比对（防重合/冲突 —— 用户 2026-07-02 要求）
+
+> 核对对象：AIRP-MCP-Server（`D:\airp-mcp-server`，我们自己的数据层仓）+ Core/engine 现有设计。目的：NeuroBook 的"学习点"里，凡我们**本来就有**的，标为"已有·仅佐证"，**不当新东西造、更不造平行系统**；只有**净新**的才纳入路线。
+
+| # | NeuroBook 点 | 我们现状 | 结论 |
+|---|---|---|---|
+| 1 | TSX Profile 类型化组件树 + 三层 | **分层概念已有**（MCP `prompt-caching.md` 按可变性排序 + 我们 §3.5 稳定前缀）；类型化组件树**形态**没有 | **半新**：只学"形态"，且是 engine orchestrator 的**重构参考**，**不新增平行装配系统**（否则跟 Core orchestrator 冲突） |
+| 2 | Per-subject 知识隔离（角色只知该知道的） | **目标已有**（SKILL.md:75 防"角色知道太多"+ `apply_lorebook` 关键词懒加载）；**持久化 per-角色知识模型没有**（`视角` 仅指多角色主视角标签，非同概念） | **净新·真值得做**：懒加载是"取时过滤"，NeuroBook 是"持久化角色视角知识层"，更进一步 |
+| 3 | 节点 retrieval/inject/refs 语义 | **已有**：MCP lorebook 有 `constant`(常驻注入)/`selective`(条件) + 我们 §5 已决定"位置降为建议元数据+检索工具" | **重合·仅佐证**：NeuroBook 独立走到同一处，不新增 |
+| 4 | Agent Dialogue 内容边界（排工具/思考/harness） | **已有**：Core 两平面 + `subagent_context_has_no_orchestrator_noise` CI 不变式 | **重合·仅佐证** |
+| 5 | 重建非累积 + index/state 分离 | **已有**：MCP `memory/current.md`+`index.md`、`state/live.json`+`history.jsonl`；Core `prepare_pipeline` 每轮重建；封卷；已定采 Hermes 记忆 | **重合·仅佐证** |
+| 6 | Leader/subagent + walkthrough + 问人 | **subagent 编排+可观测已有**（Core M_AGENT loop + SSE `plan`/`tool_call`/`tool_result`）；**walkthrough 用户可读摘要 + 中途问人 没有** | **半新**：只学 walkthrough 包装 + pause-for-human |
+| 7 | 酒馆卡三段导入 inspect→unpack→import | **完全已有**：`validate_card`(检查) + `decompose_character`/`analyze_card`(拆解) + `import_card`(导入) | **纯重合·删此学习点**：我们已有，Task 1.1 复用现有三工具，**别按 NeuroBook 重造导入管线** |
+
+**净提炼——真正值得纳入的只有：**
+- **点 2（净新）**：持久化 per-角色视角知识层——超出我们现有"关键词懒加载"。→ Task 1.3 世界书 + 角色模型。
+- **点 1（半新·形态）**：orchestrator 结构化 profile 抽象的**形态**参考——**重构** Core orchestrator 时借鉴，**不建平行系统**。
+- **点 6（半新·小）**：walkthrough（SSE 事件包装成用户可读执行摘要）+ 中途问人。
+- 点 3/4/5/7 **我们已有**，NeuroBook 仅**外部佐证方向**，**不新增、不重造、不建平行实现**。
+
 ## 不学 / 差异
 - 技术栈 Nuxt/Bun/SQLite/Prisma vs 我们 Tauri/Rust——不搬代码。
 - 定位偏"小说写作 IDE"（Thread/Scene/Plot 剧情结构、手稿分卷），我们偏"RP agent 客户端"——剧情结构那套按需借鉴，非照搬。
 - License 非商用——只学理念，不复制其代码。
 
-## 落地建议（并入我们路线）
-- **Task 1.3 世界书引擎**：条目加 `retrieval`/`inject` 语义（学点 3）+ 引入 **per-角色视角知识**层（学点 2）。
-- **Phase 2 记忆/装配**：orchestrator 结构化 profile 抽象参考 **TSX 三层 + 运行时合同**（学点 1）；记忆走"重建非累积"（学点 5）。
-- **可观测**：SSE 事件包装成 **walkthrough** 推 UI（学点 6）。
-- **Task 1.1 导入**：采 inspect→unpack→import 三段（学点 7）。
-- **红线加固**：把"Agent Dialogue 排除项"扩成清单断言，强化 `subagent_context_has_no_orchestrator_noise`（学点 4）。
+## 落地建议（**只列净新，去掉与自有重合的**）
+- **Task 1.3 世界书/角色模型**：引入 **per-角色视角知识层**（点 2·净新）——注入角色平面的是"该角色该知道的子集"，超出现有关键词懒加载。（`retrieval`/`inject` 语义 §5 已有，不重复列。）
+- **Phase 2 orchestrator 重构（非新增）**：借鉴 **TSX 三层 + 运行时合同的形态**（点 1·半新）重构 Core orchestrator 装配——**不建平行装配系统**，避免与现有 orchestrator 冲突。
+- **可观测（小）**：SSE 事件包装成用户可读 **walkthrough** + 支持 loop 中途 pause 问人（点 6·半新）。
+- **不做**：三段导入（点 7 已有 `validate_card`/`decompose_character`/`import_card`，Task 1.1 直接复用）、内容边界断言（点 4 已有 CI 不变式）、重建/分层记忆（点 5 已有 + Hermes 已定）、retrieval/inject 语义（点 3 §5 已定）——**这些 NeuroBook 只作外部佐证，不重造。**
