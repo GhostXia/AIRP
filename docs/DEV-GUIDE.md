@@ -28,11 +28,12 @@
 **🎯 首要目标（用户 2026-07-03 定，优先级高于一切 Phase/Task 排序）**：**开发出可执行文件并能简单运行。**
 
 - 这条压倒 DEV-GUIDE/PLAN 里所有 Phase 1/2/3 的功能拆分与 Task 顺序——任何 agent 接手时，**第一动作应是让项目产出可双击运行的产物（桌面端 .exe / 可执行）并跑通最简对话闭环**，而非按 Task 1.x 清单逐项推进。
-- "简单运行"判据：用户拿到产物 → 双击/启动 → 选角色 → 发一条消息 → 收到流式回复。这一条不过，其余 Task 1.2/1.3/1.4/1.5、Perf Spike、扩展生态都属空谈——不可运行的代码对用户价值为零。
+- "简单运行"判据：用户拿到产物 → 双击/启动 → 选角色 → 发一条消息 → 收到流式回复。这一条不过，其余 Task 1.3/1.4/1.5、Perf Spike、扩展生态都属空谈——不可运行的代码对用户价值为零。
 - 已知阻塞项（动手前先核对，别重做）：
-  - `ui/build-tauri.ps1` 是坏死脚本（硬编码他人路径 + 旧仓名 `AIRP-State-Protocol`，见 issue #7 P0-3）——**不可用**，走 `cargo tauri build` 或 `npm run tauri dev`。
+  - `ui/build-tauri.ps1` 已在 2026-07-03 审计 follow-up 修复；优先用它产出桌面 artifact，或用 `npm run tauri dev` 做开发态验收。
   - Tauri bundler 缓存需留 D 盘（PR #5 已加 `bundle.useLocalToolsDir`，守 AGENTS.md 工具链不下 C 盘）。
-  - 引擎 sidecar 随包自带、零配置（PLAN §3.7）；启动需 `data/settings.json` 有有效 `endpoint`/`api_key`/`model`（当前该文件有死链 model `gemini-3.1-pro-preview`，issue #7 P1-4，需修）。
+  - `data/settings.json` 的死链 model 已修；但真实运行仍需要有效 `endpoint`/`api_key`/`model`。不要把示例空 key 当作已完成运行时验收。
+  - 当前真正未闭环的是：打包产物启动、真实配置下最简对话、GUI 角色导入路径与大卡不卡顿、Perf Spike。
 - 与"更开放/透明/易修正/易迭代"取向一致：可运行 = 最朴素的透明（用户能自己验证它动不动）；不可运行 = 最深的封闭。
 
 ---
@@ -146,8 +147,8 @@ data/
 ## 4. UI 详细设计（Tauri 桌面优先）
 
 - **技术**：Tauri 2 + Vue（`ui/`）。只渲染引擎下发的 **Blueprint**（声明式 JSON），**不执行 agent 生成的代码**。
-- **已实现（代码完成，当前 AIRP-Dev 集成后仍需验收）**：Widget Registry（vue/module/esm 三类）、BlueprintRenderer、WidgetHost（错误隔离）、RFC6902 state store（`test` op 非事务，注意）、首方 widget（chat/emotion/memory/inventory/quest/map/card + clock）、虚拟滚动（`virtual-window.ts` `computeWindow`）、esm 沙箱（opaque-origin iframe）、consent 门（授权绑 `{type,version,source}` + localStorage 持久化）、边界 guard、Tauri `.exe` 打包。历史事实：AIRP-State-Protocol 原项目最早验证过打包 exe 可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
-- **必做（MVP 第一步）**：把 mock `BusRelay`（`ui/src-tauri/src/bus.rs`）换成**连真引擎**——加 `SSEBus`（非 Tauri 环境）或让 `BusRelay` 内部 HTTP 调引擎（Tauri 壳内 IPC→Rust核→引擎）。`bus-factory.ts` 已按 `__TAURI_INTERNALS__` 选 bus，接线点清楚。
+- **已实现（代码完成，当前 AIRP-Dev 集成后仍需验收）**：Widget Registry（vue/module/esm 三类）、BlueprintRenderer、WidgetHost（错误隔离）、RFC6902 state store（`test` op 已预校验，失败不半应用）、首方 widget（chat/emotion/memory/inventory/quest/map/card + clock）、虚拟滚动（`virtual-window.ts` `computeWindow`）、esm 沙箱（opaque-origin iframe，`postMessage` targetOrigin 已收紧到 `"null"`）、consent 门（授权绑 `{type,version,source}` + localStorage 持久化）、边界 guard、Tauri `.exe` 打包、id-keyed chat 消息模型。历史事实：AIRP-State-Protocol 原项目最早验证过打包 exe 可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
+- **已落地（MVP 第一步）**：`BusRelay`（`ui/src-tauri/src/bus.rs`）已从 mock 改为 Tauri 壳内 IPC→Rust 核→engine HTTP `/v1/chat/completions`，并消费 SSE 回填 chat state。`bus-factory.ts` 仍按 `__TAURI_INTERNALS__` 选 bus，接线点清楚。
 - **半永久 Blueprint / RP=UI Profile**：首次进 RP → agent 推导 Blueprint → 存储+UUID；同一 RP 以后直接读。RP 类型定画像（恋爱→聊天、经营→数据面板、桌游→卡牌、跑团→属性栏）。
 - **必须跑 Perf Spike**（见 §7）——代码有虚拟滚动但从没真跑过 10 万条验证。
 
@@ -163,7 +164,7 @@ data/
 | **世界书** | 🆕 **最大新建件** | 四仓皆无完整实现。酒馆是 `{entries:{"0":{...}}}` uid-keyed object。**重组**：解析全字段进数据层 + 把 position/depth/selective/constant/probability/递归 当**给 agent 的建议元数据 + 检索 Tool**（agent 生成中按需调 `lorebook_lookup`），**非硬编注入管线**。MVP 可先"解析+关键词触发（aho-corasick）"，插入语义增量补 |
 | **预设** | 🔧 | 预设是**建议素材非机械回放**：agent 理解意图按当前模型适配（`analyze_preset`/`tune_preset` 思路）。采样参数=adapter 建议值。正则脚本→**消息格式化 Hook**。用 Core/mcp-server 的 `preset_regex.rs`（正确骨架），杀掉 `preset.rs` 里瞎起名的 `RegexScript` 冲突版，补 trimStrings/minDepth/maxDepth 等字段 |
 
-**已知代码修点**（挖对应零件时一并修，详见 PARTS.md §M）：mcp-server 角色卡 zTXt-only（用 core 替换）、世界书 Vec 结构、预设两套 RegexScript 冲突、state 写入不 clamp（模型可写越界值，`persist_live_state` 落盘前按 schema clamp）、list 排序漂移、import_preset 绕沙箱、constant_time_eq 长度侧信道、错误码全归 INTERNAL_ERROR、并发写无文件锁、RFC6902 test 非事务。
+**已知代码修点**（挖对应零件时一并修，详见 PARTS.md §M）：mcp-server 角色卡 zTXt-only（用 core 替换）、世界书 Vec 结构、预设两套 RegexScript 冲突、state 写入不 clamp（模型可写越界值，`persist_live_state` 落盘前按 schema clamp）、list 排序漂移、import_preset 绕沙箱、constant_time_eq 长度侧信道、错误码全归 INTERNAL_ERROR、并发写无文件锁。
 
 ---
 
@@ -196,15 +197,15 @@ data/
 
 > 原则：每阶段自身可跑、可测、可验收。**MVP 优先证明端到端，再谈扩展。**
 >
-> **📍 当前状态（2026-07-03）**：Phase 0 ✅ 已完成合并（PR #2）。Phase 1 Task 1.1 ✅ 已实现（PR #3）并完成派生 ID 加固（PR #4）。**下一步 = 先做 Task 1.1 运行时验收 / 文档收口，再推进 Task 1.2（chat 消息 id-keyed 寻址）**。
+> **📍 当前状态（2026-07-03）**：Phase 0 ✅ 已完成合并（PR #2）。Phase 1 Task 1.1 ✅ 已实现（PR #3）并完成派生 ID 加固（PR #4）。Task 1.2 ✅ 已完成并合并（PR #6，PR #12 追加审计 follow-up）。**下一步 = 可执行文件/GUI 运行时验收 + Perf Spike，然后进入 Task 1.3 世界书或 Task 1.4 会话操作**。
 
 ### Phase 0 · 引擎+UI 直连，跑通一次干净对话（MVP 地基）—— ✅ 已完成（PR #2 合并入 main）
 - 已落地：`ui/src-tauri/src/bus.rs` 的 `BusRelay` 从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，消费 SSE、按 `w-chat` scope 流式回填；角色列表 `characters.list`。
 - 已验证：真实酒馆卡端到端对话通；`cargo test -p airp-ui`(5) + `vitest`(92) + `vue-tsc`(0) + **`subagent_context_has_no_orchestrator_noise` ✅**（神圣不变式）全绿。
-- **遗留到 Phase 1**：角色卡导入 UI 运行时验收（Phase 0 用预置 `data/characters/` 卡验证；Task 1.1 代码已合并）；当前 AIRP-Dev `.exe` 打包后真跑 GUI；Perf Spike 10 万条（§7）；reasoning/action 渲染；chat_lock → id-keyed 重构（Task 1.2）。
+- **遗留到 Phase 1**：角色卡导入 UI 运行时验收（Phase 0 用预置 `data/characters/` 卡验证；Task 1.1 代码已合并）；当前 AIRP-Dev `.exe` 打包后真跑 GUI；Perf Spike 10 万条（§7）；reasoning/action 渲染。
 
 ### Phase 1 · 酒馆导入完整 + 基础会话
-> 按下列顺序推进，每个 Task 自身可验收。**当前先收口 Task 1.1 运行时验收，再进入 Task 1.2。**
+> 按下列顺序推进，每个 Task 自身可验收。**当前先收口可执行文件/GUI 运行时验收与 Perf Spike，再进入 Task 1.3/1.4。**
 
 **Task 1.1 · 角色卡导入 UI** —— PR #3 已实现，PR #4 已加固派生 ID；当前需要运行时验收与文档收口
 - UI 加"导入卡"：Tauri 文件对话框拿路径 → `characters.import` intent（只带路径）→ 引擎读盘 + png_parser 解析落盘 → 刷新 `characters.list`。
@@ -226,11 +227,28 @@ data/
 - **待验收**：从 Tauri GUI 选真实酒馆 PNG 卡导入成功、出现在列表、可对话；`character_book` 一并入库；**传给引擎的是路径非 base64**（大卡不卡顿、store 无大字符串）；`card/raw.json` 有原始留存（sidecar）。
 - **🔒 未来必做待办（已登记 RR-001）**：引擎 `/v1/characters/import` 的 `card_path` 端点目前**无调用方可信度校验**——任意能发 HTTP 请求者均可令引擎读任意绝对路径。当前单本地 UI + 同机 sidecar 模型下审计豁免；但**任一以下条件触发时必须先补门控再放行**：①引擎转多客户端/web（引擎不再只听本机）；②放开第三方 widget 发 `characters.import` intent；③`card_path` 暴露给非可信调用方。门控方式：capability/白名单限制 `card_path` 仅可信本地 UI 来源，或对不可信方强制走 base64/multipart 上传分支而禁用 path 分支。**未来审计 agent 应主动核查此待办是否已补，未补而条件已变 = 漏洞。**
 
-**Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
+**Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— ✅ 已完成（PR #6，PR #12 follow-up）
 - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁治标：① 全局串行挡住多角色 N 个 NPC 并发流式（§3.6），② user_echo 锁外同步发、顺序仍可能小错乱。
 - **做法**：chat scope 消息模型数组 → **id-keyed map + order 数组**（`{messages:{"a1":{...}}, order:["u1","a1"]}`），每流 patch 自己那条 `replace /messages/{id}/text`，**删 chat_lock**。改动面：`ui/src-tauri/src/bus.rs`（patch 构造 + 去锁）、`ui/src/state/store.ts`、`ui/src/widgets/ChatWidget.vue`（渲染改 `order.map(id => messages[id])`）。
 - **实现约束**：`BusRelay` 不能假设 `airp_dispatch` 串行。每个 `chat.send` 必须用**单个 state patch envelope** 同时写入 user row、`order` user id、assistant row、`order` assistant id；否则两个并发 dispatch 的多 envelope emit 可能交错成 `u1,u2,a2,a1`。
-- **验收**：两条 chat.send 并发不串扰、顺序对、无锁。
+- **实现状态**：`BusRelay` 已移除 `chat_lock`；chat scope 已改为 `{messages, order}`；每个 `chat.send` 用单个 state patch envelope 同时写入 user row、`order` user id、assistant row、`order` assistant id；流式回填只改自己的 `/messages/{assistant_id}/text`。
+- **已验证**：`cargo test -p airp-ui`、`npm run test -- --run`、`npm run typecheck`、`cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` 通过；审计 follow-up 后前端测试 95 个通过。
+
+### 下一步开发接手清单（2026-07-03）
+
+1. 先设置 D 盘工具链环境：
+   ```powershell
+   $env:RUSTUP_HOME = "D:\.rustup"
+   $env:CARGO_HOME = "D:\.cargo"
+   $env:npm_config_prefix = "D:\npm-global"
+   $env:npm_config_cache = "D:\npm-global\npm-cache"
+   $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
+   ```
+2. 确认 `data/settings.json` 使用真实可用的 `endpoint` / `api_key` / `model`，不要把空 key 示例当运行时验收。
+3. 开发态最简闭环：启动 engine（例如 `cargo run -p airp-core -- daemon --port 8000`），再 `cd ui; npm run tauri dev`，选/导入角色，发一条消息，确认收到流式回复。
+4. 打包态闭环：`cd ui; .\build-tauri.ps1`，启动产物，重复最简对话；记录 artifact 路径、启动方式、settings 来源、是否依赖 sidecar 手动启动。
+5. 跑 Perf Spike：用 10 万条消息验证 `virtual-window.ts` 路径和 ChatWidget 不退化。
+6. 继续功能时优先二选一：Task 1.3 世界书引擎，或 Task 1.4 会话操作（swipe/edit/delete/regenerate）。
 
 **Task 1.3 · 世界书引擎（最大新建 · 关键路径）** —— 见 §5 + [PARTS.md](PARTS.md) F
 - 解析酒馆 world info（`{entries:{"0":{...}}}` uid-keyed object，全字段：keys/secondary_keys/position/depth/order/probability/selective/constant/递归…）入数据层；关键词触发用引擎已有 aho-corasick 扫描。

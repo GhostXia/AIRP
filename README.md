@@ -34,6 +34,8 @@ D:\AIRP-Dev/
 
 - Phase 0 已完成：UI `BusRelay` 直连 engine `/v1/chat/completions`，可流式回填聊天。
 - Phase 1 Task 1.1 已实现：UI 通过 Tauri dialog path-first 导入角色卡，engine 读盘解析并落库。
+- Phase 1 Task 1.2 已完成：chat 状态已改为 id-keyed `{messages, order}`，`BusRelay` 不再依赖 `chat_lock`，每次 `chat.send` 用单个 patch envelope 原子创建 user/assistant 两行。
+- 2026-07-03 审计 follow-up 已完成：Tauri 构建脚本、默认 settings、sandbox `postMessage` 目标、RFC6902 `test` 预校验、仓库 metadata 均已同步修正。
 - 当前未解决/待验收事项见 [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md) 和 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)。
 
 ## 本地环境

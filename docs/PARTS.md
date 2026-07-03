@@ -93,12 +93,12 @@
 | Tauri+Vue 壳 + 打包 | S `src-tauri/` + `tauri-build.yml` | ✅ | AIRP-State-Protocol 原项目最早已验证打包后的 `airp-ui.exe` 可正常启动并做简单交互；未做深度功能/性能测试。签名二进制分发，不运行时编译 |
 | Widget Registry | S `src/registry/registry.ts` | ✅ | vue/module/esm 三类注册，命名空间 `namespace.name`，`core.*` 保留 |
 | BlueprintRenderer + WidgetHost | S `src/components/` | ✅ | 渲染声明式 Blueprint，错误隔离(onErrorCaptured) |
-| RFC6902 状态 store | S `src/state/store.ts` | 🔧 | 全量 patch(add/remove/replace/move/copy/test)。⚠️ `test` op 非事务性（前置 op 已生效） |
+| RFC6902 状态 store | S `src/state/store.ts` | ✅ | 全量 patch(add/remove/replace/move/copy/test)。`test` op 已改为整包预校验，失败时不会半应用前置 op |
 | 首方 widget 集 | S `src/widgets/` | ✅ | chat/emotion/memory/inventory/quest/map/card + clock(module) |
 | 虚拟滚动 | S `src/widgets/virtual-window.ts`(`computeWindow`) | 🔧 | 定高窗口化纯函数，代码在。**perf spike(10万条)从没真跑过**，必验 |
 | AgentBus 接口 + 环境工厂 | S `src/protocol/{bus,bus-factory,tauri-bus}.ts` | ✅ | `dispatch`/`subscribe` 抽象，按 `__TAURI_INTERNALS__` 选 bus。**换后端只换 bus 实现** |
 | 边界 guard | S `src/protocol/guard.ts` | ✅ | Envelope 进 store 前结构校验，非法回 error，fail-closed |
-| BusRelay（engine live link 已落地） | 当前 `ui/src-tauri/src/bus.rs` | 🔧 | Phase 0 已从 mock 改为直连 engine `/v1/chat/completions` 并消费 SSE。仍有 `chat_lock` 串行化债务、Task 1.2 id-keyed 消息寻址、GUI runtime 验收与 Perf Spike 待补 |
+| BusRelay（engine live link 已落地） | 当前 `ui/src-tauri/src/bus.rs` | ✅ | Phase 0 已从 mock 改为直连 engine `/v1/chat/completions` 并消费 SSE。Task 1.2 已改为 id-keyed chat、移除 `chat_lock`，每次 `chat.send` 用单 patch envelope 原子创建 user/assistant 行。GUI runtime 验收与 Perf Spike 待补 |
 
 ## I. 线协议 / 状态渲染契约
 
@@ -152,7 +152,7 @@
 | constant_time_eq 长度侧信道 | M `http.rs:137`(E.3) | 改 HMAC 定长比较 |
 | 错误码全归 INTERNAL_ERROR | M `error.rs:41`(E.4) | 客户端错误用 -32600/-32602 |
 | 并发写无文件锁 | C deploy §并发 | 多 agent 写同角色会漂移。per-character 串行化待建 |
-| RFC6902 test 非事务 | S `store.ts` | 前置 op 已生效才抛 |
+| RFC6902 test 非事务 | S `store.ts` | 已修：patch 前预校验所有 `test`，失败不半应用 |
 | Gateway pending oneshot 泄漏 | G R11.2 | 超时后 pending 表条目不清 |
 
 ---

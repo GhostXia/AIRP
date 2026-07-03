@@ -11,6 +11,7 @@
 - `docs/DEV-GUIDE.md`：同步 PR #1-#4 状态、D 盘工具链和 npm cache 约束。
 - `docs/PLAN.md` / `docs/PARTS.md`：修正四仓 workspace、mock BusRelay、CI 强制等 2026-07-01 旧状态。
 - `AGENTS.md`：补充 npm cache 必须显式指向 `D:\npm-global\npm-cache`。
+- 2026-07-03 审计 follow-up：PR #6 已合并 Task 1.2 id-keyed chat 并移除 `chat_lock`；PR #12 已修 `ui/build-tauri.ps1`、默认 settings、sandbox `postMessage`、RFC6902 `test` 预校验与仓库 metadata；issue #7-#11 已关闭。
 - 补充历史验证事实：AIRP-State-Protocol 原项目打包后的 exe 曾可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
 - 新增 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)：已拍板 AIRP-State-Protocol 的理念定位。Blueprint/Widget/patch/guard/虚拟滚动/consent/sandbox 必须吸收；"通用 Agent UI 标准优先"和"乐高优先"不作为 AIRP 主线。
 - 新增 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：逐项审查 AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol，统一为"吸收资产，不继承产品北极星"。
@@ -23,9 +24,10 @@
    - 建议写法：`已实现，待运行时验收`。若你认可，也可以改成 `Done`，把验收作为单独 QA 项。
 
 2. **下一步优先级**
-   - 路线 A：先补 Task 1.1 GUI/runtime 验收和 Perf Spike，再继续功能。
-   - 路线 B：先做 Task 1.2 chat 消息 id-keyed 寻址，顺带解决 `chat_lock` 债务。
-   - 我倾向 A 后 B，原因是导入链路已经合并，先把验收闭环补上更透明。
+   - 已完成：Task 1.2 chat 消息 id-keyed 寻址与 `chat_lock` 移除已合并，不再作为路线选择项。
+   - 路线 A：先补可执行文件/GUI runtime 验收和 Perf Spike，再继续功能。
+   - 路线 B：直接进入 Task 1.3 世界书或 Task 1.4 会话操作。
+   - 我倾向 A 后 B，原因是当前首要目标是可运行产物，先把打包、启动、真实配置、最简对话闭环补上更透明。
 
 3. **“CI”措辞**
    - 当前仓库没有项目级 `.github` CI；门禁事实是本地测试 + 人工 review。

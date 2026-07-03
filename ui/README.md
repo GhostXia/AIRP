@@ -64,11 +64,11 @@ cargo test -p airp-ui
 - Override with `AIRP_ENGINE_URL`.
 - Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested.
 - Character import is path-first: the UI sends only `card_path`; it must not put base64 card blobs into Vue state or widget props.
-- Current chat streaming still uses `chat_lock` and `/messages/-/text`; Task 1.2 should move chat state to id-keyed messages and remove the lock.
+- Chat state is id-keyed as `{ messages, order }`. `BusRelay` no longer uses `chat_lock`; each `chat.send` opens the user and assistant rows with one patch envelope, then streams into `/messages/{assistant_id}/text`.
 
 ## Open Items
 
 - AIRP-Dev GUI end-to-end verification after packaging and engine integration.
+- Package/runtime smoke: build the desktop artifact, launch it, select/import a character, send one message, and receive a streamed reply with real settings.
 - Perf spike with 100k messages.
 - Reasoning/action rendering.
-- Task 1.2 id-keyed chat message model.
