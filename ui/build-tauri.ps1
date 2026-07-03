@@ -1,17 +1,32 @@
-$env:CARGO_HOME = 'D:\.cargo'
-$env:RUSTUP_HOME = 'D:\.rustup'
-$mingw = 'C:\Users\xiach\scoop\apps\mingw\current\bin'
-$sc = 'D:\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained'
-$env:PATH = 'D:\.cargo\bin;' + $mingw + ';' + $sc + ';' + $env:PATH
+$ErrorActionPreference = "Stop"
 
-# 1. Build src-tauri (Tauri desktop shell)
-$env:CARGO_TARGET_DIR = 'D:\AIRP-State-Protocol\src-tauri\target'
-Set-Location 'D:\AIRP-State-Protocol\src-tauri'
-Write-Host "=== cargo build (src-tauri) ==="
-& 'D:\.cargo\bin\cargo.exe' +stable-x86_64-pc-windows-gnu build 2>&1 | ForEach-Object { Write-Host $_ }
-Write-Host "--- build exit $LASTEXITCODE ---"
+$env:RUSTUP_HOME = "D:\.rustup"
+$env:CARGO_HOME = "D:\.cargo"
+$env:npm_config_prefix = "D:\npm-global"
+$env:npm_config_cache = "D:\npm-global\npm-cache"
+$env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
 
-# 2. cargo test (src-tauri)
-Write-Host "=== cargo test (src-tauri) ==="
-& 'D:\.cargo\bin\cargo.exe' +stable-x86_64-pc-windows-gnu test 2>&1 | ForEach-Object { Write-Host $_ }
-Write-Host "--- test exit $LASTEXITCODE ---"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$cargo = Join-Path $env:CARGO_HOME "bin\cargo.exe"
+$npm = "D:\nodejs\npm.cmd"
+
+if (-not (Test-Path -LiteralPath $cargo)) {
+    throw "cargo.exe not found at $cargo"
+}
+if (-not (Test-Path -LiteralPath $npm)) {
+    throw "npm.cmd not found at $npm"
+}
+
+Push-Location (Join-Path $repoRoot "ui")
+try {
+    Write-Host "=== npm run build ==="
+    & $npm run build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    Write-Host "=== npm run tauri -- build ==="
+    & $npm run tauri -- build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+finally {
+    Pop-Location
+}

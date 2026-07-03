@@ -70,4 +70,15 @@ describe("state store", () => {
     setState("tf", { x: 5 });
     expect(() => patchState("tf", [{ op: "test", path: "/x", value: 1 }])).toThrow();
   });
+
+  it("rolls back earlier ops when a later op fails", () => {
+    setState("tx", { x: 5, y: 1 });
+    expect(() =>
+      patchState("tx", [
+        { op: "replace", path: "/x", value: 9 },
+        { op: "test", path: "/y", value: 2 },
+      ]),
+    ).toThrow();
+    expect(stateStore.tx).toEqual({ x: 5, y: 1 });
+  });
 });

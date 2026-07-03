@@ -162,4 +162,10 @@ describe("sandboxBootstrap", () => {
     expect(html).toContain("if (hasState)");
     expect(html).not.toContain("__sandboxStateCb");
   });
+
+  it("posts back to the opaque parent origin explicitly", () => {
+    const html = sandboxBootstrap("https://cdn.acme/widget.js");
+    expect(html).toContain('parent.postMessage(msg, "null")');
+    expect(html).not.toContain('parent.postMessage(msg, "*")');
+  });
 });

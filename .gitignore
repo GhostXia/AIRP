@@ -33,8 +33,6 @@ Thumbs.db
 .env.*.local
 
 # 运行时数据（core 的样本数据保留入库，但运行产物忽略）
-crates/core/data/**/*.log
-crates/core/data/sessions/
 # 引擎运行时产物（Phase 0 端到端验证生成）：config.json 是 daemon 启动自动写的，
 # history/ turn_counter/ quota.json 是会话/封卷/quota 计数器，均不入库。
 config.json

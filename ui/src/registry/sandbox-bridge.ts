@@ -14,7 +14,7 @@
  * `mount(iframe.document.body, ctxProxy)` where `ctxProxy` translates calls
  * into `postMessage` to the host. `allow-scripts` permits the import + mount.
  *
- * Message protocol (host ↔ iframe), all `postMessage` with targetOrigin `"*"`
+ * Message protocol (host ↔ iframe), all `postMessage` with targetOrigin `"null"`
  * (the iframe is opaque; the host gates on `event.source === iframe.contentWindow`):
  *
  * - host → iframe: `{ kind: "mount", instance, capabilities }` then
@@ -149,7 +149,7 @@ export class SandboxBridge {
  * the `WidgetContext` over `postMessage`. Kept as a function so the source
  * can be interpolated without string concatenation ambiguity.
  *
- * The bootstrap uses `parent.postMessage(msg, "*")` to reach the host; the
+ * The bootstrap uses `parent.postMessage(msg, "null")` to reach the host; the
  * host gates on `event.source === iframe.contentWindow` (see
  * `createIframeTransport`), so a hostile iframe cannot spoof messages from a
  * different frame.
@@ -163,7 +163,7 @@ export function sandboxBootstrap(source: string): string {
 <body><script>
 (function(){
   var SRC = ${safeSource};
-  function send(msg){ parent.postMessage(msg, "*"); }
+  function send(msg){ parent.postMessage(msg, "null"); }
   // Buffer the latest state: a state message can arrive before the widget's
   // async import has registered its onState callback. We keep the last value
   // and replay it on registration, so the first state slice is never dropped.
@@ -235,8 +235,8 @@ export function createIframeTransport(
 
   return {
     postMessage: (msg) => {
-      // targetOrigin "*" because the iframe is opaque-origin (no real origin).
-      iframe.contentWindow?.postMessage(msg, "*");
+      // targetOrigin "null" precisely targets the opaque-origin sandbox frame.
+      iframe.contentWindow?.postMessage(msg, "null");
     },
     onMessage: (cb) => {
       listeners.add(cb);
