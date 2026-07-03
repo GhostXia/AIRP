@@ -17,11 +17,11 @@
 //! headless engine service — see DEV-GUIDE §3.3).
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
+use airp_state_protocol::{Body, Envelope, PatchOp, PatchOpKind, SetOrPatch, PROTOCOL_VERSION};
 use futures_util::StreamExt;
 use tauri::{AppHandle, Emitter};
-use airp_state_protocol::{Body, Envelope, PatchOp, PatchOpKind, SetOrPatch, PROTOCOL_VERSION};
 
 /// Tauri event name carrying a downstream envelope to the webview.
 pub const ENVELOPE_EVENT: &str = "airp:envelope";
@@ -43,20 +43,16 @@ pub struct BusRelay {
     seq: AtomicU64,
     engine_url: String,
     http: reqwest::Client,
-    /// Serializes chat.send streams so `/messages/-/text` always targets the
-    /// in-flight assistant row. Without this, two concurrent streams would both
-    /// append then race on `replace /messages/-/text`, corrupting each other's
-    /// reply (CodeRabbit finding). An **async** mutex held for the whole SSE
-    /// consumption: a std Mutex guard is `!Send` and can't cross the `.await` in
-    /// the spawned task, so we use `tokio::sync::Mutex` + `Arc` and lock *inside*
-    /// the task (dispatch stays non-blocking; streams queue instead of racing).
-    chat_lock: Arc<tokio::sync::Mutex<()>>,
+    // Task 1.2: chat_lock removed. Streaming patches now address a fixed
+    // assistant row id (`/messages/{id}/text`) reserved before spawning, so
+    // concurrent streams no longer race on `/messages/-/text` (the `-`
+    // last-element target that the lock existed to serialize).
 }
 
 impl BusRelay {
     pub fn new() -> Self {
-        let engine_url = std::env::var("AIRP_ENGINE_URL")
-            .unwrap_or_else(|_| DEFAULT_ENGINE_URL.to_string());
+        let engine_url =
+            std::env::var("AIRP_ENGINE_URL").unwrap_or_else(|_| DEFAULT_ENGINE_URL.to_string());
         // Bounded HTTP client: connect + request timeouts prevent spawned
         // tasks hanging forever if the engine stalls (CodeRabbit finding).
         let http = reqwest::Client::builder()
@@ -69,7 +65,6 @@ impl BusRelay {
             seq: AtomicU64::new(0),
             engine_url,
             http,
-            chat_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -96,7 +91,9 @@ impl BusRelay {
             format!("ack-{n}"),
             now_ms(),
             "gateway",
-            Body::Ack(airp_state_protocol::AckMsg { ref_: env.id.clone() }),
+            Body::Ack(airp_state_protocol::AckMsg {
+                ref_: env.id.clone(),
+            }),
         ));
 
         if let Body::Intent(i) = &env.body {
@@ -114,51 +111,39 @@ impl BusRelay {
                     .unwrap_or("")
                     .to_string();
 
-                // Mirror the user's message into the chat scope immediately so
-                // the UI shows it before the engine responds (the engine also
-                // persists it, but this avoids a round-trip for the user echo).
-                let user_msg_id = format!("u{n}");
-                let user_echo = Envelope::new(
-                    format!("state-u{n}"),
-                    now_ms(),
-                    "ui",
-                    Body::State(airp_state_protocol::StateMsg {
-                        scope: "w-chat".into(),
-                        op: SetOrPatch::Patch,
-                        state: None,
-                        patch: Some(vec![PatchOp {
-                            op: PatchOpKind::Add,
-                            path: "/messages/-".into(),
-                            from: None,
-                            value: Some(serde_json::json!({
-                                "id": user_msg_id,
-                                "role": "user",
-                                "text": text,
-                            })),
-                        }]),
-                    }),
-                );
-                self.emit(&user_echo);
+                // Open the chat turn in one envelope: user row, user order id,
+                // assistant row, assistant order id. Multiple Tauri commands
+                // can enter dispatch concurrently, so splitting this into two
+                // emits can interleave `/order` entries across turns.
+                let (turn_open, assistant_id) = chat_turn_open_envelope(n, &text);
+                self.emit(&turn_open);
 
                 // Spawn the engine call so dispatch returns immediately; the
                 // streaming patches are emitted from the task as chunks arrive.
-                // The chat_lock is acquired *inside* the task (async, awaited) so
-                // concurrent chat.send streams serialize — `/messages/-/text` must
-                // always target this stream's assistant row, not a later stream's
-                // (CodeRabbit finding). dispatch itself never blocks.
+                // No lock: each stream patches its own `/messages/{id}/text`,
+                // so concurrent streams don't interfere (Task 1.2).
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
                 let engine_url = self.engine_url.clone();
-                let assistant_id = format!("a{n}");
-                let chat_lock = self.chat_lock.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _guard = chat_lock.lock().await; // held until stream ends
                     if let Err(e) = run_chat_stream(
-                        app_opt.clone(), http, &engine_url, &character_id, &text, &assistant_id, n,
+                        app_opt.clone(),
+                        http,
+                        &engine_url,
+                        &character_id,
+                        &text,
+                        &assistant_id,
+                        n,
                     )
                     .await
                     {
                         tracing::error!(err = %e, "engine chat stream failed");
+                        emit_state_patch(
+                            &app_opt,
+                            format!("state-a{n}-error"),
+                            "w-chat",
+                            vec![assistant_text_patch(&assistant_id, format!("(error: {e}"))],
+                        );
                         if let Some(app) = app_opt {
                             let err_env = Envelope::new(
                                 format!("err-{n}"),
@@ -239,7 +224,10 @@ impl BusRelay {
                         serde_json::json!({ "importing": true }),
                     );
                     match import_character_via_path(
-                        &http, &engine_url, &card_path, character_id.as_deref(),
+                        &http,
+                        &engine_url,
+                        &card_path,
+                        character_id.as_deref(),
                     )
                     .await
                     {
@@ -293,6 +281,70 @@ impl Default for BusRelay {
     }
 }
 
+fn chat_turn_open_envelope(n: u64, text: &str) -> (Envelope, String) {
+    let user_msg_id = format!("u{n}");
+    let assistant_id = format!("a{n}");
+    // Message ids are generated here as `u{n}`/`a{n}`. They must stay JSON
+    // Pointer-safe (no "/" or "~") while paths are built by string formatting.
+    let patch = vec![
+        PatchOp {
+            op: PatchOpKind::Add,
+            path: format!("/messages/{user_msg_id}"),
+            from: None,
+            value: Some(serde_json::json!({
+                "id": user_msg_id,
+                "role": "user",
+                "text": text,
+            })),
+        },
+        PatchOp {
+            op: PatchOpKind::Add,
+            path: "/order/-".into(),
+            from: None,
+            value: Some(serde_json::Value::String(user_msg_id)),
+        },
+        PatchOp {
+            op: PatchOpKind::Add,
+            path: format!("/messages/{assistant_id}"),
+            from: None,
+            value: Some(serde_json::json!({
+                "id": assistant_id,
+                "role": "assistant",
+                "text": "",
+            })),
+        },
+        PatchOp {
+            op: PatchOpKind::Add,
+            path: "/order/-".into(),
+            from: None,
+            value: Some(serde_json::Value::String(assistant_id.clone())),
+        },
+    ];
+    (
+        Envelope::new(
+            format!("state-chat-turn-{n}-open"),
+            now_ms(),
+            "ui",
+            Body::State(airp_state_protocol::StateMsg {
+                scope: "w-chat".into(),
+                op: SetOrPatch::Patch,
+                state: None,
+                patch: Some(patch),
+            }),
+        ),
+        assistant_id,
+    )
+}
+
+fn assistant_text_patch(assistant_id: &str, text: impl Into<String>) -> PatchOp {
+    PatchOp {
+        op: PatchOpKind::Replace,
+        path: format!("/messages/{assistant_id}/text"),
+        from: None,
+        value: Some(serde_json::Value::String(text.into())),
+    }
+}
+
 /// Shape of a single SSE `message` event data emitted by the engine's
 /// `/v1/chat/completions` (see `chat_pipeline::build_sse_stream` →
 /// `UnpackedChunk`: `#[serde(tag="type", content="text")]` with per-variant
@@ -316,14 +368,13 @@ enum EngineChunk {
 /// POST the user message to the engine and stream the assistant reply back as
 /// downstream `state` patches on `w-chat`.
 ///
-/// Streaming protocol (performance contract §6 — incremental append):
-/// 1. Before the first body chunk: emit `add /messages/-` with an empty
-///    assistant message (so the UI reserves a slot and virtual-scroll knows a
-///    new row is coming).
-/// 2. For each subsequent `body_chunk`: emit `replace /messages/-/text` with the
-///    **accumulated** assistant text. The UI store resolves `-` to the last
-///    array element, so this updates only the in-flight message's text — no
-///    full re-parse of the chat log.
+/// Streaming protocol (performance contract §6 — incremental append, Task 1.2):
+/// 1. dispatch emits the user row and reserved assistant row in one envelope.
+///    The four patch ops apply in order, so the turn opens as `u{n}, a{n}`
+///    even when multiple `chat.send` commands enter concurrently.
+/// 2. For each `body_chunk`: emit `replace /messages/{assistant_id}/text` with
+///    the **accumulated** assistant text. Each stream targets its own id, so
+///    concurrent streams don't race — no chat_lock needed.
 /// 3. `think` chunks are dropped in Phase 0 (reasoning display is Phase 1).
 async fn run_chat_stream(
     app: Option<AppHandle>,
@@ -364,13 +415,15 @@ async fn run_chat_stream(
     // boundaries, where the bytes form a complete (valid-UTF-8) SSE frame.
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
-    let mut assistant_started = false;
     let mut acc = String::new();
     // Per-chunk counter so every emitted envelope has a unique id (the protocol
     // requires unique message ids; reusing `state-a{n}-body` for every streamed
     // chunk violated that and would break any downstream ack/dedup).
     let mut chunk_seq: u64 = 0;
-
+    // The assistant row was already reserved (empty) by dispatch before
+    // spawning, so we only ever replace its text — no `assistant_started` /
+    // `/messages/-` add here. Concurrent streams each target their own
+    // `/messages/{assistant_id}/text` and don't interfere (Task 1.2).
     while let Some(chunk) = stream.next().await {
         let bytes = chunk?;
         buf.extend_from_slice(&bytes);
@@ -409,38 +462,13 @@ async fn run_chat_stream(
             match chunk {
                 EngineChunk::Think(_) => continue, // Phase 1: reasoning display.
                 EngineChunk::Body(piece) => {
-                    if !assistant_started {
-                        // Open the assistant row with an empty text; subsequent
-                        // chunks replace the last message's text in place.
-                        assistant_started = true;
-                        emit_state_patch(
-                            &app,
-                            format!("state-a{n}-open"),
-                            "w-chat",
-                            vec![PatchOp {
-                                op: PatchOpKind::Add,
-                                path: "/messages/-".into(),
-                                from: None,
-                                value: Some(json!({
-                                    "id": assistant_id,
-                                    "role": "assistant",
-                                    "text": "",
-                                })),
-                            }],
-                        );
-                    }
                     acc.push_str(&piece);
                     chunk_seq += 1;
                     emit_state_patch(
                         &app,
                         format!("state-a{n}-body-{chunk_seq}"),
                         "w-chat",
-                        vec![PatchOp {
-                            op: PatchOpKind::Replace,
-                            path: "/messages/-/text".into(),
-                            from: None,
-                            value: Some(serde_json::Value::String(acc.clone())),
-                        }],
+                        vec![assistant_text_patch(assistant_id, acc.clone())],
                     );
                 }
                 EngineChunk::ActionOptions { options: _ } => continue, // Phase 1: action UI.
@@ -448,25 +476,9 @@ async fn run_chat_stream(
         }
     }
 
-    // If the engine produced no body chunks at all, still emit an empty
-    // assistant row so the UI sees a (degenerate) turn boundary.
-    if !assistant_started {
-        emit_state_patch(
-            &app,
-            format!("state-a{n}-empty"),
-            "w-chat",
-            vec![PatchOp {
-                op: PatchOpKind::Add,
-                path: "/messages/-".into(),
-                from: None,
-                value: Some(json!({
-                    "id": assistant_id,
-                    "role": "assistant",
-                    "text": "",
-                })),
-            }],
-        );
-    }
+    // If the engine produced no body chunks at all, the assistant row reserved
+    // by dispatch already stands as a (degenerate) empty turn boundary — no
+    // extra emit needed.
 
     Ok(())
 }
@@ -582,11 +594,16 @@ mod tests {
     use airp_state_protocol::IntentMsg;
 
     fn intent(name: &str, params: serde_json::Value) -> Envelope {
-        Envelope::new("u1", 0, "ui", Body::Intent(IntentMsg {
-            name: name.into(),
-            params: Some(params),
-            source: None,
-        }))
+        Envelope::new(
+            "u1",
+            0,
+            "ui",
+            Body::Intent(IntentMsg {
+                name: name.into(),
+                params: Some(params),
+                source: None,
+            }),
+        )
     }
 
     /// The relay must not panic without a subscriber (emit is a no-op) and must
@@ -594,7 +611,10 @@ mod tests {
     #[tokio::test]
     async fn dispatch_handles_intent_without_subscriber() {
         let relay = BusRelay::new();
-        relay.dispatch(intent("chat.send", serde_json::json!({ "text": "hello", "character_id": "x" })));
+        relay.dispatch(intent(
+            "chat.send",
+            serde_json::json!({ "text": "hello", "character_id": "x" }),
+        ));
         relay.dispatch(intent("status.toggle", serde_json::json!({})));
     }
 
@@ -612,7 +632,10 @@ mod tests {
     #[tokio::test]
     async fn chat_send_reads_text_field_from_object_params() {
         let relay = BusRelay::new();
-        relay.dispatch(intent("chat.send", serde_json::json!({ "text": "hello world", "character_id": "c1" })));
+        relay.dispatch(intent(
+            "chat.send",
+            serde_json::json!({ "text": "hello world", "character_id": "c1" }),
+        ));
         relay.dispatch(intent("chat.send", serde_json::json!({})));
         // Yield so spawned tasks (which hit no subscriber → no-op) settle.
         tokio::task::yield_now().await;
@@ -637,5 +660,34 @@ mod tests {
             EngineChunk::Think(t) => assert_eq!(t, "pondering"),
             _ => panic!("expected Think"),
         }
+    }
+
+    #[test]
+    fn chat_turn_open_is_one_ordered_patch_envelope() {
+        let (env, assistant_id) = chat_turn_open_envelope(7, "hello");
+        assert_eq!(assistant_id, "a7");
+
+        let Body::State(state) = env.body else {
+            panic!("expected state envelope");
+        };
+        assert_eq!(state.scope, "w-chat");
+        let patch = state.patch.expect("patch");
+        let paths: Vec<&str> = patch.iter().map(|op| op.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["/messages/u7", "/order/-", "/messages/a7", "/order/-"]
+        );
+        assert_eq!(patch[1].value, Some(serde_json::json!("u7")));
+        assert_eq!(patch[3].value, Some(serde_json::json!("a7")));
+        assert_eq!(patch[0].value.as_ref().unwrap()["text"], "hello");
+        assert_eq!(patch[2].value.as_ref().unwrap()["role"], "assistant");
+    }
+
+    #[test]
+    fn assistant_text_patch_targets_id_keyed_row() {
+        let patch = assistant_text_patch("a42", "partial");
+        assert_eq!(patch.op, PatchOpKind::Replace);
+        assert_eq!(patch.path, "/messages/a42/text");
+        assert_eq!(patch.value, Some(serde_json::json!("partial")));
     }
 }

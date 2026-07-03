@@ -229,6 +229,7 @@ data/
 **Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
 - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁治标：① 全局串行挡住多角色 N 个 NPC 并发流式（§3.6），② user_echo 锁外同步发、顺序仍可能小错乱。
 - **做法**：chat scope 消息模型数组 → **id-keyed map + order 数组**（`{messages:{"a1":{...}}, order:["u1","a1"]}`），每流 patch 自己那条 `replace /messages/{id}/text`，**删 chat_lock**。改动面：`ui/src-tauri/src/bus.rs`（patch 构造 + 去锁）、`ui/src/state/store.ts`、`ui/src/widgets/ChatWidget.vue`（渲染改 `order.map(id => messages[id])`）。
+- **实现约束**：`BusRelay` 不能假设 `airp_dispatch` 串行。每个 `chat.send` 必须用**单个 state patch envelope** 同时写入 user row、`order` user id、assistant row、`order` assistant id；否则两个并发 dispatch 的多 envelope emit 可能交错成 `u1,u2,a2,a1`。
 - **验收**：两条 chat.send 并发不串扰、顺序对、无锁。
 
 **Task 1.3 · 世界书引擎（最大新建 · 关键路径）** —— 见 §5 + [PARTS.md](PARTS.md) F
