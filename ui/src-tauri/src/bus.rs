@@ -151,7 +151,7 @@ impl BusRelay {
                 let engine_url = self.engine_url.clone();
                 let assistant_id = format!("a{n}");
                 let chat_lock = self.chat_lock.clone();
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
                     let _guard = chat_lock.lock().await; // held until stream ends
                     if let Err(e) = run_chat_stream(
                         app_opt.clone(), http, &engine_url, &character_id, &text, &assistant_id, n,
@@ -181,7 +181,7 @@ impl BusRelay {
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
                 let engine_url = self.engine_url.clone();
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
                     match fetch_character_list(&http, &engine_url).await {
                         Ok(ids) => {
                             emit_state_set(
@@ -230,7 +230,7 @@ impl BusRelay {
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
                 let engine_url = self.engine_url.clone();
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
                     // 标记导入中，UI 可显示进度/禁用按钮。
                     emit_state_set(
                         &app_opt,
