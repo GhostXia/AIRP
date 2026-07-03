@@ -5,6 +5,12 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        { "name": "binaries/airp-core", "sidecar": true }
+      ]
+    }
   ]
 }
