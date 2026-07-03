@@ -72,16 +72,21 @@ export class MockBus implements AgentBus {
   dispatch(e: Envelope): void {
     if (e.body.kind === "intent") {
       // Echo a chat intent back into the chat state as an assistant line.
+      // id-keyed messages + order array (matches BusRelay's Task 1.2 layout).
       if (e.body.name === "chat.send") {
         const text = (e.body.params as unknown as { text?: string } | undefined)?.text ?? "";
+        const uid = `u${seq}`;
+        const aid = `a${seq}`;
         this.emit(
           env("agent:narrator", {
             kind: "state",
             scope: "w-chat",
             op: "patch",
             patch: [
-              { op: "add", path: "/messages/-", value: { id: `u${seq}`, role: "user", text } },
-              { op: "add", path: "/messages/-", value: { id: `a${seq}`, role: "assistant", text: "（示例回应）" } },
+              { op: "add", path: `/messages/${uid}`, value: { id: uid, role: "user", text } },
+              { op: "add", path: "/order/-", value: uid },
+              { op: "add", path: `/messages/${aid}`, value: { id: aid, role: "assistant", text: "（示例回应）" } },
+              { op: "add", path: "/order/-", value: aid },
             ],
           }),
         );
@@ -110,7 +115,7 @@ export class MockBus implements AgentBus {
           kind: "state",
           scope: "w-chat",
           op: "set",
-          state: { messages: [{ id: "s1", role: "narrator", text: "你睁开眼，霓虹灯在窗外闪烁。" }] },
+          state: { messages: { s1: { id: "s1", role: "narrator", text: "你睁开眼，霓虹灯在窗外闪烁。" } }, order: ["s1"] },
         }),
       );
       this.emit(env("gateway", { kind: "state", scope: "w-emotion", op: "set", state: { emotion: 60, label: "平静" } }));

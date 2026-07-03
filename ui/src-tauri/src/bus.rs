@@ -17,7 +17,7 @@
 //! headless engine service — see DEV-GUIDE §3.3).
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use futures_util::StreamExt;
 use tauri::{AppHandle, Emitter};
@@ -43,14 +43,11 @@ pub struct BusRelay {
     seq: AtomicU64,
     engine_url: String,
     http: reqwest::Client,
-    /// Serializes chat.send streams so `/messages/-/text` always targets the
-    /// in-flight assistant row. Without this, two concurrent streams would both
-    /// append then race on `replace /messages/-/text`, corrupting each other's
-    /// reply (CodeRabbit finding). An **async** mutex held for the whole SSE
-    /// consumption: a std Mutex guard is `!Send` and can't cross the `.await` in
-    /// the spawned task, so we use `tokio::sync::Mutex` + `Arc` and lock *inside*
-    /// the task (dispatch stays non-blocking; streams queue instead of racing).
-    chat_lock: Arc<tokio::sync::Mutex<()>>,
+    // Task 1.2: chat_lock removed. Streaming patches now address a fixed
+    // assistant row index (`/messages/{idx}/text`) reserved synchronously in
+    // dispatch before spawning, so concurrent streams no longer race on
+    // `/messages/-/text` (the `-` last-element target that the lock existed
+    // to serialize). See DEV-GUIDE Task 1.2.
 }
 
 impl BusRelay {
@@ -69,7 +66,6 @@ impl BusRelay {
             seq: AtomicU64::new(0),
             engine_url,
             http,
-            chat_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -117,7 +113,15 @@ impl BusRelay {
                 // Mirror the user's message into the chat scope immediately so
                 // the UI shows it before the engine responds (the engine also
                 // persists it, but this avoids a round-trip for the user echo).
+                //
+                // Task 1.2: messages is an id-keyed map + a parallel `order`
+                // array of ids. We add by id (`/messages/{id}`) and append the
+                // id to `/order/-`. This lets concurrent streams each patch
+                // their own row (`/messages/{assistant_id}/text`) without racing
+                // on `/messages/-/text`'s "last element" resolution — so the
+                // chat_lock is gone. See DEV-GUIDE Task 1.2.
                 let user_msg_id = format!("u{n}");
+                let assistant_id = format!("a{n}");
                 let user_echo = Envelope::new(
                     format!("state-u{n}"),
                     now_ms(),
@@ -126,33 +130,71 @@ impl BusRelay {
                         scope: "w-chat".into(),
                         op: SetOrPatch::Patch,
                         state: None,
-                        patch: Some(vec![PatchOp {
-                            op: PatchOpKind::Add,
-                            path: "/messages/-".into(),
-                            from: None,
-                            value: Some(serde_json::json!({
-                                "id": user_msg_id,
-                                "role": "user",
-                                "text": text,
-                            })),
-                        }]),
+                        patch: Some(vec![
+                            PatchOp {
+                                op: PatchOpKind::Add,
+                                path: format!("/messages/{}", user_msg_id),
+                                from: None,
+                                value: Some(serde_json::json!({
+                                    "id": user_msg_id,
+                                    "role": "user",
+                                    "text": text,
+                                })),
+                            },
+                            PatchOp {
+                                op: PatchOpKind::Add,
+                                path: "/order/-".into(),
+                                from: None,
+                                value: Some(serde_json::Value::String(user_msg_id.clone())),
+                            },
+                        ]),
                     }),
                 );
                 self.emit(&user_echo);
 
+                // Reserve the assistant row synchronously (empty text) so its
+                // id exists in the map before the streamed chunks start
+                // replacing its text. Done in dispatch (serial) so the add
+                // ordering vs the user echo is deterministic; the stream task
+                // only ever replaces `/messages/{assistant_id}/text`.
+                let assistant_open = Envelope::new(
+                    format!("state-a{n}-open"),
+                    now_ms(),
+                    "ui",
+                    Body::State(airp_state_protocol::StateMsg {
+                        scope: "w-chat".into(),
+                        op: SetOrPatch::Patch,
+                        state: None,
+                        patch: Some(vec![
+                            PatchOp {
+                                op: PatchOpKind::Add,
+                                path: format!("/messages/{}", assistant_id),
+                                from: None,
+                                value: Some(serde_json::json!({
+                                    "id": assistant_id,
+                                    "role": "assistant",
+                                    "text": "",
+                                })),
+                            },
+                            PatchOp {
+                                op: PatchOpKind::Add,
+                                path: "/order/-".into(),
+                                from: None,
+                                value: Some(serde_json::Value::String(assistant_id.clone())),
+                            },
+                        ]),
+                    }),
+                );
+                self.emit(&assistant_open);
+
                 // Spawn the engine call so dispatch returns immediately; the
                 // streaming patches are emitted from the task as chunks arrive.
-                // The chat_lock is acquired *inside* the task (async, awaited) so
-                // concurrent chat.send streams serialize — `/messages/-/text` must
-                // always target this stream's assistant row, not a later stream's
-                // (CodeRabbit finding). dispatch itself never blocks.
+                // No lock: each stream patches its own `/messages/{id}/text`,
+                // so concurrent streams don't interfere (Task 1.2).
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
                 let engine_url = self.engine_url.clone();
-                let assistant_id = format!("a{n}");
-                let chat_lock = self.chat_lock.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _guard = chat_lock.lock().await; // held until stream ends
                     if let Err(e) = run_chat_stream(
                         app_opt.clone(), http, &engine_url, &character_id, &text, &assistant_id, n,
                     )
@@ -316,14 +358,14 @@ enum EngineChunk {
 /// POST the user message to the engine and stream the assistant reply back as
 /// downstream `state` patches on `w-chat`.
 ///
-/// Streaming protocol (performance contract §6 — incremental append):
-/// 1. Before the first body chunk: emit `add /messages/-` with an empty
-///    assistant message (so the UI reserves a slot and virtual-scroll knows a
-///    new row is coming).
-/// 2. For each subsequent `body_chunk`: emit `replace /messages/-/text` with the
-///    **accumulated** assistant text. The UI store resolves `-` to the last
-///    array element, so this updates only the in-flight message's text — no
-///    full re-parse of the chat log.
+/// Streaming protocol (performance contract §6 — incremental append, Task 1.2):
+/// 1. dispatch **reserves** the assistant row synchronously before spawning:
+///    `add /messages/{assistant_id}` (empty text) + `add /order/-` (its id).
+///    Because dispatch is serial, the add ordering vs the user echo is
+///    deterministic; the spawned stream task only ever *replaces* text.
+/// 2. For each `body_chunk`: emit `replace /messages/{assistant_id}/text` with
+///    the **accumulated** assistant text. Each stream targets its own id, so
+///    concurrent streams don't race — no chat_lock needed.
 /// 3. `think` chunks are dropped in Phase 0 (reasoning display is Phase 1).
 async fn run_chat_stream(
     app: Option<AppHandle>,
@@ -364,12 +406,16 @@ async fn run_chat_stream(
     // boundaries, where the bytes form a complete (valid-UTF-8) SSE frame.
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
-    let mut assistant_started = false;
     let mut acc = String::new();
     // Per-chunk counter so every emitted envelope has a unique id (the protocol
     // requires unique message ids; reusing `state-a{n}-body` for every streamed
     // chunk violated that and would break any downstream ack/dedup).
     let mut chunk_seq: u64 = 0;
+    // The assistant row was already reserved (empty) by dispatch before
+    // spawning, so we only ever replace its text — no `assistant_started` /
+    // `/messages/-` add here. Concurrent streams each target their own
+    // `/messages/{assistant_id}/text` and don't interfere (Task 1.2).
+    let assistant_text_path = format!("/messages/{}/text", assistant_id);
 
     while let Some(chunk) = stream.next().await {
         let bytes = chunk?;
@@ -409,26 +455,6 @@ async fn run_chat_stream(
             match chunk {
                 EngineChunk::Think(_) => continue, // Phase 1: reasoning display.
                 EngineChunk::Body(piece) => {
-                    if !assistant_started {
-                        // Open the assistant row with an empty text; subsequent
-                        // chunks replace the last message's text in place.
-                        assistant_started = true;
-                        emit_state_patch(
-                            &app,
-                            format!("state-a{n}-open"),
-                            "w-chat",
-                            vec![PatchOp {
-                                op: PatchOpKind::Add,
-                                path: "/messages/-".into(),
-                                from: None,
-                                value: Some(json!({
-                                    "id": assistant_id,
-                                    "role": "assistant",
-                                    "text": "",
-                                })),
-                            }],
-                        );
-                    }
                     acc.push_str(&piece);
                     chunk_seq += 1;
                     emit_state_patch(
@@ -437,7 +463,7 @@ async fn run_chat_stream(
                         "w-chat",
                         vec![PatchOp {
                             op: PatchOpKind::Replace,
-                            path: "/messages/-/text".into(),
+                            path: assistant_text_path.clone(),
                             from: None,
                             value: Some(serde_json::Value::String(acc.clone())),
                         }],
@@ -448,25 +474,9 @@ async fn run_chat_stream(
         }
     }
 
-    // If the engine produced no body chunks at all, still emit an empty
-    // assistant row so the UI sees a (degenerate) turn boundary.
-    if !assistant_started {
-        emit_state_patch(
-            &app,
-            format!("state-a{n}-empty"),
-            "w-chat",
-            vec![PatchOp {
-                op: PatchOpKind::Add,
-                path: "/messages/-".into(),
-                from: None,
-                value: Some(json!({
-                    "id": assistant_id,
-                    "role": "assistant",
-                    "text": "",
-                })),
-            }],
-        );
-    }
+    // If the engine produced no body chunks at all, the assistant row reserved
+    // by dispatch already stands as a (degenerate) empty turn boundary — no
+    // extra emit needed.
 
     Ok(())
 }

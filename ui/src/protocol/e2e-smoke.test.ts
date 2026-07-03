@@ -100,9 +100,10 @@ describe("protocol round-trip e2e smoke (audit §2.6 #4)", () => {
     // 3. ordering: manifest precedes blueprint (the contract App.vue relies on).
     expect(seenKinds.indexOf("manifest")).toBeLessThan(seenKinds.indexOf("blueprint"));
 
-    // 4. seed state arrived for the chat scope.
+    // 4. seed state arrived for the chat scope (id-keyed: messages map + order).
     expect(stateStore["w-chat"]).toBeDefined();
-    const messagesBefore = (stateStore["w-chat"] as { messages: unknown[] }).messages.length;
+    const chatBefore = stateStore["w-chat"] as { messages: Record<string, { text: string }>; order: string[] };
+    const orderBefore = chatBefore.order.length;
 
     // 5. intent up: a user sends a chat line. MockBus echoes it back as a patch.
     bus.dispatch({
@@ -113,12 +114,12 @@ describe("protocol round-trip e2e smoke (audit §2.6 #4)", () => {
       body: { kind: "intent", name: "chat.send", params: { text: "hello" } },
     });
 
-    // 6. the patch回流 added a user + assistant line to the chat scope.
-    const messagesAfter = (stateStore["w-chat"] as { messages: unknown[] }).messages.length;
-    expect(messagesAfter).toBe(messagesBefore + 2);
-    const last = (stateStore["w-chat"] as { messages: { text: string }[] }).messages.slice(-2);
-    expect(last[0].text).toBe("hello");
-    expect(last[1].text).toBe("（示例回应）");
+    // 6. the patch回流 added a user + assistant line (two new order entries).
+    const chatAfter = stateStore["w-chat"] as { messages: Record<string, { text: string }>; order: string[] };
+    expect(chatAfter.order.length).toBe(orderBefore + 2);
+    const lastTwoIds = chatAfter.order.slice(-2);
+    expect(chatAfter.messages[lastTwoIds[0]].text).toBe("hello");
+    expect(chatAfter.messages[lastTwoIds[1]].text).toBe("（示例回应）");
   });
 
   it("the guard rejects malformed envelopes so they cannot half-apply", () => {

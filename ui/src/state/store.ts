@@ -53,8 +53,8 @@ function resolveParent(root: Json, toks: string[]): { parent: any; key: string }
   for (let i = 0; i < toks.length - 1; i++) {
     if (parent == null) return null;
     // RFC 6902: "-" means "last element" of an array. Resolve it to the real
-    // index so downstream Number(key) / property access works on deep paths
-    // like /messages/-/text (used by streaming chat: replace last message text).
+    // index so downstream Number(key) / property access works on deep paths.
+    // (Used by the `order` array's `/order/-` append in id-keyed chat, Task 1.2.)
     if (Array.isArray(parent) && toks[i] === "-") parent = parent[parent.length - 1];
     else parent = parent?.[toks[i]];
   }
