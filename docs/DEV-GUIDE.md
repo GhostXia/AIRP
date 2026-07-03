@@ -261,13 +261,14 @@ data/
   ```powershell
   $env:RUSTUP_HOME = "D:\.rustup"
   $env:CARGO_HOME  = "D:\.cargo"          # ← 关键，别漏（漏了就 SxS 14001）
-  $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;" + $env:PATH
+  $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
   cd D:\AIRP-Dev
   cargo check -p airp-ui                                               # 已验证 exit 0
   cargo test  -p airp-ui                                               # 已验证 5 passed
   cargo test  -p airp-core subagent_context_has_no_orchestrator_noise  # 神圣不变式，已验证 ok
   ```
   用**默认 target dir**（`D:\AIRP-Dev\target`）即可，本轮无 os error 5、无需重定向 `CARGO_TARGET_DIR`。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
+- **本机工具链自检（2026-07-03）**：`D:\.cargo`、`D:\.rustup`、`D:\msys64`、`D:\nodejs`、`D:\npm-global` 均存在；当前 shell 的 `cargo/rustc/rustup` 指向 `D:\.cargo\bin`，`node/npm` 指向 `D:\nodejs`。**不要把 Rust/Node/npm 全局依赖、缓存或构建工具塞回 C 盘**；若命令试图写 `C:\Users\<user>\.cargo`、`.rustup` 或 npm 全局/cache，先停下来改 env/prefix。
 - **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。仍推荐推送后让 CI + 审计 bot 复核。
 - 引擎启动：`cargo run -p airp-core -- daemon --port 8000`。配置三层合并 default→`data/settings.json`→env→request，env 有 `AIRP_ENDPOINT`/`AIRP_API_KEY`/`AIRP_MODEL`/`AIRP_ACCESS_KEY`。UI 侧 `BusRelay` 默认连 `http://127.0.0.1:8000`，`AIRP_ENGINE_URL` 可覆盖。
 
