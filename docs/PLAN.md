@@ -13,8 +13,11 @@
 - **最终形态（用户 2026-07-01）**：**像 Codex / Claude Code 那样的完整 AI Agent 客户端**——完整 Agent 运行时（工具/多步 loop/规划/子 agent/MCP/扩展钩子），专精 RP。**agent loop 是脊柱，非可选加项。**
 - **⚠️ 酒馆功能必须解耦二次重组，不可照搬（用户 2026-07-01）**：酒馆是"固定 prompt 装配管线 + 外挂插件"架构；我们是"agent 自主决策 + 能力以工具/钩子暴露"架构，**根子不同**。照搬酒馆的机械管线塞不进 agent 框架。**原则：把每个酒馆功能拆成"底层用户能力"，再用 agent 框架原语（工具 / 记忆 / 技能 / 事件钩子 / prompt 装配规则 / 宏）重新表达。** 重组映射见 [TAVERN-PARITY.md](TAVERN-PARITY.md) 第四部分。
 - **范围诚实**：框架形的内核，但**RP 特化交付**——不追 Hermes 的全宽度（20+ 消息平台 / RL 训练 / 全部终端后端）。那是天花板参考，不是我们的目标。框架架构要干净到"将来能泛化"，但当前只交付 RP 客户端所需。
+- **代码取向（用户 2026-07-03）**：代码必须**更开放、更透明、在未来更易修正、且更易迭代更新**。这不是泛化优先，而是工程可持续：接口和扩展点清晰开放；状态、决策、错误和验收结果可观察；模块边界低耦合、可替换；协议/数据结构版本化，允许小步迁移。
 - **UI 无关 + Web 就绪（用户 2026-07-01）**：**当前以 Tauri 桌面为主、优先做完**；未来暴露 web 端口适配 WebUI。故**引擎必须是无头、独立的网络服务**（HTTP/SSE/WS，传输无关线协议），**不嵌进 Tauri 壳**——但**排期上桌面优先，web 是后续加端口、非当前工作**。Tauri 桌面 UI 和未来 web UI 都是同一引擎的客户端，走同一协议（State-Protocol 传输无关 Envelope + SSEBus 路径 = web 路径）。这坐实"引擎 + UI 两盒"拆法。
 - **四个原仓库 = 参考素材（理念 + 代码都仅供参考）**：作者按需求拆过四个项目、写清了各自的解法。它们是极有价值的先行思考，但**一切以我们客户端的实际需求为准**——不被它们的模块划分/戒律/命名/实现束缚。需要功能时去对应仓库挖可借鉴的代码/思路搬来改。用户对四仓库有完整版权，无侵权顾虑。酒馆当功能清单参考。
+- **源项目统一定位已拍板（2026-07-03，见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)）**：AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 都按同一原则处理：**吸收资产，不继承产品北极星**。Core 是 engine 主核但不继承其 standalone 乐高后端叙事；MCP-Server 是数据/工具/工作流规格来源但不继承纯 MCP 数据层边界；Gateway 是传输/安全/MCP-client 资产来源但不继承纯协议桥目标；State-Protocol 是 UI/协议资产来源但不继承通用 Agent UI 标准目标。
+- **State-Protocol 定位已拍板（2026-07-03，见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)）**：原 AIRP-State-Protocol 的"通用 Agent UI 标准 / 乐高化显示层"理念不作为 AIRP 主线；但 **Blueprint、Widget Registry/Host、RFC6902 patch、Envelope、guard、虚拟滚动、consent/sandbox** 是必须吸收的成熟资产。结论：**吸收 Blueprint/Widget 架构，降级通用协议优先定位**。
 - **AIRP-Dev 现状（2026-07-03）**：PR #1 已把 workspace 收敛为 `engine + protocol + ui` 两盒结构；`gateway` / `mcp-server` 不再是本 workspace 成员，只作为独立仓库/零件来源。PR #2 已让 UI `BusRelay` 直连 engine `/v1/chat/completions`；PR #3/#4 已实现并加固 path-first 角色卡导入。当前剩余是运行时验收、Perf Spike、Task 1.2（chat 消息 id-keyed 寻址）以及后续 engine 数据/工具能力融入。
 
 ## 1. 产品命根子：干净提示词（干净提示词 / pristine prompt）
@@ -101,6 +104,7 @@
 - UI **只渲染声明式 Blueprint、不执行 agent 生成的代码**（安全立仓之本：否决"Agent 每轮写 Vue"——token 浪费+不稳+前端执行任意 LLM 代码风险）。
 - 首次进 RP → agent 推导 Blueprint（widget 列表 JSON）→ 存储 + UUID；同一 RP 以后直接读、不再生成。RP 类型决定 UI 画像：恋爱→聊天、经营→数据面板、桌游→卡牌、跑团→属性栏。
 - 首批候选 widget：`chat / memory / emotion / inventory / quest / map / card`（`背景整理 §7-2` 先做哪几个待定）。widget 注册表开放（`namespace.name`，`core.*` 保留），capability 由引擎强制。
+- 方向约束：Blueprint/Widget 是 **AIRP 内部 UI 合同与扩展面**，不是当前阶段的公共协议标准化工程。默认路径必须先跑通并验收 `UI → Tauri bridge → engine → state patch → Blueprint/widget render`；MockBus 只留给测试/演示。
 
 ## 2.5 性能契约（产品级硬约束 —— 防止重蹈酒馆覆辙，`背景整理 §6`）
 
@@ -213,7 +217,7 @@
 **仍需你拍板的真开放题：**
 
 1. **引擎内数据层的存储设计**（原"数据归属"收敛后剩的）：单一真相已定在引擎内；剩的是怎么把 **Core 自带数据层**（png_parser 正确、chat_store/volume/scene）与 **MCP-Server 数据域**（角色/世界书/state/预设的域模型 + 沙箱 + 插件零schema）**熔成一套**——以 Core 为基吸收 MCP 优点，还是反之。多为工程取舍，可动手时定。
-2. **UI↔引擎线协议选型**：复用 State-Protocol 的 Envelope 协议（widget/Blueprint/RFC6902 patch 一整套，UI 侧已实现），还是简化自定义？倾向**复用**（UI 已配套、传输无关合 web 就绪）。原 `agentbus` 自重写 Envelope 的重复问题随之消解（引擎直接用 state-protocol 类型）。
+2. **UI↔引擎线协议落地细节**：方向已定为吸收 State-Protocol 的 Blueprint/Widget/RFC6902 patch/Envelope 资产，且默认链路直连 AIRP engine；剩余是具体接口边界、版本策略、错误语义和 engine 侧 capability 强制的实现细节。原 `agentbus` 自重写 Envelope 的重复问题随之消解（引擎直接用 state-protocol 类型）。
 3. **Phase 1 收口顺序**：UI→引擎（Core 核）直连已由 Phase 0 落地；当前应先补 Task 1.1 运行时验收/文档收口，再推进 Task 1.2（chat 消息 id-keyed 寻址）和 Perf Spike，之后再谈扩展面。
 4. **纯净度代价是否接受**（Core §10-1）：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外。接受（纯净优先），还是留"污染模式"开关兼容那类模型？
 5. **capability 引擎侧强制**：现只 UI 单边限制，引擎侧真强制不存在（State-Protocol §2.5-E）。MVP 要不要先做，还是随扩展面一起？
@@ -224,6 +228,9 @@
 ## 5. 修订记录
 
 - 2026-07-03：同步 GitHub 合并历史后的当前状态：PR #1 收敛两盒 workspace，PR #2 完成 UI↔engine 直连，PR #3/#4 完成并加固 path-first 角色卡导入；将仍写着 mock BusRelay、四仓入 workspace、CI 强制等旧状态的段落改成当前事实，并把未能代替用户拍板的事项移入 [DOC-AUDIT.md](DOC-AUDIT.md)。
+- 2026-07-03：新增 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)，拍板 AIRP-State-Protocol 的定位：不继承"通用 Agent UI 标准优先 / 乐高优先"作为产品北极星，但必须吸收 Blueprint、Widget、state patch、guard、虚拟滚动、consent/sandbox 等成熟 UI 资产。
+- 2026-07-03：补入代码取向：更开放、更透明、未来更易修正、更易迭代更新；并解释为接口/扩展点清晰、状态与决策可观察、低耦合可替换、协议和数据结构版本化。
+- 2026-07-03：新增 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)，逐项审查 AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol，并统一为"吸收资产，不继承产品北极星"。
 - 2026-07-01：**重写 §2 架构章为定稿方向**——"RP 特化 Agent 框架 = 无头引擎（Agent 内核原语面 Tool/Memory/Skill/Hook/Macro/Subagent + RP 特化层 + HTTP/服务层）+ 可换 UI（Tauri 先/web 后）"两盒图，取代旧四层图。§2.1 引擎不变式（从四仓戒律重组：干净prompt/有界/工具受控/数据单一真相/建议非强制/扩展受控开放）。§2.2 UI 层（Blueprint/widget）。据此收敛 §4：数据归属/拓扑/seam 等随架构消解，剩 8 条真开放题（引擎数据层设计/线协议选型/MVP/纯净度代价/capability强制/世界书完整度/扩展模型/Soul细节）。同步纠正 §3.5/3.7 中 Gateway/MCP-Server 旧措辞为"引擎"。
 - 2026-07-01：初稿，基于四仓库架构排查 + 产品目标澄清。
 - 2026-07-01：比对酒馆源码，发现三类格式当前实现均不兼容真实酒馆文件。

@@ -1,7 +1,7 @@
 # AIRP 开发文档（交接给实现 Agent）
 
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
-> **配套设计文档（背景/依据，动手前通读）**：[PLAN.md](PLAN.md)（总设计+待决项）· [PARTS.md](PARTS.md)（四仓零件清单+file:line）· [TAVERN-PARITY.md](TAVERN-PARITY.md)（酒馆功能对标+扩展接口+解耦重组）· [HERMES-MEMORY.md](HERMES-MEMORY.md)（自进化记忆）。
+> **配套设计文档（背景/依据，动手前通读）**：[PLAN.md](PLAN.md)（总设计+待决项）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（四源项目吸收资产/降级北极星）· [PARTS.md](PARTS.md)（四仓零件清单+file:line）· [TAVERN-PARITY.md](TAVERN-PARITY.md)（酒馆功能对标+扩展接口+解耦重组）· [HERMES-MEMORY.md](HERMES-MEMORY.md)（自进化记忆）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
 > 最后更新：2026-07-03
 
@@ -10,6 +10,8 @@
 ## 0. 一句话与铁律（先读，任何时候不许破）
 
 **我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（当前 Tauri 桌面优先，未来暴露端口接 web），专精 RP。
+
+**代码取向（用户 2026-07-03 定）**：代码必须更开放、更透明、在未来更易修正、且更易迭代更新。落地判据：接口和扩展点清晰开放；状态、决策、错误和验收结果可观察；模块边界低耦合、可替换；协议/数据结构版本化，允许小步迁移而不是一次性重写。
 
 **六条不变式（红线，实现中永不许破）：**
 1. **干净提示词（灵魂）**：喂模型的**角色平面**只装 RP 数据（卡/世界书/预设/state/记忆/历史），**零 agent 脚手架**；工具定义/调用/结果走**控制平面**=模型 API 原生结构化字段（OpenAI `tools`/`tool_calls`/`tool` role；Anthropic `tools`/`tool_use`/`tool_result`），**永不拼进角色平面自然语言**。**不用 in-prompt ReAct**（把工具说明写进 prompt 文本 = 自我污染）。本地门禁守 `subagent_context_has_no_orchestrator_noise`——违反即红，这个测试神圣不可删。
@@ -47,6 +49,7 @@ D:\AIRP-Dev/
 - **四块从没端到端一起跑过**（各自 mock 自测）——**Phase 0（本 PR #2）正是首次让 UI↔引擎真跑通**：UI `BusRelay` 已从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，流式回填 `w-chat`。
 - **`engine` 已是完整 RP 后端**（80% 后端功能已实现且带测试）：`/v1/chat/completions`(单回合 SSE)、`/v1/agent/run`(多步 loop M_AGENT-1)、characters/sessions/scenes/state/history/rollback/regen/settings；adapter 双 provider(OpenAI+Anthropic)；orchestrator 装配；fsm+xml_unpacker 流过滤；封卷；**png_parser 正确解析酒馆卡**。
 - **`D:\airp-mcp-server` = 未来刚需·能力要融进 engine**（用户 2026-07-02）：它的 38 工具/12 工作流提示词/19 资源 + 数据模型是 engine 数据层 + agent 内置工具的**完整规格**（engine 现只重实现了子集）。**融入=M_AGENT-2 把数据操作包成 agent 工具**，详见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)。**注意区分**：它的**角色卡/世界书解析确有 bug**（zTXt-only、Vec 结构错）——移植时改用 engine 的 png_parser、修解析；但这是局部要修的点，**不是丢掉整个 MCP-Server 的理由**。
+- **四个源项目统一原则**：吸收资产，不继承产品北极星。Core 是 engine 主核但不继承 standalone 乐高后端叙事；MCP-Server 是数据/工具/工作流规格来源但不继承纯 MCP 数据层边界；Gateway 是传输/安全/MCP-client 资产来源但不继承纯协议桥目标；State-Protocol 是 UI/协议资产来源但不继承通用 Agent UI 标准目标。详见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)。
 
 **起点决策（已落地）：引擎 = 以 `engine` 为核演进，并把 `D:\airp-mcp-server` 的完整能力面（38工具/12提示词/19资源+数据模型）逐步融入 engine 成原生 agent 工具+工作流+数据层**（主载体 = M_AGENT-2，见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)）；`D:\AIRP-Gateway` 留作 engine 作 MCP client 接**第三方** MCP 的参考；`ui/` 直接用。
 

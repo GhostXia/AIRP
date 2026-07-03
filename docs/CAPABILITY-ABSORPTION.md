@@ -2,7 +2,7 @@
 
 > 用户 2026-07-02：**四个源仓库里凡有"好能力"的，都应融入 agent 客户端**（不止 MCP-Server）。
 > 原则：客户端 = engine（agent 内核 + 数据层 + 工具/工作流）+ UI（Tauri+Vue）两盒。四仓库的好能力**拆解重组进这两盒当原生能力**，而非当外部服务连、也非保留其"独立分发"的自我约束。
-> 参见：[MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)（MCP 详细 catalog）· [PARTS.md](PARTS.md)（零件 file:line）· [PLAN.md](PLAN.md) · [DEV-GUIDE.md](DEV-GUIDE.md)。
+> 参见：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（四源项目资产吸收/北极星降级）· [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)（MCP 详细 catalog）· [PARTS.md](PARTS.md)（零件 file:line）· [PLAN.md](PLAN.md) · [DEV-GUIDE.md](DEV-GUIDE.md)。
 > 最后更新：2026-07-02
 
 ---
@@ -12,8 +12,12 @@
 ### 1. AIRP-Core（`engine`）—— ✅ 已融（是内核本身）
 客户端内核就是它：`adapter`(双provider流式) · `chat_pipeline`(三段) · `orchestrator`(装配) · `fsm`/`xml_unpacker`(流过滤) · agent loop(M_AGENT) · `volume_*`(封卷) · `png_parser`(正确卡解析) · `scene` · 数据层。**已在 engine，无需再融**——它就是融入的载体。
 
+不继承：Core 的"独立、开源、乐高式 Agent 后端 / standalone 参考大脑"产品北极星。AIRP-Dev 中 Core 是 engine 主核，服从 AIRP RP 产品闭环。
+
 ### 2. AIRP-MCP-Server —— 融数据管理面（详见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)）
 **38 工具 / 12 工作流提示词 / 19 资源 + 数据模型** → engine 的**内置 agent 工具 + 工作流/技能 + 数据读API + 数据层规格**。主载体 = M_AGENT-2。局部解析 bug 移植时修。
+
+不继承：纯 MCP 数据层、不调 LLM、不做推理、决策完全下放外部 Agent 的边界。AIRP-Dev 要把自有 RP 数据能力内化进 engine。
 
 ### 3. AIRP-Gateway —— 融能力，弃"纯桥"约束
 Gateway 的好能力融进 engine 的**服务层 + MCP-client 子系统 + UI↔engine 传输**；它"纯协议桥·不含业务·库优先"的铁律是**它独立分发时的自我克制，对我们单一客户端不适用**——我们要它的能力，不要它的约束。
@@ -31,6 +35,8 @@ Gateway 的好能力融进 engine 的**服务层 + MCP-client 子系统 + UI↔e
 - **UI runtime**：widget 注册表 · BlueprintRenderer · WidgetHost · RFC6902 store · 虚拟滚动 · esm 沙箱 · consent 门 · Tauri 打包 → **已在 `ui/`**。
 - **线协议**：Envelope/Blueprint/WidgetDef/Capability + Rust 绑定 → **已在 `protocol/`**。
 - 结论：State-Protocol 的好能力**已经是客户端的 UI 盒 + 协议盒**，无需再融，直接用 + 演进。
+
+不继承：通用 Agent UI 标准、协议优先、Widget 市场优先、MockBus/demo-first 的产品北极星。AIRP-Dev 先做 AIRP 专用客户端闭环。
 
 ---
 

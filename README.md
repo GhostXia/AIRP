@@ -8,6 +8,14 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端，当前仓库已经收敛
 
 旧的 `gateway` 和 `mcp-server` 已不再是本 workspace 成员。它们保留为独立仓库/零件来源：Gateway 的传输、安全、MCP client 能力按需吸收；MCP-Server 的数据管理面按 `M_AGENT-2` 路线融入 engine。
 
+AIRP-State-Protocol 同样按零件来源处理：必须吸收 Blueprint、Widget、state patch、guard、虚拟滚动、consent/sandbox 等成熟资产，但不继承其"通用 Agent UI 标准优先"的产品定位。见 [docs/UI-PROTOCOL-DECISION.md](docs/UI-PROTOCOL-DECISION.md)。
+
+四个源项目统一按"吸收资产，不继承产品北极星"处理，详见 [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)。
+
+## 项目取向
+
+代码应当更开放、更透明、在未来更易修正、且更易迭代更新。具体含义：接口和扩展点清晰开放；状态、决策和错误可观察；模块边界低耦合、可替换；协议和数据结构版本化、小步演进。
+
 ## 目录
 
 ```text
@@ -93,6 +101,8 @@ UI 默认连接 `http://127.0.0.1:8000`，可用 `AIRP_ENGINE_URL` 覆盖。
 
 - [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)：当前开发交接与工程纪律
 - [docs/PLAN.md](docs/PLAN.md)：长期设计计划
+- [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)：四个源项目的资产吸收/北极星降级决策
+- [docs/UI-PROTOCOL-DECISION.md](docs/UI-PROTOCOL-DECISION.md)：UI 协议与 Widget 的采纳/降级决策
 - [docs/PARTS.md](docs/PARTS.md)：旧仓能力拆件清单
 - [docs/MCP-SERVER-ABSORPTION.md](docs/MCP-SERVER-ABSORPTION.md)：MCP-Server 能力融入 engine 路线
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记

@@ -2,6 +2,8 @@
 
 `ui/` 是 AIRP 的 Tauri + Vue 桌面客户端。它是 engine 的客户端，不再假设独立 Gateway 或 MockBus 作为默认后端。
 
+UI 继承 AIRP-State-Protocol 的 Blueprint、Widget、patch、guard、虚拟滚动和沙箱资产，但不继承其通用协议优先定位。当前目标是 AIRP 专用桌面客户端；Widget 扩展必须先服务 RP 工作流。详见 [`../docs/UI-PROTOCOL-DECISION.md`](../docs/UI-PROTOCOL-DECISION.md)。
+
 ## 当前职责
 
 - 渲染 Blueprint/widget UI。

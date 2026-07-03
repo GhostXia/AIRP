@@ -12,6 +12,8 @@
 - `docs/PLAN.md` / `docs/PARTS.md`：修正四仓 workspace、mock BusRelay、CI 强制等 2026-07-01 旧状态。
 - `AGENTS.md`：补充 npm cache 必须显式指向 `D:\npm-global\npm-cache`。
 - 补充历史验证事实：AIRP-State-Protocol 原项目打包后的 exe 曾可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
+- 新增 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)：已拍板 AIRP-State-Protocol 的理念定位。Blueprint/Widget/patch/guard/虚拟滚动/consent/sandbox 必须吸收；"通用 Agent UI 标准优先"和"乐高优先"不作为 AIRP 主线。
+- 新增 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：逐项审查 AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol，统一为"吸收资产，不继承产品北极星"。
 
 ## 需要用户审核 / 拍板
 
@@ -41,9 +43,18 @@
 
 6. **旧四仓历史要保留到什么程度**
    - 当前 README 只简述 `gateway` / `mcp-server` 是零件来源，详细历史留在 `docs/PLAN.md` / `docs/PARTS.md`。
-   - 需要你确认：根 README 是否应该更彻底，只面向当前 AIRP-Dev，不再提旧四仓细节。
+   - 已新增总决策文档：旧四仓历史保留为资产审计与来源说明，不作为产品路线约束。
+   - 仍需你确认：根 README 是否应该更彻底，只面向当前 AIRP-Dev，不再提旧四仓细节。
 
-7. **`docs/PLAN.md` 的体量**
+7. **State-Protocol 的最终定位已确认**
+   - 已确认：原项目理念不是完全继承。AIRP 吸收 Blueprint/Widget 等好资产，但不继承通用协议优先定位。
+   - 后续待做的是按此决策改代码路线和验收项，不再把"是否以 State-Protocol 为主产品"列为开放题。
+
+8. **四个源项目的最终定位已确认**
+   - 已确认：Core/MCP-Server/Gateway/State-Protocol 全部按"吸收资产，不继承产品北极星"处理。
+   - 后续待做的是按 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md) 改代码路线和验收项，不再把任何源项目自身路线图当 AIRP-Dev 主线。
+
+9. **`docs/PLAN.md` 的体量**
    - `PLAN.md` 仍是长文，包含大量 2026-07-01 审计记录。
    - 建议后续拆成：`VISION.md`（长期定位）、`ROADMAP.md`（当前阶段）、`DECISIONS.md`（已拍板）、`DOC-AUDIT.md`（待拍板）。
    - 这属于结构调整，不应在未确认前直接大搬。

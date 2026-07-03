@@ -5,6 +5,9 @@
 > 来源仓库：C=AIRP-Core(D:\AIRPCLI) · M=AIRP-MCP-Server(D:\airp-mcp-server) · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指原仓库路径。
 > 最后更新：2026-07-03
 
+> UI 协议拍板：S 的 Blueprint/Widget/patch/guard/虚拟滚动/consent/sandbox 是必须吸收的成熟资产；S 的"通用 Agent UI 标准优先"与"乐高优先"不是 AIRP 产品主线。见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)。
+> 源项目总拍板：C/M/G/S 都是资产来源，统一按"吸收资产，不继承产品北极星"处理。见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)。
+
 ---
 
 ## A. 干净提示词内核（产品命根子 —— 最该完整保留的资产）
@@ -83,6 +86,8 @@
 
 ## H. UI 前端（State-Protocol —— 四块里代码最成熟）
 
+> 采纳方式：把 S 当作 AIRP UI 资产库，而不是当作产品定位。默认目标是强 AIRP 客户端：先打通并验收 UI→engine→patch→widget 渲染闭环，再谈第三方生态和公共协议。
+
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
 | Tauri+Vue 壳 + 打包 | S `src-tauri/` + `tauri-build.yml` | ✅ | AIRP-State-Protocol 原项目最早已验证打包后的 `airp-ui.exe` 可正常启动并做简单交互；未做深度功能/性能测试。签名二进制分发，不运行时编译 |
@@ -99,8 +104,8 @@
 
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
-| Envelope/Body 协议 v1 | S `schema/` + `docs/spec/protocol.md` | ✅ | 下行 blueprint/state/manifest/event/error；上行 intent/subscribe/hello/ack。传输无关 |
-| Blueprint/Widget/Capability 类型 | S `schema/*.schema.json` | ✅ | 半永久 Blueprint、WidgetDef manifest、capability 闭集 |
+| Envelope/Body 协议 v1 | S `schema/` + `docs/spec/protocol.md` | ✅ | 下行 blueprint/state/manifest/event/error；上行 intent/subscribe/hello/ack。作为 AIRP 内部线协议复用，非当前公共标准化目标 |
+| Blueprint/Widget/Capability 类型 | S `schema/*.schema.json` | ✅ | 半永久 Blueprint、WidgetDef manifest、capability 闭集。Blueprint/Widget 必须吸收；capability 需补 engine 侧强制 |
 | Rust + TS 双绑定 | S `bindings/rust`(+`AgentBus` trait)、`bindings/typescript` | ✅ | schema 真相 + 两端对齐 |
 | ⚠️ 推理路由缺口 | S/G 全部文档 | 🆕 | 现有 intent `chat.send`→**MCP 数据工具**(只存取)。我们需→**引擎推理**(生成)。**无现成方案，需定** |
 
@@ -154,7 +159,8 @@
 
 ## 汇总：拆件的性质分布
 
-- **✅ 可原样复用（引擎心脏 + UI 主体）**：干净 prompt 内核、双 provider adapter、流式 FSM/拆包、封卷、Core 数据层与 daemon、整套 Tauri+Vue UI + widget + 协议契约。**这些是白捡的成熟资产。**
+- **✅ 可原样复用（引擎心脏 + UI 主体）**：干净 prompt 内核、双 provider adapter、流式 FSM/拆包、封卷、Core 数据层与 daemon、整套 Tauri+Vue UI + Blueprint/widget + 协议契约。**这些是白捡的成熟资产。**
 - **🔧 有基础需修/补**：agent loop 真工具、酒馆预设正则字段、state clamp、虚拟滚动验证、BusRelay 的 chat/id-keyed 后续债务、载荷排序、数据层若干 E 系列。
 - **🆕 必须新建**：**世界书完整解析+插入引擎**（最大工作量）、capability 引擎侧强制、Perf Spike 实跑、（可选）RAG/ClaudeCodeSdk/第三方 MCP 接入。UI→引擎聊天推理路由已先行落地，后续要把它从最小直连接成更完整的 State-Protocol/Blueprint 流。
-- **📖 仅参考**：六戒律/两平面/性能契约/责任边界等设计律，Gateway 纯桥路由（对单客户端价值有限）。
+- **📖 仅参考**：六戒律/两平面/性能契约/责任边界等设计律，Gateway 纯桥路由（对单客户端价值有限），State-Protocol 的公共标准化/通用 Agent 浏览器定位。
+- **不继承的北极星**：Core 的 standalone 乐高 Agent 后端叙事、MCP-Server 的纯 MCP 数据层边界、Gateway 的纯协议桥目标、State-Protocol 的通用 Agent UI 标准化目标，均不作为 AIRP-Dev 主线。
