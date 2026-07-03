@@ -2,8 +2,8 @@
 //! bridge (PLAN task B): upstream envelopes arrive via the `airp_dispatch`
 //! command; downstream envelopes are emitted on the `airp:envelope` event.
 //!
-//! The relay itself (`bus::BusRelay`) is an in-process mock standing in for
-//! AIRP-Gateway until the live link lands (runtime verification item, PLAN §2.5).
+//! The relay itself (`bus::BusRelay`) is the Tauri-side live bridge to the AIRP
+//! engine. Runtime and performance verification are still tracked in the docs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bus;

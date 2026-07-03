@@ -3,7 +3,7 @@
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
 > **配套设计文档（背景/依据，动手前通读）**：[PLAN.md](PLAN.md)（总设计+待决项）· [PARTS.md](PARTS.md)（四仓零件清单+file:line）· [TAVERN-PARITY.md](TAVERN-PARITY.md)（酒馆功能对标+扩展接口+解耦重组）· [HERMES-MEMORY.md](HERMES-MEMORY.md)（自进化记忆）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
-> 最后更新：2026-07-01
+> 最后更新：2026-07-03
 
 ---
 
@@ -12,7 +12,7 @@
 **我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（当前 Tauri 桌面优先，未来暴露端口接 web），专精 RP。
 
 **六条不变式（红线，实现中永不许破）：**
-1. **干净提示词（灵魂）**：喂模型的**角色平面**只装 RP 数据（卡/世界书/预设/state/记忆/历史），**零 agent 脚手架**；工具定义/调用/结果走**控制平面**=模型 API 原生结构化字段（OpenAI `tools`/`tool_calls`/`tool` role；Anthropic `tools`/`tool_use`/`tool_result`），**永不拼进角色平面自然语言**。**不用 in-prompt ReAct**（把工具说明写进 prompt 文本 = 自我污染）。**CI 守 `subagent_context_has_no_orchestrator_noise`——违反即红，这个测试神圣不可删。**
+1. **干净提示词（灵魂）**：喂模型的**角色平面**只装 RP 数据（卡/世界书/预设/state/记忆/历史），**零 agent 脚手架**；工具定义/调用/结果走**控制平面**=模型 API 原生结构化字段（OpenAI `tools`/`tool_calls`/`tool` role；Anthropic `tools`/`tool_use`/`tool_result`），**永不拼进角色平面自然语言**。**不用 in-prompt ReAct**（把工具说明写进 prompt 文本 = 自我污染）。本地门禁守 `subagent_context_has_no_orchestrator_noise`——违反即红，这个测试神圣不可删。
 2. **有界 agent**：loop 必有 step/token/成本/墙钟上限，任一触顶即停；可取消；每步流式可观测（不黑箱）。
 3. **工具受控**：allowlist + capability 门；破坏性工具默认 dry-run 需确认；幂等键去重；同角色/资源并发写串行化。
 4. **数据单一真相**：RP 数据引擎内一处存、一个真相（不要 Core 一份 + MCP-Server 一份并存——那是原仓为独立分发的设计，对我们是负担）。
@@ -133,7 +133,7 @@ data/
 ## 4. UI 详细设计（Tauri 桌面优先）
 
 - **技术**：Tauri 2 + Vue（`ui/`）。只渲染引擎下发的 **Blueprint**（声明式 JSON），**不执行 agent 生成的代码**。
-- **已实现（代码完成、运行时未验证）**：Widget Registry（vue/module/esm 三类）、BlueprintRenderer、WidgetHost（错误隔离）、RFC6902 state store（`test` op 非事务，注意）、首方 widget（chat/emotion/memory/inventory/quest/map/card + clock）、虚拟滚动（`virtual-window.ts` `computeWindow`）、esm 沙箱（opaque-origin iframe）、consent 门（授权绑 `{type,version,source}` + localStorage 持久化）、边界 guard、Tauri `.exe` 打包（已验证产出 exe+NSIS）。
+- **已实现（代码完成，当前 AIRP-Dev 集成后仍需验收）**：Widget Registry（vue/module/esm 三类）、BlueprintRenderer、WidgetHost（错误隔离）、RFC6902 state store（`test` op 非事务，注意）、首方 widget（chat/emotion/memory/inventory/quest/map/card + clock）、虚拟滚动（`virtual-window.ts` `computeWindow`）、esm 沙箱（opaque-origin iframe）、consent 门（授权绑 `{type,version,source}` + localStorage 持久化）、边界 guard、Tauri `.exe` 打包。历史事实：AIRP-State-Protocol 原项目最早验证过打包 exe 可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
 - **必做（MVP 第一步）**：把 mock `BusRelay`（`ui/src-tauri/src/bus.rs`）换成**连真引擎**——加 `SSEBus`（非 Tauri 环境）或让 `BusRelay` 内部 HTTP 调引擎（Tauri 壳内 IPC→Rust核→引擎）。`bus-factory.ts` 已按 `__TAURI_INTERNALS__` 选 bus，接线点清楚。
 - **半永久 Blueprint / RP=UI Profile**：首次进 RP → agent 推导 Blueprint → 存储+UUID；同一 RP 以后直接读。RP 类型定画像（恋爱→聊天、经营→数据面板、桌游→卡牌、跑团→属性栏）。
 - **必须跑 Perf Spike**（见 §7）——代码有虚拟滚动但从没真跑过 10 万条验证。
@@ -183,17 +183,17 @@ data/
 
 > 原则：每阶段自身可跑、可测、可验收。**MVP 优先证明端到端，再谈扩展。**
 >
-> **📍 当前状态（2026-07-02）**：Phase 0 ✅ 已完成合并（PR #2）。**下一步 = Phase 1，从 Task 1.1（角色卡导入 UI）开始**，见下。
+> **📍 当前状态（2026-07-03）**：Phase 0 ✅ 已完成合并（PR #2）。Phase 1 Task 1.1 ✅ 已实现（PR #3）并完成派生 ID 加固（PR #4）。**下一步 = 先做 Task 1.1 运行时验收 / 文档收口，再推进 Task 1.2（chat 消息 id-keyed 寻址）**。
 
 ### Phase 0 · 引擎+UI 直连，跑通一次干净对话（MVP 地基）—— ✅ 已完成（PR #2 合并入 main）
 - 已落地：`ui/src-tauri/src/bus.rs` 的 `BusRelay` 从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，消费 SSE、按 `w-chat` scope 流式回填；角色列表 `characters.list`。
 - 已验证：真实酒馆卡端到端对话通；`cargo test -p airp-ui`(5) + `vitest`(92) + `vue-tsc`(0) + **`subagent_context_has_no_orchestrator_noise` ✅**（神圣不变式）全绿。
-- **遗留到 Phase 1**：角色卡导入 UI（Phase 0 用预置 `data/characters/` 卡验证）；`.exe` 打包后真跑 GUI；Perf Spike 10 万条（§7）；reasoning/action 渲染；chat_lock → id-keyed 重构（Task 1.2）。
+- **遗留到 Phase 1**：角色卡导入 UI 运行时验收（Phase 0 用预置 `data/characters/` 卡验证；Task 1.1 代码已合并）；当前 AIRP-Dev `.exe` 打包后真跑 GUI；Perf Spike 10 万条（§7）；reasoning/action 渲染；chat_lock → id-keyed 重构（Task 1.2）。
 
 ### Phase 1 · 酒馆导入完整 + 基础会话
-> 按下列顺序推进，每个 Task 自身可验收。**从 Task 1.1 开始。**
+> 按下列顺序推进，每个 Task 自身可验收。**当前先收口 Task 1.1 运行时验收，再进入 Task 1.2。**
 
-**Task 1.1（👉 从这里开始）· 角色卡导入 UI** —— 补完 Phase 0 只用预置卡的缺口
+**Task 1.1 · 角色卡导入 UI** —— PR #3 已实现，PR #4 已加固派生 ID；当前需要运行时验收与文档收口
 - UI 加"导入卡"：Tauri 文件对话框拿路径 → `characters.import` intent（只带路径）→ 引擎读盘 + png_parser 解析落盘 → 刷新 `characters.list`。
 - **⚠️ 必须 path-first，禁止把整卡 base64 塞进 store（对齐 MCP `png_path` 设计，SKILL.md:118）**：
   - **做法**：`@tauri-apps/plugin-dialog` open 拿**绝对路径** → 传**路径**（几十字节）给引擎 → **引擎读盘 + png_parser 解析**。
@@ -209,8 +209,9 @@ data/
   - **Q5 = 只授 `dialog:allow-open`（最小权限，守不变式3）**。`allow-save` 等真做导出 round-trip 时再加，现在不预授。
   - **Q6 = 桌面期 path 直喂引擎合规**（引擎是本地 sidecar 进程、同机同盘，`fs::read(abs_path)` 有效）。web 期/远端引擎时 path-first 失效 → 优先走 multipart/streaming upload；base64 只作无二进制上传能力时的最后 fallback（引擎保留 `card_json`/`card_png_base64` 入参是兜底，不是推荐主路）。
   - **🔒 审计追加护栏（该 agent 没提，但必须记）**：`card_path` = **引擎侧读任意绝对路径**。当前"本地可信 UI + 用户经对话框亲选"模型下可接受；但**严禁暴露给不可信调用方**（未来 web 客户端 / 能发 import intent 的第三方 widget）——否则是任意文件读漏洞。**规则**：`card_path`（服务端任意路径读）只给**可信本地 UI**；不可信/远端调用方一律只能 multipart/streaming upload，base64 最后兜底，**不得走服务端任意路径读**。引擎转多客户端/web、或放开第三方 widget 发 import intent 时，`card_path` 必须 capability 门控或对不可信方禁用。
-- **验收**：从 UI 选真实酒馆 PNG 卡导入成功、出现在列表、可对话；`character_book` 一并入库；**传给引擎的是路径非 base64**（大卡不卡顿、store 无大字符串）；`card/raw.json` 有原始留存（sidecar）。
-- **🔒 未来必做待办（PR #3 已落地 path-first，本项未做、审计豁免当前阶段）**：引擎 `/v1/characters/import` 的 `card_path` 端点目前**无调用方可信度校验**——任意能发 HTTP 请求者均可令引擎读任意绝对路径。当前单本地 UI + 同机 sidecar 模型下审计豁免；但**任一以下条件触发时必须先补门控再放行**：①引擎转多客户端/web（引擎不再只听本机）；②放开第三方 widget 发 `characters.import` intent；③`card_path` 暴露给非可信调用方。门控方式：capability/白名单限制 `card_path` 仅可信本地 UI 来源，或对不可信方强制走 base64/multipart 上传分支而禁用 path 分支。**未来审计 agent 应主动核查此待办是否已补，未补而条件已变 = 漏洞。**
+- **实现状态**：`engine/src/daemon/handlers.rs` 已支持 `card_path` / optional `character_id` / slugify 派生 ID / 重名后缀；`ui/src-tauri/src/bus.rs` 已支持 `characters.import` path-first；`CharactersWidget.vue` 已通过 `@tauri-apps/plugin-dialog` 发起导入；`docs/RISK-REGISTER.md` 已记录 `card_path` 风险。
+- **待验收**：从 Tauri GUI 选真实酒馆 PNG 卡导入成功、出现在列表、可对话；`character_book` 一并入库；**传给引擎的是路径非 base64**（大卡不卡顿、store 无大字符串）；`card/raw.json` 有原始留存（sidecar）。
+- **🔒 未来必做待办（已登记 RR-001）**：引擎 `/v1/characters/import` 的 `card_path` 端点目前**无调用方可信度校验**——任意能发 HTTP 请求者均可令引擎读任意绝对路径。当前单本地 UI + 同机 sidecar 模型下审计豁免；但**任一以下条件触发时必须先补门控再放行**：①引擎转多客户端/web（引擎不再只听本机）；②放开第三方 widget 发 `characters.import` intent；③`card_path` 暴露给非可信调用方。门控方式：capability/白名单限制 `card_path` 仅可信本地 UI 来源，或对不可信方强制走 base64/multipart 上传分支而禁用 path 分支。**未来审计 agent 应主动核查此待办是否已补，未补而条件已变 = 漏洞。**
 
 **Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
 - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁治标：① 全局串行挡住多角色 N 个 NPC 并发流式（§3.6），② user_echo 锁外同步发、顺序仍可能小错乱。
@@ -263,13 +264,15 @@ data/
   $env:RUSTUP_HOME = "D:\.rustup"
   $env:CARGO_HOME  = "D:\.cargo"          # ← 关键，别漏（漏了就 SxS 14001）
   $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
+  $env:npm_config_prefix = "D:\npm-global"
+  $env:npm_config_cache = "D:\npm-global\npm-cache"
   cd D:\AIRP-Dev
   cargo check -p airp-ui                                               # 已验证 exit 0
   cargo test  -p airp-ui                                               # 已验证 5 passed
   cargo test  -p airp-core subagent_context_has_no_orchestrator_noise  # 神圣不变式，已验证 ok
   ```
   用**默认 target dir**（`D:\AIRP-Dev\target`）即可，本轮无 os error 5、无需重定向 `CARGO_TARGET_DIR`。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
-- **本机工具链自检（2026-07-03）**：`D:\.cargo`、`D:\.rustup`、`D:\msys64`、`D:\nodejs`、`D:\npm-global` 均存在；当前 shell 的 `cargo/rustc/rustup` 指向 `D:\.cargo\bin`，`node/npm` 指向 `D:\nodejs`。**不要把 Rust/Node/npm 全局依赖、缓存或构建工具塞回 C 盘**；若命令试图写 `C:\Users\<user>\.cargo`、`.rustup` 或 npm 全局/cache，先停下来改 env/prefix。
+- **本机工具链自检（2026-07-03）**：`D:\.cargo`、`D:\.rustup`、`D:\msys64`、`D:\nodejs`、`D:\npm-global` 均存在；当前 shell 的 `cargo/rustc/rustup` 指向 `D:\.cargo\bin`，`node/npm` 指向 `D:\nodejs`。实测 npm 全局 prefix 为 `D:\npm-global`，但默认 cache 仍可能指向 `C:\Users\<user>\AppData\Local\npm-cache`，所以 npm 命令必须显式设置 `npm_config_cache=D:\npm-global\npm-cache`。**不要把 Rust/Node/npm 全局依赖、缓存或构建工具塞回 C 盘**；若命令试图写 `C:\Users\<user>\.cargo`、`.rustup` 或 npm 全局/cache，先停下来改 env/prefix。
 - **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。审计 bot 已下线（2026-07-03），PR review 由开发者自审 + 人工承接，不阻塞在"等审计 bot"；自审按 `AGENTS.md` 的 Audit Agent Charter 三原则（独立 / 可提己见 / 可质疑历史并查证）。
 - 引擎启动：`cargo run -p airp-core -- daemon --port 8000`。配置三层合并 default→`data/settings.json`→env→request，env 有 `AIRP_ENDPOINT`/`AIRP_API_KEY`/`AIRP_MODEL`/`AIRP_ACCESS_KEY`。UI 侧 `BusRelay` 默认连 `http://127.0.0.1:8000`，`AIRP_ENGINE_URL` 可覆盖。
 

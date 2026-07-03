@@ -53,8 +53,8 @@ Core 已从「单回合流式后端」演进为「独立 Agent 后端」（M_AGE
 
 | 项 | 值 |
 |---|---|
-| 测试 | **299** passing（lib 297 + integration 2 agent 不变式），1 ignored |
-| Clippy `--lib --bins -- -D warnings` | **0** warning |
+| 测试 | 本地当前基线：`cargo test -p airp-core` 通过（302 unit passed + 10 integration passed，1 ignored） |
+| Clippy `--lib --bins -- -D warnings` | 历史记录为 0 warning；当前轮未复跑 |
 | CLI 子命令 | `daemon`（SSE 网关）、`run`（单次流式到 stdout） |
 | HTTP 入口 | `/v1/chat/completions`（单回合）· `/v1/agent/run`（多步 loop，M_AGENT-1） |
 | Agent 进度 | M_AGENT-0 ✅ · **M_AGENT-1 ✅** · M_AGENT-2~7 待推（见 `AGENT_BACKEND_PLAN.md`） |
@@ -71,9 +71,9 @@ cargo run -- daemon --port 8000
 airp-core.exe daemon --port 8000
 ```
 
-随后前端经 `POST http://127.0.0.1:1:8000/v1/chat/completions`（OpenAI 兼容）发请求，Core 装配上下文、自调上游 LLM、流式回 SSE（`UnpackedChunk`：`immersive` / `<action>` 拆包），并自动落库 + 封卷。
+随后前端经 `POST http://127.0.0.1:8000/v1/chat/completions`（OpenAI 兼容）发请求，Core 装配上下文、自调上游 LLM、流式回 SSE（`UnpackedChunk`：`immersive` / `<action>` 拆包），并自动落库 + 封卷。
 
-配置（上游 endpoint / api_key / model 等）走 `config.json` + `data/settings.json` + 环境变量三层合并，运行时可经 `POST /v1/settings` 热重载。详见 `AGENTS.md`。
+配置（上游 endpoint / api_key / model 等）走 `config.json` + `data/settings.json` + 环境变量三层合并，运行时可经 `POST /v1/settings` 热重载。注意 `config.json` 是本地运行时配置，已被 `.gitignore` 忽略。
 
 ### 单次流式到 stdout（CLI 调试）
 
@@ -85,7 +85,8 @@ cargo run -- run --character alice --message "你好" --filters "<thought>[\s\S]
 
 ```powershell
 $env:RUSTUP_HOME = "D:\.rustup"
-$env:PATH = "D:\msys64\mingw64\bin;" + $env:PATH
+$env:CARGO_HOME = "D:\.cargo"
+$env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
 ```
 
 目标三元组 `x86_64-pc-windows-gnu`（见 `.cargo/config.toml`）。Linux CI 通过 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu` 覆盖。
@@ -112,7 +113,7 @@ cargo run -- run --character alice --message "你好" --filters "<thought>[\s\S]
 
 `/v1/agent/run` 入参 = `/v1/chat/completions` 超集：加 `max_steps`（缺省=1 退化单回合）、`token_budget`、`wall_clock_secs`。SSE 事件：`plan` / `tool_call` / `tool_result` / `delta` / `done`。
 
-便捷脚本：`run_daemon.bat`（增量编译 + 启动）、`run_tests.bat`。
+本仓当前未跟踪 `run_daemon.bat` / `run_tests.bat`。请使用上面的 `cargo run` / `cargo test` 命令。
 
 ---
 
@@ -296,10 +297,10 @@ data/
 
 ## 测试基础设施
 
-- **单元测试** — 435 用例覆盖配置三层合并 / 卷系统隔离 / FSM 状态转换 / Orchestrator 装配 / ChatLog 持久化 / 各 MCP 工具 / 场景多角色装配
+- **单元测试** — 当前 `cargo test -p airp-core` 覆盖配置三层合并 / 卷系统隔离 / FSM 状态转换 / Orchestrator 装配 / ChatLog 持久化 / 场景多角色装配等，共 302 个 unit test 通过，1 个 ignored
 - **集成测试** — `tests/sse_wiremock.rs` + `tests/openai_compat.rs` 用 `wiremock` mock 上游 SSE，5 端到端场景
 - **Property test** — `fsm.rs` proptest 验证 chunk 边界独立性 / 任意 UTF-8 不 panic / 变量替换 chunk 独立 / `<卷评估/>` 自闭合标签 chunk 独立
-- **CI** — `.github/workflows/ci.yml` Ubuntu 跑 test + clippy + fmt（全部必过）+ `cargo-llvm-cov` 覆盖率
+- **CI** — 当前 AIRP 仓没有项目级 `.github` CI；本地测试 + 人工 review 是主要门禁
 
 ---
 
@@ -322,12 +323,7 @@ data/
 
 ## 部署
 
-```powershell
-# Docker
-docker-compose up --build -d
-```
-
-`Dockerfile` 多阶段构建，`docker-compose.yml` 单服务。详见 `docs/deploy.md`。
+Dockerfile / docker-compose 部署文件当前未在本仓跟踪。部署文档待重新整理。
 
 ---
 
@@ -356,7 +352,7 @@ docker-compose up --build -d
 ## 已知限制
 
 - **`estimate_tokens` ±30% 偏差** — 启发式而非真实 tokenizer。卷阈值容忍
-- **Windows-GNU 本地覆盖率不可跑** — `profiler_builtins` runtime 缺失；`cargo llvm-cov` 仅 Linux CI 跑得通
+- **Windows-GNU 本地覆盖率不可跑** — 历史记录显示 `profiler_builtins` runtime 缺失；当前仓无 CI 覆盖率门禁
 - **错误响应中文为主** — 跨语言 API client 解析不便（未来 M_I18N 规划）
 - **角色卡仅支持 PNG / JSON** — PNG 覆盖 `tEXt` / `zTXt` / `iTXt`（含 zlib 压缩），`ccv3`(V3) 优先回退 `chara`(V2)，v1 平铺卡自动归一化为 v2。WEBP / JPEG 非 SillyTavern 标准导出格式，暂不支持（未来扩展：EXIF/XMP 字节扫描解卡）
 

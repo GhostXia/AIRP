@@ -1,7 +1,7 @@
 # AIRP 客户端 —— 设计计划
 
 > 状态：草稿，逐条商议修改中。
-> 最后更新：2026-07-01
+> 最后更新：2026-07-03
 > **权威 = 我们这个客户端的实际需求。** 四个原仓库的文档与代码都**仅供参考**——是作者已想清的宝贵先例/解法，但不是必须遵守的法律。它们的理念、戒律、模块边界、ADR、路线图**均为参考**，与我们实际需求冲突时以需求为准。本 PLAN 的每个决策先问"我们的客户端需要什么"，再问"哪个仓库有可借鉴的现成解法"，**绝不问"文档规定了什么"**。
 
 ## 0. 背景与定位
@@ -15,13 +15,13 @@
 - **范围诚实**：框架形的内核，但**RP 特化交付**——不追 Hermes 的全宽度（20+ 消息平台 / RL 训练 / 全部终端后端）。那是天花板参考，不是我们的目标。框架架构要干净到"将来能泛化"，但当前只交付 RP 客户端所需。
 - **UI 无关 + Web 就绪（用户 2026-07-01）**：**当前以 Tauri 桌面为主、优先做完**；未来暴露 web 端口适配 WebUI。故**引擎必须是无头、独立的网络服务**（HTTP/SSE/WS，传输无关线协议），**不嵌进 Tauri 壳**——但**排期上桌面优先，web 是后续加端口、非当前工作**。Tauri 桌面 UI 和未来 web UI 都是同一引擎的客户端，走同一协议（State-Protocol 传输无关 Envelope + SSEBus 路径 = web 路径）。这坐实"引擎 + UI 两盒"拆法。
 - **四个原仓库 = 参考素材（理念 + 代码都仅供参考）**：作者按需求拆过四个项目、写清了各自的解法。它们是极有价值的先行思考，但**一切以我们客户端的实际需求为准**——不被它们的模块划分/戒律/命名/实现束缚。需要功能时去对应仓库挖可借鉴的代码/思路搬来改。用户对四仓库有完整版权，无侵权顾虑。酒馆当功能清单参考。
-- **AIRP-Dev 现状**：四仓库已拷进 `crates/{gateway,mcp-server,state-protocol,core}` + `ui/` 成 Cargo workspace，但**运行时五模块互不相通**（UI 的 `BusRelay` 是 mock、Core 跑独立 daemon、Gateway 是未嵌入的库、MCP-Server 独立跑无人接）。整合 = 按我们的需求重新裁剪拼装，不是照搬任一仓库的原架构。
+- **AIRP-Dev 现状（2026-07-03）**：PR #1 已把 workspace 收敛为 `engine + protocol + ui` 两盒结构；`gateway` / `mcp-server` 不再是本 workspace 成员，只作为独立仓库/零件来源。PR #2 已让 UI `BusRelay` 直连 engine `/v1/chat/completions`；PR #3/#4 已实现并加固 path-first 角色卡导入。当前剩余是运行时验收、Perf Spike、Task 1.2（chat 消息 id-keyed 寻址）以及后续 engine 数据/工具能力融入。
 
 ## 1. 产品命根子：干净提示词（干净提示词 / pristine prompt）
 
 **这是我们客户端立身之本**（你最早就点明的差异化），恰好也是四仓库共同的灵魂——采纳它是因为它契合我们需求，不是因为文档写了。参考出处 `AIRPCLI/AGENT_BACKEND_PLAN.md:44-53,187-201`。
 
-> **关键调和（回应 §0"像 Claude Code"看似的矛盾）**：我们要 Claude Code / Codex **级的能力**（loop/工具/MCP/记忆/子agent），但**提示词纯净度上恰恰相反**。Claude Code 这类通用 agent 框架**自带关不掉的系统提示词/脚手架**——那是它们的产品本体，对 RP 就是**上下文污染源**。**这正是"必须自建框架、不能把 RP 跑在别人框架之上"的根本理由**：只有我们**原生拥有 loop**，才能保证进模型的每个 token 由我们全权决定。**"尽可能保证提示词纯净度"是本框架的一等不变式（§2.1 不变式①，CI 强制、不可破）**——我们是 Claude-Code-级能力 + 纯净度优先的 RP 特化框架。
+> **关键调和（回应 §0"像 Claude Code"看似的矛盾）**：我们要 Claude Code / Codex **级的能力**（loop/工具/MCP/记忆/子agent），但**提示词纯净度上恰恰相反**。Claude Code 这类通用 agent 框架**自带关不掉的系统提示词/脚手架**——那是它们的产品本体，对 RP 就是**上下文污染源**。**这正是"必须自建框架、不能把 RP 跑在别人框架之上"的根本理由**：只有我们**原生拥有 loop**，才能保证进模型的每个 token 由我们全权决定。**"尽可能保证提示词纯净度"是本框架的一等不变式（§2.1 不变式①，本地/未来 CI 门禁、不可破）**——我们是 Claude-Code-级能力 + 纯净度优先的 RP 特化框架。
 
 - **为什么**：角色上下文里**每个 token 都影响角色保真度与文风**。一句外来的 "You are a helpful assistant / 请一步步思考 / 安全前导词" 就能把角色拉出戏（社区所谓"死人化"）。
 - **为什么第三方 Agent 客户端不行**：Claude Code / Cursor / Codex 必然在 RP 内容外裹自己的脚手架，关不掉 → 提示词污染。**即便用 subagent 隔离上下文也不能根除——隔离 ≠ 纯净**。
@@ -36,7 +36,7 @@
 | **控制平面** | 工具定义 / 工具调用 / 工具结果 | 走模型 API 的**原生结构化字段**（OpenAI `tools`+`tool_calls`+`tool` role；Anthropic `tools`+`tool_use`+`tool_result` block），**永不拼进角色平面的自然语言** |
 
 - **不用 in-prompt ReAct**：把 ReAct 指令写进 prompt 文本 = 控制平面灌进角色平面 = 自我污染。结构化工具调用是守此律的唯一干净路径。
-- **CI 强制**：`tests::subagent_context_has_no_orchestrator_noise`——断言送进 adapter 的角色平面 prompt 字符串里不含任何 agent 脚手架标记（工具名/规划指令/observe 包装），违反即红。这个测试必须保留、优先保护。
+- **本地/未来 CI 强制**：`tests::subagent_context_has_no_orchestrator_noise`——断言送进 adapter 的角色平面 prompt 字符串里不含任何 agent 脚手架标记（工具名/规划指令/observe 包装），违反即红。这个测试必须保留、优先保护；当前无项目级 CI，由本地测试 + 人工 review 承接。
 - **已知代价（诚实声明）**：此律把靠 in-context ReAct 脚手架的纯文本模型挡在门外。为"纯净后端"接受此代价。
 
 ### loop = 纯净 subagent 的编排器（`AGENT_BACKEND_PLAN §4.0` 最深表述）
@@ -89,7 +89,7 @@
 
 > 四仓各有为**独立分发**定的戒律，是宝贵参考非法律。为我们的**单一 RP agent 框架**重组成下面这套引擎不变式（采纳契合的、丢掉为独立性自我设限的）。
 
-- **① 干净提示词（灵魂，不可破）**：两平面物理隔离（§1）。角色平面只装 RP 数据、零脚手架；控制平面走结构化工具调用。CI 守 `subagent_context_has_no_orchestrator_noise`。
+- **① 干净提示词（灵魂，不可破）**：两平面物理隔离（§1）。角色平面只装 RP 数据、零脚手架；控制平面走结构化工具调用。本地/未来 CI 守 `subagent_context_has_no_orchestrator_noise`。
 - **② 有界 agent**：步数/token/成本/墙钟上限任一触顶即停；可取消；每步可观测流式（不黑箱）。（承 Core 6 戒律 1-3）
 - **③ 工具受控**：allowlist + capability 门；破坏性工具默认 dry-run 需确认；幂等键去重；同角色/资源并发写串行化。（承 Core 戒律 4-5 + 安全模型）
 - **④ 数据单一真相**：RP 数据（卡/世界书/会话/记忆/state/场景）引擎内**一处存、一个真相**——**丢弃**原 Core"自带数据"与 MCP-Server"另一份数据"并存的乐高设计（那是为各自独立分发，对单产品是负担）。具体落盘归属见 §4-1。
@@ -108,7 +108,7 @@
 
 **7 条硬约束（不可违反，实现方谁都不许破，`背景整理 §6.2`）**：
 1. 聊天/长列表**强制虚拟滚动**，永远只渲染视口内 DOM（这是"2000 条崩"与"10 万条丝滑"的分界）。
-2. 全量历史真相在 Gateway，UI **窗口分页**拉取，不前端常驻全量。
+2. 全量历史真相在引擎，UI **窗口分页**拉取，不前端常驻全量。
 3. 状态更新 **patch 优先**，禁每轮全量重灌 state。
 4. **稳定 ID 做 key**，细粒度响应式只更新变化节点。
 5. **重计算留在 Rust sidecar**（状态 diff / 正则 / prompt 拼装 / 持久化离开渲染线程；JS 重活走 Web Worker）。
@@ -119,21 +119,21 @@
 
 ## 2.6 现状真相 + 复用地图（亲读六份承重文档后校准）
 
-> 一句话：**四块从没端到端一起跑过。** 每块只用 mock 自测——Gateway e2e 用自带 mock（没接真 MCP/Core）、UI 用 MockBus、Core daemon 自测、MCP 独立测。**"让它们真互相说话"在四块里全属未建状态，正是本项目要做的核心。**
+> 历史事实：四块原仓从没端到端一起跑过。每块只用 mock 自测——Gateway e2e 用自带 mock（没接真 MCP/Core）、UI 用 MockBus、Core daemon 自测、MCP 独立测。当前 AIRP-Dev 已完成第一段整合：UI `BusRelay` 直连 engine 的聊天 SSE；仍未完成的是 GUI 运行时验收、Perf Spike、id-keyed chat 以及 engine 侧工具/数据能力融入。
 
 ### 什么能用 / 什么是桩 / 什么从没联调
 
 | 块 | 代码成熟度 | 关键桩 / 缺口 | 联调状态 |
 |---|---|---|---|
-| **Core（推理后端）** | 高——daemon 面是完整、带测试、自调 LLM 的流式 RP 后端（`AGENT_CLIENT_ASSESSMENT`："一个 RP 客户端 80% 功能已在 Core"）。299 测试过 | server-side loop 只到 M_AGENT-1 骨架（仅 mock `echo` 工具，真工具执行 M_AGENT-2+）；`ClaudeCodeSdk` engine 是 stub；state schema min/max **不在写入路径强制**（模型可写 `affection:999`） | daemon 面成熟；loop 与 MCP client（M_AGENT-3）未建 |
+| **Core/engine（推理后端）** | 高——daemon 面是完整、带测试、自调 LLM 的流式 RP 后端（`AGENT_CLIENT_ASSESSMENT`："一个 RP 客户端 80% 功能已在 Core"）。当前本地 `cargo test -p airp-core` 全绿 | server-side loop 只到 M_AGENT-1 骨架（仅 mock `echo` 工具，真工具执行 M_AGENT-2+）；`ClaudeCodeSdk` engine 是 stub；state schema min/max **不在写入路径强制**（模型可写 `affection:999`） | daemon 面成熟；loop 与 MCP client（M_AGENT-3）未建 |
 | **MCP-Server（数据层）** | 中——框架全，stdio 真 MCP、HTTP 已补 | **酒馆兼容基本假**（角色卡 zTXt-only 读错、世界书 Vec 结构错，见 §3）；`export_context_bundle` 布局破坏前缀缓存 | 从没被 Gateway 或 Core 真消费过 |
 | **Gateway（协议桥）** | 高——已硬化、测试全绿的纯桥 | **streaming(Stage 2)是返回 Unimplemented 的桩**（唯一明确功能缺口）；嵌入 Core(Stage 5)未做 | e2e 全用自带 mock；**从没接真 MCP-Server / Core** |
-| **UI（显示层）** | 最高——widget/registry/RFC6902 patch/沙箱/**虚拟滚动(computeWindow已实现)**/边界guard/`.exe`打包 全代码完成+CI绿 | `BusRelay` 是 mock；**perf spike(10万条)代码在但没跑过** | UI↔Gateway 真链路未验证（§2.5 ledger B） |
+| **UI（显示层）** | 高——widget/registry/RFC6902 patch/沙箱/**虚拟滚动(computeWindow已实现)**/边界guard/`.exe`打包已有；AIRP-State-Protocol 原项目曾验证打包 exe 可启动并简单交互；Phase 0 已接 engine SSE | `chat_lock` 仍是临时串行化；消息寻址仍需 Task 1.2 改成 id-keyed；**perf spike(10万条)代码在但没跑过**；原项目 exe 验证不覆盖当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收 | UI↔engine 聊天链路已接；当前 GUI 运行时验收与性能验收待补 |
 
 ### 复用地图（从哪挖什么 —— 参考，最终按我们需求裁）
 
 - **后端主体挖 Core**：`AGENT_CLIENT_ASSESSMENT §附` 给了精确索引——`adapter.rs`(双 provider 流式)、`chat_pipeline.rs`(prepare→stream→finalize)、`orchestrator/`(装配)、`fsm`/`xml_unpacker`(流过滤)、`png_parser.rs`(角色卡正确解析)。这些当库复用，别重写。
-- **UI 壳挖 State-Protocol**：整套 Tauri+Vue + widget 生态 + 打包，最成熟。主要工作 = 把 mock BusRelay 换成连我们真后端 + 跑 perf spike。
+- **UI 壳挖 State-Protocol**：整套 Tauri+Vue + widget 生态 + 打包，最成熟；原项目打包 exe 曾能正常启动和简单交互。Phase 0 已把 BusRelay 换成连真 engine；主要剩余 = 跑当前 AIRP-Dev GUI/runtime 验收、Perf Spike，并补 chat id-keyed 寻址。
 - **协议桥挖 Gateway**：纯桥/传输/路由/安全硬化可参考；但要补 streaming、且要第一次真接后端。
 - **数据格式解析挖 MCP-Server + Core**：MCP 有数据域框架，Core 有正确的 png_parser；酒馆兼容要按 §3 补齐。
 
@@ -193,7 +193,7 @@
 - **需求**：聊天界面（流式/swipe/编辑）、角色管理、连接设置、可扩展面板（状态条/好感度/物品栏）。
 - **解法**：Tauri+Vue，只渲染**引擎**下发的 Blueprint（不执行 agent 生成的代码）。widget 三类（Vue 首方 / Module / esm 动态 import）。面板=widget 实例，state 走 RFC6902 patch。capability 消费门 + 沙箱（esm+sandbox → opaque-origin iframe）。**交付=签名二进制，绝不运行时 clone 编译（RCE 风险）**。引擎作 sidecar 随包默认自带、零配置；可一键换远程引擎 URL（承 §0 web 就绪：同一线协议）。
 - **性能是硬需求**：本支柱必须守 §2.5 的 7 条硬约束 + Perf Spike 验证门——UI 是最容易重蹈酒馆覆辙的一层。
-- **状态**：UI runtime（Registry/BlueprintRenderer/WidgetHost/store+patch/虚拟滚动/沙箱/consent/打包）代码完成但运行时未验证；`BusRelay` mock 待换**直连引擎**的真链路（§4-3 MVP 第一步）。
+- **状态**：UI runtime（Registry/BlueprintRenderer/WidgetHost/store+patch/虚拟滚动/沙箱/consent/打包）主体在；`BusRelay` 已直连 engine 聊天 SSE。仍待补 GUI 运行时验收、Perf Spike、`chat_lock` 债务与 Task 1.2 id-keyed 消息寻址。
 
 ### 3.8 Agent 能力 + 扩展生态（合一 —— 产品脊柱 + 硬需求）
 - **需求（用户 2026-07-01 强调）**：必须充分暴露接口，无门槛、无缝兼容第三方扩展。对标酒馆——它的扩展性是护城河。详见 [TAVERN-PARITY.md](TAVERN-PARITY.md) 第二部分。
@@ -214,7 +214,7 @@
 
 1. **引擎内数据层的存储设计**（原"数据归属"收敛后剩的）：单一真相已定在引擎内；剩的是怎么把 **Core 自带数据层**（png_parser 正确、chat_store/volume/scene）与 **MCP-Server 数据域**（角色/世界书/state/预设的域模型 + 沙箱 + 插件零schema）**熔成一套**——以 Core 为基吸收 MCP 优点，还是反之。多为工程取舍，可动手时定。
 2. **UI↔引擎线协议选型**：复用 State-Protocol 的 Envelope 协议（widget/Blueprint/RFC6902 patch 一整套，UI 侧已实现），还是简化自定义？倾向**复用**（UI 已配套、传输无关合 web 就绪）。原 `agentbus` 自重写 Envelope 的重复问题随之消解（引擎直接用 state-protocol 类型）。
-3. **MVP 范围/顺序**：**UI→引擎（Core 核）直连**先跑通一次真实干净对话（换掉 UI mock BusRelay 为直连引擎的 SSE/IPC bus）——四盒从没联调过，先证明端到端，再谈扩展。**推荐此为第一步。**
+3. **Phase 1 收口顺序**：UI→引擎（Core 核）直连已由 Phase 0 落地；当前应先补 Task 1.1 运行时验收/文档收口，再推进 Task 1.2（chat 消息 id-keyed 寻址）和 Perf Spike，之后再谈扩展面。
 4. **纯净度代价是否接受**（Core §10-1）：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外。接受（纯净优先），还是留"污染模式"开关兼容那类模型？
 5. **capability 引擎侧强制**：现只 UI 单边限制，引擎侧真强制不存在（State-Protocol §2.5-E）。MVP 要不要先做，还是随扩展面一起？
 6. **世界书插入引擎完整度**：MVP 先做能解析+关键词触发，还是一步到位补齐 position/depth/selective/递归？且按 §3.2/TAVERN-PARITY §4——position/depth 这些机械插入语义要重组为"给 agent 的建议元数据 + 检索 Tool"，非硬编注入器。
@@ -223,6 +223,7 @@
 
 ## 5. 修订记录
 
+- 2026-07-03：同步 GitHub 合并历史后的当前状态：PR #1 收敛两盒 workspace，PR #2 完成 UI↔engine 直连，PR #3/#4 完成并加固 path-first 角色卡导入；将仍写着 mock BusRelay、四仓入 workspace、CI 强制等旧状态的段落改成当前事实，并把未能代替用户拍板的事项移入 [DOC-AUDIT.md](DOC-AUDIT.md)。
 - 2026-07-01：**重写 §2 架构章为定稿方向**——"RP 特化 Agent 框架 = 无头引擎（Agent 内核原语面 Tool/Memory/Skill/Hook/Macro/Subagent + RP 特化层 + HTTP/服务层）+ 可换 UI（Tauri 先/web 后）"两盒图，取代旧四层图。§2.1 引擎不变式（从四仓戒律重组：干净prompt/有界/工具受控/数据单一真相/建议非强制/扩展受控开放）。§2.2 UI 层（Blueprint/widget）。据此收敛 §4：数据归属/拓扑/seam 等随架构消解，剩 8 条真开放题（引擎数据层设计/线协议选型/MVP/纯净度代价/capability强制/世界书完整度/扩展模型/Soul细节）。同步纠正 §3.5/3.7 中 Gateway/MCP-Server 旧措辞为"引擎"。
 - 2026-07-01：初稿，基于四仓库架构排查 + 产品目标澄清。
 - 2026-07-01：比对酒馆源码，发现三类格式当前实现均不兼容真实酒馆文件。

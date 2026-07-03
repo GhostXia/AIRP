@@ -3,7 +3,7 @@
 > 目的：把四个原仓库拆成**功能零件**，脱离原仓库的模块边界，供"当新项目重组"时按需取用。
 > 状态图例：✅ 可原样复用 ｜ 🔧 有基础但需修/补 ｜ 🆕 四仓皆无，需新建 ｜ 📖 仅作参考/思路（代码不直接搬）
 > 来源仓库：C=AIRP-Core(D:\AIRPCLI) · M=AIRP-MCP-Server(D:\airp-mcp-server) · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指原仓库路径。
-> 最后更新：2026-07-01
+> 最后更新：2026-07-03
 
 ---
 
@@ -12,7 +12,7 @@
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
 | 两平面物理隔离机制 | C `AGENT_BACKEND_PLAN.md:187-201` + `chat_pipeline.rs` | ✅ | 角色平面(RP数据)/控制平面(结构化 tool-calling)分离；orchestrator 只装 RP 数据，工具走 API 原生字段 |
-| 戒律#6 CI 不变式 | C `tests::subagent_context_has_no_orchestrator_noise` | ✅ | 断言角色平面 prompt 无脚手架标记，违反即红。**必须随内核一起搬** |
+| 戒律#6 本地/未来 CI 不变式 | C `tests::subagent_context_has_no_orchestrator_noise` | ✅ | 断言角色平面 prompt 无脚手架标记，违反即红。**必须随内核一起保留**；当前无项目级 CI，由本地测试 + 人工 review 承接 |
 | 六条有界 Agent 戒律 | C `README.md:39-46` | 📖 | 有界/可取消/可观测/最小授权/幂等隔离/上下文纯净。作我们引擎的设计律采纳 |
 | orchestrator 装配 | C `orchestrator/mod.rs` | ✅ | card→preset→gating→known→卷→lorebook 默认序；多角色 `build_multi_char_system_prompt`；schema min/max 渲染 `:289-302` |
 | chat_pipeline 三段式 | C `chat_pipeline.rs`（prepare `:296`/stream `:596`/finalize `:694`） | ✅ | 单回合流水线，被 agent loop 当库复用。AGENT_CLIENT_ASSESSMENT 认证"80% 后端已在此" |
@@ -85,7 +85,7 @@
 
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
-| Tauri+Vue 壳 + 打包 | S `src-tauri/` + `tauri-build.yml` | ✅ | 已验证产出 `airp-ui.exe` + NSIS 安装包。签名二进制分发，不运行时编译 |
+| Tauri+Vue 壳 + 打包 | S `src-tauri/` + `tauri-build.yml` | ✅ | AIRP-State-Protocol 原项目最早已验证打包后的 `airp-ui.exe` 可正常启动并做简单交互；未做深度功能/性能测试。签名二进制分发，不运行时编译 |
 | Widget Registry | S `src/registry/registry.ts` | ✅ | vue/module/esm 三类注册，命名空间 `namespace.name`，`core.*` 保留 |
 | BlueprintRenderer + WidgetHost | S `src/components/` | ✅ | 渲染声明式 Blueprint，错误隔离(onErrorCaptured) |
 | RFC6902 状态 store | S `src/state/store.ts` | 🔧 | 全量 patch(add/remove/replace/move/copy/test)。⚠️ `test` op 非事务性（前置 op 已生效） |
@@ -93,7 +93,7 @@
 | 虚拟滚动 | S `src/widgets/virtual-window.ts`(`computeWindow`) | 🔧 | 定高窗口化纯函数，代码在。**perf spike(10万条)从没真跑过**，必验 |
 | AgentBus 接口 + 环境工厂 | S `src/protocol/{bus,bus-factory,tauri-bus}.ts` | ✅ | `dispatch`/`subscribe` 抽象，按 `__TAURI_INTERNALS__` 选 bus。**换后端只换 bus 实现** |
 | 边界 guard | S `src/protocol/guard.ts` | ✅ | Envelope 进 store 前结构校验，非法回 error，fail-closed |
-| BusRelay（mock，待换） | S `src-tauri/src/bus.rs` | 📖 | 自发自收 mock。**真连后端时换 relay 内部，表面不变**——这是 UI↔引擎接线点 |
+| BusRelay（engine live link 已落地） | 当前 `ui/src-tauri/src/bus.rs` | 🔧 | Phase 0 已从 mock 改为直连 engine `/v1/chat/completions` 并消费 SSE。仍有 `chat_lock` 串行化债务、Task 1.2 id-keyed 消息寻址、GUI runtime 验收与 Perf Spike 待补 |
 
 ## I. 线协议 / 状态渲染契约
 
@@ -155,6 +155,6 @@
 ## 汇总：拆件的性质分布
 
 - **✅ 可原样复用（引擎心脏 + UI 主体）**：干净 prompt 内核、双 provider adapter、流式 FSM/拆包、封卷、Core 数据层与 daemon、整套 Tauri+Vue UI + widget + 协议契约。**这些是白捡的成熟资产。**
-- **🔧 有基础需修/补**：agent loop 真工具、酒馆预设正则字段、state clamp、虚拟滚动验证、agentbus 桥、载荷排序、数据层若干 E 系列。
-- **🆕 必须新建**：**世界书完整解析+插入引擎**（最大工作量）、**推理路由**（UI→引擎推理，非→MCP工具）、capability 引擎侧强制、Perf Spike 实跑、（可选）RAG/ClaudeCodeSdk/第三方 MCP 接入。
+- **🔧 有基础需修/补**：agent loop 真工具、酒馆预设正则字段、state clamp、虚拟滚动验证、BusRelay 的 chat/id-keyed 后续债务、载荷排序、数据层若干 E 系列。
+- **🆕 必须新建**：**世界书完整解析+插入引擎**（最大工作量）、capability 引擎侧强制、Perf Spike 实跑、（可选）RAG/ClaudeCodeSdk/第三方 MCP 接入。UI→引擎聊天推理路由已先行落地，后续要把它从最小直连接成更完整的 State-Protocol/Blueprint 流。
 - **📖 仅参考**：六戒律/两平面/性能契约/责任边界等设计律，Gateway 纯桥路由（对单客户端价值有限）。

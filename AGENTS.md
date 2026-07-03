@@ -9,11 +9,14 @@
   - Rust shims: `D:\.cargo\bin`
   - MSYS2/GNU linker path: `D:\msys64\mingw64\bin`
   - Node.js: `D:\nodejs`
-  - npm global prefix/cache area: `D:\npm-global`
+  - npm global prefix: `D:\npm-global`
+  - npm cache must be forced to `D:\npm-global\npm-cache` because the default may point to `C:\Users\<user>\AppData\Local\npm-cache`
 - Before local Rust builds/tests in PowerShell, set:
   ```powershell
   $env:RUSTUP_HOME = "D:\.rustup"
   $env:CARGO_HOME = "D:\.cargo"
+  $env:npm_config_prefix = "D:\npm-global"
+  $env:npm_config_cache = "D:\npm-global\npm-cache"
   $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
   ```
 - Use the default repo target directory `D:\AIRP-Dev\target` unless a task explicitly requires otherwise.
