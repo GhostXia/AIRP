@@ -19,11 +19,8 @@ if (-not (Test-Path -LiteralPath $npm)) {
 
 Push-Location (Join-Path $repoRoot "ui")
 try {
-    Write-Host "=== npm run build ==="
-    & $npm run build
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
     Write-Host "=== npm run tauri -- build ==="
+    Write-Host "tauri beforeBuildCommand runs build:engine-sidecar and npm run build"
     & $npm run tauri -- build
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
