@@ -23,6 +23,17 @@ describe("state store", () => {
     expect((stateStore.c as { messages: unknown[] }).messages).toHaveLength(1);
   });
 
+  it("patch replace updates an id-keyed chat message", () => {
+    setState("chat", {
+      messages: { a1: { id: "a1", role: "assistant", text: "" } },
+      order: ["a1"],
+    });
+    patchState("chat", [{ op: "replace", path: "/messages/a1/text", value: "partial" }]);
+    const chat = stateStore.chat as { messages: Record<string, { text: string }>; order: string[] };
+    expect(chat.messages.a1.text).toBe("partial");
+    expect(chat.order).toEqual(["a1"]);
+  });
+
   it("patch remove deletes a key", () => {
     setState("o", { a: 1, b: 2 });
     patchState("o", [{ op: "remove", path: "/b" }]);

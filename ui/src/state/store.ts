@@ -54,7 +54,8 @@ function resolveParent(root: Json, toks: string[]): { parent: any; key: string }
   for (let i = 0; i < toks.length - 1; i++) {
     if (parent == null) return null;
     // RFC 6902: "-" means the end of an array for add, and the last element
-    // when resolving a parent path such as /messages/-/text.
+    // when resolving a parent path. The id-keyed chat model still uses this for
+    // `/order/-` appends.
     if (Array.isArray(parent) && toks[i] === "-") parent = parent[parent.length - 1];
     else parent = parent?.[toks[i]];
   }

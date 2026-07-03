@@ -136,8 +136,9 @@ onMounted(async () => {
     // keeps its own sample blueprint via its subscribe priming.
     if (isTauri) {
       blueprint.value = MINIMAL_BLUEPRINT;
-      // Prime an empty chat scope so the first patch (add /messages/-) applies.
-      setState("w-chat", { messages: [] });
+      // Prime an empty chat scope so the first patch (add /messages/{id} and
+      // /order/-) applies. messages is id-keyed, order holds render order.
+      setState("w-chat", { messages: {}, order: [] });
       setState("w-characters", { ids: [], loaded: false });
       refreshCharacters();
     }

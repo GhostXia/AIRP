@@ -12,6 +12,11 @@ interface Msg {
   text: string;
 }
 
+// Task 1.2: chat state is `{ messages: {id: Msg}, order: id[] }`. We render
+// in `order` sequence, looking each id up in `messages` (O(1)). Virtual scroll
+// windows over `order` so 100k logs stay bounded (perf contract).
+type ChatState = { messages?: Record<string, Msg>; order?: string[] };
+
 // Fixed row height for the virtualized window (performance contract: only the
 // viewport slice is rendered, so a 100k-message log stays bounded).
 const ITEM_H = 48;
@@ -20,9 +25,11 @@ const title = computed(() => {
   const p = props.instance.props as unknown as { title?: string } | null;
   return p?.title ?? "对话";
 });
-const messages = computed<Msg[]>(
-  () => (props.state as { messages?: Msg[] } | null)?.messages ?? [],
+const chatState = computed<ChatState>(
+  () => (props.state as ChatState | null) ?? {},
 );
+const messagesById = computed<Record<string, Msg>>(() => chatState.value.messages ?? {});
+const order = computed<string[]>(() => chatState.value.order ?? []);
 
 const scrollEl = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
@@ -33,11 +40,18 @@ const vwin = computed(() =>
     scrollTop: scrollTop.value,
     viewportHeight: viewportH.value,
     itemHeight: ITEM_H,
-    total: messages.value.length,
+    total: order.value.length,
     overscan: 8,
   }),
 );
-const visible = computed(() => messages.value.slice(vwin.value.start, vwin.value.end));
+// Render the viewport slice of `order`, resolving each id to its message.
+// Skip ids missing from `messages` (shouldn't happen, but fail soft).
+const visible = computed<Msg[]>(() =>
+  order.value
+    .slice(vwin.value.start, vwin.value.end)
+    .map((id) => messagesById.value[id])
+    .filter((m): m is Msg => m != null),
+);
 
 function onScroll(): void {
   const el = scrollEl.value;
