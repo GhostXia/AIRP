@@ -61,6 +61,7 @@ proptest = "1"
 toml = "0.8"
 url = "2"
 tower_governor = "0.4"
+unicode-normalization = "0.1"
 
 # Internal crates — path deps resolved inside the workspace.
 airp-state-protocol = { path = "protocol" }

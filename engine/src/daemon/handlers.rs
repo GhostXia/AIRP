@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::fs;
 use std::sync::Arc;
+use unicode_normalization::UnicodeNormalization;
+
+const MAX_DERIVED_CHARACTER_ID_BYTES: usize = 120;
 
 // ── Private request/response types (handler-local) ────────────────────────────
 
@@ -298,6 +301,10 @@ pub(crate) fn import_card_to_disk(
     let (card_format, json_str, png_bytes): (String, String, Option<Vec<u8>>) =
         if let Some(path) = card_path {
             // path-first 主路径：引擎读盘（守不变式6——大 blob 不经线协议）。
+            // ⚠️ AUDIT-RISK: 服务端任意绝对路径读。当前"可信本地 UI + 用户经
+            // plugin-dialog 亲选"模型下可接受；引擎转多客户端/web 或放开第三方
+            // widget 发 import intent 时，必须在此处加调用方可信度校验/capability
+            // 门控，否则为任意文件读漏洞。详见 docs/RISK-REGISTER.md RR-001。
             let bytes = fs::read(path).map_err(|e| {
                 AirpError::BadRequest(format!("读取 card_path 失败: {}", e))
             })?;
@@ -389,16 +396,20 @@ fn extract_card_name(json_str: &str) -> String {
         .unwrap_or_default()
 }
 
-/// 把卡名 sanitize 成合法 id_segment：替换 `/ \ : * ? " < > | \0 空格` 为 `_`，
-/// 去行首点，去 `..`。空串返回 `character`。
+/// 把卡名 sanitize 成合法 id_segment：NFC 归一化，替换文件名非法字符/空白，
+/// 移除不可见控制字符，去行首点，去 `..`，并限制长度。空串返回 `character`。
 fn slugify_id(name: &str) -> String {
-    let mut s: String = name
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' | ' ' => '_',
-            _ => c,
-        })
-        .collect();
+    let mut s = String::with_capacity(name.len().min(MAX_DERIVED_CHARACTER_ID_BYTES));
+    for c in name.nfc() {
+        if is_invisible_id_control(c) {
+            continue;
+        }
+        match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => s.push('_'),
+            c if c.is_whitespace() => s.push('_'),
+            _ => s.push(c),
+        }
+    }
     // 去行首点（validate 拒 `.`/`..` 及以点开头）。
     while s.starts_with('.') {
         s.remove(0);
@@ -417,12 +428,35 @@ fn slugify_id(name: &str) -> String {
             prev_dot = false;
         }
     }
-    let s = collapsed;
+    let mut s = collapsed;
+    truncate_utf8_bytes(&mut s, MAX_DERIVED_CHARACTER_ID_BYTES);
     if s.is_empty() {
         "character".to_string()
     } else {
         s
     }
+}
+
+fn is_invisible_id_control(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200B}'..='\u{200F}' // zero-width + LRM/RLM
+                | '\u{202A}'..='\u{202E}' // bidi embedding/override
+                | '\u{2060}'..='\u{206F}' // word joiner + bidi isolates
+                | '\u{FEFF}' // BOM / zero-width no-break space
+        )
+}
+
+fn truncate_utf8_bytes(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
 }
 
 /// 目标角色目录已存在时加 `-2`/`-3` 后缀直到空闲，不覆盖既有角色。
@@ -839,5 +873,35 @@ pub(super) async fn list_models(
             }
         }
         Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::CharacterId;
+
+    #[test]
+    fn slugify_strips_invisible_controls() {
+        let id = slugify_id("艾\u{200B}米\u{200F}丽\u{202E}");
+        assert_eq!(id, "艾米丽");
+        CharacterId::new(&id).unwrap();
+    }
+
+    #[test]
+    fn slugify_normalizes_to_nfc() {
+        let decomposed = slugify_id("Cafe\u{301}");
+        let composed = slugify_id("Caf\u{00E9}");
+        assert_eq!(decomposed, composed);
+        assert_eq!(composed, "Caf\u{00E9}");
+        CharacterId::new(&composed).unwrap();
+    }
+
+    #[test]
+    fn slugify_truncates_long_names_on_utf8_boundary() {
+        let id = slugify_id(&"角色".repeat(200));
+        assert!(id.len() <= MAX_DERIVED_CHARACTER_ID_BYTES);
+        assert!(std::str::from_utf8(id.as_bytes()).is_ok());
+        CharacterId::new(&id).unwrap();
     }
 }
