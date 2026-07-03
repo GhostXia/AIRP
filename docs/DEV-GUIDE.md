@@ -210,6 +210,7 @@ data/
   - **Q6 = 桌面期 path 直喂引擎合规**（引擎是本地 sidecar 进程、同机同盘，`fs::read(abs_path)` 有效）。web 期/远端引擎时 path-first 失效 → 优先走 multipart/streaming upload；base64 只作无二进制上传能力时的最后 fallback（引擎保留 `card_json`/`card_png_base64` 入参是兜底，不是推荐主路）。
   - **🔒 审计追加护栏（该 agent 没提，但必须记）**：`card_path` = **引擎侧读任意绝对路径**。当前"本地可信 UI + 用户经对话框亲选"模型下可接受；但**严禁暴露给不可信调用方**（未来 web 客户端 / 能发 import intent 的第三方 widget）——否则是任意文件读漏洞。**规则**：`card_path`（服务端任意路径读）只给**可信本地 UI**；不可信/远端调用方一律只能 multipart/streaming upload，base64 最后兜底，**不得走服务端任意路径读**。引擎转多客户端/web、或放开第三方 widget 发 import intent 时，`card_path` 必须 capability 门控或对不可信方禁用。
 - **验收**：从 UI 选真实酒馆 PNG 卡导入成功、出现在列表、可对话；`character_book` 一并入库；**传给引擎的是路径非 base64**（大卡不卡顿、store 无大字符串）；`card/raw.json` 有原始留存（sidecar）。
+- **🔒 未来必做待办（PR #3 已落地 path-first，本项未做、审计豁免当前阶段）**：引擎 `/v1/characters/import` 的 `card_path` 端点目前**无调用方可信度校验**——任意能发 HTTP 请求者均可令引擎读任意绝对路径。当前单本地 UI + 同机 sidecar 模型下审计豁免；但**任一以下条件触发时必须先补门控再放行**：①引擎转多客户端/web（引擎不再只听本机）；②放开第三方 widget 发 `characters.import` intent；③`card_path` 暴露给非可信调用方。门控方式：capability/白名单限制 `card_path` 仅可信本地 UI 来源，或对不可信方强制走 base64/multipart 上传分支而禁用 path 分支。**未来审计 agent 应主动核查此待办是否已补，未补而条件已变 = 漏洞。**
 
 **Task 1.2 · chat 消息改 id-keyed 寻址（去掉 Phase 0 的 chat_lock）** —— 先于会话操作与多角色
 - **背景**：Phase 0 的 `BusRelay` 用 `Arc<tokio::sync::Mutex<()>>`（chat_lock）串行化所有 chat 流，因为流式回填靠 `replace /messages/-/text`（"最后一个元素"寻址），`-` 在 apply 时才解析——并发流会互相覆盖。锁治标：① 全局串行挡住多角色 N 个 NPC 并发流式（§3.6），② user_echo 锁外同步发、顺序仍可能小错乱。
@@ -269,7 +270,7 @@ data/
   ```
   用**默认 target dir**（`D:\AIRP-Dev\target`）即可，本轮无 os error 5、无需重定向 `CARGO_TARGET_DIR`。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
 - **本机工具链自检（2026-07-03）**：`D:\.cargo`、`D:\.rustup`、`D:\msys64`、`D:\nodejs`、`D:\npm-global` 均存在；当前 shell 的 `cargo/rustc/rustup` 指向 `D:\.cargo\bin`，`node/npm` 指向 `D:\nodejs`。**不要把 Rust/Node/npm 全局依赖、缓存或构建工具塞回 C 盘**；若命令试图写 `C:\Users\<user>\.cargo`、`.rustup` 或 npm 全局/cache，先停下来改 env/prefix。
-- **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。仍推荐推送后让 CI + 审计 bot 复核。
+- **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。审计 bot 已下线（2026-07-03），PR review 由开发者自审 + 人工承接，不阻塞在"等审计 bot"；自审按 `AGENTS.md` 的 Audit Agent Charter 三原则（独立 / 可提己见 / 可质疑历史并查证）。
 - 引擎启动：`cargo run -p airp-core -- daemon --port 8000`。配置三层合并 default→`data/settings.json`→env→request，env 有 `AIRP_ENDPOINT`/`AIRP_API_KEY`/`AIRP_MODEL`/`AIRP_ACCESS_KEY`。UI 侧 `BusRelay` 默认连 `http://127.0.0.1:8000`，`AIRP_ENGINE_URL` 可覆盖。
 
 ---
@@ -287,7 +288,8 @@ data/
 
 - **一 Task 一分支 → PR，禁止把代码 WIP 摊在 `main` 工作树上**：
   - 动手前 `git checkout -b <phase-x-task-name>`（如 `phase-1-card-import`）。
-  - **代码改动**（`engine/` `ui/` `protocol/` 等）**一律走分支 → 本地测试绿 → PR → 审计 → 合并**，**绝不直接 commit/推 `main`**，更不许把改了一半的代码留在 `main` 的工作树里（会跟别的 agent 踩脚、污染共享树）。
+  - **代码改动**（`engine/` `ui/` `protocol/` 等）**一律走分支 → 本地测试绿 → PR → 合并**，**绝不直接 commit/推 `main`**，更不许把改了一半的代码留在 `main` 的工作树里（会跟别的 agent 踩脚、污染共享树）。
+    - **审计环节现状（2026-07-03 更新）**：原"审计 bot 复核"已下线（bot 不存在）。PR 现由**开发者自审 + 人工 review** 承接——本地测试全绿（含神圣不变式）即可开 PR，由人决定合并，不阻塞在"等审计 bot"。未来若重新引入审计 agent，以 `AGENTS.md` 的「Audit Agent Charter」为其入职守则（独立审计 / 可提自己的想法 / 可质疑历史决策并查证）。开发 agent 自审时也应按该 Charter 三原则自我要求，而非机械对照本文档放行。
   - **仅文档**（`docs/`、`*.md`）改动可直接 commit `main`（低风险、无 CI），但保持独立 commit、别夹带代码。
   - AIRP 仓**无 CI**，本地测试 = 唯一门：PR 前必跑 `cargo test -p airp-core`（动引擎时）+ `subagent_context_has_no_orchestrator_noise`（神圣不变式）+ 相关 `cargo test -p airp-ui` / `vitest` / `vue-tsc`。
 - **提交卫生**：
