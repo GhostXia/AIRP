@@ -1,7 +1,7 @@
 {
-  "api_key": "any",
-  "endpoint": "http://127.0.0.1:8889/v1/chat/completions",
-  "model": "gemini-3.1-pro-preview",
+  "api_key": "",
+  "endpoint": "https://api.openai.com/v1/chat/completions",
+  "model": "gpt-4o",
   "provider": "OpenAI",
   "volume": {
     "hard_threshold_tokens": 3500,

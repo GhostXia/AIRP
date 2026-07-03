@@ -1,11 +1,11 @@
 /**
- * Reactive state store. Holds one value per protocol "scope" (a widget instance
- * id, "session", or dotted path). Updated from downstream `state` messages:
+ * Reactive state store. Holds one value per protocol scope (a widget instance
+ * id, "session", or dotted path). Updated from downstream state messages:
  * `set` replaces a scope, `patch` applies an RFC 6902 JSON Patch in place.
  *
  * `applyJsonPatch` implements the full op set (add/remove/replace/move/copy/test)
- * and is reused for `blueprint op:patch`. Note: application is in-place and not
- * transactional — a failing `test` throws after earlier ops have applied.
+ * and is reused for `blueprint op:patch`. All `test` ops are prevalidated before
+ * mutation, so a failing test cannot leave the scope half-applied.
  *
  * Performance contract: the full history lives in the Gateway. This store only
  * holds the live windowed slice the UI currently renders.
@@ -29,6 +29,7 @@ export function patchState(scope: string, patch: JsonPatch): void {
 
 /** Apply an RFC 6902 JSON Patch document to `root` in place. */
 export function applyJsonPatch(root: Json, patch: JsonPatch): void {
+  validateTests(root, patch);
   for (const op of patch) applyOp(root, op);
 }
 
@@ -52,16 +53,13 @@ function resolveParent(root: Json, toks: string[]): { parent: any; key: string }
   let parent: any = root;
   for (let i = 0; i < toks.length - 1; i++) {
     if (parent == null) return null;
-    // RFC 6902: "-" means "last element" of an array. Resolve it to the real
-    // index so downstream Number(key) / property access works on deep paths
-    // like /messages/-/text (used by streaming chat: replace last message text).
+    // RFC 6902: "-" means the end of an array for add, and the last element
+    // when resolving a parent path such as /messages/-/text.
     if (Array.isArray(parent) && toks[i] === "-") parent = parent[parent.length - 1];
     else parent = parent?.[toks[i]];
   }
-  // The final resolved parent may itself be null/undefined — e.g. `/messages/-/text`
-  // when `messages` is empty resolves `-` to `arr[-1] === undefined`. Returning it
-  // would make the caller do `undefined[key] = ...` → TypeError, crashing the UI
-  // (gemini-code-assist finding). Fail closed: no valid parent → no-op patch.
+  // Fail closed: if the parent cannot be resolved, drop the op instead of
+  // throwing and crashing the UI on malformed or stale patches.
   if (parent == null) return null;
   return { parent, key: toks[toks.length - 1] };
 }
@@ -82,6 +80,16 @@ function removeAt(parent: any, key: string): void {
 
 function clone<T>(v: T): T {
   return v == null ? v : (structuredClone(v) as T);
+}
+
+function validateTests(root: Json, patch: JsonPatch): void {
+  for (const op of patch) {
+    if (op.op !== "test") continue;
+    const actual = getAtPointer(root, pointerTokens(op.path));
+    if (JSON.stringify(actual) !== JSON.stringify(op.value)) {
+      throw new Error(`JSON Patch test failed at ${op.path}`);
+    }
+  }
 }
 
 // Full RFC 6902: add / remove / replace / move / copy / test.
@@ -115,12 +123,7 @@ function applyOp(root: Json, op: PatchOp): void {
       addAt(parent, key, value);
       break;
     }
-    case "test": {
-      const actual = getAtPointer(root, toks);
-      if (JSON.stringify(actual) !== JSON.stringify(op.value)) {
-        throw new Error(`JSON Patch test failed at ${op.path}`);
-      }
+    case "test":
       break;
-    }
   }
 }
