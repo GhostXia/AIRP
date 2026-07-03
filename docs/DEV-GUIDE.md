@@ -25,6 +25,16 @@
 
 **扩展开放模型**：受控开放——丰富结构化钩子（工具/事件/宏/命令/技能）对第三方开放，但过 capability 门 + 沙箱；**拒执行 agent/第三方生成的任意代码**（UI 只渲染声明式 Blueprint，esm 第三方 widget 走 opaque-origin iframe 沙箱 + 用户同意）。
 
+**🎯 首要目标（用户 2026-07-03 定，优先级高于一切 Phase/Task 排序）**：**开发出可执行文件并能简单运行。**
+
+- 这条压倒 DEV-GUIDE/PLAN 里所有 Phase 1/2/3 的功能拆分与 Task 顺序——任何 agent 接手时，**第一动作应是让项目产出可双击运行的产物（桌面端 .exe / 可执行）并跑通最简对话闭环**，而非按 Task 1.x 清单逐项推进。
+- "简单运行"判据：用户拿到产物 → 双击/启动 → 选角色 → 发一条消息 → 收到流式回复。这一条不过，其余 Task 1.2/1.3/1.4/1.5、Perf Spike、扩展生态都属空谈——不可运行的代码对用户价值为零。
+- 已知阻塞项（动手前先核对，别重做）：
+  - `ui/build-tauri.ps1` 是坏死脚本（硬编码他人路径 + 旧仓名 `AIRP-State-Protocol`，见 issue #7 P0-3）——**不可用**，走 `cargo tauri build` 或 `npm run tauri dev`。
+  - Tauri bundler 缓存需留 D 盘（PR #5 已加 `bundle.useLocalToolsDir`，守 AGENTS.md 工具链不下 C 盘）。
+  - 引擎 sidecar 随包自带、零配置（PLAN §3.7）；启动需 `data/settings.json` 有有效 `endpoint`/`api_key`/`model`（当前该文件有死链 model `gemini-3.1-pro-preview`，issue #7 P1-4，需修）。
+- 与"更开放/透明/易修正/易迭代"取向一致：可运行 = 最朴素的透明（用户能自己验证它动不动）；不可运行 = 最深的封闭。
+
 ---
 
 ## 1. 现状（起点）
