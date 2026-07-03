@@ -13,6 +13,7 @@ use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(BusRelay::new())
         .invoke_handler(tauri::generate_handler![bus::airp_dispatch])
         .setup(|app| {

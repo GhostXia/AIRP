@@ -17,19 +17,25 @@ use std::sync::Arc;
 
 // ── Private request/response types (handler-local) ────────────────────────────
 
-/// R-01: Import a character card from JSON string or base64-encoded PNG bytes.
+/// R-01: Import a character card. Path-first (守不变式6)：优先 `card_path`
+/// 让引擎读盘；`card_json`/`card_png_base64` 为 fallback（无真实路径时）。
+/// `character_id` 可选——不传时引擎从 `card.name` slugify 派生并在响应返回。
 #[derive(Debug, Deserialize)]
 pub(super) struct ImportCharacterRequest {
-    pub character_id: CharacterId,
-    /// TavernCardV2 JSON string (already parsed, or raw JSON file content).
+    /// 落盘目录名。None → 引擎从卡内 name 派生；重名自动加后缀。
+    pub character_id: Option<CharacterId>,
+    /// 绝对路径——引擎 fs::read 后按内容嗅探（PNG 魔数 → png_parser，否则 JSON）。
+    pub card_path: Option<std::path::PathBuf>,
+    /// TavernCardV2 JSON string (fallback)。
     pub card_json: Option<String>,
-    /// Raw PNG file bytes, base64-encoded (standard alphabet, no line breaks required).
+    /// Raw PNG bytes, base64-encoded (fallback)。
     pub card_png_base64: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct ImportCharacterResponse {
-    pub character_id: CharacterId,
+    /// 最终落盘用的 id（传入则原样；未传则为派生 id）。
+    pub character_id: String,
     pub card_format: String,
 }
 
@@ -266,27 +272,50 @@ pub(super) async fn agent_run(
 
 /// M_MCP MCP-2: 角色卡导入的内部实现（pub(crate) 供 daemon HTTP handler 与 MCP tool 共享）。
 ///
-/// 二选一参数：`card_json` 或 `card_png_base64`。两者都为 None → 400。
+/// 三选一参数（按优先级）：`card_path`（path-first，引擎读盘）/ `card_json` / `card_png_base64`。
+/// 全为 None → 400。
+///
+/// `character_id` 为 `None` 时，引擎解析卡后 slugify `data.name` 派生默认 id 并返回；
+/// 重名（目标目录已存在）时加 `-2`/`-3` 后缀，不覆盖既有角色。
 ///
 /// 副作用（CF-7 解包）：
 /// - `card.json` 或 `card.png` 写入角色根目录（向后兼容）
-/// - `card/raw.json` — 完整 TavernV2 JSON
+/// - `card/raw.json` — 完整 TavernV2 JSON（最小 sidecar，守 ASSET-SPEC 规则2 存储永不丢）
 /// - `card/greetings/00.md` — first_mes（其他 `0x.md` 为 alternate_greetings）
 /// - `world/lorebook.json` — 角色卡内嵌 character_book 转 Lorebook 格式
 ///
-/// 返回 `(card_format, json_str)`；`card_format` ∈ {"json", "png"}。
+/// 返回 `(character_id, card_format, json_str)`。`character_id` 是最终落盘用的 id
+/// （可能与传入不同——传入 None 时为派生 id）。
 pub(crate) fn import_card_to_disk(
     data_root: &std::path::Path,
-    character_id: &str,
+    character_id: Option<&str>,
+    card_path: Option<&std::path::Path>,
     card_json: Option<String>,
     card_png_base64: Option<String>,
-) -> Result<(String, String), AirpError> {
-    let char_dir = data_dir::character_dir(data_root, character_id)?;
-
-    // 阶段 1：提取 + 校验 JSON（PNG 先 decode 到内存，暂不落盘）。
+) -> Result<(String, String, String), AirpError> {
+    // 阶段 1：提取 + 校验 JSON（path/PNG 先读入内存，暂不落盘）。
     // 写盘推迟到形状校验之后，避免被拒的预设残留脏文件。
     let (card_format, json_str, png_bytes): (String, String, Option<Vec<u8>>) =
-        if let Some(json) = card_json {
+        if let Some(path) = card_path {
+            // path-first 主路径：引擎读盘（守不变式6——大 blob 不经线协议）。
+            let bytes = fs::read(path).map_err(|e| {
+                AirpError::BadRequest(format!("读取 card_path 失败: {}", e))
+            })?;
+            // 按内容嗅探：PNG 魔数 → png_parser；否则当 JSON 文本。
+            if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+                let json = crate::png_parser::parse_png_character_card_bytes(&bytes)?;
+                ("png".to_string(), json, Some(bytes))
+            } else {
+                let clean = data_dir::strip_utf8_bom(
+                    std::str::from_utf8(&bytes)
+                        .map_err(|e| AirpError::BadRequest(format!("card_path 非 UTF-8: {}", e)))?,
+                )
+                .to_owned();
+                let _ = serde_json::from_str::<serde_json::Value>(&clean)
+                    .map_err(|e| AirpError::BadRequest(format!("card_path 不是有效 JSON: {}", e)))?;
+                ("json".to_string(), clean, None)
+            }
+        } else if let Some(json) = card_json {
             let clean = data_dir::strip_utf8_bom(&json).to_owned();
             let _ = serde_json::from_str::<serde_json::Value>(&clean)
                 .map_err(|e| AirpError::BadRequest(format!("card_json 不是有效 JSON: {}", e)))?;
@@ -301,7 +330,7 @@ pub(crate) fn import_card_to_disk(
             ("png".to_string(), json, Some(bytes))
         } else {
             return Err(AirpError::BadRequest(
-                "必须提供 card_json 或 card_png_base64 之一".to_string(),
+                "必须提供 card_path / card_json / card_png_base64 之一".to_string(),
             ));
         };
 
@@ -320,33 +349,111 @@ pub(crate) fn import_card_to_disk(
     // 不归一化则下游 TavernCardV2 解析失败，greetings/lorebook 全丢。
     let json_str = crate::orchestrator::card::normalize_v1_to_v2(&json_str);
 
+    // 阶段 2.5：确定 character_id。传入则校验；未传则 slugify card.name 派生。
+    let final_id: String = match character_id {
+        Some(id) => {
+            // 传入的 id 必须本身合法（UI/调用方负责）；CharacterId 校验。
+            CharacterId::new(id)?;
+            id.to_string()
+        }
+        None => {
+            let name = extract_card_name(&json_str);
+            let base = slugify_id(&name);
+            resolve_unique_id(data_root, &base)?
+        }
+    };
+    // 最终 id 再过一次 newtype 校验（slugify 可能产生需复核的串）+ 防 None 路径漏网。
+    CharacterId::new(&final_id)?;
+    let char_dir = data_dir::character_dir(data_root, &final_id)?;
+
     // 阶段 3：落盘（仅在校验通过后）。
     if let Some(bytes) = png_bytes {
         fs::write(char_dir.join("card.png"), &bytes)?;
-        let card_dir = data_dir::char_card_dir(data_root, character_id)?;
+        let card_dir = data_dir::char_card_dir(data_root, &final_id)?;
         fs::write(card_dir.join("card.png"), &bytes)?;
     } else {
         fs::write(char_dir.join("card.json"), &json_str)?;
     }
 
     // CF-7: 解包资产（非阻塞；失败仅 warn）
-    extract_card_assets(data_root, character_id, &json_str);
+    extract_card_assets(data_root, &final_id, &json_str);
 
-    Ok((card_format, json_str))
+    Ok((final_id, card_format, json_str))
+}
+
+/// 从归一化后的 TavernV2 JSON 提取 `data.name`。失败/缺字段返回空串。
+fn extract_card_name(json_str: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(json_str)
+        .ok()
+        .and_then(|v| v.get("data").and_then(|d| d.get("name"))?.as_str().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// 把卡名 sanitize 成合法 id_segment：替换 `/ \ : * ? " < > | \0 空格` 为 `_`，
+/// 去行首点，去 `..`。空串返回 `character`。
+fn slugify_id(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' | ' ' => '_',
+            _ => c,
+        })
+        .collect();
+    // 去行首点（validate 拒 `.`/`..` 及以点开头）。
+    while s.starts_with('.') {
+        s.remove(0);
+    }
+    // 去 `..` 子串（validate 拒含 `..`）——逐字符折叠连续点为单点。
+    let mut collapsed = String::with_capacity(s.len());
+    let mut prev_dot = false;
+    for c in s.chars() {
+        if c == '.' {
+            if !prev_dot {
+                collapsed.push(c);
+            }
+            prev_dot = true;
+        } else {
+            collapsed.push(c);
+            prev_dot = false;
+        }
+    }
+    let s = collapsed;
+    if s.is_empty() {
+        "character".to_string()
+    } else {
+        s
+    }
+}
+
+/// 目标角色目录已存在时加 `-2`/`-3` 后缀直到空闲，不覆盖既有角色。
+fn resolve_unique_id(data_root: &std::path::Path, base: &str) -> Result<String, AirpError> {
+    let candidate = |id: &str| data_root.join("characters").join(id).exists();
+    if !candidate(base) {
+        return Ok(base.to_string());
+    }
+    for n in 2..u32::MAX {
+        let id = format!("{}-{}", base, n);
+        if !candidate(&id) {
+            return Ok(id);
+        }
+    }
+    Err(AirpError::BadRequest("角色 id 重名后缀耗尽".to_string()))
 }
 
 pub(super) async fn import_character(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<ImportCharacterRequest>,
 ) -> Result<Json<ImportCharacterResponse>, AirpError> {
-    let (card_format, _json_str) = import_card_to_disk(
+    let cid_str = req.character_id.as_ref().map(|c| c.as_str().to_string());
+    let (final_id, card_format, _json_str) = import_card_to_disk(
         &state.data_root,
-        req.character_id.as_str(),
+        cid_str.as_deref(),
+        req.card_path.as_deref(),
         req.card_json,
         req.card_png_base64,
     )?;
     Ok(Json(ImportCharacterResponse {
-        character_id: req.character_id,
+        character_id: final_id,
         card_format,
     }))
 }
