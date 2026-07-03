@@ -17,7 +17,7 @@
 //! headless engine service — see DEV-GUIDE §3.3).
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use airp_state_protocol::{Body, Envelope, PatchOp, PatchOpKind, SetOrPatch, PROTOCOL_VERSION};
 use futures_util::StreamExt;
@@ -41,7 +41,7 @@ const DEFAULT_ENGINE_URL: &str = "http://127.0.0.1:8000";
 pub struct BusRelay {
     subscriber: OnceLock<AppHandle>,
     seq: AtomicU64,
-    engine_url: String,
+    engine: RwLock<EngineConnection>,
     http: reqwest::Client,
     // Task 1.2: chat_lock removed. Streaming patches now address a fixed
     // assistant row id (`/messages/{id}/text`) reserved before spawning, so
@@ -49,10 +49,23 @@ pub struct BusRelay {
     // last-element target that the lock existed to serialize).
 }
 
+#[derive(Clone)]
+struct EngineConnection {
+    url: String,
+    access_key: Option<String>,
+}
+
 impl BusRelay {
     pub fn new() -> Self {
         let engine_url =
             std::env::var("AIRP_ENGINE_URL").unwrap_or_else(|_| DEFAULT_ENGINE_URL.to_string());
+        let access_key = std::env::var("AIRP_ACCESS_KEY")
+            .ok()
+            .filter(|key| !key.is_empty());
+        Self::with_connection(engine_url, access_key)
+    }
+
+    pub fn with_connection(engine_url: String, access_key: Option<String>) -> Self {
         // Bounded HTTP client: connect + request timeouts prevent spawned
         // tasks hanging forever if the engine stalls (CodeRabbit finding).
         let http = reqwest::Client::builder()
@@ -63,9 +76,25 @@ impl BusRelay {
         Self {
             subscriber: OnceLock::new(),
             seq: AtomicU64::new(0),
-            engine_url,
+            engine: RwLock::new(EngineConnection {
+                url: engine_url,
+                access_key,
+            }),
             http,
         }
+    }
+
+    pub fn configure_engine(&self, engine_url: String, access_key: Option<String>) {
+        let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        guard.url = engine_url;
+        guard.access_key = access_key;
+    }
+
+    fn engine_connection(&self) -> EngineConnection {
+        self.engine
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Register the webview as the downstream sink. Called once from `setup`.
@@ -124,12 +153,13 @@ impl BusRelay {
                 // so concurrent streams don't interfere (Task 1.2).
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
-                let engine_url = self.engine_url.clone();
+                let engine = self.engine_connection();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = run_chat_stream(
                         app_opt.clone(),
                         http,
-                        &engine_url,
+                        &engine.url,
+                        engine.access_key.as_deref(),
                         &character_id,
                         &text,
                         &assistant_id,
@@ -165,9 +195,11 @@ impl BusRelay {
                 // picker. The engine returns `Vec<String>` of character ids.
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
-                let engine_url = self.engine_url.clone();
+                let engine = self.engine_connection();
                 tauri::async_runtime::spawn(async move {
-                    match fetch_character_list(&http, &engine_url).await {
+                    match fetch_character_list(&http, &engine.url, engine.access_key.as_deref())
+                        .await
+                    {
                         Ok(ids) => {
                             emit_state_set(
                                 &app_opt,
@@ -214,7 +246,7 @@ impl BusRelay {
                 }
                 let app_opt = self.subscriber.get().cloned();
                 let http = self.http.clone();
-                let engine_url = self.engine_url.clone();
+                let engine = self.engine_connection();
                 tauri::async_runtime::spawn(async move {
                     // 标记导入中，UI 可显示进度/禁用按钮。
                     emit_state_set(
@@ -225,7 +257,8 @@ impl BusRelay {
                     );
                     match import_character_via_path(
                         &http,
-                        &engine_url,
+                        &engine.url,
+                        engine.access_key.as_deref(),
                         &card_path,
                         character_id.as_deref(),
                     )
@@ -234,7 +267,13 @@ impl BusRelay {
                         Ok(imported_id) => {
                             tracing::info!(path = %card_path, id = %imported_id, "character imported");
                             // 刷新列表让新 id 出现。
-                            match fetch_character_list(&http, &engine_url).await {
+                            match fetch_character_list(
+                                &http,
+                                &engine.url,
+                                engine.access_key.as_deref(),
+                            )
+                            .await
+                            {
                                 Ok(ids) => emit_state_set(
                                     &app_opt,
                                     format!("state-chars-{n}"),
@@ -380,6 +419,7 @@ async fn run_chat_stream(
     app: Option<AppHandle>,
     http: reqwest::Client,
     engine_url: &str,
+    access_key: Option<&str>,
     character_id: &str,
     text: &str,
     assistant_id: &str,
@@ -393,11 +433,10 @@ async fn run_chat_stream(
         "user_profile": { "name": "User", "variables": {} },
     });
 
-    let resp = http
+    let request = http
         .post(format!("{}/v1/chat/completions", engine_url))
-        .json(&body)
-        .send()
-        .await?;
+        .json(&body);
+    let resp = with_auth(request, access_key).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -520,11 +559,10 @@ fn emit_state_set(app: &Option<AppHandle>, id: String, scope: &str, state: serde
 async fn fetch_character_list(
     http: &reqwest::Client,
     engine_url: &str,
+    access_key: Option<&str>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let resp = http
-        .get(format!("{}/v1/characters", engine_url))
-        .send()
-        .await?;
+    let request = http.get(format!("{}/v1/characters", engine_url));
+    let resp = with_auth(request, access_key).send().await?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -540,6 +578,7 @@ async fn fetch_character_list(
 async fn import_character_via_path(
     http: &reqwest::Client,
     engine_url: &str,
+    access_key: Option<&str>,
     card_path: &str,
     character_id: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -547,11 +586,10 @@ async fn import_character_via_path(
     if let Some(id) = character_id {
         body["character_id"] = serde_json::json!(id);
     }
-    let resp = http
+    let request = http
         .post(format!("{}/v1/characters/import", engine_url))
-        .json(&body)
-        .send()
-        .await?;
+        .json(&body);
+    let resp = with_auth(request, access_key).send().await?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -565,6 +603,16 @@ async fn import_character_via_path(
         .unwrap_or("")
         .to_string();
     Ok(id)
+}
+
+fn with_auth(
+    request: reqwest::RequestBuilder,
+    access_key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    match access_key.filter(|key| !key.is_empty()) {
+        Some(key) => request.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}")),
+        None => request,
+    }
 }
 
 fn now_ms() -> i64 {

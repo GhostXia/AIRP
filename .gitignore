@@ -18,6 +18,7 @@ ui/.vite/
 
 # Tauri
 ui/src-tauri/gen/schemas/
+ui/src-tauri/binaries/
 
 # IDE
 .vscode/

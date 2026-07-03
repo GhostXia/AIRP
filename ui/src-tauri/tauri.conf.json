@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build:engine-sidecar && npm run build"
   },
   "app": {
     "windows": [
@@ -19,6 +19,7 @@
     "active": true,
     "useLocalToolsDir": true,
     "targets": ["nsis"],
+    "externalBin": ["binaries/airp-core"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
