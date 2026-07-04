@@ -14,6 +14,8 @@
   const connText = $('#conn-text');
   const healthInfo = $('#health-info');
   const settingsDisplay = $('#settings-display');
+  const modelsDisplay = $('#models-display');
+  const btnRefreshModels = $('#btn-refresh-models');
   const charSelect = $('#char-select');
   const sessSelect = $('#sess-select');
   const chatLog = $('#chat-log');
@@ -96,6 +98,21 @@
   }
 
   // ── connection ───────────────────────────────────────────────────────────
+  function formatError(data, text) {
+    if (data && typeof data === 'object' && data.error) {
+      const err = data.error;
+      const lines = [err.code || 'error'];
+      if (err.message) lines.push(err.message);
+      if (err.upstream_status) lines.push('upstream_status=' + err.upstream_status);
+      if (err.upstream_body) lines.push('upstream_body=' + err.upstream_body);
+      if (err.detail) lines.push('detail=' + err.detail);
+      return lines.join('\n');
+    }
+    if (typeof data === 'string' && data) return data;
+    if (text) return text;
+    return JSON.stringify(data);
+  }
+
   async function connect() {
     base = engineUrl.value.replace(/\/+$/, '');
     bearer = bearerToken.value || '';
@@ -108,7 +125,7 @@
       refreshAll();
     } else {
       connStatus.className = 'status-dot dot-err';
-      connText.textContent = '连接失败: ' + (r.data || r.text);
+      connText.textContent = '连接失败: ' + formatError(r.data, r.text);
     }
   }
 
@@ -118,13 +135,13 @@
 
   // ── refresh all left-panel data ──────────────────────────────────────────
   async function refreshAll() {
-    await Promise.all([refreshHealth(), refreshSettings(), refreshChars()]);
+    await Promise.all([refreshHealth(), refreshSettings(), refreshModels(), refreshChars()]);
   }
 
   async function refreshHealth() {
     const r = await api('GET', '/version');
     if (r.ok) healthInfo.textContent = 'version: ' + (r.data?.version || r.text);
-    else healthInfo.textContent = 'err: ' + (r.data || r.text);
+    else healthInfo.textContent = 'err: ' + formatError(r.data, r.text);
   }
 
   async function refreshSettings() {
@@ -135,7 +152,21 @@
       if (s.access_api_key) s.access_api_key = maskSecret(s.access_api_key);
       settingsDisplay.textContent = JSON.stringify(s, null, 2);
     } else {
-      settingsDisplay.textContent = 'err: ' + (r.data || r.text);
+      settingsDisplay.textContent = 'err: ' + formatError(r.data, r.text);
+    }
+  }
+
+  async function refreshModels() {
+    if (!modelsDisplay) return;
+    modelsDisplay.textContent = 'loading...';
+    const r = await api('GET', '/v1/models');
+    if (r.ok) {
+      const models = Array.isArray(r.data?.data) ? r.data.data : null;
+      modelsDisplay.textContent = models
+        ? models.map(m => m.id || JSON.stringify(m)).join('\n')
+        : JSON.stringify(r.data, null, 2);
+    } else {
+      modelsDisplay.textContent = 'err:\n' + formatError(r.data, r.text);
     }
   }
 
@@ -168,6 +199,7 @@
   }
 
   btnRefreshChars.addEventListener('click', refreshChars);
+  if (btnRefreshModels) btnRefreshModels.addEventListener('click', refreshModels);
 
   async function refreshSessions() {
     const cid = charSelect.value;

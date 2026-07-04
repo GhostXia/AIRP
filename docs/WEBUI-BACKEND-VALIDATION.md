@@ -1,6 +1,6 @@
 # WebUI 后端可靠性验证路线
 
-> 最后更新：2026-07-04
+> 最后更新：2026-07-05
 > 目的：把当前“先用 WebUI 验证后端，并让用户先体验完整 agent 能力”的方向整理成可执行开发路线。本文里的 WebUI 是临时后端验证面和早期可用入口，不是 AIRP 的长期产品 UI。
 
 ## 1. 开发判断
@@ -139,6 +139,43 @@ M1-M3 可复现后，再把同一批行为接回桌面 UI：
 - 失败路径的截图或保存日志
 
 不要只写“已验证”，要写清楚具体断言。
+
+### 2026-07-05 · P0 `/v1/models` provider smoke hardening
+
+范围：先修 WebUI provider smoke 的后端阻塞面，不触碰 Tauri UI 和长期协议重构。
+
+本轮代码断言：
+
+- `cargo test -p airp-core --test openai_compat models_proxy -- --nocapture`：3 passed。
+- `cargo test -p airp-core --test openai_compat -- --nocapture`：9 passed。
+- `cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise -- --nocapture`：1 passed。
+- `cargo test -p airp-core`：lib 315 passed / 1 ignored，`openai_compat` 9 passed，`sse_wiremock` 5 passed。
+- `cargo clippy -p airp-core -- -D warnings`：passed。
+
+覆盖行为：
+
+- `/v1/models` 上游 200 时继续透传 upstream JSON，WebUI 可直接读模型列表。
+- `/v1/models` 上游 401 时返回 HTTP 502 + JSON error，包含 `error.code = "upstream_status"`、`upstream_status = 401`、`upstream_body`，避免 WebUI 只看到空 502。
+- provider endpoint 无法映射到 `/models` 时返回 HTTP 502 + JSON error，包含 `error.code = "invalid_endpoint"` 和原始 endpoint detail。
+- invalid endpoint detail 会脱敏 URL query/userinfo；`not-a-url?api_key=secret` 只返回 `not-a-url?redacted`，响应体不包含 `secret`。
+- 请求已设置显式 timeout；真实慢 upstream 会返回 typed JSON error，而不是让浏览器无限等待。
+
+真实 provider smoke：
+
+- provider：HTTP API `127.0.0.1:8889`，默认模型 `gemini-3.1-pro-preview`。
+- direct `GET http://127.0.0.1:8889/v1/models` 返回 200，模型列表包含 `gemini-3.1-pro-preview` 和 `gemini-3.5-pro-preview`。
+- engine 启动命令：`target\debug\airp-core.exe daemon --port 8891`，环境变量 `AIRP_ENDPOINT=http://127.0.0.1:8889/v1/chat/completions`、`AIRP_MODEL=gemini-3.1-pro-preview`、`AIRP_DATA_DIR=target\p0-smoke-data`。
+- engine `GET http://127.0.0.1:8891/version` 返回 200。
+- engine `GET http://127.0.0.1:8891/v1/models` 返回 200，并透传同一组 provider 模型列表。
+- `POST /v1/chat/completions` 返回 HTTP 200 SSE，但 SSE payload 是 `event: error`，body 指向 provider `Cloud Error 429`；断言是错误路径可见，不是生成成功。
+- `POST /v1/agent/run` 返回 HTTP 200 SSE，事件序列包含 `plan -> tool_call -> tool_result -> plan -> done`，`done.stop_reason = "upstream_error"`；断言是 agent loop 和工具事件可见，生成阶段被 provider quota/error 截断。
+
+WebUI browser smoke：
+
+- 静态 WebUI：`http://127.0.0.1:9002/`；engine：`http://127.0.0.1:8892`。
+- 连接后页面 `#models-display` 渲染 `gemini-3.1-pro-preview` 与 `gemini-3.5-pro-preview`；event log 记录 `200 GET /v1/models`。
+- 临时把 engine endpoint 改为 `not-a-url` 后点击 models reload，页面渲染 `err:\ninvalid_endpoint\nprovider endpoint cannot be mapped to a /models URL\ndetail=not-a-url`；event log 记录 `502 GET /v1/models`。
+- 恢复 endpoint 后点击 models reload，页面再次渲染两条 provider model id；event log 记录 `200 GET /v1/models`。
 
 ## 6. 立即开发顺序
 

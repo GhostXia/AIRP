@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::fs;
 use std::sync::Arc;
+use std::time::Duration;
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_DERIVED_CHARACTER_ID_BYTES: usize = 120;
+const MODELS_PROXY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ── Private request/response types (handler-local) ────────────────────────────
 
@@ -855,18 +857,24 @@ pub(super) async fn list_models(
         (cfg.endpoint.clone(), cfg.api_key.clone())
     };
 
-    let models_url = if let Some(pos) = endpoint.find("/v1/") {
-        format!("{}/v1/models", &endpoint[..pos])
-    } else {
-        let base = endpoint.trim_end_matches('/');
-        if let Some(pos) = base.rfind('/') {
-            format!("{}/models", &base[..pos])
-        } else {
-            return StatusCode::BAD_GATEWAY.into_response();
+    let models_url = match models_url_from_endpoint(&endpoint) {
+        Some(url) => url,
+        None => {
+            return models_proxy_error(
+                StatusCode::BAD_GATEWAY,
+                "invalid_endpoint",
+                "provider endpoint cannot be mapped to a /models URL",
+                None,
+                None,
+                Some(redact_endpoint_for_error(&endpoint)),
+            );
         }
     };
 
-    let mut req = state.http_client.get(&models_url);
+    let mut req = state
+        .http_client
+        .get(&models_url)
+        .timeout(MODELS_PROXY_TIMEOUT);
     if let Some(key) = &api_key {
         if !key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", key));
@@ -877,17 +885,131 @@ pub(super) async fn list_models(
         Ok(resp) => {
             let status = resp.status();
             match resp.bytes().await {
-                Ok(body) => (
-                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                Ok(body) if status.is_success() => (
+                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
                     [(header::CONTENT_TYPE, "application/json")],
                     body,
                 )
                     .into_response(),
-                Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+                Ok(body) => models_proxy_error(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_status",
+                    format!("model provider /models returned HTTP {}", status.as_u16()),
+                    Some(status.as_u16()),
+                    Some(truncate_error_text(&String::from_utf8_lossy(&body))),
+                    None,
+                ),
+                Err(e) => models_proxy_error(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_body_read_failed",
+                    "failed to read model provider /models response body",
+                    Some(status.as_u16()),
+                    None,
+                    Some(e.to_string()),
+                ),
             }
         }
-        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+        Err(e) if e.is_timeout() => models_proxy_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "upstream_timeout",
+            format!(
+                "model provider /models timed out after {}s",
+                MODELS_PROXY_TIMEOUT.as_secs()
+            ),
+            None,
+            None,
+            None,
+        ),
+        Err(_) => models_proxy_error(
+            StatusCode::BAD_GATEWAY,
+            "upstream_request_failed",
+            "model provider /models request failed",
+            None,
+            None,
+            None,
+        ),
     }
+}
+
+fn models_url_from_endpoint(endpoint: &str) -> Option<String> {
+    if let Some(pos) = endpoint.find("/v1/") {
+        return Some(format!("{}/v1/models", &endpoint[..pos]));
+    }
+    let base = endpoint.trim_end_matches('/');
+    base.rfind('/')
+        .map(|pos| format!("{}/models", &base[..pos]))
+}
+
+fn redact_endpoint_for_error(endpoint: &str) -> String {
+    if let Ok(mut url) = reqwest::Url::parse(endpoint) {
+        if !url.username().is_empty() {
+            let _ = url.set_username("redacted");
+        }
+        if url.password().is_some() {
+            let _ = url.set_password(Some("redacted"));
+        }
+        if url.query().is_some() {
+            url.set_query(Some("redacted"));
+        }
+        return url.to_string();
+    }
+    if let Some(pos) = endpoint.find('?') {
+        return format!("{}?redacted", &endpoint[..pos]);
+    }
+    endpoint.to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct ModelsProxyError {
+    error: ModelsProxyErrorBody,
+}
+
+#[derive(Debug, Serialize)]
+struct ModelsProxyErrorBody {
+    code: &'static str,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+fn models_proxy_error(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+    upstream_status: Option<u16>,
+    upstream_body: Option<String>,
+    detail: Option<String>,
+) -> Response {
+    (
+        status,
+        Json(ModelsProxyError {
+            error: ModelsProxyErrorBody {
+                code,
+                message: message.into(),
+                upstream_status,
+                upstream_body,
+                detail,
+            },
+        }),
+    )
+        .into_response()
+}
+
+fn truncate_error_text(text: &str) -> String {
+    const MAX_ERROR_BODY_CHARS: usize = 2048;
+    let mut out = String::new();
+    for (idx, ch) in text.chars().enumerate() {
+        if idx >= MAX_ERROR_BODY_CHARS {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(test)]
