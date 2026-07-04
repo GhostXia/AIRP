@@ -295,7 +295,7 @@ window.__AIRP_AGENT_TEST__.getSnapshot()
 - **干净提示词 CI 不变式**：`subagent_context_has_no_orchestrator_noise`——断言送进 adapter 的角色平面 prompt 无脚手架标记。**神圣，不许删/改弱。**
 - **格式导入 fixture**：用**真实酒馆导出文件**（PNG 卡/世界书 JSON/预设 JSON）做测试样本，不是自造的。
 - **Perf Spike**：10 万条假消息 60fps + 内存封顶。
-- **Agent UI Test Harness**：`npm run test -- --run src/agent-test.test.ts` 覆盖开关、动作 dispatch、snapshot、DOM text/wait 语义。GUI 层后续接 Codex browser plugin 或 Playwright，必须产出截图/状态证据。
+- **Agent UI Test Harness**：`npm run test -- --run src/agent-test.test.ts` 覆盖开关、动作 dispatch、snapshot、DOM text/wait 语义。若用户删除 `src/agent-test.ts` 关闭测试面，该测试不阻断手动构建。GUI 层后续接 Codex browser plugin 或 Playwright，必须产出截图/状态证据。
 - **数据传输纪律门（§0 不变式6）——现为 review 门，未来落 workflow**：
   - **现在（AIRP 无 CI）= 强制 PR review 检查项**：任何导入/大数据改动，review 必须核对——传给引擎/模型/前端的是**路径/引用**还是**大 blob**？intent/Envelope/store 里有没有塞 base64 或大字符串？有=打回。
   - **未来 = 自动化门禁（workflow）**：立 CI/lint 检查——(a) 静态扫：`emit(intent…)` / `dispatch` / setState 的 payload 不得含 base64 大字段或 >阈值字符串；(b) 测试：导入大文件后断言 state store 无大字符串、intent 体积有上限；(c) 引擎侧断言 import 接口收路径而非内容。**这条纪律优先级足够高，应尽早从"review 门"升级为"自动门"。**

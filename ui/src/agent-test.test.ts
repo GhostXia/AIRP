@@ -1,9 +1,36 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { installAgentTestHarness, shouldInstallAgentTestHarness } from "./agent-test";
 import type { Json } from "./protocol/types";
 
 const originalWindow = globalThis.window;
 const originalDocument = globalThis.document;
+
+type AgentTestHarness = {
+  selectCharacter(characterId: string): void;
+  sendChat(text: string, characterId?: string): void;
+  refreshCharacters(): void;
+  getSnapshot(): { selectedCharacterId: string };
+  getState(scope?: string): Json | Record<string, Json>;
+  getText(selector?: string): string;
+  waitForText(text: string, timeoutMs?: number): Promise<boolean>;
+};
+
+type AgentTestModule = {
+  shouldInstallAgentTestHarness(): boolean;
+  installAgentTestHarness(ctx: {
+    dispatchIntent: (name: string, params?: Json) => void;
+    getBlueprint: () => Json;
+    getState: () => Record<string, Json>;
+    getSelectedCharacterId: () => string;
+    getBusError: () => string | null;
+  }): AgentTestHarness | null;
+};
+
+const agentTestModules = import.meta.glob<AgentTestModule>("./agent-test.ts");
+
+async function loadAgentTestModule(): Promise<AgentTestModule | null> {
+  const load = Object.values(agentTestModules)[0];
+  return load ? await load() : null;
+}
 
 function installDom(url = "http://localhost:1420/?airp_agent_test=1") {
   const body = { textContent: "AIRP ready" };
@@ -42,19 +69,25 @@ describe("agent UI test harness", () => {
     if (originalDocument) vi.stubGlobal("document", originalDocument);
   });
 
-  it("is gated by explicit dev query flag", () => {
+  it("is gated by explicit dev query flag", async () => {
+    const mod = await loadAgentTestModule();
+    if (!mod) return;
+
     installDom("http://localhost:1420/");
-    expect(shouldInstallAgentTestHarness()).toBe(false);
+    expect(mod.shouldInstallAgentTestHarness()).toBe(false);
 
     installDom("http://localhost:1420/?airp_agent_test=1");
-    expect(shouldInstallAgentTestHarness()).toBe(true);
+    expect(mod.shouldInstallAgentTestHarness()).toBe(true);
   });
 
   it("exposes safe UI actions and snapshots", async () => {
+    const mod = await loadAgentTestModule();
+    if (!mod) return;
+
     const { body } = installDom();
     const calls: Array<[string, Json | undefined]> = [];
     const state = { "w-chat": { messages: {}, order: [] } } satisfies Record<string, Json>;
-    const harness = installAgentTestHarness({
+    const harness = mod.installAgentTestHarness({
       dispatchIntent(name, params) {
         calls.push([name, params]);
       },
@@ -65,7 +98,7 @@ describe("agent UI test harness", () => {
     });
 
     expect(harness).not.toBeNull();
-    expect(window.__AIRP_AGENT_TEST__).toBe(harness);
+    expect((window as Window & { __AIRP_AGENT_TEST__?: unknown }).__AIRP_AGENT_TEST__).toBe(harness);
 
     harness!.selectCharacter("bob");
     harness!.sendChat("hello", "bob");
