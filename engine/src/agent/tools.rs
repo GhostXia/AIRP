@@ -139,20 +139,16 @@ impl Tool for EchoTool {
 pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.register(Box::new(EchoTool));
-    // M_AGENT-2 第一批：会话类 5 工具（engine 已有等价内部能力，包成工具）。
-    reg.register(Box::new(ListSessionsTool {
-        state: state.clone(),
-    }));
-    reg.register(Box::new(StartSessionTool {
-        state: state.clone(),
-    }));
-    reg.register(Box::new(AppendMessageTool {
-        state: state.clone(),
-    }));
-    reg.register(Box::new(GetRecentContextTool {
-        state: state.clone(),
-    }));
-    reg.register(Box::new(RollbackMessagesTool { state }));
+    // M_AGENT-2 第一批：会话类 5 工具。
+    reg.register(Box::new(ListSessionsTool { state: state.clone() }));
+    reg.register(Box::new(StartSessionTool { state: state.clone() }));
+    reg.register(Box::new(AppendMessageTool { state: state.clone() }));
+    reg.register(Box::new(GetRecentContextTool { state: state.clone() }));
+    reg.register(Box::new(RollbackMessagesTool { state: state.clone() }));
+    // M_AGENT-2 第二批：角色类 3 工具（list/get/delete）。
+    reg.register(Box::new(ListCharactersTool { state: state.clone() }));
+    reg.register(Box::new(GetCharacterTool { state: state.clone() }));
+    reg.register(Box::new(DeleteCharacterTool { state }));
     reg
 }
 
@@ -527,6 +523,128 @@ impl Tool for RollbackMessagesTool {
     }
 }
 
+// ── M_AGENT-2 第二批：角色类 3 工具 ─────────────────────────────────────────
+//
+// list/get/delete characters。list 是 readonly；get 是 readonly（读 card.json）；
+// delete 是 destructive（删整个角色目录）→ 默认 dry-run。
+// 对应 MCP-SERVER-ABSORPTION.md §1 "角色" 行的 3 个 ✅ 工具。
+// analyze_card / decompose_character 是 🆕 需移植，不在本批。
+
+/// `list_characters`：列所有角色 id。readonly。
+/// params: `{}` → `["alice", "bob", ...]`
+struct ListCharactersTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for ListCharactersTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "list_characters",
+            description: "List all available character ids (folder names under data/characters/).",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        _params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let ids = data_dir::list_characters(&state.data_root)?;
+            Ok(ToolResult {
+                output: Value::Array(ids.into_iter().map(Value::String).collect()),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+/// `get_character`：读角色 card.json（原始 JSON 文本，解析后返回 object）。
+/// readonly。兼容迁移后 `card/card.json` 与旧 `card.json`。
+/// params: `{ "character_id": string }` → `{ "card": <parsed card.json object> }`
+struct GetCharacterTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for GetCharacterTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "get_character",
+            description: "Read a character's card.json (parsed object). Returns card fields like name/description/personality/first_mes/etc.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid_str = params
+                .get("character_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
+            let cid = CharacterId::new(cid_str)?;
+            let card_text = data_dir::get_character(&state.data_root, cid.as_str())?;
+            let card: Value = serde_json::from_str(&card_text).unwrap_or(Value::String(card_text));
+            Ok(ToolResult {
+                output: serde_json::json!({ "card": card }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+/// `delete_character`：删整个角色目录（card + state + memory + sessions）。
+/// **destructive** → 默认 dry-run，未 confirm 只回"将删除角色 X 的全部数据"。
+/// params: `{ "character_id": string }` → `{ "deleted": string }` 或 dry-run preview
+struct DeleteCharacterTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for DeleteCharacterTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "delete_character",
+            description: "Delete a character's entire directory (card, state, memory, sessions). Destructive — dry-run unless confirm=true.",
+            side_effect: ToolSideEffect::Destructive,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid_str = params
+                .get("character_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
+            let cid = CharacterId::new(cid_str)?;
+            if !confirm {
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "character_id": cid.to_string(),
+                        "preview": "将删除该角色的全部数据（card + state + memory + sessions）。传 confirm=true 执行。",
+                    }),
+                    dry_run: true,
+                });
+            }
+            data_dir::delete_character(&state.data_root, cid.as_str())?;
+            Ok(ToolResult {
+                output: serde_json::json!({ "deleted": cid.to_string() }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,5 +930,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.output["probe"], "still-here");
+    }
+
+    #[tokio::test]
+    async fn character_tools_list_get_delete() {
+        // 端到端：list(空) → 写 fixture card → list(1) → get → delete(dry-run) → delete(真) → list(空)
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        // list 初始空
+        let list = reg.get("list_characters").unwrap();
+        let r = list.call(serde_json::json!({}), false).await.unwrap();
+        assert_eq!(r.output.as_array().unwrap().len(), 0);
+
+        // 写 fixture 角色卡
+        let char_dir = state.data_root.join("characters").join("alice");
+        std::fs::create_dir_all(char_dir.join("card")).unwrap();
+        std::fs::write(
+            char_dir.join("card").join("card.json"),
+            r#"{"name":"Alice","description":"test char"}"#,
+        ).unwrap();
+
+        // list → 1
+        let r = list.call(serde_json::json!({}), false).await.unwrap();
+        assert_eq!(r.output.as_array().unwrap().len(), 1);
+        assert_eq!(r.output[0], "alice");
+
+        // get → card object
+        let get = reg.get("get_character").unwrap();
+        let r = get
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+        assert_eq!(r.output["card"]["name"], "Alice");
+
+        // get 不存在角色 → NotFound
+        let err = get
+            .call(serde_json::json!({"character_id": "ghost"}), false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::NotFound(_)));
+
+        // delete dry-run → preview, dry_run=true
+        let del = reg.get("delete_character").unwrap();
+        let r = del
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+        assert!(r.dry_run);
+        assert!(r.output["preview"].is_string());
+
+        // delete confirm=true → 真删
+        let r = del
+            .call(serde_json::json!({"character_id": "alice"}), true)
+            .await
+            .unwrap();
+        assert!(!r.dry_run);
+        assert_eq!(r.output["deleted"], "alice");
+
+        // list → 0
+        let r = list.call(serde_json::json!({}), false).await.unwrap();
+        assert_eq!(r.output.as_array().unwrap().len(), 0);
     }
 }

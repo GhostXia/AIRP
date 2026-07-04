@@ -276,6 +276,34 @@ pub fn list_characters(root: &Path) -> Result<Vec<String>, AirpError> {
     Ok(result)
 }
 
+/// Read a character's card.json (兼容迁移后 `card/card.json` 与旧 `card.json`)。
+/// 返回原始 JSON 文本；调用方自行 parse。角色不存在 → `NotFound`。
+pub fn get_character(root: &Path, character_id: &str) -> Result<String, AirpError> {
+    let dir = root.join("characters").join(character_id);
+    if !dir.is_dir() {
+        return Err(AirpError::NotFound(format!("character {} 不存在", character_id)));
+    }
+    let migrated = dir.join("card").join("card.json");
+    let legacy = dir.join("card.json");
+    let path = if migrated.exists() { migrated } else { legacy };
+    if !path.exists() {
+        return Err(AirpError::NotFound(format!(
+            "character {} 无 card.json（既无 card/card.json 也无 card.json）", character_id
+        )));
+    }
+    fs::read_to_string(&path).map_err(AirpError::from)
+}
+
+/// Delete a character directory entirely (card + state + memory + sessions + ...)。
+/// 角色不存在 → `NotFound`。destructive：调用方负责确认。
+pub fn delete_character(root: &Path, character_id: &str) -> Result<(), AirpError> {
+    let dir = root.join("characters").join(character_id);
+    if !dir.exists() {
+        return Err(AirpError::NotFound(format!("character {} 不存在", character_id)));
+    }
+    fs::remove_dir_all(&dir).map_err(AirpError::from)
+}
+
 pub fn list_presets(root: &Path) -> Result<Vec<String>, AirpError> {
     use std::collections::BTreeSet;
 
