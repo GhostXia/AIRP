@@ -42,12 +42,30 @@
     const el = document.createElement('div');
     el.className = 'event';
     const now = new Date().toLocaleTimeString();
-    const cls = status < 300 ? 'ok' : status < 500 ? 'unknown' : 'err';
-    el.innerHTML = `<span class="ts">${now}</span> <span class="status ${cls}">${status}</span> ` +
-      `<span class="method">${method}</span> <span class="path">${path}</span> ${ms}ms` +
-      (detail ? `<br/>${detail}` : '');
+    const code = Number(status);
+    const cls = code >= 200 && code < 300 ? 'ok' : code >= 500 || code === 0 ? 'err' : 'unknown';
+    appendInline(el, 'span', 'ts', now);
+    el.append(' ');
+    appendInline(el, 'span', 'status ' + cls, String(status));
+    el.append(' ');
+    appendInline(el, 'span', 'method', String(method));
+    el.append(' ');
+    appendInline(el, 'span', 'path', String(path));
+    el.append(' ' + ms + 'ms');
+    if (detail) {
+      el.appendChild(document.createElement('br'));
+      appendInline(el, 'span', 'detail', String(detail));
+    }
     eventLog.prepend(el);
     if (eventLog.children.length > 200) eventLog.removeChild(eventLog.lastChild);
+  }
+
+  function appendInline(parent, tag, className, text) {
+    const node = document.createElement(tag);
+    node.className = className;
+    node.textContent = text;
+    parent.appendChild(node);
+    return node;
   }
 
   // ── HTTP helpers ─────────────────────────────────────────────────────────
@@ -113,22 +131,40 @@
     const r = await api('GET', '/v1/settings');
     if (r.ok) {
       const s = { ...r.data };
-      if (s.api_key) s.api_key = s.api_key.slice(0, 4) + '…' + s.api_key.slice(-4);
+      if (s.api_key) s.api_key = maskSecret(s.api_key);
+      if (s.access_api_key) s.access_api_key = maskSecret(s.access_api_key);
       settingsDisplay.textContent = JSON.stringify(s, null, 2);
     } else {
       settingsDisplay.textContent = 'err: ' + (r.data || r.text);
     }
   }
 
+  function maskSecret(value) {
+    const s = String(value);
+    if (s.length <= 8) return '•'.repeat(Math.max(4, s.length));
+    return s.slice(0, 4) + '…' + s.slice(-4);
+  }
+
   async function refreshChars() {
     const r = await api('GET', '/v1/characters');
     if (r.ok) {
       const ids = Array.isArray(r.data) ? r.data : [];
-      charSelect.innerHTML = ids.map(id => `<option value="${id}">${id}</option>`).join('');
+      replaceOptions(charSelect, ids);
       if (ids.length && !selectedChar) { selectedChar = ids[0]; charSelect.value = ids[0]; }
       if (selectedChar && ids.includes(selectedChar)) charSelect.value = selectedChar;
       refreshSessions();
     }
+  }
+
+  function replaceOptions(select, ids, labelFn) {
+    select.textContent = '';
+    ids.forEach(id => {
+      const value = String(id);
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = labelFn ? labelFn(value) : value;
+      select.appendChild(option);
+    });
   }
 
   btnRefreshChars.addEventListener('click', refreshChars);
@@ -137,44 +173,45 @@
     const cid = charSelect.value;
     if (!cid) return;
     selectedChar = cid;
-    const r = await api('GET', '/v1/sessions/' + cid);
+    const r = await api('GET', '/v1/sessions/' + encodeURIComponent(cid));
     if (r.ok) {
       const ids = Array.isArray(r.data) ? r.data.map(s => s.session_id || s) : [];
-      sessSelect.innerHTML = ids.map(id => `<option value="${id}">${id.slice(0, 12)}</option>`).join('');
-      if (ids.length && !selectedSess) selectedSess = ids[0];
+      replaceOptions(sessSelect, ids, id => id.slice(0, 12));
+      if (!ids.includes(selectedSess)) selectedSess = ids[0] || '';
+      if (selectedSess) sessSelect.value = selectedSess;
     }
   }
 
   charSelect.addEventListener('change', () => { selectedChar = charSelect.value; refreshSessions(); });
+  sessSelect.addEventListener('change', () => { selectedSess = sessSelect.value; });
 
   btnNewSession.addEventListener('click', async () => {
     if (!selectedChar) return;
-    const r = await api('POST', '/v1/sessions/' + selectedChar);
+    const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
     if (r.ok) refreshSessions();
   });
 
   // ── chat: send & stream ─────────────────────────────────────────────────
   function appendMsg(role, text, isStreaming) {
     const div = document.createElement('div');
-    div.className = 'msg ' + role;
-    div.innerHTML = `<span class="role">${role}</span><span class="text${isStreaming ? ' streaming' : ''}">${escHtml(text)}</span>`;
+    const safeRole = role === 'user' ? 'user' : 'assistant';
+    div.className = 'msg ' + safeRole;
+    appendInline(div, 'span', 'role', role);
+    const textNode = appendInline(div, 'span', 'text' + (isStreaming ? ' streaming' : ''), text);
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
-    return div.querySelector('.text');
+    return textNode;
   }
-
-  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   async function doSend() {
     const text = chatInput.value.trim();
     if (!text || !selectedChar) return;
     chatInput.value = '';
     appendMsg('user', text, false);
-    const userMsg = document.querySelector('.msg.user:last-child .text');
 
     // create session if none
     if (!selectedSess) {
-      const r = await api('POST', '/v1/sessions/' + selectedChar);
+      const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
       if (!r.ok) { appendMsg('assistant', '[session create failed]', false); return; }
       await refreshSessions();
       selectedSess = r.data?.session_id || sessSelect.value;
@@ -185,12 +222,13 @@
     abortController = new AbortController();
     const url = base + '/v1/chat/completions';
     const t0 = performance.now();
+    let msgEl = null;
 
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ character_id: selectedChar, messages: [{ role: 'user', content: text }] }),
+        body: JSON.stringify(buildChatPayload(text)),
         signal: abortController.signal,
       });
       if (!res.ok) {
@@ -199,44 +237,68 @@
         appendMsg('assistant', '[HTTP ' + res.status + '] ' + errBody, false);
         return;
       }
-      const msgEl = appendMsg('assistant', '', true);
+      msgEl = appendMsg('assistant', '', true);
       let acc = '';
-      let seq = 0;
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') break;
-            try {
-              const chunk = JSON.parse(data);
-              if (chunk.body_chunk !== undefined) {
-                acc += chunk.body_chunk;
-                msgEl.textContent = acc;
-                seq++;
-                if (seq % 5 === 0) {  // log every 5th chunk
-                  logEvent('SSE', '/v1/chat/completions', 200, Math.round(performance.now() - t0), 'chunk#' + seq);
-                }
-              }
-            } catch {}
+      const seq = await streamSse(res, (chunk, seq) => {
+        const body = chunk.type === 'body_chunk' ? chunk.text : chunk.text;
+        if (body) {
+          acc += body;
+          msgEl.textContent = acc;
+          if (seq % 5 === 0) {
+            logEvent('SSE', '/v1/chat/completions', 200, Math.round(performance.now() - t0), 'chunk#' + seq);
           }
         }
-      }
+      });
       msgEl.classList.remove('streaming');
       logEvent('SSE', '/v1/chat/completions', 200, Math.round(performance.now() - t0), 'done/' + seq + 'chunks');
     } catch (e) {
-      if (e.name === 'AbortError') return;
+      if (msgEl) msgEl.classList.remove('streaming');
+      if (e.name === 'AbortError') {
+        logEvent('SSE', '/v1/chat/completions', 0, Math.round(performance.now() - t0), 'aborted');
+        return;
+      }
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
       appendMsg('assistant', '[fetch error] ' + e.message, false);
     }
+  }
+
+  function buildChatPayload(text) {
+    const payload = {
+      character_id: selectedChar,
+      user_profile: { name: 'User', variables: {} },
+      message: text,
+    };
+    if (selectedSess) payload.session_id = selectedSess;
+    return payload;
+  }
+
+  async function streamSse(res, onChunk) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let seq = 0;
+    let sawDone = false;
+    while (!sawDone) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') {
+          sawDone = true;
+          break;
+        }
+        try {
+          const chunk = JSON.parse(data);
+          seq++;
+          onChunk(chunk, seq);
+        } catch {}
+      }
+    }
+    return seq;
   }
 
   btnSend.addEventListener('click', doSend);
@@ -263,7 +325,7 @@
     if (!selectedChar) return;
     const index = prompt('Rollback to message index (0-based):', '0');
     if (index === null) return;
-    const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, index: parseInt(index) });
+    const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, message_index: parseInt(index) });
     if (r.ok) btnHistory.click();
   });
 
@@ -272,15 +334,31 @@
     const input = agentInput.value.trim();
     if (!input) return;
     agentOutput.textContent = 'Running…';
-    const r = await api('POST', '/v1/agent/run', {
-      character_id: selectedChar || '',
-      messages: [{ role: 'user', content: input }],
-    });
-    if (r.ok) {
-      const text = typeof r.data === 'string' ? r.data : JSON.stringify(r.data, null, 2);
-      agentOutput.textContent = text;
-    } else {
-      agentOutput.textContent = 'err: ' + (r.data || r.text);
+    const path = '/v1/agent/run';
+    const t0 = performance.now();
+    try {
+      const res = await fetch(base + path, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ ...buildChatPayload(input), max_steps: 3 }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text();
+        logEvent('POST', path, res.status, Math.round(performance.now() - t0), errBody);
+        agentOutput.textContent = '[HTTP ' + res.status + '] ' + errBody;
+        return;
+      }
+      const events = [];
+      const seq = await streamSse(res, (chunk, seq) => {
+        events.push(chunk);
+        const label = chunk.type || 'event';
+        logEvent('SSE', path, 200, Math.round(performance.now() - t0), '#' + seq + ' ' + label);
+        agentOutput.textContent = events.map(e => JSON.stringify(e)).join('\n');
+      });
+      logEvent('SSE', path, 200, Math.round(performance.now() - t0), 'done/' + seq + 'events');
+    } catch (e) {
+      logEvent('POST', path, 0, Math.round(performance.now() - t0), e.message);
+      agentOutput.textContent = '[fetch error] ' + e.message;
     }
   });
 
@@ -304,10 +382,7 @@
     const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
     let body;
     if (isPng) {
-      // base64 encode
-      let bin = '';
-      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-      const b64 = btoa(bin);
+      const b64 = await readFileAsBase64(file);
       body = { card_png_base64: b64 };
     } else {
       // treat as JSON text
@@ -323,6 +398,18 @@
     }
   });
 
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = String(reader.result || '');
+        resolve(value.includes(',') ? value.slice(value.indexOf(',') + 1) : value);
+      };
+      reader.onerror = () => reject(reader.error || new Error('file read failed'));
+      reader.readAsDataURL(file);
+    });
+  }
+
   // ── M2: concurrent stream test ───────────────────────────────────────────
   // 启动两条并发 chat.send，验证 id-keyed chat state 不串扰（PR #6 修的 race）。
   const btnConcurrent = $('#btn-concurrent');
@@ -336,55 +423,46 @@
       doSendText('并发流 A: 你好'),
       doSendText('并发流 B: 再见'),
     ];
-    await Promise.all(promises);
+    const results = await Promise.all(promises);
     const ms = Math.round(performance.now() - t0);
-    logEvent('CONCURRENT', '/v1/chat/completions ×2', 200, ms, '两条流均完成');
-    concurrentStatus.textContent = '✓ 两条流完成 (' + ms + 'ms)。检查 chat log 顺序：u-A → a-A → u-B → a-B 应基本交替，无串扰。';
+    const ok = results.every(r => r.ok);
+    logEvent('CONCURRENT', '/v1/chat/completions ×2', ok ? 200 : 500, ms, ok ? '两条流均完成' : JSON.stringify(results));
+    concurrentStatus.textContent = (ok ? '✓' : '✗') + ' 两条流完成 (' + ms + 'ms)。检查 chat log 顺序：u-A → a-A → u-B → a-B 应基本交替，无串扰。';
   });
 
   // 抽出 doSend 的纯逻辑供并发复用（不发 user DOM、不读 input）
   async function doSendText(text) {
-    if (!selectedChar) return;
+    if (!selectedChar) return { ok: false, status: 0, error: 'no character' };
+    appendMsg('user', text, false);
     const url = base + '/v1/chat/completions';
     const t0 = performance.now();
+    let msgEl = null;
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ character_id: selectedChar, messages: [{ role: 'user', content: text }] }),
+        body: JSON.stringify(buildChatPayload(text)),
       });
       if (!res.ok) {
-        logEvent('POST', '/v1/chat/completions', res.status, Math.round(performance.now() - t0));
-        return;
+        const errBody = await res.text();
+        logEvent('POST', '/v1/chat/completions', res.status, Math.round(performance.now() - t0), errBody);
+        return { ok: false, status: res.status, error: errBody };
       }
-      const msgEl = appendMsg('assistant', '', true);
+      msgEl = appendMsg('assistant', '', true);
       let acc = '';
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') break;
-            try {
-              const chunk = JSON.parse(data);
-              if (chunk.body_chunk !== undefined) {
-                acc += chunk.body_chunk;
-                msgEl.textContent = acc;
-              }
-            } catch {}
-          }
+      const seq = await streamSse(res, (chunk) => {
+        const body = chunk.type === 'body_chunk' ? chunk.text : chunk.text;
+        if (body) {
+          acc += body;
+          msgEl.textContent = acc;
         }
-      }
+      });
       msgEl.classList.remove('streaming');
+      return { ok: true, status: 200, chunks: seq };
     } catch (e) {
+      if (msgEl) msgEl.classList.remove('streaming');
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
+      return { ok: false, status: 0, error: e.message };
     }
   }
 

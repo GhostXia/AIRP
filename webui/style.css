@@ -28,7 +28,7 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .msg.user { background: #1f2937; }
 .msg.assistant { background: #0f1a2e; }
 .msg .role { font-weight: 600; font-size: 11px; color: #58a6ff; display: block; margin-bottom: 2px; }
-.msg .text { white-space: pre-wrap; word-break: break-word; }
+.msg .text { white-space: pre-wrap; overflow-wrap: break-word; }
 .msg .text.streaming::after { content: '\258A'; animation: blink 0.8s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
@@ -47,6 +47,7 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .event { padding: 2px 4px; border-bottom: 1px solid #21262d; }
 .event .ts { color: #8b949e; }
 .event .status.ok { color: #3fb950; }
+.event .status.unknown { color: #d29922; }
 .event .status.err { color: #f85149; }
 .event .path { color: #58a6ff; }
 

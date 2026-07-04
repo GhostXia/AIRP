@@ -298,57 +298,57 @@ pub(crate) fn import_card_to_disk(
 ) -> Result<(String, String, String), AirpError> {
     // 阶段 1：提取 + 校验 JSON（path/PNG 先读入内存，暂不落盘）。
     // 写盘推迟到形状校验之后，避免被拒的预设残留脏文件。
-    let (card_format, json_str, png_bytes): (String, String, Option<Vec<u8>>) =
-        if let Some(path) = card_path {
-            // path-first 主路径：引擎读盘（守不变式6——大 blob 不经线协议）。
-            // ⚠️ RR-001 / 审计 2026-07-04：card_path = 服务端任意绝对路径读。
-            // 门控：仅当 engine 启动时设了 AIRP_ALLOW_LOCAL_PATH=1 才开放此分支。
-            // Tauri sidecar 启动脚本带此变量；对外暴露的 engine 不带 → Web/远端
-            // 调用方即使伪造 JSON body 带 card_path 也被拒。不可伪造（env 在进程
-            // 启动时定，非请求头）。审计裁定：Web 永不走 card_path，即使持 bearer。
-            let allow_local_path = std::env::var("AIRP_ALLOW_LOCAL_PATH")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            if !allow_local_path {
-                return Err(AirpError::BadRequest(
+    let (card_format, json_str, png_bytes): (String, String, Option<Vec<u8>>) = if let Some(path) =
+        card_path
+    {
+        // path-first 主路径：引擎读盘（守不变式6——大 blob 不经线协议）。
+        // ⚠️ RR-001 / 审计 2026-07-04：card_path = 服务端任意绝对路径读。
+        // 门控：仅当 engine 启动时设了 AIRP_ALLOW_LOCAL_PATH=1 才开放此分支。
+        // Tauri sidecar 启动脚本带此变量；对外暴露的 engine 不带 → Web/远端
+        // 调用方即使伪造 JSON body 带 card_path 也被拒。不可伪造（env 在进程
+        // 启动时定，非请求头）。审计裁定：Web 永不走 card_path，即使持 bearer。
+        let allow_local_path = std::env::var("AIRP_ALLOW_LOCAL_PATH")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !allow_local_path {
+            return Err(AirpError::BadRequest(
                     "card_path 任意路径读已禁用（AIRP_ALLOW_LOCAL_PATH 未设）。Web/远端调用方请用 multipart 上传或 card_png_base64/card_json。".to_string(),
                 ));
-            }
-            let bytes = fs::read(path).map_err(|e| {
-                AirpError::BadRequest(format!("读取 card_path 失败: {}", e))
-            })?;
-            // 按内容嗅探：PNG 魔数 → png_parser；否则当 JSON 文本。
-            if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-                let json = crate::png_parser::parse_png_character_card_bytes(&bytes)?;
-                ("png".to_string(), json, Some(bytes))
-            } else {
-                let clean = data_dir::strip_utf8_bom(
-                    std::str::from_utf8(&bytes)
-                        .map_err(|e| AirpError::BadRequest(format!("card_path 非 UTF-8: {}", e)))?,
-                )
-                .to_owned();
-                let _ = serde_json::from_str::<serde_json::Value>(&clean)
-                    .map_err(|e| AirpError::BadRequest(format!("card_path 不是有效 JSON: {}", e)))?;
-                ("json".to_string(), clean, None)
-            }
-        } else if let Some(json) = card_json {
-            let clean = data_dir::strip_utf8_bom(&json).to_owned();
-            let _ = serde_json::from_str::<serde_json::Value>(&clean)
-                .map_err(|e| AirpError::BadRequest(format!("card_json 不是有效 JSON: {}", e)))?;
-            ("json".to_string(), clean, None)
-        } else if let Some(png_b64) = card_png_base64 {
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(&png_b64)
-                .map_err(|e| AirpError::BadRequest(format!("base64 解码失败: {}", e)))?;
-            // 从内存字节解析 tEXt/ccv3；解析失败即报错，不落盘。
+        }
+        let bytes = fs::read(path)
+            .map_err(|e| AirpError::BadRequest(format!("读取 card_path 失败: {}", e)))?;
+        // 按内容嗅探：PNG 魔数 → png_parser；否则当 JSON 文本。
+        if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
             let json = crate::png_parser::parse_png_character_card_bytes(&bytes)?;
             ("png".to_string(), json, Some(bytes))
         } else {
-            return Err(AirpError::BadRequest(
-                "必须提供 card_path / card_json / card_png_base64 之一".to_string(),
-            ));
-        };
+            let clean = data_dir::strip_utf8_bom(
+                std::str::from_utf8(&bytes)
+                    .map_err(|e| AirpError::BadRequest(format!("card_path 非 UTF-8: {}", e)))?,
+            )
+            .to_owned();
+            let _ = serde_json::from_str::<serde_json::Value>(&clean)
+                .map_err(|e| AirpError::BadRequest(format!("card_path 不是有效 JSON: {}", e)))?;
+            ("json".to_string(), clean, None)
+        }
+    } else if let Some(json) = card_json {
+        let clean = data_dir::strip_utf8_bom(&json).to_owned();
+        let _ = serde_json::from_str::<serde_json::Value>(&clean)
+            .map_err(|e| AirpError::BadRequest(format!("card_json 不是有效 JSON: {}", e)))?;
+        ("json".to_string(), clean, None)
+    } else if let Some(png_b64) = card_png_base64 {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&png_b64)
+            .map_err(|e| AirpError::BadRequest(format!("base64 解码失败: {}", e)))?;
+        // 从内存字节解析 tEXt/ccv3；解析失败即报错，不落盘。
+        let json = crate::png_parser::parse_png_character_card_bytes(&bytes)?;
+        ("png".to_string(), json, Some(bytes))
+    } else {
+        return Err(AirpError::BadRequest(
+            "必须提供 card_path / card_json / card_png_base64 之一".to_string(),
+        ));
+    };
 
     // 阶段 2：形状校验。若内容明显是 SillyTavern 预设（顶层 prompts[] + 模型参数），
     // 拒绝导入为角色卡，提示改用 import_preset。此处尚未写盘，拒绝不留脏文件。
@@ -401,7 +401,12 @@ pub(crate) fn import_card_to_disk(
 fn extract_card_name(json_str: &str) -> String {
     serde_json::from_str::<serde_json::Value>(json_str)
         .ok()
-        .and_then(|v| v.get("data").and_then(|d| d.get("name"))?.as_str().map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("data")
+                .and_then(|d| d.get("name"))?
+                .as_str()
+                .map(|s| s.to_string())
+        })
         .unwrap_or_default()
 }
 
@@ -889,6 +894,19 @@ pub(super) async fn list_models(
 mod tests {
     use super::*;
     use crate::types::CharacterId;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_local_path_env<F: FnOnce()>(enabled: bool, f: F) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
+        if enabled {
+            std::env::set_var("AIRP_ALLOW_LOCAL_PATH", "1");
+        }
+        f();
+        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
+    }
 
     #[test]
     fn slugify_strips_invisible_controls() {
@@ -912,5 +930,55 @@ mod tests {
         assert!(id.len() <= MAX_DERIVED_CHARACTER_ID_BYTES);
         assert!(std::str::from_utf8(id.as_bytes()).is_ok());
         CharacterId::new(&id).unwrap();
+    }
+
+    #[test]
+    fn card_path_import_rejected_without_local_path_env() {
+        with_local_path_env(false, || {
+            let data_root = tempfile::tempdir().unwrap();
+            let card_file = tempfile::NamedTempFile::new().unwrap();
+
+            let result = import_card_to_disk(
+                data_root.path(),
+                Some("gate-test"),
+                Some(card_file.path()),
+                None,
+                None,
+            );
+
+            assert!(
+                matches!(result, Err(AirpError::BadRequest(msg)) if msg.contains("AIRP_ALLOW_LOCAL_PATH"))
+            );
+        });
+    }
+
+    #[test]
+    fn card_path_import_allowed_with_local_path_env() {
+        with_local_path_env(true, || {
+            let data_root = tempfile::tempdir().unwrap();
+            let card_file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(
+                card_file.path(),
+                r#"{"spec":"chara_card_v2","data":{"name":"Gate Test","first_mes":"hi"}}"#,
+            )
+            .unwrap();
+
+            let (character_id, card_format, json) = import_card_to_disk(
+                data_root.path(),
+                Some("gate-test"),
+                Some(card_file.path()),
+                None,
+                None,
+            )
+            .unwrap();
+
+            assert_eq!(character_id, "gate-test");
+            assert_eq!(card_format, "json");
+            assert!(json.contains("Gate Test"));
+            assert!(data_root
+                .path()
+                .join("characters/gate-test/card/raw.json")
+                .exists());
+        });
     }
 }
