@@ -59,6 +59,17 @@ fn build_post_request(uri: &str, json_body: &str) -> Request<Body> {
     req
 }
 
+fn build_get_request(uri: &str) -> Request<Body> {
+    let mut req = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 9999u16))));
+    req
+}
+
 /// Spin up `DaemonState` with wiremock upstream, quota limit, and a tmp data root.
 async fn setup_with_quota(
     upstream_url: &str,
@@ -117,6 +128,122 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
         }),
     });
     (state, tmp)
+}
+
+async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_root = tmp.path().to_path_buf();
+
+    std::fs::create_dir_all(data_root.join("characters")).unwrap();
+    std::fs::create_dir_all(data_root.join("presets")).unwrap();
+    std::fs::create_dir_all(data_root.join("sessions")).unwrap();
+
+    let state = Arc::new(DaemonState {
+        data_root,
+        http_client: reqwest::Client::new(),
+        config: std::sync::RwLock::new(MutableConfig {
+            provider: Provider::OpenAI,
+            endpoint,
+            api_key: Some("test-key".to_string()),
+            model: "test-model".to_string(),
+            volume_config: VolumeConfig::default(),
+            access_api_key: None,
+            engine: BackendEngine::default(),
+            quota: QuotaConfig::default(),
+        }),
+    });
+    (state, tmp)
+}
+
+#[tokio::test]
+async fn test_models_proxy_success_passthrough() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "object": "list",
+            "data": [{ "id": "test-model" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let (state, _tmp) = setup(&server.uri()).await;
+    let router = create_router(state);
+    let resp = router
+        .oneshot(build_get_request("/v1/models"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["id"], "test-model");
+}
+
+#[tokio::test]
+async fn test_models_proxy_upstream_status_returns_typed_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": { "message": "bad provider key" }
+        })))
+        .mount(&server)
+        .await;
+
+    let (state, _tmp) = setup(&server.uri()).await;
+    let router = create_router(state);
+    let resp = router
+        .oneshot(build_get_request("/v1/models"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "upstream_status");
+    assert_eq!(json["error"]["upstream_status"], 401);
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("HTTP 401"));
+    assert!(json["error"]["upstream_body"]
+        .as_str()
+        .unwrap()
+        .contains("bad provider key"));
+}
+
+#[tokio::test]
+async fn test_models_proxy_invalid_endpoint_returns_typed_error() {
+    let (state, _tmp) = setup_with_endpoint("not-a-url".to_string()).await;
+    let router = create_router(state);
+    let resp = router
+        .oneshot(build_get_request("/v1/models"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "invalid_endpoint");
+    assert_eq!(json["error"]["detail"], "not-a-url");
+}
+
+#[tokio::test]
+async fn test_models_proxy_invalid_endpoint_redacts_query_detail() {
+    let (state, _tmp) = setup_with_endpoint("not-a-url?api_key=secret".to_string()).await;
+    let router = create_router(state);
+    let resp = router
+        .oneshot(build_get_request("/v1/models"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "invalid_endpoint");
+    assert_eq!(json["error"]["detail"], "not-a-url?redacted");
+    assert!(!body.windows(b"secret".len()).any(|w| w == b"secret"));
 }
 
 #[tokio::test]
