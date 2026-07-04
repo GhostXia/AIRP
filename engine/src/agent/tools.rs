@@ -113,7 +113,8 @@ impl Tool for EchoTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "echo",
-            description: "M_AGENT-1 mock: returns its input verbatim. Verifies loop→tool→subagent wiring.",
+            description:
+                "M_AGENT-1 mock: returns its input verbatim. Verifies loop→tool→subagent wiring.",
             side_effect: ToolSideEffect::Readonly,
         }
     }
@@ -139,7 +140,7 @@ impl Tool for EchoTool {
 pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.register(Box::new(EchoTool));
-    // M_AGENT-2 第一批：会话类 5 工具（engine 已有等价内部能力，包成工具）。
+    // M_AGENT-2 第一批：会话类 5 工具。
     reg.register(Box::new(ListSessionsTool {
         state: state.clone(),
     }));
@@ -152,7 +153,17 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     reg.register(Box::new(GetRecentContextTool {
         state: state.clone(),
     }));
-    reg.register(Box::new(RollbackMessagesTool { state }));
+    reg.register(Box::new(RollbackMessagesTool {
+        state: state.clone(),
+    }));
+    // M_AGENT-2 第二批：角色类 3 工具（list/get/delete）。
+    reg.register(Box::new(ListCharactersTool {
+        state: state.clone(),
+    }));
+    reg.register(Box::new(GetCharacterTool {
+        state: state.clone(),
+    }));
+    reg.register(Box::new(DeleteCharacterTool { state }));
     reg
 }
 
@@ -274,7 +285,8 @@ impl Tool for StartSessionTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "start_session",
-            description: "Create a new named session for a character. session_id is auto-generated (UUID).",
+            description:
+                "Create a new named session for a character. session_id is auto-generated (UUID).",
             side_effect: ToolSideEffect::Mutate,
         }
     }
@@ -521,6 +533,153 @@ impl Tool for RollbackMessagesTool {
                     "dropped": dropped,
                     "session_id": session_id.map(|sid| sid.to_string()),
                 }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+// ── M_AGENT-2 第二批：角色类 3 工具 ─────────────────────────────────────────
+//
+// list/get/delete characters。list 是 readonly；get 是 readonly（读 card.json）；
+// delete 是 destructive（删整个角色目录）→ 默认 dry-run。
+// 对应 MCP-SERVER-ABSORPTION.md §1 "角色" 行的 3 个 ✅ 工具。
+// analyze_card / decompose_character 是 🆕 需移植，不在本批。
+
+/// `list_characters`：列所有角色 id。readonly。
+/// params: `{}` → `["alice", "bob", ...]`
+struct ListCharactersTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for ListCharactersTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "list_characters",
+            description: "List all available character ids (folder names under data/characters/).",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        _params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let ids = data_dir::list_characters(&state.data_root)?;
+            Ok(ToolResult {
+                output: Value::Array(ids.into_iter().map(Value::String).collect()),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+/// `get_character`：读角色 card.json（原始 JSON 文本，解析后返回 object）。
+/// readonly。兼容迁移后 `card/card.json` 与旧 `card.json`。
+/// params: `{ "character_id": string }` → `{ "card": <parsed card.json object> }`
+struct GetCharacterTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for GetCharacterTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "get_character",
+            description: "Read a character's card.json as a parsed JSON object. Invalid JSON is reported as data corruption.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid_str = params
+                .get("character_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
+            let cid = CharacterId::new(cid_str)?;
+            let card_text = data_dir::get_character(&state.data_root, &cid)?;
+            let card: Value = serde_json::from_str(&card_text).map_err(|e| {
+                AirpError::BadRequest(format!(
+                    "character {} card.json is invalid JSON: {}",
+                    cid, e
+                ))
+            })?;
+            if !card.is_object() {
+                return Err(AirpError::BadRequest(format!(
+                    "character {} card.json must be a JSON object",
+                    cid
+                )));
+            }
+            Ok(ToolResult {
+                output: serde_json::json!({ "card": card }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+/// `delete_character`：删整个角色目录子树（所有 files under data/characters/{id}/）。
+/// **destructive** → 默认 dry-run，未 confirm 只回结构化 preview。
+/// params: `{ "character_id": string }` → `{ "deleted": string }` 或 dry-run preview
+struct DeleteCharacterTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for DeleteCharacterTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "delete_character",
+            description: "Delete a character's entire directory subtree (all files under data/characters/{id}/). Destructive — dry-run unless confirm=true.",
+            side_effect: ToolSideEffect::Destructive,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid_str = params
+                .get("character_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
+            let cid = CharacterId::new(cid_str)?;
+            if !confirm {
+                let exists = data_dir::list_characters(&state.data_root)?
+                    .iter()
+                    .any(|id| id == cid.as_str());
+                if !exists {
+                    return Err(AirpError::NotFound(format!(
+                        "character {} does not exist",
+                        cid
+                    )));
+                }
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "character_id": cid.to_string(),
+                        "action": "delete_character",
+                        "will_delete": ["card", "state", "memory", "sessions", "all future files under character subtree"],
+                        "requires": "confirm=true",
+                    }),
+                    dry_run: true,
+                });
+            }
+            let lock = chat_log_lock(cid.as_str(), None);
+            let _guard = lock.lock().await;
+            data_dir::delete_character(&state.data_root, &cid)?;
+            tracing::warn!(character_id = %cid, "delete_character executed");
+            Ok(ToolResult {
+                output: serde_json::json!({ "deleted": cid.to_string() }),
                 dry_run: false,
             })
         })
@@ -812,5 +971,154 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.output["probe"], "still-here");
+    }
+
+    #[test]
+    fn default_registry_includes_expected_tool_names() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let reg = default_registry(state);
+
+        for name in [
+            "echo",
+            "list_sessions",
+            "start_session",
+            "append_message",
+            "get_recent_context",
+            "rollback_messages",
+            "list_characters",
+            "get_character",
+            "delete_character",
+        ] {
+            assert!(reg.get(name).is_some(), "missing tool: {name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn character_tools_list_get_delete() {
+        // 端到端：list(空) → 写 fixture card → list(1) → get → delete(dry-run) → delete(真) → list(空)
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        // 非法目录名不应出现在 list_characters 中，否则 list/get/delete 契约不对称。
+        std::fs::create_dir_all(state.data_root.join("characters").join(".bad")).unwrap();
+
+        // list 初始空
+        let list = reg.get("list_characters").unwrap();
+        let r = list.call(serde_json::json!({}), false).await.unwrap();
+        assert_eq!(r.output.as_array().unwrap().len(), 0);
+
+        // 写 fixture 角色卡
+        let char_dir = state.data_root.join("characters").join("alice");
+        std::fs::create_dir_all(char_dir.join("card")).unwrap();
+        std::fs::write(
+            char_dir.join("card").join("card.json"),
+            r#"{"name":"Alice","description":"test char"}"#,
+        )
+        .unwrap();
+
+        // list → 1
+        let r = list.call(serde_json::json!({}), false).await.unwrap();
+        assert_eq!(r.output.as_array().unwrap().len(), 1);
+        assert_eq!(r.output[0], "alice");
+
+        // get → card object
+        let get = reg.get("get_character").unwrap();
+        let r = get
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+        assert_eq!(r.output["card"]["name"], "Alice");
+
+        // get 不存在角色 → NotFound
+        let err = get
+            .call(serde_json::json!({"character_id": "ghost"}), false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::NotFound(_)));
+
+        // delete dry-run → preview, dry_run=true
+        let del = reg.get("delete_character").unwrap();
+        let r = del
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+        assert!(r.dry_run);
+        assert_eq!(r.output["action"], "delete_character");
+        assert_eq!(r.output["requires"], "confirm=true");
+        assert!(r.output["will_delete"].is_array());
+        assert!(
+            char_dir.exists(),
+            "dry-run must not delete the character dir"
+        );
+
+        // delete dry-run 对不存在角色也应报 NotFound，避免误导 agent 决策。
+        let err = del
+            .call(serde_json::json!({"character_id": "ghost"}), false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::NotFound(_)));
+
+        // delete confirm=true → 真删
+        let r = del
+            .call(serde_json::json!({"character_id": "alice"}), true)
+            .await
+            .unwrap();
+        assert!(!r.dry_run);
+        assert_eq!(r.output["deleted"], "alice");
+
+        // list → 0
+        let r = list.call(serde_json::json!({}), false).await.unwrap();
+        assert_eq!(r.output.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn get_character_reads_legacy_card_json_path() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        let char_dir = state.data_root.join("characters").join("legacy");
+        std::fs::create_dir_all(&char_dir).unwrap();
+        std::fs::write(
+            char_dir.join("card.json"),
+            r#"{"name":"Legacy","description":"old layout"}"#,
+        )
+        .unwrap();
+
+        let get = reg.get("get_character").unwrap();
+        let r = get
+            .call(serde_json::json!({"character_id": "legacy"}), false)
+            .await
+            .unwrap();
+
+        assert_eq!(r.output["card"]["name"], "Legacy");
+    }
+
+    #[tokio::test]
+    async fn get_character_rejects_invalid_card_json() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        let char_dir = state
+            .data_root
+            .join("characters")
+            .join("broken")
+            .join("card");
+        std::fs::create_dir_all(&char_dir).unwrap();
+        std::fs::write(char_dir.join("card.json"), "not json").unwrap();
+
+        let get = reg.get("get_character").unwrap();
+        let err = get
+            .call(serde_json::json!({"character_id": "broken"}), false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AirpError::BadRequest(_)));
     }
 }

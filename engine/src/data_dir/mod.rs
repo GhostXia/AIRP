@@ -13,7 +13,9 @@ pub use paths::{
     char_state_dir,
     char_state_history_path,
     character_dir,
+    delete_character,
     ensure_data_dirs,
+    get_character,
     list_characters,
     list_presets,
     // M_MS: scene paths

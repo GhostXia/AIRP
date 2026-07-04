@@ -1,4 +1,5 @@
 use crate::error::AirpError;
+use crate::types::CharacterId;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -267,13 +268,50 @@ pub fn list_characters(root: &Path) -> Result<Vec<String>, AirpError> {
         let entry = entry?;
         if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
             if let Some(name) = entry.file_name().to_str() {
-                result.push(name.to_string());
+                if super::security::validate_id_segment(name).is_ok() {
+                    result.push(name.to_string());
+                }
             }
         }
     }
 
     result.sort();
     Ok(result)
+}
+
+/// Read a character's card.json (兼容迁移后 `card/card.json` 与旧 `card.json`)。
+/// 返回原始 JSON 文本；调用方自行 parse。角色不存在 → `NotFound`。
+pub fn get_character(root: &Path, character_id: &CharacterId) -> Result<String, AirpError> {
+    let dir = root.join("characters").join(character_id.as_str());
+    if !dir.is_dir() {
+        return Err(AirpError::NotFound(format!(
+            "character {} does not exist",
+            character_id
+        )));
+    }
+    let migrated = dir.join("card").join("card.json");
+    let legacy = dir.join("card.json");
+    let path = if migrated.exists() { migrated } else { legacy };
+    if !path.exists() {
+        return Err(AirpError::NotFound(format!(
+            "character {} has no card.json (neither card/card.json nor card.json exists)",
+            character_id
+        )));
+    }
+    fs::read_to_string(&path).map_err(AirpError::from)
+}
+
+/// Delete a character directory entirely (card + state + memory + sessions + ...)。
+/// 角色不存在 → `NotFound`。destructive：调用方负责确认。
+pub fn delete_character(root: &Path, character_id: &CharacterId) -> Result<(), AirpError> {
+    let dir = root.join("characters").join(character_id.as_str());
+    if !dir.is_dir() {
+        return Err(AirpError::NotFound(format!(
+            "character {} does not exist",
+            character_id
+        )));
+    }
+    fs::remove_dir_all(&dir).map_err(AirpError::from)
 }
 
 pub fn list_presets(root: &Path) -> Result<Vec<String>, AirpError> {
