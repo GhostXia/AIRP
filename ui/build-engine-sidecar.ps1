@@ -7,13 +7,25 @@
 # sidecar builder for that target.
 $ErrorActionPreference = "Stop"
 
-$env:RUSTUP_HOME = "D:\.rustup"
-$env:CARGO_HOME = "D:\.cargo"
-$env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
+if (-not $env:RUSTUP_HOME) { $env:RUSTUP_HOME = "D:\.rustup" }
+if (-not $env:CARGO_HOME) { $env:CARGO_HOME = "D:\.cargo" }
+if (Test-Path -LiteralPath "D:\msys64\mingw64\bin") {
+    $env:PATH = "D:\msys64\mingw64\bin;" + $env:PATH
+}
+if (Test-Path -LiteralPath "D:\nodejs") {
+    $env:PATH = "D:\nodejs;" + $env:PATH
+}
+if (Test-Path -LiteralPath (Join-Path $env:CARGO_HOME "bin")) {
+    $env:PATH = (Join-Path $env:CARGO_HOME "bin") + ";" + $env:PATH
+}
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $cargo = Join-Path $env:CARGO_HOME "bin\cargo.exe"
-if (-not (Test-Path -LiteralPath $cargo)) { throw "cargo.exe not found at $cargo" }
+if (-not (Test-Path -LiteralPath $cargo)) {
+    $cmd = Get-Command cargo -ErrorAction SilentlyContinue
+    if ($cmd) { $cargo = $cmd.Source }
+}
+if (-not (Test-Path -LiteralPath $cargo)) { throw "cargo.exe not found" }
 
 # Host target triple (e.g. x86_64-pc-windows-gnu). Tauri sidecar requires a
 # platform-suffixed name, but the Tauri CLI may resolve the Windows suffix as

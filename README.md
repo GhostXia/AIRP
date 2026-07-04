@@ -36,6 +36,8 @@ D:\AIRP-Dev/
 - Phase 1 Task 1.1 已实现：UI 通过 Tauri dialog path-first 导入角色卡，engine 读盘解析并落库。
 - Phase 1 Task 1.2 已完成：chat 状态已改为 id-keyed `{messages, order}`，`BusRelay` 不再依赖 `chat_lock`，每次 `chat.send` 用单个 patch envelope 原子创建 user/assistant 两行。
 - 2026-07-03 审计 follow-up 已完成：Tauri 构建脚本、默认 settings、sandbox `postMessage` 目标、RFC6902 `test` 预校验、仓库 metadata 均已同步修正。
+- PR #13 已完成 Tauri engine sidecar 打包链路，可产出包含 engine 的 Windows 安装包；仍需真实配置下的 GUI smoke 和长期 UI 体验打磨。
+- WebUI 仅作为临时后端可靠性验证面：用浏览器/HTTP 快速压测 engine、验证数据层和推理闭环；不替代 Tauri/Vue 桌面 UI 的长期产品路线。
 - 当前未解决/待验收事项见 [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md) 和 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)。
 
 ## 本地环境
@@ -98,6 +100,15 @@ npm run tauri dev
 ```
 
 UI 默认连接 `http://127.0.0.1:8000`，可用 `AIRP_ENGINE_URL` 覆盖。
+
+## 手动 CI 构建
+
+Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Windows runner 上执行 Rust/UI 测试、打包 Tauri 桌面端，并上传 artifacts：
+
+- `airp-ui.exe`
+- `AIRP UI_0.1.0_x64-setup.exe`
+
+当前 workflow 先覆盖 Windows，因为现有 sidecar 和 bundle 目标是 Windows 桌面包；macOS/Linux 需要补对应 sidecar 命名和 Tauri bundle 目标后再纳入 matrix。
 
 ## 关键文档
 

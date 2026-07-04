@@ -6,6 +6,7 @@ import { createBus, isTauriEnvironment } from "./protocol/bus-factory";
 import { validateEnvelope } from "./protocol/guard";
 import { stateStore, setState, patchState, applyJsonPatch } from "./state/store";
 import { registerBuiltins, applyManifestMessage } from "./registry";
+import { installAgentTestHarness } from "./agent-test";
 import BlueprintRenderer from "./components/BlueprintRenderer.vue";
 
 // Register first-party widgets into the open registry.
@@ -142,6 +143,13 @@ onMounted(async () => {
       setState("w-characters", { ids: [], loaded: false });
       refreshCharacters();
     }
+    installAgentTestHarness({
+      dispatchIntent: onIntent,
+      getBlueprint: () => blueprint.value,
+      getState: () => stateStore,
+      getSelectedCharacterId: () => selectedCharacterId.value,
+      getBusError: () => busError.value,
+    });
   } catch (err) {
     console.error("[App] createBus failed:", err);
     busError.value = String(err ?? "createBus failed");

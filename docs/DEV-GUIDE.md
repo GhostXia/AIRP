@@ -9,7 +9,7 @@
 
 ## 0. 一句话与铁律（先读，任何时候不许破）
 
-**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（当前 Tauri 桌面优先，未来暴露端口接 web），专精 RP。
+**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（长期产品 UI = Tauri/Vue 桌面端；WebUI = 临时后端可靠性验证面），专精 RP。
 
 **代码取向（用户 2026-07-03 定）**：代码必须更开放、更透明、在未来更易修正、且更易迭代更新。落地判据：接口和扩展点清晰开放；状态、决策、错误和验收结果可观察；模块边界低耦合、可替换；协议/数据结构版本化，允许小步迁移而不是一次性重写。
 
@@ -125,6 +125,7 @@ D:\AIRP-Dev/
 
 - 无头网络服务：Core daemon 已有（axum + `/v1/*` + 鉴权 `AIRP_ACCESS_KEY` + 限流 10req/s）。**web 就绪的关键：引擎是独立 service，不嵌 Tauri**（Tauri 把引擎当 sidecar 打包）。
 - **UI↔引擎线协议**：倾向**复用 State-Protocol Envelope**（`protocol` 已有 Rust/TS 绑定，UI 已配套）。引擎实现 AgentBus 面：上行 `POST /airp/dispatch`(Envelope) + 下行 `GET /airp/stream`(SSE)，或 Tauri IPC。**注意：intent `chat.send` 要路由到引擎的推理 loop（生成），不是路由到某个 MCP 数据工具**——这是原 agentbus demo 的缺口，必须重定。
+- **WebUI 临时定位（2026-07-04）**：WebUI 只用来快速验证 engine 的 API/SSE/鉴权/数据读写/并发/错误恢复。它是后端可靠性 harness，不替代桌面 UI 产品路线；成熟能力再接回 Tauri UI。
 - 安全默认坑（Core deploy A2-3）：默认无鉴权 + CORS `*` 有本地 CSRF/DNS-rebind 风险。桌面本地默认可接受，但要文档化；对外必须设 `AIRP_ACCESS_KEY`。
 
 ### 3.4 数据目录布局（沿用 Core）
@@ -150,6 +151,7 @@ data/
 - **已实现（代码完成，当前 AIRP-Dev 集成后仍需验收）**：Widget Registry（vue/module/esm 三类）、BlueprintRenderer、WidgetHost（错误隔离）、RFC6902 state store（`test` op 已预校验，失败不半应用）、首方 widget（chat/emotion/memory/inventory/quest/map/card + clock）、虚拟滚动（`virtual-window.ts` `computeWindow`）、esm 沙箱（opaque-origin iframe，`postMessage` targetOrigin 已收紧到 `"null"`）、consent 门（授权绑 `{type,version,source}` + localStorage 持久化）、边界 guard、Tauri `.exe` 打包、id-keyed chat 消息模型。历史事实：AIRP-State-Protocol 原项目最早验证过打包 exe 可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
 - **已落地（MVP 第一步）**：`BusRelay`（`ui/src-tauri/src/bus.rs`）已从 mock 改为 Tauri 壳内 IPC→Rust 核→engine HTTP `/v1/chat/completions`，并消费 SSE 回填 chat state。`bus-factory.ts` 仍按 `__TAURI_INTERNALS__` 选 bus，接线点清楚。
 - **半永久 Blueprint / RP=UI Profile**：首次进 RP → agent 推导 Blueprint → 存储+UUID；同一 RP 以后直接读。RP 类型定画像（恋爱→聊天、经营→数据面板、桌游→卡牌、跑团→属性栏）。
+- **Agent UI Test Harness（已落地最小入口）**：`ui/src/agent-test.ts` 提供 dev/test-only `window.__AIRP_AGENT_TEST__`。显式开启条件：`?airp_agent_test=1`、`localStorage.AIRP_AGENT_TEST=1` 或 `VITE_AIRP_AGENT_TEST=1`。Codex 浏览器插件或 Playwright 可调用 `sendChat` / `selectCharacter` / `refreshCharacters` / `getSnapshot` / `getState` / `getText` / `waitForText` 做 GUI smoke。默认关闭，白名单能力，不给任意文件/命令权限，不进入生产扩展权限。
 - **必须跑 Perf Spike**（见 §7）——代码有虚拟滚动但从没真跑过 10 万条验证。
 
 ---
@@ -246,9 +248,20 @@ data/
    ```
 2. 确认 `data/settings.json` 使用真实可用的 `endpoint` / `api_key` / `model`，不要把空 key 示例当运行时验收。
 3. 开发态最简闭环：启动 engine（例如 `cargo run -p airp-core -- daemon --port 8000`），再 `cd ui; npm run tauri dev`，选/导入角色，发一条消息，确认收到流式回复。
-4. 打包态闭环：`cd ui; .\build-tauri.ps1`，启动产物，重复最简对话；记录 artifact 路径、启动方式、settings 来源、是否依赖 sidecar 手动启动。
-5. 跑 Perf Spike：用 10 万条消息验证 `virtual-window.ts` 路径和 ChatWidget 不退化。
-6. 继续功能时优先二选一：Task 1.3 世界书引擎，或 Task 1.4 会话操作（swipe/edit/delete/regenerate）。
+4. 打包态闭环：`cd ui; .\build-tauri.ps1`，启动产物，重复最简对话；记录 artifact 路径、启动方式、settings 来源、sidecar 数据目录和失败时 UI 可见错误。
+5. 若后端可靠性仍不透明，先做临时 WebUI/HTTP harness：不做产品 UI，只验证 engine API、SSE、鉴权、数据目录、角色/会话读写和并发错误。
+6. 给 agent 补 UI 自测能力：先做 dev/test-only 的最小控制接口或 Playwright bridge，使 agent 能自行跑 GUI smoke 并产出截图/状态证据。
+7. 跑 Perf Spike：用 10 万条消息验证 `virtual-window.ts` 路径和 ChatWidget 不退化。
+8. 继续功能时优先二选一：Task 1.3 世界书引擎，或 Task 1.4 会话操作（swipe/edit/delete/regenerate）。
+
+Agent UI Test Harness 最小用法：
+
+```js
+// Dev URL 加 ?airp_agent_test=1 后，在 Codex 浏览器插件或 Playwright 里执行：
+await window.__AIRP_AGENT_TEST__.sendChat("hello", "alice")
+await window.__AIRP_AGENT_TEST__.waitForText("hello")
+window.__AIRP_AGENT_TEST__.getSnapshot()
+```
 
 **Task 1.3 · 世界书引擎（最大新建 · 关键路径）** —— 见 §5 + [PARTS.md](PARTS.md) F
 - 解析酒馆 world info（`{entries:{"0":{...}}}` uid-keyed object，全字段：keys/secondary_keys/position/depth/order/probability/selective/constant/递归…）入数据层；关键词触发用引擎已有 aho-corasick 扫描。
@@ -273,7 +286,7 @@ data/
 ### Phase 3+ · 酒馆功能补齐 + 扩展态 + web
 - Author's Note/Character's Note/Instruct Mode/Connection Profiles/群聊调度；slash 命令+脚本+Quick Replies；消息格式化管线。
 - 扩展态（走扩展接口，不进内核）：TTS/STT/图像生成/翻译/Web搜索/立绘/Data Bank-RAG。
-- **web UI**：引擎暴露端口，web 前端复用同一线协议（SSE 路径）。
+- **web UI**：近期只作为后端可靠性验证 harness；未来若产品需要，再把它升级为正式 Web 客户端。不要让临时 WebUI 反向决定桌面 UI 架构。
 
 ---
 
@@ -282,6 +295,7 @@ data/
 - **干净提示词 CI 不变式**：`subagent_context_has_no_orchestrator_noise`——断言送进 adapter 的角色平面 prompt 无脚手架标记。**神圣，不许删/改弱。**
 - **格式导入 fixture**：用**真实酒馆导出文件**（PNG 卡/世界书 JSON/预设 JSON）做测试样本，不是自造的。
 - **Perf Spike**：10 万条假消息 60fps + 内存封顶。
+- **Agent UI Test Harness**：`npm run test -- --run src/agent-test.test.ts` 覆盖开关、动作 dispatch、snapshot、DOM text/wait 语义。GUI 层后续接 Codex browser plugin 或 Playwright，必须产出截图/状态证据。
 - **数据传输纪律门（§0 不变式6）——现为 review 门，未来落 workflow**：
   - **现在（AIRP 无 CI）= 强制 PR review 检查项**：任何导入/大数据改动，review 必须核对——传给引擎/模型/前端的是**路径/引用**还是**大 blob**？intent/Envelope/store 里有没有塞 base64 或大字符串？有=打回。
   - **未来 = 自动化门禁（workflow）**：立 CI/lint 检查——(a) 静态扫：`emit(intent…)` / `dispatch` / setState 的 payload 不得含 base64 大字段或 >阈值字符串；(b) 测试：导入大文件后断言 state store 无大字符串、intent 体积有上限；(c) 引擎侧断言 import 接口收路径而非内容。**这条纪律优先级足够高，应尽早从"review 门"升级为"自动门"。**
@@ -290,6 +304,8 @@ data/
 ---
 
 ## 10. 构建环境（本机 —— 已验证可本地 check+test）
+
+GitHub 手动构建：`.github/workflows/manual-build.yml` 提供 `workflow_dispatch`。fork 用户可在 Actions 页手动运行 **Manual build**，下载 `airp-ui-windows` artifact，内含 `target/release/airp-ui.exe` 与 NSIS setup。当前只承诺 Windows；其他平台要先补对应 sidecar builder 与 Tauri bundle target。
 
 - **默认工具链 `stable-x86_64-pc-windows-gnu`**（本机无 MSVC linker，用 GNU）。**三个 env 必须都指 D 盘**，漏 `CARGO_HOME` 会让 cargo 落到 `C:\Users\<user>\.cargo` 用错工具链、build script 报 SxS `os error 14001`：
   ```powershell
@@ -339,8 +355,9 @@ data/
 
 1. **引擎内数据层熔合设计**：以 Core 为基吸收 mcp-server 数据域，具体怎么熔（工程取舍，Phase 1 前定）。
 2. **UI↔引擎线协议**：复用 State-Protocol Envelope（推荐）vs 简化自定义。
-3. **纯净度代价**：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外——接受（纯净优先）还是留"污染模式"开关。
-4. **capability 引擎侧强制时机**：MVP 先做还是随扩展面一起。
-5. **世界书插入引擎完整度**：MVP 先关键词触发、增量补完整语义，还是一步到位。
+3. **Agent UI Test Harness 形态**：临时 widget、Tauri dev command、Playwright bridge、WebUI harness 选哪条最小路径；共同红线是 dev/test-only、默认关闭、能力白名单。
+4. **纯净度代价**：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外——接受（纯净优先）还是留"污染模式"开关。
+5. **capability 引擎侧强制时机**：MVP 先做还是随扩展面一起。
+6. **世界书插入引擎完整度**：MVP 先关键词触发、增量补完整语义，还是一步到位。
 
 > Phase 0（引擎+UI 直连跑通对话）方向已定、可直接动手；上述决策影响 Phase 1+，动到时先问用户。

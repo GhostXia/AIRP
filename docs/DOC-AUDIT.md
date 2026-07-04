@@ -18,6 +18,11 @@
 
 ## 需要用户审核 / 拍板
 
+0. **2026-07-04 已拍板的开发方向**
+   - WebUI 是临时后端可靠性验证面，用来验证 engine API/SSE/数据层/错误恢复，不替代 Tauri/Vue 桌面 UI。
+   - 桌面 UI 是长期产品面，可以慢慢推进控件、布局、交互和性能。
+   - 需要给 agent 增加前端自测能力：临时控件/插件、Tauri dev-only command、Playwright bridge 或 WebUI harness 均可评估；红线是 dev/test-only、默认关闭、能力白名单。
+
 1. **Task 1.1 状态怎么写**
    - 已确认：PR #3 已实现 path-first 角色卡导入 UI，PR #4 已加固派生 ID。
    - 未确认：本轮没有做 GUI 端到端手动验收。

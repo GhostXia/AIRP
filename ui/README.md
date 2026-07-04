@@ -49,6 +49,7 @@ npm run dev
 npm run typecheck
 npm run test
 npm run build
+npm run build:engine-sidecar
 npm run tauri dev
 ```
 
@@ -65,10 +66,17 @@ cargo test -p airp-ui
 - Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested.
 - Character import is path-first: the UI sends only `card_path`; it must not put base64 card blobs into Vue state or widget props.
 - Chat state is id-keyed as `{ messages, order }`. `BusRelay` no longer uses `chat_lock`; each `chat.send` opens the user and assistant rows with one patch envelope, then streams into `/messages/{assistant_id}/text`.
+- WebUI is a temporary backend reliability harness only. Product UI work continues here in Tauri/Vue.
+- Agent UI Test Harness is dev/test-only. Enable with `?airp_agent_test=1`, `localStorage.AIRP_AGENT_TEST=1`, or `VITE_AIRP_AGENT_TEST=1`; then use `window.__AIRP_AGENT_TEST__` from Codex browser control or Playwright.
+
+## CI Artifacts
+
+The root `.github/workflows/manual-build.yml` workflow can be run manually on a fork. It builds the Windows Tauri package and uploads `airp-ui-windows` with the desktop exe and NSIS setup.
 
 ## Open Items
 
 - AIRP-Dev GUI end-to-end verification after packaging and engine integration.
 - Package/runtime smoke: build the desktop artifact, launch it, select/import a character, send one message, and receive a streamed reply with real settings.
+- Agent UI Test Harness: connect the current `window.__AIRP_AGENT_TEST__` surface to Codex browser plugin / Playwright GUI smoke and store screenshots/logs as artifacts.
 - Perf spike with 100k messages.
 - Reasoning/action rendering.

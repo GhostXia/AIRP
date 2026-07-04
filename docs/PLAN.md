@@ -15,11 +15,11 @@
 - **⚠️ 酒馆功能必须解耦二次重组，不可照搬（用户 2026-07-01）**：酒馆是"固定 prompt 装配管线 + 外挂插件"架构；我们是"agent 自主决策 + 能力以工具/钩子暴露"架构，**根子不同**。照搬酒馆的机械管线塞不进 agent 框架。**原则：把每个酒馆功能拆成"底层用户能力"，再用 agent 框架原语（工具 / 记忆 / 技能 / 事件钩子 / prompt 装配规则 / 宏）重新表达。** 重组映射见 [TAVERN-PARITY.md](TAVERN-PARITY.md) 第四部分。
 - **范围诚实**：框架形的内核，但**RP 特化交付**——不追 Hermes 的全宽度（20+ 消息平台 / RL 训练 / 全部终端后端）。那是天花板参考，不是我们的目标。框架架构要干净到"将来能泛化"，但当前只交付 RP 客户端所需。
 - **代码取向（用户 2026-07-03）**：代码必须**更开放、更透明、在未来更易修正、且更易迭代更新**。这不是泛化优先，而是工程可持续：接口和扩展点清晰开放；状态、决策、错误和验收结果可观察；模块边界低耦合、可替换；协议/数据结构版本化，允许小步迁移。
-- **UI 无关 + Web 就绪（用户 2026-07-01）**：**当前以 Tauri 桌面为主、优先做完**；未来暴露 web 端口适配 WebUI。故**引擎必须是无头、独立的网络服务**（HTTP/SSE/WS，传输无关线协议），**不嵌进 Tauri 壳**——但**排期上桌面优先，web 是后续加端口、非当前工作**。Tauri 桌面 UI 和未来 web UI 都是同一引擎的客户端，走同一协议（State-Protocol 传输无关 Envelope + SSEBus 路径 = web 路径）。这坐实"引擎 + UI 两盒"拆法。
+- **UI 无关 + Web 就绪（用户 2026-07-01；2026-07-04 澄清）**：**当前长期产品 UI 仍是 Tauri/Vue 桌面端，允许慢慢推进体验与控件**；WebUI 只作为**临时后端可靠性验证面**，用于快速验证 engine、数据层、推理闭环、鉴权和流式稳定性，不作为替代桌面 UI 的路线。故**引擎必须是无头、独立的网络服务**（HTTP/SSE/WS，传输无关线协议），**不嵌进 Tauri 壳**。Tauri 桌面 UI 和临时 WebUI 都是同一引擎的客户端，走同一协议（State-Protocol 传输无关 Envelope + SSEBus/HTTP 路径）。这坐实"引擎 + UI 两盒"拆法。
 - **四个原仓库 = 参考素材（理念 + 代码都仅供参考）**：作者按需求拆过四个项目、写清了各自的解法。它们是极有价值的先行思考，但**一切以我们客户端的实际需求为准**——不被它们的模块划分/戒律/命名/实现束缚。需要功能时去对应仓库挖可借鉴的代码/思路搬来改。用户对四仓库有完整版权，无侵权顾虑。酒馆当功能清单参考。
 - **源项目统一定位已拍板（2026-07-03，见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)）**：AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 都按同一原则处理：**吸收资产，不继承产品北极星**。Core 是 engine 主核但不继承其 standalone 乐高后端叙事；MCP-Server 是数据/工具/工作流规格来源但不继承纯 MCP 数据层边界；Gateway 是传输/安全/MCP-client 资产来源但不继承纯协议桥目标；State-Protocol 是 UI/协议资产来源但不继承通用 Agent UI 标准目标。
 - **State-Protocol 定位已拍板（2026-07-03，见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)）**：原 AIRP-State-Protocol 的"通用 Agent UI 标准 / 乐高化显示层"理念不作为 AIRP 主线；但 **Blueprint、Widget Registry/Host、RFC6902 patch、Envelope、guard、虚拟滚动、consent/sandbox** 是必须吸收的成熟资产。结论：**吸收 Blueprint/Widget 架构，降级通用协议优先定位**。
-- **AIRP-Dev 现状（2026-07-03）**：PR #1 已把 workspace 收敛为 `engine + protocol + ui` 两盒结构；`gateway` / `mcp-server` 不再是本 workspace 成员，只作为独立仓库/零件来源。PR #2 已让 UI `BusRelay` 直连 engine `/v1/chat/completions`；PR #3/#4 已实现并加固 path-first 角色卡导入；PR #6 已完成 chat 消息 id-keyed 寻址并移除 `chat_lock`；PR #12 已收口审计 follow-up（构建脚本、默认 settings、sandbox、RFC6902、metadata）。当前剩余是可执行文件/最简对话运行时验收、Perf Spike、Task 1.3 世界书、Task 1.4 会话操作以及后续 engine 数据/工具能力融入。
+- **AIRP-Dev 现状（2026-07-04）**：PR #1 已把 workspace 收敛为 `engine + protocol + ui` 两盒结构；`gateway` / `mcp-server` 不再是本 workspace 成员，只作为独立仓库/零件来源。PR #2 已让 UI `BusRelay` 直连 engine `/v1/chat/completions`；PR #3/#4 已实现并加固 path-first 角色卡导入；PR #6 已完成 chat 消息 id-keyed 寻址并移除 `chat_lock`；PR #12 已收口审计 follow-up；PR #13 已让 Tauri 打包链路携带 engine sidecar。当前剩余是：真实配置下的 GUI/runtime smoke、Perf Spike、临时 WebUI 后端可靠性验证面、Agent UI Test Harness、Task 1.3 世界书、Task 1.4 会话操作以及后续 engine 数据/工具能力融入。
 
 ## 1. 产品命根子：干净提示词（干净提示词 / pristine prompt）
 
@@ -58,7 +58,7 @@
 > 旧"四层图"（State-Protocol `背景整理 §3.3`）是三仓时代、且最底"推理层"曾是空框——已被 Core 填上、被本次定性取代，仅作历史参考。旧图里"Gateway=未来核心/最值钱是 State Protocol"是 `背景整理 §3` 明标的 ChatGPT 非定论意见，不采纳。
 
 ```
-┌─ UI（可换，当前 Tauri 桌面优先；未来暴露端口接 web）──────────────┐
+┌─ UI（可换，长期产品=Tauri 桌面；临时 WebUI=后端验证面）──────────┐
 │  Vue WebView：Blueprint 渲染 · widget 注册表 · RFC6902 patch store  │
 │  · 虚拟滚动 · 沙箱 · consent 门                                     │
 └───────────────── State-Protocol Envelope（SSE / Tauri IPC / 将来 WS）┘
@@ -106,6 +106,20 @@
 - 首次进 RP → agent 推导 Blueprint（widget 列表 JSON）→ 存储 + UUID；同一 RP 以后直接读、不再生成。RP 类型决定 UI 画像：恋爱→聊天、经营→数据面板、桌游→卡牌、跑团→属性栏。
 - 首批候选 widget：`chat / memory / emotion / inventory / quest / map / card`（`背景整理 §7-2` 先做哪几个待定）。widget 注册表开放（`namespace.name`，`core.*` 保留），capability 由引擎强制。
 - 方向约束：Blueprint/Widget 是 **AIRP 内部 UI 合同与扩展面**，不是当前阶段的公共协议标准化工程。默认路径必须先跑通并验收 `UI → Tauri bridge → engine → state patch → Blueprint/widget render`；MockBus 只留给测试/演示。
+
+### 2.3 WebUI 临时验证面（2026-07-04 用户澄清）
+
+- **定位**：WebUI 是临时工程工具，用来验证后端可靠性；它不是桌面 UI 的替代产品方向，也不应牵引控件体验、插件生态或最终交付形式。
+- **目的**：快速验证 engine 的 `/v1/*` API、SSE 流式、鉴权、数据目录、角色/世界书/会话读写、并发和错误恢复。后端不稳时，先用 WebUI/HTTP harness 把 engine 行为打实，再把成熟能力接回 Tauri UI。
+- **约束**：WebUI 不走 `card_path` 任意路径读；远端/浏览器导入只能用 multipart/streaming upload 或测试 fixture。WebUI 产生的临时状态、调试面板和 harness 代码不得污染长期桌面 UI 交互。
+- **退出条件**：当 engine API、数据层和流式对话在临时 WebUI 中稳定可复现，Tauri UI 继续慢慢做产品化控件、布局、可访问性和性能。
+
+### 2.4 Agent UI Test Harness（临时受控测试接口）
+
+- **目标**：给开发 agent 一个可程序化控制前端 UI 的能力，让 agent 能自己启动 UI、选择角色、发消息、观察 DOM/状态/日志、截图、断言结果，避免每次 GUI 验收都靠人工目测。
+- **形态候选**：① dev-only widget/插件（如 `core.agent_test_panel`）；② Tauri dev-only command（如 `airp_test_action`）；③ 浏览器/Playwright 侧测试桥；④ engine 侧 test fixture + UI 自动脚本。优先做最小、可删的临时接口。
+- **安全边界**：默认关闭，只在 dev/test build 或显式 env flag 开启；能力白名单；不得暴露任意文件读写、任意命令执行、未授权 shell/plugin 权限；不得成为第三方扩展默认能力。
+- **验收能力**：至少能执行 `load fixture → select/import character → send chat.send → wait streamed reply → read state/DOM → screenshot/log`，并能在失败时输出可复现证据。
 
 ## 2.5 性能契约（产品级硬约束 —— 防止重蹈酒馆覆辙，`背景整理 §6`）
 
@@ -198,7 +212,7 @@
 - **需求**：聊天界面（流式/swipe/编辑）、角色管理、连接设置、可扩展面板（状态条/好感度/物品栏）。
 - **解法**：Tauri+Vue，只渲染**引擎**下发的 Blueprint（不执行 agent 生成的代码）。widget 三类（Vue 首方 / Module / esm 动态 import）。面板=widget 实例，state 走 RFC6902 patch。capability 消费门 + 沙箱（esm+sandbox → opaque-origin iframe）。**交付=签名二进制，绝不运行时 clone 编译（RCE 风险）**。引擎作 sidecar 随包默认自带、零配置；可一键换远程引擎 URL（承 §0 web 就绪：同一线协议）。
 - **性能是硬需求**：本支柱必须守 §2.5 的 7 条硬约束 + Perf Spike 验证门——UI 是最容易重蹈酒馆覆辙的一层。
-- **状态**：UI runtime（Registry/BlueprintRenderer/WidgetHost/store+patch/虚拟滚动/沙箱/consent/打包）主体在；`BusRelay` 已直连 engine 聊天 SSE；chat 已改成 id-keyed 消息模型并移除 `chat_lock`。仍待补 GUI 运行时验收、Perf Spike、reasoning/action 渲染与后续会话操作。
+- **状态**：UI runtime（Registry/BlueprintRenderer/WidgetHost/store+patch/虚拟滚动/沙箱/consent/打包）主体在；`BusRelay` 已直连 engine 聊天 SSE；chat 已改成 id-keyed 消息模型并移除 `chat_lock`；PR #13 已打通 engine sidecar 打包。仍待补 GUI 运行时验收、Perf Spike、Agent UI Test Harness、reasoning/action 渲染与后续会话操作。
 
 ### 3.8 Agent 能力 + 扩展生态（合一 —— 产品脊柱 + 硬需求）
 - **需求（用户 2026-07-01 强调）**：必须充分暴露接口，无门槛、无缝兼容第三方扩展。对标酒馆——它的扩展性是护城河。详见 [TAVERN-PARITY.md](TAVERN-PARITY.md) 第二部分。
@@ -219,7 +233,7 @@
 
 1. **引擎内数据层的存储设计**（原"数据归属"收敛后剩的）：单一真相已定在引擎内；剩的是怎么把 **Core 自带数据层**（png_parser 正确、chat_store/volume/scene）与 **MCP-Server 数据域**（角色/世界书/state/预设的域模型 + 沙箱 + 插件零schema）**熔成一套**——以 Core 为基吸收 MCP 优点，还是反之。多为工程取舍，可动手时定。
 2. **UI↔引擎线协议落地细节**：方向已定为吸收 State-Protocol 的 Blueprint/Widget/RFC6902 patch/Envelope 资产，且默认链路直连 AIRP engine；剩余是具体接口边界、版本策略、错误语义和 engine 侧 capability 强制的实现细节。原 `agentbus` 自重写 Envelope 的重复问题随之消解（引擎直接用 state-protocol 类型）。
-3. **Phase 1 收口顺序**：UI→引擎（Core 核）直连已由 Phase 0 落地；Task 1.1 代码与 Task 1.2 id-keyed chat 已合并。当前应先补可执行文件/GUI 运行时验收和 Perf Spike，再推进 Task 1.3 世界书、Task 1.4 会话操作，之后再谈扩展面。
+3. **Phase 1 收口顺序**：UI→引擎（Core 核）直连已由 Phase 0 落地；Task 1.1 代码与 Task 1.2 id-keyed chat 已合并，PR #13 已让桌面包携带 engine sidecar。当前应先补真实配置 GUI smoke、临时 WebUI 后端可靠性验证、Agent UI Test Harness 和 Perf Spike，再推进 Task 1.3 世界书、Task 1.4 会话操作，之后再谈扩展面。
 4. **纯净度代价是否接受**（Core §10-1）：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外。接受（纯净优先），还是留"污染模式"开关兼容那类模型？
 5. **capability 引擎侧强制**：现只 UI 单边限制，引擎侧真强制不存在（State-Protocol §2.5-E）。MVP 要不要先做，还是随扩展面一起？
 6. **世界书插入引擎完整度**：MVP 先做能解析+关键词触发，还是一步到位补齐 position/depth/selective/递归？且按 §3.2/TAVERN-PARITY §4——position/depth 这些机械插入语义要重组为"给 agent 的建议元数据 + 检索 Tool"，非硬编注入器。
@@ -228,6 +242,7 @@
 
 ## 5. 修订记录
 
+- 2026-07-04：用户澄清 WebUI 定位：它是临时后端可靠性验证面，用来验证 engine/API/SSE/数据层，不替代 Tauri/Vue 桌面 UI；桌面 UI 继续作为长期产品面慢慢推进。新增 Agent UI Test Harness 方向：给开发 agent 一个 dev/test-only 受控前端操作接口（临时 widget、Tauri dev command、Playwright bridge 或 WebUI harness），用于自动 GUI smoke、截图和状态断言，默认关闭、能力白名单。
 - 2026-07-03：同步 GitHub 合并历史后的当前状态：PR #1 收敛两盒 workspace，PR #2 完成 UI↔engine 直连，PR #3/#4 完成并加固 path-first 角色卡导入；将仍写着 mock BusRelay、四仓入 workspace、CI 强制等旧状态的段落改成当前事实，并把未能代替用户拍板的事项移入 [DOC-AUDIT.md](DOC-AUDIT.md)。
 - 2026-07-03：新增 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)，拍板 AIRP-State-Protocol 的定位：不继承"通用 Agent UI 标准优先 / 乐高优先"作为产品北极星，但必须吸收 Blueprint、Widget、state patch、guard、虚拟滚动、consent/sandbox 等成熟 UI 资产。
 - 2026-07-03：补入代码取向：更开放、更透明、未来更易修正、更易迭代更新；并解释为接口/扩展点清晰、状态与决策可观察、低耦合可替换、协议和数据结构版本化。
