@@ -235,7 +235,69 @@ WebUI 启动时显示当前 engine 的鉴权状态：
 
 ---
 
-## 9. 不做的事（显式列出，防审计误以为遗漏）
+## 9. To Do 大清单（2026-07-05 后续开发入口）
+
+本清单按“尽快让用户通过 WebUI 使用完整后端 agent 能力”排序，而不是按审计 issue 严重度排序。原则：先跑通真实闭环，再逐步偿还架构和安全债；不要让长期 debt 阻塞 WebUI 可用性。
+
+### P0：马上可用闭环
+
+目标：不经过 Tauri，浏览器 WebUI 能连真实 provider，完成 chat streaming、agent run、session/history、错误可见。
+
+- 开 `webui-p0-usability` 分支。
+- 使用当前本地验证配置先跑通：HTTP API `127.0.0.1:8889`，默认模型 `gemini-3.1-pro-preview`。
+- 修 #34 的最小阻塞面：`/v1/models` 加显式 timeout；provider/auth/model/timeout 错误返回可读、结构化、不会无限挂起。
+- WebUI 直接显示常见失败：无 API key、模型不存在、provider timeout、401 bearer 缺失、SSE 中断。
+- 用 WebUI 跑通 `/version`、`/v1/settings`、`/v1/characters`、session list/create/select、`/v1/chat/completions`、`/v1/agent/run`、history/regen/rollback、并发 stream test。
+- #30 先做“可复现验证”而非大测试框架：记录 `/v1/agent/run` 能产生 `plan/tool_call/tool_result/delta/done` 的真实事件序列；正式 integration test 放 P2。
+- 把验证证据写回 `docs/WEBUI-BACKEND-VALIDATION.md`：启动命令、engine URL、模型名、请求路径、状态码、耗时、SSE event 序列、触碰的数据目录、失败截图或日志。
+
+P0 完成标准：早期用户可以打开 WebUI，用真实 provider 发消息，并看到流式回复与 agent event log；失败时知道该改 key、model、endpoint 还是 bearer。
+
+### P1：完整后端能力体验
+
+目标：WebUI 不精美，但能覆盖后端主要能力，足够让用户试用完整 agent 能力。
+
+- 角色、session、history、regen、rollback 的交互收口，所有 destructive 操作有明显提示。
+- agent event log 可读化：按 `plan`、`tool_call`、`tool_result`、`delta`、`done` 分类显示；保留 raw JSON 折叠区。
+- 增加“一键诊断”入口：依次跑 version/settings/models/chat smoke/agent smoke，并输出可复制诊断摘要。
+- WebUI 导入继续不走 `card_path`；短期可保留 `card_json` / `card_png_base64`，真正 multipart 进入 P2/P3。
+- 文档同步：更新 WebUI README，明确 WebUI 是临时 harness，不是产品 UI，也不替代 Tauri 长期路线。
+
+### P2：可靠性和测试补强
+
+目标：把 P0/P1 的手工成功变成可回归的工程资产。
+
+- #30：补正式 `AgentLoop::run` 或 `/v1/agent/run` 集成测试，断言事件顺序和 tool registry 路径。
+- #35：定义 session delete/cleanup/per-user isolation；如果 WebUI 开始长期使用 session，则优先实现 delete/cleanup。
+- #27：如果 WebUI 开始支持 scene，对 scene pipeline 加 preset regex filters；否则不抢 P0。
+- #26：下一批 M_AGENT/ReAct 改动前，强化 sacred invariant，让它覆盖真实 subagent pipeline 输出。
+- #31：抽 shared session operations，防止 HTTP handlers 和 agent tools 语义漂移。
+- #33：在 WebUI 从 harness 走向用户设置入口前，决定 secrets 存储策略，避免默认把新 key 持久写入明文 `settings.json`。
+- M2 可靠性用例集文档化：API key 缺失/错误、model 错误、provider timeout、SSE 断流、bearer 缺失、并发 stream、刷新后 history。
+
+### P3：长期架构、安全和桌面 UI 回流
+
+目标：不阻塞当前可用性，但在产品化、第三方扩展、桌面 UI 回流前逐步处理。
+
+- #32：engine-side capability enforcement；UI consent/localStorage 只能是 UX gate，不能作为安全权威。
+- #28：Rust protocol wire types 与 TS runtime guard 增加 drift guard。
+- #29：回到 Tauri 打包产品线时处理 sidecar child lifecycle、shutdown、offline state、restart。
+- #36：state scope versioning 与 live-state schema enforcement，等第三方 widget/state 持久化前处理。
+- #37：长会话 UI memory、durable message id、JSON Pointer escaping、Perf Spike。
+- #24：ToolRegistry duplicate registration fail-fast。
+- #25：character card shared parsing contract。
+- #22：`delete_character` 与 named-session writes 的锁覆盖。
+- #23：character get/delete 的 HTTP/API 文档或路由补齐。
+
+### 分支和 PR 节奏
+
+- P0 只开一个短分支：`webui-p0-usability`。目标是快修可用性和记录真实验证，不混入 P2/P3 重构。
+- P1 可拆为 `webui-agent-log-readability`、`webui-diagnostics`、`webui-session-polish`。
+- P2/P3 issue 一律单独 PR；不要把“顺手修审计 debt”混进 WebUI 可用性 PR。
+- 批次大小按审计能力动态调整：若审计/人工 review 能覆盖更多内容，优先把单次任务推进到“可验证闭环”（例如后端修复 + WebUI 暴露 + 证据回填），而不是把每个小改拆成独立 PR。只有当改动跨越不同风险域（安全边界、协议契约、桌面 UI 产品线、长期重构）时才强制拆分。
+- 每个 PR 合并前至少跑：相关 Rust 测试、神圣不变式、以及一条真实 WebUI smoke；无法跑真实 provider 时必须在 PR 描述写明原因和替代验证。
+
+## 10. 不做的事（显式列出，防审计误以为遗漏）
 
 - 不做 WebUI 的产品化（主题/响应式/无障碍）。
 - 不做 WebUI 的鉴权管理 UI（只显示状态 + 收 bearer token；不在浏览器里修改 access key）。
