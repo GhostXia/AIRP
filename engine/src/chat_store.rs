@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::adapter::ChatMessage;
 use crate::error::AirpError;
+use crate::types::SessionId;
 
 /// ChatLog 滚动上限：超过此值时丢弃最早的消息。
 ///
@@ -37,6 +38,8 @@ pub struct ChatLog {
     pub created_at: String,
     /// ISO 8601 last update timestamp
     pub updated_at: String,
+    #[serde(skip, default)]
+    scope_session_id: Option<String>,
 }
 
 /// 持久化在 `chat_log_meta.json` 中的小型元数据 (无 messages 字段)。
@@ -58,25 +61,56 @@ impl ChatLog {
             messages: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
+            scope_session_id: None,
         }
+    }
+
+    /// Creates a new empty chat log for a named session scope.
+    fn new_for_session(character_id: &str, session_id: &SessionId) -> Self {
+        let mut log = Self::new(character_id);
+        log.scope_session_id = Some(session_id.to_string());
+        log
+    }
+
+    fn history_dir(
+        data_root: &Path,
+        character_id: &str,
+        scope_session_id: Option<&str>,
+    ) -> PathBuf {
+        let character_dir = data_root.join("characters").join(character_id);
+        match scope_session_id {
+            Some(session_id) => character_dir
+                .join("sessions")
+                .join(session_id)
+                .join("history"),
+            None => character_dir.join("history"),
+        }
+    }
+
+    fn scoped_jsonl_path(
+        data_root: &Path,
+        character_id: &str,
+        scope_session_id: Option<&str>,
+    ) -> PathBuf {
+        Self::history_dir(data_root, character_id, scope_session_id).join("chat_log.jsonl")
+    }
+
+    fn scoped_meta_path(
+        data_root: &Path,
+        character_id: &str,
+        scope_session_id: Option<&str>,
+    ) -> PathBuf {
+        Self::history_dir(data_root, character_id, scope_session_id).join("chat_log_meta.json")
     }
 
     /// 角色目录下消息 JSONL 文件路径（CF-2 位置：`history/` 子目录）。
     fn jsonl_path(data_root: &Path, character_id: &str) -> PathBuf {
-        data_root
-            .join("characters")
-            .join(character_id)
-            .join("history")
-            .join("chat_log.jsonl")
+        Self::scoped_jsonl_path(data_root, character_id, None)
     }
 
     /// 角色目录下元数据 JSON 文件路径（CF-2 位置：`history/` 子目录）。
     fn meta_path(data_root: &Path, character_id: &str) -> PathBuf {
-        data_root
-            .join("characters")
-            .join(character_id)
-            .join("history")
-            .join("chat_log_meta.json")
+        Self::scoped_meta_path(data_root, character_id, None)
     }
 
     /// Pre-CF2 JSONL 路径（6.0e 旧位置：字符根目录，迁移用）。
@@ -111,6 +145,52 @@ impl ChatLog {
     ///   3. 根目录 `chat_log.json` 存在（<6.0e legacy）→ 迁移到 `history/` 后加载；
     ///   4. 均不存在 → 新建空 log，写入 `history/`。
     pub fn load_or_create(data_root: &Path, character_id: &str) -> Result<Self, AirpError> {
+        Self::load_or_create_for_session(data_root, character_id, None)
+    }
+
+    /// Loads or creates a chat log scoped to a named session when `session_id` is provided.
+    ///
+    /// `None` preserves the historical per-character log and migration behavior. Named sessions
+    /// use `characters/{id}/sessions/{session_id}/history/` and intentionally do not import the
+    /// legacy per-character chat log.
+    pub fn load_or_create_for_session(
+        data_root: &Path,
+        character_id: &str,
+        session_id: Option<&SessionId>,
+    ) -> Result<Self, AirpError> {
+        if let Some(session_id) = session_id {
+            let scope_session_id = session_id.to_string();
+            crate::data_dir::resolve_session_dir(data_root, character_id, Some(session_id))?;
+            let jsonl = Self::scoped_jsonl_path(data_root, character_id, Some(&scope_session_id));
+            let meta_p = Self::scoped_meta_path(data_root, character_id, Some(&scope_session_id));
+            if jsonl.exists() {
+                let messages = Self::read_messages_jsonl(&jsonl)?;
+                let m: ChatLogMeta = if meta_p.exists() {
+                    serde_json::from_str(&fs::read_to_string(&meta_p)?)?
+                } else {
+                    let now = Utc::now().to_rfc3339();
+                    ChatLogMeta {
+                        session_id: uuid::Uuid::new_v4().to_string(),
+                        character_id: character_id.to_string(),
+                        created_at: now.clone(),
+                        updated_at: now,
+                    }
+                };
+                return Ok(Self {
+                    session_id: m.session_id,
+                    character_id: m.character_id,
+                    messages,
+                    created_at: m.created_at,
+                    updated_at: m.updated_at,
+                    scope_session_id: Some(scope_session_id),
+                });
+            }
+
+            let log = ChatLog::new_for_session(character_id, session_id);
+            log.save(data_root)?;
+            return Ok(log);
+        }
+
         let jsonl = Self::jsonl_path(data_root, character_id);
         let meta_p = Self::meta_path(data_root, character_id);
         let pre_cf2_jsonl = Self::pre_cf2_jsonl_path(data_root, character_id);
@@ -138,6 +218,7 @@ impl ChatLog {
                 messages,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
+                scope_session_id: None,
             });
         }
 
@@ -162,6 +243,7 @@ impl ChatLog {
                 messages,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
+                scope_session_id: None,
             };
             log.save(data_root)?;
             // 删除旧文件，失败不阻塞
@@ -183,7 +265,8 @@ impl ChatLog {
                 "CF-2 迁移: chat_log.json (legacy) → history/"
             );
             let content = fs::read_to_string(&legacy)?;
-            let log: ChatLog = serde_json::from_str(&content)?;
+            let mut log: ChatLog = serde_json::from_str(&content)?;
+            log.scope_session_id = None;
             log.save(data_root)?;
             if let Err(e) = fs::remove_file(&legacy) {
                 tracing::warn!(path = ?legacy, err = %e, "迁移完成但删除旧 chat_log.json 失败");
@@ -200,8 +283,9 @@ impl ChatLog {
 
     /// 整体重写 jsonl + meta（用于 delete/rollback/滚动截断）。
     pub fn save(&self, data_root: &Path) -> Result<(), AirpError> {
-        let jsonl = Self::jsonl_path(data_root, &self.character_id);
-        let meta = Self::meta_path(data_root, &self.character_id);
+        let scope = self.scope_session_id.as_deref();
+        let jsonl = Self::scoped_jsonl_path(data_root, &self.character_id, scope);
+        let meta = Self::scoped_meta_path(data_root, &self.character_id, scope);
 
         // 确保 history/ 目录存在
         if let Some(parent) = jsonl.parent() {
@@ -247,7 +331,8 @@ impl ChatLog {
         }
 
         // 常规追加：jsonl O(1) 写入 + meta 小文件刷新。
-        let jsonl = Self::jsonl_path(data_root, &self.character_id);
+        let scope = self.scope_session_id.as_deref();
+        let jsonl = Self::scoped_jsonl_path(data_root, &self.character_id, scope);
         // 文件可能首次创建（迁移路径已 ensure，但保底处理）
         if let Some(parent) = jsonl.parent() {
             if !parent.exists() {
@@ -270,7 +355,7 @@ impl ChatLog {
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
         };
-        let meta_path = Self::meta_path(data_root, &self.character_id);
+        let meta_path = Self::scoped_meta_path(data_root, &self.character_id, scope);
         fs::write(&meta_path, serde_json::to_string_pretty(&m)?)?;
         Ok(())
     }
