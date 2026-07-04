@@ -20,13 +20,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use crate::adapter::{ChatMessage, MessageRole};
 use crate::chat_store::ChatLog;
 use crate::daemon::DaemonState;
 use crate::data_dir;
-use crate::types::CharacterId;
+use crate::types::{CharacterId, SessionId};
 
 /// 工具副作用分类（驱动 dry-run / 确认流 / 幂等去重）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,12 +140,72 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.register(Box::new(EchoTool));
     // M_AGENT-2 第一批：会话类 5 工具（engine 已有等价内部能力，包成工具）。
-    reg.register(Box::new(ListSessionsTool { state: state.clone() }));
-    reg.register(Box::new(StartSessionTool { state: state.clone() }));
-    reg.register(Box::new(AppendMessageTool { state: state.clone() }));
-    reg.register(Box::new(GetRecentContextTool { state: state.clone() }));
+    reg.register(Box::new(ListSessionsTool {
+        state: state.clone(),
+    }));
+    reg.register(Box::new(StartSessionTool {
+        state: state.clone(),
+    }));
+    reg.register(Box::new(AppendMessageTool {
+        state: state.clone(),
+    }));
+    reg.register(Box::new(GetRecentContextTool {
+        state: state.clone(),
+    }));
     reg.register(Box::new(RollbackMessagesTool { state }));
     reg
+}
+
+const MAX_RECENT_CONTEXT: usize = 200;
+
+type ChatLogLockMap = StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>;
+
+static CHAT_LOG_LOCKS: OnceLock<ChatLogLockMap> = OnceLock::new();
+
+fn chat_log_lock(
+    character_id: &str,
+    session_id: Option<&SessionId>,
+) -> Arc<tokio::sync::Mutex<()>> {
+    let key = match session_id {
+        Some(session_id) => format!("{}/{}", character_id, session_id),
+        None => character_id.to_string(),
+    };
+    let mut locks = CHAT_LOG_LOCKS
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .expect("chat log lock map poisoned");
+    locks
+        .entry(key)
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+fn optional_session_id(params: &Value) -> Result<Option<SessionId>, AirpError> {
+    match params.get("session_id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => {
+            let raw = v
+                .as_str()
+                .ok_or_else(|| AirpError::BadRequest("session_id must be a string".into()))?;
+            Ok(Some(SessionId::parse(raw)?))
+        }
+    }
+}
+
+fn required_usize_param(params: &Value, key: &str) -> Result<usize, AirpError> {
+    let raw = params
+        .get(key)
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| AirpError::BadRequest(format!("missing {}", key)))?;
+    usize::try_from(raw)
+        .map_err(|_| AirpError::BadRequest(format!("{} {} exceeds platform usize", key, raw)))
+}
+
+fn optional_usize_param(params: &Value, key: &str, default: usize) -> Result<usize, AirpError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(_) => required_usize_param(params, key),
+    }
 }
 
 // ── M_AGENT-2：会话类 built-in 工具 ─────────────────────────────────────────
@@ -156,7 +216,7 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
 // 访问数据层——不改 `Tool` trait 签名（EchoTool 等无状态工具不受影响）。
 //
 // 设计纪律（守不变式 #3 工具受控）：
-// - 全部 readonly 或 append（会话追加幂等键由 session_id + index 天然去重）；
+// - append returns the persisted position so callers can record their own idempotency keys;
 // - rollback 是 destructive → 默认 dry-run，未 confirm 只回"将回滚到 idx N"；
 // - 入参/出参均 serde_json::Value，schema 不强约束（开放接入戒律）；
 // - 错误透传 AirpError，agent loop 已有 ToolCall failed 分支。
@@ -286,12 +346,26 @@ impl Tool for AppendMessageTool {
                     return Err(AirpError::BadRequest(format!(
                         "invalid role: {} (expect user|assistant|system)",
                         other
-                    )))
+                    )));
                 }
             };
             let cid = CharacterId::new(cid_str)?;
-            let mut log = ChatLog::load_or_create(&state.data_root, cid.as_str())?;
+            let session_id = optional_session_id(&params)?;
+            let lock = chat_log_lock(cid.as_str(), session_id.as_ref());
+            let _guard = lock.lock().await;
+            let mut log = ChatLog::load_or_create_for_session(
+                &state.data_root,
+                cid.as_str(),
+                session_id.as_ref(),
+            )?;
             let total_before = log.messages.len();
+            if role == MessageRole::System {
+                tracing::info!(
+                    character_id = %cid,
+                    session_id = session_id.map(|sid| sid.to_string()).as_deref().unwrap_or("default"),
+                    "append_message writes a system message"
+                );
+            }
             log.append(
                 &state.data_root,
                 ChatMessage {
@@ -299,10 +373,18 @@ impl Tool for AppendMessageTool {
                     content: content.to_string(),
                 },
             )?;
+            let total = log.messages.len();
+            let truncated_count = total_before.saturating_add(1).saturating_sub(total);
+            let index = total.checked_sub(1).ok_or_else(|| {
+                AirpError::Internal("append_message produced an empty log".into())
+            })?;
             Ok(ToolResult {
                 output: serde_json::json!({
-                    "index": total_before,
-                    "total": total_before + 1,
+                    "index": index,
+                    "total": total,
+                    "truncated": truncated_count > 0,
+                    "truncated_count": truncated_count,
+                    "session_id": session_id.map(|sid| sid.to_string()),
                 }),
                 dry_run: false,
             })
@@ -337,20 +419,30 @@ impl Tool for GetRecentContextTool {
                 .get("character_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
-            let n = params
-                .get("n")
-                .and_then(|v| v.as_u64())
-                .map(|x| x as usize)
-                .unwrap_or(20);
+            let n = optional_usize_param(&params, "n", 20)?;
+            if n > MAX_RECENT_CONTEXT {
+                return Err(AirpError::BadRequest(format!(
+                    "n {} exceeds max {}",
+                    n, MAX_RECENT_CONTEXT
+                )));
+            }
             let cid = CharacterId::new(cid_str)?;
-            let log = ChatLog::load_or_create(&state.data_root, cid.as_str())?;
+            let session_id = optional_session_id(&params)?;
+            let log = ChatLog::load_or_create_for_session(
+                &state.data_root,
+                cid.as_str(),
+                session_id.as_ref(),
+            )?;
             let recent = log.recent(n);
             let msgs: Vec<Value> = recent
                 .into_iter()
                 .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
                 .collect();
             Ok(ToolResult {
-                output: serde_json::json!({ "messages": msgs }),
+                output: serde_json::json!({
+                    "messages": msgs,
+                    "session_id": session_id.map(|sid| sid.to_string()),
+                }),
                 dry_run: false,
             })
         })
@@ -386,13 +478,16 @@ impl Tool for RollbackMessagesTool {
                 .get("character_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
-            let index = params
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| AirpError::BadRequest("missing index".into()))?
-                as usize;
+            let index = required_usize_param(&params, "index")?;
             let cid = CharacterId::new(cid_str)?;
-            let mut log = ChatLog::load_or_create(&state.data_root, cid.as_str())?;
+            let session_id = optional_session_id(&params)?;
+            let lock = chat_log_lock(cid.as_str(), session_id.as_ref());
+            let _guard = lock.lock().await;
+            let mut log = ChatLog::load_or_create_for_session(
+                &state.data_root,
+                cid.as_str(),
+                session_id.as_ref(),
+            )?;
             let total = log.messages.len();
             if index >= total {
                 return Err(AirpError::BadRequest(format!(
@@ -406,16 +501,25 @@ impl Tool for RollbackMessagesTool {
                     output: serde_json::json!({
                         "rolled_back_to": index,
                         "dropped": dropped,
+                        "session_id": session_id.map(|sid| sid.to_string()),
                         "preview": "pass confirm=true to execute",
                     }),
                     dry_run: true,
                 });
             }
+            tracing::warn!(
+                character_id = %cid,
+                session_id = session_id.map(|sid| sid.to_string()).as_deref().unwrap_or("default"),
+                index,
+                dropped,
+                "rollback_messages executed"
+            );
             log.rollback_to(&state.data_root, index)?;
             Ok(ToolResult {
                 output: serde_json::json!({
                     "rolled_back_to": index,
                     "dropped": dropped,
+                    "session_id": session_id.map(|sid| sid.to_string()),
                 }),
                 dry_run: false,
             })
@@ -427,8 +531,9 @@ impl Tool for RollbackMessagesTool {
 mod tests {
     use super::*;
     use crate::adapter::{BackendEngine, Provider};
-    use crate::daemon::{DaemonState, MutableConfig};
+    use crate::chat_store::MAX_MESSAGES;
     use crate::config::VolumeConfig;
+    use crate::daemon::{DaemonState, MutableConfig};
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -467,6 +572,7 @@ mod tests {
             .unwrap();
         assert!(!r.dry_run);
         assert!(r.output["session_id"].is_string());
+        let session_id = r.output["session_id"].as_str().unwrap().to_string();
 
         // list_sessions → 至少 1
         let list = reg.get("list_sessions").unwrap();
@@ -475,14 +581,22 @@ mod tests {
             .await
             .unwrap();
         let arr = r.output.as_array().unwrap();
-        assert!(!arr.is_empty(), "list_sessions should find the started session");
+        assert!(
+            !arr.is_empty(),
+            "list_sessions should find the started session"
+        );
 
         // append_message ×2 (user + assistant)
         let append = reg.get("append_message").unwrap();
         for (role, content) in [("user", "hello"), ("assistant", "hi there")] {
             let r = append
                 .call(
-                    serde_json::json!({"character_id": "alice", "role": role, "content": content}),
+                    serde_json::json!({
+                        "character_id": "alice",
+                        "session_id": session_id.clone(),
+                        "role": role,
+                        "content": content,
+                    }),
                     false,
                 )
                 .await
@@ -493,7 +607,10 @@ mod tests {
         // get_recent_context n=10 → 2 条
         let recent = reg.get("get_recent_context").unwrap();
         let r = recent
-            .call(serde_json::json!({"character_id": "alice", "n": 10}), false)
+            .call(
+                serde_json::json!({"character_id": "alice", "session_id": session_id.clone(), "n": 10}),
+                false,
+            )
             .await
             .unwrap();
         let msgs = r.output["messages"].as_array().unwrap();
@@ -504,7 +621,10 @@ mod tests {
         // rollback index=0 dry-run → dropped=1, dry_run=true
         let rb = reg.get("rollback_messages").unwrap();
         let r = rb
-            .call(serde_json::json!({"character_id": "alice", "index": 0}), false)
+            .call(
+                serde_json::json!({"character_id": "alice", "session_id": session_id.clone(), "index": 0}),
+                false,
+            )
             .await
             .unwrap();
         assert!(r.dry_run);
@@ -512,15 +632,130 @@ mod tests {
 
         // rollback index=0 confirm=true → 真回滚，剩 1 条
         let r = rb
-            .call(serde_json::json!({"character_id": "alice", "index": 0}), true)
+            .call(
+                serde_json::json!({"character_id": "alice", "session_id": session_id.clone(), "index": 0}),
+                true,
+            )
             .await
             .unwrap();
         assert!(!r.dry_run);
         let r = recent
-            .call(serde_json::json!({"character_id": "alice", "n": 10}), false)
+            .call(
+                serde_json::json!({"character_id": "alice", "session_id": session_id.clone(), "n": 10}),
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(r.output["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn session_history_isolated_from_character_history() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state);
+
+        let start = reg.get("start_session").unwrap();
+        let session = start
+            .call(serde_json::json!({"character_id": "scope"}), false)
+            .await
+            .unwrap()
+            .output["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let append = reg.get("append_message").unwrap();
+        append
+            .call(
+                serde_json::json!({"character_id": "scope", "role": "user", "content": "global"}),
+                false,
+            )
+            .await
+            .unwrap();
+        append
+            .call(
+                serde_json::json!({
+                    "character_id": "scope",
+                    "session_id": session.clone(),
+                    "role": "user",
+                    "content": "session",
+                }),
+                false,
+            )
+            .await
+            .unwrap();
+
+        let recent = reg.get("get_recent_context").unwrap();
+        let global = recent
+            .call(serde_json::json!({"character_id": "scope", "n": 10}), false)
+            .await
+            .unwrap();
+        assert_eq!(global.output["messages"][0]["content"], "global");
+
+        let scoped = recent
+            .call(
+                serde_json::json!({"character_id": "scope", "session_id": session.clone(), "n": 10}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(scoped.output["messages"][0]["content"], "session");
+    }
+
+    #[tokio::test]
+    async fn append_reports_persisted_index_after_fifo_truncation() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let mut log = ChatLog::load_or_create(&state.data_root, "overflow").unwrap();
+        for i in 0..MAX_MESSAGES {
+            log.append(
+                &state.data_root,
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: format!("seed-{i}"),
+                },
+            )
+            .unwrap();
+        }
+
+        let reg = default_registry(state);
+        let append = reg.get("append_message").unwrap();
+        let r = append
+            .call(
+                serde_json::json!({
+                    "character_id": "overflow",
+                    "role": "assistant",
+                    "content": "after-cap",
+                }),
+                false,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(r.output["index"], MAX_MESSAGES - 1);
+        assert_eq!(r.output["total"], MAX_MESSAGES);
+        assert_eq!(r.output["truncated"], true);
+        assert_eq!(r.output["truncated_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn recent_context_rejects_over_cap() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state);
+        let recent = reg.get("get_recent_context").unwrap();
+        let err = recent
+            .call(
+                serde_json::json!({"character_id": "cap", "n": MAX_RECENT_CONTEXT + 1}),
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::BadRequest(_)));
     }
 
     #[tokio::test]
@@ -539,7 +774,10 @@ mod tests {
             .unwrap();
         let rb = reg.get("rollback_messages").unwrap();
         let err = rb
-            .call(serde_json::json!({"character_id": "bob", "index": 99}), true)
+            .call(
+                serde_json::json!({"character_id": "bob", "index": 99}),
+                true,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, AirpError::BadRequest(_)));
