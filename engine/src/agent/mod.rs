@@ -134,10 +134,8 @@ pub struct AgentLoop {
 
 impl AgentLoop {
     pub fn new(state: Arc<DaemonState>) -> Self {
-        Self {
-            state,
-            registry: tools::default_registry(),
-        }
+        let registry = tools::default_registry(state.clone());
+        Self { state, registry }
     }
 
     /// 跑一次 agent run，返回 SSE 事件流。
