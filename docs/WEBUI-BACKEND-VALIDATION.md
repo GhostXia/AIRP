@@ -1,19 +1,22 @@
 # WebUI 后端可靠性验证路线
 
 > 最后更新：2026-07-04
-> 目的：把当前“先用 WebUI 验证后端”的方向整理成可执行开发路线。本文里的 WebUI 是临时后端验证面，不是 AIRP 的长期产品 UI。
+> 目的：把当前“先用 WebUI 验证后端，并让用户先体验完整 agent 能力”的方向整理成可执行开发路线。本文里的 WebUI 是临时后端验证面和早期可用入口，不是 AIRP 的长期产品 UI。
 
 ## 1. 开发判断
 
-UI 设计已经在产品可用前消耗了过多时间。下一步不应该继续打磨桌面 UI 控件体验，而应该先证明 engine 作为无头 RP 后端是可靠、可观察、可复现的。
+UI 设计已经在产品可用前消耗了过多时间。下一步不应该继续打磨桌面 UI 控件体验，而应该先证明 engine 作为无头 RP 后端是可靠、可观察、可复现的，并让用户先通过简陋 WebUI 体验后端的完整 agent 能力。
 
 产品形态不变：
 
 - **长期产品 UI**：Tauri/Vue 桌面端。
-- **短期验证面**：浏览器 WebUI / HTTP harness。
+- **短期验证面与早期可用入口**：浏览器 WebUI / HTTP harness。
 - **稳定核心**：`engine` 是独立 HTTP/SSE 服务，不嵌进 Tauri 壳。
 
-WebUI 只回答一个问题：**后端能否稳定跑通最小 RP 闭环，让 UI 不再遮住后端不确定性？**
+WebUI 回答两个问题：
+
+1. **后端能否稳定跑通最小 RP 闭环，让 UI 不再遮住后端不确定性？**
+2. **用户能否先用简陋界面触达完整 agent 能力，为本地 UI 产品化争取时间？**
 
 ## 2. 当前起点
 
@@ -37,7 +40,7 @@ WebUI 只回答一个问题：**后端能否稳定跑通最小 RP 闭环，让 U
 - 角色列表与 fixture/upload 形式的导入路径。
 - session 列表、创建、选择。
 - chat 请求表单与 SSE 流式 transcript。
-- `/v1/agent/run` 请求表单。
+- `/v1/agent/run` 请求表单与 agent event log。
 - history、rollback、regen、state、state history 视图。
 - event log：request id、状态码、耗时、SSE 事件顺序、可见错误 body。
 - 两个或更多并发 chat stream 的测试入口。
@@ -49,6 +52,8 @@ WebUI 只回答一个问题：**后端能否稳定跑通最小 RP 闭环，让 U
 - 浏览器侧任意本地路径读取。
 - 产品插件/runtime 决策。
 - 让临时 WebUI 反向决定 Tauri UI 架构。
+
+界面风格裁定：M1 WebUI 仿 Claude Code / Codex 的 agent console，而不是 Open WebUI 的平台型聊天产品。默认结构是左侧角色/session/run history，中间 chat transcript，右侧或下方 agent event log + diagnostics。Open WebUI 只能借鉴 session 侧栏、model selector、markdown 渲染、轻量 settings drawer；不借鉴 RBAC、RAG、插件市场、PWA、企业认证、多模型平台或独立后端/数据库架构。
 
 ## 4. 验证里程碑
 
@@ -76,10 +81,11 @@ WebUI 只回答一个问题：**后端能否稳定跑通最小 RP 闭环，让 U
 - 列角色
 - 创建/列 session
 - 发一条 `/v1/chat/completions` 并按顺序渲染 token stream
+- 发起一轮 `/v1/agent/run` 并显示 `plan/tool_call/tool_result/delta/done/error`
 - 取 history 并做 regen/rollback
 - 失败时不吞状态码和错误 body
 
-验收标准：开发者能启动 engine，打开 WebUI，配置真实 provider，发一条消息，并看到流式回复和持久化 history。
+验收标准：开发者能启动 engine，打开 WebUI，配置真实 provider，发一条消息并看到流式回复和持久化 history；还能发起 agent run 并看到 agent 事件流。
 
 ### M2. 可靠性检查
 
@@ -152,6 +158,7 @@ M1-M3 可复现后，再把同一批行为接回桌面 UI：
 - data persistence 和 session/history 行为可观察。
 - 鉴权和错误行为可见。
 - 并发 stream 不破坏 id-keyed chat state。
+- agent run 的计划、工具调用、工具结果、文本增量、完成/错误事件可见。
 - 浏览器导入不依赖可信本地 `card_path`。
 - Tauri UI 可以按已知稳定的后端合同实现。
 

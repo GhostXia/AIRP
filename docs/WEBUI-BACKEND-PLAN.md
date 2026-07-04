@@ -11,13 +11,18 @@
 
 **WebUI 是临时后端可靠性验证 harness，不是产品 UI。**（DEV-GUIDE §3.3 L130、WEBUI-BACKEND-VALIDATION.md §1）
 
-它回答一个问题：**后端能否稳定跑通最小 RP 闭环，让 UI 不再遮住后端不确定性？**
+它回答两个问题：
+
+1. **后端能否稳定跑通最小 RP 闭环，让 UI 不再遮住后端不确定性？**
+2. **用户能否先通过简陋 WebUI 体验完整 agent 能力，让本地 UI 获得充足时间产品化？**
 
 - 长期产品 UI = Tauri/Vue 桌面端（不变）。
 - 短期验证面 = 浏览器 WebUI / HTTP harness。
 - 稳定核心 = `engine` 是独立 HTTP/SSE 服务，不嵌 Tauri（现状已如此）。
 
-**退出条件**（WEBUI-BACKEND-VALIDATION.md §7）：不经过 Tauri 也能从浏览器复现后端 chat streaming；data persistence / 鉴权 / 错误 / 并发 stream 可观察；浏览器导入不依赖可信本地 `card_path`。达成后 WebUI 可降为 developer-only 诊断页或删除，**不成为默认产品面**。
+**产品裁定**：早期用户真正需要的是“后端完整 agent 能力”，可以忍受 UI 简陋。因此 WebUI 的优先级不是视觉质量，而是把 chat、agent loop、工具事件、角色/会话、history/regen/rollback、state/history、settings/provider 错误面完整暴露出来；Tauri UI 则继续按正式产品体验打磨。
+
+**退出条件**（WEBUI-BACKEND-VALIDATION.md §7）：不经过 Tauri 也能从浏览器复现后端 chat streaming 和 agent run；data persistence / 鉴权 / 错误 / 并发 stream 可观察；浏览器导入不依赖可信本地 `card_path`；早期用户能在 WebUI 中触达完整后端能力。达成后 WebUI 可降为 developer-only 诊断页或删除，**不成为默认产品面**。
 
 ---
 
@@ -86,7 +91,8 @@
    - `/v1/chat/completions` 发消息 + SSE 流式 transcript 渲染
    - `/v1/chat/history` / `rollback` / `regen`
    - `/v1/characters/:id/state` + `state/history`
-   - `/v1/agent/run` 表单
+   - `/v1/agent/run` 表单 + SSE agent event log（`plan/tool_call/tool_result/delta/done/error`）
+   - provider/model/settings 错误展示，作为用户可用性的底线，不做静默失败
 3. **可靠性检查**（M2）：API key 缺失/错误、model 错误、provider timeout/SSE 断流、bearer 缺失、**两个并发 chat stream**、刷新页面、regen/rollback 后置状态。
 4. **数据安全边界**（M3）：浏览器导入走 multipart upload + engine 受控临时目录，**Web/browser 永久禁用 `card_path`**。
 5. **证据记录**（§5）：每次验证记 engine 启动命令、URL、status code、耗时、SSE 事件序、数据目录、失败截图/日志。
@@ -123,6 +129,35 @@ D:\AIRP-Dev/
 ```
 
 **技术选型理由**：无框架、无构建链——harness 越薄越好，避免它自己变成要维护的产品。浏览器不能直接执行 TypeScript，所以默认写 `app.js`（可配 JSDoc），用原生 ES modules + `fetch` + `EventSource`（SSE）。只有当手写 JS 明显阻碍验证时，才升级为 Vite/TypeScript。
+
+### 4.1.1 界面风格裁定
+
+**主方向：仿 Claude Code / Codex 的 agent console 风格，不仿 Open WebUI 的平台型产品架构。**
+
+理由：WebUI 的核心任务是让完整 agent 能力可见，而不是提供通用 AI 平台。它要优先展示 agent 如何工作：请求、流式回复、计划、工具调用、工具结果、错误、耗时、状态码、SSE 顺序、state/history 变化。Claude Code / Codex 式的“工作流 + 事件流 + 可折叠执行细节”更贴近这个任务。
+
+M1 默认信息架构：
+
+- 左侧：角色、session、run history。
+- 中间：chat transcript，支持 streaming delta 和 markdown。
+- 右侧或下方：agent event log + diagnostics。
+- 每个 `tool_call` / `tool_result` 可折叠，保留 raw JSON 查看入口。
+- settings/model/provider 放在轻量 drawer 或顶部控制条，不做完整设置中心。
+- 错误、鉴权状态、HTTP status、耗时、SSE event order 必须直接可见，不静默吞错。
+
+Open WebUI 只可借鉴少量通用聊天习惯：
+
+- session 侧栏。
+- model/provider selector。
+- markdown 渲染。
+- 简单 settings drawer。
+
+明确不借鉴：
+
+- RBAC / user groups / enterprise auth。
+- RAG、知识库、文件库、语音、PWA、插件市场、多模型平台。
+- Open WebUI 的后端、数据库、部署、权限和产品 IA。
+- 把 WebUI 做成独立平台或默认产品面。
 
 ### 4.2 engine 侧需要的最小改动
 
@@ -161,7 +196,7 @@ WebUI 启动时显示当前 engine 的鉴权状态：
 | 里程碑 | 产出 | 验收判据 |
 |---|---|---|
 | **M0** | 端点矩阵文档（§2.1 扩全两列：request/response shape + 已知缺口） | 矩阵每行来自源码 `route()` 核实，审计可复查 |
-| **M1** | `webui/` 单页 harness（不含 import） | 不经 Tauri，浏览器配真实 provider → 发消息 → 看到流式回复 + 持久化 history |
+| **M1** | `webui/` 单页 harness（不含 import） | 不经 Tauri，浏览器配真实 provider → 发消息 → 看到流式回复 + 持久化 history；能发起 `/v1/agent/run` 并看到 agent event log |
 | **M2** | 可靠性用例集 | §3.1.3 每条失败路径有可见错误解释；成功路径留下可预测文件/state；**两并发 stream 不破坏 id-keyed chat state** |
 | **M3** | 浏览器导入安全边界 | 浏览器调用方**不能**令 engine 读任意本地路径（`card_path` 永禁）；multipart 导入成功 |
 | **M4** | 证据回灌 | 验证记录写回 `WEBUI-BACKEND-VALIDATION.md`；Tauri UI 产品化基于已验证后端合同 |
@@ -193,7 +228,7 @@ WebUI 启动时显示当前 engine 的鉴权状态：
 ## 8. 立即执行顺序
 
 1. 开 `webui-m0-matrix` 分支，把 §2.1 矩阵补全（request/response shape + 缺口两列）→ PR。
-2. 开 `webui-m1-harness` 分支，落 `webui/` 单页（`index.html` + `app.js` + `style.css`），只做 version/settings/characters list/sessions/chat/history/state/agent-run；**不做 import**。`/health` 可同 PR 加，但不是 M1 阻塞项。
+2. 开 `webui-m1-harness` 分支，落 `webui/` 单页（`index.html` + `app.js` + `style.css`），只做 version/settings/characters list/sessions/chat/history/state/agent-run event log；**不做 import**。`/health` 可同 PR 加，但不是 M1 阻塞项。
 3. 开 `webui-m3-import-safety` 分支，落 multipart upload，并保证 Web/browser 无法用 `card_path` 令 engine 读任意本地路径 → PR。
 4. 开 `webui-m2-reliability` 分支，跑用例集，证据回填文档 → PR。
 5. M4（Tauri 回灌）不属于本计划，留给后续。
