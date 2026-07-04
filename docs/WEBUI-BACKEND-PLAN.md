@@ -27,29 +27,29 @@
 
 共 21 个端点 + `/version`：
 
-| 端点 | Method | 鉴权 | SSE | data 副作用 | 备注 |
-|---|---|---|---|---|---|
-| `/version` | GET | **否** | 否 | 无 | 在 `v1_routes` 外层，不走 `auth_middleware`（`test_audit_10` 守护） |
-| `/v1/chat/completions` | POST | 是 | **是** | chat log append | 核心；`Sse::new(build_sse_stream)` |
-| `/v1/agent/run` | POST | 是 | **是** | chat log + agent step | M_AGENT-1 多步 loop |
-| `/v1/chat/history` | POST | 是 | 否 | 读 |  |
-| `/v1/chat/rollback` | POST | 是 | 否 | chat log truncate | destructive |
-| `/v1/chat/regen` | POST | 是 | 否 | chat log rewrite |  |
-| `/v1/characters` | GET | 是 | 否 | 读 |  |
-| `/v1/characters/import` | POST | 是 | 否 | 写 `data/characters/` | **10MB body limit**；`card_path` 风险见 §4.3 |
-| `/v1/characters/:id/reextract` | POST | 是 | 否 | 重写 assets |  |
-| `/v1/characters/:id/avatar` | GET | 是 | 否 | 读 |  |
-| `/v1/characters/:id/state` | GET | 是 | 否 | 读 |  |
-| `/v1/characters/:id/state/history` | GET | 是 | 否 | 读 |  |
-| `/v1/characters/:id/state/schema` | GET | 是 | 否 | 读 |  |
-| `/v1/scenes` | GET/POST | 是 | 否 | POST 写 |  |
-| `/v1/scenes/:id` | GET | 是 | 否 | 读 |  |
-| `/v1/scenes/:id/characters` | POST | 是 | 否 | 写 |  |
-| `/v1/models` | GET | 是 | 否 | 读 |  |
-| `/v1/presets` | GET | 是 | 否 | 读 |  |
-| `/v1/presets/:id` | GET | 是 | 否 | 读 |  |
-| `/v1/sessions/:character_id` | GET/POST | 是 | 否 | POST 创建 session 目录 |  |
-| `/v1/settings` | GET/POST | 是 | 否 | POST 写 `config.json` | 热重载 |
+| 端点 | Method | 鉴权 | SSE | Request shape | Response shape | data 副作用 / WebUI 缺口 |
+|---|---|---|---|---|---|---|
+| `/version` | GET | **否** | 否 | none | `{name, version}` | 无副作用；M1 health ping 可先用它 |
+| `/v1/chat/completions` | POST | 是 | **是** | `ChatCompletionRequest`：`message` + `user_profile` 必填；`character_id/session_id/model/endpoint/api_key/...` 可选 | SSE `data: {text}`，结束帧由 stream 完成 | append chat log；M1 核心路径；WebUI 自编号 SSE event order |
+| `/v1/agent/run` | POST | 是 | **是** | `AgentRunRequest` = `ChatCompletionRequest` + `max_steps/token_budget/wall_clock_secs` | SSE `AgentEvent`：`plan/tool_call/tool_result/delta/done` | append chat log + agent step；M1 只做表单和事件日志，不做产品化渲染 |
+| `/v1/chat/history` | POST | 是 | 否 | `{character_id}` | `ChatLog` | 读；M1 用于刷新持久化 history |
+| `/v1/chat/rollback` | POST | 是 | 否 | `{character_id, message_index}` | `ChatLog` | truncate chat log；destructive，WebUI 要二次确认或明显标注 |
+| `/v1/chat/regen` | POST | 是 | 否 | `{character_id}` | `ChatLog` | rewrite/delete last assistant message；WebUI 标注会修改历史 |
+| `/v1/characters` | GET | 是 | 否 | none | `string[]` | 读；M1 只列角色，不导入 |
+| `/v1/characters/import` | POST | 是 | 否 | 当前 JSON：`{character_id?, card_path?, card_json?, card_png_base64?}`；M3 新增 multipart | `{character_id, card_format}` | 写 `data/characters/`；10MB body limit；M1 禁用，M3 前 Web/browser 永不发 `card_path` |
+| `/v1/characters/:id/reextract` | POST | 是 | 否 | path `character_id` | JSON asset summary | 重写 card assets；非 M1 范围，后续诊断页可加 |
+| `/v1/characters/:id/avatar` | GET | 是 | 否 | path `character_id` | `image/png` bytes | 读；M1 可选预览，不阻塞 |
+| `/v1/characters/:id/state` | GET | 是 | 否 | path `character_id` | raw `live.json` | 读；不存在返回 404，WebUI 要显示 empty/missing 区别 |
+| `/v1/characters/:id/state/history` | GET | 是 | 否 | path `character_id` + query `limit?` | JSON array parsed from history JSONL | 读；`limit` clamp 1..1000 |
+| `/v1/characters/:id/state/schema` | GET | 是 | 否 | path `character_id` | raw `schema.json` | 读；M1 可选，不阻塞 |
+| `/v1/scenes` | GET/POST | 是 | 否 | GET none；POST `SceneConfig` | GET `string[]`；POST `{scene_id, path}` | POST 写 scene；非 M1 核心 |
+| `/v1/scenes/:id` | GET | 是 | 否 | path `scene_id` | raw `scene.json` | 读；非 M1 核心 |
+| `/v1/scenes/:id/characters` | POST | 是 | 否 | `{character_id, role?, intro?}` | `{scene_id, character_count}` | 写 scene；非 M1 核心 |
+| `/v1/models` | GET | 是 | 否 | none | upstream `/models` JSON passthrough | 代理上游；依赖 `endpoint/api_key`；M1 用于 provider smoke |
+| `/v1/presets` | GET | 是 | 否 | none | `string[]` | 读；M1 可列，不做编辑 |
+| `/v1/presets/:id` | GET | 是 | 否 | path `preset_id` | `TavernPrompt[]` | 读；无文件返回 404 |
+| `/v1/sessions/:character_id` | GET/POST | 是 | 否 | path `character_id` | GET `SessionId[]`；POST `SessionId` | POST 创建 session 目录；M1 要支持 list/create/select |
+| `/v1/settings` | GET/POST | 是 | 否 | GET none；POST `PartialAppConfig` | `SettingsView`，`api_key` 脱敏 | POST 写 `data/settings.json` 并热重载；WebUI 不做 access key 管理 UI |
 
 ### 2.2 安全姿态（源码核实）
 
