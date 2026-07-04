@@ -301,10 +301,19 @@ pub(crate) fn import_card_to_disk(
     let (card_format, json_str, png_bytes): (String, String, Option<Vec<u8>>) =
         if let Some(path) = card_path {
             // path-first 主路径：引擎读盘（守不变式6——大 blob 不经线协议）。
-            // ⚠️ AUDIT-RISK: 服务端任意绝对路径读。当前"可信本地 UI + 用户经
-            // plugin-dialog 亲选"模型下可接受；引擎转多客户端/web 或放开第三方
-            // widget 发 import intent 时，必须在此处加调用方可信度校验/capability
-            // 门控，否则为任意文件读漏洞。详见 docs/RISK-REGISTER.md RR-001。
+            // ⚠️ RR-001 / 审计 2026-07-04：card_path = 服务端任意绝对路径读。
+            // 门控：仅当 engine 启动时设了 AIRP_ALLOW_LOCAL_PATH=1 才开放此分支。
+            // Tauri sidecar 启动脚本带此变量；对外暴露的 engine 不带 → Web/远端
+            // 调用方即使伪造 JSON body 带 card_path 也被拒。不可伪造（env 在进程
+            // 启动时定，非请求头）。审计裁定：Web 永不走 card_path，即使持 bearer。
+            let allow_local_path = std::env::var("AIRP_ALLOW_LOCAL_PATH")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !allow_local_path {
+                return Err(AirpError::BadRequest(
+                    "card_path 任意路径读已禁用（AIRP_ALLOW_LOCAL_PATH 未设）。Web/远端调用方请用 multipart 上传或 card_png_base64/card_json。".to_string(),
+                ));
+            }
             let bytes = fs::read(path).map_err(|e| {
                 AirpError::BadRequest(format!("读取 card_path 失败: {}", e))
             })?;

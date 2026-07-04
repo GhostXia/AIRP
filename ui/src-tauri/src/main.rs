@@ -81,7 +81,8 @@ fn main() {
                     cmd = cmd
                         .args(["daemon", "--port", port_arg.as_str()])
                         .current_dir(&data_root)
-                        .env("AIRP_DATA_DIR", &data_root);
+                        .env("AIRP_DATA_DIR", &data_root)
+                        .env("AIRP_ALLOW_LOCAL_PATH", "1");
                     match cmd.spawn() {
                         Ok((mut rx, _child)) => {
                             // Single receiver yields all CommandEvent variants

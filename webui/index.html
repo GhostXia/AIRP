@@ -38,6 +38,12 @@
         <h3>Sessions <button id="btn-new-session">+</button></h3>
         <select id="sess-select" size="6"></select>
       </section>
+      <section>
+        <h3>Import (M3)</h3>
+        <input type="file" id="import-file" accept=".png,.json,.card" />
+        <button id="btn-import">上传导入</button>
+        <div id="import-result" class="hint">—</div>
+      </section>
     </aside>
 
     <!-- Center: chat -->
@@ -58,6 +64,12 @@
         <textarea id="agent-input" rows="2" placeholder="输入" model ">然后调 /v1/agent/run"></textarea>
         <button id="btn-agent-run">Run</button>
         <pre id="agent-output" class="mono">—</pre>
+      </div>
+      <div id="concurrent-test">
+        <h4>Concurrent Stream Test (M2)</h4>
+        <div>两条并发 chat stream，验证 id-keyed state 不串扰：</div>
+        <button id="btn-concurrent">启动两条并发流</button>
+        <div id="concurrent-status" class="hint">—</div>
       </div>
     </main>
 

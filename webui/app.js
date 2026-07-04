@@ -287,6 +287,107 @@
   // ── clear log ────────────────────────────────────────────────────────────
   btnClearLog.addEventListener('click', () => { eventLog.innerHTML = ''; });
 
+  // ── M3: import via multipart/base64 (NEVER card_path) ───────────────────
+  // 审计裁定：Web 永不走 card_path（RR-001）。浏览器读文件 → base64 →
+  // card_png_base64 或 card_json。engine 侧 AIRP_ALLOW_LOCAL_PATH 未设时
+  // card_path 被拒，此为纵深防御；WebUI 自身亦不发 card_path。
+  const importFile = $('#import-file');
+  const btnImport = $('#btn-import');
+  const importResult = $('#import-result');
+
+  btnImport.addEventListener('click', async () => {
+    const file = importFile.files[0];
+    if (!file) { importResult.textContent = '请先选文件'; return; }
+    importResult.textContent = '上传中…';
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
+    let body;
+    if (isPng) {
+      // base64 encode
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      const b64 = btoa(bin);
+      body = { card_png_base64: b64 };
+    } else {
+      // treat as JSON text
+      const text = new TextDecoder().decode(bytes);
+      body = { card_json: text };
+    }
+    const r = await api('POST', '/v1/characters/import', body);
+    if (r.ok) {
+      importResult.textContent = '✓ 导入成功: ' + (r.data?.character_id || '?');
+      refreshChars();
+    } else {
+      importResult.textContent = '✗ ' + (r.status || 'err') + ': ' + (r.data || r.text);
+    }
+  });
+
+  // ── M2: concurrent stream test ───────────────────────────────────────────
+  // 启动两条并发 chat.send，验证 id-keyed chat state 不串扰（PR #6 修的 race）。
+  const btnConcurrent = $('#btn-concurrent');
+  const concurrentStatus = $('#concurrent-status');
+
+  btnConcurrent.addEventListener('click', async () => {
+    if (!selectedChar) { concurrentStatus.textContent = '请先选角色'; return; }
+    concurrentStatus.textContent = '启动两条并发流…';
+    const t0 = performance.now();
+    const promises = [
+      doSendText('并发流 A: 你好'),
+      doSendText('并发流 B: 再见'),
+    ];
+    await Promise.all(promises);
+    const ms = Math.round(performance.now() - t0);
+    logEvent('CONCURRENT', '/v1/chat/completions ×2', 200, ms, '两条流均完成');
+    concurrentStatus.textContent = '✓ 两条流完成 (' + ms + 'ms)。检查 chat log 顺序：u-A → a-A → u-B → a-B 应基本交替，无串扰。';
+  });
+
+  // 抽出 doSend 的纯逻辑供并发复用（不发 user DOM、不读 input）
+  async function doSendText(text) {
+    if (!selectedChar) return;
+    const url = base + '/v1/chat/completions';
+    const t0 = performance.now();
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ character_id: selectedChar, messages: [{ role: 'user', content: text }] }),
+      });
+      if (!res.ok) {
+        logEvent('POST', '/v1/chat/completions', res.status, Math.round(performance.now() - t0));
+        return;
+      }
+      const msgEl = appendMsg('assistant', '', true);
+      let acc = '';
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') break;
+            try {
+              const chunk = JSON.parse(data);
+              if (chunk.body_chunk !== undefined) {
+                acc += chunk.body_chunk;
+                msgEl.textContent = acc;
+              }
+            } catch {}
+          }
+        }
+      }
+      msgEl.classList.remove('streaming');
+    } catch (e) {
+      logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
+    }
+  }
+
   // ── auto-connect on load ─────────────────────────────────────────────────
   setTimeout(connect, 300);
 })();
