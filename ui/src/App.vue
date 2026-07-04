@@ -6,7 +6,6 @@ import { createBus, isTauriEnvironment } from "./protocol/bus-factory";
 import { validateEnvelope } from "./protocol/guard";
 import { stateStore, setState, patchState, applyJsonPatch } from "./state/store";
 import { registerBuiltins, applyManifestMessage } from "./registry";
-import { installAgentTestHarness } from "./agent-test";
 import BlueprintRenderer from "./components/BlueprintRenderer.vue";
 
 // Register first-party widgets into the open registry.
@@ -126,6 +125,31 @@ function refreshCharacters(): void {
   onIntent("characters.list", {});
 }
 
+type AgentTestInstaller = {
+  installAgentTestHarness: (ctx: {
+    dispatchIntent: (name: string, params?: Json) => void;
+    getBlueprint: () => Blueprint | null;
+    getState: () => typeof stateStore;
+    getSelectedCharacterId: () => string;
+    getBusError: () => string | null;
+  }) => unknown;
+};
+
+const agentTestModules = import.meta.glob<AgentTestInstaller>("./agent-test.ts");
+
+async function installOptionalAgentTestHarness(): Promise<void> {
+  const load = Object.values(agentTestModules)[0];
+  if (!load) return;
+  const mod = await load();
+  mod.installAgentTestHarness({
+    dispatchIntent: onIntent,
+    getBlueprint: () => blueprint.value,
+    getState: () => stateStore,
+    getSelectedCharacterId: () => selectedCharacterId.value,
+    getBusError: () => busError.value,
+  });
+}
+
 onMounted(async () => {
   try {
     const built = await createBus();
@@ -143,13 +167,7 @@ onMounted(async () => {
       setState("w-characters", { ids: [], loaded: false });
       refreshCharacters();
     }
-    installAgentTestHarness({
-      dispatchIntent: onIntent,
-      getBlueprint: () => blueprint.value,
-      getState: () => stateStore,
-      getSelectedCharacterId: () => selectedCharacterId.value,
-      getBusError: () => busError.value,
-    });
+    await installOptionalAgentTestHarness();
   } catch (err) {
     console.error("[App] createBus failed:", err);
     busError.value = String(err ?? "createBus failed");

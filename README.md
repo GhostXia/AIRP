@@ -121,6 +121,19 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记
 - [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档审计后的待确认项
 
+## Agent UI Test Harness and user control
+
+`ui/src/agent-test.ts` is a temporary development/test harness for automated UI verification. It can expose `window.__AIRP_AGENT_TEST__` when explicitly enabled in dev/test mode, so an agent runner such as Codex browser control or Playwright can drive the UI and inspect snapshots.
+
+This harness is not a normal user feature and is not required for role-play usage. It is default-off and should stay limited to testing, but users who want to avoid any agent-control surface can remove it before building their own copy:
+
+```powershell
+Remove-Item ui\src\agent-test.ts
+Remove-Item ui\src\agent-test.test.ts
+```
+
+After deleting those files, run the manual GitHub Actions build again. `ui/src/App.vue` loads this module only when the file exists, so no source-code edit is required. Fork users can do this in their fork before running **Manual build**; the resulting artifact will not include this harness.
+
 ## License
 
 MIT OR Apache-2.0.

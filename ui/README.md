@@ -68,6 +68,7 @@ cargo test -p airp-ui
 - Chat state is id-keyed as `{ messages, order }`. `BusRelay` no longer uses `chat_lock`; each `chat.send` opens the user and assistant rows with one patch envelope, then streams into `/messages/{assistant_id}/text`.
 - WebUI is a temporary backend reliability harness only. Product UI work continues here in Tauri/Vue.
 - Agent UI Test Harness is dev/test-only. Enable with `?airp_agent_test=1`, `localStorage.AIRP_AGENT_TEST=1`, or `VITE_AIRP_AGENT_TEST=1`; then use `window.__AIRP_AGENT_TEST__` from Codex browser control or Playwright.
+- Users who do not want any agent-control surface can delete `src/agent-test.ts` and `src/agent-test.test.ts` before building. `App.vue` loads the harness only when the module exists.
 
 ## CI Artifacts
 
