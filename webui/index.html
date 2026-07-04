@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIRP Engine Console</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <!-- Top bar -->
+  <header id="topbar">
+    <span class="logo">AIRP Engine Console</span>
+    <span id="conn-status" class="status-dot dot-unknown"></span>
+    <span id="conn-text">未连接</span>
+    <label>Engine URL: <input id="engine-url" value="http://127.0.0.1:8000" /></label>
+    <label>Bearer: <input id="bearer-token" type="password" placeholder="(空=无鉴权)" /></label>
+    <button id="btn-connect">连接</button>
+  </header>
+
+  <!-- Three-panel body -->
+  <div id="body">
+    <!-- Left: character + session -->
+    <aside id="left-panel">
+      <section id="health-section">
+        <h3>Engine</h3>
+        <div id="health-info">—</div>
+      </section>
+      <section>
+        <h3>Settings</h3>
+        <pre id="settings-display" class="mono">—</pre>
+      </section>
+      <section>
+        <h3>Characters <button id="btn-refresh-chars">↻</button></h3>
+        <select id="char-select" size="6"></select>
+      </section>
+      <section>
+        <h3>Sessions <button id="btn-new-session">+</button></h3>
+        <select id="sess-select" size="6"></select>
+      </section>
+    </aside>
+
+    <!-- Center: chat -->
+    <main id="center-panel">
+      <div id="chat-log"></div>
+      <div id="chat-composer">
+        <textarea id="chat-input" rows="3" placeholder="输入消息… (Ctrl+Enter 发送)"></textarea>
+        <div id="chat-actions">
+          <button id="btn-send">发送</button>
+          <button id="btn-history">History</button>
+          <button id="btn-regen">↻ Regenerate</button>
+          <button id="btn-rollback">↩ Rollback</button>
+        </div>
+      </div>
+      <hr />
+      <div id="agent-runner">
+        <h4>Agent Run</h4>
+        <textarea id="agent-input" rows="2" placeholder="输入" model ">然后调 /v1/agent/run"></textarea>
+        <button id="btn-agent-run">Run</button>
+        <pre id="agent-output" class="mono">—</pre>
+      </div>
+    </main>
+
+    <!-- Right: event log / diagnostics -->
+    <aside id="right-panel">
+      <h3>Event Log <button id="btn-clear-log">清</button></h3>
+      <div id="event-log"></div>
+    </aside>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
