@@ -25,7 +25,7 @@
 
 **扩展开放模型**：受控开放——丰富结构化钩子（工具/事件/宏/命令/技能）对第三方开放，但过 capability 门 + 沙箱；**拒执行 agent/第三方生成的任意代码**（UI 只渲染声明式 Blueprint，esm 第三方 widget 走 opaque-origin iframe 沙箱 + 用户同意）。
 
-**反冗余门禁（2026-07-04 审计补充）**：任何临时机制、测试面、兼容层或候选方案落地后，必须收成**一个默认路径 + 一个关闭/迁移动作**。候选列表要改为当前决策，不得继续作为开放题悬挂。普通用户文档不得暴露内部测试文件、备选实现或二级删除步骤；测试代码可以覆盖实现，但不能成为用户关闭功能的必要操作。若要新增第二套入口（例如 WebUI harness、Tauri dev command、临时 widget 与 `window.__AIRP_AGENT_TEST__` 并存），必须先删或降级旧入口，并在 PR/提交说明里写清为什么一个入口不足。
+**反冗余门禁（2026-07-04 审计补充）**：任何临时机制、测试面、兼容层或候选方案落地后，必须收成**一个默认路径 + 一个关闭/迁移动作**。候选列表要改为当前决策，不得继续作为开放题悬挂。普通用户文档不得暴露内部测试文件、备选实现或二级删除步骤；测试代码可以覆盖实现，但不能成为用户关闭功能的必要操作。若要新增第二套 agent 前端控制入口（例如 WebUI 控制 harness、Tauri dev command、临时 widget 与 `window.__AIRP_AGENT_TEST__` 并存），必须先删或降级旧入口，并在 PR/提交说明里写清为什么一个入口不足；这不限制后端可靠性 WebUI。
 
 **🎯 首要目标（用户 2026-07-03 定，优先级高于一切 Phase/Task 排序）**：**开发出可执行文件并能简单运行。**
 
@@ -251,7 +251,7 @@ data/
 2. 确认 `data/settings.json` 使用真实可用的 `endpoint` / `api_key` / `model`，不要把空 key 示例当运行时验收。
 3. 开发态最简闭环：启动 engine（例如 `cargo run -p airp-core -- daemon --port 8000`），再 `cd ui; npm run tauri dev`，选/导入角色，发一条消息，确认收到流式回复。
 4. 打包态闭环：`cd ui; .\build-tauri.ps1`，启动产物，重复最简对话；记录 artifact 路径、启动方式、settings 来源、sidecar 数据目录和失败时 UI 可见错误。
-5. 若后端可靠性仍不透明，先做临时 WebUI/HTTP harness：不做产品 UI，只验证 engine API、SSE、鉴权、数据目录、角色/会话读写和并发错误。
+5. 若后端可靠性仍不透明，先做临时 WebUI/HTTP harness：不做产品 UI，只验证 engine API、SSE、鉴权、数据目录、角色/会话读写和并发错误。执行路线见 [WEBUI-BACKEND-VALIDATION.md](WEBUI-BACKEND-VALIDATION.md)。
 6. 给 agent 补 UI 自测能力：沿用现有 `ui/src/agent-test.ts` 一文件测试面接 Codex browser control 或 Playwright，使 agent 能自行跑 GUI smoke 并产出截图/状态证据；不要再造平行控制接口。
 7. 跑 Perf Spike：用 10 万条消息验证 `virtual-window.ts` 路径和 ChatWidget 不退化。
 8. 继续功能时优先二选一：Task 1.3 世界书引擎，或 Task 1.4 会话操作（swipe/edit/delete/regenerate）。

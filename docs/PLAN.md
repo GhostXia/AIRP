@@ -113,11 +113,12 @@
 - **目的**：快速验证 engine 的 `/v1/*` API、SSE 流式、鉴权、数据目录、角色/世界书/会话读写、并发和错误恢复。后端不稳时，先用 WebUI/HTTP harness 把 engine 行为打实，再把成熟能力接回 Tauri UI。
 - **约束**：WebUI 不走 `card_path` 任意路径读；远端/浏览器导入只能用 multipart/streaming upload 或测试 fixture。WebUI 产生的临时状态、调试面板和 harness 代码不得污染长期桌面 UI 交互。
 - **退出条件**：当 engine API、数据层和流式对话在临时 WebUI 中稳定可复现，Tauri UI 继续慢慢做产品化控件、布局、可访问性和性能。
+- **执行路线**：详见 [WEBUI-BACKEND-VALIDATION.md](WEBUI-BACKEND-VALIDATION.md)。先做端点矩阵和最小 HTTP/SSE 验证面，再把稳定行为回灌到 Tauri UI。
 
 ### 2.4 Agent UI Test Harness（临时受控测试接口）
 
 - **目标**：给开发 agent 一个可程序化控制前端 UI 的能力，让 agent 能自己启动 UI、选择角色、发消息、观察 DOM/状态/日志、截图、断言结果，避免每次 GUI 验收都靠人工目测。
-- **当前形态（已收口）**：一个可删除的运行时模块 `ui/src/agent-test.ts`，显式开启后暴露 `window.__AIRP_AGENT_TEST__`，由 Codex browser control 或 Playwright 调用。它是当前唯一默认测试面；dev-only widget、Tauri dev command、WebUI harness 只能作为替换方案提出，不得与它并行新增，除非先说明为什么一个入口不足并移除/降级旧入口。
+- **当前形态（已收口）**：一个可删除的运行时模块 `ui/src/agent-test.ts`，显式开启后暴露 `window.__AIRP_AGENT_TEST__`，由 Codex browser control 或 Playwright 调用。它是当前唯一默认测试面；dev-only widget、Tauri dev command、WebUI 前端控制面只能作为替换方案提出，不得与它并行新增，除非先说明为什么一个入口不足并移除/降级旧入口。这里限制的是 agent 驱动 GUI 的控制入口，不限制 §2.3 的后端可靠性 WebUI。
 - **用户关闭方式**：删除 `ui/src/agent-test.ts` 后重新手动构建；`App.vue` 只在文件存在时加载该模块，相关单测不阻断无模块构建。普通用户文档只暴露这一条关闭路径。
 - **安全边界**：默认关闭，只在 dev/test build 或显式 env flag 开启；能力白名单；不得暴露任意文件读写、任意命令执行、未授权 shell/plugin 权限；不得成为第三方扩展默认能力。
 - **验收能力**：至少能执行 `load fixture → select/import character → send chat.send → wait streamed reply → read state/DOM → screenshot/log`，并能在失败时输出可复现证据。

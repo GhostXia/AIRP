@@ -114,6 +114,7 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 
 - [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)：当前开发交接与工程纪律
 - [docs/PLAN.md](docs/PLAN.md)：长期设计计划
+- [docs/WEBUI-BACKEND-VALIDATION.md](docs/WEBUI-BACKEND-VALIDATION.md)：临时 WebUI 后端可靠性验证路线
 - [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)：四个源项目的资产吸收/北极星降级决策
 - [docs/UI-PROTOCOL-DECISION.md](docs/UI-PROTOCOL-DECISION.md)：UI 协议与 Widget 的采纳/降级决策
 - [docs/PARTS.md](docs/PARTS.md)：旧仓能力拆件清单

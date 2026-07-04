@@ -21,8 +21,9 @@
 
 0. **2026-07-04 已拍板的开发方向**
    - WebUI 是临时后端可靠性验证面，用来验证 engine API/SSE/数据层/错误恢复，不替代 Tauri/Vue 桌面 UI。
+   - 已新增 [WEBUI-BACKEND-VALIDATION.md](WEBUI-BACKEND-VALIDATION.md) 收口 WebUI-first 的执行路线：先端点矩阵和最小 HTTP/SSE 验证面，再把稳定行为回灌到 Tauri UI。
    - 桌面 UI 是长期产品面，可以慢慢推进控件、布局、交互和性能。
-   - agent 前端自测能力已先按一文件测试面落地：`ui/src/agent-test.ts` 暴露 dev/test-only `window.__AIRP_AGENT_TEST__`。临时控件/插件、Tauri dev-only command、WebUI harness 不再是并行候选；只有当现入口无法提供 GUI smoke 证据链时，才作为替换方案评估。
+   - agent 前端自测能力已先按一文件测试面落地：`ui/src/agent-test.ts` 暴露 dev/test-only `window.__AIRP_AGENT_TEST__`。临时控件/插件、Tauri dev-only command、WebUI 前端控制面不再是并行候选；只有当现入口无法提供 GUI smoke 证据链时，才作为替换方案评估。这里不限制上条的后端可靠性 WebUI。
 
 1. **Task 1.1 状态怎么写**
    - 已确认：PR #3 已实现 path-first 角色卡导入 UI，PR #4 已加固派生 ID。
