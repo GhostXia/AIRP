@@ -12,7 +12,7 @@ import { validateEnvelope } from "./guard";
 import type { Envelope, Body, Blueprint, WidgetDef, JsonPatch } from "./types";
 
 function env(body: Body, overrides?: Partial<Envelope>): Envelope {
-  return { v: 1, id: "t1", ts: 1000, src: "gateway", body, ...overrides };
+  return { v: 1, id: "t1", ts: 1000, src: "engine", body, ...overrides };
 }
 
 const VALID_BP: Blueprint = {

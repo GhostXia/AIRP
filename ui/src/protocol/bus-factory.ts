@@ -2,8 +2,8 @@
  * Bus factory — picks the right {@link AgentBus} for the current environment
  * (PLAN task B, ②).
  *
- * Inside the Tauri shell the UI talks to the Rust core (and onward to
- * AIRP-Gateway) via {@link TauriBus}; everywhere else (web preview, vitest,
+ * Inside the Tauri shell the UI talks to the Rust core / engine bridge via
+ * {@link TauriBus}; everywhere else (web preview, vitest,
  * `vite dev` outside Tauri) it falls back to {@link MockBus} so the scaffold
  * renders with no backend.
  *

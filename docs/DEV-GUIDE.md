@@ -3,7 +3,7 @@
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
 > **配套设计文档（背景/依据，动手前通读）**：[PLAN.md](PLAN.md)（总设计+待决项）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（四源项目吸收资产/降级北极星）· [PARTS.md](PARTS.md)（四仓零件清单+file:line）· [TAVERN-PARITY.md](TAVERN-PARITY.md)（酒馆功能对标+扩展接口+解耦重组）· [HERMES-MEMORY.md](HERMES-MEMORY.md)（自进化记忆）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
-> 最后更新：2026-07-03
+> 最后更新：2026-07-04
 
 ---
 
@@ -24,6 +24,8 @@
    - base64 仅在**无真实路径**（未来 web/拖拽内存文件）时作 fallback；web 期优先用 multipart/二进制上传避 base64 的 33% 膨胀（延后）。**判据：数据要落进模型/store/日志之前，先问"它多大？大就传引用、且别驻留"。**
 
 **扩展开放模型**：受控开放——丰富结构化钩子（工具/事件/宏/命令/技能）对第三方开放，但过 capability 门 + 沙箱；**拒执行 agent/第三方生成的任意代码**（UI 只渲染声明式 Blueprint，esm 第三方 widget 走 opaque-origin iframe 沙箱 + 用户同意）。
+
+**反冗余门禁（2026-07-04 审计补充）**：任何临时机制、测试面、兼容层或候选方案落地后，必须收成**一个默认路径 + 一个关闭/迁移动作**。候选列表要改为当前决策，不得继续作为开放题悬挂。普通用户文档不得暴露内部测试文件、备选实现或二级删除步骤；测试代码可以覆盖实现，但不能成为用户关闭功能的必要操作。若要新增第二套入口（例如 WebUI harness、Tauri dev command、临时 widget 与 `window.__AIRP_AGENT_TEST__` 并存），必须先删或降级旧入口，并在 PR/提交说明里写清为什么一个入口不足。
 
 **🎯 首要目标（用户 2026-07-03 定，优先级高于一切 Phase/Task 排序）**：**开发出可执行文件并能简单运行。**
 
@@ -151,7 +153,7 @@ data/
 - **已实现（代码完成，当前 AIRP-Dev 集成后仍需验收）**：Widget Registry（vue/module/esm 三类）、BlueprintRenderer、WidgetHost（错误隔离）、RFC6902 state store（`test` op 已预校验，失败不半应用）、首方 widget（chat/emotion/memory/inventory/quest/map/card + clock）、虚拟滚动（`virtual-window.ts` `computeWindow`）、esm 沙箱（opaque-origin iframe，`postMessage` targetOrigin 已收紧到 `"null"`）、consent 门（授权绑 `{type,version,source}` + localStorage 持久化）、边界 guard、Tauri `.exe` 打包、id-keyed chat 消息模型。历史事实：AIRP-State-Protocol 原项目最早验证过打包 exe 可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
 - **已落地（MVP 第一步）**：`BusRelay`（`ui/src-tauri/src/bus.rs`）已从 mock 改为 Tauri 壳内 IPC→Rust 核→engine HTTP `/v1/chat/completions`，并消费 SSE 回填 chat state。`bus-factory.ts` 仍按 `__TAURI_INTERNALS__` 选 bus，接线点清楚。
 - **半永久 Blueprint / RP=UI Profile**：首次进 RP → agent 推导 Blueprint → 存储+UUID；同一 RP 以后直接读。RP 类型定画像（恋爱→聊天、经营→数据面板、桌游→卡牌、跑团→属性栏）。
-- **Agent UI Test Harness（已落地最小入口）**：`ui/src/agent-test.ts` 提供 dev/test-only `window.__AIRP_AGENT_TEST__`。显式开启条件：`?airp_agent_test=1`、`localStorage.AIRP_AGENT_TEST=1` 或 `VITE_AIRP_AGENT_TEST=1`。Codex 浏览器插件或 Playwright 可调用 `sendChat` / `selectCharacter` / `refreshCharacters` / `getSnapshot` / `getState` / `getText` / `waitForText` 做 GUI smoke。默认关闭，白名单能力，不给任意文件/命令权限，不进入生产扩展权限。
+- **Agent UI Test Harness（已落地且已收口）**：当前唯一默认测试面是 `ui/src/agent-test.ts` 的 dev/test-only `window.__AIRP_AGENT_TEST__`。显式开启条件：`?airp_agent_test=1`、`localStorage.AIRP_AGENT_TEST=1` 或 `VITE_AIRP_AGENT_TEST=1`。Codex 浏览器插件或 Playwright 可调用 `sendChat` / `selectCharacter` / `refreshCharacters` / `getSnapshot` / `getState` / `getText` / `waitForText` 做 GUI smoke。默认关闭，白名单能力，不给任意文件/命令权限，不进入生产扩展权限。用户若要完全关闭 agent 控制面，只删除 `ui/src/agent-test.ts` 后重新手动构建；不要再引入第二套 dev widget/Tauri command/WebUI 控制面，除非先按反冗余门禁替换旧入口。
 - **必须跑 Perf Spike**（见 §7）——代码有虚拟滚动但从没真跑过 10 万条验证。
 
 ---
@@ -250,7 +252,7 @@ data/
 3. 开发态最简闭环：启动 engine（例如 `cargo run -p airp-core -- daemon --port 8000`），再 `cd ui; npm run tauri dev`，选/导入角色，发一条消息，确认收到流式回复。
 4. 打包态闭环：`cd ui; .\build-tauri.ps1`，启动产物，重复最简对话；记录 artifact 路径、启动方式、settings 来源、sidecar 数据目录和失败时 UI 可见错误。
 5. 若后端可靠性仍不透明，先做临时 WebUI/HTTP harness：不做产品 UI，只验证 engine API、SSE、鉴权、数据目录、角色/会话读写和并发错误。
-6. 给 agent 补 UI 自测能力：先做 dev/test-only 的最小控制接口或 Playwright bridge，使 agent 能自行跑 GUI smoke 并产出截图/状态证据。
+6. 给 agent 补 UI 自测能力：沿用现有 `ui/src/agent-test.ts` 一文件测试面接 Codex browser control 或 Playwright，使 agent 能自行跑 GUI smoke 并产出截图/状态证据；不要再造平行控制接口。
 7. 跑 Perf Spike：用 10 万条消息验证 `virtual-window.ts` 路径和 ChatWidget 不退化。
 8. 继续功能时优先二选一：Task 1.3 世界书引擎，或 Task 1.4 会话操作（swipe/edit/delete/regenerate）。
 
@@ -296,8 +298,8 @@ window.__AIRP_AGENT_TEST__.getSnapshot()
 - **格式导入 fixture**：用**真实酒馆导出文件**（PNG 卡/世界书 JSON/预设 JSON）做测试样本，不是自造的。
 - **Perf Spike**：10 万条假消息 60fps + 内存封顶。
 - **Agent UI Test Harness**：`npm run test -- --run src/agent-test.test.ts` 覆盖开关、动作 dispatch、snapshot、DOM text/wait 语义。若用户删除 `src/agent-test.ts` 关闭测试面，该测试不阻断手动构建。GUI 层后续接 Codex browser plugin 或 Playwright，必须产出截图/状态证据。
-- **数据传输纪律门（§0 不变式6）——现为 review 门，未来落 workflow**：
-  - **现在（AIRP 无 CI）= 强制 PR review 检查项**：任何导入/大数据改动，review 必须核对——传给引擎/模型/前端的是**路径/引用**还是**大 blob**？intent/Envelope/store 里有没有塞 base64 或大字符串？有=打回。
+- **数据传输纪律门（§0 不变式6）——现为 review 门，未来落自动 workflow**：
+  - **现在（手动打包 CI 存在，但非 PR gate）= 强制 PR review 检查项**：任何导入/大数据改动，review 必须核对——传给引擎/模型/前端的是**路径/引用**还是**大 blob**？intent/Envelope/store 里有没有塞 base64 或大字符串？有=打回。
   - **未来 = 自动化门禁（workflow）**：立 CI/lint 检查——(a) 静态扫：`emit(intent…)` / `dispatch` / setState 的 payload 不得含 base64 大字段或 >阈值字符串；(b) 测试：导入大文件后断言 state store 无大字符串、intent 体积有上限；(c) 引擎侧断言 import 接口收路径而非内容。**这条纪律优先级足够高，应尽早从"review 门"升级为"自动门"。**
 - 沿用 Core 现有：FSM proptest（chunk 边界独立）、wiremock mock 上游 SSE 集成测试。
 
@@ -341,8 +343,8 @@ GitHub 手动构建：`.github/workflows/manual-build.yml` 提供 `workflow_disp
   - 动手前 `git checkout -b <phase-x-task-name>`（如 `phase-1-card-import`）。
   - **代码改动**（`engine/` `ui/` `protocol/` 等）**一律走分支 → 本地测试绿 → PR → 合并**，**绝不直接 commit/推 `main`**，更不许把改了一半的代码留在 `main` 的工作树里（会跟别的 agent 踩脚、污染共享树）。
     - **审计环节现状（2026-07-03 更新）**：原"审计 bot 复核"已下线（bot 不存在）。PR 现由**开发者自审 + 人工 review** 承接——本地测试全绿（含神圣不变式）即可开 PR，由人决定合并，不阻塞在"等审计 bot"。未来若重新引入审计 agent，以 `AGENTS.md` 的「Audit Agent Charter」为其入职守则（独立审计 / 可提自己的想法 / 可质疑历史决策并查证）。开发 agent 自审时也应按该 Charter 三原则自我要求，而非机械对照本文档放行。
-  - **仅文档**（`docs/`、`*.md`）改动可直接 commit `main`（低风险、无 CI），但保持独立 commit、别夹带代码。
-  - AIRP 仓**无 CI**，本地测试 = 唯一门：PR 前必跑 `cargo test -p airp-core`（动引擎时）+ `subagent_context_has_no_orchestrator_noise`（神圣不变式）+ 相关 `cargo test -p airp-ui` / `vitest` / `vue-tsc`。
+  - **仅文档**（`docs/`、`*.md`）改动可直接 commit `main`（低风险），但保持独立 commit、别夹带代码。
+  - AIRP 仓当前只有**手动** GitHub Actions 打包 workflow，不是 PR 自动门禁；本地测试仍是合并前主要门：PR 前必跑 `cargo test -p airp-core`（动引擎时）+ `subagent_context_has_no_orchestrator_noise`（神圣不变式）+ 相关 `cargo test -p airp-ui` / `vitest` / `vue-tsc`。
 - **提交卫生**：
   - **只 `git add <明确文件>`，禁止 `git add -A` / `git add .`**——会把垃圾/临时文件（如 `nul`、`_check.bat`、编辑器/构建产物）扫进提交。
   - 提交前 `git status` 核对暂存清单；发现游离垃圾文件先清（Windows 保留名 `nul` 用 `del \\.\nul`）或加 `.gitignore`。
@@ -355,7 +357,7 @@ GitHub 手动构建：`.github/workflows/manual-build.yml` 提供 `workflow_disp
 
 1. **引擎内数据层熔合设计**：以 Core 为基吸收 mcp-server 数据域，具体怎么熔（工程取舍，Phase 1 前定）。
 2. **UI↔引擎线协议**：复用 State-Protocol Envelope（推荐）vs 简化自定义。
-3. **Agent UI Test Harness 形态**：临时 widget、Tauri dev command、Playwright bridge、WebUI harness 选哪条最小路径；共同红线是 dev/test-only、默认关闭、能力白名单。
+3. **Agent UI Test Harness 扩展边界**：当前路径已收口为 `ui/src/agent-test.ts` + Codex browser control/Playwright 调用。只有当它无法完成 GUI smoke 证据链时，才允许提出替换方案；不得并行新增临时 widget、Tauri dev command 或 WebUI 控制面。
 4. **纯净度代价**：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外——接受（纯净优先）还是留"污染模式"开关。
 5. **capability 引擎侧强制时机**：MVP 先做还是随扩展面一起。
 6. **世界书插入引擎完整度**：MVP 先关键词触发、增量补完整语义，还是一步到位。

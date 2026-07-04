@@ -75,7 +75,7 @@ npm run typecheck
 npm run test
 ```
 
-本仓当前没有项目级 `.github` CI；本地测试和人工 review 是主要门禁。`subagent_context_has_no_orchestrator_noise` 是干净提示词不变式，不得删除或削弱。
+本仓有手动 GitHub Actions 打包 workflow，但它不是 PR gate。本地测试和人工 review 仍是主要门禁。`subagent_context_has_no_orchestrator_noise` 是干净提示词不变式，不得删除或削弱。
 
 ## 运行
 
@@ -121,17 +121,17 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记
 - [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档审计后的待确认项
 
-## Agent UI Test Harness and user control
+## Agent UI 测试面与用户控制
 
-`ui/src/agent-test.ts` is a temporary development/test harness for automated UI verification. It can expose `window.__AIRP_AGENT_TEST__` when explicitly enabled in dev/test mode, so an agent runner such as Codex browser control or Playwright can drive the UI and inspect snapshots.
+`ui/src/agent-test.ts` 是临时开发/测试面，用于自动化 UI 验证。它只在 dev/test 且显式开启时暴露 `window.__AIRP_AGENT_TEST__`，让 Codex 浏览器控制或 Playwright 这类测试 runner 能驱动 UI 并读取状态快照。
 
-This harness is not a normal user feature and is not required for role-play usage. It is default-off and should stay limited to testing, but users who want to avoid any agent-control surface can remove the runtime module before building their own copy:
+它不是普通用户功能，也不是 RP 使用所必需。默认关闭，且应只用于测试。想完全移除 agent 控制面的用户，只需要在 fork 后、手动构建前删除这个运行时模块：
 
 ```powershell
 Remove-Item ui\src\agent-test.ts
 ```
 
-After deleting that file, run the manual GitHub Actions build again. `ui/src/App.vue` loads this module only when the file exists, and the related unit test does not block the build when the module is absent, so no source-code edit is required. Fork users can do this in their fork before running **Manual build**; the resulting artifact will not include this harness.
+删除后再运行 **Manual build**。`ui/src/App.vue` 只在文件存在时加载该模块，相关单测在模块不存在时不会阻断构建，因此不需要再改别的源码；构建出的 artifact 不会包含该测试面。
 
 ## License
 

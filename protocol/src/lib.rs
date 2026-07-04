@@ -2,11 +2,11 @@
 //!
 //! Wire types and the [`AgentBus`] trait. This crate is the in-process contract
 //! between an AIRP UI host (e.g. the Tauri core) and an `AgentBus` implementation
-//! (e.g. AIRP-Gateway). The on-the-wire contract is defined by
+//! (normally the AIRP engine bridge). The on-the-wire contract is defined by
 //! `schema/airp-state-protocol.schema.json`; these types mirror it 1:1.
 //!
 //! Independence comes from this contract, not from how it is wired: any crate
-//! that implements [`AgentBus`] can replace the default Gateway.
+//! that implements [`AgentBus`] can replace the default engine bridge.
 
 use std::collections::BTreeMap;
 
@@ -26,7 +26,7 @@ pub struct Envelope {
     pub id: String,
     /// Creation time, epoch milliseconds.
     pub ts: i64,
-    /// Origin: `"ui"`, `"gateway"`, or `"agent:<name>"`.
+    /// Origin: `"ui"`, `"engine"`, or `"agent:<name>"`.
     pub src: String,
     /// The tagged message body.
     pub body: Body,
@@ -46,7 +46,7 @@ impl Envelope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Body {
-    // ---- downstream: gateway -> ui ----
+    // ---- downstream: runtime -> ui ----
     /// Set or patch the UI blueprint.
     Blueprint(BlueprintMsg),
     /// Set or patch a state scope.
@@ -58,7 +58,7 @@ pub enum Body {
     Event(EventMsg),
     /// Error report.
     Error(ErrorMsg),
-    // ---- upstream: ui -> gateway ----
+    // ---- upstream: ui -> runtime ----
     /// A user action emitted by a widget.
     Intent(IntentMsg),
     /// Subscribe to state scopes.
@@ -108,7 +108,7 @@ pub struct StateMsg {
 ///
 /// `op = Set` replaces the UI's full known-manifest set; `op = Patch` upserts
 /// the given subset by `type` (the incremental form — an upsert of `manifests`,
-/// not an RFC 6902 JSON Patch), letting the Gateway ship only diffs. The UI
+/// not an RFC 6902 JSON Patch), letting the runtime ship only diffs. The UI
 /// should process a manifest BEFORE any blueprint that references its types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManifestMsg {
@@ -256,7 +256,7 @@ pub struct WidgetDef {
     /// JSON Schema for this widget's state slice.
     #[serde(rename = "stateSchema", skip_serializing_if = "Option::is_none", default)]
     pub state_schema: Option<Value>,
-    /// Permissions this widget requests; enforced by the Gateway.
+    /// Permissions this widget requests; enforced by the engine/runtime.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub capabilities: Option<Vec<Capability>>,
     /// Intent names this widget can emit.
@@ -298,7 +298,7 @@ pub enum EntryKind {
     Esm,
 }
 
-/// A permission a widget/agent requests; enforced by the Gateway.
+/// A permission a widget/agent requests; enforced by the engine/runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Capability {
     #[serde(rename = "read:memory")]
@@ -367,9 +367,9 @@ impl std::error::Error for BusError {}
 
 /// The in-process contract between a UI host and an upstream runtime.
 ///
-/// `AIRP-Gateway` is the default implementation; any type implementing this
-/// trait can replace it. The UI host sends upstream envelopes via [`dispatch`]
-/// and renders the downstream stream from [`subscribe`].
+/// The AIRP engine bridge is the default implementation; any type implementing
+/// this trait can replace it. The UI host sends upstream envelopes via
+/// [`dispatch`] and renders the downstream stream from [`subscribe`].
 ///
 /// [`dispatch`]: AgentBus::dispatch
 /// [`subscribe`]: AgentBus::subscribe
@@ -392,7 +392,7 @@ mod tests {
         let env = Envelope::new(
             "01HF...",
             1_718_200_000_000,
-            "gateway",
+            "engine",
             Body::State(StateMsg {
                 scope: "w-emotion".into(),
                 op: SetOrPatch::Patch,
@@ -422,7 +422,7 @@ mod tests {
             "v": 1,
             "id": "m1",
             "ts": 1,
-            "src": "gateway",
+            "src": "engine",
             "body": {
                 "kind": "blueprint",
                 "op": "set",
@@ -470,7 +470,7 @@ mod tests {
         let env = Envelope::new(
             "m1",
             1_718_200_000_000,
-            "gateway",
+            "engine",
             Body::Manifest(ManifestMsg {
                 op: SetOrPatch::Patch,
                 manifests: vec![WidgetDef {

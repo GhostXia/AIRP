@@ -1,7 +1,7 @@
 /**
  * Runtime structural guard for inbound Envelopes.
  *
- * TS types only protect code we write ourselves — a real Gateway / IPC feed is
+ * TS types only protect code we write ourselves — a real runtime / IPC feed is
  * untyped JSON and must not be trusted past the boundary. This module validates
  * the *skeleton* of an Envelope (required fields present, `kind` known, each
  * body shape consistent) WITHOUT pulling in ajv or the JSON Schema bundle:

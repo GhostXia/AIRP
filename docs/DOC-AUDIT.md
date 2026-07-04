@@ -1,17 +1,18 @@
 # 文档审计待确认项
 
-> 最后更新：2026-07-03
+> 最后更新：2026-07-04
 > 目的：把文档整理中发现的矛盾、疑问和需要用户拍板的地方集中列出。事实性过期描述已直接修正；这里保留不能替用户决定的事项。
 
 ## 已按当前事实整理
 
 - 根 README：更新为 `engine + protocol + ui` 两盒结构，并说明 `gateway` / `mcp-server` 已退回独立零件来源。
 - `ui/README.md`：更新为 engine 客户端，不再把 Gateway/MockBus 当默认后端。
-- `engine/README.md`：更新测试基线、无项目级 CI、Docker/脚本缺失等当前事实。
+- `engine/README.md`：更新测试基线、手动打包 CI、Docker/脚本缺失等当前事实。
 - `docs/DEV-GUIDE.md`：同步 PR #1-#4 状态、D 盘工具链和 npm cache 约束。
 - `docs/PLAN.md` / `docs/PARTS.md`：修正四仓 workspace、mock BusRelay、CI 强制等 2026-07-01 旧状态。
 - `AGENTS.md`：补充 npm cache 必须显式指向 `D:\npm-global\npm-cache`。
 - 2026-07-03 审计 follow-up：PR #6 已合并 Task 1.2 id-keyed chat 并移除 `chat_lock`；PR #12 已修 `ui/build-tauri.ps1`、默认 settings、sandbox `postMessage`、RFC6902 `test` 预校验与仓库 metadata；issue #7-#11 已关闭。
+- 2026-07-04 反冗余审计：Agent UI Test Harness 已收口为 `ui/src/agent-test.ts` 一文件 dev/test 入口；普通用户关闭 agent 控制面只删除该文件后重新手动构建。后续不得把内部测试文件或候选方案暴露成用户操作步骤。
 - 补充历史验证事实：AIRP-State-Protocol 原项目打包后的 exe 曾可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
 - 新增 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)：已拍板 AIRP-State-Protocol 的理念定位。Blueprint/Widget/patch/guard/虚拟滚动/consent/sandbox 必须吸收；"通用 Agent UI 标准优先"和"乐高优先"不作为 AIRP 主线。
 - 新增 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：逐项审查 AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol，统一为"吸收资产，不继承产品北极星"。
@@ -21,7 +22,7 @@
 0. **2026-07-04 已拍板的开发方向**
    - WebUI 是临时后端可靠性验证面，用来验证 engine API/SSE/数据层/错误恢复，不替代 Tauri/Vue 桌面 UI。
    - 桌面 UI 是长期产品面，可以慢慢推进控件、布局、交互和性能。
-   - 需要给 agent 增加前端自测能力：临时控件/插件、Tauri dev-only command、Playwright bridge 或 WebUI harness 均可评估；红线是 dev/test-only、默认关闭、能力白名单。
+   - agent 前端自测能力已先按一文件测试面落地：`ui/src/agent-test.ts` 暴露 dev/test-only `window.__AIRP_AGENT_TEST__`。临时控件/插件、Tauri dev-only command、WebUI harness 不再是并行候选；只有当现入口无法提供 GUI smoke 证据链时，才作为替换方案评估。
 
 1. **Task 1.1 状态怎么写**
    - 已确认：PR #3 已实现 path-first 角色卡导入 UI，PR #4 已加固派生 ID。
@@ -35,9 +36,9 @@
    - 我倾向 A 后 B，原因是当前首要目标是可运行产物，先把打包、启动、真实配置、最简对话闭环补上更透明。
 
 3. **“CI”措辞**
-   - 当前仓库没有项目级 `.github` CI；门禁事实是本地测试 + 人工 review。
-   - 我已把“CI 强制”改成“本地/未来 CI 强制”或“本地门禁”。
-   - 需要你确认：是否所有文档都统一避免单独写“CI 绿”，只写“本地测试全绿 / 未来 CI”。
+   - 当前仓库已有 `.github/workflows/manual-build.yml`，但它是 `workflow_dispatch` 手动打包 workflow，不是 PR gate。
+   - 文档应统一写成：本地测试 + 人工 review 是合并前主要门禁；手动 GitHub Actions 用于 fork 用户取得 Windows artifact。
+   - 若后续新增 PR 自动门禁，再把“本地/人工为主”改成对应 workflow 名称和触发条件。
 
 4. **`card_path` 安全边界**
    - 当前 path-first 导入假设 UI 与 engine 是可信本地 sidecar 组合。

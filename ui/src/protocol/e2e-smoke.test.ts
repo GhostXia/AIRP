@@ -137,7 +137,7 @@ describe("protocol round-trip e2e smoke (audit §2.6 #4)", () => {
       v: 1,
       id: "x",
       ts: 1,
-      src: "gateway",
+      src: "engine",
       body: { kind: "state", scope: "w-chat", op: "patch" } as unknown as Envelope["body"],
     };
     expect(validateEnvelope(bad).ok).toBe(false);
@@ -148,7 +148,7 @@ describe("protocol round-trip e2e smoke (audit §2.6 #4)", () => {
       v: 1,
       id: "y",
       ts: 1,
-      src: "gateway",
+      src: "engine",
       body: {
         kind: "manifest",
         op: "set",
@@ -170,7 +170,7 @@ describe("protocol round-trip e2e smoke (audit §2.6 #4)", () => {
       expect(blueprintRef.bp).not.toBeNull();
       const widgetCountBefore = blueprintRef.bp!.widgets.length;
 
-      // Gateway pushes a downstream blueprint patch adding a widget. This is a
+      // The runtime pushes a downstream blueprint patch adding a widget. This is a
       // bus→UI delivery (not an upstream intent), so simulate it by feeding the
       // dispatcher directly the way App.vue's subscribe handler would receive it.
       const patch: JsonPatch = [
@@ -180,7 +180,7 @@ describe("protocol round-trip e2e smoke (audit §2.6 #4)", () => {
         v: 1,
         id: "bp-patch",
         ts: Date.now(),
-        src: "gateway",
+        src: "engine",
         body: { kind: "blueprint", op: "patch", patch },
       });
       // The dispatcher validates + applies the blueprint patch in place.

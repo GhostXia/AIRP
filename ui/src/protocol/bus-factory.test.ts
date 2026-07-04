@@ -30,7 +30,7 @@ describe("bus-factory", () => {
   // The Tauri branch of createBus dynamically imports @tauri-apps/api and
   // builds a real IPC transport, which only works inside the shell. Exercising
   // it here would either flake on import or assert against an error — neither
-  // proves the live link. The live UI→core→Gateway round-trip is on the
-  // runtime verification ledger (PLAN §2.5 B), so we deliberately do NOT unit-
+  // proves the live link. The live UI→core→engine round-trip is on the
+  // runtime verification ledger, so we deliberately do NOT unit-
   // test the Tauri branch here; the branch selection above is what CI guards.
 });

@@ -1,7 +1,7 @@
 /**
  * AgentBus client — the UI's view of the State Protocol transport.
  *
- * The real implementation talks to AIRP-Gateway over Tauri IPC or HTTP/SSE.
+ * The real implementation talks to the AIRP engine bridge over Tauri IPC.
  * `MockBus` below emits a sample session so the scaffold renders without a
  * backend; swap it for the real bus when wiring the Tauri core.
  */
@@ -25,7 +25,7 @@ function env(src: string, body: Envelope["body"]): Envelope {
 /**
  * A third-party widget the UI cannot render yet. The MockBus advertises it via a
  * downstream `manifest` so the UI auto-registers an esm loader for it before the
- * blueprint arrives — exactly how a real Gateway would onboard a third-party
+ * blueprint arrives — exactly how a real runtime would onboard a third-party
  * widget. `source` is a local specifier; `main.ts` maps it to the in-repo module
  * so the demo needs no network.
  */
@@ -95,7 +95,7 @@ export class MockBus implements AgentBus {
       // widget's intent through the bus back into its own state slice.
       if (e.body.name === "status.toggle") {
         this.emit(
-          env("gateway", { kind: "state", scope: "w-status", op: "patch", patch: [{ op: "replace", path: "/on", value: true }] }),
+          env("engine", { kind: "state", scope: "w-status", op: "patch", patch: [{ op: "replace", path: "/on", value: true }] }),
         );
       }
     }
@@ -108,19 +108,19 @@ export class MockBus implements AgentBus {
     // third-party esm widget must be registered before the blueprint that
     // references it arrives.
     queueMicrotask(() => {
-      this.emit(env("gateway", { kind: "manifest", op: "set", manifests: SAMPLE_MANIFESTS }));
-      this.emit(env("gateway", { kind: "blueprint", op: "set", blueprint: SAMPLE_BLUEPRINT }));
+      this.emit(env("engine", { kind: "manifest", op: "set", manifests: SAMPLE_MANIFESTS }));
+      this.emit(env("engine", { kind: "blueprint", op: "set", blueprint: SAMPLE_BLUEPRINT }));
       this.emit(
-        env("gateway", {
+        env("engine", {
           kind: "state",
           scope: "w-chat",
           op: "set",
           state: { messages: { s1: { id: "s1", role: "narrator", text: "你睁开眼，霓虹灯在窗外闪烁。" } }, order: ["s1"] },
         }),
       );
-      this.emit(env("gateway", { kind: "state", scope: "w-emotion", op: "set", state: { emotion: 60, label: "平静" } }));
+      this.emit(env("engine", { kind: "state", scope: "w-emotion", op: "set", state: { emotion: 60, label: "平静" } }));
       this.emit(
-        env("gateway", {
+        env("engine", {
           kind: "state",
           scope: "w-inventory",
           op: "set",
@@ -128,7 +128,7 @@ export class MockBus implements AgentBus {
         }),
       );
       this.emit(
-        env("gateway", {
+        env("engine", {
           kind: "state",
           scope: "w-quest",
           op: "set",
@@ -136,7 +136,7 @@ export class MockBus implements AgentBus {
         }),
       );
       this.emit(
-        env("gateway", { kind: "state", scope: "w-status", op: "set", state: { label: "在线", on: false } }),
+        env("engine", { kind: "state", scope: "w-status", op: "set", state: { label: "在线", on: false } }),
       );
       setTimeout(() => {
         this.emit(env("agent:narrator", { kind: "state", scope: "w-emotion", op: "patch", patch: [{ op: "replace", path: "/emotion", value: 80 }, { op: "replace", path: "/label", value: "心动" }] }));

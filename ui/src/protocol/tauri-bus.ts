@@ -2,15 +2,15 @@
  * Real AgentBus over Tauri IPC (PLAN task B).
  *
  * UI → core: `invoke("airp_dispatch", { env })` forwards an upstream envelope to
- * the Rust core, which relays it to the Gateway.
+ * the Rust core, which relays it to the AIRP engine.
  * core → UI: the core emits downstream envelopes on the `airp:envelope` event.
  *
  * The IPC is injected as a {@link TauriTransport} so the logic is unit-testable
  * without a running Tauri shell. `createTauriTransport()` builds the real one by
  * dynamically importing `@tauri-apps/api` (only loaded inside the Tauri app).
  *
- * NOTE: the real end-to-end link (core ↔ Gateway) is runtime-only; it is on the
- * "unverified — debug phase" ledger in docs/PLAN.md. CI covers the logic here.
+ * NOTE: full GUI smoke with a real engine config is runtime verification. Unit
+ * tests cover only this transport wrapper.
  */
 
 import type { AgentBus, EnvelopeHandler } from "./bus";
