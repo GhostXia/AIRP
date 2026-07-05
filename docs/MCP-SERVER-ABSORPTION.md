@@ -4,7 +4,7 @@
 > 纠正此前误框：我曾因角色卡/世界书**解析有 bug**（属实）就把整个 MCP-Server 当"边缘零件库、可丢"——错。解析 bug 是局部要修的点；MCP-Server 的 **38 工具 / 12 工作流提示词 / 19 资源 + 数据模型**是完整 RP 数据管理面 = engine 的数据层 + agent 工具规格。
 > 架构落点：**engine 原生内化**（拆解重组进 engine），**非**"engine 当 MCP client 连独立 MCP-Server"。这正是 Core 路线图 **M_AGENT-2**"把进程内数据操作包成 built-in 工具"的目标规格。
 > 权威源：`D:\airp-mcp-server\src\mcp\{mod.rs,tools.rs,prompts.rs,resources.rs}`（本 catalog 从源码枚举）。
-> 最后更新：2026-07-02
+> 最后更新：2026-07-05（#23：区分 data 层 / agent 工具 / HTTP 路由三个层级）
 
 ---
 
@@ -19,10 +19,15 @@
 
 状态：✅ engine 已有等价内部能力（M_AGENT-2 包成工具即可）｜🔧 engine 有部分/需补｜🆕 engine 无、需从 MCP-Server 移植
 
+> **层级约定（#23）**："engine 现状"必须区分三个层级，不可混称——
+> **data 层**（`data_dir`/store 函数）、**agent 工具**（`agent/tools.rs` 注册表，仅 agent loop 内可调）、
+> **HTTP 路由**（daemon 对 WebUI/API 直接暴露）。agent 工具 ≠ HTTP 端点：当前 `/v1/agent/run`
+> 仍是固定计划骨架，不能作为 HTTP get/delete 的实际替代。
+
 | 类 | MCP 工具 | engine 现状 | 融入动作 |
 |---|---|---|---|
 | 角色 | `import_card` | ✅ png_parser 正确 + `/v1/characters/import` | 包成 agent 工具（Task 1.1 已排） |
-| 角色 | `list_characters` `get_character` `delete_character` | ✅ daemon 有 | 包成工具 |
+| 角色 | `list_characters` `get_character` `delete_character` | 🔧 list：data 层 + agent 工具 + HTTP `GET /v1/characters` 全有；get/delete：**data 层 + agent 工具已有（PR #20），无 HTTP 路由** | 工具已包（M_AGENT-2 batch 2）；HTTP get/delete 端点待 WebUI 实际需要时再加（含 dry-run/confirm 纪律，背景见 #23） |
 | 角色 | `analyze_card`(4档) | 🆕 | 移植（+ `analyze_preset` 同族） |
 | 角色 | `decompose_character` | 🆕 | 移植（拆 7 md，配 prompt） |
 | 会话 | `start_session` `list_sessions` `append_message` `get_recent_context` `rollback_messages` | ✅ chat_store + daemon | 包成工具 |
