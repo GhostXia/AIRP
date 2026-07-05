@@ -5,6 +5,21 @@ Temporary browser-based harness to validate engine backend reliability.
 
 ## Quick Start
 
+### 方式 A：一键 .bat（Windows 推荐）
+
+双击 `webui/start.bat` 即可。脚本会：
+
+1. 按 `AGENTS.md` 设好 Rust/Node/MSYS2 工具链环境（产物落 D: 盘）
+2. 在新窗口起 engine：`cargo run -p airp-core -- daemon --port 8000`
+3. 在新窗口起 WebUI 静态 server：`node webui/serve.js`（零依赖纯 node，无需 npx/python）
+4. 自动打开浏览器到 http://127.0.0.1:9001
+
+关闭两个弹出的窗口即停止对应服务。业务配置（`AIRP_ENDPOINT` / `AIRP_MODEL` / `AIRP_ACCESS_KEY` 等）在 .bat 顶部注释里取消注释即可。
+
+跨设备访问（手机浏览器连桌面 engine）：把 .bat 里 `WEBUI_HOST=127.0.0.1` 改成 `0.0.0.0`，再用桌面机 IP 访问。
+
+### 方式 B：手动起（跨平台）
+
 1. **Start the engine** (in one terminal):
    ```sh
    cargo run -p airp-core -- daemon --port 8000
@@ -13,9 +28,9 @@ Temporary browser-based harness to validate engine backend reliability.
 
 2. **Serve the WebUI** (in another terminal):
    ```sh
-   npx serve webui/
+   node webui/serve.js
    ```
-   Or `python -m http.server 9001 -d webui/`. Open http://localhost:9001.
+   或 `npx serve webui/` / `python -m http.server 9001 -d webui/`。打开 http://localhost:9001。
 
 3. **Connect**: enter Engine URL (default http://127.0.0.1:8000) and optional Bearer token, click Connect.
 
