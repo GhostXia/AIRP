@@ -37,6 +37,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 once_cell = { workspace = true }
 thiserror = { workspace = true }
+dirs = "6"
 # 6.0p：Aho-Corasick 自动机替代关键词 substring loop。
 aho-corasick = { workspace = true }
 # DX-5: SHA-256 for sync manifest

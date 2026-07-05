@@ -3,12 +3,32 @@ use crate::types::CharacterId;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// 解析引擎数据根目录。三层 fallback，优先级清晰：
+///
+/// 1. `AIRP_DATA_DIR` 环境变量 —— 用户显式指定（最高优先，所有场景适用）。
+/// 2. `cwd/data` —— **开发者场景**：cwd 含 `Cargo.toml`（即从 repo 根 `cargo run`），
+///    数据落 repo 内，删 repo = 卸载，复制 repo = 迁移。符合 clone 后产物收口诉求。
+/// 3. `dirs::data_dir().join("airp")` —— **打包 .exe 双击场景**：cwd 不在 repo 根
+///    （如 `Program Files` 的 UAC 拒写、或用户从任意目录双击）时，落 OS 标准 per-user
+///    位（Win `%APPDATA%\airp\`，macOS `~/Library/Application Support/airp/`，
+///    Linux `~/.local/share/airp/`），per-user 隔离、重装不丢、不污染 Program Files。
+///
+/// 旧实现仅「cwd/data」相对 cwd，双击 .exe 时 cwd 漂到安装目录致写失败或数据共享。
 pub fn resolve_data_root() -> PathBuf {
     if let Ok(custom) = std::env::var("AIRP_DATA_DIR") {
-        PathBuf::from(custom)
-    } else {
-        PathBuf::from("data")
+        return PathBuf::from(custom);
     }
+    // 开发模式：cwd 在 repo 根（含 Cargo.toml）→ 数据落 repo 内
+    if PathBuf::from("Cargo.toml").exists() {
+        return PathBuf::from("data");
+    }
+    // 打包模式：落 OS per-user 数据目录
+    if let Some(per_user) = dirs::data_dir() {
+        let airp = per_user.join("airp");
+        return airp;
+    }
+    // dirs 取不到（极罕见，某些容器化环境）的最后兜底：cwd/data
+    PathBuf::from("data")
 }
 
 pub fn ensure_data_dirs(root: &Path) -> Result<(), AirpError> {
