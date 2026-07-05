@@ -31,6 +31,11 @@
   const btnClearLog = $('#btn-clear-log');
   const btnRefreshChars = $('#btn-refresh-chars');
   const btnNewSession = $('#btn-new-session');
+  const charAvatar = $('#char-avatar');
+  const stateDisplay = $('#state-display');
+  const stateHistoryDisplay = $('#state-history-display');
+  const stateHistoryLimit = $('#state-history-limit');
+  const btnRefreshState = $('#btn-refresh-state');
 
   // ── state ────────────────────────────────────────────────────────────────
   let base = engineUrl.value.replace(/\/+$/, '');
@@ -137,6 +142,9 @@
   // ── refresh all left-panel data ──────────────────────────────────────────
   async function refreshAll() {
     await Promise.all([refreshHealth(), refreshSettings(), refreshModels(), refreshChars()]);
+    // 初次连接后自动加载当前角色的 chat history（PLAN §9 P1 "交互收口"）。
+    // refreshChars 内部已设置 selectedChar；此处 await 完成后即可拉 history。
+    if (selectedChar) loadHistory();
   }
 
   async function refreshHealth() {
@@ -185,6 +193,8 @@
       if (ids.length && !selectedChar) { selectedChar = ids[0]; charSelect.value = ids[0]; }
       if (selectedChar && ids.includes(selectedChar)) charSelect.value = selectedChar;
       refreshSessions();
+      refreshAvatar();
+      refreshStateAll();
     }
   }
 
@@ -246,15 +256,93 @@
     chatLog.innerHTML = '';
   }
 
+  // ── avatar: fetch as blob with bearer, render via object URL ─────────────
+  // <img src> 无法附 Authorization 头，故 fetch blob → createObjectURL。
+  // 切换角色时 revoke 旧 URL 防泄漏。
+  let avatarUrl = '';
+  async function refreshAvatar() {
+    if (avatarUrl) { URL.revokeObjectURL(avatarUrl); avatarUrl = ''; }
+    const cid = selectedChar || charSelect.value;
+    if (!cid || !charAvatar) { if (charAvatar) charAvatar.hidden = true; return; }
+    try {
+      const res = await fetch(base + '/v1/characters/' + encodeURIComponent(cid) + '/avatar', {
+        headers: bearer ? { Authorization: 'Bearer ' + bearer } : {},
+      });
+      logEvent('GET', '/v1/characters/:id/avatar', res.status, 0);
+      if (!res.ok) { charAvatar.hidden = true; return; }
+      const blob = await res.blob();
+      if (!blob.size || !blob.type.startsWith('image/')) { charAvatar.hidden = true; return; }
+      avatarUrl = URL.createObjectURL(blob);
+      charAvatar.src = avatarUrl;
+      charAvatar.hidden = false;
+    } catch (e) {
+      charAvatar.hidden = true;
+    }
+  }
+
+  // ── state: live.json + state history ─────────────────────────────────────
+  // 404 = 角色尚未有 state；与空对象 {} 区分开显示（PLAN §2.1 L47）。
+  async function refreshState() {
+    if (!stateDisplay) return;
+    const cid = selectedChar || charSelect.value;
+    if (!cid) { stateDisplay.textContent = '—'; return; }
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(cid) + '/state');
+    if (r.status === 404) {
+      stateDisplay.textContent = '(404 — 该角色尚无 live.json)';
+      return;
+    }
+    if (r.ok) {
+      // try pretty-print; if not JSON, show raw
+      try { stateDisplay.textContent = JSON.stringify(typeof r.data === 'string' ? JSON.parse(r.data) : r.data, null, 2); }
+      catch { stateDisplay.textContent = String(r.data || r.text); }
+    } else {
+      stateDisplay.textContent = 'err: ' + formatError(r.data, r.text);
+    }
+  }
+
+  async function refreshStateHistory() {
+    if (!stateHistoryDisplay) return;
+    const cid = selectedChar || charSelect.value;
+    if (!cid) { stateHistoryDisplay.textContent = '—'; return; }
+    const limit = Math.max(1, Math.min(1000, parseInt(stateHistoryLimit.value, 10) || 20));
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(cid) + '/state/history?limit=' + limit);
+    if (r.status === 404) {
+      stateHistoryDisplay.textContent = '(404 — 尚无 state history)';
+      return;
+    }
+    if (r.ok) {
+      const arr = Array.isArray(r.data) ? r.data : [];
+      stateHistoryDisplay.textContent = arr.length
+        ? arr.map((e, i) => '[' + i + '] ' + JSON.stringify(e)).join('\n')
+        : '(empty array)';
+    } else {
+      stateHistoryDisplay.textContent = 'err: ' + formatError(r.data, r.text);
+    }
+  }
+
+  function refreshStateAll() {
+    refreshState();
+    refreshStateHistory();
+  }
+
+  if (btnRefreshState) btnRefreshState.addEventListener('click', refreshStateAll);
+  if (stateHistoryLimit) stateHistoryLimit.addEventListener('change', refreshStateHistory);
+
   charSelect.addEventListener('change', () => {
     selectedChar = charSelect.value;
     selectedSess = '';
     clearChatView();
     refreshSessions();
+    refreshAvatar();
+    refreshStateAll();
+    // 自动加载 history：切角色后立即拉取该角色已有 chat history，
+    // 避免用户每次都需手点 History 按钮（PLAN §9 P1 "交互收口"）。
+    loadHistory();
   });
   sessSelect.addEventListener('change', () => {
     selectedSess = sessSelect.value;
     clearChatView();
+    loadHistory();
   });
 
   btnNewSession.addEventListener('click', async () => {
@@ -270,12 +358,83 @@
   });
 
   // ── chat: send & stream ─────────────────────────────────────────────────
+  // 极简 markdown 渲染（PLAN §4.1.1 "支持 streaming delta 和 markdown"）。
+  // 零构建约束 → 不引入第三方库；手写覆盖 code fence / inline code / 标题 /
+  // 粗体 / 斜体 / 段落换行，足够 chat 场景。安全策略：先 escapeHtml 全转义，
+  // 再用 private-use Unicode 占位符抽出 code fence（防止内部 \n 被 <br> 替换），
+  // 最后应用其它行内/块级转换。所有用户内容已被转义，不会注入 HTML。
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderMarkdown(text) {
+    if (text == null) return '';
+    // 行级分块：先把 fenced code blocks 抽出（用占位符），再按行 split，
+    // 块级（pre/h1-h3）独立包裹，避免非法 HTML 嵌套（<p><pre>、<p><h1>）。
+    const codeBlocks = [];
+    // F16/F17 fix: 用带随机 nonce 的 private-use 占位符，避免用户输入同形序列被误替换。
+    const phNonce = Math.random().toString(36).slice(2, 10);
+    const phPrefix = '\uF8FFCB' + phNonce + '_';
+    const phSuffix = '\uF8FF';
+    const phRegex = new RegExp(phPrefix + '(\\d+)' + phSuffix, 'g');
+    const placeholder = (i) => '\n' + phPrefix + i + phSuffix + '\n';
+    let s = escapeHtml(text);
+    // F18 fix: 统一换行符，避免 CRLF 导致空行识别失败。
+    s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // 1. fenced code blocks ```lang\n...\n``` 抽到占位行
+    s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      // lang 暂未用于高亮（避免引第三方）；保留以便未来加 highlight.js
+      const i = codeBlocks.push('<pre class="md-code"><code>' + code.replace(/\n$/, '') + '</code></pre>') - 1;
+      return placeholder(i);
+    });
+    // 2. 行内 markdown：inline code / bold / italic 在非占位行上。
+    //    占位行使用随机 nonce，用户输入的同形序列不会被后续恢复步骤误匹配。
+    s = s.replace(/`([^`\n]+)`/g, '<code class="md-code-inline">$1</code>');
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    // 3. 标题转块级（不被 <p> 包裹）。Fenced placeholder 行不含 #。
+    s = s.replace(/^### (.+)$/gm, '<h3 class="md-h">$1</h3>');
+    s = s.replace(/^## (.+)$/gm, '<h2 class="md-h">$1</h2>');
+    s = s.replace(/^# (.+)$/gm, '<h1 class="md-h">$1</h1>');
+    // 4. 块级切分：按行扫描，块级元素/占位行独占一段，blank line 切 paragraph
+    const lines = s.split('\n');
+    const out = [];
+    let para = [];
+    const flushPara = () => {
+      if (para.length) {
+        out.push('<p>' + para.join('<br>') + '</p>');
+        para = [];
+      }
+    };
+    const phLineRegex = new RegExp('^' + phPrefix + '\\d+' + phSuffix + '$');
+    for (const line of lines) {
+      const isBlock = /^(<h[1-3] )/.test(line) || phLineRegex.test(line);
+      if (line === '') { flushPara(); continue; }
+      if (isBlock) { flushPara(); out.push(line); }
+      else { para.push(line); }
+    }
+    flushPara();
+    // 5. 恢复 code blocks (顺序与 codeBlocks.push 一致)
+    return out.join('\n').replace(phRegex, (_, i) => codeBlocks[+i]);
+  }
+
+  // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
   function appendMsg(role, text, isStreaming) {
     const div = document.createElement('div');
     const safeRole = role === 'user' ? 'user' : 'assistant';
     div.className = 'msg ' + safeRole;
     appendInline(div, 'span', 'role', role);
-    const textNode = appendInline(div, 'span', 'text' + (isStreaming ? ' streaming' : ''), text);
+    const textNode = appendInline(div, 'span', 'text' + (isStreaming ? ' streaming' : ''), '');
+    if (isStreaming) {
+      textNode.textContent = text;
+    } else {
+      textNode.innerHTML = renderMarkdown(text);
+    }
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
     return textNode;
@@ -331,9 +490,15 @@
         }
       });
       msgEl.classList.remove('streaming');
+      // 流式期间用 textContent（保 cursor 动画 + 性能），完成后切 markdown innerHTML。
+      if (acc) msgEl.innerHTML = renderMarkdown(acc);
       logEvent('SSE', '/v1/chat/completions', 200, Math.round(performance.now() - t0), 'done/' + seq + 'chunks');
     } catch (e) {
-      if (msgEl) msgEl.classList.remove('streaming');
+      if (msgEl) {
+        msgEl.classList.remove('streaming');
+        // 异常时若已有部分内容，仍切 markdown；否则保留 raw 错误文本
+        if (acc) msgEl.innerHTML = renderMarkdown(acc);
+      }
       if (e.name === 'AbortError') {
         logEvent('SSE', '/v1/chat/completions', 0, Math.round(performance.now() - t0), 'aborted');
         return;
@@ -402,21 +567,27 @@
   chatInput.addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') doSend(); });
 
   // ── history / regen / rollback (P1: destructive confirm) ────────────────
-  btnHistory.addEventListener('click', async () => {
+  // loadHistory 抽出来供 charSelect/sessSelect 切换时自动复用，避免用户每次手点。
+  async function loadHistory() {
     if (!selectedChar) return;
     const r = await api('POST', '/v1/chat/history', { character_id: selectedChar });
     if (r.ok) {
       const msgs = r.data?.messages || r.data || [];
       chatLog.innerHTML = '';
       msgs.forEach(m => appendMsg(m.role || 'assistant', m.text || m.content || '', false));
+    } else if (r.status !== 0) {
+      // 0 = 网络层失败（已 logEvent），其它状态码显式提示
+      appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false);
     }
-  });
+  }
+
+  btnHistory.addEventListener('click', loadHistory);
 
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
     if (!window.confirm('Regenerate 会重写/删除最后一条 assistant 消息，不可撤销。继续？')) return;
     const r = await api('POST', '/v1/chat/regen', { character_id: selectedChar });
-    if (r.ok) btnHistory.click();
+    if (r.ok) loadHistory();
   });
 
   btnRollback.addEventListener('click', async () => {
@@ -427,7 +598,7 @@
     if (Number.isNaN(idx) || idx < 0) { logEvent('POST', '/v1/chat/rollback', 0, 0, 'illegal index: ' + index); return; }
     if (!window.confirm('确认截断到 index ' + idx + '？此操作不可撤销。')) return;
     const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, message_index: idx });
-    if (r.ok) btnHistory.click();
+    if (r.ok) loadHistory();
   });
 
   // ── agent run (P1: classified event log + collapsible raw JSON) ─────────
@@ -697,9 +868,13 @@
         }
       });
       msgEl.classList.remove('streaming');
+      if (acc) msgEl.innerHTML = renderMarkdown(acc);
       return { ok: true, status: 200, chunks: seq };
     } catch (e) {
-      if (msgEl) msgEl.classList.remove('streaming');
+      if (msgEl) {
+        msgEl.classList.remove('streaming');
+        if (acc) msgEl.innerHTML = renderMarkdown(acc);
+      }
       const interrupted = e.kind === 'stream_interrupt';
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), (interrupted ? 'stream interrupted: ' : '') + e.message);
       return { ok: false, status: 0, error: e.message, kind: interrupted ? 'stream_interrupt' : undefined };

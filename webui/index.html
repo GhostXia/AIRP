@@ -36,11 +36,21 @@
       </section>
       <section>
         <h3>Characters <button id="btn-refresh-chars">↻</button></h3>
-        <select id="char-select" size="6"></select>
+        <div id="char-avatar-row">
+          <img id="char-avatar" alt="avatar" hidden />
+          <select id="char-select" size="6"></select>
+        </div>
       </section>
       <section>
         <h3>Sessions <button id="btn-new-session">+</button></h3>
         <select id="sess-select" size="6"></select>
+      </section>
+      <section id="state-section">
+        <h3>State <button id="btn-refresh-state">↻</button></h3>
+        <div class="hint">live.json（404 = 该角色尚未有 state）</div>
+        <pre id="state-display" class="mono">—</pre>
+        <h3 class="subhead">State History <label class="hint">limit: <input id="state-history-limit" type="number" value="20" min="1" max="1000" /></label></h3>
+        <pre id="state-history-display" class="mono">—</pre>
       </section>
       <section>
         <h3>Import (M3)</h3>

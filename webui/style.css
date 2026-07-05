@@ -28,9 +28,22 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .msg.user { background: #1f2937; }
 .msg.assistant { background: #0f1a2e; }
 .msg .role { font-weight: 600; font-size: 11px; color: #58a6ff; display: block; margin-bottom: 2px; }
-.msg .text { white-space: pre-wrap; overflow-wrap: break-word; }
+.msg .text { overflow-wrap: break-word; }
+.msg .text.streaming { white-space: pre-wrap; }
 .msg .text.streaming::after { content: '\258A'; animation: blink 0.8s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* markdown 渲染样式（PLAN §4.1.1） */
+.msg .text p { margin: 0; }
+.msg .text p + p { margin-top: 6px; }
+.msg .text .md-h { color: #f0f6fc; margin: 8px 0 4px; }
+.msg .text h1.md-h { font-size: 16px; }
+.msg .text h2.md-h { font-size: 14px; }
+.msg .text h3.md-h { font-size: 13px; }
+.msg .text .md-code { background: #161b22; border: 1px solid #21262d; border-radius: 3px; padding: 6px; margin: 4px 0; overflow-x: auto; font-size: 11px; white-space: pre; }
+.msg .text .md-code-inline { background: #161b22; border: 1px solid #21262d; border-radius: 2px; padding: 0 3px; font-size: 12px; }
+.msg .text strong { color: #f0f6fc; }
+.msg .text em { color: #d2a8ff; }
 
 #chat-composer { border-top: 1px solid #30363d; padding-top: 6px; }
 #chat-input { width: 100%; resize: vertical; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 6px; border-radius: 4px; font-family: inherit; font-size: 13px; }
@@ -80,3 +93,16 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 select { width: 100%; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; font-family: inherit; font-size: 12px; }
 select option { padding: 2px 4px; }
 select option:checked { background: #1f6feb; }
+
+/* avatar + character row */
+#char-avatar-row { display: flex; gap: 6px; align-items: flex-start; }
+#char-avatar { width: 48px; height: 48px; border-radius: 4px; border: 1px solid #30363d; object-fit: cover; flex-shrink: 0; background: #161b22; }
+#char-avatar[hidden] { display: none; }
+#char-avatar-row select { flex: 1; }
+
+/* state panel */
+#state-section .subhead { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+#state-section .subhead .hint { text-transform: none; letter-spacing: normal; font-weight: normal; }
+#state-section .subhead input { width: 60px; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 1px 4px; border-radius: 3px; font-family: inherit; font-size: 11px; }
+#state-display, #state-history-display { max-height: 180px; overflow-y: auto; font-size: 10px; color: #8b949e; }
+.hint { font-size: 10px; color: #6e7681; }
