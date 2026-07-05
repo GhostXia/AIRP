@@ -5,6 +5,22 @@
 > **审计员立场**: 独立审计（不附开发文档与既有代码结论）
 > **完整报告**: [docs/audits/PR-38-audit.md](../audits/PR-38-audit.md)
 
+## 解决状态（2026-07-05 复核）
+
+| 编号 | 状态 | 修复位置 |
+|---|---|---|
+| A1 `models_url_from_endpoint` host-only bug | **已修** | PR #51（[engine/src/daemon/handlers.rs:969](../../engine/src/daemon/handlers.rs#L969)）改用 `reqwest::Url::parse` + scheme/host 校验；本审计报告时该 bug 还在，复核时已被 PR #51 独立修掉 |
+| A2 webui SSE chunk 三元 noop | **已修** | commit `6eb2886`（[webui/app.js:323,692](../../webui/app.js#L323)）改只渲染 `body_chunk`；`think_chunk` / `action_options` 不再混入 body |
+| A3 webui import 错误不走 formatError | **已修** | commit `6eb2886`（[webui/app.js:636](../../webui/app.js#L636)）改走 `formatError(r.data, r.text)` |
+| A4 bearer token 截断 panic 风险 | **已修（defense-in-depth）** | commit `6eb2886`（[engine/src/daemon/mod.rs:148](../../engine/src/daemon/mod.rs#L148)）改 `chars().take(32)`；新增 `test_a4_multibyte_token_does_not_panic` 固化现状 |
+| B1-B4 设计/验证缺口 | **未修** | 留 P1+：B1 并发流断言、B2 timeout 可配、B3 sender 区分、B4 formatError 字段白名单 |
+| C1-C5 harness 风险 | **未修** | 留 P1+，非 P0 阻塞 |
+
+复核结论：A 类全部已收口（A1 由 PR #51 独立修；A2/A3/A4 由 6eb2886 收口）；B/C 留 P1+。
+原审计报告内容保持不变以备追溯（见下文）。
+
+---
+
 ## TL;DR
 
 PR #38 兑现了"`/v1/models` provider smoke 在 WebUI 中可见"的核心承诺，但合并前放过 4 个真 bug（A 类）+ 4 个设计/验证缺口（B 类）+ 5 个 harness 风险记号（C 类）。A 类 4 个都可在零契约/零行为变化下以 < 50 LOC 修复，建议在下一个 WebUI 收尾 PR 一次性补完，再进 P1。
