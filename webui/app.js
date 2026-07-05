@@ -359,7 +359,7 @@
     const index = prompt('Rollback to message index (0-based)：\n（将截断该 index 之后的所有消息，不可撤销）', '0');
     if (index === null) return;
     const idx = parseInt(index);
-    if (Number.isNaN(idx) || idx < 0) { appendMsg('assistant', '[rollback] 非法 index', false); return; }
+    if (Number.isNaN(idx) || idx < 0) { logEvent('POST', '/v1/chat/rollback', 0, 0, 'illegal index: ' + index); return; }
     if (!window.confirm('确认截断到 index ' + idx + '？此操作不可撤销。')) return;
     const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, message_index: idx });
     if (r.ok) btnHistory.click();
@@ -387,11 +387,17 @@
 
   function summarizeAgentEvent(chunk) {
     // 返回 {label, summary, isDone}；summary 是人类可读的一行
+    // PlanAction 是 #[serde(rename_all = "snake_case")]，故 JSON 里是
+    //   {"action":"generate"} / {"action":"finish"}
+    //   {"action":{"call_tool":{"tool","params"}}}
     const t = chunk.type;
     if (t === 'plan') {
       const action = chunk.action;
-      if (action && action.CallTool) return { label: 'PLAN', summary: 'step ' + chunk.step + ' → call ' + action.CallTool.tool };
-      if (action && action.Finish) return { label: 'PLAN', summary: 'step ' + chunk.step + ' → finish' };
+      if (action && typeof action === 'object' && action.call_tool) {
+        return { label: 'PLAN', summary: 'step ' + chunk.step + ' → call ' + action.call_tool.tool };
+      }
+      if (action === 'generate') return { label: 'PLAN', summary: 'step ' + chunk.step + ' → generate' };
+      if (action === 'finish') return { label: 'PLAN', summary: 'step ' + chunk.step + ' → finish' };
       return { label: 'PLAN', summary: 'step ' + chunk.step };
     }
     if (t === 'tool_call') return { label: 'TOOL_CALL', summary: 'step ' + chunk.step + ' · ' + chunk.tool };
@@ -452,7 +458,11 @@
       }
       const seq = await streamSse(res, (chunk, seq) => {
         const info = appendAgentEvent(chunk);
-        if (chunk.type === 'plan') stepCount = chunk.step;
+        if (chunk.type === 'plan') {
+          stepCount = chunk.step;
+          // 流式过程中实时刷 step counter，让用户看到 loop 进展而非静止 'running…'
+          agentStepCounter.textContent = 'step ' + stepCount + ' · ' + seq + ' events · ' + Math.round(performance.now() - t0) + 'ms';
+        }
         if (info.isDone) lastDone = chunk;
         logEvent('SSE', path, 200, Math.round(performance.now() - t0), '#' + seq + ' ' + info.label + (info.summary ? ' ' + info.summary : ''));
       });
@@ -588,6 +598,33 @@
   const diagOutput = $('#diag-output');
   let lastDiagText = '';
 
+  // 诊断专用：带 timeout 的 api 包装。engine 卡死时 fail-fast 而非永悬
+  // （诊断的本职就是探 engine 卡死，自己不能跟着卡）。
+  // 用 AbortController 真切断 fetch，而非 Promise.race 留 fetch 悬跑。
+  async function diagApi(method, path, timeoutMs = 5000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const t0 = performance.now();
+    try {
+      const url = base + path;
+      const res = await fetch(url, { method, headers: headers(), signal: ctrl.signal });
+      const text = await res.text();
+      const ms = Math.round(performance.now() - t0);
+      logEvent(method, path, res.status, ms);
+      let data;
+      try { data = JSON.parse(text); } catch { data = text; }
+      return { ok: res.ok, status: res.status, data, text, ms };
+    } catch (e) {
+      const ms = Math.round(performance.now() - t0);
+      const aborted = e.name === 'AbortError';
+      const msg = aborted ? 'timeout after ' + timeoutMs + 'ms' : e.message;
+      logEvent(method, path, 0, ms, msg);
+      return { ok: false, status: 0, data: null, text: msg, ms };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function runDiagnostics() {
     if (!base) { diagOutput.textContent = '请先连接 engine'; return; }
     diagOutput.textContent = '诊断中…';
@@ -600,19 +637,15 @@
 
     // 1. version
     {
-      const t0 = performance.now();
-      const r = await api('GET', '/version');
-      const ms = Math.round(performance.now() - t0);
-      lines.push('[1] GET /version  → ' + r.status + ' (' + ms + 'ms)');
+      const r = await diagApi('GET', '/version');
+      lines.push('[1] GET /version  → ' + r.status + ' (' + r.ms + 'ms)');
       if (r.ok) lines.push('    name=' + (r.data?.name || '?') + ' version=' + (r.data?.version || r.text || '?'));
       else lines.push('    err: ' + formatError(r.data, r.text));
     }
     // 2. settings
     {
-      const t0 = performance.now();
-      const r = await api('GET', '/v1/settings');
-      const ms = Math.round(performance.now() - t0);
-      lines.push('[2] GET /v1/settings  → ' + r.status + ' (' + ms + 'ms)');
+      const r = await diagApi('GET', '/v1/settings');
+      lines.push('[2] GET /v1/settings  → ' + r.status + ' (' + r.ms + 'ms)');
       if (r.ok) {
         const s = r.data || {};
         const hasApiKey = !!(s.api_key && String(s.api_key).length);
@@ -627,10 +660,8 @@
     }
     // 3. models (provider smoke)
     {
-      const t0 = performance.now();
-      const r = await api('GET', '/v1/models');
-      const ms = Math.round(performance.now() - t0);
-      lines.push('[3] GET /v1/models  → ' + r.status + ' (' + ms + 'ms)');
+      const r = await diagApi('GET', '/v1/models');
+      lines.push('[3] GET /v1/models  → ' + r.status + ' (' + r.ms + 'ms)');
       if (r.ok) {
         const models = Array.isArray(r.data?.data) ? r.data.data.map(m => m.id) : null;
         lines.push('    models: ' + (models ? models.length + ' 个 → ' + models.slice(0, 5).join(', ') + (models.length > 5 ? ' …' : '') : JSON.stringify(r.data).slice(0, 80)));
@@ -640,10 +671,8 @@
     }
     // 4. characters
     {
-      const t0 = performance.now();
-      const r = await api('GET', '/v1/characters');
-      const ms = Math.round(performance.now() - t0);
-      lines.push('[4] GET /v1/characters  → ' + r.status + ' (' + ms + 'ms)');
+      const r = await diagApi('GET', '/v1/characters');
+      lines.push('[4] GET /v1/characters  → ' + r.status + ' (' + r.ms + 'ms)');
       if (r.ok) lines.push('    count=' + (Array.isArray(r.data) ? r.data.length : 0));
       else lines.push('    err: ' + formatError(r.data, r.text));
     }
