@@ -808,6 +808,11 @@ pub(super) async fn delete_character_endpoint(
 /// PUT /v1/characters/:character_id — 更新角色卡 JSON（整体替换）。
 /// body 是 TavernCardV2 JSON；写回 `card/card.json` + `card/raw.json`。
 /// 不重新解包资产（greetings/lorebook），如需重解请调 reextract。
+///
+/// 设计说明：raw.json 在导入时是"原始 imported 卡"的 sidecar（守 ASSET-SPEC
+/// 规则2 存储永不丢）。本端点将其一并覆盖——把工作台编辑视为"新的规范化
+/// 版本"，后续 reextract 会以编辑后的卡为源。如需保留原始 imported 卡，
+/// 调用方应在 PUT 前自行备份（例如调 reextract 前再 PUT 一次原始内容）。
 pub(super) async fn update_character_card(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,

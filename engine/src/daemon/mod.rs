@@ -12,6 +12,7 @@ use crate::adapter::{BackendEngine, Provider};
 use crate::config::VolumeConfig;
 use axum::{
     extract::{ConnectInfo, DefaultBodyLimit},
+    handler::Handler,
     http::{header, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -201,7 +202,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/characters/:character_id",
             get(get_character_card)
-                .put(update_character_card)
+                .put(update_character_card.layer(DefaultBodyLimit::max(2 * 1024 * 1024)))
                 .delete(delete_character_endpoint),
         )
         .route(
@@ -214,7 +215,8 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         )
         .route(
             "/v1/characters/:character_id/lorebook",
-            get(get_character_lorebook).put(update_character_lorebook),
+            get(get_character_lorebook)
+                .put(update_character_lorebook.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
         )
         .route(
             "/v1/characters/:character_id/state",

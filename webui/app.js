@@ -1231,9 +1231,11 @@
   if (btnWbSaveLore) btnWbSaveLore.addEventListener('click', saveWorkbenchLore);
   if (btnWbAddLore) btnWbAddLore.addEventListener('click', addLoreEntry);
 
-  // ESC 关闭工作台
+  // ESC 关闭工作台（但 textarea/input 中按 ESC 不关，避免丢失未保存编辑）
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && workbenchPanel && !workbenchPanel.hidden) {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       closeWorkbench();
     }
   });
