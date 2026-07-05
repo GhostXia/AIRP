@@ -460,7 +460,7 @@
       logEvent('SSE', path, 200, ms, 'done/' + seq + 'events');
       agentStepCounter.textContent = lastDone
         ? lastDone.stop_reason + ' · ' + lastDone.steps_taken + ' steps · ' + ms + 'ms'
-        : seq + ' events · ' + ms + 'ms';
+        : (stepCount ? 'step ' + stepCount + ' · ' : '') + seq + ' events · ' + ms + 'ms';
     } catch (e) {
       logEvent('POST', path, 0, Math.round(performance.now() - t0), e.message);
       const row = document.createElement('div');
