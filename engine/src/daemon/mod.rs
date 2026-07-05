@@ -26,11 +26,12 @@ use tower_http::cors::{Any, CorsLayer};
 
 use handlers::{
     add_scene_character_endpoint, agent_run, chat_completion, create_scene_endpoint,
-    create_session_endpoint, get_character_avatar, get_character_state,
-    get_character_state_history, get_character_state_schema, get_chat_history,
-    get_preset_endpoint, get_scene_endpoint, get_settings, import_character, list_characters,
-    list_models, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
-    reextract_character_assets, regen_chat, rollback_chat, update_settings,
+    create_session_endpoint, delete_character_endpoint, get_character_avatar, get_character_card,
+    get_character_lorebook, get_character_state, get_character_state_history,
+    get_character_state_schema, get_chat_history, get_preset_endpoint, get_scene_endpoint,
+    get_settings, import_character, list_characters, list_models, list_presets_endpoint,
+    list_scenes_endpoint, list_sessions_endpoint, reextract_character_assets, regen_chat,
+    rollback_chat, update_character_card, update_character_lorebook, update_settings,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -198,12 +199,22 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             post(import_character).layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
         )
         .route(
+            "/v1/characters/:character_id",
+            get(get_character_card)
+                .put(update_character_card)
+                .delete(delete_character_endpoint),
+        )
+        .route(
             "/v1/characters/:character_id/reextract",
             post(reextract_character_assets),
         )
         .route(
             "/v1/characters/:character_id/avatar",
             get(get_character_avatar),
+        )
+        .route(
+            "/v1/characters/:character_id/lorebook",
+            get(get_character_lorebook).put(update_character_lorebook),
         )
         .route(
             "/v1/characters/:character_id/state",
