@@ -320,9 +320,10 @@
       msgEl = appendMsg('assistant', '', true);
       let acc = '';
       const seq = await streamSse(res, (chunk, seq) => {
-        const body = chunk.type === 'body_chunk' ? chunk.text : chunk.text;
-        if (body) {
-          acc += body;
+        // A2: 只把 body_chunk 渲染到正文。think_chunk（心理独白，应折叠）和
+        // action_options（选项数组，content 是对象不是 string）都不应混入 body。
+        if (chunk.type === 'body_chunk' && chunk.text) {
+          acc += chunk.text;
           msgEl.textContent = acc;
           if (seq % 5 === 0) {
             logEvent('SSE', '/v1/chat/completions', 200, Math.round(performance.now() - t0), 'chunk#' + seq);
@@ -632,7 +633,7 @@
       importResult.textContent = '✓ 导入成功: ' + (r.data?.character_id || '?');
       refreshChars();
     } else {
-      importResult.textContent = '✗ ' + (r.status || 'err') + ': ' + (r.data || r.text);
+      importResult.textContent = '✗ ' + (r.status || 'err') + ': ' + formatError(r.data, r.text);
     }
   });
 
@@ -689,9 +690,9 @@
       msgEl = appendMsg('assistant', '', true);
       let acc = '';
       const seq = await streamSse(res, (chunk) => {
-        const body = chunk.type === 'body_chunk' ? chunk.text : chunk.text;
-        if (body) {
-          acc += body;
+        // A2: 同 doSend，只渲染 body_chunk；think_chunk / action_options 不混入 body。
+        if (chunk.type === 'body_chunk' && chunk.text) {
+          acc += chunk.text;
           msgEl.textContent = acc;
         }
       });
