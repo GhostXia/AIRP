@@ -94,6 +94,51 @@ fn load_char_card_json(root: &std::path::Path, character_id: &str) -> Option<Str
     }
 }
 
+/// issue #27：组装流式过滤器集合，single 与 scene 分支复用同一份加载逻辑。
+///
+/// 顺序固定，确保两分支产出**一致**的过滤器集合：
+///   1. 请求体自带的 `regex_filters`；
+///   2. PR-4：预设关联的 SillyTavern 正则脚本（仅在指定 `preset_id` 时加载，
+///      内部筛选 AI Output + 空 replaceString 的「隐藏」类脚本）；
+///   3. 内置隐藏段 `<卷评估…/>` 与 `<state>…</state>`。
+///
+/// 抽出此函数以消除原 single / scene 两分支的不对称：scene 分支此前漏掉第 2 步
+/// （PR-4 预设正则），导致同一 preset 在 scene / 群聊模式下本应隐藏的
+/// thought / status 段泄露到输出。
+fn assemble_regex_filters(
+    payload: &ChatCompletionRequest,
+    effective_root: &std::path::Path,
+) -> Vec<RegexFilter> {
+    let mut filters: Vec<RegexFilter> = payload
+        .regex_filters
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| RegexFilter::from_regex(&r))
+        .collect();
+    // PR-4: 预设关联的 SillyTavern 正则脚本（仅 AI Output + 空 replaceString）
+    if let Some(ref pid) = payload.preset_id {
+        match crate::preset_regex::load_preset_regex_scripts(effective_root, pid.as_str()) {
+            Ok(scripts) => {
+                let preset_filters = crate::preset_regex::scripts_to_filters(&scripts);
+                if !preset_filters.is_empty() {
+                    tracing::debug!(
+                        preset = pid.as_str(),
+                        count = preset_filters.len(),
+                        "PR-4: 注入预设关联正则过滤器"
+                    );
+                    filters.extend(preset_filters);
+                }
+            }
+            Err(e) => tracing::warn!(err = %e, "PR-4: 加载预设正则脚本失败"),
+        }
+    }
+    filters.push(RegexFilter::from_regex("<卷评估[\\s\\S]*?/>"));
+    // M_LS-2: strip <state>…</state> during streaming so users never see raw state tokens
+    filters.push(RegexFilter::from_regex("<state>[\\s\\S]*?</state>"));
+    filters
+}
+
 // ── prepare (scene branch) ────────────────────────────────────────────────────
 
 /// MS-6: Scene pipeline — loads SceneConfig, all character cards, merges lorebooks,
@@ -252,15 +297,8 @@ fn prepare_scene_pipeline(
         list
     };
 
-    let mut filters: Vec<RegexFilter> = payload
-        .regex_filters
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| RegexFilter::from_regex(&r))
-        .collect();
-    filters.push(RegexFilter::from_regex("<卷评估[\\s\\S]*?/>"));
-    filters.push(RegexFilter::from_regex("<state>[\\s\\S]*?</state>"));
+    // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 single 分支产出一致集合。
+    let filters = assemble_regex_filters(payload, &effective_root);
 
     let runtime_variables = payload.user_profile.variables.clone();
     let fsm = StreamingFsm::new(filters, runtime_variables);
@@ -519,33 +557,8 @@ pub fn prepare_pipeline(
     };
 
     // 13. Build FSM
-    let mut filters: Vec<RegexFilter> = payload
-        .regex_filters
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| RegexFilter::from_regex(&r))
-        .collect();
-    // PR-4: 预设关联的 SillyTavern 正则脚本（仅 AI Output + 空 replaceString）
-    if let Some(ref pid) = payload.preset_id {
-        match crate::preset_regex::load_preset_regex_scripts(&effective_root, pid.as_str()) {
-            Ok(scripts) => {
-                let preset_filters = crate::preset_regex::scripts_to_filters(&scripts);
-                if !preset_filters.is_empty() {
-                    tracing::debug!(
-                        preset = pid.as_str(),
-                        count = preset_filters.len(),
-                        "PR-4: 注入预设关联正则过滤器"
-                    );
-                    filters.extend(preset_filters);
-                }
-            }
-            Err(e) => tracing::warn!(err = %e, "PR-4: 加载预设正则脚本失败"),
-        }
-    }
-    filters.push(RegexFilter::from_regex("<卷评估[\\s\\S]*?/>"));
-    // M_LS-2: strip <state>…</state> during streaming so users never see raw state tokens
-    filters.push(RegexFilter::from_regex("<state>[\\s\\S]*?</state>"));
+    // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 scene 分支产出一致集合。
+    let filters = assemble_regex_filters(payload, &effective_root);
 
     let mut runtime_variables = payload.user_profile.variables.clone();
     runtime_variables.insert("user".to_string(), payload.user_profile.name.clone());
