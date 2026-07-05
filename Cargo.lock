@@ -28,6 +28,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "dirs",
  "flate2",
  "futures-util",
  "once_cell",
