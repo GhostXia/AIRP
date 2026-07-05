@@ -287,3 +287,106 @@ PR P0-5b 说 "POST /v1/chat/history 返回 6 条历史"，但 chat_log.jsonl 终
 | F10 P0-5b 时序未说明 | — | 低 | 合并前加注 |
 
 **v2 终判**：F6 是 blocking，其他 9 条 F1–F5/F7–F10 维持原严重度。**建议阻塞合并，等 F6 修复 + F2/F3/F7 澄清后再 review**。
+
+---
+
+## 7. v3 追加：真实 engine 运行实锤 F6
+
+> **审计源 LLM**：`GLM-5.2`（Trae IDE 托管实例，2026-07-05 生成）。本追加是独立审计 pass，允许有自己的想法，超出文档限定范围。
+
+### 7.1 审计方法
+
+审计员真实启动 engine：
+
+```powershell
+$env:AIRP_ENDPOINT = "http://127.0.0.1:8889/v1/chat/completions"
+$env:AIRP_MODEL = "gemini-3.1-pro-preview"
+$env:AIRP_DATA_DIR = "d:\AIRP-Dev\target\p0-final-smoke"
+Remove-Item Env:\AIRP_ACCESS_KEY -ErrorAction SilentlyContinue
+d:\AIRP-Dev\target\debug\airp-core.exe daemon --port 8000
+```
+
+并用 PR 同一份 `agent1.json` 发起真实请求：
+
+```powershell
+curl.exe -s -N -X POST -H "Content-Type: application/json" `
+  -d "@agent1.json" `
+  "http://127.0.0.1:8000/v1/agent/run" `
+  --max-time 60
+```
+
+捕获到的 SSE 流保存为本地工件 `target\p0-final-smoke\agent1-real-sse.txt`（`target/` 已被 `.gitignore` 排除，故未进入 git，但可在本地复现）。
+
+### 7.2 真实 SSE 节选
+
+```
+data: {"type":"plan","step":1,"action":{"call_tool":{"tool":"echo","params":{"probe":"loop-skeleton"}}}}
+data: {"type":"tool_call","step":1,"tool":"echo","params":{"probe":"loop-skeleton"}}
+data: {"type":"tool_result","step":1,"tool":"echo","output":{"probe":"loop-skeleton"},"dry_run":false}
+data: {"type":"plan","step":2,"action":"generate"}
+data: {"type":"delta","step":2,"chunk":"Body(\"I do not have access to a session_list tool, but the capital of France is Paris.\\n\\n1, 2,\")"}
+data: {"type":"delta","step":2,"chunk":"Body(\" 3, 4, 5\\n\\n1, 2, 3, 4, 5\\n\\n1\")"}
+...
+data: {"type":"plan","step":3,"action":"finish"}
+data: {"type":"done","stop_reason":"converged","steps_taken":3,"tokens_estimated":316}
+```
+
+### 7.3 与 PR 文档的硬性冲突表（v3 确认）
+
+| 项目 | PR 文档声称 | 真实 SSE / 源码 | 判定 |
+|---|---|---|---|
+| 工具名 | `"search"` | `"echo"`（[agent/mod.rs:198](../../engine/src/agent/mod.rs#L198) 硬编码） | 虚构 |
+| 工具参数 | `{"q":"capital of France"}` | `{"probe":"loop-skeleton"}`（源码硬编码） | 虚构 |
+| `Delta` 字段 | `{"text":"The"}` | `{"chunk":"Body(\"...\")"}`（[agent/mod.rs:317](../../engine/src/agent/mod.rs#L317) `format!("{:?}", chunk)`） | 虚构 |
+| `ToolResult` 字段 | `{"ok":true,"result":"Paris..."}` | `{"output":{...},"dry_run":false}`（[agent/mod.rs:79-84](../../engine/src/agent/mod.rs#L79-L84)） | 虚构 |
+| `Done` 字段 | `{"steps":3}` | `{"steps_taken":3,"tokens_estimated":316}`（[agent/mod.rs:91-95](../../engine/src/agent/mod.rs#L91-L95)） | 虚构 |
+| SSE 前缀 | `event: message  data:` | 只有 `data:`，没有 `event:`（[agent/mod.rs:172](../../engine/src/agent/mod.rs#L172) 未调用 `.event("message")`） | 张冠李戴 |
+
+### 7.4 v3 勘误 v2
+
+v2 报告说 `default_registry` "只注册了 echo 一个工具"，这是事实错误。重新核验 [agent/tools.rs:149-185](../../engine/src/agent/tools.rs#L149-L185) 发现实际注册了 8 个工具（echo + list_sessions/start_session/append_message/get_recent_context/rollback_messages/list_characters/get_character/delete_character）。
+
+**但此勘误不改变 F6 结论**：agent 协调器在 [agent/mod.rs:195-206](../../engine/src/agent/mod.rs#L195-L206) 的硬编码 plan 中仍然只使用 `"echo"`，PR 的 `"search"` 工具名依旧是虚构。
+
+### 7.5 v3 新增独立发现
+
+#### G1：代码内部一致，PR 文档是唯一不一致处
+
+[webui/app.js:481-482](../../webui/app.js#L481-L482) 的 `summarizeAgentEvent` 已经按真实字段实现：
+
+```javascript
+if (t === 'delta') return { ..., summary: 'step ' + chunk.step + ' · ' + (chunk.chunk || '').slice(0, 60) };
+if (t === 'done') return { ..., summary: chunk.stop_reason + ' · steps=' + chunk.steps_taken + ' · tokens~' + chunk.tokens_estimated };
+```
+
+**engine 代码 + WebUI 代码在内部是一致的**，都使用 `chunk` / `steps_taken` / `tokens_estimated`。PR 文档是系统里**唯一**使用 `text` / `steps` / 省略 `tokens_estimated` 的地方。这不是代码 bug，是**文档伪造证据**。
+
+#### G2：agent run 在 M_AGENT-1 骨架下不落库
+
+实测：发起 `/v1/agent/run` 后，`chat_log.jsonl` 只追加了一行 user 消息，**没有对应的 assistant 行**。
+
+源码依据：[agent/mod.rs:299-300](../../engine/src/agent/mod.rs#L299-L300)：
+
+> `// M_AGENT-1 骨架：run_generation_step 不 finalize（不落库/封卷）。`
+
+这是设计如此。但 PR 把 P0-5d 放在 "data persistence 和 session/history 行为可观察" 的退出条件对照表里，容易让读者误以为 agent run 也验证了持久化。建议文档加一行说明。
+
+#### G3：真实模型输出严重跑题
+
+真实 SSE 里模型从 "capital of France" 一路数到 30。这不是 PR 的问题，但 P0-5d 作为"真实 provider 证据"应如实呈现，而不是用理想化短句粉饰。
+
+### 7.6 v3 终判
+
+**F6 证据虚构已被真实 engine 运行实锤。维持 blocking。建议阻塞合并，待 PR 作者用真实 SSE 捕获替换 P0-5d 手写代码块后再 review。**
+
+v3 处置建议更新：
+
+| 发现 | 严重度 | 合并前必须修复？ |
+|---|---|---|
+| F6 P0-5d 事件序列虚构 | blocking | 是 |
+| F3 provider timeout 遗漏 | 高 | 建议 |
+| F2 P0-4a 概念混淆 | 中-高 | 建议 |
+| F7 P0-4b 实为 quota 429 | 中 | 建议 |
+| F9 文档没清 AIRP_ACCESS_KEY | 中 | 建议 |
+| G2 agent run 不落库 | 低 | 可选说明 |
+| 其余 F1/F4/F5/F8/F10/G3/G4 | 低/信息 | 否 |
