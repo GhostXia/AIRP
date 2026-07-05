@@ -377,15 +377,23 @@
     // 行级分块：先把 fenced code blocks 抽出（用占位符），再按行 split，
     // 块级（pre/h1-h3）独立包裹，避免非法 HTML 嵌套（<p><pre>、<p><h1>）。
     const codeBlocks = [];
+    // F16/F17 fix: 用带随机 nonce 的 private-use 占位符，避免用户输入同形序列被误替换。
+    const phNonce = Math.random().toString(36).slice(2, 10);
+    const phPrefix = '\uF8FFCB' + phNonce + '_';
+    const phSuffix = '\uF8FF';
+    const phRegex = new RegExp(phPrefix + '(\\d+)' + phSuffix, 'g');
+    const placeholder = (i) => '\n' + phPrefix + i + phSuffix + '\n';
     let s = escapeHtml(text);
+    // F18 fix: 统一换行符，避免 CRLF 导致空行识别失败。
+    s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     // 1. fenced code blocks ```lang\n...\n``` 抽到占位行
     s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
       // lang 暂未用于高亮（避免引第三方）；保留以便未来加 highlight.js
       const i = codeBlocks.push('<pre class="md-code"><code>' + code.replace(/\n$/, '') + '</code></pre>') - 1;
-      return '\n\uF8FFCB' + i + '\uF8FF\n';
+      return placeholder(i);
     });
     // 2. 行内 markdown：inline code / bold / italic 在非占位行上。
-    //    占位行只有 \uF8FF 包装，无 ** / ` / * 风险，replace 仍安全。
+    //    占位行使用随机 nonce，用户输入的同形序列不会被后续恢复步骤误匹配。
     s = s.replace(/`([^`\n]+)`/g, '<code class="md-code-inline">$1</code>');
     s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
@@ -403,15 +411,16 @@
         para = [];
       }
     };
+    const phLineRegex = new RegExp('^' + phPrefix + '\\d+' + phSuffix + '$');
     for (const line of lines) {
-      const isBlock = /^(<h[1-3] )/.test(line) || /^\uF8FFCB\d+\uF8FF$/.test(line);
+      const isBlock = /^(<h[1-3] )/.test(line) || phLineRegex.test(line);
       if (line === '') { flushPara(); continue; }
       if (isBlock) { flushPara(); out.push(line); }
       else { para.push(line); }
     }
     flushPara();
     // 5. 恢复 code blocks (顺序与 codeBlocks.push 一致)
-    return out.join('\n').replace(/\uF8FFCB(\d+)\uF8FF/g, (_, i) => codeBlocks[+i]);
+    return out.join('\n').replace(phRegex, (_, i) => codeBlocks[+i]);
   }
 
   // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
