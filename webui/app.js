@@ -202,7 +202,7 @@
   btnRefreshChars.addEventListener('click', refreshChars);
   if (btnRefreshModels) btnRefreshModels.addEventListener('click', refreshModels);
 
-  async function refreshSessions(autoSelectFirst = false) {
+  async function refreshSessions() {
     const cid = charSelect.value;
     if (!cid) return;
     selectedChar = cid;
@@ -211,13 +211,22 @@
       const ids = Array.isArray(r.data) ? r.data.map(s => s.session_id || s) : [];
       replaceOptions(sessSelect, ids, id => id.slice(0, 12));
       if (!ids.includes(selectedSess)) selectedSess = ids[0] || '';
-      if (autoSelectFirst && !sessSelect.value) selectedSess = ids[0] || '';
       if (selectedSess) sessSelect.value = selectedSess;
     }
   }
 
+  function abortChatStream() {
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+  }
+
   // 切换 session 清空当前 chat log 视图，防上一 session 残留消息串扰新 session 视图
-  function clearChatView() { chatLog.innerHTML = ''; }
+  function clearChatView() {
+    abortChatStream();
+    chatLog.innerHTML = '';
+  }
 
   charSelect.addEventListener('change', () => {
     selectedChar = charSelect.value;
@@ -238,10 +247,9 @@
       const newId = r.data?.session_id || r.data;
       if (newId) {
         selectedSess = typeof newId === 'string' ? newId : (newId.uuid || String(newId));
-        clearChatView();
       }
+      clearChatView();
       await refreshSessions();
-      if (newId && sessSelect.value !== selectedSess) sessSelect.value = selectedSess;
     }
   });
 
@@ -267,8 +275,11 @@
     if (!selectedSess) {
       const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
       if (!r.ok) { appendMsg('assistant', '[session create failed]', false); return; }
+      const newId = r.data?.session_id || r.data;
+      if (newId) {
+        selectedSess = typeof newId === 'string' ? newId : (newId.uuid || String(newId));
+      }
       await refreshSessions();
-      selectedSess = r.data?.session_id || sessSelect.value;
     }
 
     // abort prior stream
