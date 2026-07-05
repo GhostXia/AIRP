@@ -374,30 +374,44 @@
 
   function renderMarkdown(text) {
     if (text == null) return '';
+    // 行级分块：先把 fenced code blocks 抽出（用占位符），再按行 split，
+    // 块级（pre/h1-h3）独立包裹，避免非法 HTML 嵌套（<p><pre>、<p><h1>）。
     const codeBlocks = [];
     let s = escapeHtml(text);
-    // 1. fenced code blocks ```lang\n...\n```
+    // 1. fenced code blocks ```lang\n...\n``` 抽到占位行
     s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-      const i = codeBlocks.length;
-      codeBlocks.push('<pre class="md-code"><code>' + code.replace(/\n$/, '') + '</code></pre>');
-      return '\uF8FFCB' + i + '\uF8FF';
+      // lang 暂未用于高亮（避免引第三方）；保留以便未来加 highlight.js
+      const i = codeBlocks.push('<pre class="md-code"><code>' + code.replace(/\n$/, '') + '</code></pre>') - 1;
+      return '\n\uF8FFCB' + i + '\uF8FF\n';
     });
-    // 2. inline code `...`
+    // 2. 行内 markdown：inline code / bold / italic 在非占位行上。
+    //    占位行只有 \uF8FF 包装，无 ** / ` / * 风险，replace 仍安全。
     s = s.replace(/`([^`\n]+)`/g, '<code class="md-code-inline">$1</code>');
-    // 3. headers (line-anchored)
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    // 3. 标题转块级（不被 <p> 包裹）。Fenced placeholder 行不含 #。
     s = s.replace(/^### (.+)$/gm, '<h3 class="md-h">$1</h3>');
     s = s.replace(/^## (.+)$/gm, '<h2 class="md-h">$1</h2>');
     s = s.replace(/^# (.+)$/gm, '<h1 class="md-h">$1</h1>');
-    // 4. bold **...** (must run before italic so italic regex won't see **)
-    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    // 5. italic *...*
-    s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-    // 6. paragraph + line break
-    s = s.replace(/\n{2,}/g, '</p><p>');
-    s = s.replace(/\n/g, '<br>');
-    // 7. restore code blocks (after \n→<br> so internal \n preserved)
-    s = s.replace(/\uF8FFCB(\d+)\uF8FF/g, (_, i) => codeBlocks[+i]);
-    return '<p>' + s + '</p>';
+    // 4. 块级切分：按行扫描，块级元素/占位行独占一段，blank line 切 paragraph
+    const lines = s.split('\n');
+    const out = [];
+    let para = [];
+    const flushPara = () => {
+      if (para.length) {
+        out.push('<p>' + para.join('<br>') + '</p>');
+        para = [];
+      }
+    };
+    for (const line of lines) {
+      const isBlock = /^(<h[1-3] )/.test(line) || /^\uF8FFCB\d+\uF8FF$/.test(line);
+      if (line === '') { flushPara(); continue; }
+      if (isBlock) { flushPara(); out.push(line); }
+      else { para.push(line); }
+    }
+    flushPara();
+    // 5. 恢复 code blocks (顺序与 codeBlocks.push 一致)
+    return out.join('\n').replace(/\uF8FFCB(\d+)\uF8FF/g, (_, i) => codeBlocks[+i]);
   }
 
   // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。

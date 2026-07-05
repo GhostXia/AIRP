@@ -21,7 +21,14 @@ const MIME = {
 };
 
 http.createServer((req, res) => {
-  let urlPath = decodeURIComponent(req.url.split('?')[0]);
+  // F3 (审计 fix): decodeURIComponent 对 malformed % 抛 URIError 会杀进程。
+  // try/catch 兜住，返回 400 而非崩溃整个 server。
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(req.url.split('?')[0]);
+  } catch {
+    res.writeHead(400); res.end('bad url encoding'); return;
+  }
   if (urlPath === '/') urlPath = '/index.html';
   // 防路径穿越：归一化后必须仍在 ROOT 下
   const safe = path.normalize(path.join(ROOT, urlPath));
