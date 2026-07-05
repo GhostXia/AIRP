@@ -984,6 +984,382 @@
     }
   });
 
+  // ── Workbench（角色卡 + 世界书编辑，PR F）─────────────────────────────────
+  // 用户需求：导入角色卡后，点击「工作台」进入编辑视图，可改角色卡和世界书，
+  // 然后在右侧 session 区新建对话。工作台是 overlay 面板，不挡 chat。
+  const workbenchPanel = $('#workbench-panel');
+  const wbCharName = $('#wb-char-name');
+  const wbCardFields = $('#wb-card-fields');
+  const wbLoreEntries = $('#wb-lore-entries');
+  const wbCardStatus = $('#wb-card-status');
+  const wbLoreStatus = $('#wb-lore-status');
+  const btnWorkbench = $('#btn-workbench');
+  const btnReextract = $('#btn-reextract');
+  const btnWbClose = $('#btn-wb-close');
+  const btnWbSaveCard = $('#btn-wb-save-card');
+  const btnWbSaveLore = $('#btn-wb-save-lore');
+  const btnWbAddLore = $('#btn-wb-add-lore');
+  const wbDirtyDot = $('#wb-dirty-dot');
+
+  // 当前工作台缓存的角色卡 / 世界书数据
+  let wbCardData = null;
+  let wbLoreData = null;
+  let wbDirty = false;
+
+  // 角色卡可编辑字段（TavernCardV2 data 层）
+  const CARD_FIELDS = [
+    { key: 'name', label: '名称', type: 'input' },
+    { key: 'description', label: '描述', type: 'textarea', tall: true },
+    { key: 'personality', label: '性格', type: 'textarea' },
+    { key: 'scenario', label: '场景', type: 'textarea' },
+    { key: 'first_mes', label: '开场白', type: 'textarea', tall: true },
+    { key: 'system_prompt', label: '系统提示词', type: 'textarea', tall: true },
+    { key: 'mes_example', label: '对话示例', type: 'textarea', tall: true },
+  ];
+
+  function openWorkbench() {
+    if (!selectedChar) {
+      alert('请先选择一个角色');
+      return;
+    }
+    workbenchPanel.hidden = false;
+    wbCharName.textContent = selectedChar;
+    wbCardStatus.textContent = '加载中…';
+    wbLoreStatus.textContent = '加载中…';
+    setWbDirty(false);  // 切角色打开时清 dirty，避免上次残留
+    loadWorkbenchCard();
+    loadWorkbenchLorebook();
+  }
+
+  function setWbDirty(dirty) {
+    wbDirty = dirty;
+    if (wbDirtyDot) wbDirtyDot.hidden = !dirty;
+  }
+
+  function closeWorkbench() {
+    if (wbDirty) {
+      if (!confirm('工作台有未保存修改，关闭后修改将丢失。确定关闭？')) return;
+    }
+    workbenchPanel.hidden = true;
+    wbCardData = null;
+    wbLoreData = null;
+    setWbDirty(false);
+  }
+
+  async function loadWorkbenchCard() {
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(selectedChar));
+    if (r.ok) {
+      wbCardData = r.data;
+      renderCardFields();
+      wbCardStatus.textContent = '已加载（修改后点保存写回）';
+    } else {
+      wbCardStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
+      wbCardFields.innerHTML = '';
+    }
+  }
+
+  function renderCardFields() {
+    if (!wbCardData) return;
+    const data = wbCardData.data || wbCardData;
+    wbCardFields.innerHTML = '';
+
+    // name 单独一行
+    const nameField = CARD_FIELDS.find(f => f.key === 'name');
+    if (nameField) wbCardFields.appendChild(makeCardField(nameField, data));
+
+    // 提示词类字段分组
+    const promptFields = CARD_FIELDS.filter(f => f.key !== 'name');
+    if (promptFields.length) {
+      const group = document.createElement('div');
+      group.className = 'wb-group';
+      const title = document.createElement('div');
+      title.className = 'wb-group-title';
+      title.textContent = '提示词与背景';
+      group.appendChild(title);
+      for (const f of promptFields) group.appendChild(makeCardField(f, data));
+      wbCardFields.appendChild(group);
+    }
+  }
+
+  function makeCardField(f, data) {
+    const wrap = document.createElement('div');
+    wrap.className = 'wb-field';
+    const lbl = document.createElement('label');
+    lbl.textContent = f.label;
+    const el = document.createElement(f.type === 'textarea' ? 'textarea' : 'input');
+    if (f.type === 'textarea' && f.tall) el.classList.add('wb-tall');
+    el.value = data[f.key] || '';
+    el.dataset.field = f.key;
+    el.addEventListener('input', () => setWbDirty(true));
+    wrap.appendChild(lbl);
+    wrap.appendChild(el);
+    return wrap;
+  }
+
+  async function saveWorkbenchCard() {
+    if (!wbCardData || !selectedChar) return;
+    const data = wbCardData.data || wbCardData;
+    // 收集表单值
+    for (const f of CARD_FIELDS) {
+      const el = wbCardFields.querySelector('[data-field="' + f.key + '"]');
+      if (el) data[f.key] = el.value;
+    }
+    wbCardStatus.textContent = '保存中…';
+    btnWbSaveCard.disabled = true;
+    const r = await api('PUT', '/v1/characters/' + encodeURIComponent(selectedChar), wbCardData);
+    btnWbSaveCard.disabled = false;
+    if (r.ok) {
+      wbCardStatus.textContent = '已保存 ✓';
+      setWbDirty(false);
+      refreshAvatar();
+    } else {
+      wbCardStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  async function loadWorkbenchLorebook() {
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook');
+    if (r.status === 404) {
+      wbLoreData = { entries: [] };
+      renderLoreEntries();
+      wbLoreStatus.textContent = '该角色尚无世界书（可新建条目后保存）';
+    } else if (r.ok) {
+      wbLoreData = r.data;
+      if (!wbLoreData.entries) wbLoreData.entries = [];
+      renderLoreEntries();
+      wbLoreStatus.textContent = '已加载 ' + wbLoreData.entries.length + ' 条条目';
+    } else {
+      wbLoreStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  function renderLoreEntries() {
+    if (!wbLoreData) return;
+    wbLoreEntries.innerHTML = '';
+    wbLoreData.entries.forEach((entry, i) => {
+      wbLoreEntries.appendChild(renderLoreEntry(entry, i));
+    });
+  }
+
+  function renderLoreEntry(entry, index) {
+    const div = document.createElement('div');
+    div.className = 'wb-lore-entry collapsed';
+    div.dataset.index = String(index);
+
+    const head = document.createElement('div');
+    head.className = 'wb-lore-head';
+
+    // index + 展开切换
+    const toggle = document.createElement('button');
+    toggle.className = 'wb-lore-toggle';
+    toggle.textContent = '▸';
+    toggle.title = '展开/折叠';
+    toggle.addEventListener('click', () => {
+      div.classList.toggle('collapsed');
+      toggle.textContent = div.classList.contains('collapsed') ? '▸' : '▾';
+    });
+    head.appendChild(toggle);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'wb-lore-index';
+    lbl.textContent = '条目 #' + (index + 1);
+    head.appendChild(lbl);
+
+    // keys 行内编辑
+    const keysInput = document.createElement('input');
+    keysInput.className = 'wb-lore-keys';
+    keysInput.type = 'text';
+    keysInput.value = (entry.keys || []).join(', ');
+    keysInput.placeholder = '关键词（逗号分隔）';
+    keysInput.addEventListener('input', (e) => {
+      entry.keys = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+      setWbDirty(true);
+    });
+    head.appendChild(keysInput);
+
+    // priority
+    const priInput = document.createElement('input');
+    priInput.className = 'wb-lore-priority';
+    priInput.type = 'number';
+    priInput.min = '0';
+    priInput.value = entry.priority ?? 10;
+    priInput.title = '优先级';
+    priInput.addEventListener('input', (e) => {
+      const v = parseInt(e.target.value, 10);
+      entry.priority = isNaN(v) ? 10 : v;
+      setWbDirty(true);
+    });
+    head.appendChild(priInput);
+
+    // enabled
+    const enLbl = document.createElement('label');
+    enLbl.className = 'wb-lore-enabled';
+    const enCb = document.createElement('input');
+    enCb.type = 'checkbox';
+    enCb.checked = entry.enabled !== false;
+    enCb.addEventListener('change', () => {
+      entry.enabled = enCb.checked;
+      setWbDirty(true);
+    });
+    enLbl.appendChild(enCb);
+    enLbl.appendChild(document.createTextNode('启用'));
+    head.appendChild(enLbl);
+
+    // delete
+    const del = document.createElement('button');
+    del.className = 'wb-lore-del';
+    del.textContent = '✕';
+    del.title = '删除此条目';
+    del.addEventListener('click', () => {
+      wbLoreData.entries.splice(index, 1);
+      setWbDirty(true);
+      renderLoreEntries();
+    });
+    head.appendChild(del);
+
+    div.appendChild(head);
+
+    // body
+    const body = document.createElement('div');
+    body.className = 'wb-lore-body';
+
+    const contentTa = document.createElement('textarea');
+    contentTa.placeholder = '注入内容';
+    contentTa.value = entry.content || '';
+    contentTa.addEventListener('input', (e) => {
+      entry.content = e.target.value;
+      setWbDirty(true);
+    });
+    body.appendChild(contentTa);
+
+    const cmtInput = document.createElement('input');
+    cmtInput.className = 'wb-lore-comment';
+    cmtInput.type = 'text';
+    cmtInput.placeholder = '注释（可选）';
+    cmtInput.value = entry.comment || '';
+    cmtInput.addEventListener('input', (e) => {
+      entry.comment = e.target.value || null;
+      setWbDirty(true);
+    });
+    body.appendChild(cmtInput);
+
+    div.appendChild(body);
+    return div;
+  }
+
+  function addLoreEntry() {
+    if (!wbLoreData) wbLoreData = { entries: [] };
+    wbLoreData.entries.push({
+      keys: [],
+      content: '',
+      enabled: true,
+      priority: 10,
+      comment: null,
+    });
+    setWbDirty(true);
+    renderLoreEntries();
+    // 自动滚动到新条目并展开
+    const entries = wbLoreEntries.querySelectorAll('.wb-lore-entry');
+    const last = entries[entries.length - 1];
+    if (last) {
+      last.classList.remove('collapsed');
+      const toggle = last.querySelector('.wb-lore-toggle');
+      if (toggle) toggle.textContent = '▾';
+      last.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  async function saveWorkbenchLore() {
+    if (!wbLoreData || !selectedChar) return;
+    wbLoreStatus.textContent = '保存中…';
+    btnWbSaveLore.disabled = true;
+    const r = await api('PUT', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook', wbLoreData);
+    btnWbSaveLore.disabled = false;
+    if (r.ok) {
+      wbLoreStatus.textContent = '已保存 ✓（' + (r.data?.entries_count ?? '?') + ' 条）';
+      setWbDirty(false);
+    } else {
+      wbLoreStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  // Tab 切换
+  $$('.wb-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('.wb-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const target = tab.dataset.tab;
+      $('#wb-tab-card').hidden = target !== 'card';
+      $('#wb-tab-lorebook').hidden = target !== 'lorebook';
+    });
+  });
+
+  if (btnWorkbench) btnWorkbench.addEventListener('click', openWorkbench);
+  if (btnReextract) btnReextract.addEventListener('click', reextractCurrentChar);
+  if (btnWbClose) btnWbClose.addEventListener('click', closeWorkbench);
+  if (btnWbSaveCard) btnWbSaveCard.addEventListener('click', saveWorkbenchCard);
+  if (btnWbSaveLore) btnWbSaveLore.addEventListener('click', saveWorkbenchLore);
+  if (btnWbAddLore) btnWbAddLore.addEventListener('click', addLoreEntry);
+
+  // ESC 关闭工作台（但 textarea/input 中按 ESC 不关，避免丢失未保存编辑）
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && workbenchPanel && !workbenchPanel.hidden) {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      closeWorkbench();
+    }
+  });
+
+  // 工作台面板拖拽调整宽度
+  // 兜底：mouseleave/blur 强制 endDrag 防拖到窗口外松不开
+  function initWorkbenchResizer() {
+    const resizer = $('#workbench-resizer');
+    if (!resizer || !workbenchPanel) return;
+    let dragging = false;
+    let onMove = null, onUp = null;
+    const endDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.userSelect = '';
+      if (onMove) window.removeEventListener('mousemove', onMove);
+      if (onUp) window.removeEventListener('mouseup', onUp);
+      onMove = null; onUp = null;
+    };
+    resizer.addEventListener('mousedown', (e) => {
+      if (dragging) return;
+      dragging = true;
+      document.body.style.userSelect = 'none';
+      const startX = e.clientX;
+      const startW = workbenchPanel.offsetWidth;
+      onMove = (ev) => {
+        if (!dragging) return;
+        const delta = startX - ev.clientX;
+        const next = Math.min(Math.max(startW + delta, 320), window.innerWidth * 0.65);
+        workbenchPanel.style.width = next + 'px';
+      };
+      onUp = () => endDrag();
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+    // 兜底 1：鼠标离开浏览器窗口
+    document.addEventListener('mouseleave', endDrag);
+    // 兜底 2：窗口失焦
+    window.addEventListener('blur', endDrag);
+  }
+  initWorkbenchResizer();
+
+  async function reextractCurrentChar() {
+    if (!selectedChar) { alert('请先选择一个角色'); return; }
+    if (!confirm('重新解包会从当前 card.json 重新生成 world/lorebook.json 和 card/greetings/，确定继续？')) return;
+    const r = await api('POST', '/v1/characters/' + encodeURIComponent(selectedChar) + '/reextract');
+    if (r.ok) {
+      alert('重新解包完成');
+      loadWorkbenchLorebook();
+    } else {
+      alert('重新解包失败: ' + formatError(r.data, r.text));
+    }
+  }
+
   // ── auto-connect on load ─────────────────────────────────────────────────
   setTimeout(connect, 300);
 })();

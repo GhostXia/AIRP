@@ -40,6 +40,10 @@
           <img id="char-avatar" alt="avatar" hidden />
           <select id="char-select" size="6"></select>
         </div>
+        <div id="char-actions">
+          <button id="btn-workbench" class="btn-primary">🛠 工作台</button>
+          <button id="btn-reextract" title="重新解包角色卡资产">↻ 重解</button>
+        </div>
       </section>
       <section>
         <h3>Sessions <button id="btn-new-session">+</button></h3>
@@ -58,6 +62,40 @@
         <button id="btn-import">上传导入</button>
         <div id="import-result" class="hint">—</div>
       </section>
+    </aside>
+
+    <!-- Workbench overlay (角色卡 + 世界书编辑) -->
+    <aside id="workbench-panel" hidden>
+      <div id="workbench-resizer" title="左右拖拽调整宽度"></div>
+      <div id="workbench-header">
+        <div id="workbench-title">
+          <h3>工作台</h3>
+          <span id="wb-char-name">—</span>
+          <span id="wb-dirty-dot" hidden title="有未保存修改">●</span>
+        </div>
+        <button id="btn-wb-close" title="关闭 (ESC)">✕</button>
+      </div>
+      <div id="workbench-tabs">
+        <button class="wb-tab active" data-tab="card">角色卡</button>
+        <button class="wb-tab" data-tab="lorebook">世界书</button>
+      </div>
+      <div id="wb-tab-card" class="wb-tab-content">
+        <div class="hint">编辑角色卡。保存后写回 card.json + raw.json。</div>
+        <div class="wb-fields" id="wb-card-fields"></div>
+        <div class="wb-actions">
+          <button id="btn-wb-save-card" class="btn-primary">保存角色卡</button>
+          <span id="wb-card-status" class="hint">—</span>
+        </div>
+      </div>
+      <div id="wb-tab-lorebook" class="wb-tab-content" hidden>
+        <div class="hint">编辑世界书条目（keys 触发关键词，content 注入内容）。</div>
+        <div id="wb-lore-entries"></div>
+        <div class="wb-actions">
+          <button id="btn-wb-add-lore">+ 添加条目</button>
+          <button id="btn-wb-save-lore" class="btn-primary">保存世界书</button>
+          <span id="wb-lore-status" class="hint">—</span>
+        </div>
+      </div>
     </aside>
 
     <!-- Center: chat -->

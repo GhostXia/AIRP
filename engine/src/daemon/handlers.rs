@@ -776,6 +776,120 @@ pub(super) async fn get_character_state_history(
     }
 }
 
+// ── Character card / lorebook CRUD（PR E：工作台编辑所需） ──────────────────
+
+/// GET /v1/characters/:character_id — 返回角色卡 JSON 原文。
+/// 优先读 `card/card.json`（迁移后路径），兼容旧 `card.json`。
+pub(super) async fn get_character_card(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(character_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AirpError> {
+    let cid = CharacterId::new(character_id)?;
+    let json_str = data_dir::get_character(&state.data_root, &cid)?;
+    let value: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| AirpError::BadRequest(format!("card.json 解析失败: {}", e)))?;
+    Ok(Json(value))
+}
+
+/// DELETE /v1/characters/:character_id — 删除整个角色目录（card + state + sessions + ...）。
+/// destructive：调用方负责确认。返回 {deleted: id}。
+pub(super) async fn delete_character_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(character_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AirpError> {
+    let cid = CharacterId::new(character_id)?;
+    data_dir::delete_character(&state.data_root, &cid)?;
+    Ok(Json(serde_json::json!({
+        "deleted": cid.as_str(),
+        "status": "ok"
+    })))
+}
+
+/// PUT /v1/characters/:character_id — 更新角色卡 JSON（整体替换）。
+/// body 是 TavernCardV2 JSON；写回 `card/card.json` + `card/raw.json`。
+/// 不重新解包资产（greetings/lorebook），如需重解请调 reextract。
+///
+/// 设计说明：raw.json 在导入时是"原始 imported 卡"的 sidecar（守 ASSET-SPEC
+/// 规则2 存储永不丢）。本端点将其一并覆盖——把工作台编辑视为"新的规范化
+/// 版本"，后续 reextract 会以编辑后的卡为源。如需保留原始 imported 卡，
+/// 调用方应在 PUT 前自行备份（例如调 reextract 前再 PUT 一次原始内容）。
+pub(super) async fn update_character_card(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(character_id): axum::extract::Path<String>,
+    Json(card): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AirpError> {
+    let cid = CharacterId::new(character_id)?;
+    // 校验角色已存在（character_dir 会创建子目录，所以用 list_characters 校验）
+    let exists = data_dir::list_characters(&state.data_root)?
+        .into_iter()
+        .any(|c| c == cid.as_str());
+    if !exists {
+        return Err(AirpError::NotFound(format!(
+            "character {} does not exist",
+            cid
+        )));
+    }
+    let json_str = serde_json::to_string_pretty(&card)
+        .map_err(|e| AirpError::BadRequest(format!("card JSON 序列化失败: {}", e)))?;
+    let char_dir = data_dir::character_dir(&state.data_root, cid.as_str())?;
+    let card_dir = char_dir.join("card");
+    fs::create_dir_all(&card_dir)?;
+    fs::write(card_dir.join("card.json"), &json_str)?;
+    fs::write(card_dir.join("raw.json"), &json_str)?;
+    Ok(Json(serde_json::json!({
+        "character_id": cid.as_str(),
+        "status": "ok"
+    })))
+}
+
+/// GET /v1/characters/:character_id/lorebook — 返回角色级世界书 JSON。
+/// 不存在 → 404（与空对象 {} 区分）。
+pub(super) async fn get_character_lorebook(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(character_id): axum::extract::Path<String>,
+) -> Response {
+    let char_id = match CharacterId::new(character_id) {
+        Ok(id) => id,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let lb_path = data_dir::char_world_lorebook_path(&state.data_root, char_id.as_str());
+    match fs::read_to_string(&lb_path) {
+        Ok(json) => ([(header::CONTENT_TYPE, "application/json")], json).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// PUT /v1/characters/:character_id/lorebook — 更新角色级世界书（整体替换）。
+/// body 是 `Lorebook` JSON：`{ entries: [{ keys, content, enabled?, priority?, comment? }] }`。
+/// 角色不存在 → 404；写入前会校验 Lorebook 结构。
+pub(super) async fn update_character_lorebook(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(character_id): axum::extract::Path<String>,
+    Json(body): Json<crate::orchestrator::Lorebook>,
+) -> Result<Json<serde_json::Value>, AirpError> {
+    let cid = CharacterId::new(character_id)?;
+    // 校验角色已存在
+    let exists = data_dir::list_characters(&state.data_root)?
+        .into_iter()
+        .any(|c| c == cid.as_str());
+    if !exists {
+        return Err(AirpError::NotFound(format!(
+            "character {} does not exist",
+            cid
+        )));
+    }
+    let json_str = serde_json::to_string_pretty(&body)
+        .map_err(|e| AirpError::BadRequest(format!("lorebook JSON 序列化失败: {}", e)))?;
+    let world_dir = data_dir::char_world_dir(&state.data_root, cid.as_str())?;
+    let lb_path = world_dir.join("lorebook.json");
+    fs::write(&lb_path, json_str)?;
+    Ok(Json(serde_json::json!({
+        "character_id": cid.as_str(),
+        "entries_count": body.entries.len(),
+        "status": "ok"
+    })))
+}
+
 // ── Scene handlers ────────────────────────────────────────────────────────────
 
 /// GET /v1/scenes — list all scene IDs.
