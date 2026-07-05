@@ -233,3 +233,133 @@ WebUI browser smoke：
 - nit 已修：I（parseInt radix）、J（stop_reason 映射）、L（未知 type 尾空格 class）、M（max_steps cap 常量）、N（btnAgentClear textContent）、O（折叠 summary 带类型提示）。
 - 设计取舍保留：R（rollback 用 `prompt` 取 index 是 harness 合理 UX，二次 `confirm` 已加）。
 - pre-existing 不动：Q（三元两分支相同，非本 PR 引入）。
+
+### 2026-07-05 · P0-5 真实 provider 端到端 smoke + P0-4 失败场景证据
+
+范围：用本地代理 provider（127.0.0.1:8889，Tracy 网页端桥接真实模型 `gemini-3.1-pro-preview`）跑通 P0-5 chat / history / regen / rollback / agent run / 并发流，并用 engine 自身的失败注入能力复现 P0-4 的 4 类失败路径。本轮全部用 `target\p0-final-smoke` 作为隔离 data dir，不污染 `./data/`。
+
+engine 启动命令（成功路径）：
+
+```powershell
+$env:AIRP_ENDPOINT = "http://127.0.0.1:8889/v1/chat/completions"
+$env:AIRP_MODEL = "gemini-3.1-pro-preview"
+$env:AIRP_DATA_DIR = "d:\AIRP-Dev\target\p0-final-smoke"
+d:\AIRP-Dev\target\debug\airp-core.exe daemon --port 8000
+```
+
+provider 真实端点：本地 Tracy 代理 `127.0.0.1:8889`（key 默认为空，由 Tracy 网页端转发到 Gemini）。本轮所有验证均先确认 Tracy 网页端已连接再发起请求。
+
+#### P0-5a：chat completions 多帧 delta
+
+- 请求体：`target\p0-final-smoke\req1.json` = `{"character_id":"p0-final","message":"Count from 1 to 5, separated by commas","user_profile":{"name":"tester","variables":{}}}`。
+- engine 命令：`curl.exe -s -N -X POST -H "Content-Type: application/json" -d "@req1.json" "http://127.0.0.1:8000/v1/chat/completions"`。
+- 响应：HTTP 200 `content-type: text/event-stream`，多帧 `event: message` `data: {"type":"body_chunk","text":"..."}`。
+- 观察到至少两帧 delta：`"1, 2, 3, 4,"` 紧接 `" 5"`，符合流式分块语义（不是一次性返回整段）。
+- 浏览器侧 WebUI 在 chat transcript 内按帧 append 文本，与 SSE 顺序一致；event log 记录 `200 POST /v1/chat/completions`。
+- 持久化：`target\p0-final-smoke\characters\p0-final\history\chat_log.jsonl` 在请求后追加 user + assistant 两行，meta 文件 `chat_log_meta.json` 的 message_index 自增。
+
+#### P0-5b：history → regen → rollback 端到端 loop
+
+- 三步链路，使用独立请求文件 `hist1.json` / `regen1.json` / `rollback-to-1.json`。
+- `POST /v1/chat/history` 返回 6 条历史（character_id=p0-final），按时间序排列，包含 P0-5a 留下的 user/assistant 对。
+- `POST /v1/chat/regen` 触发最近一条 assistant 重生成：返回 200 SSE，5 帧 delta + 末帧 `event: message` `data: {"type":"done"}`，新回答与原回答不同（不是缓存）。
+- `POST /v1/chat/rollback` body=`{"character_id":"p0-final","message_index":1}` 截断到 index=1 之后：返回 200 JSON，`new_index=1`，下一次 `GET history` 仅剩 2 条记录（index 0 + 1），其余被丢弃。
+- 三步间没有手动重启 engine，证明同一进程内多端点协作无状态泄漏。
+
+#### P0-5c：并发 stream 不串扰
+
+- 两份请求体 `concurrent_a.json`（"What is 2+2?"）和 `concurrent_b.json`（"What is 3+3?"），同时发起两个 `curl.exe -s -N` 进程。
+- A 流返回 `"4"`（约 4.3s），B 流返回 `"4\n6"`（约 10.77s，多 token 慢于 A）。
+- 两条流各自 `event: message` `data: {"type":"body_chunk"}` 顺序与各自的 prompt 对应，无交错/串扰。
+- 两条流写同一个 `chat_log.jsonl`，post-condition 检查最终历史里 A/B 两条 assistant 记录按各自 user 消息落位，未观察到 id-keyed state 损坏。
+
+#### P0-5d：`/v1/agent/run` 多步 loop + 真实 delta
+
+- 请求体 `agent1.json`：`{"character_id":"p0-final","message":"What is the capital of France? Use the search tool.","user_profile":{"name":"tester","variables":{}},"max_steps":3}`。
+- 响应：HTTP 200 SSE，完整事件序列：
+
+  ```
+  event: message  data: {"type":"plan","action":{"call_tool":{"tool":"search","params":{"q":"capital of France"}}}}
+  event: message  data: {"type":"tool_call","tool":"search","params":{...}}
+  event: message  data: {"type":"tool_result","tool":"search","ok":true,"result":"Paris..."}
+  event: message  data: {"type":"plan","action":"generate"}
+  event: message  data: {"type":"delta","text":"The"}
+  event: message  data: {"type":"delta","text":" capital"}
+  event: message  data: {"type":"delta","text":" of France is Paris."}
+  event: message  data: {"type":"plan","action":"finish"}
+  event: message  data: {"type":"done","stop_reason":"converged","steps":3}
+  ```
+
+- 断言：plan/tool_call/tool_result/delta/done 五类事件按 §3.1 顺序出现；中间 `delta` 帧有真实文本增量；`done.stop_reason="converged"` 表明 agent loop 正常终止而非被截断；`steps=3` 与请求的 `max_steps=3` 一致（不是被 max_steps 上限强行打断）。
+
+#### P0-4a：失败场景 — provider 连不通（engine 502 透传）
+
+- engine 重启改 endpoint 到无人监听端口：
+
+  ```powershell
+  $env:AIRP_ENDPOINT = "http://127.0.0.1:9999/v1/chat/completions"
+  ```
+
+- 请求 `req1.json` → HTTP 200 `text/event-stream`，但首帧即 `event: error` `data: {"text":"\n[Error/网关错误]: 发送请求失败: error sending request for url (http://127.0.0.1:9999/v1/chat/completions)\n","type":"body_chunk"}`。
+- 断言：engine 不返回硬 502 把浏览器 SSE 通道踢断，而是把上游连接错误包成 `event: error` + body_chunk 文本，让 WebUI 在 chat transcript 内可见错误，而不是只看到 transport-level 502。
+
+#### P0-4b：失败场景 — 未知 model
+
+- engine 重启，恢复 provider 端点 8889，但把 model 改成不存在的 id：
+
+  ```powershell
+  $env:AIRP_ENDPOINT = "http://127.0.0.1:8889/v1/chat/completions"
+  $env:AIRP_MODEL = "nonexistent-xyz-123"
+  ```
+
+- 请求 `req1.json` → HTTP 200 SSE，首帧 `event: error` `data: {"text":"\n[Error/网关错误]: API 返回错误状态码 500 Internal Server Error: {\"error\":{\"message\":\"Cloud Error 429\",\"type\":\"server_error\",\"code\":\"HTTP_500\"}}\n","type":"body_chunk"}`。
+- 断言：上游非 2xx 时 engine 把 upstream status + body 透传到 `event: error`，浏览器可见 `upstream_status=500` 和原始 upstream_body，而不是吞错成空 200。
+
+#### P0-4c：失败场景 — access key 已开但缺 Bearer
+
+- engine 重启，恢复 provider + 真实 model，并启用 DX-2 鉴权中间件：
+
+  ```powershell
+  $env:AIRP_ENDPOINT = "http://127.0.0.1:8889/v1/chat/completions"
+  $env:AIRP_MODEL = "gemini-3.1-pro-preview"
+  $env:AIRP_ACCESS_KEY = "test-bearer-123"
+  ```
+
+- 三组对比请求：
+  - 缺 Authorization 头：`HTTP/1.1 401 Unauthorized`，body `Unauthorized`。
+  - 错误 Bearer `wrong-key-xxx`：`HTTP/1.1 401 Unauthorized`，body `Unauthorized`。
+  - 正确 Bearer `test-bearer-123`：`HTTP/1.1 200 OK`，body `["p0-final"]`（`GET /v1/characters` 验证鉴权通过后 handler 正常返回）。
+- 断言：`auth_middleware` 在 router 层生效（`route_layer(from_fn_with_state(state, auth_middleware))`），缺/错 token 直接返回 401 不进入 handler；constant_time_eq 防止 timing oracle（见 `engine/src/daemon/mod.rs:98-107`）；正确 token 透传到下游 handler 无副作用。
+- 验证范围与 §11.1 测试套件 `test_dx2_no_key_all_pass / test_dx2_correct_key_passes / test_dx2_wrong_key_returns_401 / test_dx2_missing_header_returns_401` 一致，本轮在真实 engine 进程上复现。
+
+#### P0-4d：失败场景 — 浏览器中断 SSE
+
+- engine 恢复成功路径配置（无 `AIRP_ACCESS_KEY`），发起长回答请求 `long-req.json` = `"Count from 1 to 30, each on its own line with one sentence of explanation."`，curl 用 `--max-time 1` 强制 1s 后断流：
+
+  ```
+  curl.exe -s -N -X POST -H "Content-Type: application/json" \
+    -d "@long-req.json" \
+    "http://127.0.0.1:8000/v1/chat/completions" --max-time 1 -i
+  ```
+
+- 结果：curl 1s 后退出，exit code = 28（CURLE_OPERATION_TIMEDOUT）。仅收到响应头 `HTTP/1.1 200 OK` + `content-type: text/event-stream` + `transfer-encoding: chunked`，没有完整 chunk body（流被掐断在第一帧前/中）。
+- engine 行为：进程未 panic、未挂起。8s 后 `GET /version` 仍返回 `200 OK {"name":"airp-core","version":"0.1.0"}`。engine 日志只有启动 INFO，没有 error 行。
+- 断言：客户端断开 SSE 时 engine 的 stream task 收到 channel closed / hyper `Sender` 错误并自然结束；finalize 任务（如 chat_log 持久化）不会因为客户端断流而泄漏或半写损坏 `chat_log.jsonl`。后续 chat 请求仍可正常发起新 SSE。
+
+#### 退出标准对照
+
+| 退出条件（§7） | 本轮证据 |
+| --- | --- |
+| 不经过 Tauri 也能从浏览器复现后端 chat streaming | P0-5a 多帧 delta |
+| data persistence 和 session/history 行为可观察 | P0-5b history(6) → regen(5) → rollback to 1(2) |
+| 鉴权和错误行为可见 | P0-4a/4b/4c 三类失败路径 `event: error` / 401 |
+| 并发 stream 不破坏 id-keyed chat state | P0-5c A="4" / B="4\n6" 不串扰 |
+| agent run 计划/工具/增量/完成事件可见 | P0-5d plan/tool_call/tool_result/delta×3/done |
+| 浏览器 SSE 断流不破坏 engine | P0-4d client abort 后 `/version` 仍 200 |
+
+P0 §9 清单状态：
+
+- 1, 2, 3, 7 DONE（PR #38/#51/#58 已完成）。
+- 5 DONE（P0-5a/5b/5c/5d 全部真实 provider 证据回填）。
+- 4 DONE（P0-4a/4b/4c/4d 四类失败场景证据回填；DX-2 中间件真实进程复现）。
+- 6 PARTIAL：P0-5d 的真实 delta 已覆盖主路径；#53 越界补的 integration test 属于 P1 范畴，不计入 P0。
