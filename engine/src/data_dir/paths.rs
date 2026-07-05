@@ -15,24 +15,41 @@ use std::path::{Path, PathBuf};
 ///    （如 `Program Files` 的 UAC 拒写、或用户从任意目录双击）时，落 OS 标准 per-user
 ///    位（Win `%APPDATA%\airp\`，macOS `~/Library/Application Support/airp/`，
 ///    Linux `~/.local/share/airp/`），per-user 隔离、重装不丢、不污染 Program Files。
+/// 4. 兜底 `cwd/data` —— `dirs` 取不到（极罕见，某些容器化环境）。
 ///
 /// 旧实现仅「cwd/data」相对 cwd，双击 .exe 时 cwd 漂到安装目录致写失败或数据共享。
 pub fn resolve_data_root() -> PathBuf {
-    if let Ok(custom) = std::env::var("AIRP_DATA_DIR") {
+    resolve_data_root_inner(
+        std::env::var("AIRP_DATA_DIR").ok().as_deref(),
+        cfg!(debug_assertions),
+        std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+        &PathBuf::from("Cargo.toml"),
+    )
+}
+
+/// `resolve_data_root` 的纯函数内核 —— 把 env / 编译态 / cwd 这些全局依赖
+/// 参数化后，单元测试可直接覆盖每条 fallback 与边界条件（空 env var、whitespace、
+/// release 误入 dev 模式、dirs 不可用等），无需求助 `serial_test` 锁 env 或
+/// 改 cwd。Kimi-K2.7-Code 的 in-place 修法（review #1/#2）虽然正确但不可测，
+/// 这一层抽出来正好补回测试覆盖。
+fn resolve_data_root_inner(
+    env_value: Option<&str>,
+    is_debug: bool,
+    under_cargo: bool,
+    cargo_toml_path: &Path,
+) -> PathBuf {
+    if let Some(custom) = env_value {
         if !custom.trim().is_empty() {
             return PathBuf::from(custom);
         }
     }
-    // 开发模式：debug 编译，或运行于 Cargo 环境下，且 cwd 在 repo 根
-    let is_dev = cfg!(debug_assertions) || std::env::var("CARGO_MANIFEST_DIR").is_ok();
-    if is_dev && PathBuf::from("Cargo.toml").exists() {
+    let is_dev = is_debug || under_cargo;
+    if is_dev && cargo_toml_path.exists() {
         return PathBuf::from("data");
     }
-    // 打包模式：落 OS per-user 数据目录
     if let Some(per_user) = dirs::data_dir() {
         return per_user.join("airp");
     }
-    // dirs 取不到（极罕见，某些容器化环境）的最后兜底：cwd/data
     PathBuf::from("data")
 }
 
@@ -536,4 +553,123 @@ pub fn list_scenes(root: &Path) -> Result<Vec<String>, AirpError> {
     }
     result.sort();
     Ok(result)
+}
+
+// ── Tests for resolve_data_root_inner ──────────────────────────────────────────
+//
+// 拆出 `resolve_data_root_inner` 的主要动机：把 env / cfg! / cwd 这些进程级依赖
+// 参数化后，每条 fallback 层与边界条件都能直接 unit test，无需 `serial_test`
+// 锁 env、无需改 cwd、无需 flakiness 风险。这部分覆盖 Gemini-code-assist 在
+// PR #55 标的两条 review 之外的关键回归路径（空/空白 env、release 误入 dev
+// 模式、dirs 不可用兜底、dev 模式但 cwd 不在 repo 根）。
+
+#[cfg(test)]
+mod data_root_tests {
+    use super::resolve_data_root_inner;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    /// 不存在路径作为 cargo_toml_path → 强制跳过 dev 模式
+    fn missing_toml() -> PathBuf {
+        // 固定的不存在路径（不依赖 tempdir 生命周期），保证 .exists() == false
+        PathBuf::from("/nonexistent_for_test_only_Cargo.toml")
+    }
+
+    fn present_toml() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("Cargo.toml");
+        fs::write(&p, "[package]\nname=\"x\"\n").unwrap();
+        (tmp, p)
+    }
+
+    #[test]
+    fn env_var_takes_priority_over_dev_mode() {
+        // dev 模式条件全开，但 env 仍胜出
+        let r = resolve_data_root_inner(Some("/custom/path"), true, true, &missing_toml());
+        assert_eq!(r, PathBuf::from("/custom/path"));
+    }
+
+    #[test]
+    fn env_var_empty_string_falls_through_to_dev_mode() {
+        // Gemini review #1：空串必须不被当作有效路径
+        // 配 debug + cargo + 真 Cargo.toml → 应落 cwd/data
+        let (_tmp, fake_toml) = present_toml();
+        let r = resolve_data_root_inner(Some(""), true, true, &fake_toml);
+        assert_eq!(
+            r,
+            PathBuf::from("data"),
+            "empty AIRP_DATA_DIR should fall through to dev-mode 'data', not return empty PathBuf"
+        );
+    }
+
+    #[test]
+    fn env_var_whitespace_only_falls_through() {
+        // 纯空白视为未设置 —— shell 误传 "  " 也不该走通
+        let (_tmp, fake_toml) = present_toml();
+        let r = resolve_data_root_inner(Some("   "), true, true, &fake_toml);
+        assert_eq!(r, PathBuf::from("data"));
+    }
+
+    #[test]
+    fn release_build_with_cargo_toml_in_cwd_does_not_trigger_dev_mode() {
+        // Gemini review #2 (核心)：release 打包 .exe 误入含 Cargo.toml 的目录
+        // 必须不进入 dev 模式，应落 dirs::data_dir() 的 per-user 位
+        let (_tmp, fake_toml) = present_toml();
+        let r = resolve_data_root_inner(
+            None,
+            /* is_debug= */ false,
+            /* under_cargo= */ false,
+            &fake_toml,
+        );
+        if let Some(per_user) = dirs::data_dir() {
+            assert_eq!(
+                r,
+                per_user.join("airp"),
+                "release + coincidental Cargo.toml must NOT write to cwd/data"
+            );
+        } else {
+            assert_eq!(r, PathBuf::from("data"));
+        }
+    }
+
+    #[test]
+    fn debug_build_with_cargo_toml_uses_dev_mode() {
+        // debug 编译下自动走 dev 模式（即使不通过 cargo 启动）——
+        // 让 `cargo build && ./target/debug/airp-core` 也能落 cwd/data
+        let (_tmp, fake_toml) = present_toml();
+        let r = resolve_data_root_inner(None, true, false, &fake_toml);
+        assert_eq!(r, PathBuf::from("data"));
+    }
+
+    #[test]
+    fn release_under_cargo_uses_dev_mode() {
+        // `cargo run --release` 必须走 dev 模式（CARGO_MANIFEST_DIR 在）
+        let (_tmp, fake_toml) = present_toml();
+        let r = resolve_data_root_inner(None, false, true, &fake_toml);
+        assert_eq!(r, PathBuf::from("data"));
+    }
+
+    #[test]
+    fn no_dev_marker_no_env_uses_per_user_data_dir() {
+        // release + 无 cargo + cwd 无 Cargo.toml → per-user
+        let r = resolve_data_root_inner(None, false, false, &missing_toml());
+        if let Some(per_user) = dirs::data_dir() {
+            assert_eq!(r, per_user.join("airp"));
+        } else {
+            assert_eq!(r, PathBuf::from("data"));
+        }
+    }
+
+    #[test]
+    fn dev_mode_with_no_cargo_toml_uses_per_user() {
+        // debug 但 cwd 实际不在 repo 根（无 Cargo.toml）→ 仍走 per-user，
+        // 不该退化到 cwd/data；这是 2 与 3 的边界（防 Gemini #2 误伤）
+        let r = resolve_data_root_inner(None, true, true, &missing_toml());
+        if let Some(per_user) = dirs::data_dir() {
+            assert_eq!(r, per_user.join("airp"));
+        } else {
+            assert_eq!(r, PathBuf::from("data"));
+        }
+    }
 }
