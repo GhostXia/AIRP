@@ -38,6 +38,7 @@
   let selectedChar = '';
   let selectedSess = '';
   let abortController = null;   // for chat SSE
+  let agentAbort = null;        // for agent run SSE — 二次点击先 abort 前一个，防事件交错竞态（issue #43/#44 D）
 
   // ── event log ────────────────────────────────────────────────────────────
   function logEvent(method, path, status, ms, detail) {
@@ -377,6 +378,17 @@
     delta: 'DELTA',
     done: 'DONE',
   };
+  // 上限 20 仅为防御性 UX cap；引擎本身无此限制（u32::MAX）。
+  const AGENT_MAX_STEPS_CAP = 20;
+  // stop_reason snake_case → 人类可读标签
+  const STOP_REASON_LABEL = {
+    converged: 'converged',
+    step_cap: 'step cap reached',
+    token_budget: 'token budget exhausted',
+    wall_clock: 'wall clock timeout',
+    cancelled: 'cancelled',
+    upstream_error: 'upstream error',
+  };
   const AGENT_TYPE_CLASS = {
     plan: 'ev-plan',
     tool_call: 'ev-tool',
@@ -407,18 +419,22 @@
     return { label: (t || 'EVENT').toUpperCase(), summary: '' };
   }
 
+  // agent output DOM 上限：长跑累积可膨胀，封顶防回流压力（issue F）
+  const AGENT_OUTPUT_MAX_ROWS = 500;
+
   function appendAgentEvent(chunk) {
     const info = summarizeAgentEvent(chunk);
     const row = document.createElement('div');
-    row.className = 'agent-ev ' + (AGENT_TYPE_CLASS[chunk.type] || '');
+    const cls = AGENT_TYPE_CLASS[chunk.type] || '';
+    row.className = cls ? 'agent-ev ' + cls : 'agent-ev';
     appendInline(row, 'span', 'ev-label', info.label);
     row.append(' ');
     appendInline(row, 'span', 'ev-summary', info.summary || '');
-    // 折叠 raw JSON
+    // 折叠 raw JSON，summary 带事件类型提示方便长流扫读（issue O）
     const details = document.createElement('details');
     details.className = 'ev-raw';
     const summary = document.createElement('summary');
-    summary.textContent = 'raw';
+    summary.textContent = 'raw (' + info.label.toLowerCase() + ')';
     details.appendChild(summary);
     const pre = document.createElement('pre');
     pre.className = 'mono';
@@ -426,13 +442,24 @@
     details.appendChild(pre);
     row.appendChild(details);
     agentOutput.appendChild(row);
+    // DOM 上限：超则删最早行
+    while (agentOutput.children.length > AGENT_OUTPUT_MAX_ROWS) {
+      agentOutput.removeChild(agentOutput.firstChild);
+    }
     agentOutput.scrollTop = agentOutput.scrollHeight;
     return info;
   }
 
+  // agent run 客户端超时（30s；agent loop 比单轮 chat 慢，给宽点）
+  const AGENT_RUN_TIMEOUT_MS = 30000;
+
   btnAgentRun.addEventListener('click', async () => {
     const input = agentInput.value.trim();
     if (!input || !selectedChar) return;
+    // 二次点击先 abort 前一个 run，防 SSE 事件交错竞态（与 chat send 路径对齐）
+    if (agentAbort) agentAbort.abort();
+    agentAbort = new AbortController();
+    const timeoutTimer = setTimeout(() => agentAbort.abort(), AGENT_RUN_TIMEOUT_MS);
     agentOutput.innerHTML = '';
     agentStepCounter.textContent = 'running…';
     const path = '/v1/agent/run';
@@ -440,11 +467,12 @@
     let stepCount = 0;
     let lastDone = null;
     try {
-      const maxSteps = Math.max(1, Math.min(20, parseInt(agentMaxSteps.value) || 3));
+      const maxSteps = Math.max(1, Math.min(AGENT_MAX_STEPS_CAP, parseInt(agentMaxSteps.value, 10) || 3));
       const res = await fetch(base + path, {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify({ ...buildChatPayload(input), max_steps: maxSteps }),
+        signal: agentAbort.signal,
       });
       if (!res.ok) {
         const errBody = await res.text();
@@ -457,10 +485,14 @@
         return;
       }
       const seq = await streamSse(res, (chunk, seq) => {
+        // 防畸形 chunk：SSE 解析已 try/catch JSON.parse，但未知 type 走 fallback
+        if (!chunk || typeof chunk !== 'object') {
+          logEvent('SSE', path, 200, Math.round(performance.now() - t0), '#' + seq + ' invalid chunk');
+          return;
+        }
         const info = appendAgentEvent(chunk);
         if (chunk.type === 'plan') {
           stepCount = chunk.step;
-          // 流式过程中实时刷 step counter，让用户看到 loop 进展而非静止 'running…'
           agentStepCounter.textContent = 'step ' + stepCount + ' · ' + seq + ' events · ' + Math.round(performance.now() - t0) + 'ms';
         }
         if (info.isDone) lastDone = chunk;
@@ -469,20 +501,32 @@
       const ms = Math.round(performance.now() - t0);
       logEvent('SSE', path, 200, ms, 'done/' + seq + 'events');
       agentStepCounter.textContent = lastDone
-        ? lastDone.stop_reason + ' · ' + lastDone.steps_taken + ' steps · ' + ms + 'ms'
+        ? STOP_REASON_LABEL[lastDone.stop_reason] + ' · ' + lastDone.steps_taken + ' steps · ' + ms + 'ms'
         : (stepCount ? 'step ' + stepCount + ' · ' : '') + seq + ' events · ' + ms + 'ms';
     } catch (e) {
-      logEvent('POST', path, 0, Math.round(performance.now() - t0), e.message);
-      const row = document.createElement('div');
-      row.className = 'agent-ev ev-err';
-      row.textContent = '[fetch error] ' + e.message;
-      agentOutput.appendChild(row);
-      agentStepCounter.textContent = 'fetch error';
+      if (e.name === 'AbortError') {
+        logEvent('SSE', path, 0, Math.round(performance.now() - t0), 'aborted/timeout');
+        agentStepCounter.textContent = stepCount ? 'aborted at step ' + stepCount : 'aborted';
+        const row = document.createElement('div');
+        row.className = 'agent-ev ev-err';
+        row.textContent = '[aborted]';
+        agentOutput.appendChild(row);
+      } else {
+        logEvent('POST', path, 0, Math.round(performance.now() - t0), e.message);
+        const row = document.createElement('div');
+        row.className = 'agent-ev ev-err';
+        row.textContent = '[fetch error] ' + e.message;
+        agentOutput.appendChild(row);
+        agentStepCounter.textContent = 'fetch error';
+      }
+    } finally {
+      clearTimeout(timeoutTimer);
+      agentAbort = null;
     }
   });
 
   if (btnAgentClear) btnAgentClear.addEventListener('click', () => {
-    agentOutput.innerHTML = '—';
+    agentOutput.textContent = '—';
     agentStepCounter.textContent = '';
   });
 

@@ -39,6 +39,7 @@ Temporary browser-based harness to validate engine backend reliability.
 
 **Diagnostics (P1)**
 -  One-click backend sweep producing a copyable summary: engine URL, bearer status, version, endpoint/model/api_key presence, model count, character count, per-call status + latency.
+-  **v1 scope**: covers 4 endpoints (`/version` → `/v1/settings` → `/v1/models` → `/v1/characters`) — backend reachability only. **chat/agent smoke deferred to P2/M2** reliability suite, to avoid consuming provider quota during a routine diagnostic; the 4-endpoint sweep already surfaces backend reachability failures (missing API key, no models, wrong endpoint). See `docs/WEBUI-BACKEND-PLAN.md §9 P1`.
 -  Event log (right panel): request path, method, status code, latency, SSE chunk count, agent event labels.
 
 ## Not in scope (deferred)

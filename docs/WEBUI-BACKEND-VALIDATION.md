@@ -200,3 +200,36 @@ WebUI browser smoke：
 - Tauri UI 可以按已知稳定的后端合同实现。
 
 之后 WebUI 可以保留为 developer-only 诊断页，也可以删除。除非后续明确拍板，否则它不成为 AIRP 默认产品面。
+
+### 2026-07-05 · P1 agent event log readability + diagnostics + destructive confirm
+
+范围：WebUI P1 三项 harness 改动（agent event log 可读化、一键诊断、destructive 确认），纯 `webui/`，不碰 engine 契约。
+
+本轮代码断言：
+
+- `node --check webui/app.js`：通过。
+- `cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise -- --nocapture`：1 passed（神圣不变式）。
+- engine binary smoke（独立 data dir `target/p1-smoke-data`，port 8895，无 provider）：`/version` `/v1/settings` `/v1/characters` 均 200。
+
+覆盖行为：
+
+- `AgentEvent` serde tag 分类显示：PLAN/TOOL_CALL/TOOL_RESULT/DELTA/DONE 各类配色标签 + 一行摘要 + 折叠 raw JSON。`PlanAction` 按 snake_case 正确匹配（`call_tool`/`generate`/`finish`），三类 PLAN 摘要 ALL PASS。
+- step counter 流式过程中每个 `plan` 事件实时刷新 `'step N · events · ms'`；DONE 事件后显示 `stop_reason · steps · ms`（stop_reason 经映射表人类可读化）。
+- agent run 二次点击先 abort 前一个（AbortController），防 SSE 事件交错竞态；客户端 30s timeout；畸形 chunk 守护。
+- `#agent-output` DOM 上限 500 行，超则删最早行。
+- 一键诊断：依次跑 `/version` `/v1/settings` `/v1/models` `/v1/characters`，每端点 `AbortController` 5s timeout（engine 卡死时 fail-fast 而非永悬 `'诊断中…'`），输出可复制摘要。**v1 不含 chat/agent smoke**——避免消耗 provider quota，推迟到 P2/M2。
+- regen/rollback 加 `window.confirm` 二次确认；rollback 输入校验失败路由进 event log 而非污染 chat transcript。
+
+真路径验证：
+
+- timeout 切断：造 hung server（连上永不响应）+ Node 复刻 `diagApi` 跑 `/v1/settings`，5007ms `AbortError` 抛出 + `finally` 清 timer + 返回 `timeout after 5000ms`，PASS。
+- PLAN 摘要正确性：改后 `summarizeAgentEvent` 对真三 SSE JSON（`{action:{call_tool:{tool,params}}}` / `{action:"generate"}` / `{action:"finish"}`）摘要 ALL PASS。
+
+审计 issue 处置（issue #43/#44/#45/#46）：
+
+- 真 bug 已修：A（PlanAction 字段名错配）、C（诊断无 timeout）、D（agent run 二次点击竞态）、F（DOM 上限）、H（step counter 非实时）。
+- stale（基于旧 commit）：B（stepCount dead，`73db44f` 已修）、E（max_steps 硬编码，`00d5650` 已改读输入框）。
+- 真中已修：G（spec 偏离，README 明说 v1 只 4 端点）、K（验证证据回填，本段）、T（wire-shape test，见 `engine/src/agent/mod.rs` `agent_event_wire_shape`）。
+- nit 已修：I（parseInt radix）、J（stop_reason 映射）、L（未知 type 尾空格 class）、M（max_steps cap 常量）、N（btnAgentClear textContent）、O（折叠 summary 带类型提示）。
+- 设计取舍保留：R（rollback 用 `prompt` 取 index 是 harness 合理 UX，二次 `confirm` 已加）。
+- pre-existing 不动：Q（三元两分支相同，非本 PR 引入）。

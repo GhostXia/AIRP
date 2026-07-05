@@ -427,4 +427,54 @@ mod tests {
         // run_loop 内部依 max_steps 选 plan；这里仅断言默认值语义。
         assert_eq!(default_max_steps(), 1);
     }
+
+    /// AgentEvent / PlanAction 序列化 wire-shape 守门员（issue #43/#44/#45/#46 T 建议）。
+    ///
+    /// PR #41 曾因前端按 PascalCase (`action.CallTool`) 读 snake_case serde
+    /// (`{"call_tool":{...}}`) 导致 PLAN 摘要全 fallback。本 test 锁死 wire 形态，
+    /// 未来前端/契约改动若与此处漂移会立即红。
+    #[test]
+    fn agent_event_wire_shape() {
+        // PlanAction: externally-tagged，snake_case
+        assert_eq!(
+            serde_json::to_value(PlanAction::Generate).unwrap(),
+            serde_json::json!("generate")
+        );
+        assert_eq!(
+            serde_json::to_value(PlanAction::Finish).unwrap(),
+            serde_json::json!("finish")
+        );
+        assert_eq!(
+            serde_json::to_value(PlanAction::CallTool {
+                tool: "echo".to_string(),
+                params: serde_json::json!({"probe": "x"}),
+            })
+            .unwrap(),
+            serde_json::json!({"call_tool": {"tool": "echo", "params": {"probe": "x"}}})
+        );
+
+        // AgentEvent: #[serde(tag = "type", rename_all = "snake_case")]
+        let plan = serde_json::to_value(AgentEvent::Plan {
+            step: 2,
+            action: PlanAction::CallTool {
+                tool: "echo".to_string(),
+                params: serde_json::json!({}),
+            },
+        })
+        .unwrap();
+        assert_eq!(plan["type"], "plan");
+        assert_eq!(plan["step"], 2);
+        assert_eq!(plan["action"]["call_tool"]["tool"], "echo");
+
+        let done = serde_json::to_value(AgentEvent::Done {
+            stop_reason: StopReason::UpstreamError,
+            steps_taken: 1,
+            tokens_estimated: 42,
+        })
+        .unwrap();
+        assert_eq!(done["type"], "done");
+        assert_eq!(done["stop_reason"], "upstream_error");
+        assert_eq!(done["steps_taken"], 1);
+        assert_eq!(done["tokens_estimated"], 42);
+    }
 }
