@@ -35,7 +35,7 @@
         <pre id="models-display" class="mono">-</pre>
       </section>
       <section>
-        <h3>Characters <button id="btn-refresh-chars">↻</button></h3>
+        <h3>Characters <button id="btn-refresh-chars">↻</button> <button id="btn-workbench">工作台</button></h3>
         <div id="char-avatar-row">
           <img id="char-avatar" alt="avatar" hidden />
           <select id="char-select" size="6"></select>
@@ -58,6 +58,31 @@
         <button id="btn-import">上传导入</button>
         <div id="import-result" class="hint">—</div>
       </section>
+    </aside>
+
+    <!-- Workbench overlay (角色卡 + 世界书编辑) -->
+    <aside id="workbench-panel" hidden>
+      <div id="workbench-header">
+        <h3>工作台 — <span id="wb-char-name">—</span></h3>
+        <button id="btn-wb-close">✕ 关闭</button>
+      </div>
+      <div id="workbench-tabs">
+        <button class="wb-tab active" data-tab="card">角色卡</button>
+        <button class="wb-tab" data-tab="lorebook">世界书</button>
+      </div>
+      <div id="wb-tab-card" class="wb-tab-content">
+        <div class="hint">编辑角色卡 JSON，保存后写回 card.json + raw.json。</div>
+        <div class="wb-fields" id="wb-card-fields"></div>
+        <button id="btn-wb-save-card">保存角色卡</button>
+        <div id="wb-card-status" class="hint">—</div>
+      </div>
+      <div id="wb-tab-lorebook" class="wb-tab-content" hidden>
+        <div class="hint">编辑世界书条目（keys 触发关键词，content 注入内容）。</div>
+        <div id="wb-lore-entries"></div>
+        <button id="btn-wb-add-lore">+ 添加条目</button>
+        <button id="btn-wb-save-lore">保存世界书</button>
+        <div id="wb-lore-status" class="hint">—</div>
+      </div>
     </aside>
 
     <!-- Center: chat -->
