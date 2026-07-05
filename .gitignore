@@ -48,6 +48,18 @@ data/quota.json
 data/characters/
 data/presets/
 
+# 会话产物：玩家物品清单/世界状态/NPC 关系是 RP 运行时生成，非引擎默认
+data/items.md
+data/world.md
+# 封卷记忆 / gating 决策 / session 命名空间 / state 衍生，均 per-user 运行时
+data/**/memory/
+data/**/gating/
+data/**/state/
+data/**/sessions/
+data/**/history/
+data/**/turn_counter*
+data/**/*.lock
+
 # AI agent 旁路产物（AtomCode/Claude 等会话元数据），不属本仓
 .claude/
 .atomcode/
