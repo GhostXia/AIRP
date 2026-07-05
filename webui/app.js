@@ -215,16 +215,34 @@
     }
   }
 
-  function abortChatStream() {
+  // POST /v1/sessions 返回引擎 `Json<SessionId>` 序列化的纯字符串（如
+  // "550e8400-…"）；历史/兼容路径可能回 `{session_id}` 或 `{uuid}` 对象。
+  // 抽出来供 btnNewSession / doSend 复用，消除上一轮 review 留下的两处复制。
+  function extractSessionId(r) {
+    const raw = r && r.data;
+    if (!raw) return '';
+    if (typeof raw === 'string') return raw;
+    if (typeof raw === 'object') return raw.session_id || raw.uuid || String(raw);
+    return String(raw);
+  }
+
+  // 终止在飞 chat/agent stream。Kimi-K2.7-Code 已修 chat 这条；
+  // 同源 race 同样存在于 agent run（issue #43/#44 二次点击 abort 路径的姊妹），
+  // 用户切 session/character 时不 abort 同样会让 agent event 写回已清空视图。
+  function abortInFlightStreams() {
     if (abortController) {
       abortController.abort();
       abortController = null;
     }
+    if (agentAbort) {
+      agentAbort.abort();
+      agentAbort = null;
+    }
   }
 
-  // 切换 session 清空当前 chat log 视图，防上一 session 残留消息串扰新 session 视图
+  // 切换 session / character / 新建 session 时统一：终止在飞 stream + 清空视图。
   function clearChatView() {
-    abortChatStream();
+    abortInFlightStreams();
     chatLog.innerHTML = '';
   }
 
@@ -244,10 +262,8 @@
     const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
     if (r.ok) {
       // 新建后自动选中该 session，省用户再手动点
-      const newId = r.data?.session_id || r.data;
-      if (newId) {
-        selectedSess = typeof newId === 'string' ? newId : (newId.uuid || String(newId));
-      }
+      const newId = extractSessionId(r);
+      if (newId) selectedSess = newId;
       clearChatView();
       await refreshSessions();
     }
@@ -275,10 +291,9 @@
     if (!selectedSess) {
       const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
       if (!r.ok) { appendMsg('assistant', '[session create failed]', false); return; }
-      const newId = r.data?.session_id || r.data;
-      if (newId) {
-        selectedSess = typeof newId === 'string' ? newId : (newId.uuid || String(newId));
-      }
+      const newId = extractSessionId(r);
+      if (!newId) { appendMsg('assistant', '[session create: empty id]', false); return; }
+      selectedSess = newId;
       await refreshSessions();
     }
 
