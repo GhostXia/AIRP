@@ -602,6 +602,165 @@ mod tests_ms6 {
     }
 }
 
+// ── issue #27 tests: single / scene filter parity ────────────────────────────
+//
+// 回归：single 分支加载 PR-4 预设正则（presets/{id}/regex/*.json），而 scene 分支
+// 此前漏加载，导致同一 preset 在 scene 模式下本应隐藏的 thought/status 段泄露。
+// 抽出 assemble_regex_filters 共享后，两分支必须产出一致的过滤器集合。
+
+#[cfg(test)]
+mod tests_issue27 {
+    use super::*;
+    use crate::adapter::{BackendEngine, Provider};
+    use crate::config::VolumeConfig;
+    use crate::daemon::{MutableConfig, UserProfile};
+    use crate::scene::{CharacterEntry, CharacterRole, LorebookMerge, SceneConfig};
+    use crate::types::SceneId;
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+
+    fn make_state(data_root: PathBuf) -> Arc<DaemonState> {
+        Arc::new(DaemonState {
+            data_root,
+            http_client: reqwest::Client::new(),
+            config: std::sync::RwLock::new(MutableConfig {
+                provider: Provider::OpenAI,
+                endpoint: "https://example.test/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+                model: "test-model".to_string(),
+                volume_config: VolumeConfig::default(),
+                access_api_key: None,
+                engine: BackendEngine::default(),
+                quota: crate::quota::QuotaConfig::default(),
+            }),
+        })
+    }
+
+    fn base_request() -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            character_id: None,
+            character_card_id: None,
+            lorebook_path: None,
+            user_profile: UserProfile {
+                name: "Tester".to_string(),
+                variables: HashMap::new(),
+            },
+            message: "hello".to_string(),
+            messages_history: Some(vec![]),
+            regex_filters: Some(vec!["\\[系统:[\\s\\S]*?\\]".to_string()]),
+            preset_id: None,
+            enabled_presets: None,
+            session_id: None,
+            provider: None,
+            endpoint: None,
+            api_key: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            scene_id: None,
+            user_id: None,
+        }
+    }
+
+    /// 在 presets/{pid}/regex/ 写入一个隐藏 <thought> 的 SillyTavern 正则脚本。
+    fn write_hide_thought_preset(root: &std::path::Path, pid: &str) {
+        let regex_dir = root.join("presets").join(pid).join("regex");
+        std::fs::create_dir_all(&regex_dir).unwrap();
+        let script = r#"{
+            "scriptName": "Hide Thoughts",
+            "findRegex": "/<thought>[\\s\\S]*?<\\/thought>/gi",
+            "replaceString": "",
+            "placement": [2],
+            "disabled": false
+        }"#;
+        std::fs::write(regex_dir.join("hide.json"), script).unwrap();
+    }
+
+    /// 核心回归：同一 payload（同一 preset）下，single 与 scene 分支必须产出
+    /// **完全一致**的过滤器集合——证明两分支复用同一份加载逻辑，无泄露性不对称。
+    #[test]
+    fn test_issue27_single_and_scene_filters_are_consistent() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        let pid = "hidepreset";
+        write_hide_thought_preset(tmp.path(), pid);
+
+        // scene 需要一个 SceneConfig；含 alice，与 single 分支同名角色。
+        let scene = SceneConfig {
+            scene_id: SceneId::new("s1").unwrap(),
+            description: "parity scene".to_string(),
+            characters: vec![CharacterEntry {
+                character_id: "alice".to_string(),
+                role: CharacterRole::Primary,
+                intro: "hero".to_string(),
+            }],
+            narrator_style: String::new(),
+            lorebook_merge: LorebookMerge::Union,
+            format_hint: String::new(),
+        };
+        scene.save(tmp.path()).unwrap();
+
+        // single 分支请求：character_id + 同一 preset_id + 同一 regex_filters。
+        let mut single_req = base_request();
+        single_req.character_id = Some(crate::types::CharacterId::new("alice").unwrap());
+        single_req.preset_id = Some(crate::types::PresetId::new(pid).unwrap());
+
+        // scene 分支请求：scene_id + 同一 preset_id，其余过滤器相关字段一致。
+        let mut scene_req = base_request();
+        scene_req.scene_id = Some("s1".to_string());
+        scene_req.preset_id = Some(crate::types::PresetId::new(pid).unwrap());
+
+        let single_pipe = prepare_pipeline(&single_req, &state).unwrap();
+        let scene_pipe = prepare_pipeline(&scene_req, &state).unwrap();
+
+        // 两分支过滤器集合逐项一致（顺序 + 内容）。RegexFilter 派生 PartialEq。
+        assert_eq!(
+            single_pipe.fsm.filters_for_test(),
+            scene_pipe.fsm.filters_for_test(),
+            "single 与 scene 分支应产出一致的过滤器集合"
+        );
+    }
+
+    /// 具体泄露断言：scene 分支的过滤器集合必须像 single 一样含 preset 的
+    /// <thought> 过滤器。修复前 scene 分支不加载 PR-4 预设正则，此断言会失败。
+    #[test]
+    fn test_issue27_scene_includes_preset_thought_filter() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        let pid = "hidepreset";
+        write_hide_thought_preset(tmp.path(), pid);
+
+        let scene = SceneConfig {
+            scene_id: SceneId::new("s1").unwrap(),
+            description: "leak scene".to_string(),
+            characters: vec![],
+            narrator_style: String::new(),
+            lorebook_merge: LorebookMerge::Union,
+            format_hint: String::new(),
+        };
+        scene.save(tmp.path()).unwrap();
+
+        let mut scene_req = base_request();
+        scene_req.regex_filters = None;
+        scene_req.scene_id = Some("s1".to_string());
+        scene_req.preset_id = Some(crate::types::PresetId::new(pid).unwrap());
+
+        let scene_pipe = prepare_pipeline(&scene_req, &state).unwrap();
+        let filters = scene_pipe.fsm.filters_for_test();
+        assert!(
+            filters
+                .iter()
+                .any(|f| f.start == "<thought>" && f.end == "</thought>"),
+            "scene 分支应含 preset <thought> 过滤器，实际: {:?}",
+            filters
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests_dx1 {
     use super::*;

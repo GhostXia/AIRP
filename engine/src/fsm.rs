@@ -116,6 +116,12 @@ impl StreamingFsm {
         }
     }
 
+    /// 测试专用：暴露内部过滤器集合，供 issue #27 single/scene 一致性回归断言使用。
+    #[cfg(test)]
+    pub(crate) fn filters_for_test(&self) -> &[RegexFilter] {
+        &self.filters
+    }
+
     /// 输入一个字符，返回可立即输出的字符串。
     pub fn process_char(&mut self, c: char) -> String {
         match &mut self.state {
