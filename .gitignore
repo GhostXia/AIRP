@@ -47,3 +47,7 @@ data/quota.json
 # 引擎运行时会在这两个目录下读写用户导入的卡/预设；测试用合成 fixture 另置，勿放个人数据。
 data/characters/
 data/presets/
+
+# AI agent 旁路产物（AtomCode/Claude 等会话元数据），不属本仓
+.claude/
+.atomcode/

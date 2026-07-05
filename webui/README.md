@@ -28,7 +28,7 @@ Temporary browser-based harness to validate engine backend reliability.
 -  `/v1/settings` read (API key masked)
 -  `/v1/models` provider smoke + typed error display
 -  `/v1/characters` list
--  `/v1/sessions/:character_id` list + create
+-  `/v1/sessions/:character_id` list + create — switching session clears the current chat view (防上一 session 残留串扰)；新建 session 后自动选中该 session（省手动点）
 -  `/v1/characters/import` via `card_json` / `card_png_base64` only; **never `card_path`** (RR-001)
 
 **Chat & agent loop**

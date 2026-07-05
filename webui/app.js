@@ -202,7 +202,7 @@
   btnRefreshChars.addEventListener('click', refreshChars);
   if (btnRefreshModels) btnRefreshModels.addEventListener('click', refreshModels);
 
-  async function refreshSessions() {
+  async function refreshSessions(autoSelectFirst = false) {
     const cid = charSelect.value;
     if (!cid) return;
     selectedChar = cid;
@@ -211,17 +211,38 @@
       const ids = Array.isArray(r.data) ? r.data.map(s => s.session_id || s) : [];
       replaceOptions(sessSelect, ids, id => id.slice(0, 12));
       if (!ids.includes(selectedSess)) selectedSess = ids[0] || '';
+      if (autoSelectFirst && !sessSelect.value) selectedSess = ids[0] || '';
       if (selectedSess) sessSelect.value = selectedSess;
     }
   }
 
-  charSelect.addEventListener('change', () => { selectedChar = charSelect.value; refreshSessions(); });
-  sessSelect.addEventListener('change', () => { selectedSess = sessSelect.value; });
+  // 切换 session 清空当前 chat log 视图，防上一 session 残留消息串扰新 session 视图
+  function clearChatView() { chatLog.innerHTML = ''; }
+
+  charSelect.addEventListener('change', () => {
+    selectedChar = charSelect.value;
+    selectedSess = '';
+    clearChatView();
+    refreshSessions();
+  });
+  sessSelect.addEventListener('change', () => {
+    selectedSess = sessSelect.value;
+    clearChatView();
+  });
 
   btnNewSession.addEventListener('click', async () => {
     if (!selectedChar) return;
     const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
-    if (r.ok) refreshSessions();
+    if (r.ok) {
+      // 新建后自动选中该 session，省用户再手动点
+      const newId = r.data?.session_id || r.data;
+      if (newId) {
+        selectedSess = typeof newId === 'string' ? newId : (newId.uuid || String(newId));
+        clearChatView();
+      }
+      await refreshSessions();
+      if (newId && sessSelect.value !== selectedSess) sessSelect.value = selectedSess;
+    }
   });
 
   // ── chat: send & stream ─────────────────────────────────────────────────
