@@ -99,6 +99,15 @@ select option:checked { background: #1f6feb; }
 #char-avatar { width: 48px; height: 48px; border-radius: 4px; border: 1px solid #30363d; object-fit: cover; flex-shrink: 0; background: #161b22; }
 #char-avatar[hidden] { display: none; }
 #char-avatar-row select { flex: 1; }
+#char-actions { display: flex; gap: 6px; margin-top: 6px; }
+#char-actions button { flex: 1; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; }
+#char-actions button:hover { background: #30363d; }
+#char-actions .btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+#char-actions .btn-primary:hover { background: #388bfd; }
+
+.btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.btn-primary:hover { background: #388bfd; border-color: #388bfd; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* state panel */
 #state-section .subhead { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
@@ -108,29 +117,54 @@ select option:checked { background: #1f6feb; }
 .hint { font-size: 10px; color: #6e7681; }
 
 /* ── Workbench (角色卡 + 世界书编辑) ────────────────────────────────────── */
-#workbench-panel { position: fixed; top: 44px; right: 0; width: 420px; max-width: 50vw; height: calc(100vh - 44px); background: #0d1117; border-left: 1px solid #30363d; box-shadow: -4px 0 16px rgba(0,0,0,0.4); z-index: 100; overflow-y: auto; padding: 8px; }
+#workbench-panel { position: fixed; top: 44px; right: 0; width: 460px; min-width: 320px; max-width: 65vw; height: calc(100vh - 44px); background: #0d1117; border-left: 1px solid #30363d; box-shadow: -4px 0 24px rgba(0,0,0,0.5); z-index: 100; overflow-y: auto; padding: 8px 10px 12px 14px; resize: horizontal; }
 #workbench-panel[hidden] { display: none; }
-#workbench-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-#workbench-header h3 { margin: 0; }
-#workbench-header button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; }
-#workbench-header button:hover { background: #f85149; border-color: #f85149; color: #fff; }
-#workbench-tabs { display: flex; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid #30363d; }
-.wb-tab { background: transparent; border: none; color: #8b949e; padding: 6px 14px; cursor: pointer; font-family: inherit; font-size: 12px; border-bottom: 2px solid transparent; }
+#workbench-resizer { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; background: transparent; z-index: 2; }
+#workbench-resizer:hover { background: #58a6ff33; }
+#workbench-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding-left: 6px; }
+#workbench-title { display: flex; align-items: baseline; gap: 8px; }
+#workbench-title h3 { margin: 0; font-size: 13px; }
+#wb-char-name { color: #58a6ff; font-weight: 600; font-size: 12px; }
+#wb-dirty-dot { color: #f85149; font-size: 10px; }
+#btn-wb-close { background: transparent; border: 1px solid transparent; color: #8b949e; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 16px; line-height: 1; }
+#btn-wb-close:hover { background: #f8514922; border-color: #f85149; color: #f85149; }
+#workbench-tabs { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid #30363d; padding-left: 6px; }
+.wb-tab { background: transparent; border: none; color: #8b949e; padding: 7px 16px; cursor: pointer; font-family: inherit; font-size: 12px; border-bottom: 2px solid transparent; }
 .wb-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
 .wb-tab:hover { color: #c9d1d9; }
-.wb-tab-content { padding: 4px 0; }
+.wb-tab-content { padding: 4px 0 4px 6px; }
 .wb-tab-content[hidden] { display: none; }
-.wb-fields { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
-.wb-field { display: flex; flex-direction: column; gap: 2px; }
+.wb-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.wb-actions button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; }
+.wb-actions button:hover:not(:disabled) { background: #30363d; }
+
+/* 角色卡字段 */
+.wb-fields { display: flex; flex-direction: column; gap: 8px; }
+.wb-field { display: flex; flex-direction: column; gap: 3px; }
 .wb-field label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
-.wb-field input, .wb-field textarea { background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 6px; border-radius: 3px; font-family: inherit; font-size: 12px; resize: vertical; }
+.wb-field input, .wb-field textarea { background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 5px 8px; border-radius: 4px; font-family: inherit; font-size: 12px; transition: border-color 0.15s; }
 .wb-field input:focus, .wb-field textarea:focus { outline: none; border-color: #58a6ff; }
-.wb-field textarea { min-height: 50px; }
-.wb-lore-entry { border: 1px solid #30363d; border-radius: 4px; padding: 6px; margin-bottom: 6px; background: #161b22; }
-.wb-lore-entry .wb-lore-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-.wb-lore-entry .wb-lore-head .hint { font-size: 10px; }
-.wb-lore-entry .wb-lore-del { background: transparent; border: none; color: #f85149; cursor: pointer; font-size: 14px; padding: 0 4px; }
-.wb-lore-entry .wb-lore-del:hover { color: #ff6b6b; }
-#wb-tab-lorebook button, #wb-tab-card button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; margin: 4px 4px 0 0; }
-#wb-tab-lorebook button:hover, #wb-tab-card button:hover { background: #30363d; }
-#wb-tab-lorebook button#btn-wb-save-lore:hover, #wb-tab-card button#btn-wb-save-card:hover { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.wb-field textarea { min-height: 44px; max-height: 220px; field-sizing: content; }
+.wb-field textarea.wb-tall { min-height: 90px; }
+.wb-group { margin: 8px 0; padding: 8px; border: 1px solid #21262d; border-radius: 6px; background: #11161d; }
+.wb-group-title { font-size: 10px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+
+/* 世界书条目 */
+.wb-lore-entry { border: 1px solid #30363d; border-radius: 6px; padding: 8px; margin-bottom: 8px; background: #161b22; }
+.wb-lore-entry.collapsed .wb-lore-body { display: none; }
+.wb-lore-head { display: flex; align-items: center; gap: 6px; margin-bottom: 0; }
+.wb-lore-head .wb-lore-index { font-size: 10px; color: #8b949e; min-width: 46px; }
+.wb-lore-head input.wb-lore-keys { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 3px 6px; border-radius: 3px; font-family: inherit; font-size: 11px; }
+.wb-lore-head input.wb-lore-keys:focus { outline: none; border-color: #58a6ff; }
+.wb-lore-head .wb-lore-priority { width: 56px; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 3px 4px; border-radius: 3px; font-family: inherit; font-size: 11px; text-align: center; }
+.wb-lore-head .wb-lore-enabled { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #8b949e; cursor: pointer; }
+.wb-lore-head .wb-lore-enabled input { margin: 0; }
+.wb-lore-del { background: transparent; border: 1px solid transparent; color: #f85149; cursor: pointer; font-size: 14px; padding: 0 4px; border-radius: 3px; }
+.wb-lore-del:hover { background: #f8514922; border-color: #f85149; }
+.wb-lore-toggle { background: transparent; border: 1px solid transparent; color: #8b949e; cursor: pointer; font-size: 12px; padding: 0 4px; border-radius: 3px; }
+.wb-lore-toggle:hover { color: #c9d1d9; background: #21262d; }
+.wb-lore-body { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.wb-lore-body textarea { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 5px 8px; border-radius: 4px; font-family: inherit; font-size: 12px; resize: vertical; min-height: 60px; max-height: 220px; field-sizing: content; }
+.wb-lore-body textarea:focus { outline: none; border-color: #58a6ff; }
+.wb-lore-comment { background: #0d1117; border: 1px solid #30363d; color: #8b949e; padding: 3px 6px; border-radius: 3px; font-family: inherit; font-size: 11px; }
+.wb-lore-comment:focus { outline: none; border-color: #58a6ff; }
