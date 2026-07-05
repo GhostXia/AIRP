@@ -3,7 +3,7 @@
 **/*.rs.bk
 *.pdb
 
-# 工具链元数据泄露防护（rustup/cargo 在工作区误写时忽略）
+# 防御：rustup/cargo 在 worktree 内误生成元数据目录时忽略（与 AGENTS.md D: 工具链方针互补）
 .rustup/
 .cargo/
 

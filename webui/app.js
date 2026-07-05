@@ -290,6 +290,11 @@
         logEvent('SSE', '/v1/chat/completions', 0, Math.round(performance.now() - t0), 'aborted');
         return;
       }
+      if (e.kind === 'stream_interrupt') {
+        logEvent('SSE', '/v1/chat/completions', 0, Math.round(performance.now() - t0), 'stream interrupted: ' + e.message);
+        appendMsg('assistant', '[stream interrupted: engine disconnected] ' + e.message, false);
+        return;
+      }
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
       appendMsg('assistant', '[fetch error] ' + e.message, false);
     }
@@ -312,7 +317,18 @@
     let seq = 0;
     let sawDone = false;
     while (!sawDone) {
-      const { done, value } = await reader.read();
+      let done, value;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (e) {
+        // 主动 abort（用户取消 / timeout）保持原语义，向上抛 AbortError。
+        if (e && e.name === 'AbortError') throw e;
+        // 网络中途断开（reader.read 抛 TypeError: network error 等）转 typed error，
+        // 让调用方区分「engine 断连」vs「主动取消」vs「其他 fetch error」（issue #47）。
+        const err = new Error(e && e.message ? e.message : 'stream interrupted');
+        err.kind = 'stream_interrupt';
+        throw err;
+      }
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split('\n');
@@ -511,6 +527,13 @@
         row.className = 'agent-ev ev-err';
         row.textContent = '[aborted]';
         agentOutput.appendChild(row);
+      } else if (e.kind === 'stream_interrupt') {
+        logEvent('SSE', path, 0, Math.round(performance.now() - t0), 'stream interrupted: ' + e.message);
+        const row = document.createElement('div');
+        row.className = 'agent-ev ev-err';
+        row.textContent = '[stream interrupted: engine disconnected] ' + e.message;
+        agentOutput.appendChild(row);
+        agentStepCounter.textContent = stepCount ? 'interrupted at step ' + stepCount : 'stream interrupted';
       } else {
         logEvent('POST', path, 0, Math.round(performance.now() - t0), e.message);
         const row = document.createElement('div');
@@ -629,8 +652,9 @@
       return { ok: true, status: 200, chunks: seq };
     } catch (e) {
       if (msgEl) msgEl.classList.remove('streaming');
-      logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
-      return { ok: false, status: 0, error: e.message };
+      const interrupted = e.kind === 'stream_interrupt';
+      logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), (interrupted ? 'stream interrupted: ' : '') + e.message);
+      return { ok: false, status: 0, error: e.message, kind: interrupted ? 'stream_interrupt' : undefined };
     }
   }
 
