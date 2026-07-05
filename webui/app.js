@@ -215,13 +215,58 @@
     }
   }
 
-  charSelect.addEventListener('change', () => { selectedChar = charSelect.value; refreshSessions(); });
-  sessSelect.addEventListener('change', () => { selectedSess = sessSelect.value; });
+  // POST /v1/sessions 返回引擎 `Json<SessionId>` 序列化的纯字符串（如
+  // "550e8400-…"）；历史/兼容路径可能回 `{session_id}` 或 `{uuid}` 对象。
+  // 抽出来供 btnNewSession / doSend 复用，消除上一轮 review 留下的两处复制。
+  function extractSessionId(r) {
+    const raw = r && r.data;
+    if (!raw) return '';
+    if (typeof raw === 'string') return raw;
+    if (typeof raw === 'object') return raw.session_id || raw.uuid || String(raw);
+    return String(raw);
+  }
+
+  // 终止在飞 chat/agent stream。Kimi-K2.7-Code 已修 chat 这条；
+  // 同源 race 同样存在于 agent run（issue #43/#44 二次点击 abort 路径的姊妹），
+  // 用户切 session/character 时不 abort 同样会让 agent event 写回已清空视图。
+  function abortInFlightStreams() {
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    if (agentAbort) {
+      agentAbort.abort();
+      agentAbort = null;
+    }
+  }
+
+  // 切换 session / character / 新建 session 时统一：终止在飞 stream + 清空视图。
+  function clearChatView() {
+    abortInFlightStreams();
+    chatLog.innerHTML = '';
+  }
+
+  charSelect.addEventListener('change', () => {
+    selectedChar = charSelect.value;
+    selectedSess = '';
+    clearChatView();
+    refreshSessions();
+  });
+  sessSelect.addEventListener('change', () => {
+    selectedSess = sessSelect.value;
+    clearChatView();
+  });
 
   btnNewSession.addEventListener('click', async () => {
     if (!selectedChar) return;
     const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
-    if (r.ok) refreshSessions();
+    if (r.ok) {
+      // 新建后自动选中该 session，省用户再手动点
+      const newId = extractSessionId(r);
+      if (newId) selectedSess = newId;
+      clearChatView();
+      await refreshSessions();
+    }
   });
 
   // ── chat: send & stream ─────────────────────────────────────────────────
@@ -246,8 +291,10 @@
     if (!selectedSess) {
       const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
       if (!r.ok) { appendMsg('assistant', '[session create failed]', false); return; }
+      const newId = extractSessionId(r);
+      if (!newId) { appendMsg('assistant', '[session create: empty id]', false); return; }
+      selectedSess = newId;
       await refreshSessions();
-      selectedSess = r.data?.session_id || sessSelect.value;
     }
 
     // abort prior stream
