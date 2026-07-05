@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# 工具链元数据泄露防护（rustup/cargo 在工作区误写时忽略）
+.rustup/
+.cargo/
+
 # Cargo workspace — 各成员不再保留独立 lock/target
 crates/*/target/
 crates/*/Cargo.lock

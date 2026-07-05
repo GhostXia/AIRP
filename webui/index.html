@@ -64,16 +64,22 @@
       </div>
       <hr />
       <div id="agent-runner">
-        <h4>Agent Run</h4>
+        <h4>Agent Run <span id="agent-step-counter" class="hint"></span></h4>
         <textarea id="agent-input" rows="2" placeholder="输入 agent run 消息…">然后调 /v1/agent/run</textarea>
+        <label class="inline-label">max_steps: <input id="agent-max-steps" type="number" value="3" min="1" max="20" /></label>
         <button id="btn-agent-run">Run</button>
-        <pre id="agent-output" class="mono">—</pre>
+        <button id="btn-agent-clear">清</button>
+        <div id="agent-output">—</div>
       </div>
       <div id="concurrent-test">
         <h4>Concurrent Stream Test (M2)</h4>
         <div>两条并发 chat stream，验证 id-keyed state 不串扰：</div>
         <button id="btn-concurrent">启动两条并发流</button>
         <div id="concurrent-status" class="hint">—</div>
+      </div>
+      <div id="diagnostics">
+        <h4>Diagnostics <button id="btn-diag">一键诊断</button> <button id="btn-diag-copy">复制摘要</button></h4>
+        <pre id="diag-output" class="mono">—</pre>
       </div>
     </main>
 

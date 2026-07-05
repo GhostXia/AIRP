@@ -336,7 +336,7 @@
   btnSend.addEventListener('click', doSend);
   chatInput.addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') doSend(); });
 
-  // ── history / regen / rollback ───────────────────────────────────────────
+  // ── history / regen / rollback (P1: destructive confirm) ────────────────
   btnHistory.addEventListener('click', async () => {
     if (!selectedChar) return;
     const r = await api('POST', '/v1/chat/history', { character_id: selectedChar });
@@ -349,49 +349,131 @@
 
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
+    if (!window.confirm('Regenerate 会重写/删除最后一条 assistant 消息，不可撤销。继续？')) return;
     const r = await api('POST', '/v1/chat/regen', { character_id: selectedChar });
     if (r.ok) btnHistory.click();
   });
 
   btnRollback.addEventListener('click', async () => {
     if (!selectedChar) return;
-    const index = prompt('Rollback to message index (0-based):', '0');
+    const index = prompt('Rollback to message index (0-based)：\n（将截断该 index 之后的所有消息，不可撤销）', '0');
     if (index === null) return;
-    const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, message_index: parseInt(index) });
+    const idx = parseInt(index);
+    if (Number.isNaN(idx) || idx < 0) { appendMsg('assistant', '[rollback] 非法 index', false); return; }
+    if (!window.confirm('确认截断到 index ' + idx + '？此操作不可撤销。')) return;
+    const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, message_index: idx });
     if (r.ok) btnHistory.click();
   });
 
-  // ── agent run ────────────────────────────────────────────────────────────
+  // ── agent run (P1: classified event log + collapsible raw JSON) ─────────
+  const agentStepCounter = $('#agent-step-counter');
+  const agentMaxSteps = $('#agent-max-steps');
+  const btnAgentClear = $('#btn-agent-clear');
+
+  const AGENT_TYPE_LABEL = {
+    plan: 'PLAN',
+    tool_call: 'TOOL_CALL',
+    tool_result: 'TOOL_RESULT',
+    delta: 'DELTA',
+    done: 'DONE',
+  };
+  const AGENT_TYPE_CLASS = {
+    plan: 'ev-plan',
+    tool_call: 'ev-tool',
+    tool_result: 'ev-result',
+    delta: 'ev-delta',
+    done: 'ev-done',
+  };
+
+  function summarizeAgentEvent(chunk) {
+    // 返回 {label, summary, isDone}；summary 是人类可读的一行
+    const t = chunk.type;
+    if (t === 'plan') {
+      const action = chunk.action;
+      if (action && action.CallTool) return { label: 'PLAN', summary: 'step ' + chunk.step + ' → call ' + action.CallTool.tool };
+      if (action && action.Finish) return { label: 'PLAN', summary: 'step ' + chunk.step + ' → finish' };
+      return { label: 'PLAN', summary: 'step ' + chunk.step };
+    }
+    if (t === 'tool_call') return { label: 'TOOL_CALL', summary: 'step ' + chunk.step + ' · ' + chunk.tool };
+    if (t === 'tool_result') return { label: 'TOOL_RESULT', summary: 'step ' + chunk.step + ' · ' + chunk.tool };
+    if (t === 'delta') return { label: 'DELTA', summary: 'step ' + chunk.step + ' · ' + (chunk.chunk || '').slice(0, 60) };
+    if (t === 'done') return { label: 'DONE', summary: chunk.stop_reason + ' · steps=' + chunk.steps_taken + ' · tokens~' + chunk.tokens_estimated, isDone: true };
+    return { label: (t || 'EVENT').toUpperCase(), summary: '' };
+  }
+
+  function appendAgentEvent(chunk) {
+    const info = summarizeAgentEvent(chunk);
+    const row = document.createElement('div');
+    row.className = 'agent-ev ' + (AGENT_TYPE_CLASS[chunk.type] || '');
+    appendInline(row, 'span', 'ev-label', info.label);
+    row.append(' ');
+    appendInline(row, 'span', 'ev-summary', info.summary || '');
+    // 折叠 raw JSON
+    const details = document.createElement('details');
+    details.className = 'ev-raw';
+    const summary = document.createElement('summary');
+    summary.textContent = 'raw';
+    details.appendChild(summary);
+    const pre = document.createElement('pre');
+    pre.className = 'mono';
+    pre.textContent = JSON.stringify(chunk, null, 2);
+    details.appendChild(pre);
+    row.appendChild(details);
+    agentOutput.appendChild(row);
+    agentOutput.scrollTop = agentOutput.scrollHeight;
+    return info;
+  }
+
   btnAgentRun.addEventListener('click', async () => {
     const input = agentInput.value.trim();
-    if (!input) return;
-    agentOutput.textContent = 'Running…';
+    if (!input || !selectedChar) return;
+    agentOutput.innerHTML = '';
+    agentStepCounter.textContent = 'running…';
     const path = '/v1/agent/run';
     const t0 = performance.now();
+    let stepCount = 0;
+    let lastDone = null;
     try {
+      const maxSteps = Math.max(1, Math.min(20, parseInt(agentMaxSteps.value) || 3));
       const res = await fetch(base + path, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ ...buildChatPayload(input), max_steps: 3 }),
+        body: JSON.stringify({ ...buildChatPayload(input), max_steps: maxSteps }),
       });
       if (!res.ok) {
         const errBody = await res.text();
         logEvent('POST', path, res.status, Math.round(performance.now() - t0), errBody);
-        agentOutput.textContent = '[HTTP ' + res.status + '] ' + errBody;
+        const row = document.createElement('div');
+        row.className = 'agent-ev ev-err';
+        row.textContent = '[HTTP ' + res.status + '] ' + errBody;
+        agentOutput.appendChild(row);
+        agentStepCounter.textContent = 'http ' + res.status;
         return;
       }
-      const events = [];
       const seq = await streamSse(res, (chunk, seq) => {
-        events.push(chunk);
-        const label = chunk.type || 'event';
-        logEvent('SSE', path, 200, Math.round(performance.now() - t0), '#' + seq + ' ' + label);
-        agentOutput.textContent = events.map(e => JSON.stringify(e)).join('\n');
+        const info = appendAgentEvent(chunk);
+        if (chunk.type === 'plan') stepCount = chunk.step;
+        if (info.isDone) lastDone = chunk;
+        logEvent('SSE', path, 200, Math.round(performance.now() - t0), '#' + seq + ' ' + info.label + (info.summary ? ' ' + info.summary : ''));
       });
-      logEvent('SSE', path, 200, Math.round(performance.now() - t0), 'done/' + seq + 'events');
+      const ms = Math.round(performance.now() - t0);
+      logEvent('SSE', path, 200, ms, 'done/' + seq + 'events');
+      agentStepCounter.textContent = lastDone
+        ? lastDone.stop_reason + ' · ' + lastDone.steps_taken + ' steps · ' + ms + 'ms'
+        : seq + ' events · ' + ms + 'ms';
     } catch (e) {
       logEvent('POST', path, 0, Math.round(performance.now() - t0), e.message);
-      agentOutput.textContent = '[fetch error] ' + e.message;
+      const row = document.createElement('div');
+      row.className = 'agent-ev ev-err';
+      row.textContent = '[fetch error] ' + e.message;
+      agentOutput.appendChild(row);
+      agentStepCounter.textContent = 'fetch error';
     }
+  });
+
+  if (btnAgentClear) btnAgentClear.addEventListener('click', () => {
+    agentOutput.innerHTML = '—';
+    agentStepCounter.textContent = '';
   });
 
   // ── clear log ────────────────────────────────────────────────────────────
@@ -497,6 +579,90 @@
       return { ok: false, status: 0, error: e.message };
     }
   }
+
+  // ── P1: one-click diagnostics ────────────────────────────────────────────
+  // 依次跑 version/settings/models，输出可复制的诊断摘要。
+  // 不发真实 chat/agent run（避免消耗 provider quota）；只验证后端可达性。
+  const btnDiag = $('#btn-diag');
+  const btnDiagCopy = $('#btn-diag-copy');
+  const diagOutput = $('#diag-output');
+  let lastDiagText = '';
+
+  async function runDiagnostics() {
+    if (!base) { diagOutput.textContent = '请先连接 engine'; return; }
+    diagOutput.textContent = '诊断中…';
+    const lines = [];
+    lines.push('=== AIRP Engine Diagnostics ===');
+    lines.push('time: ' + new Date().toISOString());
+    lines.push('engine_url: ' + base);
+    lines.push('bearer: ' + (bearer ? '(set, len=' + bearer.length + ')' : '(empty — engine 无鉴权或未配 bearer)'));
+    lines.push('');
+
+    // 1. version
+    {
+      const t0 = performance.now();
+      const r = await api('GET', '/version');
+      const ms = Math.round(performance.now() - t0);
+      lines.push('[1] GET /version  → ' + r.status + ' (' + ms + 'ms)');
+      if (r.ok) lines.push('    name=' + (r.data?.name || '?') + ' version=' + (r.data?.version || r.text || '?'));
+      else lines.push('    err: ' + formatError(r.data, r.text));
+    }
+    // 2. settings
+    {
+      const t0 = performance.now();
+      const r = await api('GET', '/v1/settings');
+      const ms = Math.round(performance.now() - t0);
+      lines.push('[2] GET /v1/settings  → ' + r.status + ' (' + ms + 'ms)');
+      if (r.ok) {
+        const s = r.data || {};
+        const hasApiKey = !!(s.api_key && String(s.api_key).length);
+        const hasAccessKey = !!(s.access_api_key && String(s.access_api_key).length);
+        lines.push('    endpoint=' + (s.endpoint || '(unset)'));
+        lines.push('    model=' + (s.model || '(unset)'));
+        lines.push('    api_key=' + (hasApiKey ? '(set)' : '(MISSING — provider 调用会失败)'));
+        lines.push('    access_api_key=' + (hasAccessKey ? '(set — 需 bearer)' : '(empty — 无鉴权)'));
+      } else {
+        lines.push('    err: ' + formatError(r.data, r.text));
+      }
+    }
+    // 3. models (provider smoke)
+    {
+      const t0 = performance.now();
+      const r = await api('GET', '/v1/models');
+      const ms = Math.round(performance.now() - t0);
+      lines.push('[3] GET /v1/models  → ' + r.status + ' (' + ms + 'ms)');
+      if (r.ok) {
+        const models = Array.isArray(r.data?.data) ? r.data.data.map(m => m.id) : null;
+        lines.push('    models: ' + (models ? models.length + ' 个 → ' + models.slice(0, 5).join(', ') + (models.length > 5 ? ' …' : '') : JSON.stringify(r.data).slice(0, 80)));
+      } else {
+        lines.push('    err: ' + formatError(r.data, r.text));
+      }
+    }
+    // 4. characters
+    {
+      const t0 = performance.now();
+      const r = await api('GET', '/v1/characters');
+      const ms = Math.round(performance.now() - t0);
+      lines.push('[4] GET /v1/characters  → ' + r.status + ' (' + ms + 'ms)');
+      if (r.ok) lines.push('    count=' + (Array.isArray(r.data) ? r.data.length : 0));
+      else lines.push('    err: ' + formatError(r.data, r.text));
+    }
+    lines.push('');
+    lines.push('=== End ===');
+    lastDiagText = lines.join('\n');
+    diagOutput.textContent = lastDiagText;
+  }
+
+  if (btnDiag) btnDiag.addEventListener('click', runDiagnostics);
+  if (btnDiagCopy) btnDiagCopy.addEventListener('click', async () => {
+    if (!lastDiagText) { diagOutput.textContent = '先点「一键诊断」'; return; }
+    try {
+      await navigator.clipboard.writeText(lastDiagText);
+      diagOutput.textContent = lastDiagText + '\n\n[已复制到剪贴板]';
+    } catch {
+      diagOutput.textContent = lastDiagText + '\n\n[剪贴板不可用，请手动选中复制]';
+    }
+  });
 
   // ── auto-connect on load ─────────────────────────────────────────────────
   setTimeout(connect, 300);
