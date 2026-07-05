@@ -246,6 +246,53 @@ async fn test_models_proxy_invalid_endpoint_redacts_query_detail() {
     assert!(!body.windows(b"secret".len()).any(|w| w == b"secret"));
 }
 
+/// #42 F-1：无路径 endpoint（如 `http://example.com`）不得推导出丢失 host 的
+/// 畸形 URL，必须走 invalid_endpoint 类型化错误。
+#[tokio::test]
+async fn test_models_proxy_no_path_endpoint_returns_invalid_endpoint() {
+    let (state, _tmp) = setup_with_endpoint("http://example.com".to_string()).await;
+    let router = create_router(state);
+    let resp = router
+        .oneshot(build_get_request("/v1/models"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "invalid_endpoint");
+}
+
+/// #40 建议 3：上游 hang → 504 + upstream_timeout。
+/// 通过 `AIRP_MODELS_PROXY_TIMEOUT_MS` 走快速超时路径，避免测试等满默认 5s。
+#[tokio::test]
+async fn test_models_proxy_upstream_timeout_returns_504() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"data": []}))
+                .set_delay(std::time::Duration::from_secs(5)),
+        )
+        .mount(&server)
+        .await;
+
+    std::env::set_var("AIRP_MODELS_PROXY_TIMEOUT_MS", "200");
+    let (state, _tmp) = setup(&server.uri()).await;
+    let router = create_router(state);
+    let resp = router
+        .oneshot(build_get_request("/v1/models"))
+        .await
+        .unwrap();
+    std::env::remove_var("AIRP_MODELS_PROXY_TIMEOUT_MS");
+
+    assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "upstream_timeout");
+}
+
 #[tokio::test]
 async fn test_dx7_completions_returns_sse_200() {
     let server = MockServer::start().await;
