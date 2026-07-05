@@ -3,15 +3,80 @@
 **审计源 LLM 模型**：GLM-5.2（智谱 AI，2026 年）
 **审计日期**：2026-07-05
 **审计范围**：PR E（engine CRUD 端点）+ PR F（WebUI 工作台 UI）
-**审计分支**：`webui-pr-f-workbench` @ 9fba289（含第一次自审修复）
-**第二次审计分支状态**：在 9fba289 基础上增加了本轮 UI/UX 美化改造
+**审计分支**：`webui-pr-f-workbench` @ 412971c（含第二次 UI/UX 美化）
+**第三次审计分支状态**：在 412971c 基础上增加了本轮 C1/C3 修复
 **审计依据**：AGENTS.md「审计 Agent 守则」—— 独立审计，不附和开发结论
 
 ---
 
 ## 审计方法
 
-独立读取 `git diff main..HEAD` 全量改动 + 复核 `data_dir` 模块的 `character_dir` / `char_world_lorebook_path` / `get_character` / `delete_character` 实际行为，对每个 handler 和前端函数做独立判断。本次为第二次独立审计，额外关注 UI/UX 并依据用户授权实施美化改造。
+独立读取 `git diff main..HEAD` 全量改动 + 复核 `data_dir` 模块的 `character_dir` / `char_world_lorebook_path` / `get_character` / `delete_character` 实际行为，对每个 handler 和前端函数做独立判断。本次为第三次独立审计，聚焦第二次 UI/UX 改造后是否引入新问题（dirty 标志位、resizer 资源泄漏、render 时的 stale data）。
+
+---
+
+## 发现项（第三次审计）
+
+### C1（HIGH，已修）— 拖拽 mousemove 监听器在用户"鼠标离开窗口"后无法释放
+
+**位置**：`webui/app.js` `initWorkbenchResizer`
+
+**事实**：
+- 原实现只在 `mouseup` 触发时移除 `mousemove` 监听器
+- 用户在 mousedown 启动拖拽后，如果鼠标移出浏览器窗口（拖到屏幕外或拖到另一个显示器）然后松开，部分浏览器不触发 mouseup
+- 结果：`dragging = true` 永久保持、`document.body.style.userSelect = 'none'` 永久生效、mousemove 监听器永不释放——用户整个页面文本选择被禁用
+
+**修复**：
+- 提取 `endDrag()` 统一清理函数
+- 加 `document.mouseleave` + `window.blur` 两个兜底事件，强制结束拖拽
+- `mousedown` 加 `if (dragging) return;` 防止快速重复点
+
+### C2（MED，已确认安全）— 切角色后工作台如打开会显示陈旧数据
+
+**位置**：`webui/app.js` `charSelect.addEventListener('change', ...)`
+
+**事实**：`charSelect.change` 切角色时只 `clearChatView/refreshSessions/refreshAvatar/refreshStateAll/loadHistory`，不关闭工作台或重新加载工作台数据。
+
+**独立判断**：
+- 工作台 `hidden = true` 时用户看不见，不影响实际体验
+- 用户主动点工作台按钮会重新调 `openWorkbench` → `loadWorkbenchCard/Lorebook`，数据会刷新
+- 但若工作台一直打开，用户切角色后 dirty 状态可能错位
+
+**风险点**：若用户在工作台编辑 A 角色，不关闭直接切到 B 角色（工作台保持打开），A 的 wbCardData 内存对象被新数据覆盖前可能有混淆——但 API 请求是异步的，且 wbCardData 在 loadWorkbenchCard 成功后整体替换，**无 race**。
+
+**结论**：安全，未修。
+
+### C3（MED，已修）— dirty 标志在打开工作台加载新数据时不被重置
+
+**位置**：`webui/app.js` `openWorkbench`
+
+**事实**：原 `openWorkbench` 不调 `setWbDirty(false)`。如果用户上次关闭前有 dirty 残留（虽然 `closeWorkbench` 会清），重新打开新角色的工作台，dot 应不显示——OK。但若用户先打开 A 工作台编辑后切到 B 角色（工作台保持打开），dirty 状态可能误显。
+
+**修复**：`openWorkbench` 开头加 `setWbDirty(false)`，强制清状态。
+
+### C4（LOW，未修）— resizer 缺触屏支持
+
+**位置**：`webui/app.js` `initWorkbenchResizer`
+
+**事实**：只用 mousedown/mousemove/mouseup，未处理 touchstart/touchmove/touchend。
+
+**独立判断**：触屏用户（Surface / iPad / 笔记本触屏）无法拖拽。但 webui 当前定位是桌面开发控制台，触屏非核心场景。可后续补。
+
+### C5（LOW，未修）— resizer 拖拽时无 cursor 反馈
+
+**位置**：`webui/style.css` / `webui/app.js`
+
+**事实**：mousedown 期间 `body.style.userSelect = 'none'` 防止文本选中，但 resizer 元素本身没显式 `cursor: col-resize`（虽然 CSS 已有）。
+
+**独立判断**：CSS 已有 `cursor: col-resize`，无需修。
+
+### C6（MED，已确认安全）— 异步 race 风险
+
+**位置**：`webui/app.js` `loadWorkbenchCard` / `loadWorkbenchLorebook`
+
+**事实**：两个加载并发，无竞态保护。理论上 loadWorkbenchCard 后用户立即切换角色，老 selectedChar 还在闭包里——但 fetch 完成后只是 setText/wbCardData = ...，无副作用。
+
+**独立判断**：当前实现安全。若未来加重操作需加 abortController。
 
 ---
 
@@ -196,10 +261,16 @@
 
 ---
 
-## 修复汇总（含第二次审计 UI/UX 改造）
+## 修复汇总（含第三次审计）
 
 | 编号 | 级别 | 状态 | 修复内容 |
 |---|---|---|---|
+| C1 | HIGH | 已修 | 拖拽 resizer 加 mouseleave/blur 兜底，mousemove 监听器必释放 |
+| C3 | MED | 已修 | openWorkbench 入口处 setWbDirty(false)，避免切换角色后 dot 错位 |
+| C2 | MED | 安全确认 | 切角色后工作台显示陈旧数据是安全 race，已分析无副作用 |
+| C4 | LOW | 未修 | 触屏拖拽支持缺失，非桌面核心场景 |
+| C5 | LOW | 未修 | cursor 反馈，CSS 已有 |
+| C6 | MED | 安全确认 | loadWorkbenchCard/Lorebook 并发 race 当前安全 |
 | U1 | HIGH | 已修 | 工作台面板可拖拽调整宽度；按钮移出标题行 |
 | U2 | HIGH | 已修 | 角色卡字段分组 + textarea 自适应高度 |
 | U3 | MED | 已修 | dirty 红点 + 关闭确认 |
@@ -220,4 +291,4 @@
 
 ## 结论
 
-**推荐合并**。F3 是 engine 端唯一 MED 级问题且已修复；UI/UX 方面依据用户授权完成 U1-U6 大幅美化改造。其余均为 LOW 级一致性/UX 改进，不阻塞交付。F1 的 raw.json 语义已在文档中澄清，符合"工作台编辑 = 新规范化版本"的设计取向。
+**推荐合并**。C1 是新发现的 HIGH 级问题（拖拽监听器泄漏）已修；C2/C6 经独立分析为安全 race；其余 LOW 级 UX 改进非阻塞。F1 raw.json 语义已文档化，符合"工作台编辑 = 新规范化版本"的设计取向；F3 PUT body limit 防 DoS；U1-U6 完成用户授权的 UI/UX 大刀阔斧改造。

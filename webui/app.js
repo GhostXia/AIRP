@@ -1026,6 +1026,7 @@
     wbCharName.textContent = selectedChar;
     wbCardStatus.textContent = '加载中…';
     wbLoreStatus.textContent = '加载中…';
+    setWbDirty(false);  // 切角色打开时清 dirty，避免上次残留
     loadWorkbenchCard();
     loadWorkbenchLorebook();
   }
@@ -1310,30 +1311,40 @@
   });
 
   // 工作台面板拖拽调整宽度
+  // 兜底：mouseleave/blur 强制 endDrag 防拖到窗口外松不开
   function initWorkbenchResizer() {
     const resizer = $('#workbench-resizer');
     if (!resizer || !workbenchPanel) return;
     let dragging = false;
+    let onMove = null, onUp = null;
+    const endDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.userSelect = '';
+      if (onMove) window.removeEventListener('mousemove', onMove);
+      if (onUp) window.removeEventListener('mouseup', onUp);
+      onMove = null; onUp = null;
+    };
     resizer.addEventListener('mousedown', (e) => {
+      if (dragging) return;
       dragging = true;
       document.body.style.userSelect = 'none';
       const startX = e.clientX;
       const startW = workbenchPanel.offsetWidth;
-      const onMove = (ev) => {
+      onMove = (ev) => {
         if (!dragging) return;
         const delta = startX - ev.clientX;
         const next = Math.min(Math.max(startW + delta, 320), window.innerWidth * 0.65);
         workbenchPanel.style.width = next + 'px';
       };
-      const onUp = () => {
-        dragging = false;
-        document.body.style.userSelect = '';
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-      };
+      onUp = () => endDrag();
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
     });
+    // 兜底 1：鼠标离开浏览器窗口
+    document.addEventListener('mouseleave', endDrag);
+    // 兜底 2：窗口失焦
+    window.addEventListener('blur', endDrag);
   }
   initWorkbenchResizer();
 
