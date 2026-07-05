@@ -85,9 +85,18 @@ impl ToolRegistry {
         Self::default()
     }
 
-    pub fn register(&mut self, tool: Box<dyn Tool>) {
+    /// 注册工具。重名视为注册表组装期的编程错误 → 返回 `Err`，绝不静默覆盖
+    /// （旧实现 `insert` 会悄悄顶掉同名工具，掩盖冲突；issue #24）。
+    pub fn register(&mut self, tool: Box<dyn Tool>) -> Result<(), AirpError> {
         let name = tool.meta().name;
+        if self.tools.contains_key(name) {
+            return Err(AirpError::Config(format!(
+                "duplicate tool registration: {}",
+                name
+            )));
+        }
         self.tools.insert(name, tool);
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
@@ -138,40 +147,78 @@ impl Tool for EchoTool {
 /// `state` 让 built-in 工具访问数据层（`data_root`）。echo 等无状态工具
 /// 忽略它。调用方（`AgentLoop::new`）已有 `Arc<DaemonState>`，传入即可。
 pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
+    // 内建工具集是编译期固定的、名字不重复的集合；若这里冒出重名，那是新增
+    // 工具时的编程错误，应在启动时立刻炸出来，而非静默覆盖（issue #24）。
+    const COLLISION: &str = "built-in tool name collision";
     let mut reg = ToolRegistry::new();
-    reg.register(Box::new(EchoTool));
+    reg.register(Box::new(EchoTool)).expect(COLLISION);
     // M_AGENT-2 第一批：会话类 5 工具。
     reg.register(Box::new(ListSessionsTool {
         state: state.clone(),
-    }));
+    }))
+    .expect(COLLISION);
     reg.register(Box::new(StartSessionTool {
         state: state.clone(),
-    }));
+    }))
+    .expect(COLLISION);
     reg.register(Box::new(AppendMessageTool {
         state: state.clone(),
-    }));
+    }))
+    .expect(COLLISION);
     reg.register(Box::new(GetRecentContextTool {
         state: state.clone(),
-    }));
+    }))
+    .expect(COLLISION);
     reg.register(Box::new(RollbackMessagesTool {
         state: state.clone(),
-    }));
+    }))
+    .expect(COLLISION);
     // M_AGENT-2 第二批：角色类 3 工具（list/get/delete）。
     reg.register(Box::new(ListCharactersTool {
         state: state.clone(),
-    }));
+    }))
+    .expect(COLLISION);
     reg.register(Box::new(GetCharacterTool {
         state: state.clone(),
-    }));
-    reg.register(Box::new(DeleteCharacterTool { state }));
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(DeleteCharacterTool { state }))
+        .expect(COLLISION);
     reg
 }
 
 const MAX_RECENT_CONTEXT: usize = 200;
 
+// 两级锁保证「破坏性整角色删除」与「单会话写」互斥（issue #22）：
+//
+// - `CHAT_LOG_LOCKS`（per-session `Mutex`，key = `character` 或 `character/{sid}`）
+//   保证同一会话的 append/rollback 串行。
+// - `CHARACTER_LOCKS`（per-character `RwLock`，key = `character`）是角色级破坏性锁：
+//   append/rollback 持 `read()`（同角色不同会话仍可并发），delete_character 持
+//   `write()`（独占，排斥该角色下**所有**会话写）。
+//
+// 旧实现只有 per-session `Mutex`，delete 用 key=`character`、命名会话写用
+// key=`character/{sid}`，属不同 entry 互不排斥 → delete 能与会话写交错，
+// 造成半删 / IO race。两级锁获取顺序统一为「先 character 再 session」，无环、无死锁。
 type ChatLogLockMap = StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>;
 
 static CHAT_LOG_LOCKS: OnceLock<ChatLogLockMap> = OnceLock::new();
+
+type CharacterLockMap = StdMutex<HashMap<String, Arc<tokio::sync::RwLock<()>>>>;
+
+static CHARACTER_LOCKS: OnceLock<CharacterLockMap> = OnceLock::new();
+
+/// 取角色级破坏性锁。append/rollback 拿 `read()`，delete_character 拿 `write()`。
+fn character_lock(character_id: &str) -> Arc<tokio::sync::RwLock<()>> {
+    let mut locks = CHARACTER_LOCKS
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .expect("character lock map poisoned");
+    locks
+        .entry(character_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
+        .clone()
+}
 
 fn chat_log_lock(
     character_id: &str,
@@ -363,6 +410,8 @@ impl Tool for AppendMessageTool {
             };
             let cid = CharacterId::new(cid_str)?;
             let session_id = optional_session_id(&params)?;
+            let char_lock = character_lock(cid.as_str());
+            let _char_guard = char_lock.read().await;
             let lock = chat_log_lock(cid.as_str(), session_id.as_ref());
             let _guard = lock.lock().await;
             let mut log = ChatLog::load_or_create_for_session(
@@ -493,6 +542,8 @@ impl Tool for RollbackMessagesTool {
             let index = required_usize_param(&params, "index")?;
             let cid = CharacterId::new(cid_str)?;
             let session_id = optional_session_id(&params)?;
+            let char_lock = character_lock(cid.as_str());
+            let _char_guard = char_lock.read().await;
             let lock = chat_log_lock(cid.as_str(), session_id.as_ref());
             let _guard = lock.lock().await;
             let mut log = ChatLog::load_or_create_for_session(
@@ -674,8 +725,11 @@ impl Tool for DeleteCharacterTool {
                     dry_run: true,
                 });
             }
-            let lock = chat_log_lock(cid.as_str(), None);
-            let _guard = lock.lock().await;
+            // 破坏性删除：拿角色级写锁，独占排斥该角色下所有会话的 append/rollback
+            // （它们持 read 锁）。旧实现用 per-session Mutex 的 key=character，与命名
+            // 会话写的 key=character/{sid} 不互斥，故可交错半删（issue #22）。
+            let char_lock = character_lock(cid.as_str());
+            let _char_guard = char_lock.write().await;
             data_dir::delete_character(&state.data_root, &cid)?;
             tracing::warn!(character_id = %cid, "delete_character executed");
             Ok(ToolResult {
@@ -1120,5 +1174,51 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, AirpError::BadRequest(_)));
+    }
+
+    #[test]
+    fn register_rejects_duplicate_tool_name() {
+        // 同名工具二次注册必须报错，绝不静默覆盖（issue #24）。
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(EchoTool))
+            .expect("first echo registers");
+        let err = reg
+            .register(Box::new(EchoTool))
+            .expect_err("duplicate echo must be rejected");
+        assert!(matches!(err, AirpError::Config(_)));
+        // 首个注册仍在，未被顶掉。
+        assert!(reg.get("echo").is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_write_lock_excludes_session_writes() {
+        // issue #22：delete_character 的角色级写锁必须与 append/rollback 的读锁
+        // 互斥。持一把 read guard 时 delete 侧 write() 必须阻塞，直到 read 释放才
+        // 推进——证明二者走同一把角色锁，不再各锁各的（旧实现 delete 与命名会话
+        // 写属不同 Mutex entry，互不排斥）。用独立 key 避免污染并行测试的角色锁。
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let key = "issue22-delete-lock-probe";
+        let reader = character_lock(key);
+        let read_guard = reader.read().await;
+
+        let writer = character_lock(key);
+        let acquired = Arc::new(AtomicBool::new(false));
+        let acquired2 = acquired.clone();
+        let handle = tokio::spawn(async move {
+            let _w = writer.write().await;
+            acquired2.store(true, Ordering::SeqCst);
+        });
+
+        // read guard 仍持有：write 不可能拿到。
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !acquired.load(Ordering::SeqCst),
+            "write lock must not be acquired while a read guard is held"
+        );
+
+        // 释放 read → write 应推进。
+        drop(read_guard);
+        handle.await.unwrap();
+        assert!(acquired.load(Ordering::SeqCst));
     }
 }
