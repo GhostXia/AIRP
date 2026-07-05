@@ -145,11 +145,9 @@ impl tower_governor::key_extractor::KeyExtractor for UserOrIpKeyExtractor {
         if let Some(auth) = req.headers().get(header::AUTHORIZATION) {
             if let Ok(s) = auth.to_str() {
                 if let Some(token) = s.strip_prefix("Bearer ") {
-                    let key = if token.len() > 32 {
-                        &token[..32]
-                    } else {
-                        token
-                    };
+                    // A4: 用 chars().take(32) 而非 &token[..32] —— 后者是字节切片，
+                    // 32 不在 char boundary 上时会 panic（热路径 5xx）。take(32) 永远安全。
+                    let key: String = token.chars().take(32).collect();
                     return Ok(format!("k:{}", key));
                 }
             }
@@ -845,5 +843,22 @@ mod tests_dx4 {
         let req = req_with_auth(&long_token);
         let key = ext.extract(&req).unwrap();
         assert_eq!(key.len(), 34, "k: prefix (2) + 32 chars = 34; got: {}", key);
+    }
+
+    #[test]
+    fn test_a4_multibyte_token_does_not_panic() {
+        // A4: 审计假设多字节 token 能到达 `&token[..32]` 切片路径，从而触发
+        // "byte index 32 is not a char boundary" panic。实测：HTTP HeaderValue
+        // 的 `to_str()` 在任意字节 ≥ 0x80 时返回 Err（HTTP/1.1 头值规范只允许
+        // visible ASCII），因此非 ASCII token 会落回 IP key，永远到不了切片那行。
+        // 结论：A4 描述的 panic 在当前代码路径下不可达；但 `chars().take(32)`
+        // 仍是更安全的 Rust 写法（defense-in-depth），保留。
+        // 本测试固化"多字节 token 落回 ip:unknown、不 panic"的现状，防止未来
+        // 有人放松 `to_str()` 检查时悄悄把 panic 引回来。
+        let ext = UserOrIpKeyExtractor;
+        let multibyte_token = "🛡".repeat(40); // U+1F6E1，单码点 4 字节，40 个 = 160 字节
+        let req = req_with_auth(&multibyte_token);
+        let key = ext.extract(&req).expect("must not panic on multibyte token");
+        assert_eq!(key, "ip:unknown", "multibyte token rejected by to_str(); expected IP fallback");
     }
 }
