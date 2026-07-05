@@ -428,6 +428,126 @@ mod tests {
         assert_eq!(default_max_steps(), 1);
     }
 
+    /// #26：把神圣不变式压到真实管线产物上。
+    ///
+    /// 旧测试只查 `req.base` 的种子字符串；本测试走 loop 派生 subagent 的
+    /// **同一条** `prepare_pipeline` 路径（run_loop 的 Generate 分支，
+    /// `engine/src/agent/mod.rs` Generate → prepare_pipeline(&req.base, state)），
+    /// 断言装配出的最终 `system_prompt` / `messages` 不含协调器控制平面标记。
+    /// 未来 M_AGENT/ReAct 改动若把 plan/tool/observe 状态误注入角色平面，此处立即红。
+    #[test]
+    fn subagent_prepared_pipeline_has_no_orchestrator_noise() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_root = tmp.path().to_path_buf();
+        for d in ["characters", "presets", "sessions"] {
+            std::fs::create_dir_all(data_root.join(d)).unwrap();
+        }
+        let state = Arc::new(DaemonState {
+            data_root,
+            http_client: reqwest::Client::new(),
+            config: std::sync::RwLock::new(crate::daemon::MutableConfig {
+                provider: crate::adapter::Provider::OpenAI,
+                endpoint: "http://127.0.0.1:1/v1/chat/completions".to_string(),
+                api_key: None,
+                model: "test-model".to_string(),
+                volume_config: crate::config::VolumeConfig::default(),
+                access_api_key: None,
+                engine: crate::adapter::BackendEngine::default(),
+                quota: crate::quota::QuotaConfig::default(),
+            }),
+        });
+
+        let card = serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "Alice",
+                "description": "a knight",
+                "personality": "", "scenario": "", "first_mes": "Hello!",
+                "mes_example": "", "creator_notes": "", "system_prompt": "",
+                "post_history_instructions": "", "tags": [], "creator": "",
+                "character_version": "", "alternate_greetings": [], "extensions": {}
+            }
+        })
+        .to_string();
+
+        let req = AgentRunRequest {
+            base: ChatCompletionRequest {
+                character_id: None,
+                character_card_id: Some(card),
+                lorebook_path: None,
+                user_profile: crate::daemon::UserProfile {
+                    name: "User".to_string(),
+                    variables: std::collections::HashMap::new(),
+                },
+                message: "你好".to_string(),
+                messages_history: None,
+                regex_filters: None,
+                preset_id: None,
+                enabled_presets: None,
+                session_id: None,
+                provider: None,
+                endpoint: None,
+                api_key: None,
+                model: None,
+                temperature: None,
+                max_tokens: None,
+                scene_id: None,
+                user_id: None,
+            },
+            max_steps: 3,
+            token_budget: None,
+            wall_clock_secs: 60,
+        };
+
+        // 与 run_loop Generate 分支完全相同的调用形态。
+        let pipeline = prepare_pipeline(&req.base, &state).expect("prepare_pipeline");
+
+        // 控制平面标记：loop 协议字段名 + 骨架 echo 探针参数。
+        // 任何一个出现在角色平面即视为戒律#6 破裂。
+        let noise_markers = [
+            "tool_call",
+            "tool_result",
+            "plan_action",
+            "observe",
+            "orchestrator",
+            "loop-skeleton",
+            "stop_reason",
+            "steps_taken",
+            "dry_run",
+        ];
+        let mut plane = vec![("system_prompt".to_string(), pipeline.system_prompt.clone())];
+        for (i, m) in pipeline.messages.iter().enumerate() {
+            plane.push((format!("messages[{}]", i), m.content.clone()));
+        }
+        for (loc, text) in &plane {
+            let lower = text.to_lowercase();
+            for marker in &noise_markers {
+                assert!(
+                    !lower.contains(marker),
+                    "戒律#6 破裂：{} 含协调器噪声标记 `{}`",
+                    loc,
+                    marker
+                );
+            }
+        }
+
+        // 正向 sanity：装配确实跑了（角色平面含卡内容，而不是空 prompt 侥幸通过）。
+        let all_text = plane
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all_text.contains("Alice"),
+            "装配产物应包含角色卡内容（防止空产物假绿）"
+        );
+        assert!(
+            plane.iter().any(|(_, t)| t.contains("你好")),
+            "装配产物应包含用户消息"
+        );
+    }
+
     /// AgentEvent / PlanAction 序列化 wire-shape 守门员（issue #43/#44/#45/#46 T 建议）。
     ///
     /// PR #41 曾因前端按 PascalCase (`action.CallTool`) 读 snake_case serde
