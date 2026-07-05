@@ -31,6 +31,11 @@
   const btnClearLog = $('#btn-clear-log');
   const btnRefreshChars = $('#btn-refresh-chars');
   const btnNewSession = $('#btn-new-session');
+  const charAvatar = $('#char-avatar');
+  const stateDisplay = $('#state-display');
+  const stateHistoryDisplay = $('#state-history-display');
+  const stateHistoryLimit = $('#state-history-limit');
+  const btnRefreshState = $('#btn-refresh-state');
 
   // ── state ────────────────────────────────────────────────────────────────
   let base = engineUrl.value.replace(/\/+$/, '');
@@ -137,6 +142,9 @@
   // ── refresh all left-panel data ──────────────────────────────────────────
   async function refreshAll() {
     await Promise.all([refreshHealth(), refreshSettings(), refreshModels(), refreshChars()]);
+    // 初次连接后自动加载当前角色的 chat history（PLAN §9 P1 "交互收口"）。
+    // refreshChars 内部已设置 selectedChar；此处 await 完成后即可拉 history。
+    if (selectedChar) loadHistory();
   }
 
   async function refreshHealth() {
@@ -185,6 +193,8 @@
       if (ids.length && !selectedChar) { selectedChar = ids[0]; charSelect.value = ids[0]; }
       if (selectedChar && ids.includes(selectedChar)) charSelect.value = selectedChar;
       refreshSessions();
+      refreshAvatar();
+      refreshStateAll();
     }
   }
 
@@ -246,15 +256,93 @@
     chatLog.innerHTML = '';
   }
 
+  // ── avatar: fetch as blob with bearer, render via object URL ─────────────
+  // <img src> 无法附 Authorization 头，故 fetch blob → createObjectURL。
+  // 切换角色时 revoke 旧 URL 防泄漏。
+  let avatarUrl = '';
+  async function refreshAvatar() {
+    if (avatarUrl) { URL.revokeObjectURL(avatarUrl); avatarUrl = ''; }
+    const cid = selectedChar || charSelect.value;
+    if (!cid || !charAvatar) { if (charAvatar) charAvatar.hidden = true; return; }
+    try {
+      const res = await fetch(base + '/v1/characters/' + encodeURIComponent(cid) + '/avatar', {
+        headers: bearer ? { Authorization: 'Bearer ' + bearer } : {},
+      });
+      logEvent('GET', '/v1/characters/:id/avatar', res.status, 0);
+      if (!res.ok) { charAvatar.hidden = true; return; }
+      const blob = await res.blob();
+      if (!blob.size || !blob.type.startsWith('image/')) { charAvatar.hidden = true; return; }
+      avatarUrl = URL.createObjectURL(blob);
+      charAvatar.src = avatarUrl;
+      charAvatar.hidden = false;
+    } catch (e) {
+      charAvatar.hidden = true;
+    }
+  }
+
+  // ── state: live.json + state history ─────────────────────────────────────
+  // 404 = 角色尚未有 state；与空对象 {} 区分开显示（PLAN §2.1 L47）。
+  async function refreshState() {
+    if (!stateDisplay) return;
+    const cid = selectedChar || charSelect.value;
+    if (!cid) { stateDisplay.textContent = '—'; return; }
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(cid) + '/state');
+    if (r.status === 404) {
+      stateDisplay.textContent = '(404 — 该角色尚无 live.json)';
+      return;
+    }
+    if (r.ok) {
+      // try pretty-print; if not JSON, show raw
+      try { stateDisplay.textContent = JSON.stringify(typeof r.data === 'string' ? JSON.parse(r.data) : r.data, null, 2); }
+      catch { stateDisplay.textContent = String(r.data || r.text); }
+    } else {
+      stateDisplay.textContent = 'err: ' + formatError(r.data, r.text);
+    }
+  }
+
+  async function refreshStateHistory() {
+    if (!stateHistoryDisplay) return;
+    const cid = selectedChar || charSelect.value;
+    if (!cid) { stateHistoryDisplay.textContent = '—'; return; }
+    const limit = Math.max(1, Math.min(1000, parseInt(stateHistoryLimit.value, 10) || 20));
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(cid) + '/state/history?limit=' + limit);
+    if (r.status === 404) {
+      stateHistoryDisplay.textContent = '(404 — 尚无 state history)';
+      return;
+    }
+    if (r.ok) {
+      const arr = Array.isArray(r.data) ? r.data : [];
+      stateHistoryDisplay.textContent = arr.length
+        ? arr.map((e, i) => '[' + i + '] ' + JSON.stringify(e)).join('\n')
+        : '(empty array)';
+    } else {
+      stateHistoryDisplay.textContent = 'err: ' + formatError(r.data, r.text);
+    }
+  }
+
+  function refreshStateAll() {
+    refreshState();
+    refreshStateHistory();
+  }
+
+  if (btnRefreshState) btnRefreshState.addEventListener('click', refreshStateAll);
+  if (stateHistoryLimit) stateHistoryLimit.addEventListener('change', refreshStateHistory);
+
   charSelect.addEventListener('change', () => {
     selectedChar = charSelect.value;
     selectedSess = '';
     clearChatView();
     refreshSessions();
+    refreshAvatar();
+    refreshStateAll();
+    // 自动加载 history：切角色后立即拉取该角色已有 chat history，
+    // 避免用户每次都需手点 History 按钮（PLAN §9 P1 "交互收口"）。
+    loadHistory();
   });
   sessSelect.addEventListener('change', () => {
     selectedSess = sessSelect.value;
     clearChatView();
+    loadHistory();
   });
 
   btnNewSession.addEventListener('click', async () => {
@@ -270,12 +358,60 @@
   });
 
   // ── chat: send & stream ─────────────────────────────────────────────────
+  // 极简 markdown 渲染（PLAN §4.1.1 "支持 streaming delta 和 markdown"）。
+  // 零构建约束 → 不引入第三方库；手写覆盖 code fence / inline code / 标题 /
+  // 粗体 / 斜体 / 段落换行，足够 chat 场景。安全策略：先 escapeHtml 全转义，
+  // 再用 private-use Unicode 占位符抽出 code fence（防止内部 \n 被 <br> 替换），
+  // 最后应用其它行内/块级转换。所有用户内容已被转义，不会注入 HTML。
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderMarkdown(text) {
+    if (text == null) return '';
+    const codeBlocks = [];
+    let s = escapeHtml(text);
+    // 1. fenced code blocks ```lang\n...\n```
+    s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      const i = codeBlocks.length;
+      codeBlocks.push('<pre class="md-code"><code>' + code.replace(/\n$/, '') + '</code></pre>');
+      return '\uF8FFCB' + i + '\uF8FF';
+    });
+    // 2. inline code `...`
+    s = s.replace(/`([^`\n]+)`/g, '<code class="md-code-inline">$1</code>');
+    // 3. headers (line-anchored)
+    s = s.replace(/^### (.+)$/gm, '<h3 class="md-h">$1</h3>');
+    s = s.replace(/^## (.+)$/gm, '<h2 class="md-h">$1</h2>');
+    s = s.replace(/^# (.+)$/gm, '<h1 class="md-h">$1</h1>');
+    // 4. bold **...** (must run before italic so italic regex won't see **)
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    // 5. italic *...*
+    s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    // 6. paragraph + line break
+    s = s.replace(/\n{2,}/g, '</p><p>');
+    s = s.replace(/\n/g, '<br>');
+    // 7. restore code blocks (after \n→<br> so internal \n preserved)
+    s = s.replace(/\uF8FFCB(\d+)\uF8FF/g, (_, i) => codeBlocks[+i]);
+    return '<p>' + s + '</p>';
+  }
+
+  // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
   function appendMsg(role, text, isStreaming) {
     const div = document.createElement('div');
     const safeRole = role === 'user' ? 'user' : 'assistant';
     div.className = 'msg ' + safeRole;
     appendInline(div, 'span', 'role', role);
-    const textNode = appendInline(div, 'span', 'text' + (isStreaming ? ' streaming' : ''), text);
+    const textNode = appendInline(div, 'span', 'text' + (isStreaming ? ' streaming' : ''), '');
+    if (isStreaming) {
+      textNode.textContent = text;
+    } else {
+      textNode.innerHTML = renderMarkdown(text);
+    }
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
     return textNode;
@@ -331,9 +467,15 @@
         }
       });
       msgEl.classList.remove('streaming');
+      // 流式期间用 textContent（保 cursor 动画 + 性能），完成后切 markdown innerHTML。
+      if (acc) msgEl.innerHTML = renderMarkdown(acc);
       logEvent('SSE', '/v1/chat/completions', 200, Math.round(performance.now() - t0), 'done/' + seq + 'chunks');
     } catch (e) {
-      if (msgEl) msgEl.classList.remove('streaming');
+      if (msgEl) {
+        msgEl.classList.remove('streaming');
+        // 异常时若已有部分内容，仍切 markdown；否则保留 raw 错误文本
+        if (acc) msgEl.innerHTML = renderMarkdown(acc);
+      }
       if (e.name === 'AbortError') {
         logEvent('SSE', '/v1/chat/completions', 0, Math.round(performance.now() - t0), 'aborted');
         return;
@@ -402,21 +544,27 @@
   chatInput.addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') doSend(); });
 
   // ── history / regen / rollback (P1: destructive confirm) ────────────────
-  btnHistory.addEventListener('click', async () => {
+  // loadHistory 抽出来供 charSelect/sessSelect 切换时自动复用，避免用户每次手点。
+  async function loadHistory() {
     if (!selectedChar) return;
     const r = await api('POST', '/v1/chat/history', { character_id: selectedChar });
     if (r.ok) {
       const msgs = r.data?.messages || r.data || [];
       chatLog.innerHTML = '';
       msgs.forEach(m => appendMsg(m.role || 'assistant', m.text || m.content || '', false));
+    } else if (r.status !== 0) {
+      // 0 = 网络层失败（已 logEvent），其它状态码显式提示
+      appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false);
     }
-  });
+  }
+
+  btnHistory.addEventListener('click', loadHistory);
 
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
     if (!window.confirm('Regenerate 会重写/删除最后一条 assistant 消息，不可撤销。继续？')) return;
     const r = await api('POST', '/v1/chat/regen', { character_id: selectedChar });
-    if (r.ok) btnHistory.click();
+    if (r.ok) loadHistory();
   });
 
   btnRollback.addEventListener('click', async () => {
@@ -427,7 +575,7 @@
     if (Number.isNaN(idx) || idx < 0) { logEvent('POST', '/v1/chat/rollback', 0, 0, 'illegal index: ' + index); return; }
     if (!window.confirm('确认截断到 index ' + idx + '？此操作不可撤销。')) return;
     const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, message_index: idx });
-    if (r.ok) btnHistory.click();
+    if (r.ok) loadHistory();
   });
 
   // ── agent run (P1: classified event log + collapsible raw JSON) ─────────
@@ -697,9 +845,13 @@
         }
       });
       msgEl.classList.remove('streaming');
+      if (acc) msgEl.innerHTML = renderMarkdown(acc);
       return { ok: true, status: 200, chunks: seq };
     } catch (e) {
-      if (msgEl) msgEl.classList.remove('streaming');
+      if (msgEl) {
+        msgEl.classList.remove('streaming');
+        if (acc) msgEl.innerHTML = renderMarkdown(acc);
+      }
       const interrupted = e.kind === 'stream_interrupt';
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), (interrupted ? 'stream interrupted: ' : '') + e.message);
       return { ok: false, status: 0, error: e.message, kind: interrupted ? 'stream_interrupt' : undefined };

@@ -27,15 +27,23 @@ Temporary browser-based harness to validate engine backend reliability.
 -  `/version` (health check)
 -  `/v1/settings` read (API key masked)
 -  `/v1/models` provider smoke + typed error display
--  `/v1/characters` list
+-  `/v1/characters` list + avatar preview (`/v1/characters/:id/avatar` fetched as blob with bearer, rendered via object URL)
 -  `/v1/sessions/:character_id` list + create — switching character/session clears the current chat view **and aborts any in-flight chat/agent stream** (防上一 session 残留消息串扰 / 防止 SSE chunk 回写新视图); 新建 session 后自动选中该 session（省手动点）
 -  `/v1/characters/import` via `card_json` / `card_png_base64` only; **never `card_path`** (RR-001)
 
+**Character state (M1)**
+-  `/v1/characters/:id/state` — live.json view; 404 (角色尚无 state) 显式区分于空对象
+-  `/v1/characters/:id/state/history?limit=N` — 最近 N 条 state 变更（默认 20，上限 1000）；404 显式提示
+
 **Chat & agent loop**
--  `/v1/chat/completions` (SSE streaming, token-by-token render)
--  `/v1/chat/history`, `regen`, `rollback` — destructive ops (regen/rollback) require explicit confirm dialog
+-  `/v1/chat/completions` (SSE streaming, token-by-token render); 流式期间用 raw textContent（保 cursor 动画），完成后切 markdown 渲染
+-  `/v1/chat/history`, `regen`, `rollback` — destructive ops (regen/rollback) require explicit confirm dialog; 切换 character/session 或初次连接后自动 load history（无需手点 History）
 -  `/v1/agent/run` (SSE agent event log) — events classified as `PLAN` / `TOOL_CALL` / `TOOL_RESULT` / `DELTA` / `DONE` with color-coded labels, one-line summary, and collapsible raw JSON per event; step counter shows `stop_reason · steps_taken · ms`
 -  Concurrent chat stream test (M2) — two parallel `/v1/chat/completions` to verify id-keyed chat state doesn't cross-talk
+
+**Markdown rendering**
+-  极简手写 renderer（零构建约束，不引第三方库）：fenced code blocks / inline code / h1-h3 / **bold** / *italic* / 段落换行
+-  安全：先 escapeHtml 全转义，再用 private-use Unicode 占位符抽 code fence，最后应用其它转换；用户内容不会注入 HTML
 
 **Diagnostics (P1)**
 -  One-click backend sweep producing a copyable summary: engine URL, bearer status, version, endpoint/model/api_key presence, model count, character count, per-call status + latency.
