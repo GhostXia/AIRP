@@ -847,15 +847,22 @@ pub(super) async fn update_character_card(
 pub(super) async fn get_character_lorebook(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
-) -> Response {
-    let char_id = match CharacterId::new(character_id) {
-        Ok(id) => id,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
+) -> Result<Json<serde_json::Value>, AirpError> {
+    // #67 #5 fix: 改用 Result<Json<Value>, AirpError> 统一错误格式。
+    // 之前返回 Response + 裸 StatusCode::BAD_REQUEST，客户端 formatError 拿不到结构化 error body。
+    let char_id = CharacterId::new(character_id)?;
     let lb_path = data_dir::char_world_lorebook_path(&state.data_root, char_id.as_str());
     match fs::read_to_string(&lb_path) {
-        Ok(json) => ([(header::CONTENT_TYPE, "application/json")], json).into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+        Ok(json) => {
+            // lorebook 文件是合法 JSON，直接 parse 后用 Json<Value> 返回，保持 application/json
+            let value: serde_json::Value = serde_json::from_str(&json)
+                .map_err(|e| AirpError::Internal(format!("lorebook parse error: {e}")))?;
+            Ok(Json(value))
+        }
+        Err(_) => Err(AirpError::NotFound(format!(
+            "lorebook for character {} not found",
+            char_id
+        ))),
     }
 }
 

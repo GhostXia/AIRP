@@ -105,14 +105,27 @@
   }
 
   // ── connection ───────────────────────────────────────────────────────────
+  // #67 #9 fix: formatError 用白名单展开已知字段，其余字段折叠为 raw JSON 显示。
+  // 避免 engine 错误模型扩展（如 request_id / hint / suggestion）时 webui 自动丢失。
   function formatError(data, text) {
     if (data && typeof data === 'object' && data.error) {
       const err = data.error;
+      const KNOWN_FIELDS = ['code', 'message', 'upstream_status', 'upstream_body', 'detail'];
       const lines = [err.code || 'error'];
       if (err.message) lines.push(err.message);
       if (err.upstream_status) lines.push('upstream_status=' + err.upstream_status);
       if (err.upstream_body) lines.push('upstream_body=' + err.upstream_body);
       if (err.detail) lines.push('detail=' + err.detail);
+      // 折叠未知字段为 raw JSON（排除已知字段和已展开的字段）
+      const extras = {};
+      let hasExtra = false;
+      for (const k of Object.keys(err)) {
+        if (!KNOWN_FIELDS.includes(k)) {
+          extras[k] = err[k];
+          hasExtra = true;
+        }
+      }
+      if (hasExtra) lines.push('extras=' + JSON.stringify(extras));
       return lines.join('\n');
     }
     if (typeof data === 'string' && data) return data;
@@ -121,6 +134,9 @@
   }
 
   async function connect() {
+    // #68 #5: 任何路径进入 connect() 都取消 pending auto-connect，避免
+    // keydown Enter / btn-click 后 300ms 又被 setTimeout 触发一次（重复请求）。
+    cancelAutoConnect();
     base = engineUrl.value.replace(/\/+$/, '');
     bearer = bearerToken.value || '';
     // W-01: 持久化到 sessionStorage（关 tab 即清，缩短泄漏 token 的存活窗口）
@@ -146,6 +162,26 @@
   btnConnect.addEventListener('click', connect);
   engineUrl.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
   bearerToken.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+
+  // #68 #5 fix: auto-connect 竞态保护。用户在 300ms 延迟内编辑 URL/bearer
+  // 会触发 connect 读半截值，发请求到不存在的主机污染 event log。
+  // 改成：用户输入时取消 pending auto-connect，由 Enter/click 显式触发。
+  let pendingAutoConnect = null;
+  function scheduleAutoConnect() {
+    if (pendingAutoConnect) clearTimeout(pendingAutoConnect);
+    pendingAutoConnect = setTimeout(() => {
+      pendingAutoConnect = null;
+      connect();
+    }, 300);
+  }
+  function cancelAutoConnect() {
+    if (pendingAutoConnect) {
+      clearTimeout(pendingAutoConnect);
+      pendingAutoConnect = null;
+    }
+  }
+  engineUrl.addEventListener('input', cancelAutoConnect);
+  bearerToken.addEventListener('input', cancelAutoConnect);
 
   // ── refresh all left-panel data ──────────────────────────────────────────
   async function refreshAll() {
@@ -604,12 +640,55 @@
 
   // ── history / regen / rollback (P1: destructive confirm) ────────────────
   // loadHistory 抽出来供 charSelect/sessSelect 切换时自动复用，避免用户每次手点。
+  // #73 方案A: 同时显示会话时间范围（created_at → updated_at），让用户能识别
+  // 历史会话的"新鲜度"，避免误把陈旧会话当作活跃会话继续聊。
+  function formatSessionTime(iso) {
+    // ISO 8601 → 本地可读格式 "YYYY-MM-DD HH:MM"。无效输入返回空串。
+    if (!iso || typeof iso !== 'string') return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return yyyy + '-' + mm + '-' + dd + ' ' + hh + ':' + mi;
+  }
+  function renderSessionInfo(data) {
+    const msgs = data?.messages;
+    const hasMsgs = Array.isArray(msgs) && msgs.length > 0;
+    const created = formatSessionTime(data?.created_at);
+    const updated = formatSessionTime(data?.updated_at);
+    if (!hasMsgs) {
+      // 空会话：不显示时间条，避免在新建角色/会话时占用顶部空间。
+      return null;
+    }
+    const div = document.createElement('div');
+    div.className = 'session-info';
+    let text;
+    if (created && updated && created.slice(0, 10) === updated.slice(0, 10)) {
+      // 同一天：只显示一次日期 + 时间范围
+      text = '会话时间：' + created + ' → ' + updated.slice(11);
+    } else if (created && updated) {
+      text = '会话时间：' + created + ' → ' + updated;
+    } else if (updated) {
+      text = '会话时间：' + updated;
+    } else {
+      // 时间戳缺失（异常路径）：退化为消息数提示，不阻断渲染。
+      text = '会话消息数：' + msgs.length;
+    }
+    div.textContent = text;
+    return div;
+  }
   async function loadHistory() {
     if (!selectedChar) return;
     const r = await api('POST', '/v1/chat/history', { character_id: selectedChar });
     if (r.ok) {
-      const msgs = r.data?.messages || r.data || [];
+      const data = r.data && typeof r.data === 'object' ? r.data : {};
+      const msgs = data.messages || r.data || [];
       chatLog.innerHTML = '';
+      const info = renderSessionInfo(data);
+      if (info) chatLog.appendChild(info);
       msgs.forEach(m => appendMsg(m.role || 'assistant', m.text || m.content || '', false));
     } else if (r.status !== 0) {
       // 0 = 网络层失败（已 logEvent），其它状态码显式提示
@@ -1448,5 +1527,6 @@
   } catch {}
 
   // ── auto-connect on load ─────────────────────────────────────────────────
-  setTimeout(connect, 300);
+  // #68 #5 fix: 改用 scheduleAutoConnect，用户在 300ms 内输入 URL/bearer 会取消
+  scheduleAutoConnect();
 })();
