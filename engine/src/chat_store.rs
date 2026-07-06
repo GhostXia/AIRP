@@ -34,6 +34,14 @@ pub struct ChatLog {
     pub character_id: String,
     /// Ordered list of messages (user + assistant interleaved)
     pub messages: Vec<ChatMessage>,
+    /// #73 方案 B：消息级时间戳（ISO 8601），与 `messages` 一一对应。
+    ///
+    /// 旧 jsonl 无 ts → 对应位置为 `None`（向后兼容，不强制迁移）。
+    /// 新写入 → `Some(now)`。
+    ///
+    /// 长度始终等于 `messages.len()`（save/append/delete/rollback 同步维护）。
+    #[serde(default)]
+    pub message_timestamps: Vec<Option<String>>,
     /// ISO 8601 creation timestamp
     pub created_at: String,
     /// ISO 8601 last update timestamp
@@ -51,6 +59,24 @@ struct ChatLogMeta {
     updated_at: String,
 }
 
+/// #73 方案 B：jsonl 行的持久化结构。
+///
+/// 用 `#[serde(flatten)]` 平铺 `ChatMessage`（role/content，OpenAI 协议兼容），
+/// 额外存 `ts`（消息写入时间，ISO 8601）。
+///
+/// - 旧 jsonl（无 ts）→ deserialize 时 `ts: None`（向后兼容，不强制迁移）
+/// - 新写入 → `ts: Some(now)`
+///
+/// `ChatLog.messages` 仍是 `Vec<ChatMessage>`（保持 OpenAI 协议兼容），
+/// `ts` 单独存在 `ChatLog.message_timestamps` 中，与 messages 一一对应。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredMessage {
+    #[serde(flatten)]
+    msg: ChatMessage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ts: Option<String>,
+}
+
 impl ChatLog {
     /// Creates a new empty chat log for a character.
     pub fn new(character_id: &str) -> Self {
@@ -59,6 +85,7 @@ impl ChatLog {
             session_id: uuid::Uuid::new_v4().to_string(),
             character_id: character_id.to_string(),
             messages: Vec::new(),
+            message_timestamps: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
             scope_session_id: None,
@@ -164,7 +191,7 @@ impl ChatLog {
             let jsonl = Self::scoped_jsonl_path(data_root, character_id, Some(&scope_session_id));
             let meta_p = Self::scoped_meta_path(data_root, character_id, Some(&scope_session_id));
             if jsonl.exists() {
-                let messages = Self::read_messages_jsonl(&jsonl)?;
+                let (messages, message_timestamps) = Self::read_messages_jsonl(&jsonl)?;
                 let m: ChatLogMeta = if meta_p.exists() {
                     serde_json::from_str(&fs::read_to_string(&meta_p)?)?
                 } else {
@@ -180,6 +207,7 @@ impl ChatLog {
                     session_id: m.session_id,
                     character_id: m.character_id,
                     messages,
+                    message_timestamps,
                     created_at: m.created_at,
                     updated_at: m.updated_at,
                     scope_session_id: Some(scope_session_id),
@@ -199,7 +227,7 @@ impl ChatLog {
 
         // ── 1. CF-2 新位置 ────────────────────────────────────────────────────
         if jsonl.exists() {
-            let messages = Self::read_messages_jsonl(&jsonl)?;
+            let (messages, message_timestamps) = Self::read_messages_jsonl(&jsonl)?;
             let m: ChatLogMeta = if meta_p.exists() {
                 serde_json::from_str(&fs::read_to_string(&meta_p)?)?
             } else {
@@ -216,6 +244,7 @@ impl ChatLog {
                 session_id: m.session_id,
                 character_id: m.character_id,
                 messages,
+                message_timestamps,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
@@ -225,7 +254,7 @@ impl ChatLog {
         // ── 2. pre-CF2 迁移：根目录 chat_log.jsonl → history/ ─────────────────
         if pre_cf2_jsonl.exists() {
             tracing::info!(char = character_id, "CF-2 迁移: chat_log.jsonl → history/");
-            let messages = Self::read_messages_jsonl(&pre_cf2_jsonl)?;
+            let (messages, message_timestamps) = Self::read_messages_jsonl(&pre_cf2_jsonl)?;
             let m: ChatLogMeta = if pre_cf2_meta.exists() {
                 serde_json::from_str(&fs::read_to_string(&pre_cf2_meta)?)?
             } else {
@@ -241,6 +270,7 @@ impl ChatLog {
                 session_id: m.session_id,
                 character_id: m.character_id,
                 messages,
+                message_timestamps,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
@@ -267,6 +297,11 @@ impl ChatLog {
             let content = fs::read_to_string(&legacy)?;
             let mut log: ChatLog = serde_json::from_str(&content)?;
             log.scope_session_id = None;
+            // #73 方案 B：旧 ChatLog JSON 无 message_timestamps 字段（#[serde(default)]
+            // 给空 Vec），但 messages 有内容 → 长度不匹配。补齐为全 None。
+            if log.message_timestamps.len() != log.messages.len() {
+                log.message_timestamps = log.messages.iter().map(|_| None).collect();
+            }
             log.save(data_root)?;
             if let Err(e) = fs::remove_file(&legacy) {
                 tracing::warn!(path = ?legacy, err = %e, "迁移完成但删除旧 chat_log.json 失败");
@@ -294,10 +329,12 @@ impl ChatLog {
             }
         }
 
-        // 写 jsonl：一行一条 message
+        // 写 jsonl：一行一条 StoredMessage（含 ts）
         let mut buf = String::new();
-        for m in &self.messages {
-            buf.push_str(&serde_json::to_string(m)?);
+        for (i, m) in self.messages.iter().enumerate() {
+            let ts = self.message_timestamps.get(i).cloned().flatten();
+            let stored = StoredMessage { msg: m.clone(), ts };
+            buf.push_str(&serde_json::to_string(&stored)?);
             buf.push('\n');
         }
         fs::write(&jsonl, buf)?;
@@ -319,13 +356,19 @@ impl ChatLog {
     /// 常规路径 O(1)：以 `OpenOptions::append` 在 jsonl 末尾追加一行，
     /// 然后用 ~小常数大小的 meta 文件刷新 `updated_at`。
     /// 仅当超过 `MAX_MESSAGES` 触发 FIFO 滚动时才会发生整体重写。
+    ///
+    /// #73 方案 B：同时写入消息级 `ts`（ISO 8601 now），并同步 push 到
+    /// `message_timestamps` 保持与 `messages` 等长。
     pub fn append(&mut self, data_root: &Path, msg: ChatMessage) -> Result<(), AirpError> {
+        let now = Utc::now().to_rfc3339();
         self.messages.push(msg.clone());
+        self.message_timestamps.push(Some(now.clone()));
 
         if self.messages.len() > MAX_MESSAGES {
-            // 滚动截断 → 走整体重写。
+            // 滚动截断 → 走整体重写。同步 drain timestamps。
             let drop = self.messages.len() - MAX_MESSAGES;
             self.messages.drain(..drop);
+            self.message_timestamps.drain(..drop);
             self.updated_at = Utc::now().to_rfc3339();
             return self.save(data_root);
         }
@@ -339,12 +382,13 @@ impl ChatLog {
                 fs::create_dir_all(parent)?;
             }
         }
+        let stored = StoredMessage { msg, ts: Some(now) };
+        let mut line = serde_json::to_string(&stored)?;
+        line.push('\n');
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&jsonl)?;
-        let mut line = serde_json::to_string(&msg)?;
-        line.push('\n');
         f.write_all(line.as_bytes())?;
 
         // meta 刷新
@@ -361,21 +405,28 @@ impl ChatLog {
     }
 
     /// Deletes the last N messages (for regen: delete last assistant message).
+    ///
+    /// #73 方案 B：同步截断 `message_timestamps` 保持等长。
     pub fn delete_last_n(&mut self, data_root: &Path, n: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if n > len {
             self.messages.clear();
+            self.message_timestamps.clear();
         } else {
             self.messages.truncate(len - n);
+            self.message_timestamps.truncate(len - n);
         }
         self.updated_at = Utc::now().to_rfc3339();
         self.save(data_root)
     }
 
     /// Rolls back to a specific message index (keeps messages 0..=index).
+    ///
+    /// #73 方案 B：同步截断 `message_timestamps` 保持等长。
     pub fn rollback_to(&mut self, data_root: &Path, index: usize) -> Result<(), AirpError> {
         if index < self.messages.len() {
             self.messages.truncate(index + 1);
+            self.message_timestamps.truncate(index + 1);
             self.updated_at = Utc::now().to_rfc3339();
             self.save(data_root)?;
         }
@@ -393,20 +444,39 @@ impl ChatLog {
     }
 
     /// 逐行解析 jsonl。空行忽略；非法行返回错误（不静默吞掉，避免历史丢失）。
-    fn read_messages_jsonl(path: &Path) -> Result<Vec<ChatMessage>, AirpError> {
+    ///
+    /// #73 方案 B：返回 `(messages, timestamps)` — 用 `StoredMessage` 反序列化，
+    /// 旧行无 `ts` 字段时返回 `None`（向后兼容）。
+    fn read_messages_jsonl(
+        path: &Path,
+    ) -> Result<(Vec<ChatMessage>, Vec<Option<String>>), AirpError> {
         let content = fs::read_to_string(path)?;
-        let mut out = Vec::new();
+        let mut msgs = Vec::new();
+        let mut tss = Vec::new();
         for (i, line) in content.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            let m: ChatMessage = serde_json::from_str(line).map_err(|e| {
-                AirpError::Internal(format!("chat_log.jsonl 第 {} 行解析失败: {}", i + 1, e))
-            })?;
-            out.push(m);
+            // 先尝试 StoredMessage（新格式，含 ts）；失败则回退 ChatMessage（旧格式）
+            let stored: StoredMessage = match serde_json::from_str(line) {
+                Ok(s) => s,
+                Err(_) => {
+                    // 旧格式：role + content，无 ts
+                    let m: ChatMessage = serde_json::from_str(line).map_err(|e| {
+                        AirpError::Internal(format!(
+                            "chat_log.jsonl 第 {} 行解析失败: {}",
+                            i + 1,
+                            e
+                        ))
+                    })?;
+                    StoredMessage { msg: m, ts: None }
+                }
+            };
+            msgs.push(stored.msg);
+            tss.push(stored.ts);
         }
-        Ok(out)
+        Ok((msgs, tss))
     }
 }
 
@@ -646,5 +716,154 @@ mod tests {
             log.messages.last().unwrap().content,
             format!("msg-{}", total - 1)
         );
+    }
+
+    // ── #73 方案 B：消息级时间戳回归测试 ──────────────────────────────────
+
+    #[test]
+    fn test_message_timestamps_persisted_after_append() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("characters").join("ts_char")).unwrap();
+
+        let mut log = ChatLog::new("ts_char");
+        log.append(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "msg1".to_string(),
+            },
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        log.append(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content: "msg2".to_string(),
+            },
+        )
+        .unwrap();
+
+        // 内存状态：timestamps 等长，每条都有 ts
+        assert_eq!(log.message_timestamps.len(), 2);
+        assert!(log.message_timestamps[0].is_some());
+        assert!(log.message_timestamps[1].is_some());
+
+        // 重新加载：ts 应持久化
+        let reloaded = ChatLog::load_or_create(root, "ts_char").unwrap();
+        assert_eq!(reloaded.message_timestamps.len(), 2);
+        assert!(reloaded.message_timestamps[0].is_some());
+        assert!(reloaded.message_timestamps[1].is_some());
+        // ts 应能 parse 为有效时间
+        let ts0 = reloaded.message_timestamps[0].as_ref().unwrap();
+        assert!(chrono::DateTime::parse_from_rfc3339(ts0).is_ok());
+    }
+
+    #[test]
+    fn test_message_timestamps_back_compat_old_jsonl() {
+        // 模拟旧格式 jsonl（无 ts 字段）→ 加载时应回退为 None
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let char_dir = root.join("characters").join("old_char");
+        let history_dir = char_dir.join("history");
+        fs::create_dir_all(&history_dir).unwrap();
+
+        // 写旧格式 jsonl：纯 {"role":"user","content":"legacy"}
+        let old_jsonl = history_dir.join("chat_log.jsonl");
+        fs::write(
+            &old_jsonl,
+            r#"{"role":"user","content":"legacy1"}
+{"role":"assistant","content":"legacy2"}
+"#,
+        )
+        .unwrap();
+        // 写最小 meta
+        let now = Utc::now().to_rfc3339();
+        fs::write(
+            history_dir.join("chat_log_meta.json"),
+            serde_json::to_string_pretty(&ChatLogMeta {
+                session_id: "test-session".to_string(),
+                character_id: "old_char".to_string(),
+                created_at: now.clone(),
+                updated_at: now,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut log = ChatLog::load_or_create(root, "old_char").unwrap();
+        assert_eq!(log.messages.len(), 2);
+        assert_eq!(log.message_timestamps.len(), 2);
+        // 旧消息无 ts → None
+        assert!(log.message_timestamps[0].is_none());
+        assert!(log.message_timestamps[1].is_none());
+
+        // append 新消息 → 新消息有 ts，旧消息仍 None
+        log.append(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "new".to_string(),
+            },
+        )
+        .unwrap();
+        // 但 append 会触发 save 重写 jsonl — 这里只测内存状态
+    }
+
+    #[test]
+    fn test_message_timestamps_delete_last_n_keeps_sync() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("characters").join("del_char")).unwrap();
+
+        let mut log = ChatLog::new("del_char");
+        for i in 0..5 {
+            log.append(
+                root,
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: format!("msg{i}"),
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(log.message_timestamps.len(), 5);
+
+        // 删 2 条
+        log.delete_last_n(root, 2).unwrap();
+        assert_eq!(log.messages.len(), 3);
+        assert_eq!(log.message_timestamps.len(), 3);
+        // 重载验证持久化
+        let reloaded = ChatLog::load_or_create(root, "del_char").unwrap();
+        assert_eq!(reloaded.message_timestamps.len(), 3);
+    }
+
+    #[test]
+    fn test_message_timestamps_rollback_keeps_sync() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("characters").join("rb_char")).unwrap();
+
+        let mut log = ChatLog::new("rb_char");
+        for i in 0..5 {
+            log.append(
+                root,
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: format!("msg{i}"),
+                },
+            )
+            .unwrap();
+        }
+        // rollback 到 index 1（保留 0..=1）
+        log.rollback_to(root, 1).unwrap();
+        assert_eq!(log.messages.len(), 2);
+        assert_eq!(log.message_timestamps.len(), 2);
+        // 重载验证
+        let reloaded = ChatLog::load_or_create(root, "rb_char").unwrap();
+        assert_eq!(reloaded.message_timestamps.len(), 2);
+        assert_eq!(reloaded.messages[0].content, "msg0");
+        assert_eq!(reloaded.messages[1].content, "msg1");
     }
 }
