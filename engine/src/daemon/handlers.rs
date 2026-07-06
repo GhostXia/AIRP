@@ -847,15 +847,22 @@ pub(super) async fn update_character_card(
 pub(super) async fn get_character_lorebook(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
-) -> Response {
-    let char_id = match CharacterId::new(character_id) {
-        Ok(id) => id,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
+) -> Result<Json<serde_json::Value>, AirpError> {
+    // #67 #5 fix: 改用 Result<Json<Value>, AirpError> 统一错误格式。
+    // 之前返回 Response + 裸 StatusCode::BAD_REQUEST，客户端 formatError 拿不到结构化 error body。
+    let char_id = CharacterId::new(character_id)?;
     let lb_path = data_dir::char_world_lorebook_path(&state.data_root, char_id.as_str());
     match fs::read_to_string(&lb_path) {
-        Ok(json) => ([(header::CONTENT_TYPE, "application/json")], json).into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+        Ok(json) => {
+            // lorebook 文件是合法 JSON，直接 parse 后用 Json<Value> 返回，保持 application/json
+            let value: serde_json::Value = serde_json::from_str(&json)
+                .map_err(|e| AirpError::Internal(format!("lorebook parse error: {e}")))?;
+            Ok(Json(value))
+        }
+        Err(_) => Err(AirpError::NotFound(format!(
+            "lorebook for character {} not found",
+            char_id
+        ))),
     }
 }
 
@@ -1376,6 +1383,113 @@ mod tests {
         // slugify_id 不小写化，仅把空格 → '_'：`Http M3 Test` → `Http_M3_Test`
         assert_eq!(v["character_id"], "Http_M3_Test");
         assert_eq!(v["card_format"], "json");
+    }
+
+    // ── PR #74 W-01: get_character_lorebook HTTP-level 回归测试 ─────────────
+    //
+    // 守 #67 #5 修复：handler 改为 `Result<Json<Value>, AirpError>` 后，错误响应
+    // 必须是 JSON envelope（`{"error":{"code","message"}}`），不能是裸 StatusCode。
+    // 复用 make_state_for_http_test，3 个 case 覆盖主要分支。
+
+    #[tokio::test]
+    async fn pr74_lorebook_not_found_returns_json_envelope() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/characters/does_not_exist/lorebook")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["error"]["code"], "not_found");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("does_not_exist"),
+            "错误 message 应含 character_id，got: {}",
+            v["error"]["message"]
+        );
+    }
+
+    #[tokio::test]
+    async fn pr74_lorebook_invalid_character_id_returns_400_envelope() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state);
+        // 含路径遍历字符 → CharacterId::new 校验失败 → BadRequest
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/characters/..%2Fetc/lorebook")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn pr74_lorebook_happy_path_returns_json_value() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, tmp) = make_state_for_http_test();
+        // 在 data_root 下放一个合法 lorebook 文件
+        let char_dir = tmp.path().join("characters").join("test_char");
+        std::fs::create_dir_all(char_dir.join("world")).unwrap();
+        std::fs::write(
+            char_dir.join("world").join("lorebook.json"),
+            r#"{"entries":[{"keys":["hi"],"content":"hello"}]}"#,
+        )
+        .unwrap();
+
+        let app = super::super::create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/characters/test_char/lorebook")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["entries"][0]["keys"][0], "hi");
+        assert_eq!(v["entries"][0]["content"], "hello");
     }
 
     // ── #42 F-1 / #40：/v1/models URL 推导与 endpoint 脱敏 ──────────────────

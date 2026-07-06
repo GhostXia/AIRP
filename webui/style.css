@@ -36,6 +36,9 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .msg .text.streaming::after { content: '\258A'; animation: blink 0.8s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* #73 方案A: 会话时间范围信息条。轻量化、低视觉权重，避免抢走消息流焦点。 */
+.session-info { font-size: 11px; color: #8b949e; background: #161b22; border: 1px solid #21262d; border-radius: 3px; padding: 4px 8px; margin-bottom: 8px; }
+
 /* markdown 渲染样式（PLAN §4.1.1） */
 .msg .text p { margin: 0; }
 .msg .text p + p { margin-top: 6px; }
