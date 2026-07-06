@@ -115,6 +115,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* state panel */
 #state-display, #state-history-display { max-height: 180px; overflow-y: auto; font-size: 10px; color: #8b949e; }
+#state-history-limit { width: 60px; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 1px 4px; border-radius: 3px; font-family: inherit; font-size: 11px; }
 .hint { font-size: 10px; color: #6e7681; }
 
 /* ── details/summary 折叠区（左侧面板 + 工具箱通用） ─────────────────────── */
