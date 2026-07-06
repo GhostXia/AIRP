@@ -118,14 +118,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .hint { font-size: 10px; color: #6e7681; }
 
 /* ── details/summary 折叠区（左侧面板 + 工具箱通用） ─────────────────────── */
-details { margin: 4px 0; padding: 4px 6px; border: 1px solid #21262d; border-radius: 4px; background: #0d1117; }
-details[open] { background: #11161d; }
-summary { cursor: pointer; font-size: 11px; text-transform: uppercase; color: #8b949e; letter-spacing: 0.5px; user-select: none; padding: 2px 0; display: flex; align-items: center; gap: 6px; }
-summary:hover { color: #c9d1d9; }
-summary::marker { color: #58a6ff; }
-summary button { font-size: 10px; text-transform: none; letter-spacing: normal; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 1px 6px; border-radius: 3px; cursor: pointer; font-family: inherit; }
-summary button:hover { background: #30363d; }
-details > .hint { margin: 4px 0 2px; text-transform: none; letter-spacing: normal; font-weight: normal; }
+#left-panel details,
+#center-panel > details {
+  margin: 4px 0; padding: 4px 6px; border: 1px solid #21262d; border-radius: 4px; background: #0d1117;
+}
+#left-panel details[open],
+#center-panel > details[open] { background: #11161d; }
+#left-panel summary,
+#center-panel > details > summary {
+  cursor: pointer; font-size: 11px; text-transform: uppercase; color: #8b949e; letter-spacing: 0.5px;
+  user-select: none; padding: 2px 0; display: flex; align-items: center; gap: 6px;
+}
+#left-panel summary:hover,
+#center-panel > details > summary:hover { color: #c9d1d9; }
+#left-panel summary::marker,
+#center-panel > details > summary::marker { color: #58a6ff; }
+#left-panel summary button,
+#center-panel > details > summary button {
+  font-size: 10px; text-transform: none; letter-spacing: normal; background: #21262d; border: 1px solid #30363d;
+  color: #c9d1d9; padding: 1px 6px; border-radius: 3px; cursor: pointer; font-family: inherit;
+}
+#left-panel summary button:hover,
+#center-panel > details > summary button:hover { background: #30363d; }
+#left-panel details > .hint,
+#center-panel > details > .hint { margin: 4px 0 2px; text-transform: none; letter-spacing: normal; font-weight: normal; }
 
 /* ── Workbench (角色卡 + 世界书编辑) ────────────────────────────────────── */
 #workbench-panel { position: fixed; top: 44px; right: 0; width: 460px; min-width: 320px; max-width: 65vw; height: calc(100vh - 44px); background: #0d1117; border-left: 1px solid #30363d; box-shadow: -4px 0 24px rgba(0,0,0,0.5); z-index: 100; overflow-y: auto; padding: 8px 10px 12px 14px; resize: horizontal; }
