@@ -1121,6 +1121,9 @@
   async function saveWorkbenchCard() {
     if (!wbCardData || !selectedChar) return;
     const data = wbCardData.data || wbCardData;
+    // A-01 修复：保存前深拷贝表单原始值。保存失败时恢复 wbCardData，
+    // 让用户能「回到上次保存的版本」而不是带着失败的 mutation。
+    const snapshot = JSON.parse(JSON.stringify(wbCardData));
     // 收集表单值
     for (const f of CARD_FIELDS) {
       const el = wbCardFields.querySelector('[data-field="' + f.key + '"]');
@@ -1135,6 +1138,13 @@
       setWbDirty(false);
       refreshAvatar();
     } else {
+      // 保存失败：恢复 wbCardData 到保存前状态，并把表单字段也回滚
+      wbCardData = snapshot;
+      const data2 = wbCardData.data || wbCardData;
+      for (const f of CARD_FIELDS) {
+        const el = wbCardFields.querySelector('[data-field="' + f.key + '"]');
+        if (el) el.value = data2[f.key] || '';
+      }
       wbCardStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
     }
   }
@@ -1204,6 +1214,7 @@
     priInput.className = 'wb-lore-priority';
     priInput.type = 'number';
     priInput.min = '0';
+    priInput.step = '1';
     priInput.value = entry.priority ?? 10;
     priInput.title = '优先级';
     priInput.addEventListener('input', (e) => {
@@ -1232,10 +1243,18 @@
     del.className = 'wb-lore-del';
     del.textContent = '✕';
     del.title = '删除此条目';
+    // delete：只移除该条目 DOM + 数据，不全量重渲染（A-02 修复）
+    // 全量重渲染会丢失其他条目的展开/折叠状态与未保存的 input 值。
     del.addEventListener('click', () => {
       wbLoreData.entries.splice(index, 1);
+      div.remove();
+      // 重编后续条目的序号显示（dataset.index + lbl 文本），保持视觉一致
+      wbLoreEntries.querySelectorAll('.wb-lore-entry').forEach((e, i) => {
+        e.dataset.index = String(i);
+        const lbl = e.querySelector('.wb-lore-index');
+        if (lbl) lbl.textContent = '条目 #' + (i + 1);
+      });
       setWbDirty(true);
-      renderLoreEntries();
     });
     head.appendChild(del);
 
