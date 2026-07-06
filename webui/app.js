@@ -213,6 +213,9 @@
       const option = document.createElement('option');
       option.value = value;
       option.textContent = labelFn ? labelFn(value) : value;
+      // A4 fix: option 文本可能被 <select> 宽度截断（如完整 UUID），加 title
+      // 让用户 hover 看完整值。零成本改善可读性。
+      option.title = value;
       select.appendChild(option);
     });
   }
@@ -438,7 +441,7 @@
   }
 
   // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
-  // W-06 fix: 加可选 ts 参数（Date 或 null）。流式新消息传 new Date() 显示 HH:MM:SS；
+  // W-06 fix: 加可选 ts 参数（Date 或省略）。流式新消息传 new Date() 显示 HH:MM:SS；
   // loadHistory 不传（engine 的 chat_log.jsonl 不存消息时间戳，避免用加载时刻误导用户）。
   function appendMsg(role, text, isStreaming, ts) {
     const div = document.createElement('div');
@@ -819,18 +822,27 @@
   btnImport.addEventListener('click', async () => {
     const file = importFile.files[0];
     if (!file) { importResult.textContent = '请先选文件'; return; }
-    // C3 fix: 客户端 size gate。engine 侧 import 路由 body limit = 10MB。
-    // base64 编码膨胀 4/3 倍 + JSON 外壳约 30 字节，所以原始文件 >7.5MB 就可能
-    // 撞 413。提前拦截，避免用户等完整 base64 编码后才看到错误。
-    const IMPORT_RAW_LIMIT = 7.5 * 1024 * 1024; // 7.5 MB
-    if (file.size > IMPORT_RAW_LIMIT) {
-      importResult.textContent = '✗ 文件过大（' + (file.size / 1024 / 1024).toFixed(1) + 'MB），上限 7.5MB';
-      return;
-    }
-    importResult.textContent = '上传中…';
     const buf = await file.arrayBuffer();
     const bytes = new Uint8Array(buf);
     const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
+    // C3 fix: 客户端 size gate。engine import 路由 body limit = 10MB
+    // (daemon/mod.rs:200 DefaultBodyLimit::max(10 * 1024 * 1024))。
+    // 按路径动态计算最终 body 长度，零误差拦截：
+    //   PNG 路径: body = {"card_png_base64":"<b64>"}，外壳 22 字节 + base64 膨胀 4/3
+    //   JSON 路径: body = {"card_json":"<text>"}，外壳 16 字节，无 base64 膨胀
+    // A2 fix: 改为动态精确计算，替代之前的 7.5MB 固定近似阈值（原阈值比安全值大 18 字节）。
+    const ENGINE_BODY_LIMIT = 10 * 1024 * 1024; // 10 MB
+    const PNG_WRAPPER = 22; // {"card_png_base64":""}
+    const JSON_WRAPPER = 16; // {"card_json":""}
+    const b64Len = isPng ? Math.ceil(file.size / 3) * 4 : 0;
+    const wrapperLen = isPng ? PNG_WRAPPER : JSON_WRAPPER;
+    const estBodyLen = (isPng ? b64Len : file.size) + wrapperLen;
+    if (estBodyLen > ENGINE_BODY_LIMIT) {
+      const limitMB = (ENGINE_BODY_LIMIT / 1024 / 1024).toFixed(1);
+      importResult.textContent = '✗ 文件过大（' + (file.size / 1024 / 1024).toFixed(1) + 'MB' + (isPng ? ' PNG → base64 ' + (b64Len / 1024 / 1024).toFixed(1) + 'MB' : '') + '），上限 ' + limitMB + 'MB body';
+      return;
+    }
+    importResult.textContent = '上传中…';
     let body;
     if (isPng) {
       const b64 = await readFileAsBase64(file);
