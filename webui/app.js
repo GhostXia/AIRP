@@ -686,10 +686,16 @@
     if (r.ok) {
       const data = r.data && typeof r.data === 'object' ? r.data : {};
       const msgs = data.messages || r.data || [];
+      // #73 方案 B：消息级时间戳（与 messages 一一对应）。旧会话可能无 ts → null。
+      const tss = Array.isArray(data.message_timestamps) ? data.message_timestamps : [];
       chatLog.innerHTML = '';
       const info = renderSessionInfo(data);
       if (info) chatLog.appendChild(info);
-      msgs.forEach(m => appendMsg(m.role || 'assistant', m.text || m.content || '', false));
+      msgs.forEach((m, i) => {
+        const tsRaw = tss[i];
+        const ts = tsRaw ? new Date(tsRaw) : null;
+        appendMsg(m.role || 'assistant', m.text || m.content || '', false, ts);
+      });
     } else if (r.status !== 0) {
       // 0 = 网络层失败（已 logEvent），其它状态码显式提示
       appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false, new Date());
