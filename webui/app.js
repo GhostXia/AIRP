@@ -213,6 +213,9 @@
       const option = document.createElement('option');
       option.value = value;
       option.textContent = labelFn ? labelFn(value) : value;
+      // A4 fix: option 文本可能被 <select> 宽度截断（如完整 UUID），加 title
+      // 让用户 hover 看完整值。零成本改善可读性。
+      option.title = value;
       select.appendChild(option);
     });
   }
@@ -231,7 +234,9 @@
     const r = await api('GET', '/v1/sessions/' + encodeURIComponent(cid));
     if (r.ok) {
       const ids = Array.isArray(r.data) ? r.data.map(s => s.session_id || s) : [];
-      replaceOptions(sessSelect, ids, id => id.slice(0, 12));
+      // W-08 fix: 不再截断到前 12 字符——UUID 前 12 位区分度低，用户分不清多个 session。
+      // 与 charSelect 保持一致，显示完整 ID；select 元素宽度由 CSS 控制。
+      replaceOptions(sessSelect, ids);
       if (!ids.includes(selectedSess)) selectedSess = ids[0] || '';
       if (selectedSess) sessSelect.value = selectedSess;
     }
@@ -436,10 +441,19 @@
   }
 
   // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
-  function appendMsg(role, text, isStreaming) {
+  // W-06 fix: 加可选 ts 参数（Date 或省略）。流式新消息传 new Date() 显示 HH:MM:SS；
+  // loadHistory 不传（engine 的 chat_log.jsonl 不存消息时间戳，避免用加载时刻误导用户）。
+  function appendMsg(role, text, isStreaming, ts) {
     const div = document.createElement('div');
     const safeRole = role === 'user' ? 'user' : 'assistant';
     div.className = 'msg ' + safeRole;
+    if (ts instanceof Date) {
+      const hh = String(ts.getHours()).padStart(2, '0');
+      const mm = String(ts.getMinutes()).padStart(2, '0');
+      const ss = String(ts.getSeconds()).padStart(2, '0');
+      appendInline(div, 'span', 'ts', hh + ':' + mm + ':' + ss);
+      div.append(' ');
+    }
     appendInline(div, 'span', 'role', role);
     const textNode = appendInline(div, 'span', 'text' + (isStreaming ? ' streaming' : ''), '');
     if (isStreaming) {
@@ -456,14 +470,14 @@
     const text = chatInput.value.trim();
     if (!text || !selectedChar) return;
     chatInput.value = '';
-    appendMsg('user', text, false);
+    appendMsg('user', text, false, new Date());
 
     // create session if none
     if (!selectedSess) {
       const r = await api('POST', '/v1/sessions/' + encodeURIComponent(selectedChar));
-      if (!r.ok) { appendMsg('assistant', '[session create failed]', false); return; }
+      if (!r.ok) { appendMsg('assistant', '[session create failed]', false, new Date()); return; }
       const newId = extractSessionId(r);
-      if (!newId) { appendMsg('assistant', '[session create: empty id]', false); return; }
+      if (!newId) { appendMsg('assistant', '[session create: empty id]', false, new Date()); return; }
       selectedSess = newId;
       await refreshSessions();
     }
@@ -489,10 +503,10 @@
       if (!res.ok) {
         const errBody = await res.text();
         logEvent('POST', '/v1/chat/completions', res.status, Math.round(performance.now() - t0), errBody);
-        appendMsg('assistant', '[HTTP ' + res.status + '] ' + errBody, false);
+        appendMsg('assistant', '[HTTP ' + res.status + '] ' + errBody, false, new Date());
         return;
       }
-      msgEl = appendMsg('assistant', '', true);
+      msgEl = appendMsg('assistant', '', true, new Date());
       let acc = '';
       const seq = await streamSse(res, (chunk, seq) => {
         // A2: 只把 body_chunk 渲染到正文。think_chunk（心理独白，应折叠）和
@@ -521,11 +535,11 @@
       }
       if (e.kind === 'stream_interrupt') {
         logEvent('SSE', '/v1/chat/completions', 0, Math.round(performance.now() - t0), 'stream interrupted: ' + e.message);
-        appendMsg('assistant', '[stream interrupted: engine disconnected] ' + e.message, false);
+        appendMsg('assistant', '[stream interrupted: engine disconnected] ' + e.message, false, new Date());
         return;
       }
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
-      appendMsg('assistant', '[fetch error] ' + e.message, false);
+      appendMsg('assistant', '[fetch error] ' + e.message, false, new Date());
     } finally {
       // 只在全局仍是当前实例时清理，避免被旧请求 finally 误清新请求状态（race）
       if (abortController === ac) {
@@ -599,7 +613,7 @@
       msgs.forEach(m => appendMsg(m.role || 'assistant', m.text || m.content || '', false));
     } else if (r.status !== 0) {
       // 0 = 网络层失败（已 logEvent），其它状态码显式提示
-      appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false);
+      appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false, new Date());
     }
   }
 
@@ -808,10 +822,27 @@
   btnImport.addEventListener('click', async () => {
     const file = importFile.files[0];
     if (!file) { importResult.textContent = '请先选文件'; return; }
-    importResult.textContent = '上传中…';
     const buf = await file.arrayBuffer();
     const bytes = new Uint8Array(buf);
     const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
+    // C3 fix: 客户端 size gate。engine import 路由 body limit = 10MB
+    // (daemon/mod.rs:200 DefaultBodyLimit::max(10 * 1024 * 1024))。
+    // 按路径动态计算最终 body 长度，零误差拦截：
+    //   PNG 路径: body = {"card_png_base64":"<b64>"}，外壳 22 字节 + base64 膨胀 4/3
+    //   JSON 路径: body = {"card_json":"<text>"}，外壳 16 字节，无 base64 膨胀
+    // A2 fix: 改为动态精确计算，替代之前的 7.5MB 固定近似阈值（原阈值比安全值大 18 字节）。
+    const ENGINE_BODY_LIMIT = 10 * 1024 * 1024; // 10 MB
+    const PNG_WRAPPER = 22; // {"card_png_base64":""}
+    const JSON_WRAPPER = 16; // {"card_json":""}
+    const b64Len = isPng ? Math.ceil(file.size / 3) * 4 : 0;
+    const wrapperLen = isPng ? PNG_WRAPPER : JSON_WRAPPER;
+    const estBodyLen = (isPng ? b64Len : file.size) + wrapperLen;
+    if (estBodyLen > ENGINE_BODY_LIMIT) {
+      const limitMB = (ENGINE_BODY_LIMIT / 1024 / 1024).toFixed(1);
+      importResult.textContent = '✗ 文件过大（' + (file.size / 1024 / 1024).toFixed(1) + 'MB' + (isPng ? ' PNG → base64 ' + (b64Len / 1024 / 1024).toFixed(1) + 'MB' : '') + '），上限 ' + limitMB + 'MB body';
+      return;
+    }
+    importResult.textContent = '上传中…';
     let body;
     if (isPng) {
       const b64 = await readFileAsBase64(file);
@@ -865,7 +896,7 @@
   // 抽出 doSend 的纯逻辑供并发复用（不发 user DOM、不读 input）
   async function doSendText(text) {
     if (!selectedChar) return { ok: false, status: 0, error: 'no character' };
-    appendMsg('user', text, false);
+    appendMsg('user', text, false, new Date());
     const url = base + '/v1/chat/completions';
     const t0 = performance.now();
     let msgEl = null;
@@ -880,7 +911,7 @@
         logEvent('POST', '/v1/chat/completions', res.status, Math.round(performance.now() - t0), errBody);
         return { ok: false, status: res.status, error: errBody };
       }
-      msgEl = appendMsg('assistant', '', true);
+      msgEl = appendMsg('assistant', '', true, new Date());
       let acc = '';
       const seq = await streamSse(res, (chunk) => {
         // A2: 同 doSend，只渲染 body_chunk；think_chunk / action_options 不混入 body。

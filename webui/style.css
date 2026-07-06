@@ -27,8 +27,11 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .msg { margin-bottom: 6px; padding: 4px 8px; border-radius: 4px; }
 .msg.user { background: #1f2937; }
 .msg.assistant { background: #0f1a2e; }
-.msg .role { font-weight: 600; font-size: 11px; color: #58a6ff; display: block; margin-bottom: 2px; }
-.msg .text { overflow-wrap: break-word; }
+/* W-06: ts + role 共享首行。两者都设 inline-block + vertical-align: baseline，
+   保证 10px ts 与 11px role 在行底对齐（避免依赖浏览器默认 inline 行为不一致）。 */
+.msg .ts { display: inline-block; vertical-align: baseline; font-size: 10px; color: #6e7681; margin-right: 6px; }
+.msg .role { display: inline-block; vertical-align: baseline; font-weight: 600; font-size: 11px; color: #58a6ff; margin-right: 6px; }
+.msg .text { display: block; overflow-wrap: break-word; }
 .msg .text.streaming { white-space: pre-wrap; }
 .msg .text.streaming::after { content: '\258A'; animation: blink 0.8s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
