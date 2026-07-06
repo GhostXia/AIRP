@@ -302,6 +302,12 @@ impl ChatLog {
             if log.message_timestamps.len() != log.messages.len() {
                 log.message_timestamps = log.messages.iter().map(|_| None).collect();
             }
+            // A-2：迁移后验证等长不变量
+            debug_assert_eq!(
+                log.message_timestamps.len(),
+                log.messages.len(),
+                "legacy JSON 迁移后 message_timestamps.len() != messages.len()"
+            );
             log.save(data_root)?;
             if let Err(e) = fs::remove_file(&legacy) {
                 tracing::warn!(path = ?legacy, err = %e, "迁移完成但删除旧 chat_log.json 失败");
@@ -445,8 +451,10 @@ impl ChatLog {
 
     /// 逐行解析 jsonl。空行忽略；非法行返回错误（不静默吞掉，避免历史丢失）。
     ///
-    /// #73 方案 B：返回 `(messages, timestamps)` — 用 `StoredMessage` 反序列化，
-    /// 旧行无 `ts` 字段时返回 `None`（向后兼容）。
+    /// #73 方案 B：返回 `(messages, timestamps)` — 用 `StoredMessage` 反序列化。
+    /// `StoredMessage` 用 `#[serde(flatten)]` 平铺 `ChatMessage`，配合
+    /// `ts: Option<String>` + `#[serde(default)]`，旧 jsonl（无 ts 字段）
+    /// 会直接解析为 `ts: None`，无需单独的 `ChatMessage` 回退路径。
     fn read_messages_jsonl(
         path: &Path,
     ) -> Result<(Vec<ChatMessage>, Vec<Option<String>>), AirpError> {
@@ -458,24 +466,23 @@ impl ChatLog {
             if line.is_empty() {
                 continue;
             }
-            // 先尝试 StoredMessage（新格式，含 ts）；失败则回退 ChatMessage（旧格式）
-            let stored: StoredMessage = match serde_json::from_str(line) {
-                Ok(s) => s,
-                Err(_) => {
-                    // 旧格式：role + content，无 ts
-                    let m: ChatMessage = serde_json::from_str(line).map_err(|e| {
-                        AirpError::Internal(format!(
-                            "chat_log.jsonl 第 {} 行解析失败: {}",
-                            i + 1,
-                            e
-                        ))
-                    })?;
-                    StoredMessage { msg: m, ts: None }
-                }
-            };
+            let stored: StoredMessage = serde_json::from_str(line).map_err(|e| {
+                AirpError::Internal(format!(
+                    "chat_log.jsonl 第 {} 行解析失败: {}",
+                    i + 1,
+                    e
+                ))
+            })?;
             msgs.push(stored.msg);
             tss.push(stored.ts);
         }
+        // A-2：等长不变量防御。msgs 和 tss 在同一循环中 push，理论上永远等长。
+        // 此 assert 防止未来修改破坏不变量。
+        debug_assert_eq!(
+            msgs.len(),
+            tss.len(),
+            "read_messages_jsonl: msgs.len() != tss.len()"
+        );
         Ok((msgs, tss))
     }
 }
@@ -809,6 +816,69 @@ mod tests {
         )
         .unwrap();
         // 但 append 会触发 save 重写 jsonl — 这里只测内存状态
+    }
+
+    #[test]
+    fn test_message_timestamps_mixed_old_new_jsonl() {
+        // W-01：旧 jsonl（无 ts）+ append 新消息（有 ts）→ save 重写后 reload，
+        //       验证旧行 ts 仍 None，新行 ts 有值，混合场景下对应关系正确。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let char_dir = root.join("characters").join("mixed_char");
+        let history_dir = char_dir.join("history");
+        fs::create_dir_all(&history_dir).unwrap();
+
+        // 写旧格式 jsonl：2 行无 ts
+        let old_jsonl = history_dir.join("chat_log.jsonl");
+        fs::write(
+            &old_jsonl,
+            r#"{"role":"user","content":"legacy1"}
+{"role":"assistant","content":"legacy2"}
+"#,
+        )
+        .unwrap();
+        let now = Utc::now().to_rfc3339();
+        fs::write(
+            history_dir.join("chat_log_meta.json"),
+            serde_json::to_string_pretty(&ChatLogMeta {
+                session_id: "mixed-session".to_string(),
+                character_id: "mixed_char".to_string(),
+                created_at: now.clone(),
+                updated_at: now,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        // load → 旧 2 行 ts=None
+        let mut log = ChatLog::load_or_create(root, "mixed_char").unwrap();
+        assert_eq!(log.messages.len(), 2);
+        assert_eq!(log.message_timestamps.len(), 2);
+        assert!(log.message_timestamps[0].is_none());
+        assert!(log.message_timestamps[1].is_none());
+
+        // append 1 条新消息 → 触发 save 重写 jsonl（旧行无 ts + 新行有 ts 混合）
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        log.append(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "new_msg".to_string(),
+            },
+        )
+        .unwrap();
+
+        // reload → 3 行：旧 2 行 ts=None，新 1 行 ts=Some
+        let reloaded = ChatLog::load_or_create(root, "mixed_char").unwrap();
+        assert_eq!(reloaded.messages.len(), 3);
+        assert_eq!(reloaded.message_timestamps.len(), 3);
+        assert!(reloaded.message_timestamps[0].is_none(), "旧行 ts 应为 None");
+        assert!(reloaded.message_timestamps[1].is_none(), "旧行 ts 应为 None");
+        assert!(reloaded.message_timestamps[2].is_some(), "新行 ts 应有值");
+        assert_eq!(reloaded.messages[2].content, "new_msg");
+        // 新行 ts 能 parse 为有效时间
+        let ts_new = reloaded.message_timestamps[2].as_ref().unwrap();
+        assert!(chrono::DateTime::parse_from_rfc3339(ts_new).is_ok());
     }
 
     #[test]

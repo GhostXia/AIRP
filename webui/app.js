@@ -688,6 +688,10 @@
       const msgs = data.messages || r.data || [];
       // #73 方案 B：消息级时间戳（与 messages 一一对应）。旧会话可能无 ts → null。
       const tss = Array.isArray(data.message_timestamps) ? data.message_timestamps : [];
+      // A-3：长度不匹配是 engine bug，显式 warn 暴露而非静默降级
+      if (tss.length !== msgs.length) {
+        console.warn('engine bug: message_timestamps.length (' + tss.length + ') !== messages.length (' + msgs.length + ')');
+      }
       chatLog.innerHTML = '';
       const info = renderSessionInfo(data);
       if (info) chatLog.appendChild(info);
