@@ -1494,6 +1494,66 @@ mod tests {
 
     // ── #42 F-1 / #40：/v1/models URL 推导与 endpoint 脱敏 ──────────────────
 
+    // W-01：HTTP-level 回归测试 — /v1/chat/history 返回 JSON 包含
+    // message_timestamps 字段，且长度等于 messages。
+    #[tokio::test]
+    async fn pr75_chat_history_returns_message_timestamps() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, tmp) = make_state_for_http_test();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("characters").join("ts_http_char")).unwrap();
+
+        // 用 ChatLog API 写入 2 条消息（产生 ts）
+        let mut log = crate::chat_store::ChatLog::new("ts_http_char");
+        log.append(
+            root,
+            crate::adapter::ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "hello".to_string(),
+            },
+        )
+        .unwrap();
+        log.append(
+            root,
+            crate::adapter::ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content: "hi".to_string(),
+            },
+        )
+        .unwrap();
+
+        let app = super::super::create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/history")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "character_id": "ts_http_char" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        // messages 数组长度 = 2
+        assert_eq!(v["messages"].as_array().unwrap().len(), 2);
+        // message_timestamps 字段存在且长度等于 messages
+        let tss = v["message_timestamps"].as_array().unwrap();
+        assert_eq!(tss.len(), 2, "message_timestamps 长度应等于 messages");
+        // 每条都有 ts（非 null）
+        assert!(tss[0].is_string(), "ts[0] 应为字符串");
+        assert!(tss[1].is_string(), "ts[1] 应为字符串");
+    }
+
     #[test]
     fn models_url_v1_endpoint_maps_to_v1_models() {
         assert_eq!(
