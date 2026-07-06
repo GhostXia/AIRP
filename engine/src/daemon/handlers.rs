@@ -1280,14 +1280,14 @@ mod tests {
     // 守 RR-001：Web/browser 永远不能用 card_path 让 engine 读任意本地路径，
     // 即使持 bearer token、即使请求 body 形式合法。env 门控不可伪造
     // （进程启动时定，非请求头）。复用 ENV_LOCK 与 unit test 串行，避免 env race。
-    #[tokio::test]
-    async fn m3_import_card_path_rejected_at_http_level() {
-        use axum::body::Body;
-        use tower::util::ServiceExt;
-
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
-
+    //
+    // Gemini Code Assist 建议抽 DaemonState 初始化样板：两个 m3_* 测试共用
+    // `make_state_for_http_test`，避免 ~13 行重复。helper 返回 (state, _tmpguard)，
+    // `_tmpguard` 持有 tempdir 防止目录被早回收。
+    fn make_state_for_http_test() -> (
+        Arc<super::super::DaemonState>,
+        tempfile::TempDir,
+    ) {
         let tmp = tempfile::tempdir().unwrap();
         let state = Arc::new(super::super::DaemonState {
             data_root: tmp.path().to_path_buf(),
@@ -1303,6 +1303,18 @@ mod tests {
                 quota: crate::quota::QuotaConfig::default(),
             }),
         });
+        (state, tmp)
+    }
+
+    #[tokio::test]
+    async fn m3_import_card_path_rejected_at_http_level() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
+
+        let (state, _tmp) = make_state_for_http_test();
         let app = super::super::create_router(state);
         let body = serde_json::json!({ "card_path": "/etc/passwd" });
         let resp = app
@@ -1339,21 +1351,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
 
-        let tmp = tempfile::tempdir().unwrap();
-        let state = Arc::new(super::super::DaemonState {
-            data_root: tmp.path().to_path_buf(),
-            http_client: reqwest::Client::new(),
-            config: std::sync::RwLock::new(super::super::MutableConfig {
-                provider: crate::adapter::Provider::OpenAI,
-                endpoint: "http://localhost".to_string(),
-                api_key: None,
-                model: "gpt-4o".to_string(),
-                volume_config: crate::config::VolumeConfig::default(),
-                access_api_key: None,
-                engine: crate::adapter::BackendEngine::default(),
-                quota: crate::quota::QuotaConfig::default(),
-            }),
-        });
+        let (state, _tmp) = make_state_for_http_test();
         let app = super::super::create_router(state);
         let body = serde_json::json!({
             "card_json": r#"{"spec":"chara_card_v2","data":{"name":"Http M3 Test","first_mes":"hi"}}"#
