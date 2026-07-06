@@ -21,6 +21,7 @@
   const chatLog = $('#chat-log');
   const chatInput = $('#chat-input');
   const btnSend = $('#btn-send');
+  const btnStop = $('#btn-stop');
   const btnHistory = $('#btn-history');
   const btnRegen = $('#btn-regen');
   const btnRollback = $('#btn-rollback');
@@ -122,6 +123,11 @@
   async function connect() {
     base = engineUrl.value.replace(/\/+$/, '');
     bearer = bearerToken.value || '';
+    // W-01: 持久化到 sessionStorage（关 tab 即清，降 XSS 持久风险）
+    try {
+      sessionStorage.setItem('airp_engine_url', base);
+      sessionStorage.setItem('airp_bearer', bearer);
+    } catch {}
     connStatus.className = 'status-dot dot-unknown';
     connText.textContent = '连接中…';
     const r = await api('GET', '/version');
@@ -209,6 +215,10 @@
     });
   }
 
+  // summary 内的 button 点击不触发 details toggle
+  document.querySelectorAll('summary > button').forEach(b => {
+    b.addEventListener('click', e => e.stopPropagation());
+  });
   btnRefreshChars.addEventListener('click', refreshChars);
   if (btnRefreshModels) btnRefreshModels.addEventListener('click', refreshModels);
 
@@ -459,6 +469,7 @@
     // abort prior stream
     if (abortController) abortController.abort();
     abortController = new AbortController();
+    if (btnStop) btnStop.hidden = false;
     const url = base + '/v1/chat/completions';
     const t0 = performance.now();
     let msgEl = null;
@@ -510,6 +521,9 @@
       }
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
       appendMsg('assistant', '[fetch error] ' + e.message, false);
+    } finally {
+      abortController = null;
+      if (btnStop) btnStop.hidden = true;
     }
   }
 
@@ -1359,6 +1373,21 @@
       alert('重新解包失败: ' + formatError(r.data, r.text));
     }
   }
+
+  // W-05: 停止生成按钮 — 仅在 chat streaming 进行时显示
+  if (btnStop) {
+    btnStop.addEventListener('click', () => {
+      if (abortController) abortController.abort();
+    });
+  }
+
+  // W-01: 页面加载时从 sessionStorage 恢复连接参数（关 tab 即清）
+  try {
+    const savedUrl = sessionStorage.getItem('airp_engine_url');
+    const savedBearer = sessionStorage.getItem('airp_bearer');
+    if (savedUrl) engineUrl.value = savedUrl;
+    if (savedBearer) bearerToken.value = savedBearer;
+  } catch {}
 
   // ── auto-connect on load ─────────────────────────────────────────────────
   setTimeout(connect, 300);

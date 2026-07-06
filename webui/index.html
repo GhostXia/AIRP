@@ -22,20 +22,17 @@
   <div id="body">
     <!-- Left: character + session -->
     <aside id="left-panel">
-      <section id="health-section">
-        <h3>Engine</h3>
+      <details open>
+        <summary>连接信息 <button id="btn-refresh-models" title="重新加载模型列表">reload</button></summary>
+        <div class="hint">Engine</div>
         <div id="health-info">—</div>
-      </section>
-      <section>
-        <h3>Settings</h3>
+        <div class="hint">Settings</div>
         <pre id="settings-display" class="mono">—</pre>
-      </section>
-      <section>
-        <h3>Models <button id="btn-refresh-models">reload</button></h3>
+        <div class="hint">Models</div>
         <pre id="models-display" class="mono">-</pre>
-      </section>
-      <section>
-        <h3>Characters <button id="btn-refresh-chars">↻</button></h3>
+      </details>
+      <details open>
+        <summary>Characters <button id="btn-refresh-chars" title="刷新角色列表">↻</button></summary>
         <div id="char-avatar-row">
           <img id="char-avatar" alt="avatar" hidden />
           <select id="char-select" size="6"></select>
@@ -44,24 +41,24 @@
           <button id="btn-workbench" class="btn-primary">🛠 工作台</button>
           <button id="btn-reextract" title="重新解包角色卡资产">↻ 重解</button>
         </div>
-      </section>
-      <section>
-        <h3>Sessions <button id="btn-new-session">+</button></h3>
+      </details>
+      <details open>
+        <summary>Sessions <button id="btn-new-session" title="新建会话">+</button></summary>
         <select id="sess-select" size="6"></select>
-      </section>
-      <section id="state-section">
-        <h3>State <button id="btn-refresh-state">↻</button></h3>
+      </details>
+      <details id="state-section">
+        <summary>State <button id="btn-refresh-state" title="刷新 state">↻</button></summary>
         <div class="hint">live.json（404 = 该角色尚未有 state）</div>
         <pre id="state-display" class="mono">—</pre>
-        <h3 class="subhead">State History <label class="hint">limit: <input id="state-history-limit" type="number" value="20" min="1" max="1000" /></label></h3>
+        <div class="hint">State History <label>limit: <input id="state-history-limit" type="number" value="20" min="1" max="1000" /></label></div>
         <pre id="state-history-display" class="mono">—</pre>
-      </section>
-      <section>
-        <h3>Import (M3)</h3>
+      </details>
+      <details>
+        <summary>Import (M3)</summary>
         <input type="file" id="import-file" accept=".png,.json,.card" />
         <button id="btn-import">上传导入</button>
         <div id="import-result" class="hint">—</div>
-      </section>
+      </details>
     </aside>
 
     <!-- Workbench overlay (角色卡 + 世界书编辑) -->
@@ -105,30 +102,34 @@
         <textarea id="chat-input" rows="3" placeholder="输入消息… (Ctrl+Enter 发送)"></textarea>
         <div id="chat-actions">
           <button id="btn-send">发送</button>
-          <button id="btn-history">History</button>
+          <button id="btn-stop" hidden title="中断正在进行的生成">⏹ 停止</button>
+          <button id="btn-history" title="从 engine 拉取完整聊天记录">↻ 刷新历史</button>
           <button id="btn-regen">↻ Regenerate</button>
           <button id="btn-rollback">↩ Rollback</button>
         </div>
       </div>
-      <hr />
-      <div id="agent-runner">
-        <h4>Agent Run <span id="agent-step-counter" class="hint"></span></h4>
+      <details id="agent-runner">
+        <summary>Agent Run <span id="agent-step-counter" class="hint"></span></summary>
         <textarea id="agent-input" rows="2" placeholder="输入 agent run 消息…">然后调 /v1/agent/run</textarea>
         <label class="inline-label">max_steps: <input id="agent-max-steps" type="number" value="3" min="1" max="20" /></label>
         <button id="btn-agent-run">Run</button>
         <button id="btn-agent-clear">清</button>
         <div id="agent-output">—</div>
-      </div>
-      <div id="concurrent-test">
-        <h4>Concurrent Stream Test (M2)</h4>
+      </details>
+      <details id="concurrent-test">
+        <summary>Concurrent Stream Test (M2)</summary>
         <div>两条并发 chat stream，验证 id-keyed state 不串扰：</div>
         <button id="btn-concurrent">启动两条并发流</button>
         <div id="concurrent-status" class="hint">—</div>
-      </div>
-      <div id="diagnostics">
-        <h4>Diagnostics <button id="btn-diag">一键诊断</button> <button id="btn-diag-copy">复制摘要</button></h4>
+      </details>
+      <details id="diagnostics">
+        <summary>Diagnostics</summary>
+        <div class="diag-actions">
+          <button id="btn-diag">一键诊断</button>
+          <button id="btn-diag-copy">复制摘要</button>
+        </div>
         <pre id="diag-output" class="mono">—</pre>
-      </div>
+      </details>
     </main>
 
     <!-- Right: event log / diagnostics -->

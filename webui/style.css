@@ -51,8 +51,10 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 #chat-actions { display: flex; gap: 6px; margin-top: 4px; }
 #chat-actions button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; }
 #chat-actions button:hover { background: #30363d; }
+#btn-stop { background: #da3633; border-color: #f85149; color: #fff; }
+#btn-stop:hover { background: #f85149; }
 
-#agent-runner { margin-top: 6px; padding: 6px; border: 1px solid #30363d; border-radius: 4px; }
+#agent-runner { margin-top: 6px; }
 #agent-runner textarea { width: 100%; resize: vertical; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 4px; border-radius: 4px; font-family: inherit; font-size: 12px; }
 #agent-runner .inline-label { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #8b949e; margin: 4px 6px 0 0; }
 #agent-runner .inline-label input { width: 48px; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 2px 4px; border-radius: 3px; font-family: inherit; font-size: 11px; }
@@ -76,8 +78,10 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .ev-raw summary:hover { color: #c9d1d9; }
 .ev-raw pre { margin-top: 2px; padding: 4px; background: #0d1117; border: 1px solid #21262d; border-radius: 3px; font-size: 10px; color: #8b949e; max-height: 160px; overflow: auto; }
 
-#diagnostics { margin-top: 6px; padding: 6px; border: 1px solid #30363d; border-radius: 4px; }
-#diagnostics h4 { display: flex; align-items: center; gap: 6px; }
+#diagnostics { margin-top: 6px; }
+#concurrent-test button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; margin-top: 4px; }
+#concurrent-test button:hover { background: #30363d; }
+.diag-actions { display: flex; gap: 6px; margin: 4px 0; }
 #diagnostics button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; }
 #diagnostics button:hover { background: #30363d; }
 #diag-output { max-height: 200px; overflow-y: auto; padding: 4px; margin-top: 4px; background: #161b22; border: 1px solid #21262d; border-radius: 4px; font-size: 11px; }
@@ -110,11 +114,18 @@ select option:checked { background: #1f6feb; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* state panel */
-#state-section .subhead { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
-#state-section .subhead .hint { text-transform: none; letter-spacing: normal; font-weight: normal; }
-#state-section .subhead input { width: 60px; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 1px 4px; border-radius: 3px; font-family: inherit; font-size: 11px; }
 #state-display, #state-history-display { max-height: 180px; overflow-y: auto; font-size: 10px; color: #8b949e; }
 .hint { font-size: 10px; color: #6e7681; }
+
+/* ── details/summary 折叠区（左侧面板 + 工具箱通用） ─────────────────────── */
+details { margin: 4px 0; padding: 4px 6px; border: 1px solid #21262d; border-radius: 4px; background: #0d1117; }
+details[open] { background: #11161d; }
+summary { cursor: pointer; font-size: 11px; text-transform: uppercase; color: #8b949e; letter-spacing: 0.5px; user-select: none; padding: 2px 0; display: flex; align-items: center; gap: 6px; }
+summary:hover { color: #c9d1d9; }
+summary::marker { color: #58a6ff; }
+summary button { font-size: 10px; text-transform: none; letter-spacing: normal; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 1px 6px; border-radius: 3px; cursor: pointer; font-family: inherit; }
+summary button:hover { background: #30363d; }
+details > .hint { margin: 4px 0 2px; text-transform: none; letter-spacing: normal; font-weight: normal; }
 
 /* ── Workbench (角色卡 + 世界书编辑) ────────────────────────────────────── */
 #workbench-panel { position: fixed; top: 44px; right: 0; width: 460px; min-width: 320px; max-width: 65vw; height: calc(100vh - 44px); background: #0d1117; border-left: 1px solid #30363d; box-shadow: -4px 0 24px rgba(0,0,0,0.5); z-index: 100; overflow-y: auto; padding: 8px 10px 12px 14px; resize: horizontal; }
