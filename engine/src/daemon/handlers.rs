@@ -1271,6 +1271,113 @@ mod tests {
         });
     }
 
+    // M3 RR-001 护栏 HTTP-level 回归测试
+    //
+    // 单测 `card_path_import_rejected_without_local_path_env` 只覆盖
+    // `import_card_to_disk` 内部分支；此处验证完整 axum 路由链路：
+    //   POST /v1/characters/import {card_path: "..."}  →  400 + 明确错误文案
+    //
+    // 守 RR-001：Web/browser 永远不能用 card_path 让 engine 读任意本地路径，
+    // 即使持 bearer token、即使请求 body 形式合法。env 门控不可伪造
+    // （进程启动时定，非请求头）。复用 ENV_LOCK 与 unit test 串行，避免 env race。
+    //
+    // Gemini Code Assist 建议抽 DaemonState 初始化样板：两个 m3_* 测试共用
+    // `make_state_for_http_test`，避免 ~13 行重复。helper 返回 (state, _tmpguard)，
+    // `_tmpguard` 持有 tempdir 防止目录被早回收。
+    fn make_state_for_http_test() -> (
+        Arc<super::super::DaemonState>,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(super::super::DaemonState {
+            data_root: tmp.path().to_path_buf(),
+            http_client: reqwest::Client::new(),
+            config: std::sync::RwLock::new(super::super::MutableConfig {
+                provider: crate::adapter::Provider::OpenAI,
+                endpoint: "http://localhost".to_string(),
+                api_key: None,
+                model: "gpt-4o".to_string(),
+                volume_config: crate::config::VolumeConfig::default(),
+                access_api_key: None,
+                engine: crate::adapter::BackendEngine::default(),
+                quota: crate::quota::QuotaConfig::default(),
+            }),
+        });
+        (state, tmp)
+    }
+
+    #[tokio::test]
+    async fn m3_import_card_path_rejected_at_http_level() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state);
+        let body = serde_json::json!({ "card_path": "/etc/passwd" });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/characters/import")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let s = String::from_utf8_lossy(&body_bytes);
+        assert!(
+            s.contains("AIRP_ALLOW_LOCAL_PATH"),
+            "错误响应应明确提示 card_path 已被 env 门控禁用，got: {}",
+            s
+        );
+    }
+
+    // M3 happy-path HTTP 烟测：card_json 路径不被 env 门控影响，未设
+    // AIRP_ALLOW_LOCAL_PATH 时仍可正常导入（确认护栏不影响合法路径）。
+    #[tokio::test]
+    async fn m3_import_card_json_works_without_local_path_env() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state);
+        let body = serde_json::json!({
+            "card_json": r#"{"spec":"chara_card_v2","data":{"name":"Http M3 Test","first_mes":"hi"}}"#
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/characters/import")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        // slugify_id 不小写化，仅把空格 → '_'：`Http M3 Test` → `Http_M3_Test`
+        assert_eq!(v["character_id"], "Http_M3_Test");
+        assert_eq!(v["card_format"], "json");
+    }
+
     // ── #42 F-1 / #40：/v1/models URL 推导与 endpoint 脱敏 ──────────────────
 
     #[test]

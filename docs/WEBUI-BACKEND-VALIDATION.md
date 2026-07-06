@@ -112,6 +112,38 @@ WebUI 回答两个问题：
 
 验收标准：浏览器调用方不能要求 engine 读取任意本地绝对路径。
 
+#### M3 收口声明（2026-07-06）
+
+**核心安全目标已达成。** 不实施 multipart 优化（独立判断），原因如下：
+
+1. **当前路径已安全**：`card_path` 受 `AIRP_ALLOW_LOCAL_PATH` env 门控（不可伪造 — 进程启动时定，非请求头），未设时 engine 返回 `400 BadRequest` 并附明确错误文案。WebUI 不发 `card_path`，仅用 `card_png_base64` / `card_json` 走 JSON body。10MB body limit 已设（`engine/src/daemon/mod.rs:200`）。
+2. **multipart 优化的边际价值低**：base64 膨胀 33% 在 10MB 限制下可接受；multipart 不会解锁新能力。
+3. **multipart 引入新攻击面**：临时文件生命周期管理、`Content-Disposition` 解析、字段名验证、part 大小限制等，新增代码 = 新增风险。
+4. **WEBUI-BACKEND-PLAN §10 明示**：harness 不做产品级打磨。base64 路径已足够 harness 验证场景。
+
+**实现位置**：
+
+- engine 门控：`engine/src/daemon/handlers.rs:319-330`（`AIRP_ALLOW_LOCAL_PATH` 检查）
+- engine 单测：`engine/src/daemon/handlers.rs::card_path_import_rejected_without_local_path_env`（unit level）
+- engine HTTP-level 回归测试：`engine/src/daemon/handlers.rs::m3_import_card_path_rejected_at_http_level` + `m3_import_card_json_works_without_local_path_env`（router 串通）
+- WebUI 不发 card_path：`webui/app.js:800-831`（注释明确「NEVER card_path」）
+
+**验收证据**：
+
+- `cargo test -p airp-core --lib daemon::handlers::tests::m3_`：2 passed
+- `cargo test -p airp-core --lib`：339 passed; 0 failed
+- 神圣不变式：`subagent_context_has_no_orchestrator_noise` + `subagent_prepared_pipeline_has_no_orchestrator_noise` 2/2 passed
+- HTTP-level 拒绝路径断言：`POST /v1/characters/import` body `{"card_path":"/etc/passwd"}` → `400 BadRequest`，错误信息含 `"AIRP_ALLOW_LOCAL_PATH"` 提示
+- HTTP-level happy-path 烟测：`card_json` 路径在 `AIRP_ALLOW_LOCAL_PATH` 未设时仍可正常导入，确认护栏不影响合法路径
+
+**未来若需引入 multipart 的触发条件**：
+
+- 用户开始把 WebUI 当成长期使用入口（与 harness 定位相悖）
+- 单次导入 > 8MB 频繁出现（触发 10MB 限制）
+- 引入第三方 widget 需要 multipart 协议
+
+任何一条触发，应作为独立 PR 评估 multipart 引入的代价与收益。
+
 ### M4. 把已验证行为回灌到 Tauri
 
 M1-M3 可复现后，再把同一批行为接回桌面 UI：
