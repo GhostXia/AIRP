@@ -21,6 +21,7 @@
   const chatLog = $('#chat-log');
   const chatInput = $('#chat-input');
   const btnSend = $('#btn-send');
+  const btnStop = $('#btn-stop');
   const btnHistory = $('#btn-history');
   const btnRegen = $('#btn-regen');
   const btnRollback = $('#btn-rollback');
@@ -122,6 +123,13 @@
   async function connect() {
     base = engineUrl.value.replace(/\/+$/, '');
     bearer = bearerToken.value || '';
+    // W-01: 持久化到 sessionStorage（关 tab 即清，缩短泄漏 token 的存活窗口）
+    // 注意：sessionStorage 不缓解 XSS——同 tab 任意脚本仍可读。选它而非 localStorage
+    // 只是为了让「tab 关闭后 token 失效」，降低意外跨会话复用的风险。
+    try {
+      sessionStorage.setItem('airp_engine_url', base);
+      sessionStorage.setItem('airp_bearer', bearer);
+    } catch {}
     connStatus.className = 'status-dot dot-unknown';
     connText.textContent = '连接中…';
     const r = await api('GET', '/version');
@@ -209,6 +217,10 @@
     });
   }
 
+  // summary 内的 button 点击不触发 details toggle
+  document.querySelectorAll('summary > button').forEach(b => {
+    b.addEventListener('click', e => e.stopPropagation());
+  });
   btnRefreshChars.addEventListener('click', refreshChars);
   if (btnRefreshModels) btnRefreshModels.addEventListener('click', refreshModels);
 
@@ -458,7 +470,11 @@
 
     // abort prior stream
     if (abortController) abortController.abort();
-    abortController = new AbortController();
+    // 用局部引用 ac：finally 清理时只清「仍是当前实例」的情况，避免旧请求 finally
+    // 在新请求已开始后误清新请求的 abortController 与 btnStop 可见性（异步竞态）。
+    const ac = new AbortController();
+    abortController = ac;
+    if (btnStop) btnStop.hidden = false;
     const url = base + '/v1/chat/completions';
     const t0 = performance.now();
     let msgEl = null;
@@ -468,7 +484,7 @@
         method: 'POST',
         headers: headers(),
         body: JSON.stringify(buildChatPayload(text)),
-        signal: abortController.signal,
+        signal: ac.signal,
       });
       if (!res.ok) {
         const errBody = await res.text();
@@ -510,6 +526,12 @@
       }
       logEvent('POST', '/v1/chat/completions', 0, Math.round(performance.now() - t0), e.message);
       appendMsg('assistant', '[fetch error] ' + e.message, false);
+    } finally {
+      // 只在全局仍是当前实例时清理，避免被旧请求 finally 误清新请求状态（race）
+      if (abortController === ac) {
+        abortController = null;
+        if (btnStop) btnStop.hidden = true;
+      }
     }
   }
 
@@ -1359,6 +1381,21 @@
       alert('重新解包失败: ' + formatError(r.data, r.text));
     }
   }
+
+  // W-05: 停止生成按钮 — 仅在 chat streaming 进行时显示
+  if (btnStop) {
+    btnStop.addEventListener('click', () => {
+      if (abortController) abortController.abort();
+    });
+  }
+
+  // W-01: 页面加载时从 sessionStorage 恢复连接参数（关 tab 即清）
+  try {
+    const savedUrl = sessionStorage.getItem('airp_engine_url');
+    const savedBearer = sessionStorage.getItem('airp_bearer');
+    if (savedUrl) engineUrl.value = savedUrl;
+    if (savedBearer) bearerToken.value = savedBearer;
+  } catch {}
 
   // ── auto-connect on load ─────────────────────────────────────────────────
   setTimeout(connect, 300);
