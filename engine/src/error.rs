@@ -5,6 +5,8 @@
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -103,19 +105,71 @@ impl AirpError {
             | AirpError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
+
+    /// #67 #9 / PR #74 方案 A：错误 code 字符串，用于 JSON envelope 的 `code` 字段。
+    ///
+    /// 与 `models_proxy_error` 的 `code: &'static str` 风格对齐，便于 webui
+    /// `formatError` 白名单统一展开。snake_case，稳定不变。
+    pub fn code_str(&self) -> &'static str {
+        match self {
+            AirpError::BadRequest(_) => "bad_request",
+            AirpError::PathEscape(_) => "path_escape",
+            AirpError::NotFound(_) => "not_found",
+            AirpError::Upstream { .. } => "upstream",
+            AirpError::QuotaExceeded(_) => "quota_exceeded",
+            AirpError::Io(_) => "io_error",
+            AirpError::Json(_) => "json_error",
+            AirpError::Http(_) => "http_error",
+            AirpError::Regex(_) => "regex_error",
+            AirpError::Config(_) => "config_error",
+            AirpError::Orchestrator(_) => "orchestrator_error",
+            AirpError::Volume(_) => "volume_error",
+            AirpError::Fsm(_) => "fsm_error",
+            AirpError::Internal(_) => "internal_error",
+        }
+    }
+}
+
+/// #67 #9 / PR #74 方案 A：JSON envelope body。
+///
+/// 与 `daemon::handlers::ModelsProxyError` 同结构（code/message + 可选 upstream_*/detail），
+/// 让 webui `formatError` 白名单统一处理 engine 所有错误响应。
+#[derive(Debug, Serialize)]
+struct AirpErrorBody {
+    code: &'static str,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AirpErrorResponse {
+    error: AirpErrorBody,
 }
 
 /// M2.3：axum handler 可直接返回 `Result<T, AirpError>`，错误自动映射。
+///
+/// #67 #9 / PR #74 方案 A：改为 JSON envelope 输出（`{"error":{"code","message"}}`），
+/// 让 webui `formatError` 白名单 + extras 折叠生效（之前返回 plain text，白名单
+/// 是 dead code）。500 内部错误仍不暴露细节，仅返回通用 message。
 impl IntoResponse for AirpError {
     fn into_response(self) -> Response {
         let status = self.status();
-        let body = self.to_string();
-        // 500 内部错误不暴露细节，仅记录到 tracing
+        let code = self.code_str();
+        let message = self.to_string();
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(err = %body, "internal error");
-            (status, "internal error".to_string()).into_response()
+            tracing::error!(err = %message, "internal error");
+            // 500 不暴露细节，仅返回通用 message（与原行为一致）
+            let body = AirpErrorResponse {
+                error: AirpErrorBody {
+                    code,
+                    message: "internal error".to_string(),
+                },
+            };
+            (status, Json(body)).into_response()
         } else {
-            (status, body).into_response()
+            let body = AirpErrorResponse {
+                error: AirpErrorBody { code, message },
+            };
+            (status, Json(body)).into_response()
         }
     }
 }
@@ -141,5 +195,41 @@ mod tests {
         }
         let r = produces();
         assert!(matches!(r, Err(AirpError::Io(_))));
+    }
+
+    // #67 #9 / PR #74 方案 A：envelope 形状回归。webui formatError 依赖此结构。
+    #[tokio::test]
+    async fn into_response_emits_json_envelope() {
+        use axum::body::to_bytes;
+        let resp = AirpError::NotFound("lorebook for character foo not found".to_string())
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], "not_found");
+        assert_eq!(
+            v["error"]["message"],
+            "资源不存在: lorebook for character foo not found"
+        );
+    }
+
+    // 500 不暴露细节（仅 "internal error"），但 code 仍按 variant 输出。
+    #[tokio::test]
+    async fn into_response_500_redacts_message() {
+        use axum::body::to_bytes;
+        let resp = AirpError::Internal("db password is hunter2".to_string()).into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], "internal_error");
+        assert_eq!(v["error"]["message"], "internal error");
+        assert!(
+            !bytes.windows(b"hunter2".len()).any(|w| w == b"hunter2"),
+            "500 响应不得泄露内部细节"
+        );
     }
 }

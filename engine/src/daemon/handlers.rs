@@ -1385,6 +1385,113 @@ mod tests {
         assert_eq!(v["card_format"], "json");
     }
 
+    // ── PR #74 W-01: get_character_lorebook HTTP-level 回归测试 ─────────────
+    //
+    // 守 #67 #5 修复：handler 改为 `Result<Json<Value>, AirpError>` 后，错误响应
+    // 必须是 JSON envelope（`{"error":{"code","message"}}`），不能是裸 StatusCode。
+    // 复用 make_state_for_http_test，3 个 case 覆盖主要分支。
+
+    #[tokio::test]
+    async fn pr74_lorebook_not_found_returns_json_envelope() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/characters/does_not_exist/lorebook")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["error"]["code"], "not_found");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("does_not_exist"),
+            "错误 message 应含 character_id，got: {}",
+            v["error"]["message"]
+        );
+    }
+
+    #[tokio::test]
+    async fn pr74_lorebook_invalid_character_id_returns_400_envelope() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state);
+        // 含路径遍历字符 → CharacterId::new 校验失败 → BadRequest
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/characters/..%2Fetc/lorebook")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn pr74_lorebook_happy_path_returns_json_value() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, tmp) = make_state_for_http_test();
+        // 在 data_root 下放一个合法 lorebook 文件
+        let char_dir = tmp.path().join("characters").join("test_char");
+        std::fs::create_dir_all(char_dir.join("world")).unwrap();
+        std::fs::write(
+            char_dir.join("world").join("lorebook.json"),
+            r#"{"entries":[{"keys":["hi"],"content":"hello"}]}"#,
+        )
+        .unwrap();
+
+        let app = super::super::create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/characters/test_char/lorebook")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["entries"][0]["keys"][0], "hi");
+        assert_eq!(v["entries"][0]["content"], "hello");
+    }
+
     // ── #42 F-1 / #40：/v1/models URL 推导与 endpoint 脱敏 ──────────────────
 
     #[test]
