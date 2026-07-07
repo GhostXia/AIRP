@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh" class="light">
 <head>
     <meta charset="UTF-8">
@@ -129,7 +129,7 @@
             </div>
             <div class="flex items-center gap-2 flex-1 justify-center max-w-md mx-4">
                 <input type="text" value="http://localhost:8080" class="h-7 px-2 text-xs rounded-md border flex-1 min-w-0" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);" readonly>
-                <input type="text" value="Bearer sk-...abc" class="h-7 px-2 text-xs rounded-md border w-32" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-tertiary);" readonly>
+                <input type="text" placeholder="Bearer token..." class="h-7 px-2 text-xs rounded-md border w-32" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-tertiary);" readonly>
                 <button class="flex items-center justify-center h-7 px-3 rounded-md text-xs font-semibold whitespace-nowrap transition-colors duration-150" style="background: var(--color-primary); color: var(--color-text-inverse); font-size: 11px;">
                     连接
                 </button>
@@ -138,6 +138,10 @@
                 <span class="flex items-center gap-1.5 text-xs" style="color: var(--state-success); font-size: 11px;">
                     <span class="w-1.5 h-1.5 rounded-full" style="background: var(--state-success);"></span>
                     已连接
+                </span>
+                <span class="px-2 py-0.5 rounded text-xs font-medium flex items-center gap-1" style="background: rgba(196, 138, 46, 0.1); color: var(--state-warning); border: 1px solid rgba(196, 138, 46, 0.2); font-size: 11px;">
+                    <i data-lucide="alert-triangle" class="w-3 h-3"></i>
+                    Engine 无鉴权，仅本地 dev 安全
                 </span>
                 <button class="flex items-center justify-center w-7 h-7 rounded-md hover:bg-[var(--color-bg-overlay)] transition-colors duration-150" style="color: var(--color-text-tertiary);" aria-label="设置">
                     <i data-lucide="settings" class="w-4 h-4"></i>

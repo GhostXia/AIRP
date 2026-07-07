@@ -114,6 +114,8 @@
         mask-position: center;
         background-color: currentColor;
       }
+      .wb-entry.collapsed .wb-body { display: none; }
+      .wb-entry.collapsed .wb-chevron { transform: rotate(-90deg); }
     </style>
 </head>
 <body class="min-h-screen font-sans antialiased">
@@ -297,7 +299,7 @@
             <!-- Entry 2 (collapsed) -->
             <div class="wb-entry collapsed" style="border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden;">
               <div class="flex items-center cursor-pointer" style="padding: 10px 12px; gap: 8px; background: var(--color-bg-surface);" onclick="this.parentElement.classList.toggle('collapsed')">
-                <i data-lucide="chevron-down" class="wb-chevron" style="width: 14px; height: 14px; color: var(--color-text-tertiary); transition: transform 160ms; flex-shrink: 0; transform: rotate(-90deg);"></i>
+                <i data-lucide="chevron-down" class="wb-chevron" style="width: 14px; height: 14px; color: var(--color-text-tertiary); transition: transform 160ms; flex-shrink: 0;"></i>
                 <span style="font-size: var(--font-size-sm); font-weight: 500; color: var(--color-text-primary); font-family: var(--font-sans); white-space: nowrap;">条目 #2</span>
                 <input type="text" value="月能魔法" style="flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-subtle)'" />
                 <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); font-family: var(--font-mono); white-space: nowrap;">8</span>
@@ -309,7 +311,7 @@
                   <i data-lucide="x" style="width: 14px; height: 14px;"></i>
                 </button>
               </div>
-              <div class="wb-body" style="padding: 0 12px 12px 12px; border-top: 1px solid var(--color-border-subtle); display: none;">
+              <div class="wb-body" style="padding: 0 12px 12px 12px; border-top: 1px solid var(--color-border-subtle);">
                 <div style="padding-top: 10px;">
                   <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">内容</label>
                   <textarea rows="3" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">月能魔法是银月森林精灵独有的魔法体系。施法者通过吸收和引导月光能量来施展法术，威力在满月之夜达到顶峰。常见的月能魔法包括月光箭矢、银色屏障和治愈之光。</textarea>
@@ -324,7 +326,7 @@
             <!-- Entry 3 (collapsed) -->
             <div class="wb-entry collapsed" style="border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden;">
               <div class="flex items-center cursor-pointer" style="padding: 10px 12px; gap: 8px; background: var(--color-bg-surface);" onclick="this.parentElement.classList.toggle('collapsed')">
-                <i data-lucide="chevron-down" class="wb-chevron" style="width: 14px; height: 14px; color: var(--color-text-tertiary); transition: transform 160ms; flex-shrink: 0; transform: rotate(-90deg);"></i>
+                <i data-lucide="chevron-down" class="wb-chevron" style="width: 14px; height: 14px; color: var(--color-text-tertiary); transition: transform 160ms; flex-shrink: 0;"></i>
                 <span style="font-size: var(--font-size-sm); font-weight: 500; color: var(--color-text-primary); font-family: var(--font-sans); white-space: nowrap;">条目 #3</span>
                 <input type="text" value="游侠准则" style="flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-subtle)'" />
                 <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); font-family: var(--font-mono); white-space: nowrap;">5</span>
@@ -336,7 +338,7 @@
                   <i data-lucide="x" style="width: 14px; height: 14px;"></i>
                 </button>
               </div>
-              <div class="wb-body" style="padding: 0 12px 12px 12px; border-top: 1px solid var(--color-border-subtle); display: none;">
+              <div class="wb-body" style="padding: 0 12px 12px 12px; border-top: 1px solid var(--color-border-subtle);">
                 <div style="padding-top: 10px;">
                   <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">内容</label>
                   <textarea rows="3" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">游侠准则是银月森林守护者遵循的行为规范：保护森林生灵不受侵害、维护自然平衡、不将月能魔法用于破坏目的、在森林受到威胁时挺身而出。</textarea>
