@@ -7,6 +7,7 @@ import { validateEnvelope } from "./protocol/guard";
 import { stateStore, setState, patchState, applyJsonPatch } from "./state/store";
 import { registerBuiltins, applyManifestMessage } from "./registry";
 import BlueprintRenderer from "./components/BlueprintRenderer.vue";
+import SettingsModal from "./widgets/SettingsModal.vue";
 
 // Register first-party widgets into the open registry.
 registerBuiltins();
@@ -18,6 +19,7 @@ const blueprint = shallowRef<Blueprint | null>(null);
 // the MockBus still primes its own sample blueprint, which we honor as-is.
 const isTauri = isTauriEnvironment();
 const selectedCharacterId = ref<string>("");
+const showSettings = ref(false);
 
 const MINIMAL_BLUEPRINT: Blueprint = {
   version: "bp-phase0",
@@ -165,6 +167,7 @@ onMounted(async () => {
       // /order/-) applies. messages is id-keyed, order holds render order.
       setState("w-chat", { messages: {}, order: [] });
       setState("w-characters", { ids: [], loaded: false });
+      setState("w-settings", { loaded: false });
       refreshCharacters();
     }
     await installOptionalAgentTestHarness();
@@ -186,6 +189,7 @@ onUnmounted(() => {
       <small>{{ isTauri ? "phase0 · engine live" : "scaffold · mock" }}</small>
       <small v-if="isTauri && selectedCharacterId" class="char-badge">角色: {{ selectedCharacterId }}</small>
       <button v-if="isTauri" class="refresh" @click="refreshCharacters">刷新角色</button>
+      <button v-if="isTauri" class="settings-btn" @click="showSettings = true">设置</button>
     </header>
     <div v-if="busError" class="bus-error">bus: {{ busError }}</div>
     <BlueprintRenderer
@@ -195,6 +199,13 @@ onUnmounted(() => {
       @intent="onIntent"
     />
     <div v-else class="loading">等待 Blueprint…</div>
+    <SettingsModal
+      v-if="isTauri"
+      :state="stateStore['w-settings']"
+      :visible="showSettings"
+      @intent="onIntent"
+      @close="showSettings = false"
+    />
   </main>
 </template>
 
@@ -232,6 +243,10 @@ body {
 }
 .topbar .refresh {
   margin-left: auto;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.topbar .settings-btn {
   font-size: 12px;
   padding: 4px 8px;
 }

@@ -302,6 +302,73 @@ impl BusRelay {
                         }
                     }
                 });
+            } else if i.name == "settings.get" {
+                // M4: 读取 engine settings（api_key 脱敏为 api_key_set bool）
+                let app_opt = self.subscriber.get().cloned();
+                let http = self.http.clone();
+                let engine = self.engine_connection();
+                tauri::async_runtime::spawn(async move {
+                    match fetch_settings(&http, &engine.url, engine.access_key.as_deref()).await {
+                        Ok(settings) => {
+                            emit_state_set(
+                                &app_opt,
+                                format!("state-settings-{n}"),
+                                "w-settings",
+                                serde_json::json!({ "loaded": true, "settings": settings }),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(err = %e, "settings.get failed");
+                            emit_state_set(
+                                &app_opt,
+                                format!("state-settings-{n}"),
+                                "w-settings",
+                                serde_json::json!({ "loaded": true, "error": e.to_string() }),
+                            );
+                        }
+                    }
+                });
+            } else if i.name == "settings.update" {
+                // M4: 更新 engine settings（POST /v1/settings 热重载）
+                // params: { endpoint?, api_key?, model? } — 只传非 null 字段
+                let params = i.params.clone().unwrap_or(serde_json::Value::Null);
+                let app_opt = self.subscriber.get().cloned();
+                let http = self.http.clone();
+                let engine = self.engine_connection();
+                tauri::async_runtime::spawn(async move {
+                    emit_state_set(
+                        &app_opt,
+                        format!("state-settings-saving-{n}"),
+                        "w-settings",
+                        serde_json::json!({ "saving": true }),
+                    );
+                    match update_settings(
+                        &http,
+                        &engine.url,
+                        engine.access_key.as_deref(),
+                        &params,
+                    )
+                    .await
+                    {
+                        Ok(updated) => {
+                            emit_state_set(
+                                &app_opt,
+                                format!("state-settings-{n}"),
+                                "w-settings",
+                                serde_json::json!({ "loaded": true, "saving": false, "settings": updated }),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(err = %e, "settings.update failed");
+                            emit_state_set(
+                                &app_opt,
+                                format!("state-settings-{n}"),
+                                "w-settings",
+                                serde_json::json!({ "loaded": true, "saving": false, "error": e.to_string() }),
+                            );
+                        }
+                    }
+                });
             }
         }
     }
@@ -603,6 +670,45 @@ async fn import_character_via_path(
         .unwrap_or("")
         .to_string();
     Ok(id)
+}
+
+/// GET `/v1/settings` from the engine. Returns the settings JSON (api_key 脱敏).
+async fn fetch_settings(
+    http: &reqwest::Client,
+    engine_url: &str,
+    access_key: Option<&str>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let request = http.get(format!("{}/v1/settings", engine_url));
+    let resp = with_auth(request, access_key).send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("engine HTTP {status}: {text}").into());
+    }
+    let v: serde_json::Value = resp.json().await?;
+    Ok(v)
+}
+
+/// POST `/v1/settings` to update engine settings (hot reload).
+/// `params` is forwarded as-is (Partial<MutableConfig>).
+/// Returns the updated settings JSON (api_key 脱敏).
+async fn update_settings(
+    http: &reqwest::Client,
+    engine_url: &str,
+    access_key: Option<&str>,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let request = http
+        .post(format!("{}/v1/settings", engine_url))
+        .json(params);
+    let resp = with_auth(request, access_key).send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("engine HTTP {status}: {text}").into());
+    }
+    let v: serde_json::Value = resp.json().await?;
+    Ok(v)
 }
 
 fn with_auth(
