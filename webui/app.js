@@ -150,8 +150,15 @@
     connText.textContent = '连接中…';
     const r = await api('GET', '/version');
     if (r.ok) {
+      // WEBUI-BACKEND-PLAN §4.2: /health 就绪探针，区分"engine 起了"与"能跑对话"
+      const h = await api('GET', '/health');
+      let detail = (r.data?.version || r.text).slice(0, 40);
+      if (h.ok && h.data) {
+        if (!h.data.provider_configured) detail += '  ⚠ provider 未配置';
+        if (!h.data.data_root_writable) detail += '  ⚠ data_root 不可写';
+      }
       connStatus.className = 'status-dot dot-ok';
-      connText.textContent = '已连接  ' + (r.data?.version || r.text).slice(0, 40);
+      connText.textContent = '已连接  ' + detail;
       refreshAll();
     } else {
       connStatus.className = 'status-dot dot-err';
@@ -1074,6 +1081,17 @@
       lines.push('[1] GET /version  → ' + r.status + ' (' + r.ms + 'ms)');
       if (r.ok) lines.push('    name=' + (r.data?.name || '?') + ' version=' + (r.data?.version || r.text || '?'));
       else lines.push('    err: ' + formatError(r.data, r.text));
+    }
+    // 1b. health
+    {
+      const r = await diagApi('GET', '/health');
+      lines.push('[1b] GET /health  → ' + r.status + ' (' + r.ms + 'ms)');
+      if (r.ok) {
+        const h = r.data || {};
+        lines.push('    engine=' + (h.engine || '?') + ' provider_configured=' + (h.provider_configured ? 'true' : 'false') + ' data_root_writable=' + (h.data_root_writable ? 'true' : 'false'));
+      } else {
+        lines.push('    err: ' + formatError(r.data, r.text));
+      }
     }
     // 2. settings
     {

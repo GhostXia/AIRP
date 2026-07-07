@@ -258,6 +258,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
 
     Router::new()
         .route("/version", get(version_handler))
+        .route("/health", get(health_handler))
         .merge(v1_routes)
         .layer(cors)
         .with_state(state)
@@ -278,6 +279,38 @@ async fn version_handler() -> axum::Json<VersionInfo> {
 struct VersionInfo {
     name: &'static str,
     version: &'static str,
+}
+
+/// WEBUI-BACKEND-PLAN §4.2：健康就绪探针。
+///
+/// 返回 engine 状态、provider 是否已配置、data_root 是否可写。
+/// 不鉴权（与 `/version` 同级），因为只暴露就绪状态，不泄露敏感信息。
+async fn health_handler(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+) -> axum::Json<HealthInfo> {
+    let cfg = state.config.read().unwrap();
+    let provider_configured = cfg.api_key.as_deref().is_some_and(|s| !s.is_empty())
+        && !cfg.endpoint.is_empty();
+    drop(cfg);
+
+    // data_root 可写检查：尝试写一个临时文件
+    let data_root_writable = std::fs::File::create(state.data_root.join(".health_probe")).is_ok();
+    if data_root_writable {
+        let _ = std::fs::remove_file(state.data_root.join(".health_probe"));
+    }
+
+    axum::Json(HealthInfo {
+        engine: "ok",
+        provider_configured,
+        data_root_writable,
+    })
+}
+
+#[derive(serde::Serialize)]
+struct HealthInfo {
+    engine: &'static str,
+    provider_configured: bool,
+    data_root_writable: bool,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -788,6 +821,95 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // WEBUI-BACKEND-PLAN §4.2: /health 就绪探针
+    #[tokio::test]
+    async fn test_health_endpoint_returns_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(DaemonState {
+            data_root: tmp.path().to_path_buf(),
+            http_client: reqwest::Client::new(),
+            config: std::sync::RwLock::new(MutableConfig {
+                provider: crate::adapter::Provider::OpenAI,
+                endpoint: "http://localhost".to_string(),
+                api_key: None,
+                model: "gpt-4o".to_string(),
+                volume_config: crate::config::VolumeConfig::default(),
+                access_api_key: None,
+                engine: crate::adapter::BackendEngine::default(),
+                quota: crate::quota::QuotaConfig::default(),
+            }),
+        });
+        let app = create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["engine"], "ok");
+        assert_eq!(v["provider_configured"].as_bool(), Some(false)); // api_key=None
+        assert_eq!(v["data_root_writable"].as_bool(), Some(true)); // tempdir 可写
+    }
+
+    // /health 不鉴权（与 /version 同级）
+    #[tokio::test]
+    async fn test_health_unauthenticated_with_key_set() {
+        let state = make_state_with_key(Some("secret-key"));
+        let app = create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // /health provider_configured=true when api_key + endpoint 都有值
+    #[tokio::test]
+    async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = Arc::new(DaemonState {
+            data_root: tmp.path().to_path_buf(),
+            http_client: reqwest::Client::new(),
+            config: std::sync::RwLock::new(MutableConfig {
+                provider: crate::adapter::Provider::OpenAI,
+                endpoint: "https://api.openai.com".to_string(),
+                api_key: Some("sk-test".to_string()),
+                model: "gpt-4o".to_string(),
+                volume_config: crate::config::VolumeConfig::default(),
+                access_api_key: None,
+                engine: crate::adapter::BackendEngine::default(),
+                quota: crate::quota::QuotaConfig::default(),
+            }),
+        });
+        let app = create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["engine"], "ok");
+        assert_eq!(v["provider_configured"], true);
+        assert_eq!(v["data_root_writable"], true);
     }
 }
 
