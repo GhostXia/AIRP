@@ -369,6 +369,95 @@ impl BusRelay {
                         }
                     }
                 });
+            } else if i.name == "chat.history" {
+                // M4: 拉取角色 chat history（legacy 单 session 路径）。
+                // params: { character_id: string }
+                // engine 返回 ChatLog { messages: Vec<ChatMessage>, ... }，
+                // 转换为 w-chat scope 的 { messages: {id: h{i}}, order: [h0, h1, ...] }，
+                // 与 chat_turn_open_envelope 的 id-keyed shape 对齐（ChatWidget 期望
+                // {id, role, text}，ChatMessage 是 {role, content}）。
+                //
+                // 历史消息 id 用 `h{i}` 前缀，与 chat.send 的 `u{n}`/`a{n}` 不冲突，
+                // 避免覆盖正在进行的流式 turn。
+                //
+                // 注意：engine 当前 `POST /v1/chat/history` 只读 legacy 单 session
+                // 路径（`data/characters/{id}/history/`），不支持 session_id 参数。
+                // 多 session 切换留下个 PR（需扩展 engine 端点）。
+                let params = i.params.clone().unwrap_or(serde_json::Value::Null);
+                let character_id = params
+                    .get("character_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if character_id.is_empty() {
+                    tracing::warn!("chat.history missing character_id");
+                    emit_state_set(
+                        &self.subscriber.get().cloned(),
+                        format!("state-chat-history-{n}"),
+                        "w-chat",
+                        serde_json::json!({ "messages": {}, "order": [] }),
+                    );
+                    return;
+                }
+                let app_opt = self.subscriber.get().cloned();
+                let http = self.http.clone();
+                let engine = self.engine_connection();
+                tauri::async_runtime::spawn(async move {
+                    match fetch_chat_history(
+                        &http,
+                        &engine.url,
+                        engine.access_key.as_deref(),
+                        &character_id,
+                    )
+                    .await
+                    {
+                        Ok(log) => {
+                            // ChatLog.messages: Vec<{role, content}> → w-chat scope
+                            let messages = log
+                                .get("messages")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+                            let mut scope_messages = serde_json::Map::new();
+                            let mut order = Vec::with_capacity(messages.len());
+                            for (i, msg) in messages.iter().enumerate() {
+                                let id = format!("h{i}");
+                                let role = msg
+                                    .get("role")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("user");
+                                let text = msg
+                                    .get("content")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                scope_messages.insert(
+                                    id.clone(),
+                                    serde_json::json!({
+                                        "id": id,
+                                        "role": role,
+                                        "text": text,
+                                    }),
+                                );
+                                order.push(serde_json::Value::String(id));
+                            }
+                            emit_state_set(
+                                &app_opt,
+                                format!("state-chat-history-{n}"),
+                                "w-chat",
+                                serde_json::json!({ "messages": scope_messages, "order": order }),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(err = %e, "chat.history failed");
+                            emit_state_set(
+                                &app_opt,
+                                format!("state-chat-history-{n}"),
+                                "w-chat",
+                                serde_json::json!({ "messages": {}, "order": [], "error": e.to_string() }),
+                            );
+                        }
+                    }
+                });
             }
         }
     }
@@ -679,6 +768,28 @@ async fn fetch_settings(
     access_key: Option<&str>,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let request = http.get(format!("{}/v1/settings", engine_url));
+    let resp = with_auth(request, access_key).send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("engine HTTP {status}: {text}").into());
+    }
+    let v: serde_json::Value = resp.json().await?;
+    Ok(v)
+}
+
+/// POST `/v1/chat/history` to get the character's chat log (legacy single-session).
+/// Returns the `ChatLog` JSON (`{ messages: Vec<ChatMessage>, ... }`).
+async fn fetch_chat_history(
+    http: &reqwest::Client,
+    engine_url: &str,
+    access_key: Option<&str>,
+    character_id: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let body = serde_json::json!({ "character_id": character_id });
+    let request = http
+        .post(format!("{}/v1/chat/history", engine_url))
+        .json(&body);
     let resp = with_auth(request, access_key).send().await?;
     if !resp.status().is_success() {
         let status = resp.status();

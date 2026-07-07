@@ -96,12 +96,18 @@ const busError = ref<string | null>(null);
 
 function onIntent(name: string, params?: Json): void {
   if (!bus) return;
-  // Phase 0: characters.select just records the selection locally (the engine
-  // is stateless per-call; the chosen id rides on each chat.send). chat.send is
+  // Phase 0: characters.select records the selection locally (the engine is
+  // stateless per-call; the chosen id rides on each chat.send). chat.send is
   // tagged with the current selection so the engine knows which card to assemble.
+  // M4: 选角色后拉 chat history（legacy 单 session），让用户重启后看到旧对话。
   if (name === "characters.select") {
     const id = (params as { character_id?: string } | undefined)?.character_id;
-    if (id) selectedCharacterId.value = id;
+    if (id) {
+      selectedCharacterId.value = id;
+      // 拉取该角色的 chat history。用 onIntent 走正常 dispatch 路径，不递归
+      // （chat.history 不在 characters.select 分支里）。
+      onIntent("chat.history", { character_id: id } as Json);
+    }
     return;
   }
   let finalParams = params;
