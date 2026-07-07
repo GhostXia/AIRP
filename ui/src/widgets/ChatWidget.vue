@@ -10,6 +10,10 @@ interface Msg {
   id: string;
   role: string;
   text: string;
+  // #81 W-03: 历史消息的时间戳（ISO 8601，来自 ChatLog.message_timestamps）。
+  // 新消息（chat.send 流式 turn）当前无 ts，留 undefined。未来 ChatWidget
+  // 想显示时间戳时可直接读此字段。
+  ts?: string;
 }
 
 // Task 1.2: chat state is `{ messages: {id: Msg}, order: id[] }`. We render
