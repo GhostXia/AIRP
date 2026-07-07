@@ -53,23 +53,15 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 | 操作 | 端点 | Method | 说明 |
 |------|------|--------|------|
 | 获取角色列表 | `/v1/characters` | GET | 返回 `string[]` 角色 slug 列表 |
-| 获取角色详情 | `/v1/characters/:id` | GET | **目前不存在此端点** — 需要新增或从 card.json 解析返回 name/description/avatar 等元数据 |
-| 获取角色头像 | `/v1/characters/:id/avatar` | GET | 返回 PNG bytes，UI 用 blob URL 渲染 |
+| 获取角色详情 | `/v1/characters/:character_id` | GET | **已存在** — 返回完整 TavernCardV2 JSON。前端从中提取 `data.name` / `data.description`。但需 N+1 请求（每个角色一次），建议扩展列表端点返回 meta，见 §5 P1 |
+| 获取角色头像 | `/v1/characters/:character_id/avatar` | GET | 返回 PNG bytes，UI 用 blob URL 渲染 |
 
 **关键细节**：
 
 - 当前 `/v1/characters` 只返回 slug 列表（`string[]`），不包含 name/description。但新 UI 的角色卡片需要显示 **角色名 + 描述 + 头像**。
-- **建议新增端点** `GET /v1/characters/:id/meta` 返回：
-  ```json
-  {
-    "character_id": "luna",
-    "name": "林婉清",
-    "description": "温柔的书店老板娘",
-    "avatar_url": "/v1/characters/luna/avatar"
-  }
-  ```
-  或者扩展 `GET /v1/characters` 返回完整列表（含 meta），避免 N+1 请求。
-- 如果不改后端，前端可以做 N+1：对每个 slug 调 avatar 端点（显示首字母 fallback）+ 读 card.json 取 name。但这对用户体验不友好（卡片逐个加载）。
+- `GET /v1/characters/:character_id` 已存在（返回完整角色卡 JSON），前端可从中提取 name/description，但每个角色一次请求 = N+1。
+- **建议扩展** `GET /v1/characters` 返回完整列表（含 meta），避免 N+1 请求。用 `?with_meta=true` query 参数做版本兼容（不传 = 旧行为 `string[]`，传 = 新行为 `[{id, name, description, avatar_url}]`）。
+- 如果不改后端，前端 fallback：对每个 slug 调 `GET /v1/characters/:character_id` 取 name/description + 调 avatar 端点（显示首字母 fallback）。但这对用户体验不友好（卡片逐个加载）。
 
 ### 2.3 角色导入
 
@@ -111,11 +103,11 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 
 - 当前 `/v1/sessions/:character_id` 返回 `SessionId[]`（只有 UUID），**不包含 session 标题或最后消息预览**。
 - 新 UI 的 session 列表需要显示：session 标题（描述性名称）、最后一条消息预览、时间戳。
-- **建议**：
-  - 方案 A：新增 `GET /v1/sessions/:character_id/detail` 返回每个 session 的 title + last_message + updated_at
-  - 方案 B：在 `POST /v1/sessions/:character_id` 时支持传入 title 参数（需后端持久化 session meta，当前 `SessionId` 只是 UUID，无 title 字段）
-  - 方案 C：前端从 chat history 推导（拿到 history 后取第一条用户消息做标题），但这需要额外请求
-  - 推荐方案 A 或 A+B 组合。注意 A 依赖 B 的 title 持久化前置。
+- **建议**（A6 修复后方案 C 成本最低，推荐先用 C，后续按需升级）：
+  - **方案 C（推荐，A6 修复后可行）**：前端从 `POST /v1/chat/history {character_id, session_id}` 推导 title（取第一条用户消息前 30 字符）。A6 修复前不可行（history 不能指定 session_id）；修复后零后端工作量。
+  - 方案 A：新增 `GET /v1/sessions/:character_id/detail` 返回每个 session 的 title + last_message + updated_at。需后端新增端点。
+  - 方案 B：在 `POST /v1/sessions/:character_id` 时支持传入 title 参数（需后端持久化 session meta，当前 `SessionId` 只是 UUID，无 title 字段）。是方案 A 的前置依赖。
+  - 推荐路径：先用方案 C（零后端工作量），若 UX 不佳再考虑 A+B 组合。
 
 #### A6 — 多 session API 设计割裂（P0 阻塞，浏览器实测发现）
 
@@ -183,8 +175,8 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 
 | 操作 | 端点 | Method | 说明 |
 |------|------|--------|------|
-| 获取 live state | `/v1/characters/:id/state` | GET | 404 = 无 state，需区分处理 |
-| 获取 state history | `/v1/characters/:id/state/history` | GET | `?limit=N` clamp 1..1000 |
+| 获取 live state | `/v1/characters/:character_id/state` | GET | 404 = 无 state，需区分处理 |
+| 获取 state history | `/v1/characters/:character_id/state/history` | GET | `?limit=N` clamp 1..1000 |
 
 **无新增后端需求**。
 
@@ -206,16 +198,16 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 
 | 操作 | 端点 | Method | 说明 |
 |------|------|--------|------|
-| 读取角色卡 | `/v1/characters/:id` | GET | **已存在** — 返回 TavernCardV2 JSON（`serde_json::Value`，优先读 `card/card.json`，兼容旧 `card.json`） |
-| 保存角色卡 | `/v1/characters/:id` | PUT | **已存在** — 接收角色卡 JSON 写回。响应 `{"character_id":"...","status":"ok"}` |
-| 删除角色 | `/v1/characters/:id` | DELETE | **已存在** — 响应 `{"deleted":"...","status":"ok"}` |
-| 重新提取 | `/v1/characters/:id/reextract` | POST | 已存在 — 触发 CF-7 资产解包 |
+| 读取角色卡 | `/v1/characters/:character_id` | GET | **已存在** — 返回 TavernCardV2 JSON（`serde_json::Value`，优先读 `card/card.json`，兼容旧 `card.json`） |
+| 保存角色卡 | `/v1/characters/:character_id` | PUT | **已存在** — 接收角色卡 JSON 写回。响应 `{"character_id":"...","status":"ok"}` |
+| 删除角色 | `/v1/characters/:character_id` | DELETE | **已存在** — 响应 `{"deleted":"...","status":"ok"}` |
+| 重新提取 | `/v1/characters/:character_id/reextract` | POST | 已存在 — 触发 CF-7 资产解包 |
 
 **关键细节**：
 
-- 旧 webui 的 workbench 通过 GET engine 内部文件路径读 card.json，然后 PUT 写回。新 UI **不应**依赖文件路径，直接用 `GET/PUT /v1/characters/:id` 即可。
+- 旧 webui 的 workbench 通过 GET engine 内部文件路径读 card.json，然后 PUT 写回。新 UI **不应**依赖文件路径，直接用 `GET/PUT /v1/characters/:character_id` 即可。
 - 路径参数名是 `:character_id`（不是 `:id`），axum 路由模式串为 `/v1/characters/:character_id`。
-- **不存在** `/v1/characters/:id/card` 子路径——卡片 CRUD 在裸路径上。前端若误调 `/card` 会收到 axum fallback 的 404（空 body）。
+- **不存在** `/v1/characters/:character_id/card` 子路径——卡片 CRUD 在裸路径上。前端若误调 `/card` 会收到 axum fallback 的 404（空 body）。
 - PUT 请求体是完整的 TavernCardV2 JSON（`{spec, spec_version, data:{...}}`）。
 - 实测：导入测试角色后 GET 返回 `{"data":{...},"spec":"chara_card_v2","spec_version":"2.0"}`；PUT 回写返回 `{"character_id":"...","status":"ok"}`；DELETE 返回 `{"deleted":"...","status":"ok"}`。
 
@@ -223,12 +215,12 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 
 | 操作 | 端点 | Method | 说明 |
 |------|------|--------|------|
-| 读取世界书 | `/v1/characters/:id/lorebook` | GET | **已存在** — 返回 lorebook JSON（`{entries:[...]}`）。文件不存在时 404 envelope `{"error":{"code":"not_found",...}}` |
-| 保存世界书 | `/v1/characters/:id/lorebook` | PUT | **已存在** — 请求体需 `entries` 字段（缺失时 422 `missing field 'entries'`）。响应 `{"character_id":"...","entries_count":N,"status":"ok"}` |
+| 读取世界书 | `/v1/characters/:character_id/lorebook` | GET | **已存在** — 返回 lorebook JSON（`{entries:[...]}`）。文件不存在时 404 envelope `{"error":{"code":"not_found",...}}` |
+| 保存世界书 | `/v1/characters/:character_id/lorebook` | PUT | **已存在** — 请求体需 `entries` 字段（缺失时 422 `missing field 'entries'`）。响应 `{"character_id":"...","entries_count":N,"status":"ok"}` |
 
 **关键细节**：
 
-- 旧 webui 读写 lorebook 的逻辑直接操作文件。新 UI 通过 `GET/PUT /v1/characters/:id/lorebook` API。
+- 旧 webui 读写 lorebook 的逻辑直接操作文件。新 UI 通过 `GET/PUT /v1/characters/:character_id/lorebook` API。
 - UI 当前覆盖的字段：keys / content / priority / enabled / comment
 - 后续需要覆盖的字段（按 TAVERN-PARITY.md）：secondary_keys / position / depth / order / probability / selective / constant / sticky / cooldown / delay / recursive / group
 - 实测：PUT `{entries:[]}` 后 GET 返回 `{entries:[]}`；空状态 GET 返回 404 envelope（**不是**空对象 `{}`，前端需按 `error.code === "not_found"` 区分）。
@@ -258,7 +250,7 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 
 **P2 端点**：API 路径前缀是边缘情况优化，且与既有自动推导逻辑语义重叠，建议暂缓。
 
-**已删除的伪 P0**（原版本错误列出，实测已存在）：~~`GET/PUT /v1/characters/:id/card`~~、~~`GET/PUT /v1/characters/:id/lorebook`~~。前端直接用裸路径 `GET/PUT /v1/characters/:id` 和 `GET/PUT /v1/characters/:id/lorebook` 即可。
+**已删除的伪 P0**（原版本错误列出，实测已存在）：~~`GET/PUT /v1/characters/:character_id/card`~~、~~`GET/PUT /v1/characters/:character_id/lorebook`~~。前端直接用裸路径 `GET/PUT /v1/characters/:character_id` 和 `GET/PUT /v1/characters/:character_id/lorebook` 即可。
 
 ---
 
@@ -276,22 +268,22 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 | `POST /v1/chat/rollback` | ⚠️ **需扩展**（A6）—— 同上 |
 | `POST /v1/chat/regen` | ⚠️ **需扩展**（A6）—— 同上 |
 | `POST /v1/characters/import` | ✅ **JSON body**（非 multipart），永禁 `card_path`（环境变量门控）。详见 §2.3 |
-| `POST /v1/characters/:id/reextract` | ✅ 触发 CF-7 资产解包 |
-| `GET /v1/characters/:id` | ✅ 返回角色卡 JSON（裸路径，非 `/card` 子路径） |
-| `PUT /v1/characters/:id` | ✅ 写回角色卡 JSON |
-| `DELETE /v1/characters/:id` | ✅ 删除角色 |
-| `GET /v1/characters/:id/avatar` | ✅ 返回 PNG bytes，`Content-Type: image/png`，文件缺失 404（空 body） |
-| `GET /v1/characters/:id/lorebook` | ✅ 返回 lorebook JSON，文件缺失 404 envelope |
-| `PUT /v1/characters/:id/lorebook` | ✅ 写回 lorebook，请求体需 `entries` 字段 |
-| `GET /v1/characters/:id/state` | ✅ 404 区分（空 body，非 envelope） |
-| `GET /v1/characters/:id/state/history` | ✅ `?limit=N` clamp 1..=1000，倒序 |
-| `GET /v1/characters/:id/state/schema` | ✅ 路由存在（文档原版本漏列） |
+| `POST /v1/characters/:character_id/reextract` | ✅ 触发 CF-7 资产解包 |
+| `GET /v1/characters/:character_id` | ✅ 返回角色卡 JSON（裸路径，非 `/card` 子路径） |
+| `PUT /v1/characters/:character_id` | ✅ 写回角色卡 JSON |
+| `DELETE /v1/characters/:character_id` | ✅ 删除角色 |
+| `GET /v1/characters/:character_id/avatar` | ✅ 返回 PNG bytes，`Content-Type: image/png`，文件缺失 404（空 body） |
+| `GET /v1/characters/:character_id/lorebook` | ✅ 返回 lorebook JSON，文件缺失 404 envelope |
+| `PUT /v1/characters/:character_id/lorebook` | ✅ 写回 lorebook，请求体需 `entries` 字段 |
+| `GET /v1/characters/:character_id/state` | ✅ 404 区分（空 body，非 envelope） |
+| `GET /v1/characters/:character_id/state/history` | ✅ `?limit=N` clamp 1..=1000，倒序 |
+| `GET /v1/characters/:character_id/state/schema` | ✅ 路由存在（文档原版本漏列） |
 | `GET /v1/models` | ✅ 上游代理，用配置的 `api_key` 加 `Authorization: Bearer` 转发 |
 | `GET /v1/settings` | ✅ 返回 `api_key_set: bool`（**非** `sk-...****` 脱敏字符串）；**需扩展** 加 `access_api_key_set`（A5） |
 | `POST /v1/settings` | ✅ 热重载，落盘 `data/settings.json`（含明文 api_key） |
 | `GET/POST /v1/sessions/:character_id` | ✅ 基础 list/create，返回 UUID 字符串数组 / 裸 UUID 字符串 |
-| `GET /v1/scenes` / `GET /v1/scenes/:id` / `POST /v1/scenes/:id/characters` | ✅ 场景管理（文档原版本漏列） |
-| `GET /v1/presets` / `GET /v1/presets/:id` | ✅ 预设查询（文档原版本漏列） |
+| `GET/POST /v1/scenes` / `GET /v1/scenes/:scene_id` / `POST /v1/scenes/:scene_id/characters` | ✅ 场景管理（文档原版本漏列） |
+| `GET /v1/presets` / `GET /v1/presets/:preset_id` | ✅ 预设查询（文档原版本漏列） |
 
 ---
 
@@ -313,7 +305,7 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 | UI 按钮/操作 | 后端调用链 |
 |-------------|-----------|
 | "链接" 按钮 | `GET /v1/models`（测试连通 + 获取模型列表）→ `POST /v1/settings`（写入 endpoint/key/model） |
-| 角色卡片点击 | `GET /v1/characters`（列表）→ `GET /v1/characters/:id`（取角色卡，从中读 name/description）或等 §5 P1 meta 扩展 |
+| 角色卡片点击 | `GET /v1/characters`（列表）→ `GET /v1/characters/:character_id`（取角色卡，从中读 name/description）或等 §5 P1 meta 扩展 |
 | "导入" 上传 | 前端读文件 → base64/text → `POST /v1/characters/import`（**JSON body**，`card_png_base64` 或 `card_json` 字段） |
 | "新建对话" | `POST /v1/sessions/:character_id` → 刷新 session 列表 |
 | Session 点击 | `POST /v1/chat/history {character_id, session_id}` → 渲染消息（**需 A6 修复后**；当前只能 `{character_id}` 读 legacy log） |
@@ -322,12 +314,12 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 | "刷新历史" | `POST /v1/chat/history {character_id, session_id}`（需 A6） |
 | "Regenerate" | `POST /v1/chat/regen {character_id, session_id}`（需 A6） |
 | "Rollback" | `POST /v1/chat/rollback {character_id, message_index, session_id}`（需 A6） |
-| "重解" | `POST /v1/characters/:id/reextract` + `confirm()` |
-| "工作台" | `GET /v1/characters/:id` → 渲染编辑表单（**裸路径**，非 `/card`） |
-| "保存角色卡" | `PUT /v1/characters/:id`（JSON body，完整 TavernCardV2） |
-| "删除角色" | `DELETE /v1/characters/:id` |
-| 世界书 tab | `GET /v1/characters/:id/lorebook` → 渲染条目列表（404 envelope = 空） |
-| "保存世界书" | `PUT /v1/characters/:id/lorebook`（JSON body，需 `entries` 字段） |
+| "重解" | `POST /v1/characters/:character_id/reextract` + `confirm()` |
+| "工作台" | `GET /v1/characters/:character_id` → 渲染编辑表单（**裸路径**，非 `/card`） |
+| "保存角色卡" | `PUT /v1/characters/:character_id`（JSON body，完整 TavernCardV2） |
+| "删除角色" | `DELETE /v1/characters/:character_id` |
+| 世界书 tab | `GET /v1/characters/:character_id/lorebook` → 渲染条目列表（404 envelope = 空） |
+| "保存世界书" | `PUT /v1/characters/:character_id/lorebook`（JSON body，需 `entries` 字段） |
 | Agent "Run" | `POST /v1/agent/run`（SSE events） |
 | "诊断" | 优先 `GET /health`（连通性 + 数据目录可写）+ `GET /version`（版本）+ `GET /v1/settings` + `GET /v1/models` |
 | 无鉴权警告 | `GET /v1/settings` → 检查 `access_api_key_set`（**需 A5 修复后**；当前 `SettingsView` 无此字段） |
@@ -340,7 +332,7 @@ WebUI 已完成视觉重构，从原来的单页三栏 harness 改为 **3 页 SP
 
 1. **P0-A**（后端）：`chat/history` / `rollback` / `regen` 加 `session_id` 字段（A6） — 多 session UI 的前置
 2. **P0-B**（后端）：`SettingsView` 加 `access_api_key_set: bool`（A5） — 无鉴权警告 UI 的前置
-3. **P0-C**（前端）：工作台直接对接现有 `GET/PUT /v1/characters/:id` + `GET/PUT /v1/characters/:id/lorebook`（零后端工作量）
+3. **P0-C**（前端）：工作台直接对接现有 `GET/PUT /v1/characters/:character_id` + `GET/PUT /v1/characters/:character_id/lorebook`（零后端工作量）
 4. **P0-D**（前端）：修正 import 调用为 JSON body + base64（非 multipart）
 5. **P1-A**（后端）：`GET /v1/characters` 扩展返回 meta — 角色列表页面基础
 6. **P1-B**（后端）：`POST /v1/sessions/:character_id` 支持 `title` + `GET` 扩展返回 detail — session 列表页面基础

@@ -66,9 +66,9 @@
 | GET 裸路径（有卡时） | `/v1/characters/AuditTestChar` | **200** | `{"data":{...},"spec":"chara_card_v2","spec_version":"2.0"}` |
 | PUT 裸路径回写 | `/v1/characters/AuditTestChar` | **200** | `{"character_id":"AuditTestChar","status":"ok"}` |
 | DELETE | `/v1/characters/AuditTestChar` | **200** | `{"deleted":"AuditTestChar","status":"ok"}` |
-| GET /card 子路径 | `/v1/characters/:id/card` | **404**（axum fallback，空 body） | 路由不存在 |
+| GET /card 子路径 | `/v1/characters/:character_id/card` | **404**（axum fallback，空 body） | 路由不存在 |
 
-**结论**：角色卡 CRUD 在裸路径 `/v1/characters/:id` 上完整存在（GET/PUT/DELETE）。文档 §4.1/§5 声称 "需要新增 GET/PUT /v1/characters/:id/card" 全部错误。
+**结论**：角色卡 CRUD 在裸路径 `/v1/characters/:character_id` 上完整存在（GET/PUT/DELETE）。文档 §4.1/§5 声称 "需要新增 GET/PUT /v1/characters/:character_id/card" 全部错误。
 
 **证据**：[handlers.rs:783-792](file:///d:/AIRP-Dev/engine/src/daemon/handlers.rs#L783-L792) `get_character_card`、[handlers.rs:816-843](file:///d:/AIRP-Dev/engine/src/daemon/handlers.rs#L816-L843) `update_character_card`、[handlers.rs:796-806](file:///d:/AIRP-Dev/engine/src/daemon/handlers.rs#L796-L806) `delete_character_endpoint`；路由注册 [mod.rs:202-207](file:///d:/AIRP-Dev/engine/src/daemon/mod.rs#L202-L207)。
 
@@ -88,10 +88,10 @@
 
 文档 §5 原列 4 条 P0 端点 "当前 engine 不存在，建议新增"：
 
-1. `GET /v1/characters/:id/card` — 实际不存在此子路径，但裸路径 `GET /v1/characters/:id` 已返回角色卡 JSON
-2. `PUT /v1/characters/:id/card` — 实际 `PUT /v1/characters/:id` 已存在
-3. `GET /v1/characters/:id/lorebook` — **已存在**
-4. `PUT /v1/characters/:id/lorebook` — **已存在**
+1. `GET /v1/characters/:character_id/card` — 实际不存在此子路径，但裸路径 `GET /v1/characters/:character_id` 已返回角色卡 JSON
+2. `PUT /v1/characters/:character_id/card` — 实际 `PUT /v1/characters/:character_id` 已存在
+3. `GET /v1/characters/:character_id/lorebook` — **已存在**
+4. `PUT /v1/characters/:character_id/lorebook` — **已存在**
 
 **结论**：4 条 P0 全部判错。真正的 P0 工作不是 "新增端点" 而是 "前端对接现有端点"。
 
@@ -186,7 +186,7 @@ engine 已有 `models_url_from_endpoint`（[handlers.rs:1090-1111](file:///d:/AI
 
 ### B5 — meta 扩展的设计取舍可优化
 
-文档原建议 `GET /v1/characters/:id/meta` + `GET /v1/sessions/:character_id/detail`。
+文档原建议 `GET /v1/characters/:character_id/meta` + `GET /v1/sessions/:character_id/detail`。
 
 **独立建议**：
 - 对角色列表：扩展 `GET /v1/characters` 返回 `[{id, name, description, avatar_url}]` 优于新增 `/meta`（避免 N+1 反模式，角色卡通常 <50 个，payload 可控）。需用 Accept header 或 `?with_meta=true` 做版本兼容。
