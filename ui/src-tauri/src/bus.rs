@@ -9,8 +9,12 @@
 //! `POST /v1/chat/completions` SSE endpoint. The streaming response is consumed
 //! here and re-emitted as downstream `state` patches so the UI's `w-chat` scope
 //! accumulates the assistant reply token-by-token (performance contract §6:
-//! streaming incremental append, no per-token full re-parse). Other intents
-//! fall back to a minimal ack until later phases wire them.
+//! streaming incremental append, no per-token full re-parse).
+//!
+//! **M4 scope**: `characters.list` / `characters.import` (path-first) /
+//! `settings.get` / `settings.update` (hot reload) / `chat.history` (legacy
+//! single-session) intents are routed to the corresponding engine HTTP
+//! endpoints. Other intents fall back to a minimal ack.
 //!
 //! The engine URL defaults to `http://127.0.0.1:8000` and is overridable via
 //! the `AIRP_ENGINE_URL` env var (the Tauri shell is a sidecar client of the
@@ -336,6 +340,10 @@ impl BusRelay {
                 let http = self.http.clone();
                 let engine = self.engine_connection();
                 tauri::async_runtime::spawn(async move {
+                    // emit saving:true 用 set 全量替换 w-settings scope，会覆盖之前的
+                    // {loaded, settings}。SettingsModal 的 watch 通过"只同步非空字段"
+                    // 避免表单被清空（saving emit 后 settings 字段为 undefined，不进 if）。
+                    // 这个交互是 set 替换 + 非空同步两者配合，单独看任一侧都不明显。
                     emit_state_set(
                         &app_opt,
                         format!("state-settings-saving-{n}"),
