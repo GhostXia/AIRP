@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIRP Engine Console — 工作台</title>
+    <style id="theme-vars">
+/* AIRP Engine Console — Claude Code inspired, Light-first */
+/* Warm Anthropic palette on clean light surfaces, developer typography */
+
+:root {
+  /* ── Brand Primary: warm Anthropic clay/amber ── */
+  --color-primary: #C4653A;
+  --color-primary-hover: #D47750;
+  --color-primary-muted: rgba(196, 101, 58, 0.12);
+  --color-primary-subtle: rgba(196, 101, 58, 0.06);
+
+  /* ── Neutral Surface System (light mode default) ── */
+  --color-bg-base: #FAFAF8;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-elevated: #FFFFFF;
+  --color-bg-overlay: #F0EDEA;
+  --color-bg-input: #FFFFFF;
+
+  --color-border-default: #E0DCD8;
+  --color-border-subtle: #EBE8E4;
+  --color-border-strong: #C5C0BA;
+
+  /* ── Text ── */
+  --color-text-primary: #1A1A1E;
+  --color-text-secondary: #6B6560;
+  --color-text-tertiary: #9E9890;
+  --color-text-inverse: #FAFAF8;
+
+  /* ── State Colors ── */
+  --state-success: #3D8B5E;
+  --state-warning: #C48A2E;
+  --state-error: #C94444;
+  --state-info: #4A7FB5;
+
+  /* ── Shape ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+
+  /* ── Spacing ── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* ── Typography ── */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.65;
+}
+
+/* Dark mode overrides */
+.dark {
+  --color-bg-base: #1A1A1E;
+  --color-bg-surface: #222226;
+  --color-bg-elevated: #2A2A2F;
+  --color-bg-overlay: #2F2F35;
+  --color-bg-input: #2A2A2F;
+  --color-border-default: #38383F;
+  --color-border-subtle: #2F2F35;
+  --color-border-strong: #4A4A55;
+  --color-text-primary: #E8E4E0;
+  --color-text-secondary: #A09A94;
+  --color-text-tertiary: #706B65;
+  --color-text-inverse: #1A1A1E;
+  --color-primary-muted: rgba(196, 101, 58, 0.15);
+  --color-primary-subtle: rgba(196, 101, 58, 0.08);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-bg-base); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+      .wb-entry.collapsed .wb-body { display: none; }
+      .wb-entry.collapsed .wb-chevron { transform: rotate(-90deg); }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main class="relative min-h-screen overflow-hidden" style="background: var(--color-bg-base);">
+
+      <!-- ── Background ghost layer (dimmed session preview) ── -->
+      <div class="absolute inset-0 pointer-events-none" style="opacity: 0.15;">
+        <div class="flex h-full">
+          <!-- Ghost sidebar -->
+          <div class="w-[300px] border-r flex flex-col" style="border-color: var(--color-border-default); background: var(--color-bg-surface);">
+            <div class="h-[48px] border-b" style="border-color: var(--color-border-default);"></div>
+            <div class="p-4 space-y-3">
+              <div class="h-10 w-full" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-10 w-3/4" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-10 w-5/6" style="background: var(--color-bg-overlay);"></div>
+            </div>
+          </div>
+          <!-- Ghost center -->
+          <div class="flex-1 flex flex-col">
+            <div class="h-[48px] border-b" style="border-color: var(--color-border-default);"></div>
+            <div class="flex-1 p-6 space-y-4">
+              <div class="h-8 w-1/3" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-24 w-full" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-24 w-full" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-24 w-2/3" style="background: var(--color-bg-overlay);"></div>
+            </div>
+          </div>
+          <!-- Ghost right panel -->
+          <div class="w-[280px] border-l" style="border-color: var(--color-border-default);">
+            <div class="h-[48px] border-b" style="border-color: var(--color-border-default);"></div>
+            <div class="p-4 space-y-2">
+              <div class="h-6 w-2/3" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-6 w-full" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-6 w-4/5" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-6 w-full" style="background: var(--color-bg-overlay);"></div>
+              <div class="h-6 w-3/4" style="background: var(--color-bg-overlay);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Dark scrim overlay ── -->
+      <div class="absolute inset-0" style="background: rgba(0, 0, 0, 0.2);"></div>
+
+      <!-- ── Overlay panel (520px, right side) ── -->
+      <div class="relative z-10 ml-auto h-screen flex flex-col" style="width: 520px; background: var(--color-bg-surface); border-left: 1px solid var(--color-border-default);">
+
+        <!-- Header bar -->
+        <div class="flex items-center justify-between shrink-0" style="height: 48px; border-bottom: 1px solid var(--color-border-default);">
+          <div class="flex items-center" style="padding-left: 16px;">
+            <span style="font-family: var(--font-sans); font-size: var(--font-size-md); font-weight: 600; color: var(--color-text-primary);">工作台</span>
+            <span style="font-family: var(--font-mono); font-size: var(--font-size-sm); color: var(--color-text-tertiary); margin-left: 8px;">/ lunara</span>
+          </div>
+          <div class="flex items-center" style="padding-right: 16px; gap: 12px;">
+            <!-- Dirty indicator dot -->
+            <span id="dirty-dot" class="hidden" style="width: 10px; height: 10px; border-radius: 50%; background: var(--state-error);"></span>
+            <!-- Close button -->
+            <button data-dom-id="back-session" class="flex items-center justify-center transition-colors" style="width: 28px; height: 28px; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-tertiary); cursor: pointer; border: none;" onmouseenter="this.style.color='var(--state-error)'" onmouseleave="this.style.color='var(--color-text-tertiary)'" aria-label="关闭工作台">
+              <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab bar -->
+        <div class="flex shrink-0" style="border-bottom: 1px solid var(--color-border-default);">
+          <button class="tab-btn active" data-tab="character-card" style="padding: 10px 16px; font-size: var(--font-size-sm); font-weight: 500; border: none; border-bottom: 2px solid var(--color-primary); background: transparent; color: var(--color-primary); cursor: pointer; font-family: var(--font-sans); transition: color 160ms, border-color 160ms;">
+            角色卡
+          </button>
+          <button class="tab-btn" data-tab="world-book" style="padding: 10px 16px; font-size: var(--font-size-sm); font-weight: 500; border: none; border-bottom: 2px solid transparent; background: transparent; color: var(--color-text-tertiary); cursor: pointer; font-family: var(--font-sans); transition: color 160ms, border-color 160ms;">
+            世界书
+          </button>
+        </div>
+
+        <!-- Tab content area -->
+        <div class="flex-1 overflow-y-auto no-scrollbar">
+
+          <!-- ── Tab: 角色卡 ── -->
+          <div id="panel-character-card" class="tab-panel" style="padding: 16px; display: block;">
+
+            <!-- Subtitle hint -->
+            <p style="font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--color-text-tertiary); margin-bottom: 16px;">
+              编辑角色卡。保存后写回 card.json + raw.json。
+            </p>
+
+            <!-- Name field -->
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">名称</label>
+              <input type="text" value="Lunara" style="width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'" />
+            </div>
+
+            <!-- Grouped section: 提示词与背景 -->
+            <div style="background: var(--color-bg-overlay); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); padding: 16px; margin-bottom: 16px;">
+              <p style="font-size: var(--font-size-sm); font-weight: 600; color: var(--color-text-primary); margin-bottom: 14px; font-family: var(--font-sans);">提示词与背景</p>
+
+              <!-- Description -->
+              <div style="margin-bottom: 12px;">
+                <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">描述</label>
+                <textarea rows="3" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">一位来自银月森林的精灵游侠，擅长月能魔法与弓术。性格沉静而敏锐，对自然有着深厚的敬畏。</textarea>
+              </div>
+
+              <!-- Personality -->
+              <div style="margin-bottom: 12px;">
+                <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">性格</label>
+                <textarea rows="2" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">沉静, 敏锐, 敬畏自然, 偶尔展现出温柔的一面</textarea>
+              </div>
+
+              <!-- Scenario -->
+              <div style="margin-bottom: 12px;">
+                <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">场景</label>
+                <textarea rows="2" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">{{user}} 在银月森林边缘遇到了正在巡逻的 Lunara。</textarea>
+              </div>
+
+              <!-- First message (开场白) -->
+              <div style="margin-bottom: 12px;">
+                <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">开场白</label>
+                <textarea rows="4" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">*树叶在月光下轻轻摇曳，一道银色的身影从树丛中走出。她将弓背在身后，警惕地打量着你。*
+
+"你是谁？这片森林不是普通旅人应该踏足的地方。" *她的声音平静却带着不容忽视的戒备。*</textarea>
+              </div>
+
+              <!-- System prompt (系统提示词) -->
+              <div style="margin-bottom: 12px;">
+                <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">系统提示词</label>
+                <textarea rows="4" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">[System note: Write Lunara's replies in third-person perspective. Maintain her calm and observant demeanor. Use *asterisks* for actions and "quotes" for dialogue. Keep responses between 3-5 paragraphs.]</textarea>
+              </div>
+
+              <!-- Example dialogue (对话示例) -->
+              <div>
+                <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">对话示例</label>
+                <textarea rows="4" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">&lt;START&gt;
+{{user}}: 你在这里巡逻多久了？
+{{char}}: *她微微侧头，目光扫过树冠间的银色光线。*
+"很久了。久到我已经记不清季节更迭了几轮。" *她的语气平淡，仿佛在叙述一件微不足道的事。*</textarea>
+              </div>
+            </div>
+
+            <!-- Action bar -->
+            <div class="flex items-center justify-between" style="padding-top: 8px;">
+              <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); font-family: var(--font-mono);">已加载</span>
+              <button style="height: 32px; padding: 0 16px; border: none; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-text-inverse); font-size: var(--font-size-sm); font-weight: 600; font-family: var(--font-sans); cursor: pointer; transition: background 160ms; white-space: nowrap;" onmouseenter="this.style.background='var(--color-primary-hover)'" onmouseleave="this.style.background='var(--color-primary)'" onfocus="this.style.outline='2px solid var(--color-primary)'; this.style.outlineOffset='2px'" onblur="this.style.outline='none'">
+                保存角色卡
+              </button>
+            </div>
+          </div>
+
+          <!-- ── Tab: 世界书 ── -->
+          <div id="panel-world-book" class="tab-panel" style="padding: 16px; display: none;">
+
+            <!-- Subtitle hint -->
+            <p style="font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--color-text-tertiary); margin-bottom: 16px;">
+              编辑世界书条目（keys 触发关键词，content 注入内容）。
+            </p>
+
+            <!-- Entry 1 (expanded) -->
+            <div class="wb-entry" style="border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden;">
+              <div class="flex items-center cursor-pointer" style="padding: 10px 12px; gap: 8px; background: var(--color-bg-surface);" onclick="this.parentElement.classList.toggle('collapsed')">
+                <i data-lucide="chevron-down" class="wb-chevron" style="width: 14px; height: 14px; color: var(--color-text-tertiary); transition: transform 160ms; flex-shrink: 0;"></i>
+                <span style="font-size: var(--font-size-sm); font-weight: 500; color: var(--color-text-primary); font-family: var(--font-sans); white-space: nowrap;">条目 #1</span>
+                <input type="text" value="银月森林, 月能" style="flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-subtle)'" />
+                <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); font-family: var(--font-mono); white-space: nowrap;">10</span>
+                <label class="flex items-center" style="gap: 4px; white-space: nowrap;">
+                  <input type="checkbox" checked style="accent-color: var(--color-primary); width: 14px; height: 14px; cursor: pointer;" />
+                  <span style="font-size: var(--font-size-xs); color: var(--color-text-secondary); font-family: var(--font-sans);">启用</span>
+                </label>
+                <button class="flex items-center justify-center" style="width: 24px; height: 24px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-tertiary); cursor: pointer; flex-shrink: 0; transition: color 120ms;" onmouseenter="this.style.color='var(--state-error)'" onmouseleave="this.style.color='var(--color-text-tertiary)'" aria-label="删除条目">
+                  <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+                </button>
+              </div>
+              <div class="wb-body" style="padding: 0 12px 12px 12px; border-top: 1px solid var(--color-border-subtle);">
+                <div style="padding-top: 10px;">
+                  <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">内容</label>
+                  <textarea rows="3" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">银月森林是大陆东部的古老森林，以夜间散发的银色光芒闻名。森林中的树木吸收月光能量，使得整片森林在夜晚如同被银色薄雾笼罩。这里是精灵游侠的领地，也是月能魔法最强的区域。</textarea>
+                </div>
+                <div style="margin-top: 8px;">
+                  <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">备注</label>
+                  <input type="text" value="核心世界观设定，始终注入" style="width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Entry 2 (collapsed) -->
+            <div class="wb-entry collapsed" style="border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden;">
+              <div class="flex items-center cursor-pointer" style="padding: 10px 12px; gap: 8px; background: var(--color-bg-surface);" onclick="this.parentElement.classList.toggle('collapsed')">
+                <i data-lucide="chevron-down" class="wb-chevron" style="width: 14px; height: 14px; color: var(--color-text-tertiary); transition: transform 160ms; flex-shrink: 0;"></i>
+                <span style="font-size: var(--font-size-sm); font-weight: 500; color: var(--color-text-primary); font-family: var(--font-sans); white-space: nowrap;">条目 #2</span>
+                <input type="text" value="月能魔法" style="flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-subtle)'" />
+                <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); font-family: var(--font-mono); white-space: nowrap;">8</span>
+                <label class="flex items-center" style="gap: 4px; white-space: nowrap;">
+                  <input type="checkbox" checked style="accent-color: var(--color-primary); width: 14px; height: 14px; cursor: pointer;" />
+                  <span style="font-size: var(--font-size-xs); color: var(--color-text-secondary); font-family: var(--font-sans);">启用</span>
+                </label>
+                <button class="flex items-center justify-center" style="width: 24px; height: 24px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-tertiary); cursor: pointer; flex-shrink: 0; transition: color 120ms;" onmouseenter="this.style.color='var(--state-error)'" onmouseleave="this.style.color='var(--color-text-tertiary)'" aria-label="删除条目">
+                  <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+                </button>
+              </div>
+              <div class="wb-body" style="padding: 0 12px 12px 12px; border-top: 1px solid var(--color-border-subtle);">
+                <div style="padding-top: 10px;">
+                  <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">内容</label>
+                  <textarea rows="3" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">月能魔法是银月森林精灵独有的魔法体系。施法者通过吸收和引导月光能量来施展法术，威力在满月之夜达到顶峰。常见的月能魔法包括月光箭矢、银色屏障和治愈之光。</textarea>
+                </div>
+                <div style="margin-top: 8px;">
+                  <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">备注</label>
+                  <input type="text" value="魔法体系说明" style="width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Entry 3 (collapsed) -->
+            <div class="wb-entry collapsed" style="border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden;">
+              <div class="flex items-center cursor-pointer" style="padding: 10px 12px; gap: 8px; background: var(--color-bg-surface);" onclick="this.parentElement.classList.toggle('collapsed')">
+                <i data-lucide="chevron-down" class="wb-chevron" style="width: 14px; height: 14px; color: var(--color-text-tertiary); transition: transform 160ms; flex-shrink: 0;"></i>
+                <span style="font-size: var(--font-size-sm); font-weight: 500; color: var(--color-text-primary); font-family: var(--font-sans); white-space: nowrap;">条目 #3</span>
+                <input type="text" value="游侠准则" style="flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-subtle)'" />
+                <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); font-family: var(--font-mono); white-space: nowrap;">5</span>
+                <label class="flex items-center" style="gap: 4px; white-space: nowrap;">
+                  <input type="checkbox" style="accent-color: var(--color-primary); width: 14px; height: 14px; cursor: pointer;" />
+                  <span style="font-size: var(--font-size-xs); color: var(--color-text-secondary); font-family: var(--font-sans);">启用</span>
+                </label>
+                <button class="flex items-center justify-center" style="width: 24px; height: 24px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-tertiary); cursor: pointer; flex-shrink: 0; transition: color 120ms;" onmouseenter="this.style.color='var(--state-error)'" onmouseleave="this.style.color='var(--color-text-tertiary)'" aria-label="删除条目">
+                  <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+                </button>
+              </div>
+              <div class="wb-body" style="padding: 0 12px 12px 12px; border-top: 1px solid var(--color-border-subtle);">
+                <div style="padding-top: 10px;">
+                  <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">内容</label>
+                  <textarea rows="3" style="width: 100%; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-sm); resize: vertical; outline: none; line-height: 1.5; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'">游侠准则是银月森林守护者遵循的行为规范：保护森林生灵不受侵害、维护自然平衡、不将月能魔法用于破坏目的、在森林受到威胁时挺身而出。</textarea>
+                </div>
+                <div style="margin-top: 8px;">
+                  <label style="display: block; font-size: var(--font-size-xs); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-family: var(--font-sans);">备注</label>
+                  <input type="text" value="补充设定，按需注入" style="width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); font-family: var(--font-sans); font-size: var(--font-size-xs); outline: none; transition: border-color 160ms;" onfocus="this.style.borderColor='var(--color-primary)'" onblur="this.style.borderColor='var(--color-border-default)'" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Action bar -->
+            <div class="flex items-center justify-between" style="padding-top: 8px;">
+              <button style="height: 32px; padding: 0 12px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: 500; font-family: var(--font-sans); cursor: pointer; transition: background 120ms, border-color 120ms; white-space: nowrap;" onmouseenter="this.style.background='var(--color-bg-overlay)'; this.style.borderColor='var(--color-border-strong)'" onmouseleave="this.style.background='transparent'; this.style.borderColor='var(--color-border-default)'" onfocus="this.style.outline='2px solid var(--color-primary)'; this.style.outlineOffset='2px'" onblur="this.style.outline='none'">
+                + 添加条目
+              </button>
+              <div class="flex items-center" style="gap: 8px;">
+                <span style="font-size: var(--font-size-xs); color: var(--color-text-tertiary); font-family: var(--font-mono);">3 条目</span>
+                <button style="height: 32px; padding: 0 16px; border: none; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-text-inverse); font-size: var(--font-size-sm); font-weight: 600; font-family: var(--font-sans); cursor: pointer; transition: background 160ms; white-space: nowrap;" onmouseenter="this.style.background='var(--color-primary-hover)'" onmouseleave="this.style.background='var(--color-primary)'" onfocus="this.style.outline='2px solid var(--color-primary)'; this.style.outlineOffset='2px'" onblur="this.style.outline='none'">
+                  保存世界书
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Bottom: ESC hint -->
+        <div class="shrink-0 flex items-center justify-center" style="height: 32px; border-top: 1px solid var(--color-border-subtle);">
+          <span style="font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--color-text-tertiary); opacity: 0.5;">ESC</span>
+        </div>
+
+      </div>
+
+      <!-- ── Tab switching logic ── -->
+      <style>
+        @media (prefers-reduced-motion: reduce) {
+          * { transition-duration: 0.01ms !important; }
+        }
+      </style>
+      <script>
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => {
+              b.style.borderBottomColor = 'transparent';
+              b.style.color = 'var(--color-text-tertiary)';
+            });
+            btn.style.borderBottomColor = 'var(--color-primary)';
+            btn.style.color = 'var(--color-primary)';
+            document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+            document.getElementById('panel-' + btn.dataset.tab).style.display = 'block';
+          });
+        });
+      </script>
+
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

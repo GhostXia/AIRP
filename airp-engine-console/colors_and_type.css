@@ -1,0 +1,80 @@
+/* AIRP Engine Console — Claude Code inspired, Light-first */
+/* Warm Anthropic palette on clean light surfaces, developer typography */
+
+:root {
+  /* ── Brand Primary: warm Anthropic clay/amber ── */
+  --color-primary: #C4653A;
+  --color-primary-hover: #D47750;
+  --color-primary-muted: rgba(196, 101, 58, 0.12);
+  --color-primary-subtle: rgba(196, 101, 58, 0.06);
+
+  /* ── Neutral Surface System (light mode default) ── */
+  --color-bg-base: #FAFAF8;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-elevated: #FFFFFF;
+  --color-bg-overlay: #F0EDEA;
+  --color-bg-input: #FFFFFF;
+
+  --color-border-default: #E0DCD8;
+  --color-border-subtle: #EBE8E4;
+  --color-border-strong: #C5C0BA;
+
+  /* ── Text ── */
+  --color-text-primary: #1A1A1E;
+  --color-text-secondary: #6B6560;
+  --color-text-tertiary: #9E9890;
+  --color-text-inverse: #FAFAF8;
+
+  /* ── State Colors ── */
+  --state-success: #3D8B5E;
+  --state-warning: #C48A2E;
+  --state-error: #C94444;
+  --state-info: #4A7FB5;
+
+  /* ── Shape ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+
+  /* ── Spacing ── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* ── Typography ── */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.65;
+}
+
+/* Dark mode overrides */
+.dark {
+  --color-bg-base: #1A1A1E;
+  --color-bg-surface: #222226;
+  --color-bg-elevated: #2A2A2F;
+  --color-bg-overlay: #2F2F35;
+  --color-bg-input: #2A2A2F;
+  --color-border-default: #38383F;
+  --color-border-subtle: #2F2F35;
+  --color-border-strong: #4A4A55;
+  --color-text-primary: #E8E4E0;
+  --color-text-secondary: #A09A94;
+  --color-text-tertiary: #706B65;
+  --color-text-inverse: #1A1A1E;
+  --color-primary-muted: rgba(196, 101, 58, 0.15);
+  --color-primary-subtle: rgba(196, 101, 58, 0.08);
+}

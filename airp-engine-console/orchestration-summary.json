@@ -1,0 +1,58 @@
+{
+  "project": {
+    "name": "AIRP Engine Console",
+    "designRead": "developer console / RP engine testers / warm Anthropic light / medium density / clean professional",
+    "designDials": { "layoutVariance": 2, "motionIntensity": 1, "visualDensity": 3 },
+    "styleDefinitionBrief": "Claude Code inspired light mode — warm clay/amber accent (#C4653A) on cream-white surfaces, clean JetBrains Mono + Inter, subtle warm borders, developer tool feel.",
+    "styleContinuityAnchors": {
+      "colorSystem": "primary: #C4653A (warm clay/amber), bg: #FAFAF8 → #FFFFFF surface stack, text: #1A1A1E → #9E9890",
+      "shapeSystem": "6/10/14px radius scale, 9999px full",
+      "typographySystem": { "title": "'Inter', sans-serif", "body": "'Inter', sans-serif", "mono": "'JetBrains Mono', 'Cascadia Code', monospace" },
+      "spacingSystem": "4/8/12/16/24/32/48px scale",
+      "surfaceAndDepth": "white cards on cream base, 1px border separators, no shadows on static elements",
+      "componentLanguage": "clean white card panels, warm border separators, monospace for code/data, sans-serif for UI",
+      "imageryAndIconography": "minimal icons, status-dot indicators, no decorative images",
+      "interactionTone": "subtle hover feedback only, no animations"
+    },
+    "sharedProjectShellContract": {
+      "navigation": "top bar with AIRP logo + engine URL + connection status + settings gear",
+      "layout": "left sidebar (300px) + center content + right event log (collapsible)",
+      "surfaceModel": "bg-base #FAFAF8 → bg-surface #FFFFFF cards → bg-input #FFFFFF, border-default #E0DCD8 separators",
+      "primaryAction": "solid bg-primary buttons, border-default secondary buttons",
+      "typography": "Inter for labels, JetBrains Mono for data/code/event-log",
+      "radiusScale": "6px inputs, 10px cards/panels, 14px modal/overlay",
+      "mode": "light-first (no class on html, dark via .dark class)"
+    },
+    "generationTree": {}
+  },
+  "designSource": {
+    "styleConstraints": { "radiusMax": 14, "staticShadowAlphaMax": 0.03 },
+    "styleConstraints": { "spacingBase": 8, "fontSizeBody": 13, "fontSizeMin": 11, "controlHeightDefault": 32, "controlHeightLarge": 36 }
+  },
+  "pages": [
+    {
+      "nodeId": "page-characters",
+      "title": "角色列表",
+      "htmlSrc": "pages/characters.html",
+      "pageIndex": 1,
+      "visualNorthStar": "Clean light Claude Code — warm cream surface, character cards with avatar placeholders, prominent LLM config panel",
+      "compositionPattern": "left sidebar config + center character grid + right collapsible event log"
+    },
+    {
+      "nodeId": "page-session",
+      "title": "对话空间",
+      "htmlSrc": "pages/session.html",
+      "pageIndex": 2,
+      "visualNorthStar": "Roleplay workspace — character context header, session list in sidebar, chat area with streaming cursor",
+      "compositionPattern": "sidebar (character info + session list) + center chat + right event log"
+    },
+    {
+      "nodeId": "page-workbench",
+      "title": "工作台",
+      "htmlSrc": "pages/workbench.html",
+      "pageIndex": 3,
+      "visualNorthStar": "Focused editing surface — tabbed card/lorebook editor with clean form hierarchy and live status",
+      "compositionPattern": "overlay panel with tabbed editing surface, clean form layout"
+    }
+  ]
+}
