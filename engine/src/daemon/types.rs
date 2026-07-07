@@ -76,6 +76,9 @@ pub struct RollbackRequest {
     pub character_id: CharacterId,
     /// 回滚到的消息索引（保留 [0, message_index) 区间，丢弃其后所有消息）。
     pub message_index: usize,
+    /// A6：可选 session ID。指定则操作 `characters/{id}/sessions/{session_id}/history/`；
+    /// 省略则回退 legacy per-character `characters/{id}/history/`。
+    pub session_id: Option<SessionId>,
 }
 
 /// `POST /v1/chat/regen` 请求体。
@@ -84,6 +87,8 @@ pub struct RollbackRequest {
 pub struct RegenRequest {
     /// 目标角色 ID；删除该角色 ChatLog 的最后一条消息。
     pub character_id: CharacterId,
+    /// A6：可选 session ID（语义同 `RollbackRequest.session_id`）。
+    pub session_id: Option<SessionId>,
 }
 
 /// `POST /v1/chat/history` 请求体。
@@ -92,4 +97,6 @@ pub struct RegenRequest {
 pub struct HistoryQuery {
     /// 待查询角色 ID。
     pub character_id: CharacterId,
+    /// A6：可选 session ID（语义同 `RollbackRequest.session_id`）。
+    pub session_id: Option<SessionId>,
 }

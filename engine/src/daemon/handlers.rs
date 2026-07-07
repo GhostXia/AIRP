@@ -205,7 +205,12 @@ pub(super) async fn get_chat_history(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(query): Json<HistoryQuery>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    let log = ChatLog::load_or_create(&state.data_root, query.character_id.as_str())?;
+    // A6：session_id 指定时走 session-scoped 路径，省略时回退 legacy per-character。
+    let log = ChatLog::load_or_create_for_session(
+        &state.data_root,
+        query.character_id.as_str(),
+        query.session_id.as_ref(),
+    )?;
     Ok(Json(log))
 }
 
@@ -214,7 +219,11 @@ pub(super) async fn rollback_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RollbackRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    let mut log = ChatLog::load_or_create(&state.data_root, req.character_id.as_str())?;
+    let mut log = ChatLog::load_or_create_for_session(
+        &state.data_root,
+        req.character_id.as_str(),
+        req.session_id.as_ref(),
+    )?;
     log.rollback_to(&state.data_root, req.message_index)?;
     Ok(Json(log))
 }
@@ -224,7 +233,11 @@ pub(super) async fn regen_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RegenRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    let mut log = ChatLog::load_or_create(&state.data_root, req.character_id.as_str())?;
+    let mut log = ChatLog::load_or_create_for_session(
+        &state.data_root,
+        req.character_id.as_str(),
+        req.session_id.as_ref(),
+    )?;
     if !log.messages.is_empty() {
         log.delete_last_n(&state.data_root, 1)?;
     }
@@ -325,7 +338,7 @@ pub(crate) fn import_card_to_disk(
             .unwrap_or(false);
         if !allow_local_path {
             return Err(AirpError::BadRequest(
-                    "card_path 任意路径读已禁用（AIRP_ALLOW_LOCAL_PATH 未设）。Web/远端调用方请用 multipart 上传或 card_png_base64/card_json。".to_string(),
+                    "card_path 任意路径读已禁用（AIRP_ALLOW_LOCAL_PATH 未设）。Web/远端调用方请用 card_png_base64 或 card_json 字段（JSON body，非 multipart）。".to_string(),
                 ));
         }
         let bytes = fs::read(path)
