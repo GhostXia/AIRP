@@ -46,7 +46,14 @@ pub struct ChatLog {
     pub created_at: String,
     /// ISO 8601 last update timestamp
     pub updated_at: String,
-    #[serde(skip, default)]
+    /// #85 O1：当前 ChatLog 所属的 scope session_id（由 `POST /v1/sessions/:character_id`
+    /// 返回的 UUID）。`None` 表示 legacy per-character log。
+    ///
+    /// HTTP 响应时序列化（`Some` 才出现，`None` skip），让前端能把它与 session 列表
+    /// 中的 id 关联——`ChatLog.session_id` 是内部 UUID，与 scope session_id 不同。
+    /// 持久化时不写入（jsonl 用 `StoredMessage`，meta 用 `ChatLogMeta`，均不含此字段）；
+    /// 反序列化时 `#[serde(default)]` 给 `None`，legacy JSON 迁移安全。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     scope_session_id: Option<String>,
 }
 
