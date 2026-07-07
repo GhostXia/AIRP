@@ -1,0 +1,428 @@
+﻿<!DOCTYPE html>
+<html lang="zh" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIRP Engine Console — 对话空间</title>
+    <style id="theme-vars">
+/* AIRP Engine Console — Claude Code inspired, Light-first */
+/* Warm Anthropic palette on clean light surfaces, developer typography */
+
+:root {
+  /* ── Brand Primary: warm Anthropic clay/amber ── */
+  --color-primary: #C4653A;
+  --color-primary-hover: #D47750;
+  --color-primary-muted: rgba(196, 101, 58, 0.12);
+  --color-primary-subtle: rgba(196, 101, 58, 0.06);
+
+  /* ── Neutral Surface System (light mode default) ── */
+  --color-bg-base: #FAFAF8;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-elevated: #FFFFFF;
+  --color-bg-overlay: #F0EDEA;
+  --color-bg-input: #FFFFFF;
+
+  --color-border-default: #E0DCD8;
+  --color-border-subtle: #EBE8E4;
+  --color-border-strong: #C5C0BA;
+
+  /* ── Text ── */
+  --color-text-primary: #1A1A1E;
+  --color-text-secondary: #6B6560;
+  --color-text-tertiary: #9E9890;
+  --color-text-inverse: #FAFAF8;
+
+  /* ── State Colors ── */
+  --state-success: #3D8B5E;
+  --state-warning: #C48A2E;
+  --state-error: #C94444;
+  --state-info: #4A7FB5;
+
+  /* ── Shape ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+
+  /* ── Spacing ── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* ── Typography ── */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.65;
+}
+
+/* Dark mode overrides */
+.dark {
+  --color-bg-base: #1A1A1E;
+  --color-bg-surface: #222226;
+  --color-bg-elevated: #2A2A2F;
+  --color-bg-overlay: #2F2F35;
+  --color-bg-input: #2A2A2F;
+  --color-border-default: #38383F;
+  --color-border-subtle: #2F2F35;
+  --color-border-strong: #4A4A55;
+  --color-text-primary: #E8E4E0;
+  --color-text-secondary: #A09A94;
+  --color-text-tertiary: #706B65;
+  --color-text-inverse: #1A1A1E;
+  --color-primary-muted: rgba(196, 101, 58, 0.15);
+  --color-primary-subtle: rgba(196, 101, 58, 0.08);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-bg-base); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main class="h-screen flex flex-col overflow-hidden" style="font-family: var(--font-sans);">
+        <!-- ═══ Top Bar ═══ -->
+        <header class="flex items-center h-12 px-4 bg-white border-b shrink-0" style="border-color: var(--color-border-default); min-height: 48px;">
+            <div class="flex items-center gap-3 w-auto">
+                <button data-dom-id="back-characters" class="flex items-center justify-center w-7 h-7 rounded-md hover:bg-[var(--color-bg-overlay)] transition-colors duration-150" style="color: var(--color-text-secondary);" aria-label="返回角色列表">
+                    <i data-lucide="arrow-left" class="w-4 h-4"></i>
+                </button>
+                <span class="text-sm font-semibold tracking-tight" style="color: var(--color-text-primary);">AIRP</span>
+                <span class="w-1.5 h-1.5 rounded-full" style="background: var(--color-primary);"></span>
+            </div>
+            <div class="flex items-center gap-2 flex-1 justify-center max-w-md mx-4">
+                <input type="text" value="http://localhost:8080" class="h-7 px-2 text-xs rounded-md border flex-1 min-w-0" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);" readonly>
+                <input type="text" value="Bearer sk-...abc" class="h-7 px-2 text-xs rounded-md border w-32" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-tertiary);" readonly>
+                <button class="flex items-center justify-center h-7 px-3 rounded-md text-xs font-semibold whitespace-nowrap transition-colors duration-150" style="background: var(--color-primary); color: var(--color-text-inverse); font-size: 11px;">
+                    连接
+                </button>
+            </div>
+            <div class="flex items-center gap-3 w-auto">
+                <span class="flex items-center gap-1.5 text-xs" style="color: var(--state-success); font-size: 11px;">
+                    <span class="w-1.5 h-1.5 rounded-full" style="background: var(--state-success);"></span>
+                    已连接
+                </span>
+                <button class="flex items-center justify-center w-7 h-7 rounded-md hover:bg-[var(--color-bg-overlay)] transition-colors duration-150" style="color: var(--color-text-tertiary);" aria-label="设置">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- ═══ Main Layout ═══ -->
+        <div class="flex flex-1 overflow-hidden">
+
+            <!-- ── Left Sidebar ── -->
+            <aside class="w-[300px] bg-white border-r flex flex-col shrink-0" style="border-color: var(--color-border-default);">
+                <!-- Section 1: Character Info -->
+                <div class="p-4 border-b" style="border-color: var(--color-border-default);">
+                    <a href="#" data-dom-id="back-characters" class="text-xs mb-3 block hover:underline" style="color: var(--color-text-tertiary); font-size: 12px;">
+                        ← 返回角色列表
+                    </a>
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="flex items-center justify-center w-14 h-14 rounded-full shrink-0" style="background: var(--color-primary-muted); color: var(--color-primary); font-size: 20px; font-weight: 600;">
+                            林
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary); font-size: 16px;">林婉清</div>
+                            <p class="text-xs mt-0.5 leading-normal line-clamp-2" style="color: var(--color-text-tertiary); font-size: 12px;">
+                                温婉知性的古典文学研究者，喜爱在午后品茶翻阅古籍，对茶道有独到见解。
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex gap-2 mt-3">
+                        <button data-dom-id="nav-workbench" class="flex-1 flex items-center justify-center h-8 rounded-md text-xs font-semibold whitespace-nowrap transition-colors duration-150" style="background: var(--color-primary); color: var(--color-text-inverse);">
+                            工作台
+                        </button>
+                        <button class="flex-1 flex items-center justify-center h-8 rounded-md text-xs font-semibold whitespace-nowrap border transition-colors duration-150" style="border-color: var(--color-border-default); color: var(--color-text-secondary);">
+                            重解
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 2: Sessions -->
+                <div class="flex flex-col flex-1 overflow-hidden">
+                    <div class="flex items-center justify-between px-4 py-3">
+                        <span class="text-xs font-semibold" style="color: var(--color-text-primary); font-size: 13px;">会话</span>
+                        <button class="text-xs font-medium whitespace-nowrap transition-colors duration-150 hover:opacity-80" style="color: var(--color-primary); font-size: 12px;">
+                            新建对话
+                        </button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto px-2">
+                        <!-- Active Session -->
+                        <div class="rounded-md px-3 py-2.5 cursor-pointer mb-1" style="background: var(--color-primary-subtle); border-left: 3px solid var(--color-primary);">
+                            <div class="text-sm truncate" style="color: var(--color-text-primary); font-size: 14px;">下午茶的时光</div>
+                            <div class="text-xs truncate mt-0.5" style="color: var(--color-text-tertiary); font-size: 12px;">那日午后阳光正好…</div>
+                            <div class="text-right mt-1" style="color: var(--color-text-tertiary); font-size: 11px;">14:32</div>
+                        </div>
+                        <!-- Session 2 -->
+                        <div class="rounded-md px-3 py-2.5 cursor-pointer mb-1 border-l-[3px] border-transparent hover:bg-[var(--color-primary-subtle)] transition-colors duration-150" style="border-left: 3px solid transparent;">
+                            <div class="text-sm truncate" style="color: var(--color-text-primary); font-size: 14px;">图书馆奇遇</div>
+                            <div class="text-xs truncate mt-0.5" style="color: var(--color-text-tertiary); font-size: 12px;">在书架间偶然相遇…</div>
+                            <div class="text-right mt-1" style="color: var(--color-text-tertiary); font-size: 11px;">昨天</div>
+                        </div>
+                        <!-- Session 3 -->
+                        <div class="rounded-md px-3 py-2.5 cursor-pointer mb-1 border-l-[3px] border-transparent hover:bg-[var(--color-primary-subtle)] transition-colors duration-150" style="border-left: 3px solid transparent;">
+                            <div class="text-sm truncate" style="color: var(--color-text-primary); font-size: 14px;">雨天漫步</div>
+                            <div class="text-xs truncate mt-0.5" style="color: var(--color-text-tertiary); font-size: 12px;">细雨中撑着伞走过…</div>
+                            <div class="text-right mt-1" style="color: var(--color-text-tertiary); font-size: 11px;">3天前</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 3: Status (Collapsible, closed) -->
+                <div class="border-t" style="border-color: var(--color-border-default);">
+                    <button class="flex items-center justify-between w-full px-4 py-2.5 text-xs font-semibold transition-colors duration-150 hover:bg-[var(--color-primary-subtle)]" style="color: var(--color-text-primary); font-size: 13px;" data-collapse-toggle="status-section">
+                        <span>状态</span>
+                        <i data-lucide="chevron-right" class="w-3.5 h-3.5" style="color: var(--color-text-tertiary);"></i>
+                    </button>
+                    <div id="status-section" class="hidden px-4 pb-3">
+                        <pre class="text-xs overflow-auto rounded-md p-2 leading-normal" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-base); color: var(--color-text-secondary); border: 1px solid var(--color-border-subtle); max-height: 120px;">{
+  "session_id": "sess_7f3a",
+  "character": "林婉清",
+  "turn_count": 5,
+  "last_model": "claude-sonnet",
+  "state": "idle"
+}</pre>
+                        <div class="flex items-center gap-2 mt-2">
+                            <span class="text-xs" style="color: var(--color-text-tertiary); font-size: 11px;">State History</span>
+                            <input type="number" value="20" min="1" max="100" class="w-14 h-6 px-1.5 text-xs rounded border text-center" style="font-family: var(--font-mono); font-size: 11px; border-color: var(--color-border-default);">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 4: Utility (Collapsible, closed) -->
+                <div class="border-t" style="border-color: var(--color-border-default);">
+                    <!-- Agent Run -->
+                    <button class="flex items-center justify-between w-full px-4 py-2.5 text-xs font-semibold transition-colors duration-150 hover:bg-[var(--color-primary-subtle)]" style="color: var(--color-text-primary); font-size: 13px;" data-collapse-toggle="agent-run-section">
+                        <span>Agent Run</span>
+                        <i data-lucide="chevron-right" class="w-3.5 h-3.5" style="color: var(--color-text-tertiary);"></i>
+                    </button>
+                    <div id="agent-run-section" class="hidden px-4 pb-3">
+                        <textarea placeholder="Agent input..." class="w-full h-16 px-2 py-1.5 text-xs rounded-md border resize-none" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"></textarea>
+                        <div class="flex items-center gap-2 mt-2">
+                            <label class="text-xs" style="color: var(--color-text-tertiary); font-size: 11px;">max_steps</label>
+                            <input type="number" value="10" min="1" class="w-12 h-6 px-1.5 text-xs rounded border text-center" style="font-family: var(--font-mono); font-size: 11px; border-color: var(--color-border-default);">
+                        </div>
+                        <div class="flex gap-2 mt-2">
+                            <button class="flex-1 flex items-center justify-center h-7 rounded-md text-xs font-semibold" style="background: var(--color-primary); color: var(--color-text-inverse); font-size: 11px;">Run</button>
+                            <button class="flex-1 flex items-center justify-center h-7 rounded-md text-xs border" style="border-color: var(--color-border-default); color: var(--color-text-secondary); font-size: 11px;">Clear</button>
+                        </div>
+                        <pre class="mt-2 text-xs overflow-auto rounded-md p-2 leading-normal" style="font-family: var(--font-mono); font-size: 11px; background: var(--color-bg-base); color: var(--color-text-secondary); border: 1px solid var(--color-border-subtle); max-height: 80px;"><span style="color: var(--state-info);">[info]</span> Agent ready
+<span style="color: var(--state-success);">[done]</span> Turn completed</pre>
+                    </div>
+
+                    <!-- Concurrency Test -->
+                    <button class="flex items-center justify-between w-full px-4 py-2.5 text-xs font-semibold transition-colors duration-150 hover:bg-[var(--color-primary-subtle)]" style="color: var(--color-text-primary); font-size: 13px;" data-collapse-toggle="concurrency-section">
+                        <span>并发测试</span>
+                        <i data-lucide="chevron-right" class="w-3.5 h-3.5" style="color: var(--color-text-tertiary);"></i>
+                    </button>
+                    <div id="concurrency-section" class="hidden px-4 pb-3">
+                        <p class="text-xs leading-normal mb-2" style="color: var(--color-text-tertiary); font-size: 11px;">模拟多轮并发请求以测试引擎稳定性。</p>
+                        <button class="w-full flex items-center justify-center h-7 rounded-md text-xs border" style="border-color: var(--color-border-default); color: var(--color-text-secondary); font-size: 11px;">开始测试</button>
+                    </div>
+
+                    <!-- Diagnostics -->
+                    <button class="flex items-center justify-between w-full px-4 py-2.5 text-xs font-semibold transition-colors duration-150 hover:bg-[var(--color-primary-subtle)]" style="color: var(--color-text-primary); font-size: 13px;" data-collapse-toggle="diagnostics-section">
+                        <span>诊断</span>
+                        <i data-lucide="chevron-right" class="w-3.5 h-3.5" style="color: var(--color-text-tertiary);"></i>
+                    </button>
+                    <div id="diagnostics-section" class="hidden px-4 pb-3">
+                        <div class="flex gap-2">
+                            <button class="flex-1 flex items-center justify-center h-7 rounded-md text-xs font-semibold" style="background: var(--color-primary); color: var(--color-text-inverse); font-size: 11px;">一键诊断</button>
+                            <button class="flex-1 flex items-center justify-center h-7 rounded-md text-xs border" style="border-color: var(--color-border-default); color: var(--color-text-secondary); font-size: 11px;">复制摘要</button>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- ── Center Panel ── -->
+            <div class="flex-1 flex flex-col overflow-hidden" style="background: var(--color-bg-base);">
+                <!-- Chat Log -->
+                <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+                    <!-- Message 1: User -->
+                    <div class="flex flex-col max-w-2xl ml-auto">
+                        <span class="text-xs font-medium mb-1 ml-1" style="color: var(--color-primary); font-size: 11px;">User</span>
+                        <div class="bg-white rounded-md px-4 py-3 text-sm leading-relaxed" style="border-left: 3px solid var(--color-primary); font-size: 13px; color: var(--color-text-primary);">
+                            婉清，今天书店新到了一批关于宋代茶道的古籍，要不要一起去看看？
+                        </div>
+                    </div>
+
+                    <!-- Message 2: Assistant -->
+                    <div class="flex flex-col max-w-2xl">
+                        <span class="text-xs font-medium mb-1 ml-1" style="color: var(--color-text-tertiary); font-size: 11px;">Assistant</span>
+                        <div class="px-4 py-3 text-sm leading-relaxed border-b" style="font-size: 13px; color: var(--color-text-primary); border-color: var(--color-border-subtle);">
+                            真的吗？那太好了。我最近正在研究<em>《茶经》</em>里关于建窑茶盏的记载，如果能找到相关的史料就更好了。午后一起去如何？
+                        </div>
+                    </div>
+
+                    <!-- Message 3: User -->
+                    <div class="flex flex-col max-w-2xl ml-auto">
+                        <span class="text-xs font-medium mb-1 ml-1" style="color: var(--color-primary); font-size: 11px;">User</span>
+                        <div class="bg-white rounded-md px-4 py-3 text-sm leading-relaxed" style="border-left: 3px solid var(--color-primary); font-size: 13px; color: var(--color-text-primary);">
+                            没问题，我在老街那家<code class="px-1 py-0.5 rounded text-xs" style="font-family: var(--font-mono); font-size: 12px; background: var(--color-bg-base); border: 1px solid var(--color-border-subtle);">青瓷书坊</code>等你，先帮你占个好位置。
+                        </div>
+                    </div>
+
+                    <!-- Message 4: Assistant -->
+                    <div class="flex flex-col max-w-2xl">
+                        <span class="text-xs font-medium mb-1 ml-1" style="color: var(--color-text-tertiary); font-size: 11px;">Assistant</span>
+                        <div class="px-4 py-3 text-sm leading-relaxed border-b" style="font-size: 13px; color: var(--color-text-primary); border-color: var(--color-border-subtle);">
+                            你总是这么贴心。我带一壶刚泡好的<strong>白毫银针</strong>过去，配上书店里那份安静的氛围，应该会很惬意吧。
+                        </div>
+                    </div>
+
+                    <!-- Message 5: User -->
+                    <div class="flex flex-col max-w-2xl ml-auto">
+                        <span class="text-xs font-medium mb-1 ml-1" style="color: var(--color-primary); font-size: 11px;">User</span>
+                        <div class="bg-white rounded-md px-4 py-3 text-sm leading-relaxed" style="border-left: 3px solid var(--color-primary); font-size: 13px; color: var(--color-text-primary);">
+                            白毫银针配古籍，光是想想就很期待了。对了，上次你说的那个建盏釉色的变化规律，今天能给我讲讲吗？
+                        </div>
+                    </div>
+
+                    <!-- Message 6: Assistant (Streaming) -->
+                    <div class="flex flex-col max-w-2xl">
+                        <span class="text-xs font-medium mb-1 ml-1" style="color: var(--color-text-tertiary); font-size: 11px;">Assistant</span>
+                        <div class="px-4 py-3 text-sm leading-relaxed" style="font-size: 13px; color: var(--color-text-primary);">
+                            当然可以。建盏的釉色变化其实很有意思，主要受窑温和还原气氛的影响。最经典的当属<strong>兔毫</strong>和<strong>油滴</strong>两种——<span class="inline-block w-[2px] h-[16px] align-text-bottom ml-0.5" style="background: var(--color-text-primary); animation: blink 1s step-end infinite;"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Composer -->
+                <div class="border-t bg-white px-6 py-4" style="border-color: var(--color-border-default);">
+                    <textarea rows="3" placeholder="输入消息… (Ctrl+Enter 发送)" class="w-full px-3 py-2 text-sm rounded-md border resize-none leading-relaxed" style="font-size: 13px; background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"></textarea>
+                    <div class="flex items-center gap-2 mt-2">
+                        <button class="flex items-center justify-center h-8 px-4 rounded-md text-xs font-semibold whitespace-nowrap transition-colors duration-150" style="background: var(--color-primary); color: var(--color-text-inverse);">
+                            发送
+                        </button>
+                        <button class="hidden items-center justify-center h-8 px-4 rounded-md text-xs font-semibold whitespace-nowrap transition-colors duration-150" style="background: var(--state-error); color: white;">
+                            停止
+                        </button>
+                        <button class="flex items-center justify-center gap-1 h-8 px-3 rounded-md text-xs border whitespace-nowrap transition-colors duration-150" style="border-color: var(--color-border-default); color: var(--color-text-secondary); font-size: 11px;">
+                            <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+                            刷新历史
+                        </button>
+                        <button class="flex items-center justify-center gap-1 h-8 px-3 rounded-md text-xs border whitespace-nowrap transition-colors duration-150" style="border-color: var(--color-border-default); color: var(--color-text-secondary); font-size: 11px;">
+                            <i data-lucide="rotate-ccw" class="w-3 h-3"></i>
+                            Regenerate
+                        </button>
+                        <button class="flex items-center justify-center gap-1 h-8 px-3 rounded-md text-xs border whitespace-nowrap transition-colors duration-150" style="border-color: var(--color-border-default); color: var(--color-text-secondary); font-size: 11px;">
+                            <i data-lucide="undo-2" class="w-3 h-3"></i>
+                            Rollback
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Right Panel (Event Log) ── -->
+            <aside id="event-log-panel" class="w-[280px] bg-white border-l flex flex-col shrink-0" style="border-color: var(--color-border-default);">
+                <div class="flex items-center justify-between px-4 py-3 border-b" style="border-color: var(--color-border-default);">
+                    <span class="text-xs font-semibold" style="color: var(--color-text-primary); font-size: 13px;">Event Log</span>
+                    <div class="flex items-center gap-1">
+                        <button class="flex items-center justify-center w-6 h-6 rounded hover:bg-[var(--color-bg-overlay)] transition-colors duration-150" style="color: var(--color-text-tertiary);" aria-label="清除日志">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                        <button class="flex items-center justify-center w-6 h-6 rounded hover:bg-[var(--color-bg-overlay)] transition-colors duration-150" style="color: var(--color-text-tertiary);" aria-label="收起面板">
+                            <i data-lucide="panel-right-close" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1.5">
+                    <!-- Event 1 -->
+                    <div class="rounded-md px-2.5 py-2" style="background: var(--color-bg-base); border: 1px solid var(--color-border-subtle);">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: var(--state-success);"></span>
+                            <span class="text-xs font-medium truncate" style="color: var(--color-text-primary); font-size: 11px;">session.created</span>
+                            <span class="ml-auto shrink-0" style="color: var(--color-text-tertiary); font-size: 10px; font-family: var(--font-mono);">14:30:01</span>
+                        </div>
+                        <p class="text-xs leading-normal truncate" style="color: var(--color-text-tertiary); font-size: 11px;">Session "下午茶的时光" created for 林婉清</p>
+                    </div>
+                    <!-- Event 2 -->
+                    <div class="rounded-md px-2.5 py-2" style="background: var(--color-bg-base); border: 1px solid var(--color-border-subtle);">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: var(--state-info);"></span>
+                            <span class="text-xs font-medium truncate" style="color: var(--color-text-primary); font-size: 11px;">llm.request</span>
+                            <span class="ml-auto shrink-0" style="color: var(--color-text-tertiary); font-size: 10px; font-family: var(--font-mono);">14:30:03</span>
+                        </div>
+                        <p class="text-xs leading-normal truncate" style="color: var(--color-text-tertiary); font-size: 11px;">claude-sonnet turn=1 tokens_in=128</p>
+                    </div>
+                    <!-- Event 3 -->
+                    <div class="rounded-md px-2.5 py-2" style="background: var(--color-bg-base); border: 1px solid var(--color-border-subtle);">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: var(--state-success);"></span>
+                            <span class="text-xs font-medium truncate" style="color: var(--color-text-primary); font-size: 11px;">llm.response</span>
+                            <span class="ml-auto shrink-0" style="color: var(--color-text-tertiary); font-size: 10px; font-family: var(--font-mono);">14:30:08</span>
+                        </div>
+                        <p class="text-xs leading-normal truncate" style="color: var(--color-text-tertiary); font-size: 11px;">tokens_out=256 latency=4.2s</p>
+                    </div>
+                    <!-- Event 4 -->
+                    <div class="rounded-md px-2.5 py-2" style="background: var(--color-bg-base); border: 1px solid var(--color-border-subtle);">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: var(--state-warning);"></span>
+                            <span class="text-xs font-medium truncate" style="color: var(--color-text-primary); font-size: 11px;">state.snapshot</span>
+                            <span class="ml-auto shrink-0" style="color: var(--color-text-tertiary); font-size: 10px; font-family: var(--font-mono);">14:32:15</span>
+                        </div>
+                        <p class="text-xs leading-normal truncate" style="color: var(--color-text-tertiary); font-size: 11px;">Auto-saved session state (turn=5)</p>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </main>
+    <script>lucide.createIcons();</script>
+    <style>
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+        }
+    </style>
+    <script>
+        document.querySelectorAll('[data-collapse-toggle]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const target = document.getElementById(btn.getAttribute('data-collapse-toggle'));
+                if (target) target.classList.toggle('hidden');
+            });
+        });
+    </script>
+</body>
+</html>
+

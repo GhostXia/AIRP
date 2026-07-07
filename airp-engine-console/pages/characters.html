@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIRP Engine Console</title>
+    <style id="theme-vars">
+/* AIRP Engine Console — Claude Code inspired, Light-first */
+/* Warm Anthropic palette on clean light surfaces, developer typography */
+
+:root {
+  /* ── Brand Primary: warm Anthropic clay/amber ── */
+  --color-primary: #C4653A;
+  --color-primary-hover: #D47750;
+  --color-primary-muted: rgba(196, 101, 58, 0.12);
+  --color-primary-subtle: rgba(196, 101, 58, 0.06);
+
+  /* ── Neutral Surface System (light mode default) ── */
+  --color-bg-base: #FAFAF8;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-elevated: #FFFFFF;
+  --color-bg-overlay: #F0EDEA;
+  --color-bg-input: #FFFFFF;
+
+  --color-border-default: #E0DCD8;
+  --color-border-subtle: #EBE8E4;
+  --color-border-strong: #C5C0BA;
+
+  /* ── Text ── */
+  --color-text-primary: #1A1A1E;
+  --color-text-secondary: #6B6560;
+  --color-text-tertiary: #9E9890;
+  --color-text-inverse: #FAFAF8;
+
+  /* ── State Colors ── */
+  --state-success: #3D8B5E;
+  --state-warning: #C48A2E;
+  --state-error: #C94444;
+  --state-info: #4A7FB5;
+
+  /* ── Shape ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+
+  /* ── Spacing ── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* ── Typography ── */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.65;
+}
+
+/* Dark mode overrides */
+.dark {
+  --color-bg-base: #1A1A1E;
+  --color-bg-surface: #222226;
+  --color-bg-elevated: #2A2A2F;
+  --color-bg-overlay: #2F2F35;
+  --color-bg-input: #2A2A2F;
+  --color-border-default: #38383F;
+  --color-border-subtle: #2F2F35;
+  --color-border-strong: #4A4A55;
+  --color-text-primary: #E8E4E0;
+  --color-text-secondary: #A09A94;
+  --color-text-tertiary: #706B65;
+  --color-text-inverse: #1A1A1E;
+  --color-primary-muted: rgba(196, 101, 58, 0.15);
+  --color-primary-subtle: rgba(196, 101, 58, 0.08);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-bg-base); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased" style="font-family: var(--font-sans); margin: 0; padding: 0;">
+
+<!-- Top Bar -->
+<header class="fixed top-0 left-0 right-0 z-50 flex items-center h-12 px-4 gap-3 border-b"
+        style="background: var(--color-bg-surface); border-color: var(--color-border-default);">
+  <!-- Logo -->
+  <div class="flex items-center gap-1.5 shrink-0">
+    <span class="text-sm font-semibold tracking-tight" style="color: var(--color-text-primary);">AIRP</span>
+    <span class="inline-block w-2 h-2 rounded-full" style="background: var(--color-primary);"></span>
+  </div>
+
+  <!-- Engine URL -->
+  <div class="flex items-center gap-2 ml-4">
+    <input type="text" placeholder="http://localhost:8080"
+           class="h-7 px-2.5 text-xs rounded-md border outline-none transition-colors duration-150"
+           style="width: 280px; font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"
+           onfocus="this.style.borderColor='var(--color-primary)'; this.style.boxShadow='0 0 0 2px var(--color-primary-muted)'"
+           onblur="this.style.borderColor='var(--color-border-default)'; this.style.boxShadow='none'">
+    <input type="password" placeholder="Bearer token..."
+           class="h-7 px-2.5 text-xs rounded-md border outline-none transition-colors duration-150"
+           style="width: 200px; font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"
+           onfocus="this.style.borderColor='var(--color-primary)'; this.style.boxShadow='0 0 0 2px var(--color-primary-muted)'"
+           onblur="this.style.borderColor='var(--color-border-default)'; this.style.boxShadow='none'">
+    <button class="h-7 px-3 text-xs font-semibold rounded-md text-white transition-all duration-150 whitespace-nowrap cursor-pointer inline-flex items-center justify-center"
+            style="background: var(--color-primary); font-size: var(--font-size-sm);"
+            onmouseenter="this.style.background='var(--color-primary-hover)'; this.style.transform='translateY(-1px)'"
+            onmouseleave="this.style.background='var(--color-primary)'; this.style.transform='translateY(0)'"
+            onmousedown="this.style.transform='translateY(0)'"
+            data-dom-id="btn-connect">
+      连接
+    </button>
+  </div>
+
+  <!-- Connection Status -->
+  <div class="flex items-center gap-1.5 ml-2 shrink-0">
+    <span class="inline-block w-2.5 h-2.5 rounded-full" style="background: var(--state-success);"></span>
+    <span class="text-xs whitespace-nowrap" style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">已连接</span>
+  </div>
+
+  <!-- Spacer -->
+  <div class="flex-1"></div>
+
+  <!-- Right buttons -->
+  <div class="flex items-center gap-1.5 shrink-0">
+    <button class="w-8 h-8 rounded-md flex items-center justify-center transition-colors duration-150 cursor-pointer"
+            style="color: var(--color-text-tertiary);"
+            onmouseenter="this.style.background='var(--color-primary-subtle)'; this.style.color='var(--color-text-primary)'"
+            onmouseleave="this.style.background='transparent'; this.style.color='var(--color-text-tertiary)'"
+            aria-label="设置"
+            data-dom-id="btn-settings">
+      <i data-lucide="settings" class="w-4 h-4"></i>
+    </button>
+    <button class="w-8 h-8 rounded-md flex items-center justify-center transition-colors duration-150 cursor-pointer"
+            style="color: var(--color-text-tertiary);"
+            onmouseenter="this.style.background='var(--color-primary-subtle)'; this.style.color='var(--color-text-primary)'"
+            onmouseleave="this.style.background='transparent'; this.style.color='var(--color-text-tertiary)'"
+            aria-label="切换Event Log"
+            data-dom-id="btn-toggle-eventlog">
+      <i data-lucide="panel-right-close" class="w-4 h-4"></i>
+    </button>
+  </div>
+</header>
+
+<!-- Main Layout -->
+<main class="flex" style="margin-top: 48px; height: calc(100vh - 48px);">
+
+  <!-- Left Sidebar -->
+  <aside class="flex flex-col shrink-0 border-r overflow-hidden"
+         style="width: 300px; background: var(--color-bg-surface); border-color: var(--color-border-default);">
+
+    <!-- Section 1: LLM 配置 -->
+    <div class="p-4 border-b" style="border-color: var(--color-border-default);">
+      <h2 class="text-xs font-semibold uppercase tracking-wide mb-3" style="color: var(--color-primary); font-size: var(--font-size-sm);">LLM 配置</h2>
+
+      <!-- API Endpoint -->
+      <label class="block mb-2.5">
+        <span class="block text-xs mb-1" style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">API Endpoint</span>
+        <input type="text" value="https://api.anthropic.com"
+               class="w-full h-8 px-2.5 rounded-md border outline-none transition-colors duration-150"
+               style="font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"
+               onfocus="this.style.borderColor='var(--color-primary)'; this.style.boxShadow='0 0 0 2px var(--color-primary-muted)'"
+               onblur="this.style.borderColor='var(--color-border-default)'; this.style.boxShadow='none'">
+        <span class="block mt-1" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs); font-family: var(--font-mono);">API 路径 /v1/ 由引擎自动追加，无需手动填写</span>
+      </label>
+
+      <!-- API Key -->
+      <label class="block mb-2.5">
+        <span class="block text-xs mb-1" style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">API Key</span>
+        <input type="password" placeholder="sk-ant-..."
+               class="w-full h-8 px-2.5 rounded-md border outline-none transition-colors duration-150"
+               style="font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"
+               onfocus="this.style.borderColor='var(--color-primary)'; this.style.boxShadow='0 0 0 2px var(--color-primary-muted)'"
+               onblur="this.style.borderColor='var(--color-border-default)'; this.style.boxShadow='none'">
+      </label>
+
+      <!-- Model -->
+      <label class="block mb-2.5">
+        <span class="block text-xs mb-1" style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">Model</span>
+        <select class="w-full h-8 px-2.5 rounded-md border outline-none transition-colors duration-150 appearance-none cursor-pointer"
+                style="font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"
+                onfocus="this.style.borderColor='var(--color-primary)'; this.style.boxShadow='0 0 0 2px var(--color-primary-muted)'"
+                onblur="this.style.borderColor='var(--color-border-default)'; this.style.boxShadow='none'">
+          <option value="claude-sonnet-4-20250514">claude-sonnet-4-20250514</option>
+          <option value="claude-haiku-4-20250514">claude-haiku-4-20250514</option>
+          <option value="claude-opus-4-20250514">claude-opus-4-20250514</option>
+        </select>
+        <span class="block mt-1" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs); font-family: var(--font-mono);">链接成功后自动获取模型列表，或手动输入</span>
+      </label>
+
+      <!-- Manual Model Input -->
+      <label class="block mb-3">
+        <span class="block text-xs mb-1" style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">手动输入模型</span>
+        <input type="text" placeholder="留空则使用上方选择"
+               class="w-full h-8 px-2.5 rounded-md border outline-none transition-colors duration-150"
+               style="font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"
+               onfocus="this.style.borderColor='var(--color-primary)'; this.style.boxShadow='0 0 0 2px var(--color-primary-muted)'"
+               onblur="this.style.borderColor='var(--color-border-default)'; this.style.boxShadow='none'">
+      </label>
+
+      <!-- Max Tokens -->
+      <label class="block mb-3">
+        <span class="block text-xs mb-1" style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">Max Tokens</span>
+        <input type="number" value="4096"
+               class="w-full h-8 px-2.5 rounded-md border outline-none transition-colors duration-150"
+               style="font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--color-bg-input); border-color: var(--color-border-default); color: var(--color-text-primary);"
+               onfocus="this.style.borderColor='var(--color-primary)'; this.style.boxShadow='0 0 0 2px var(--color-primary-muted)'"
+               onblur="this.style.borderColor='var(--color-border-default)'; this.style.boxShadow='none'">
+      </label>
+
+      <!-- Link Button + Status -->
+      <div class="flex items-center justify-between">
+        <span id="llm-link-status" class="text-xs flex items-center gap-1.5" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs);">
+          <span class="inline-block w-1.5 h-1.5 rounded-full" style="background: var(--color-text-tertiary);"></span>
+          未链接
+        </span>
+        <button class="h-7 px-3 text-xs font-semibold rounded-md text-white transition-all duration-150 whitespace-nowrap cursor-pointer inline-flex items-center justify-center"
+                style="background: var(--color-primary); font-size: var(--font-size-sm);"
+                onmouseenter="this.style.background='var(--color-primary-hover)'; this.style.transform='translateY(-1px)'"
+                onmouseleave="this.style.background='var(--color-primary)'; this.style.transform='translateY(0)'"
+                onmousedown="this.style.transform='translateY(0)'"
+                onclick="document.getElementById('llm-link-status').innerHTML='<span class=&quot;inline-block w-1.5 h-1.5 rounded-full&quot; style=&quot;background:var(--state-success)&quot;></span> 链接成功'; document.getElementById('llm-link-status').style.color='var(--state-success)'"
+                data-dom-id="btn-save-config">
+          链接
+        </button>
+      </div>
+
+      <!-- Warning Banner -->
+      <div class="mt-3 px-3 py-2 rounded-md flex items-start gap-2"
+           style="background: rgba(196, 138, 46, 0.1); border-left: 3px solid var(--state-warning);">
+        <i data-lucide="alert-triangle" class="w-3.5 h-3.5 shrink-0 mt-0.5" style="color: var(--state-warning);"></i>
+        <span class="text-xs leading-snug" style="color: var(--state-warning); font-size: var(--font-size-xs);">Engine 未配置 API Key，仅本地开发可用</span>
+      </div>
+    </div>
+
+    <!-- Section 2: 角色 -->
+    <div class="flex-1 flex flex-col overflow-hidden">
+      <div class="px-4 pt-3 pb-2 flex items-center justify-between">
+        <h2 class="text-xs font-semibold uppercase tracking-wide" style="color: var(--color-primary); font-size: var(--font-size-sm);">角色</h2>
+        <span class="inline-flex items-center justify-center h-5 px-1.5 rounded-full text-xs font-medium"
+              style="background: var(--color-primary-muted); color: var(--color-primary); font-size: var(--font-size-xs); min-width: 20px;">6</span>
+      </div>
+
+      <!-- Character List (scrollable) -->
+      <div class="flex-1 overflow-y-auto">
+
+        <!-- Character Card: 林婉清 -->
+        <a href="#" class="flex items-center gap-3 px-4 py-3 border-b transition-colors duration-150 cursor-pointer no-underline"
+           style="border-color: var(--color-border-subtle);"
+           onmouseenter="this.style.background='var(--color-bg-elevated)'; this.style.borderLeft='3px solid var(--color-primary)'"
+           onmouseleave="this.style.background='transparent'; this.style.borderLeft='none'"
+           data-dom-id="nav-session">
+          <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+               style="background: var(--color-primary-muted); color: var(--color-primary); font-size: var(--font-size-lg); font-weight: 600;">林</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary); font-size: var(--font-size-md);">林婉清</div>
+            <div class="text-xs truncate" style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">温柔的书店老板娘</div>
+          </div>
+          <i data-lucide="chevron-right" class="w-4 h-4 shrink-0" style="color: var(--color-text-tertiary);"></i>
+        </a>
+
+        <!-- Character Card: 陈思远 -->
+        <a href="#" class="flex items-center gap-3 px-4 py-3 border-b transition-colors duration-150 cursor-pointer no-underline"
+           style="border-color: var(--color-border-subtle);"
+           onmouseenter="this.style.background='var(--color-bg-elevated)'; this.style.borderLeft='3px solid var(--color-primary)'"
+           onmouseleave="this.style.background='transparent'; this.style.borderLeft='none'"
+           data-dom-id="nav-session">
+          <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+               style="background: var(--color-primary-muted); color: var(--color-primary); font-size: var(--font-size-lg); font-weight: 600;">陈</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary); font-size: var(--font-size-md);">陈思远</div>
+            <div class="text-xs truncate" style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">冷静的侦探</div>
+          </div>
+          <i data-lucide="chevron-right" class="w-4 h-4 shrink-0" style="color: var(--color-text-tertiary);"></i>
+        </a>
+
+        <!-- Character Card: 赵明 -->
+        <a href="#" class="flex items-center gap-3 px-4 py-3 border-b transition-colors duration-150 cursor-pointer no-underline"
+           style="border-color: var(--color-border-subtle);"
+           onmouseenter="this.style.background='var(--color-bg-elevated)'; this.style.borderLeft='3px solid var(--color-primary)'"
+           onmouseleave="this.style.background='transparent'; this.style.borderLeft='none'"
+           data-dom-id="nav-session">
+          <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+               style="background: var(--color-primary-muted); color: var(--color-primary); font-size: var(--font-size-lg); font-weight: 600;">赵</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary); font-size: var(--font-size-md);">赵明</div>
+            <div class="text-xs truncate" style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">热血的冒险者</div>
+          </div>
+          <i data-lucide="chevron-right" class="w-4 h-4 shrink-0" style="color: var(--color-text-tertiary);"></i>
+        </a>
+
+        <!-- Character Card: 周雅 -->
+        <a href="#" class="flex items-center gap-3 px-4 py-3 border-b transition-colors duration-150 cursor-pointer no-underline"
+           style="border-color: var(--color-border-subtle);"
+           onmouseenter="this.style.background='var(--color-bg-elevated)'; this.style.borderLeft='3px solid var(--color-primary)'"
+           onmouseleave="this.style.background='transparent'; this.style.borderLeft='none'"
+           data-dom-id="nav-session">
+          <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+               style="background: var(--color-primary-muted); color: var(--color-primary); font-size: var(--font-size-lg); font-weight: 600;">周</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary); font-size: var(--font-size-md);">周雅</div>
+            <div class="text-xs truncate" style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">神秘的占卜师</div>
+          </div>
+          <i data-lucide="chevron-right" class="w-4 h-4 shrink-0" style="color: var(--color-text-tertiary);"></i>
+        </a>
+
+        <!-- Character Card: 韩冰 -->
+        <a href="#" class="flex items-center gap-3 px-4 py-3 border-b transition-colors duration-150 cursor-pointer no-underline"
+           style="border-color: var(--color-border-subtle);"
+           onmouseenter="this.style.background='var(--color-bg-elevated)'; this.style.borderLeft='3px solid var(--color-primary)'"
+           onmouseleave="this.style.background='transparent'; this.style.borderLeft='none'"
+           data-dom-id="nav-session">
+          <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+               style="background: var(--color-primary-muted); color: var(--color-primary); font-size: var(--font-size-lg); font-weight: 600;">韩</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary); font-size: var(--font-size-md);">韩冰</div>
+            <div class="text-xs truncate" style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">寡言的剑客</div>
+          </div>
+          <i data-lucide="chevron-right" class="w-4 h-4 shrink-0" style="color: var(--color-text-tertiary);"></i>
+        </a>
+
+        <!-- Character Card: 苏瑶 -->
+        <a href="#" class="flex items-center gap-3 px-4 py-3 border-b transition-colors duration-150 cursor-pointer no-underline"
+           style="border-color: var(--color-border-subtle);"
+           onmouseenter="this.style.background='var(--color-bg-elevated)'; this.style.borderLeft='3px solid var(--color-primary)'"
+           onmouseleave="this.style.background='transparent'; this.style.borderLeft='none'"
+           data-dom-id="nav-session">
+          <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+               style="background: var(--color-primary-muted); color: var(--color-primary); font-size: var(--font-size-lg); font-weight: 600;">苏</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary); font-size: var(--font-size-md);">苏瑶</div>
+            <div class="text-xs truncate" style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">活泼的药师</div>
+          </div>
+          <i data-lucide="chevron-right" class="w-4 h-4 shrink-0" style="color: var(--color-text-tertiary);"></i>
+        </a>
+
+      </div>
+    </div>
+
+    <!-- Section 3: 导入 (collapsible, closed) -->
+    <div class="border-t" style="border-color: var(--color-border-default);">
+      <button class="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold transition-colors duration-150 cursor-pointer"
+              style="color: var(--color-primary); font-size: var(--font-size-sm);"
+              data-dom-id="btn-toggle-import"
+              onclick="const el = document.getElementById('import-panel'); el.style.display = el.style.display === 'none' ? 'block' : 'none';">
+        <span class="flex items-center gap-1.5">
+          <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+          导入
+        </span>
+        <i data-lucide="chevron-down" class="w-3.5 h-3.5 transition-transform duration-200"></i>
+      </button>
+      <div id="import-panel" style="display: none;">
+        <div class="px-4 pb-4">
+          <div class="border-2 border-dashed rounded-lg flex flex-col items-center justify-center py-6 px-3 transition-colors duration-150 cursor-pointer"
+               style="border-color: var(--color-border-default);"
+               onmouseenter="this.style.borderColor='var(--color-primary)'; this.style.background='var(--color-primary-subtle)'"
+               onmouseleave="this.style.borderColor='var(--color-border-default)'; this.style.background='transparent'"
+               data-dom-id="btn-import-upload">
+            <i data-lucide="file-up" class="w-5 h-5 mb-2" style="color: var(--color-text-tertiary);"></i>
+            <span class="text-xs text-center" style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">拖放或点击上传角色卡</span>
+          </div>
+          <p class="text-center mt-2" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs);">PNG / JSON / V2 卡片</p>
+        </div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- Center Panel -->
+  <section class="flex-1 flex items-center justify-center" style="background: var(--color-bg-base);">
+    <div class="text-center px-8">
+      <!-- Geometric pattern / icon area -->
+      <div class="flex items-center justify-center mb-6">
+        <div class="relative" style="width: 80px; height: 80px;">
+          <!-- Outer ring -->
+          <div class="absolute inset-0 rounded-full border" style="border-color: var(--color-border-default);"></div>
+          <!-- Inner shape -->
+          <div class="absolute inset-4 rounded-full" style="background: var(--color-primary-muted);"></div>
+          <!-- Center icon -->
+          <div class="absolute inset-0 flex items-center justify-center">
+            <i data-lucide="message-square-text" class="w-6 h-6" style="color: var(--color-primary);"></i>
+          </div>
+        </div>
+      </div>
+      <h1 class="font-semibold mb-2" style="font-size: var(--font-size-xl); color: var(--color-text-primary); text-wrap: balance;">选择一个角色开始对话</h1>
+      <p class="max-w-xs mx-auto" style="font-size: var(--font-size-sm); color: var(--color-text-tertiary);">从左侧选择角色卡片，或导入新的角色卡文件</p>
+    </div>
+  </section>
+
+  <!-- Right Panel: Event Log -->
+  <aside class="shrink-0 flex flex-col border-l overflow-hidden"
+         style="width: 280px; background: var(--color-bg-surface); border-color: var(--color-border-default);"
+         id="event-log-panel">
+
+    <!-- Event Log Header -->
+    <div class="flex items-center justify-between px-3 py-2 border-b" style="border-color: var(--color-border-default);">
+      <span class="text-xs font-semibold" style="color: var(--color-text-primary); font-size: var(--font-size-sm);">Event Log</span>
+      <div class="flex items-center gap-1">
+        <button class="px-1.5 py-0.5 rounded text-xs transition-colors duration-150 cursor-pointer"
+                style="color: var(--color-text-tertiary); font-size: var(--font-size-xs);"
+                onmouseenter="this.style.color='var(--color-text-primary)'; this.style.background='var(--color-primary-subtle)'"
+                onmouseleave="this.style.color='var(--color-text-tertiary)'; this.style.background='transparent'"
+                data-dom-id="btn-clear-log">
+          清除
+        </button>
+        <button class="w-6 h-6 rounded flex items-center justify-center transition-colors duration-150 cursor-pointer"
+                style="color: var(--color-text-tertiary);"
+                onmouseenter="this.style.color='var(--color-text-primary)'; this.style.background='var(--color-primary-subtle)'"
+                onmouseleave="this.style.color='var(--color-text-tertiary)'; this.style.background='transparent'"
+                data-dom-id="btn-collapse-log">
+          <i data-lucide="panel-right-close" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Event Log Entries -->
+    <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
+
+      <!-- Event 1 -->
+      <div class="rounded-md p-2 border" style="background: var(--color-bg-input); border-color: var(--color-border-subtle);">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs" style="color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--font-size-xs);">14:23:01</span>
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                style="background: rgba(61, 139, 94, 0.12); color: var(--state-success); font-size: 10px;">200</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold px-1.5 py-0.5 rounded" style="background: var(--color-bg-overlay); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs);">POST</span>
+          <span class="text-xs truncate" style="color: var(--color-text-secondary); font-family: var(--font-mono); font-size: var(--font-size-xs);">/v1/messages</span>
+        </div>
+        <div class="mt-1 text-xs" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs);">128ms</div>
+      </div>
+
+      <!-- Event 2 -->
+      <div class="rounded-md p-2 border" style="background: var(--color-bg-input); border-color: var(--color-border-subtle);">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs" style="color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--font-size-xs);">14:22:58</span>
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                style="background: rgba(74, 127, 181, 0.12); color: var(--state-info); font-size: 10px;">101</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold px-1.5 py-0.5 rounded" style="background: var(--color-bg-overlay); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs);">GET</span>
+          <span class="text-xs truncate" style="color: var(--color-text-secondary); font-family: var(--font-mono); font-size: var(--font-size-xs);">/v1/characters</span>
+        </div>
+        <div class="mt-1 text-xs" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs);">42ms</div>
+      </div>
+
+      <!-- Event 3 -->
+      <div class="rounded-md p-2 border" style="background: var(--color-bg-input); border-color: var(--color-border-subtle);">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs" style="color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--font-size-xs);">14:22:45</span>
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                style="background: rgba(61, 139, 94, 0.12); color: var(--state-success); font-size: 10px;">200</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold px-1.5 py-0.5 rounded" style="background: var(--color-bg-overlay); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs);">POST</span>
+          <span class="text-xs truncate" style="color: var(--color-text-secondary); font-family: var(--font-mono); font-size: var(--font-size-xs);">/v1/sessions</span>
+        </div>
+        <div class="mt-1 text-xs" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs);">256ms</div>
+      </div>
+
+      <!-- Event 4 -->
+      <div class="rounded-md p-2 border" style="background: var(--color-bg-input); border-color: var(--color-border-subtle);">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs" style="color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--font-size-xs);">14:22:30</span>
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                style="background: rgba(201, 68, 68, 0.12); color: var(--state-error); font-size: 10px;">401</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold px-1.5 py-0.5 rounded" style="background: var(--color-bg-overlay); color: var(--color-text-primary); font-family: var(--font-mono); font-size: var(--font-size-xs);">GET</span>
+          <span class="text-xs truncate" style="color: var(--color-text-secondary); font-family: var(--font-mono); font-size: var(--font-size-xs);">/v1/config</span>
+        </div>
+        <div class="mt-1 text-xs" style="color: var(--color-text-tertiary); font-size: var(--font-size-xs);">15ms</div>
+      </div>
+
+    </div>
+  </aside>
+
+</main>
+
+<script>lucide.createIcons();</script>
+</body>
+</html>
