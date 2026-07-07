@@ -104,8 +104,9 @@ function onIntent(name: string, params?: Json): void {
     const id = (params as { character_id?: string } | undefined)?.character_id;
     if (id) {
       selectedCharacterId.value = id;
-      // 拉取该角色的 chat history。用 onIntent 走正常 dispatch 路径，不递归
-      // （chat.history 不在 characters.select 分支里）。
+      // 拉取该角色的 chat history。此处递归调用 onIntent 函数本身，但
+      // chat.history 走正常 dispatch 路径，不会回到 characters.select 分支，
+      // 因此不会无限递归。
       onIntent("chat.history", { character_id: id } as Json);
     }
     return;

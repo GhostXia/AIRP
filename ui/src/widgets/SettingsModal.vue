@@ -39,6 +39,9 @@ const model = ref("");
 const hasExistingKey = computed<boolean>(() => settings.value.api_key_set === true);
 
 // 当 engine settings 更新时，同步到本地表单（仅非空字段）
+// 依赖 bus.rs settings.update 的 saving:true emit 用 set 替换 w-settings scope
+// （settings 字段变 undefined）—— 此处 if (s) 守卫避免表单被清空。
+// 详见 bus.rs settings.update 分支的 saving emit 注释。
 watch(
   () => state.value.settings,
   (s) => {
@@ -66,13 +69,12 @@ function refresh(): void {
 }
 
 // modal 打开时自动拉取最新 settings
-watch(
-  () => props.visible,
-  (v) => {
-    if (v) refresh();
-  },
-  { immediate: true },
-);
+// 不用 immediate:true — App.vue 中 <SettingsModal v-if="isTauri"> 在 mount 时就
+// 实例化（visible=false），immediate 会触发一次无意义回调（虽然 v=false 不发包）。
+// refresh 由 visible 翻 true 时触发即可。
+watch(() => props.visible, (v) => {
+  if (v) refresh();
+});
 </script>
 
 <template>
