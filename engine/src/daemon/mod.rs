@@ -1128,6 +1128,62 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
+
+    // ── O1 (#86): ChatLog.scope_session_id 在 HTTP 响应中暴露 ──────────────
+
+    #[tokio::test]
+    async fn test_o1_session_scoped_history_exposes_scope_session_id() {
+        // 传 session_id 调 history → 响应应包含 scope_session_id 字段，值与传入一致
+        let (state, _tmp) = make_state_no_key();
+        let app = create_router(state);
+        let scope_id = "550e8400-e29b-41d4-a716-446655440000";
+        let body = serde_json::json!({"character_id": "alice", "session_id": scope_id});
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/history")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            v["scope_session_id"].as_str(),
+            Some(scope_id),
+            "session-scoped 响应必须暴露 scope_session_id 且与传入值一致"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_o1_legacy_history_omits_scope_session_id() {
+        // 不传 session_id 调 history → 响应不应包含 scope_session_id 字段（None skip）
+        let (state, _tmp) = make_state_no_key();
+        let app = create_router(state);
+        let body = serde_json::json!({"character_id": "alice"});
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/history")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            v.get("scope_session_id").is_none() || v["scope_session_id"].is_null(),
+            "legacy 响应不应包含 scope_session_id 字段"
+        );
+    }
 }
 
 // ── DX-4 tests: UserOrIpKeyExtractor ─────────────────────────────────────────
