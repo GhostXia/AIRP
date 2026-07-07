@@ -421,8 +421,17 @@ impl BusRelay {
                     {
                         Ok(log) => {
                             // ChatLog.messages: Vec<{role, content}> → w-chat scope
+                            // ChatLog.message_timestamps: Vec<Option<String>> 与 messages
+                            // 一一对应（PR #75 #73 方案 B）。按 index 合并到 message object
+                            // 的 ts 字段，让 UI 拿到历史消息的时间戳（ChatWidget 当前不
+                            // 显示，但能力闭合，未来显示时不用回头补 bus.rs）。
                             let messages = log
                                 .get("messages")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+                            let timestamps = log
+                                .get("message_timestamps")
                                 .and_then(|v| v.as_array())
                                 .cloned()
                                 .unwrap_or_default();
@@ -438,12 +447,15 @@ impl BusRelay {
                                     .get("content")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("");
+                                // 按 index 取 ts；旧 jsonl 无 ts → None → null
+                                let ts = timestamps.get(i).cloned().unwrap_or(serde_json::Value::Null);
                                 scope_messages.insert(
                                     id.clone(),
                                     serde_json::json!({
                                         "id": id,
                                         "role": role,
                                         "text": text,
+                                        "ts": ts,
                                     }),
                                 );
                                 order.push(serde_json::Value::String(id));
