@@ -385,19 +385,24 @@ impl CharacterDecomposer {
     ///
     /// 输入：已解析的 `TavernCardV2`（不读 raw.json 原始 blob）。
     /// 输出：写入 `analysis_dir` 下的 MD 文件。
+    ///
+    /// C3 修复：`raw_meta` 是从 `card/raw.json` 提取的顶层 JSON（仅取
+    /// `data.creator` / `data.character_version` / `data.tags` 三个小字段，
+    /// 不灌整个 blob，守不变式6）。`None` 时显示"（未定义）"。
     pub async fn decompose(
         &self,
         character_id: &str,
         card: &TavernCardV2,
         lorebook: Option<&Lorebook>,
         analysis_dir: &Path,
+        raw_meta: Option<&serde_json::Value>,
     ) -> Result<DecomposeResult, AirpError> {
         tokio::fs::create_dir_all(analysis_dir).await?;
 
         let mut files_written = Vec::new();
 
         // 1. basic_info.md
-        let basic_info = Self::generate_basic_info(character_id, card);
+        let basic_info = Self::generate_basic_info(character_id, card, raw_meta);
         let path = analysis_dir.join("basic_info.md");
         tokio::fs::write(&path, basic_info).await?;
         files_written.push("basic_info.md".to_string());
@@ -459,8 +464,40 @@ impl CharacterDecomposer {
         })
     }
 
-    fn generate_basic_info(character_id: &str, card: &TavernCardV2) -> String {
+    fn generate_basic_info(
+        character_id: &str,
+        card: &TavernCardV2,
+        raw_meta: Option<&serde_json::Value>,
+    ) -> String {
         let d = &card.data;
+        // C3 修复：从 raw_meta 提取 creator/character_version/tags
+        // engine 的 CharacterData 不含这些字段，需从 raw.json 读取。
+        // 只取这三个小字段，不灌整个 blob，守不变式6。
+        let creator = raw_meta
+            .and_then(|v| v.get("data"))
+            .and_then(|d| d.get("creator"))
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("（未定义）");
+        let version = raw_meta
+            .and_then(|v| v.get("data"))
+            .and_then(|d| d.get("character_version"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("（未定义）");
+        let tags = raw_meta
+            .and_then(|v| v.get("data"))
+            .and_then(|d| d.get("tags"))
+            .and_then(|t| t.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| t.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "（未定义）".to_string());
+
         format!(
             r#"# 基础信息
 
@@ -485,9 +522,9 @@ impl CharacterDecomposer {
             character_id = character_id,
             name = d.name.as_deref().unwrap_or("（未定义）"),
             description = d.description.as_deref().unwrap_or("（未定义）"),
-            creator = "（engine 暂未持久化 creator 字段）",
-            version = "（engine 暂未持久化 character_version 字段）",
-            tags = "（engine 暂未持久化 tags 字段）",
+            creator = creator,
+            version = version,
+            tags = tags,
         )
     }
 
@@ -652,6 +689,14 @@ impl CharacterDecomposer {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // C2 修复：世界书链接条件渲染——仅当 files 含 world_book/ 开头文件时才显示
+        let has_world_book = files.iter().any(|f| f.starts_with("world_book/"));
+        let world_book_line = if has_world_book {
+            "- [世界书](./world_book/index.md)\n"
+        } else {
+            ""
+        };
+
         format!(
             r#"# {name}
 
@@ -666,8 +711,7 @@ impl CharacterDecomposer {
 - [说话风格](./speech_style.md)
 - [开场白](./greetings.md)
 - [状态定义](./state_schema.md)
-- [世界书](./world_book/index.md)（仅当角色卡含 character_book 时存在）
-
+{world_book_line}
 ## 一句话描述
 {desc_short}
 
@@ -680,6 +724,7 @@ impl CharacterDecomposer {
             desc_short = desc_short,
             file_count = files.len(),
             file_list = file_list,
+            world_book_line = world_book_line,
         )
     }
 
@@ -855,7 +900,7 @@ mod tests {
         let card = sample_card();
 
         let result = CharacterDecomposer::new()
-            .decompose("linwanqing", &card, None, &analysis_dir)
+            .decompose("linwanqing", &card, None, &analysis_dir, None)
             .await
             .unwrap();
 
@@ -879,7 +924,7 @@ mod tests {
         let lb = sample_lorebook();
 
         let result = CharacterDecomposer::new()
-            .decompose("linwanqing", &card, Some(&lb), &analysis_dir)
+            .decompose("linwanqing", &card, Some(&lb), &analysis_dir, None)
             .await
             .unwrap();
 
@@ -900,7 +945,7 @@ mod tests {
         let card = sample_card();
 
         CharacterDecomposer::new()
-            .decompose("linwanqing", &card, None, &analysis_dir)
+            .decompose("linwanqing", &card, None, &analysis_dir, None)
             .await
             .unwrap();
 
@@ -935,7 +980,7 @@ mod tests {
         };
 
         let result = CharacterDecomposer::new()
-            .decompose("emptychar", &card, None, &analysis_dir)
+            .decompose("emptychar", &card, None, &analysis_dir, None)
             .await
             .unwrap();
 
@@ -1442,9 +1487,20 @@ impl Tool for DecomposeCharacterTool {
             };
 
             let analysis_dir = data_dir::paths::ensure_char_analysis_dir(&state.data_root, cid.as_str())?;
+            // C3 修复：读 raw.json 提取 creator/character_version/tags 元信息
+            let raw_meta = {
+                let raw_path = state.data_root.join("characters").join(cid.as_str()).join("card").join("raw.json");
+                if raw_path.exists() {
+                    std::fs::read_to_string(&raw_path)
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                } else {
+                    None
+                }
+            };
             let decomposer = crate::decompose::CharacterDecomposer::new();
             let result = decomposer
-                .decompose(cid.as_str(), &card, lorebook.as_ref(), &analysis_dir)
+                .decompose(cid.as_str(), &card, lorebook.as_ref(), &analysis_dir, raw_meta.as_ref())
                 .await?;
 
             Ok(ToolResult {
@@ -1724,7 +1780,9 @@ use std::sync::Arc;
 
 #[derive(Serialize)]
 pub struct DecomposeResponse {
-    pub character_id: String,
+    /// B2 修复：对齐 DecomposeResult，用 asset_id + asset_type
+    pub asset_id: String,
+    pub asset_type: String,
     pub files_written: Vec<String>,
     pub target_dir: String,
     pub lorebook_decomposed: bool,
@@ -1751,12 +1809,29 @@ pub async fn decompose_character(
     };
 
     let analysis_dir = data_dir::paths::ensure_char_analysis_dir(&state.data_root, cid.as_str())?;
+    // C3 修复：读 raw.json 提取 creator/character_version/tags 元信息
+    let raw_meta = {
+        let raw_path = state
+            .data_root
+            .join("characters")
+            .join(cid.as_str())
+            .join("card")
+            .join("raw.json");
+        if raw_path.exists() {
+            std::fs::read_to_string(&raw_path)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        } else {
+            None
+        }
+    };
     let result = CharacterDecomposer::new()
-        .decompose(cid.as_str(), &card, lorebook.as_ref(), &analysis_dir)
+        .decompose(cid.as_str(), &card, lorebook.as_ref(), &analysis_dir, raw_meta.as_ref())
         .await?;
 
     Ok(Json(DecomposeResponse {
-        character_id: result.character_id,
+        asset_id: result.asset_id,
+        asset_type: result.asset_type,
         files_written: result.files_written,
         target_dir: result.target_dir,
         lorebook_decomposed: result.lorebook_decomposed,
@@ -1788,7 +1863,8 @@ pub async fn decompose_preset(
         .await?;
 
     Ok(Json(DecomposeResponse {
-        character_id: result.character_id,
+        asset_id: result.asset_id,
+        asset_type: result.asset_type,
         files_written: result.files_written,
         target_dir: result.target_dir,
         lorebook_decomposed: false,
