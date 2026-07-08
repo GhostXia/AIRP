@@ -707,6 +707,10 @@
         const ts = tsRaw ? new Date(tsRaw) : null;
         appendMsg(m.role || 'assistant', m.text || m.content || '', false, ts);
       });
+    } else if (r.status === 404) {
+      // #68 #8：404 = 角色无 history（engine #67 #4 已改 NotFound），视为无内容而非错误，
+      // 静默清空 chatLog 避免用户无操作却见 [history err 404]。仅渲染 session info（如有）。
+      chatLog.innerHTML = '';
     } else if (r.status !== 0) {
       // 0 = 网络层失败（已 logEvent），其它状态码显式提示
       appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false, new Date());
@@ -986,7 +990,37 @@
     const ms = Math.round(performance.now() - t0);
     const ok = results.every(r => r.ok);
     logEvent('CONCURRENT', '/v1/chat/completions ×2', ok ? 200 : 500, ms, ok ? '两条流均完成' : JSON.stringify(results));
-    concurrentStatus.textContent = (ok ? '✓' : '✗') + ' 两条流完成 (' + ms + 'ms)。检查 chat log 顺序：u-A → a-A → u-B → a-B 应基本交替，无串扰。';
+    // #68 #9：补真断言——读 engine 端 /v1/chat/history 验证持久化顺序与串扰保护，
+    // 不只看 results.every。回归 PR #6 的 id-keyed race 修复（原测试只校 ok flag，
+    // 断言被悄悄废掉）。失败时显式列出 mismatch 供诊断。
+    let assertion = '';
+    if (ok) {
+      try {
+        const h = await api('POST', '/v1/chat/history', { character_id: selectedChar });
+        if (h.ok) {
+          const data = h.data && typeof h.data === 'object' ? h.data : {};
+          const msgs = Array.isArray(data.messages) ? data.messages : [];
+          const expectN = 4;
+          if (msgs.length !== expectN) {
+            assertion = '✗ history msgs=' + msgs.length + ' 期望 ' + expectN;
+          } else {
+            const expectRoles = ['user', 'assistant', 'user', 'assistant'];
+            const roleMismatch = [];
+            for (let i = 0; i < expectN; i++) {
+              if ((msgs[i].role || 'assistant') !== expectRoles[i]) roleMismatch.push('[' + i + ']=' + msgs[i].role);
+            }
+            const u0 = (msgs[0].text || msgs[0].content || '').includes('并发流 A');
+            const u2 = (msgs[2].text || msgs[2].content || '').includes('并发流 B');
+            if (roleMismatch.length) assertion = '✗ role 顺序错: ' + roleMismatch.join(', ');
+            else if (!u0 || !u2) assertion = '✗ user 内容不匹配 A/B';
+            else assertion = '✓ history 顺序正确（u-A→a-A→u-B→a-B），无串扰';
+          }
+        } else {
+          assertion = '⚠ history 读取失败 ' + h.status + '（无法校持久化）';
+        }
+      } catch (e) { assertion = '⚠ history 读取异常: ' + e.message; }
+    }
+    concurrentStatus.textContent = (ok ? '✓' : '✗') + ' 两条流完成 (' + ms + 'ms)。' + (assertion || '检查 chat log 顺序：u-A → a-A → u-B → a-B 应基本交替，无串扰。');
   });
 
   // 抽出 doSend 的纯逻辑供并发复用（不发 user DOM、不读 input）

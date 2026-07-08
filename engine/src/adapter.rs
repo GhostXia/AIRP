@@ -5,6 +5,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// #67 #7：chat 路径 per-request timeout（建连到首字节）。
+///
+/// upstream 接受连接但不响应时，`request.send().await` 会一直 hang（直到 OS/TCP keepalive
+/// 超时，可能数分钟）。本 timeout 套在 `RequestBuilder::timeout` 上，reqwest 文档明确：
+/// `RequestBuilder::timeout` 覆盖到 `send().await` 阶段（建连到首响应头），**body streaming
+/// 消费阶段不受其约束**——故对流式 SSE 的慢 token 不误杀，恰挡"建连后挂死"。
+///
+/// 默认 30s（reqwest 默认无上限，30s 给 provider 冷启足够余量）。env
+/// `AIRP_CHAT_REQUEST_TIMEOUT_MS` 可调（与 `models_proxy_timeout` 同模式）。
+fn chat_request_timeout() -> Duration {
+    const DEFAULT: Duration = Duration::from_secs(30);
+    std::env::var("AIRP_CHAT_REQUEST_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT)
+}
 
 /// DX-6：后端引擎选择。控制 AIRP 如何调用上游 LLM 服务。
 ///
@@ -125,6 +145,7 @@ pub fn call_streaming_api(
 
         let response = request
             .json(&payload)
+            .timeout(chat_request_timeout())
             .send()
             .await
             .map_err(|e| format!("发送请求失败: {}", e))?;
@@ -217,6 +238,7 @@ pub fn call_streaming_api_anthropic(
 
         let response = request
             .json(&payload)
+            .timeout(chat_request_timeout())
             .send()
             .await
             .map_err(|e| format!("发送请求失败: {}", e))?;
