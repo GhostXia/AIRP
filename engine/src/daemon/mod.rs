@@ -71,6 +71,9 @@ pub struct MutableConfig {
 }
 
 /// `GET /v1/settings` 返回值：api_key 脱敏为 `Some("***")` / `None`。
+///
+/// 审计 PR #100 (gemini/CodeRabbit)：暴露 `data_root` 让调用方能从引擎本身稳定得知
+/// 产物落盘根，不再硬编 `target/...` 路径——治"复现命令路径基不统"的根因，提可观察性。
 #[derive(Debug, Serialize)]
 pub struct SettingsView {
     pub provider: Provider,
@@ -83,10 +86,13 @@ pub struct SettingsView {
     /// A5：daemon 自鉴权 access_api_key 是否已设置（脱敏 bool，不返回 key 本体）。
     /// 与 `api_key_set`（上游 provider key）区分：前者保护本 engine，后者用于调用上游 LLM。
     pub access_api_key_set: bool,
+    /// 数据落盘根目录真值（`AIRP_DATA_DIR` 或默认 `./data/`，由 `resolve_data_root` 定）。
+    /// 审计 PR #100：暴露让调用方稳定寻产物，逼外部硬编路径是可观察性缺口。
+    pub data_root: PathBuf,
 }
 
 impl SettingsView {
-    pub(crate) fn from_config(cfg: &MutableConfig) -> Self {
+    pub(crate) fn from_config(cfg: &MutableConfig, data_root: &std::path::Path) -> Self {
         Self {
             provider: cfg.provider.clone(),
             endpoint: cfg.endpoint.clone(),
@@ -99,6 +105,7 @@ impl SettingsView {
                 .access_api_key
                 .as_deref()
                 .is_some_and(|s| !s.is_empty()),
+            data_root: data_root.to_path_buf(),
         }
     }
 }
