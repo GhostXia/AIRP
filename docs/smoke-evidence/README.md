@@ -35,11 +35,30 @@ webui → engine /v1/chat/completions
        → chat log 落盘（chat_log_meta.json + chat_log.jsonl）
 ```
 
-## 唯一缺口（不附和：本次未达"真回复"）
+## 真回复验收（2026-07-08 补跑）
 
-`api_key_set: false`（见 `/v1/settings`）——无真 API key，engine 真转发后收 OpenAI 的 401 Unauthorized，SSE 回返的是错误帧而非真 LLM 回复。
+补真 DeepSeek API key 后重发同一请求，收真流式回复帧（见 `sse-response-deepseek.txt`）：
 
-**闭环本身全通**，唯一缺的是真 key 让 OpenAI 返真文本而非 401。补真 key 重发同一请求即可收真流式回复——无需改任何代码。
+```
+event: message
+data: {"type":"body_chunk","text":"（"}
+data: {"type":"body_chunk","text":"热情"}
+...
+data: {"type":"body_chunk","text":"！"}
+```
+
+真回复内容："（热情地挥手）你好！我是这个世界的AI助手，你可以叫我"小智"。随时为你解答问题、提供帮助，无论是学习、娱乐还是闲聊，我都很乐意陪你聊聊！"
+
+真配置：
+- `endpoint=https://api.deepseek.com/chat/completions`（DeepSeek 兼容 OpenAI 协议，路径是 `/chat/completions` 非 `/v1/chat/completions`）
+- `model=deepseek-chat`
+- `api_key_set=true`
+
+chat log 真落盘完整往返（`chat_log.jsonl`）：
+- user: "你好，请自我介绍"
+- assistant: "（热情地挥手）你好！我是这个世界的AI助手..."（真 LLM 回复，非 401 帧）
+
+**北极星闭环完整通了**：启动→选角色→发消息→收真流式回复。无任何代码改动，仅 env 配真 key。
 
 ## 验收边界
 
@@ -47,11 +66,11 @@ webui → engine /v1/chat/completions
 
 - ✅ engine daemon 真起、真配置加载、真转发 upstream、SSE 流式协议正确
 - ✅ 角色卡导入 → 选角色 → 发消息 → chat log 落盘 完整路径通
-- ✅ 非假桩、非 mock——engine 真打到了 OpenAI 服务器收真 HTTP 响应
+- ✅ 非假桩、非 mock——engine 真打到了 DeepSeek 服务器收真流式文本回复
+- ✅ 真回复内容落盘 chat_log.jsonl（user + assistant 完整往返）
 
 本次 smoke **不**证明：
 
-- ❌ 真 LLM 回复内容质量（无 key，未收真文本）
 - ❌ 桌面 exe 打包闭环（见 issue #98）
 - ❌ agent loop 真能力（见 issue #97，不走 chat 端点）
 
