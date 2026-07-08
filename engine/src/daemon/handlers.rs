@@ -1755,5 +1755,10 @@ mod tests {
             "expected BadRequest requiring one of card_path/card_json/card_png_base64, got: {:?}",
             result
         );
+        // 不留脏文件（审计 CR4：与其他拒绝测试一致防御）
+        assert!(!data_root
+            .path()
+            .join("characters/none")
+            .exists());
     }
 }

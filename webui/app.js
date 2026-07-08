@@ -1627,7 +1627,11 @@
   // 加载预设列表到下拉框（切到拆解 tab 时触发）
   async function loadPresetOptions() {
     const r = await api('GET', '/v1/presets');
-    if (!r.ok) return;
+    if (!r.ok) {
+      // 审计 CR3：仿 loadAnalysisFileList 写失败反馈，避免 UI 静默空下拉框。
+      wbDecomposeStatus.textContent = '加载预设列表失败: ' + formatError(r.data, r.text);
+      return;
+    }
     const presets = Array.isArray(r.data) ? r.data : [];
     // 清空并重建选项（用 textContent 避免 XSS）
     while (wbPresetSelect.firstChild) wbPresetSelect.removeChild(wbPresetSelect.firstChild);

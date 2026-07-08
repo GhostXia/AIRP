@@ -284,7 +284,7 @@ pub(super) async fn enhance_or_apply_character_analysis(
             // 与 EnhanceAnalysisTool 同路径：state.config + http_client + call_streaming_api_auto。
             let enhanced_md =
                 enhance_md_via_llm(&state, &original_md, &filename).await?;
-            let has_changes = enhanced_md != original_md;
+            let has_changes = enhanced_md != original_md.trim();
             Ok(Json(serde_json::to_value(EnhancePreview {
                 filename,
                 original_md,
@@ -345,7 +345,8 @@ async fn enhance_md_via_llm(
             GenerationParams {
                 model: cfg.model.clone(),
                 temperature: Some(0.3),
-                max_tokens: Some(2048),
+                // 审计 CR1：2048 对中长卡 analysis MD 增强会截断，提至 8192。
+                max_tokens: Some(8192),
             },
             cfg.engine.clone(),
         )

@@ -840,7 +840,8 @@ impl Tool for EnhanceAnalysisTool {
                     crate::adapter::GenerationParams {
                         model: cfg.model.clone(),
                         temperature: Some(0.3), // 低温度，增强要稳定
-                        max_tokens: Some(2048),
+                        // 审计 CR1：2048 对中长卡 analysis MD 增强会截断，提至 8192。
+                        max_tokens: Some(8192),
                     },
                     cfg.engine.clone(),
                 )
