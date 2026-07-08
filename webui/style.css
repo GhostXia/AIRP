@@ -202,3 +202,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wb-lore-body textarea:focus { outline: none; border-color: #58a6ff; }
 .wb-lore-comment { background: #0d1117; border: 1px solid #30363d; color: #8b949e; padding: 3px 6px; border-radius: 3px; font-family: inherit; font-size: 11px; }
 .wb-lore-comment:focus { outline: none; border-color: #58a6ff; }
+
+/* ── Decompose tab ── */
+.wb-analysis-files { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 240px; overflow-y: auto; }
+.wb-analysis-file { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; background: #161b22; border: 1px solid #30363d; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.wb-analysis-file:hover { background: #21262d; border-color: #58a6ff; }
+.wb-analysis-file .wb-af-name { color: #c9d1d9; font-family: 'JetBrains Mono', monospace; }
+.wb-analysis-file .wb-af-size { color: #6e7681; font-size: 10px; }
+.wb-analysis-viewer { margin-top: 12px; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; padding: 8px; }
+.wb-analysis-viewer-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.wb-analysis-viewer-header #wb-analysis-filename { flex: 1; color: #58a6ff; font-size: 12px; }
+.wb-analysis-viewer-header button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; }
+.wb-analysis-viewer-header button:hover:not(:disabled) { background: #30363d; }
+.wb-analysis-viewer-header button:disabled { opacity: 0.5; cursor: not-allowed; }
+.wb-analysis-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.wb-analysis-pane { display: flex; flex-direction: column; gap: 4px; }
+.wb-analysis-pane-title { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.wb-analysis-pane pre { margin: 0; background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 8px; color: #c9d1d9; font-family: 'JetBrains Mono', monospace; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto; }
+.wb-analysis-pane textarea { background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 8px; color: #c9d1d9; font-family: 'JetBrains Mono', monospace; font-size: 11px; resize: vertical; min-height: 180px; max-height: 320px; }
+.wb-analysis-pane textarea:focus { outline: none; border-color: #58a6ff; }
+@media (max-width: 720px) { .wb-analysis-diff { grid-template-columns: 1fr; } }

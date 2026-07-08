@@ -26,6 +26,7 @@ pub mod chat_store;
 pub mod config;
 pub mod daemon;
 pub mod data_dir;
+pub mod decompose;
 pub mod error;
 pub mod orchestrator;
 pub mod png_parser;
