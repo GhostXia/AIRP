@@ -314,80 +314,14 @@ pub(super) async fn enhance_or_apply_character_analysis(
 
 /// L3 修复（issue #92）：调 LLM 增强 analysis MD。
 ///
-/// 与 agent 侧 `EnhanceAnalysisTool` 同路径：`state.config` + `state.http_client` +
-/// `call_streaming_api_auto`。A3：不调 `state.adapter`（DaemonState 无此字段，
-/// 计划书 placeholder 已规避）。低温度（0.3）保证增强稳定。
-///
-/// 共享 system prompt 与 agent 侧 `ENHANCE_ANALYSIS_SYSTEM_PROMPT` 一致，
-/// 避免两条路径产物漂移。
+/// 薄 wrapper 调共享 helper `crate::agent::tools::enhance_md_via_llm_shared`，
+/// 防两路径漂移（审计 CR5）。`has_changes` 比较由调用方处理。
 async fn enhance_md_via_llm(
     state: &Arc<DaemonState>,
     original_md: &str,
     filename: &str,
 ) -> Result<String, AirpError> {
-    use crate::adapter::{call_streaming_api_auto, ChatMessage, GenerationParams, MessageRole};
-    use futures_util::StreamExt;
-
-    // 复用 agent 侧共享 prompt，避免两份复制漂移（审计 G3）。
-    let system_prompt = crate::agent::tools::ENHANCE_ANALYSIS_SYSTEM_PROMPT.to_string();
-
-    let (provider_config, gen_params, engine) = {
-        let cfg = state
-            .config
-            .read()
-            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
-        (
-            std::sync::Arc::new(crate::adapter::ProviderConfig {
-                provider: cfg.provider.clone(),
-                endpoint: cfg.endpoint.clone(),
-                api_key: cfg.api_key.clone(),
-            }),
-            GenerationParams {
-                model: cfg.model.clone(),
-                temperature: Some(0.3),
-                // 审计 CR1：2048 对中长卡 analysis MD 增强会截断，提至 8192。
-                max_tokens: Some(8192),
-            },
-            cfg.engine.clone(),
-        )
-    };
-
-    let messages = vec![ChatMessage {
-        role: MessageRole::User,
-        content: format!(
-            "请增强以下角色卡分析文件（文件名：{}）：\n\n{}",
-            filename, original_md
-        ),
-    }];
-
-    let stream = call_streaming_api_auto(
-        &engine,
-        state.http_client.clone(),
-        provider_config,
-        gen_params,
-        system_prompt,
-        messages,
-    );
-    tokio::pin!(stream);
-
-    let mut enhanced = String::new();
-    let mut upstream_err: Option<String> = None;
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(token) => enhanced.push_str(&token),
-            Err(e) => {
-                upstream_err = Some(e);
-                break;
-            }
-        }
-    }
-    if let Some(e) = upstream_err {
-        return Err(AirpError::Internal(format!(
-            "enhance LLM upstream error: {}",
-            e
-        )));
-    }
-    Ok(enhanced.trim().to_string())
+    crate::agent::tools::enhance_md_via_llm_shared(state, original_md, filename).await
 }
 
 /// 递归列出目录下所有 .md 文件，返回相对路径列表。
