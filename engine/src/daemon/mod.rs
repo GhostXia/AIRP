@@ -1,6 +1,7 @@
 //! Daemon state, config, auth middleware, and axum router factory.
 
 pub(crate) mod handlers;
+pub(crate) mod decompose_handlers;
 pub mod types;
 
 pub use types::{
@@ -33,6 +34,10 @@ use handlers::{
     get_settings, import_character, list_characters, list_models, list_presets_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, reextract_character_assets, regen_chat,
     rollback_chat, update_character_card, update_character_lorebook, update_settings,
+};
+use decompose_handlers::{
+    decompose_character, decompose_preset, enhance_or_apply_character_analysis,
+    get_character_analysis_file, list_character_analysis,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -254,6 +259,25 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             get(list_sessions_endpoint).post(create_session_endpoint),
         )
         .route("/v1/settings", get(get_settings).post(update_settings))
+        // ── Decompose Agent Flow（Task 7） ──────────────────────────────────
+        .route(
+            "/v1/characters/:character_id/decompose",
+            post(decompose_character).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/v1/presets/:preset_id/decompose",
+            post(decompose_preset).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/v1/characters/:character_id/analysis",
+            get(list_character_analysis),
+        )
+        .route(
+            "/v1/characters/:character_id/analysis/*filename",
+            get(get_character_analysis_file)
+                .post(enhance_or_apply_character_analysis)
+                .layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

@@ -224,6 +224,120 @@ pub(crate) fn char_world_lorebook_path(root: &Path, character_id: &str) -> PathB
         .join("lorebook.json")
 }
 
+// ── analysis sidecar 路径函数（decompose 产物） ──────────────────────────────
+//
+// E1 修复（G1+CR1）：拆分纯路径 vs 写路径。
+// - `*_analysis_dir_path`：纯解析，不创建目录——供 list/get/enhance 读端点用
+// - `ensure_*_analysis_dir`：会 create_dir_all——仅供 decompose/apply 写端点用
+// - `*_analysis_file_path`：带白名单校验，内部调纯路径版，不创建目录
+
+/// `characters/{id}/analysis/` 目录路径（**纯解析，不创建目录**）。
+///
+/// 读端点（list/get/enhance）用此函数，避免访问不存在的 character 时
+/// 留下空 sidecar 目录。写端点用 `ensure_char_analysis_dir`。
+pub fn char_analysis_dir_path(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    super::security::validate_id_segment(character_id)?;
+    Ok(root
+        .join("characters")
+        .join(character_id)
+        .join("analysis"))
+}
+
+/// `characters/{id}/analysis/` 目录，**会创建**。仅供写端点（decompose/apply）使用。
+pub fn ensure_char_analysis_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = char_analysis_dir_path(root, character_id)?;
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// `characters/{id}/analysis/{filename}` 路径，带白名单校验（**不创建目录**）。
+///
+/// 仅允许 `[a-z0-9_/.-]+\.md`，拒路径穿越、拒非 .md 扩展。
+pub fn char_analysis_file_path(
+    root: &Path,
+    character_id: &str,
+    filename: &str,
+) -> Result<PathBuf, AirpError> {
+    use std::path::Component;
+
+    let valid = filename
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-'))
+        && filename.ends_with(".md")
+        && !filename.starts_with('/')
+        && !filename.contains("..");
+    if !valid {
+        return Err(AirpError::BadRequest(format!(
+            "invalid analysis filename: {} (only [a-z0-9_/.-]+.md allowed, no .. or leading /)",
+            filename
+        )));
+    }
+
+    let dir = char_analysis_dir_path(root, character_id)?;
+    let path = dir.join(filename);
+
+    let normal_check: bool = path
+        .strip_prefix(&dir)
+        .map_err(|_| AirpError::BadRequest("path escape".into()))?
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)));
+    if !normal_check {
+        return Err(AirpError::BadRequest(
+            "invalid analysis filename: path traversal detected".into(),
+        ));
+    }
+    Ok(path)
+}
+
+/// `presets/{id}/analysis/` 目录路径（**纯解析，不创建目录**）。
+pub fn preset_analysis_dir_path(root: &Path, preset_id: &str) -> Result<PathBuf, AirpError> {
+    super::security::validate_id_segment(preset_id)?;
+    Ok(root.join("presets").join(preset_id).join("analysis"))
+}
+
+/// `presets/{id}/analysis/` 目录，**会创建**。仅供写端点使用。
+pub fn ensure_preset_analysis_dir(root: &Path, preset_id: &str) -> Result<PathBuf, AirpError> {
+    let dir = preset_analysis_dir_path(root, preset_id)?;
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// `presets/{id}/analysis/{filename}` 路径，带白名单校验（**不创建目录**）。
+pub fn preset_analysis_file_path(
+    root: &Path,
+    preset_id: &str,
+    filename: &str,
+) -> Result<PathBuf, AirpError> {
+    use std::path::Component;
+
+    let valid = filename
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-'))
+        && filename.ends_with(".md")
+        && !filename.starts_with('/')
+        && !filename.contains("..");
+    if !valid {
+        return Err(AirpError::BadRequest(format!(
+            "invalid analysis filename: {} (only [a-z0-9_/.-]+.md allowed)",
+            filename
+        )));
+    }
+
+    let dir = preset_analysis_dir_path(root, preset_id)?;
+    let path = dir.join(filename);
+    let normal_check: bool = path
+        .strip_prefix(&dir)
+        .map_err(|_| AirpError::BadRequest("path escape".into()))?
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)));
+    if !normal_check {
+        return Err(AirpError::BadRequest(
+            "invalid analysis filename: path traversal detected".into(),
+        ));
+    }
+    Ok(path)
+}
+
 #[allow(dead_code)]
 pub(crate) fn preset_dir(root: &Path, preset_id: &str) -> Result<PathBuf, AirpError> {
     let dir = root.join("presets").join(preset_id);
@@ -562,6 +676,80 @@ pub fn list_scenes(root: &Path) -> Result<Vec<String>, AirpError> {
 // 锁 env、无需改 cwd、无需 flakiness 风险。这部分覆盖 Gemini-code-assist 在
 // PR #55 标的两条 review 之外的关键回归路径（空/空白 env、release 误入 dev
 // 模式、dirs 不可用兜底、dev 模式但 cwd 不在 repo 根）。
+
+#[cfg(test)]
+mod analysis_path_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn char_analysis_dir_path_does_not_create_directory() {
+        let tmp = tempdir().unwrap();
+        let dir = char_analysis_dir_path(tmp.path(), "alice").unwrap();
+        assert!(!dir.exists(), "char_analysis_dir_path 不得创建目录");
+        assert_eq!(
+            dir,
+            tmp.path().join("characters").join("alice").join("analysis")
+        );
+    }
+
+    #[test]
+    fn ensure_char_analysis_dir_creates_directory() {
+        let tmp = tempdir().unwrap();
+        let dir = ensure_char_analysis_dir(tmp.path(), "alice").unwrap();
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn char_analysis_file_path_rejects_traversal() {
+        let tmp = tempdir().unwrap();
+        let result = char_analysis_file_path(tmp.path(), "alice", "../escape.md");
+        assert!(result.is_err());
+        assert!(
+            !tmp.path().join("characters").join("alice").join("analysis").exists(),
+            "校验失败不得创建目录"
+        );
+    }
+
+    #[test]
+    fn char_analysis_file_path_rejects_non_md_extension() {
+        let tmp = tempdir().unwrap();
+        let result = char_analysis_file_path(tmp.path(), "alice", "basic_info.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn char_analysis_file_path_accepts_world_book_subdir() {
+        let tmp = tempdir().unwrap();
+        let result = char_analysis_file_path(tmp.path(), "alice", "world_book/index.md");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn preset_analysis_dir_path_does_not_create_directory() {
+        let tmp = tempdir().unwrap();
+        let dir = preset_analysis_dir_path(tmp.path(), "mypreset").unwrap();
+        assert!(!dir.exists());
+        assert_eq!(
+            dir,
+            tmp.path().join("presets").join("mypreset").join("analysis")
+        );
+    }
+
+    #[test]
+    fn ensure_preset_analysis_dir_creates_directory() {
+        let tmp = tempdir().unwrap();
+        let dir = ensure_preset_analysis_dir(tmp.path(), "mypreset").unwrap();
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn char_analysis_dir_path_rejects_bad_id() {
+        let tmp = tempdir().unwrap();
+        let result = char_analysis_dir_path(tmp.path(), "../escape");
+        assert!(result.is_err());
+    }
+}
 
 #[cfg(test)]
 mod data_root_tests {

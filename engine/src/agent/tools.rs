@@ -182,7 +182,16 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
         state: state.clone(),
     }))
     .expect(COLLISION);
-    reg.register(Box::new(DeleteCharacterTool { state }))
+    reg.register(Box::new(DeleteCharacterTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    // Decompose Agent Flow（Task 4）：analysis enhance/apply 工具。
+    reg.register(Box::new(EnhanceAnalysisTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(ApplyEnhancedAnalysisTool { state }))
         .expect(COLLISION);
     reg
 }
@@ -740,6 +749,171 @@ impl Tool for DeleteCharacterTool {
     }
 }
 
+// ── Decompose Agent Flow：analysis 增强 / 应用 工具（Task 6） ────────────────
+//
+// 对应计划 `docs/superpowers/plans/2026-07-07-decompose-agent-flow.md`。
+// A1 修复：enhance 只读返回 diff 预览，不写盘；apply 是 destructive → dry-run 默认。
+// A2 修复：world_book/ 开头的文件名拒绝（世界书只读，不参与 enhance）。
+//
+// 当前实现：enhance 不调 LLM，返回 original_md 作为 enhanced_md 占位（has_changes=false）。
+// 真正的 LLM 调用走 agent loop 自身的 subagent 派生路径（计划书 §4.2 两平面隔离）——
+// 协调器派生纯净 subagent 让 LLM 增强 analysis MD，然后调 apply 工具写入。
+// 此处的 EnhanceAnalysisTool 供非 loop 路径（如 MCP 工具直调）使用，先返回只读预览。
+
+/// `enhance_analysis`：读 analysis MD，返回 diff 预览（A1：不写盘）。
+/// readonly。A2：拒绝 world_book/ 前缀。
+/// params: `{ "character_id": string, "filename": string }`
+/// → `{ "filename": string, "original_md": string, "enhanced_md": string, "has_changes": bool }`
+struct EnhanceAnalysisTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for EnhanceAnalysisTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "enhance_analysis",
+            description: "Read a character analysis MD file and return a diff preview (readonly, no write). World book entries are read-only and rejected.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid_str = params
+                .get("character_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
+            let filename = params
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing filename".into()))?;
+
+            // A2 修复：世界书条目只读，不参与 enhance
+            if filename.starts_with("world_book/") {
+                return Err(AirpError::BadRequest(
+                    "world_book entries are read-only and not eligible for enhance (issue #87)"
+                        .into(),
+                ));
+            }
+
+            let cid = CharacterId::new(cid_str)?;
+            let path =
+                data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
+            if !path.exists() {
+                return Err(AirpError::NotFound(format!(
+                    "analysis file {} not found for character {}",
+                    filename, cid
+                )));
+            }
+            let original_md = std::fs::read_to_string(&path)?;
+            // 当前占位：不调 LLM，返回原内容。真正的 enhance 走 agent loop subagent 路径。
+            let enhanced_md = original_md.clone();
+            let has_changes = enhanced_md != original_md;
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "filename": filename,
+                    "original_md": original_md,
+                    "enhanced_md": enhanced_md,
+                    "has_changes": has_changes,
+                }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+/// `apply_enhanced_analysis`：写入用户确认的 enhanced_md 到 analysis MD 文件。
+/// **destructive** → 默认 dry-run，未 confirm 只回预览。
+/// A2：拒绝 world_book/ 前缀。
+/// params: `{ "character_id": string, "filename": string, "enhanced_md": string }`
+/// → `{ "character_id": string, "filename": string, "status": "applied" }`
+struct ApplyEnhancedAnalysisTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for ApplyEnhancedAnalysisTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "apply_enhanced_analysis",
+            description: "Write a confirmed enhanced_md to a character analysis MD file. Destructive — dry-run unless confirm=true. World book entries are read-only and rejected.",
+            side_effect: ToolSideEffect::Destructive,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid_str = params
+                .get("character_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
+            let filename = params
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing filename".into()))?;
+            let enhanced_md = params
+                .get("enhanced_md")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AirpError::BadRequest("missing enhanced_md".into()))?;
+
+            // A2 修复：世界书条目不可 apply
+            if filename.starts_with("world_book/") {
+                return Err(AirpError::BadRequest(
+                    "world_book entries are read-only and not eligible for enhance (issue #87)"
+                        .into(),
+                ));
+            }
+
+            let cid = CharacterId::new(cid_str)?;
+            let path =
+                data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
+            if !path.exists() {
+                return Err(AirpError::NotFound(format!(
+                    "analysis file {} not found for character {}",
+                    filename, cid
+                )));
+            }
+
+            if !confirm {
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "character_id": cid.to_string(),
+                        "filename": filename,
+                        "action": "apply_enhanced_analysis",
+                        "will_write": format!("{} bytes of enhanced_md to {}", enhanced_md.len(), filename),
+                        "requires": "confirm=true",
+                    }),
+                    dry_run: true,
+                });
+            }
+
+            tokio::fs::write(&path, enhanced_md).await?;
+            tracing::warn!(
+                character_id = %cid,
+                filename,
+                "apply_enhanced_analysis executed"
+            );
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "character_id": cid.to_string(),
+                    "filename": filename,
+                    "status": "applied",
+                }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1043,6 +1217,8 @@ mod tests {
             "list_characters",
             "get_character",
             "delete_character",
+            "enhance_analysis",
+            "apply_enhanced_analysis",
         ] {
             assert!(reg.get(name).is_some(), "missing tool: {name}");
         }
@@ -1173,6 +1349,137 @@ mod tests {
             .await
             .unwrap_err();
 
+        assert!(matches!(err, AirpError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn enhance_analysis_returns_preview_and_rejects_world_book() {
+        // A1：enhance 只读返回 diff 预览，不写盘
+        // A2：world_book/ 前缀拒绝
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        // 写一个 fixture analysis MD 文件
+        let analysis_dir = state
+            .data_root
+            .join("characters")
+            .join("alice")
+            .join("analysis");
+        std::fs::create_dir_all(&analysis_dir).unwrap();
+        let original = "# Basic Info\n\nName: Alice\n";
+        std::fs::write(analysis_dir.join("basic_info.md"), original).unwrap();
+
+        let enhance = reg.get("enhance_analysis").unwrap();
+        let r = enhance
+            .call(
+                serde_json::json!({"character_id": "alice", "filename": "basic_info.md"}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(!r.dry_run, "enhance is readonly, never dry-run");
+        assert_eq!(r.output["filename"], "basic_info.md");
+        assert_eq!(r.output["original_md"], original);
+        // 占位实现：enhanced_md == original_md，has_changes=false
+        assert_eq!(r.output["enhanced_md"], original);
+        assert_eq!(r.output["has_changes"], false);
+
+        // A2: world_book/ 前缀拒绝
+        let err = enhance
+            .call(
+                serde_json::json!({"character_id": "alice", "filename": "world_book/entry_001.md"}),
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::BadRequest(_)));
+
+        // 不存在文件 → NotFound
+        let err = enhance
+            .call(
+                serde_json::json!({"character_id": "alice", "filename": "ghost.md"}),
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn apply_enhanced_analysis_dry_run_then_confirm() {
+        // A1：apply 是 destructive → dry-run 默认，confirm=true 才写盘
+        // A2：world_book/ 前缀拒绝
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        let analysis_dir = state
+            .data_root
+            .join("characters")
+            .join("alice")
+            .join("analysis");
+        std::fs::create_dir_all(&analysis_dir).unwrap();
+        std::fs::write(analysis_dir.join("personality.md"), "old content").unwrap();
+
+        let apply = reg.get("apply_enhanced_analysis").unwrap();
+        let enhanced = "# Personality\n\nBrave and curious\n";
+
+        // dry-run → 不写盘
+        let r = apply
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "filename": "personality.md",
+                    "enhanced_md": enhanced,
+                }),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(r.dry_run);
+        assert_eq!(r.output["action"], "apply_enhanced_analysis");
+        assert_eq!(r.output["requires"], "confirm=true");
+        assert_eq!(
+            std::fs::read_to_string(analysis_dir.join("personality.md")).unwrap(),
+            "old content",
+            "dry-run must not write to disk"
+        );
+
+        // confirm=true → 写盘
+        let r = apply
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "filename": "personality.md",
+                    "enhanced_md": enhanced,
+                }),
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(!r.dry_run);
+        assert_eq!(r.output["status"], "applied");
+        assert_eq!(
+            std::fs::read_to_string(analysis_dir.join("personality.md")).unwrap(),
+            enhanced,
+            "confirm=true must write enhanced_md to disk"
+        );
+
+        // A2: world_book/ 前缀拒绝
+        let err = apply
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "filename": "world_book/entry_001.md",
+                    "enhanced_md": "evil",
+                }),
+                true,
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, AirpError::BadRequest(_)));
     }
 

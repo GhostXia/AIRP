@@ -10,11 +10,15 @@ pub(crate) use paths::{
     preset_json_path,
 };
 pub use paths::{
+    char_analysis_dir_path,
+    char_analysis_file_path,
     char_state_dir,
     char_state_history_path,
     character_dir,
     delete_character,
+    ensure_char_analysis_dir,
     ensure_data_dirs,
+    ensure_preset_analysis_dir,
     get_character,
     list_characters,
     list_presets,
@@ -22,6 +26,8 @@ pub use paths::{
     list_scenes,
     // M_UP: user persona paths
     list_users,
+    preset_analysis_dir_path,
+    preset_analysis_file_path,
     resolve_data_root,
     // DX-1: per-user data root
     resolve_effective_root,

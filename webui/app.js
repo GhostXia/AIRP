@@ -1462,6 +1462,143 @@
     }
   }
 
+  // ── Decompose tab：拆解 / analysis 文件列表 / enhance / apply ──────────────
+  // A4 修复：所有 analysis MD 内容（来自 LLM 或用户编辑，属 untrusted data）
+  // 一律用 textContent 渲染，绝不用 innerHTML 注入。原始内容显示在 <pre>（只读），
+  // 增强后内容显示在 <textarea>（可编辑，apply 时写盘）。
+  const wbDecomposeStatus = $('#wb-decompose-status');
+  const wbAnalysisFiles = $('#wb-analysis-files');
+  const wbAnalysisViewer = $('#wb-analysis-viewer');
+  const wbAnalysisFilename = $('#wb-analysis-filename');
+  const wbAnalysisOriginal = $('#wb-analysis-original');
+  const wbAnalysisEnhanced = $('#wb-analysis-enhanced');
+  const btnWbDecompose = $('#btn-wb-decompose');
+  const btnWbListAnalysis = $('#btn-wb-list-analysis');
+  const btnWbAnalysisEnhance = $('#btn-wb-analysis-enhance');
+  const btnWbAnalysisApply = $('#btn-wb-analysis-apply');
+  const btnWbAnalysisClose = $('#btn-wb-analysis-close');
+  const wbDecomposeForce = $('#wb-decompose-force');
+  let wbAnalysisCurrentFilename = null;
+
+  async function decomposeCharacter() {
+    if (!selectedChar) return;
+    const force = wbDecomposeForce && wbDecomposeForce.checked;
+    wbDecomposeStatus.textContent = '拆解中…';
+    btnWbDecompose.disabled = true;
+    const path = '/v1/characters/' + encodeURIComponent(selectedChar) + '/decompose' + (force ? '?force=true' : '');
+    const r = await api('POST', path);
+    btnWbDecompose.disabled = false;
+    if (r.ok) {
+      const data = r.data || {};
+      wbDecomposeStatus.textContent = '已拆解 ✓（' + (data.files_written?.length ?? '?') + ' 个文件'
+        + (data.lorebook_decomposed ? '，含世界书' : '') + '）';
+      loadAnalysisFileList();
+    } else {
+      wbDecomposeStatus.textContent = '拆解失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  async function loadAnalysisFileList() {
+    if (!selectedChar) return;
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(selectedChar) + '/analysis');
+    wbAnalysisFiles.innerHTML = '';
+    if (!r.ok) {
+      wbDecomposeStatus.textContent = '加载文件列表失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    const files = (r.data && r.data.files) || [];
+    if (!files.length) {
+      const empty = document.createElement('div');
+      empty.className = 'hint';
+      empty.textContent = '尚无 analysis 文件（点"拆解角色卡"生成）';
+      wbAnalysisFiles.appendChild(empty);
+      return;
+    }
+    wbDecomposeStatus.textContent = '已加载 ' + files.length + ' 个文件';
+    for (const f of files) {
+      const row = document.createElement('div');
+      row.className = 'wb-analysis-file';
+      const name = document.createElement('span');
+      name.className = 'wb-af-name';
+      // A4 修复：filename 来自服务端但仍是 untrusted，用 textContent
+      name.textContent = f.filename;
+      const size = document.createElement('span');
+      size.className = 'wb-af-size';
+      size.textContent = f.size + ' B';
+      row.appendChild(name);
+      row.appendChild(size);
+      row.addEventListener('click', () => loadAnalysisFile(f.filename));
+      wbAnalysisFiles.appendChild(row);
+    }
+  }
+
+  async function loadAnalysisFile(filename) {
+    if (!selectedChar) return;
+    // filename 已通过服务端白名单校验（[a-z0-9_/.-]+\.md），直接拼接到 URL 路径。
+    // 不用 encodeURIComponent——它会编码 / 为 %2F，axum /*filename 通配符不解码。
+    const r = await api('GET', '/v1/characters/' + encodeURIComponent(selectedChar) + '/analysis/' + filename);
+    if (!r.ok) {
+      wbDecomposeStatus.textContent = '读文件失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    wbAnalysisCurrentFilename = filename;
+    // A4 修复：用 textContent 渲染 untrusted MD 内容，绝不用 innerHTML
+    wbAnalysisFilename.textContent = filename;
+    wbAnalysisOriginal.textContent = r.data.content || '';
+    wbAnalysisEnhanced.value = r.data.content || '';
+    btnWbAnalysisApply.hidden = true;
+    wbAnalysisViewer.hidden = false;
+    wbDecomposeStatus.textContent = '已加载 ' + filename;
+  }
+
+  async function enhanceAnalysis() {
+    if (!selectedChar || !wbAnalysisCurrentFilename) return;
+    wbDecomposeStatus.textContent = '生成 diff 预览中…';
+    btnWbAnalysisEnhance.disabled = true;
+    const body = { action: 'enhance' };
+    const r = await api('POST',
+      '/v1/characters/' + encodeURIComponent(selectedChar) + '/analysis/' + wbAnalysisCurrentFilename,
+      body);
+    btnWbAnalysisEnhance.disabled = false;
+    if (!r.ok) {
+      wbDecomposeStatus.textContent = 'enhance 失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    const data = r.data || {};
+    // A4 修复：enhanced_md 来自 LLM/占位，仍是 untrusted，用 .value 设置（textarea）
+    wbAnalysisEnhanced.value = data.enhanced_md || '';
+    btnWbAnalysisApply.hidden = false;
+    wbDecomposeStatus.textContent = data.has_changes
+      ? '已生成 diff 预览（有变化，确认后点 Apply 写盘）'
+      : '已生成 diff 预览（无变化）';
+  }
+
+  async function applyEnhanced() {
+    if (!selectedChar || !wbAnalysisCurrentFilename) return;
+    const enhanced_md = wbAnalysisEnhanced.value;
+    if (!confirm('确认把 enhanced_md 写入 ' + wbAnalysisCurrentFilename + ' ？此操作覆盖原文件。')) return;
+    wbDecomposeStatus.textContent = '写盘中…';
+    btnWbAnalysisApply.disabled = true;
+    const body = { action: 'apply', enhanced_md };
+    const r = await api('POST',
+      '/v1/characters/' + encodeURIComponent(selectedChar) + '/analysis/' + wbAnalysisCurrentFilename,
+      body);
+    btnWbAnalysisApply.disabled = false;
+    if (r.ok) {
+      wbDecomposeStatus.textContent = '已写盘 ✓';
+      // 重新加载原文件内容
+      wbAnalysisOriginal.textContent = enhanced_md;
+      btnWbAnalysisApply.hidden = true;
+    } else {
+      wbDecomposeStatus.textContent = 'apply 失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  function closeAnalysisViewer() {
+    wbAnalysisViewer.hidden = true;
+    wbAnalysisCurrentFilename = null;
+  }
+
   // Tab 切换
   $$('.wb-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1470,6 +1607,8 @@
       const target = tab.dataset.tab;
       $('#wb-tab-card').hidden = target !== 'card';
       $('#wb-tab-lorebook').hidden = target !== 'lorebook';
+      $('#wb-tab-decompose').hidden = target !== 'decompose';
+      if (target === 'decompose') loadAnalysisFileList();
     });
   });
 
@@ -1479,6 +1618,12 @@
   if (btnWbSaveCard) btnWbSaveCard.addEventListener('click', saveWorkbenchCard);
   if (btnWbSaveLore) btnWbSaveLore.addEventListener('click', saveWorkbenchLore);
   if (btnWbAddLore) btnWbAddLore.addEventListener('click', addLoreEntry);
+  // Decompose tab
+  if (btnWbDecompose) btnWbDecompose.addEventListener('click', decomposeCharacter);
+  if (btnWbListAnalysis) btnWbListAnalysis.addEventListener('click', loadAnalysisFileList);
+  if (btnWbAnalysisEnhance) btnWbAnalysisEnhance.addEventListener('click', enhanceAnalysis);
+  if (btnWbAnalysisApply) btnWbAnalysisApply.addEventListener('click', applyEnhanced);
+  if (btnWbAnalysisClose) btnWbAnalysisClose.addEventListener('click', closeAnalysisViewer);
 
   // ESC 关闭工作台（但 textarea/input 中按 ESC 不关，避免丢失未保存编辑）
   document.addEventListener('keydown', (e) => {
