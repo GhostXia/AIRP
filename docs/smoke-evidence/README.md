@@ -39,7 +39,7 @@ webui → engine /v1/chat/completions
 
 补真 DeepSeek API key 后重发同一请求，收真流式回复帧（见 `sse-response-deepseek.txt`）：
 
-```
+```text
 event: message
 data: {"type":"body_chunk","text":"（"}
 data: {"type":"body_chunk","text":"热情"}
