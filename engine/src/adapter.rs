@@ -143,11 +143,13 @@ pub fn call_streaming_api(
             payload["max_tokens"] = serde_json::Value::from(max);
         }
 
-        let response = request
-            .json(&payload)
-            .timeout(chat_request_timeout())
-            .send()
+        // #67 #7 / 审计 G1：用 tokio::time::timeout 包 request.send().await，仅保护
+        // "建连到响应头"阶段。send() 收到响应头即返回，body streaming 在 send 返回后
+        // 才由 bytes_stream() 消费——故慢 token 不误杀，恰挡"建连后挂死"。
+        // ⚠️ 不用 RequestBuilder::timeout（套到整个 response body 接收完成，会误杀长文本流式）。
+        let response = tokio::time::timeout(chat_request_timeout(), request.json(&payload).send())
             .await
+            .map_err(|_| "请求超时: 等待响应头超时".to_string())?
             .map_err(|e| format!("发送请求失败: {}", e))?;
 
         let mut byte_stream = if !response.status().is_success() {
@@ -236,11 +238,11 @@ pub fn call_streaming_api_anthropic(
             payload["temperature"] = serde_json::Value::from(t);
         }
 
-        let response = request
-            .json(&payload)
-            .timeout(chat_request_timeout())
-            .send()
+        // #67 #7 / 审计 G2：同 openai 路径，tokio::time::timeout 包 send().await，
+        // 仅保护建连到响应头，不误杀流式 body。
+        let response = tokio::time::timeout(chat_request_timeout(), request.json(&payload).send())
             .await
+            .map_err(|_| "请求超时: 等待响应头超时".to_string())?
             .map_err(|e| format!("发送请求失败: {}", e))?;
 
         let mut byte_stream = if !response.status().is_success() {

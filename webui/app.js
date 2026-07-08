@@ -1011,9 +1011,13 @@
             }
             const u0 = (msgs[0].text || msgs[0].content || '').includes('并发流 A');
             const u2 = (msgs[2].text || msgs[2].content || '').includes('并发流 B');
+            // 审计 G3：并发请求写入顺序非确定（B 先 A 后也合法），容两种合法顺序避 flaky。
+            const b0 = (msgs[0].text || msgs[0].content || '').includes('并发流 B');
+            const a2 = (msgs[2].text || msgs[2].content || '').includes('并发流 A');
+            const contentOk = (u0 && u2) || (b0 && a2);
             if (roleMismatch.length) assertion = '✗ role 顺序错: ' + roleMismatch.join(', ');
-            else if (!u0 || !u2) assertion = '✗ user 内容不匹配 A/B';
-            else assertion = '✓ history 顺序正确（u-A→a-A→u-B→a-B），无串扰';
+            else if (!contentOk) assertion = '✗ user 内容不匹配 A/B';
+            else assertion = '✓ history 顺序正确，无串扰';
           }
         } else {
           assertion = '⚠ history 读取失败 ' + h.status + '（无法校持久化）';
