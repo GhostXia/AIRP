@@ -1478,6 +1478,9 @@
   const btnWbAnalysisApply = $('#btn-wb-analysis-apply');
   const btnWbAnalysisClose = $('#btn-wb-analysis-close');
   const wbDecomposeForce = $('#wb-decompose-force');
+  // L4 修复（issue #92）：预设拆解按钮 + 预设选择器
+  const btnWbDecomposePreset = $('#btn-wb-decompose-preset');
+  const wbPresetSelect = $('#wb-preset-select');
   let wbAnalysisCurrentFilename = null;
 
   async function decomposeCharacter() {
@@ -1599,6 +1602,51 @@
     wbAnalysisCurrentFilename = null;
   }
 
+  // L4 修复（issue #92）：预设拆解 — 复用 decomposeCharacter 的 force 选项 + 状态栏
+  async function decomposePreset() {
+    const presetId = wbPresetSelect.value;
+    if (!presetId) {
+      wbDecomposeStatus.textContent = '请先选择预设';
+      return;
+    }
+    const force = wbDecomposeForce && wbDecomposeForce.checked;
+    wbDecomposeStatus.textContent = '拆解预设中…';
+    btnWbDecomposePreset.disabled = true;
+    const path = '/v1/presets/' + encodeURIComponent(presetId) + '/decompose' + (force ? '?force=true' : '');
+    const r = await api('POST', path);
+    btnWbDecomposePreset.disabled = false;
+    if (r.ok) {
+      const data = r.data || {};
+      wbDecomposeStatus.textContent = '预设已拆解 ✓（' + (data.files_written?.length ?? '?')
+        + ' 个文件，产物在 presets/' + presetId + '/analysis/）';
+    } else {
+      wbDecomposeStatus.textContent = '预设拆解失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  // 加载预设列表到下拉框（切到拆解 tab 时触发）
+  async function loadPresetOptions() {
+    const r = await api('GET', '/v1/presets');
+    if (!r.ok) {
+      // 审计 CR3：仿 loadAnalysisFileList 写失败反馈，避免 UI 静默空下拉框。
+      wbDecomposeStatus.textContent = '加载预设列表失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    const presets = Array.isArray(r.data) ? r.data : [];
+    // 清空并重建选项（用 textContent 避免 XSS）
+    while (wbPresetSelect.firstChild) wbPresetSelect.removeChild(wbPresetSelect.firstChild);
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— 选择预设 —';
+    wbPresetSelect.appendChild(placeholder);
+    for (const p of presets) {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = p;
+      wbPresetSelect.appendChild(opt);
+    }
+  }
+
   // Tab 切换
   $$('.wb-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1608,7 +1656,10 @@
       $('#wb-tab-card').hidden = target !== 'card';
       $('#wb-tab-lorebook').hidden = target !== 'lorebook';
       $('#wb-tab-decompose').hidden = target !== 'decompose';
-      if (target === 'decompose') loadAnalysisFileList();
+      if (target === 'decompose') {
+        loadAnalysisFileList();
+        loadPresetOptions(); // L4：切到拆解 tab 时加载预设列表
+      }
     });
   });
 
@@ -1621,6 +1672,7 @@
   // Decompose tab
   if (btnWbDecompose) btnWbDecompose.addEventListener('click', decomposeCharacter);
   if (btnWbListAnalysis) btnWbListAnalysis.addEventListener('click', loadAnalysisFileList);
+  if (btnWbDecomposePreset) btnWbDecomposePreset.addEventListener('click', decomposePreset); // L4
   if (btnWbAnalysisEnhance) btnWbAnalysisEnhance.addEventListener('click', enhanceAnalysis);
   if (btnWbAnalysisApply) btnWbAnalysisApply.addEventListener('click', applyEnhanced);
   if (btnWbAnalysisClose) btnWbAnalysisClose.addEventListener('click', closeAnalysisViewer);

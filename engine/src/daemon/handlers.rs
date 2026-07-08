@@ -1622,4 +1622,143 @@ mod tests {
             "not-a-url?redacted"
         );
     }
+
+    // ── L1 修复（issue #89 B3 / #92 L1）：非法 card.json 校验测试覆盖 ───────
+    //
+    // PR #62 Gemini 建议写入前校验 TavernCardV2。本组测试覆盖非法 card.json 场景，
+    // 断言现有行为：语法错误 / 预设误导入 / 缺 data.name 均被正确处理。
+
+    /// 非法 JSON 语法 → BadRequest "不是有效 JSON"
+    #[test]
+    fn l1_invalid_card_json_syntax_rejected() {
+        let data_root = tempfile::tempdir().unwrap();
+        let result = import_card_to_disk(
+            data_root.path(),
+            Some("bad-syntax"),
+            None,
+            Some("{not valid json".to_string()),
+            None,
+        );
+        assert!(
+            matches!(&result, Err(AirpError::BadRequest(msg)) if msg.contains("不是有效 JSON")),
+            "expected BadRequest with JSON syntax error, got: {:?}",
+            result
+        );
+        // 不留脏文件
+        assert!(!data_root
+            .path()
+            .join("characters/bad-syntax")
+            .exists());
+    }
+
+    /// JSON 是预设（顶层 prompts[] + 模型参数）→ BadRequest "像 SillyTavern 预设"
+    #[test]
+    fn l1_preset_misimport_as_card_rejected() {
+        let data_root = tempfile::tempdir().unwrap();
+        let preset_json = serde_json::json!({
+            "prompts": [{"name": "sys", "content": "be helpful"}],
+            "model": "gpt-4o",
+            "temperature": 0.7
+        })
+        .to_string();
+        let result = import_card_to_disk(
+            data_root.path(),
+            Some("preset-as-card"),
+            None,
+            Some(preset_json),
+            None,
+        );
+        assert!(
+            matches!(&result, Err(AirpError::BadRequest(msg)) if msg.contains("预设")),
+            "expected BadRequest rejecting preset-as-card, got: {:?}",
+            result
+        );
+        assert!(!data_root
+            .path()
+            .join("characters/preset-as-card")
+            .exists());
+    }
+
+    /// 合法 JSON 但缺 data.name → slugify 回退为 "character"，仍可导入（覆盖现有行为）
+    #[test]
+    fn l1_card_missing_data_name_falls_back_to_character_id() {
+        let data_root = tempfile::tempdir().unwrap();
+        // 无 data.name 的 v2 卡：spec 正确但缺 name 字段
+        let json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "",
+                "description": "test",
+                "first_mes": "hi"
+            }
+        })
+        .to_string();
+        // 传 None 触发 slugify 派生路径，由于 name 为空，应回退为 "character"
+        let (id, _fmt, _json) = import_card_to_disk(
+            data_root.path(),
+            None,
+            None,
+            Some(json),
+            None,
+        )
+        .unwrap();
+        assert_eq!(id, "character");
+        // 落盘成功
+        assert!(data_root
+            .path()
+            .join("characters/character/card.json")
+            .exists());
+    }
+
+    /// 合法 v2 卡 + 显式 character_id → 正常导入（happy path 覆盖）
+    #[test]
+    fn l1_valid_v2_card_imports() {
+        let data_root = tempfile::tempdir().unwrap();
+        let json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "Alice",
+                "description": "a knight",
+                "first_mes": "Hello!"
+            }
+        })
+        .to_string();
+        let (id, fmt, _json) = import_card_to_disk(
+            data_root.path(),
+            Some("alice-test"),
+            None,
+            Some(json),
+            None,
+        )
+        .unwrap();
+        assert_eq!(id, "alice-test");
+        assert_eq!(fmt, "json");
+        assert!(data_root
+            .path()
+            .join("characters/alice-test/card.json")
+            .exists());
+        assert!(data_root
+            .path()
+            .join("characters/alice-test/card/raw.json")
+            .exists());
+    }
+
+    /// 三参数全 None → BadRequest "必须提供 ... 之一"
+    #[test]
+    fn l1_no_card_source_rejected() {
+        let data_root = tempfile::tempdir().unwrap();
+        let result = import_card_to_disk(data_root.path(), Some("none"), None, None, None);
+        assert!(
+            matches!(&result, Err(AirpError::BadRequest(msg)) if msg.contains("card_path") && msg.contains("card_json")),
+            "expected BadRequest requiring one of card_path/card_json/card_png_base64, got: {:?}",
+            result
+        );
+        // 不留脏文件（审计 CR4：与其他拒绝测试一致防御）
+        assert!(!data_root
+            .path()
+            .join("characters/none")
+            .exists());
+    }
 }

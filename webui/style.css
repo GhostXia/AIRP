@@ -171,6 +171,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wb-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 .wb-actions button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; }
 .wb-actions button:hover:not(:disabled) { background: #30363d; }
+/* L4：预设拆解行 — 下拉框与按钮对齐 */
+.wb-preset-decompose-row select { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 8px; border-radius: 4px; font-size: 12px; max-width: 200px; }
 
 /* 角色卡字段 */
 .wb-fields { display: flex; flex-direction: column; gap: 8px; }

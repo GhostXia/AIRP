@@ -95,12 +95,17 @@
         </div>
       </div>
       <div id="wb-tab-decompose" class="wb-tab-content" hidden>
-        <div class="hint">拆解角色卡为 analysis MD 骨架（不调 LLM），enhance 走 agent loop。</div>
+        <div class="hint">拆解角色卡 / 预设为 analysis MD 骨架（不调 LLM），enhance 走 agent loop。</div>
         <div class="wb-actions">
           <button id="btn-wb-decompose" class="btn-primary">拆解角色卡</button>
           <label class="inline-label"><input id="wb-decompose-force" type="checkbox" /> force 覆盖</label>
           <button id="btn-wb-list-analysis">刷新文件列表</button>
           <span id="wb-decompose-status" class="hint">—</span>
+        </div>
+        <div class="wb-actions wb-preset-decompose-row">
+          <button id="btn-wb-decompose-preset">拆解预设</button>
+          <select id="wb-preset-select" class="mono"></select>
+          <span class="hint">（预设拆解产物在 presets/&lt;id&gt;/analysis/，本页仅列角色卡 analysis）</span>
         </div>
         <div id="wb-analysis-files" class="wb-analysis-files"></div>
         <div id="wb-analysis-viewer" class="wb-analysis-viewer" hidden>
