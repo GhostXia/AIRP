@@ -280,11 +280,10 @@ pub(super) async fn enhance_or_apply_character_analysis(
     match body.action.as_str() {
         "enhance" => {
             let original_md = std::fs::read_to_string(&path)?;
-            // A1 修复：enhance 只读返回 diff 预览，不写盘。
-            // 真正的 LLM enhance 由 agent 侧 EnhanceAnalysisTool 执行；
-            // HTTP 端点当前返回 original_md 作为占位（has_changes=false），
-            // 供非 agent 调用方测试端点连通性。
-            let enhanced_md = original_md.clone();
+            // L3 修复（issue #92）：HTTP 端点也真正调 LLM 增强 MD。
+            // 与 EnhanceAnalysisTool 同路径：state.config + http_client + call_streaming_api_auto。
+            let enhanced_md =
+                enhance_md_via_llm(&state, &original_md, &filename).await?;
             let has_changes = enhanced_md != original_md;
             Ok(Json(serde_json::to_value(EnhancePreview {
                 filename,
@@ -312,6 +311,90 @@ pub(super) async fn enhance_or_apply_character_analysis(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// L3 修复（issue #92）：调 LLM 增强 analysis MD。
+///
+/// 与 agent 侧 `EnhanceAnalysisTool` 同路径：`state.config` + `state.http_client` +
+/// `call_streaming_api_auto`。A3：不调 `state.adapter`（DaemonState 无此字段，
+/// 计划书 placeholder 已规避）。低温度（0.3）保证增强稳定。
+///
+/// 共享 system prompt 与 agent 侧 `ENHANCE_ANALYSIS_SYSTEM_PROMPT` 一致，
+/// 避免两条路径产物漂移。
+async fn enhance_md_via_llm(
+    state: &Arc<DaemonState>,
+    original_md: &str,
+    filename: &str,
+) -> Result<String, AirpError> {
+    use crate::adapter::{call_streaming_api_auto, ChatMessage, GenerationParams, MessageRole};
+    use futures_util::StreamExt;
+
+    const SYSTEM_PROMPT: &str = r#"你是角色卡分析增强助手。下面会给你一份角色卡拆解生成的 Markdown 分析文件，其中可能含 `<!-- Agent分析后填充 -->` 占位符。
+
+任务：
+1. 阅读全文，理解角色设定。
+2. 补全所有 `<!-- Agent分析后填充 -->` 占位符，写出具体、贴合角色的内容。
+3. 保留原有标题层级、字段名、表格结构，不删改已有非占位内容。
+4. 输出完整的增强后 Markdown（不要包 ```markdown 围栏，不要加任何前后缀说明）。
+5. 世界书条目（world_book/ 前缀）不允许 enhance，调用方已拦截，你不会收到。
+"#;
+
+    let (provider_config, gen_params, engine) = {
+        let cfg = state
+            .config
+            .read()
+            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+        (
+            std::sync::Arc::new(crate::adapter::ProviderConfig {
+                provider: cfg.provider.clone(),
+                endpoint: cfg.endpoint.clone(),
+                api_key: cfg.api_key.clone(),
+            }),
+            GenerationParams {
+                model: cfg.model.clone(),
+                temperature: Some(0.3),
+                max_tokens: Some(2048),
+            },
+            cfg.engine.clone(),
+        )
+    };
+
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: format!(
+            "请增强以下角色卡分析文件（文件名：{}）：\n\n{}",
+            filename, original_md
+        ),
+    }];
+
+    let stream = call_streaming_api_auto(
+        &engine,
+        state.http_client.clone(),
+        provider_config,
+        gen_params,
+        SYSTEM_PROMPT.to_string(),
+        messages,
+    );
+    tokio::pin!(stream);
+
+    let mut enhanced = String::new();
+    let mut upstream_err: Option<String> = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(token) => enhanced.push_str(&token),
+            Err(e) => {
+                upstream_err = Some(e);
+                break;
+            }
+        }
+    }
+    if let Some(e) = upstream_err {
+        return Err(AirpError::Internal(format!(
+            "enhance LLM upstream error: {}",
+            e
+        )));
+    }
+    Ok(enhanced.trim().to_string())
+}
 
 /// 递归列出目录下所有 .md 文件，返回相对路径列表。
 fn list_md_files_recursive(dir: &std::path::Path) -> Result<Vec<AnalysisFileEntry>, AirpError> {

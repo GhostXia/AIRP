@@ -755,13 +755,25 @@ impl Tool for DeleteCharacterTool {
 // A1 修复：enhance 只读返回 diff 预览，不写盘；apply 是 destructive → dry-run 默认。
 // A2 修复：world_book/ 开头的文件名拒绝（世界书只读，不参与 enhance）。
 //
-// 当前实现：enhance 不调 LLM，返回 original_md 作为 enhanced_md 占位（has_changes=false）。
-// 真正的 LLM 调用走 agent loop 自身的 subagent 派生路径（计划书 §4.2 两平面隔离）——
-// 协调器派生纯净 subagent 让 LLM 增强 analysis MD，然后调 apply 工具写入。
-// 此处的 EnhanceAnalysisTool 供非 loop 路径（如 MCP 工具直调）使用，先返回只读预览。
+// L3 修复（issue #92）：enhance 真正调 LLM 增强 analysis MD。
+// A3 修复：不调 `state.adapter`（DaemonState 无此字段，计划书 placeholder 已规避），
+// 改用 `state.http_client` + `state.config` + `call_streaming_api_auto`，
+// 与 chat_pipeline 同路径。LLM 输出原样作为 enhanced_md 返回，apply 端点二次确认写盘。
 
-/// `enhance_analysis`：读 analysis MD，返回 diff 预览（A1：不写盘）。
+/// enhance 专用 system prompt：指示 LLM 增强 analysis MD，保留结构、补全占位符。
+const ENHANCE_ANALYSIS_SYSTEM_PROMPT: &str = r#"你是角色卡分析增强助手。下面会给你一份角色卡拆解生成的 Markdown 分析文件，其中可能含 `<!-- Agent分析后填充 -->` 占位符。
+
+任务：
+1. 阅读全文，理解角色设定。
+2. 补全所有 `<!-- Agent分析后填充 -->` 占位符，写出具体、贴合角色的内容。
+3. 保留原有标题层级、字段名、表格结构，不删改已有非占位内容。
+4. 输出完整的增强后 Markdown（不要包 ```markdown 围栏，不要加任何前后缀说明）。
+5. 世界书条目（world_book/ 前缀）不允许 enhance，调用方已拦截，你不会收到。
+"#;
+
+/// `enhance_analysis`：读 analysis MD，调 LLM 增强，返回 diff 预览（A1：不写盘）。
 /// readonly。A2：拒绝 world_book/ 前缀。
+/// L3：真正调 LLM（call_streaming_api_auto，与 chat_pipeline 同路径）。
 /// params: `{ "character_id": string, "filename": string }`
 /// → `{ "filename": string, "original_md": string, "enhanced_md": string, "has_changes": bool }`
 struct EnhanceAnalysisTool {
@@ -772,7 +784,7 @@ impl Tool for EnhanceAnalysisTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "enhance_analysis",
-            description: "Read a character analysis MD file and return a diff preview (readonly, no write). World book entries are read-only and rejected.",
+            description: "Read a character analysis MD file, call LLM to fill placeholders, and return a diff preview (readonly, no write). World book entries are read-only and rejected.",
             side_effect: ToolSideEffect::Readonly,
         }
     }
@@ -811,9 +823,67 @@ impl Tool for EnhanceAnalysisTool {
                 )));
             }
             let original_md = std::fs::read_to_string(&path)?;
-            // 当前占位：不调 LLM，返回原内容。真正的 enhance 走 agent loop subagent 路径。
-            let enhanced_md = original_md.clone();
-            let has_changes = enhanced_md != original_md;
+
+            // L3：调 LLM 增强 MD。与 chat_pipeline 同路径：state.config + http_client + call_streaming_api_auto。
+            let (provider_config, gen_params, engine) = {
+                let cfg = state
+                    .config
+                    .read()
+                    .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+                (
+                    Arc::new(crate::adapter::ProviderConfig {
+                        provider: cfg.provider.clone(),
+                        endpoint: cfg.endpoint.clone(),
+                        api_key: cfg.api_key.clone(),
+                    }),
+                    crate::adapter::GenerationParams {
+                        model: cfg.model.clone(),
+                        temperature: Some(0.3), // 低温度，增强要稳定
+                        max_tokens: Some(2048),
+                    },
+                    cfg.engine.clone(),
+                )
+            };
+
+            let messages = vec![ChatMessage {
+                role: MessageRole::User,
+                content: format!(
+                    "请增强以下角色卡分析文件（文件名：{}）：\n\n{}",
+                    filename, original_md
+                ),
+            }];
+
+            let stream = crate::adapter::call_streaming_api_auto(
+                &engine,
+                state.http_client.clone(),
+                provider_config,
+                gen_params,
+                ENHANCE_ANALYSIS_SYSTEM_PROMPT.to_string(),
+                messages,
+            );
+            tokio::pin!(stream);
+
+            use futures_util::StreamExt;
+            let mut enhanced_md = String::new();
+            let mut upstream_err: Option<String> = None;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(token) => enhanced_md.push_str(&token),
+                    Err(e) => {
+                        upstream_err = Some(e);
+                        break;
+                    }
+                }
+            }
+            if let Some(e) = upstream_err {
+                return Err(AirpError::Internal(format!(
+                    "enhance LLM upstream error: {}",
+                    e
+                )));
+            }
+
+            let enhanced_md = enhanced_md.trim().to_string();
+            let has_changes = enhanced_md != original_md.trim();
             Ok(ToolResult {
                 output: serde_json::json!({
                     "filename": filename,
@@ -1354,10 +1424,39 @@ mod tests {
 
     #[tokio::test]
     async fn enhance_analysis_returns_preview_and_rejects_world_book() {
+        // L2 修复（issue #92）：用 wiremock mock LLM upstream。
+        // L3：enhance 真正调 LLM，测试需 mock，否则烧 token + DNS 失败。
         // A1：enhance 只读返回 diff 预览，不写盘
         // A2：world_book/ 前缀拒绝
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let enhanced_content = "# Basic Info\n\nName: Alice\nDescription: A brave knight\n";
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}\n\ndata: [DONE]\n\n",
+                serde_json::to_string(enhanced_content).unwrap()
+            )))
+            .mount(&mock_server)
+            .await;
+
         let tmp = tempdir().unwrap();
-        let state = make_state(tmp.path().to_path_buf());
+        let state = Arc::new(DaemonState {
+            data_root: tmp.path().to_path_buf(),
+            http_client: reqwest::Client::new(),
+            config: std::sync::RwLock::new(MutableConfig {
+                provider: Provider::OpenAI,
+                endpoint: format!("{}/v1/chat/completions", mock_server.uri()),
+                api_key: Some("test-key".to_string()),
+                model: "test-model".to_string(),
+                volume_config: VolumeConfig::default(),
+                access_api_key: None,
+                engine: BackendEngine::default(),
+                quota: crate::quota::QuotaConfig::default(),
+            }),
+        });
         crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
         let reg = default_registry(state.clone());
 
@@ -1382,9 +1481,17 @@ mod tests {
         assert!(!r.dry_run, "enhance is readonly, never dry-run");
         assert_eq!(r.output["filename"], "basic_info.md");
         assert_eq!(r.output["original_md"], original);
-        // 占位实现：enhanced_md == original_md，has_changes=false
-        assert_eq!(r.output["enhanced_md"], original);
-        assert_eq!(r.output["has_changes"], false);
+        // L3：enhanced_md 来自 LLM mock，has_changes=true
+        // 注意：enhance 会 trim LLM 输出，故比较时用 trim
+        assert_eq!(r.output["enhanced_md"].as_str().unwrap().trim(), enhanced_content.trim());
+        assert_eq!(r.output["has_changes"], true);
+
+        // enhance 不写盘（A1：readonly）
+        assert_eq!(
+            std::fs::read_to_string(analysis_dir.join("basic_info.md")).unwrap(),
+            original,
+            "enhance is readonly — must not write to disk"
+        );
 
         // A2: world_book/ 前缀拒绝
         let err = enhance
