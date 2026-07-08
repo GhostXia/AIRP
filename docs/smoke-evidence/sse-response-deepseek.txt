@@ -1,0 +1,120 @@
+event: message
+data: {"type":"body_chunk","text":"（"}
+
+event: message
+data: {"type":"body_chunk","text":"热情"}
+
+event: message
+data: {"type":"body_chunk","text":"地"}
+
+event: message
+data: {"type":"body_chunk","text":"挥手"}
+
+event: message
+data: {"type":"body_chunk","text":"）"}
+
+event: message
+data: {"type":"body_chunk","text":"你好"}
+
+event: message
+data: {"type":"body_chunk","text":"！"}
+
+event: message
+data: {"type":"body_chunk","text":"我是"}
+
+event: message
+data: {"type":"body_chunk","text":"这个"}
+
+event: message
+data: {"type":"body_chunk","text":"世界的"}
+
+event: message
+data: {"type":"body_chunk","text":"AI"}
+
+event: message
+data: {"type":"body_chunk","text":"助手"}
+
+event: message
+data: {"type":"body_chunk","text":"，"}
+
+event: message
+data: {"type":"body_chunk","text":"你可以"}
+
+event: message
+data: {"type":"body_chunk","text":"叫我"}
+
+event: message
+data: {"type":"body_chunk","text":"“"}
+
+event: message
+data: {"type":"body_chunk","text":"小"}
+
+event: message
+data: {"type":"body_chunk","text":"智"}
+
+event: message
+data: {"type":"body_chunk","text":"”。"}
+
+event: message
+data: {"type":"body_chunk","text":"随时"}
+
+event: message
+data: {"type":"body_chunk","text":"为你"}
+
+event: message
+data: {"type":"body_chunk","text":"解答"}
+
+event: message
+data: {"type":"body_chunk","text":"问题"}
+
+event: message
+data: {"type":"body_chunk","text":"、"}
+
+event: message
+data: {"type":"body_chunk","text":"提供"}
+
+event: message
+data: {"type":"body_chunk","text":"帮助"}
+
+event: message
+data: {"type":"body_chunk","text":"，"}
+
+event: message
+data: {"type":"body_chunk","text":"无论是"}
+
+event: message
+data: {"type":"body_chunk","text":"学习"}
+
+event: message
+data: {"type":"body_chunk","text":"、"}
+
+event: message
+data: {"type":"body_chunk","text":"娱乐"}
+
+event: message
+data: {"type":"body_chunk","text":"还是"}
+
+event: message
+data: {"type":"body_chunk","text":"闲聊"}
+
+event: message
+data: {"type":"body_chunk","text":"，"}
+
+event: message
+data: {"type":"body_chunk","text":"我"}
+
+event: message
+data: {"type":"body_chunk","text":"都很"}
+
+event: message
+data: {"type":"body_chunk","text":"乐意"}
+
+event: message
+data: {"type":"body_chunk","text":"陪你"}
+
+event: message
+data: {"type":"body_chunk","text":"聊聊"}
+
+event: message
+data: {"type":"body_chunk","text":"！"}
+

@@ -74,7 +74,7 @@ pub(super) async fn get_settings(
         .config
         .read()
         .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
-    Ok(Json(SettingsView::from_config(&cfg)))
+    Ok(Json(SettingsView::from_config(&cfg, &state.data_root)))
 }
 
 /// POST /v1/settings — 用 `PartialAppConfig` 合并到当前运行时配置 + 落盘
@@ -132,7 +132,7 @@ pub(super) async fn update_settings(
     let path = state.data_root.join("settings.json");
     fs::write(&path, serde_json::to_string_pretty(&on_disk)?)?;
 
-    Ok(Json(SettingsView::from_config(&merged)))
+    Ok(Json(SettingsView::from_config(&merged, &state.data_root)))
 }
 
 // ── Session handlers ──────────────────────────────────────────────────────────
