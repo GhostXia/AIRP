@@ -761,7 +761,8 @@ impl Tool for DeleteCharacterTool {
 // 与 chat_pipeline 同路径。LLM 输出原样作为 enhanced_md 返回，apply 端点二次确认写盘。
 
 /// enhance 专用 system prompt：指示 LLM 增强 analysis MD，保留结构、补全占位符。
-const ENHANCE_ANALYSIS_SYSTEM_PROMPT: &str = r#"你是角色卡分析增强助手。下面会给你一份角色卡拆解生成的 Markdown 分析文件，其中可能含 `<!-- Agent分析后填充 -->` 占位符。
+/// pub 以便 daemon `enhance_md_via_llm` 复用同一份，避免两条路径产物漂移（审计 G2/G3）。
+pub const ENHANCE_ANALYSIS_SYSTEM_PROMPT: &str = r#"你是角色卡分析增强助手。下面会给你一份角色卡拆解生成的 Markdown 分析文件，其中可能含 `<!-- Agent分析后填充 -->` 占位符。
 
 任务：
 1. 阅读全文，理解角色设定。

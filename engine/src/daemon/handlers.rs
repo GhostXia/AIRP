@@ -1694,20 +1694,20 @@ mod tests {
             }
         })
         .to_string();
-        // 显式传 character_id 避免走 slugify 派生路径
+        // 传 None 触发 slugify 派生路径，由于 name 为空，应回退为 "character"
         let (id, _fmt, _json) = import_card_to_disk(
             data_root.path(),
-            Some("explicit-id"),
+            None,
             None,
             Some(json),
             None,
         )
         .unwrap();
-        assert_eq!(id, "explicit-id");
+        assert_eq!(id, "character");
         // 落盘成功
         assert!(data_root
             .path()
-            .join("characters/explicit-id/card.json")
+            .join("characters/character/card.json")
             .exists());
     }
 

@@ -328,15 +328,8 @@ async fn enhance_md_via_llm(
     use crate::adapter::{call_streaming_api_auto, ChatMessage, GenerationParams, MessageRole};
     use futures_util::StreamExt;
 
-    const SYSTEM_PROMPT: &str = r#"你是角色卡分析增强助手。下面会给你一份角色卡拆解生成的 Markdown 分析文件，其中可能含 `<!-- Agent分析后填充 -->` 占位符。
-
-任务：
-1. 阅读全文，理解角色设定。
-2. 补全所有 `<!-- Agent分析后填充 -->` 占位符，写出具体、贴合角色的内容。
-3. 保留原有标题层级、字段名、表格结构，不删改已有非占位内容。
-4. 输出完整的增强后 Markdown（不要包 ```markdown 围栏，不要加任何前后缀说明）。
-5. 世界书条目（world_book/ 前缀）不允许 enhance，调用方已拦截，你不会收到。
-"#;
+    // 复用 agent 侧共享 prompt，避免两份复制漂移（审计 G3）。
+    let system_prompt = crate::agent::tools::ENHANCE_ANALYSIS_SYSTEM_PROMPT.to_string();
 
     let (provider_config, gen_params, engine) = {
         let cfg = state
@@ -371,7 +364,7 @@ async fn enhance_md_via_llm(
         state.http_client.clone(),
         provider_config,
         gen_params,
-        SYSTEM_PROMPT.to_string(),
+        system_prompt,
         messages,
     );
     tokio::pin!(stream);

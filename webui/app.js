@@ -1628,7 +1628,7 @@
   async function loadPresetOptions() {
     const r = await api('GET', '/v1/presets');
     if (!r.ok) return;
-    const presets = r.data || [];
+    const presets = Array.isArray(r.data) ? r.data : [];
     // 清空并重建选项（用 textContent 避免 XSS）
     while (wbPresetSelect.firstChild) wbPresetSelect.removeChild(wbPresetSelect.firstChild);
     const placeholder = document.createElement('option');
