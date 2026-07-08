@@ -1004,20 +1004,20 @@
           if (msgs.length !== expectN) {
             assertion = '✗ history msgs=' + msgs.length + ' 期望 ' + expectN;
           } else {
-            const expectRoles = ['user', 'assistant', 'user', 'assistant'];
-            const roleMismatch = [];
-            for (let i = 0; i < expectN; i++) {
-              if ((msgs[i].role || 'assistant') !== expectRoles[i]) roleMismatch.push('[' + i + ']=' + msgs[i].role);
-            }
-            const u0 = (msgs[0].text || msgs[0].content || '').includes('并发流 A');
-            const u2 = (msgs[2].text || msgs[2].content || '').includes('并发流 B');
-            // 审计 G3：并发请求写入顺序非确定（B 先 A 后也合法），容两种合法顺序避 flaky。
-            const b0 = (msgs[0].text || msgs[0].content || '').includes('并发流 B');
-            const a2 = (msgs[2].text || msgs[2].content || '').includes('并发流 A');
-            const contentOk = (u0 && u2) || (b0 && a2);
-            if (roleMismatch.length) assertion = '✗ role 顺序错: ' + roleMismatch.join(', ');
+            // 审计 CR2：engine chat_completion 先写 user 后写 assistant，并发两请求
+            // 写入顺序非确定——可能产 [u,u,a,a]（两 user 先写两 assistant 后写）也合法。
+            // 不硬校交替，只校"2 user + 2 assistant + 内容匹配 A/B"。
+            const roles = msgs.map(m => m.role || 'assistant');
+            const userCount = roles.filter(r => r === 'user').length;
+            const asstCount = roles.filter(r => r === 'assistant').length;
+            const roleOk = userCount === 2 && asstCount === 2;
+            const userMsgs = msgs.filter(m => (m.role || 'assistant') === 'user');
+            const hasA = userMsgs.some(m => (m.text || m.content || '').includes('并发流 A'));
+            const hasB = userMsgs.some(m => (m.text || m.content || '').includes('并发流 B'));
+            const contentOk = hasA && hasB;
+            if (!roleOk) assertion = '✗ role 计数错: user=' + userCount + ' assistant=' + asstCount + ' 期望各 2';
             else if (!contentOk) assertion = '✗ user 内容不匹配 A/B';
-            else assertion = '✓ history 顺序正确，无串扰';
+            else assertion = '✓ history 含 2 user + 2 assistant，内容匹配 A/B，无串扰';
           }
         } else {
           assertion = '⚠ history 读取失败 ' + h.status + '（无法校持久化）';
