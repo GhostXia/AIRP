@@ -121,7 +121,8 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 - [docs/PARTS.md](docs/PARTS.md)：旧仓能力拆件清单
 - [docs/MCP-SERVER-ABSORPTION.md](docs/MCP-SERVER-ABSORPTION.md)：MCP-Server 能力融入 engine 路线
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记
-- [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档审计后的待确认项
+- [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)：当前独立审计、风险和近期优先级
+- [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档权威层级与维护规则
 
 ## Agent UI 测试面与用户控制
 

@@ -15,7 +15,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
-- settings/models/version/health、可选 Bearer auth 和 rate limit。
+- settings/models/version/health 和 rate limit；默认 daemon 未鉴权且 CORS 全开放，只适合 loopback 本地开发。
 
 ## 必须诚实区分的边界
 
@@ -39,6 +39,10 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - Worldbook 尚无 selective/secondary、constant、probability、sticky/cooldown/delay、group、position/depth/order 的完整 AIRP 合同；
 - state schema 当前用于读取和提示展示，模型输出写盘前不强制类型/range/字段策略；
 - HTTP chat/state 写路径尚未与 Agent tools 统一锁和事务边界。
+
+### 部署安全边界尚未产品化
+
+默认 daemon 的 `access_api_key` 为空且 CORS 为 `Any`，没有受支持的外网部署姿势。`AIRP_ACCESS_KEY` 可为临时本地访问加 Bearer 保护，但在可配置的 restrictive CORS 与调用方 capability enforcement 落地前，不能把 engine 暴露给局域网、互联网或不可信浏览器 origin。
 
 ## 快速开始
 
@@ -77,7 +81,7 @@ cargo run -p airp-core -- run --message "hello"
 | Method | Path | 说明 |
 |---|---|---|
 | GET | `/v1/characters` | 角色列表 |
-| POST | `/v1/characters/import` | 上传 JSON/PNG 或可信桌面 `card_path` 导入 |
+| POST | `/v1/characters/import` | 上传 JSON/PNG；`card_path` 仅可在进程以 `AIRP_ALLOW_LOCAL_PATH=1` 启动时使用，当前不验证调用方身份，Web/远端不得使用 |
 | GET/PUT/DELETE | `/v1/characters/:character_id` | 卡读取、更新、删除 |
 | POST | `/v1/characters/:character_id/reextract` | 重解 sidecar |
 | GET | `/v1/characters/:character_id/avatar` | 头像 |

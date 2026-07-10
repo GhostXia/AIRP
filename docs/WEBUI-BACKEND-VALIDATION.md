@@ -1,7 +1,6 @@
 # WebUI 后端可靠性验证路线
 
-> **状态更新（2026-07-10）**：PR #100 已完成一次 WebUI → engine → 真实 DeepSeek 的 P0 smoke 并归档证据；这不覆盖 Tauri 桌面包、Agent loop 或长期稳定性。本文后续矩阵保留为验证清单，当前风险与顺序见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
-
+> **状态更新（2026-07-10）**：PR #100 归档了两个阶段的真实 smoke：本文件的本地 Tracy → Gemini P0 验证，以及 [smoke-evidence](smoke-evidence/README.md) 中直连 DeepSeek 的真流式重验。两者都不覆盖 Tauri 桌面包、Agent loop 或长期稳定性。本文后续矩阵保留为验证清单，当前风险与顺序见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
 > 最后更新：2026-07-05
 > 目的：把当前“先用 WebUI 验证后端，并让用户先体验完整 agent 能力”的方向整理成可执行开发路线。本文里的 WebUI 是临时后端验证面和早期可用入口，不是 AIRP 的长期产品 UI。
 

@@ -1,9 +1,7 @@
 # 酒馆（SillyTavern）功能对标 + 扩展接口需求
 
-> **需求对标，不是兼容性声明**：表内 ✅/🔧 来自 2026-07-01 的四源仓审查，不能直接证明当前 AIRP-Dev 已交付。Worldbook 当前为基础 CRUD/关键词触发，persona/plugin/完整扩展 API 尚未完成。见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
-
-> 目的：(1) 列全酒馆功能，标出我们要加入的；(2) 落实硬需求——**充分暴露接口，无门槛无缝支持第三方扩展**。
-> 来源：docs.sillytavern.app（2026-07 实读）。图例：✅ 四仓已有 ｜ 🔧 部分有需补 ｜ 🆕 需新加 ｜ ➖ 暂不做/低优先。
+> **需求对标，不是兼容性声明**：表内 ✅/🔧 表示 2026-07-01 源项目资产状态，不证明当前 AIRP-Dev 已交付；“AIRP-Dev 落点/缺口”列必须以当前源码复核。Worldbook 当前为基础 CRUD/关键词触发，persona/plugin/完整扩展 API 尚未完成。见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
+> 目的：(1) 列全酒馆功能，标出候选能力；(2) 落实硬需求——**充分暴露接口，无门槛无缝支持第三方扩展**。来源：docs.sillytavern.app（2026-07 实读）。图例：✅ 源项目已有 ｜ 🔧 源项目部分有需补 ｜ 🆕 源项目皆无，需新加 ｜ ➖ 暂不做/低优先。
 > 最后更新：2026-07-01
 
 ---
@@ -11,18 +9,18 @@
 ## 第一部分：酒馆功能全集 → 我们的缺口
 
 ### 1. 角色 / 人设
-| 酒馆功能 | 我们 | 说明 |
+| 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | 角色卡全字段（desc/personality/scenario/first_mes/mes_example/alt_greetings/creator_notes/system_prompt/post_history_instructions/tags/creator/version/embedded character_book） | ✅ | Core `TavernCardV2` 有全字段 + png_parser 正确解析 |
 | Character's Note（按深度注入的角色级 prompt，可配 depth + role） | 🆕 | 角色卡里的深度注入，orchestrator 需支持 |
 | Main Prompt / Post-History 覆盖（`{{original}}` 插入） | 🔧 | 字段在，装配时的覆盖+`{{original}}` 展开需做 |
-| User Personas（用户人设，AI 理解个人信息） | ✅ | Core M_UP 双层模型（base+drift） |
+| User Personas（用户人设，AI 理解个人信息） | 🔧 | 当前仅有 `UserId`/路径 helper；完整 persona API/tool 与 base+drift 运行时未实现 |
 | Talkativeness（群聊发言概率 0-100%） | 🆕 | 群聊角色轮转权重 |
 | 收藏/标签/hotswap | 🆕 | 角色管理 UI |
 | Expression Images（情绪立绘） | ➖ | 扩展类，后期 |
 
 ### 2. 会话 / 消息
-| 酒馆功能 | 我们 | 说明 |
+| 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | Swipes（同一轮多个候选回复，左右切） | 🆕 | RP 招牌功能、粘性高。Core 有 regen 但无 swipe 候选管理 |
 | Branches / Checkpoints（对话树、存档点分叉） | 🆕 | 从某消息分叉出平行线 |
@@ -33,14 +31,14 @@
 | Reasoning / thinking 块（思维链显示） | 🔧 | Core `xml_unpacker` 拆 immersive/action/state；reasoning 块显示+折叠需补 |
 
 ### 3. 世界书 / World Info
-| 酒馆功能 | 我们 | 说明 |
+| 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🆕 | **最大新建件**（见 PARTS.md F）。四仓皆残缺 |
 | 关键词触发扫描 | 🔧 | Core aho-corasick 扫描在，但触发语义（selective/递归）缺 |
 | 向量化/RAG 注入 | ➖ | Data Bank，后期 |
 
 ### 4. Prompt / 预设系统
-| 酒馆功能 | 我们 | 说明 |
+| 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | 采样参数 + 社区预设 | ✅ | 作建议素材，Agent 适配（见 PLAN §3.3） |
 | Chat Completion 的 Prompt Manager（可重排 prompt 块） | 🔧 | 我们 orchestrator 有默认序；用户可重排的管理面需做（但按"建议素材"哲学，非机械回放） |
@@ -52,13 +50,13 @@
 | Start Reply With / 自定义停止串 / prompt 后处理 | 🔧 | 部分在 adapter |
 
 ### 5. API 连接
-| 酒馆功能 | 我们 | 说明 |
+| 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | OpenAI 兼容 / Anthropic | ✅ | Core adapter 双 provider |
 | KoboldAI / Tabby / AI Horde / DreamGen / 本地等多后端 | ➖ | 按需扩 BackendEngine |
 
 ### 6. 内置扩展（酒馆随附，用户高频用）
-| 酒馆内置扩展 | 我们 | 说明 |
+| 酒馆内置扩展 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | TTS（文字转语音） / STT | 🆕➖ | 后期，走扩展接口 |
 | Image Generation（SD/FLUX/DALL-E） | 🆕➖ | 后期，走扩展接口 |
@@ -73,7 +71,7 @@
 | Regex（用户可配的输入/输出 find-replace） | 🔧 | Core preset_regex 在，用户级 UI + 全字段需补 |
 
 ### 7. 其他
-| 酒馆功能 | 我们 | 说明 |
+| 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | Data Bank / RAG（文档引用检索） | ➖ | 后期 |
 | Macros（`{{char}}/{{user}}/{{random}}/{{roll}}/{{time}}` + 自定义宏） | 🆕 | 见第二部分。装配层高频用 |
