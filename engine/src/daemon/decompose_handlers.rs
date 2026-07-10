@@ -125,7 +125,8 @@ pub(super) async fn decompose_character(
             .unwrap_or(false);
     if has_existing && !query.force.unwrap_or(false) {
         return Err(AirpError::BadRequest(
-            "analysis directory already exists and is non-empty; pass ?force=true to overwrite".into(),
+            "analysis directory already exists and is non-empty; pass ?force=true to overwrite"
+                .into(),
         ));
     }
 
@@ -163,7 +164,13 @@ pub(super) async fn decompose_character(
 
     let analysis_dir = data_dir::ensure_char_analysis_dir(&state.data_root, cid.as_str())?;
     let result = CharacterDecomposer::new()
-        .decompose(cid.as_str(), &card, lorebook.as_ref(), &analysis_dir, raw_meta.as_ref())
+        .decompose(
+            cid.as_str(),
+            &card,
+            lorebook.as_ref(),
+            &analysis_dir,
+            raw_meta.as_ref(),
+        )
         .await?;
 
     Ok(Json(DecomposeResponse::from(result)))
@@ -181,10 +188,7 @@ pub(super) async fn decompose_preset(
         .join("presets")
         .join(format!("{}.json", pid.as_str()));
     if !preset_path.exists() {
-        return Err(AirpError::NotFound(format!(
-            "preset {} not found",
-            pid
-        )));
+        return Err(AirpError::NotFound(format!("preset {} not found", pid)));
     }
 
     let analysis_dir_path = data_dir::preset_analysis_dir_path(&state.data_root, pid.as_str())?;
@@ -196,7 +200,8 @@ pub(super) async fn decompose_preset(
             .unwrap_or(false);
     if has_existing && !query.force.unwrap_or(false) {
         return Err(AirpError::BadRequest(
-            "analysis directory already exists and is non-empty; pass ?force=true to overwrite".into(),
+            "analysis directory already exists and is non-empty; pass ?force=true to overwrite"
+                .into(),
         ));
     }
 
@@ -241,10 +246,7 @@ pub(super) async fn get_character_analysis_file(
         )));
     }
     let content = std::fs::read_to_string(&path)?;
-    Ok(Json(AnalysisFileContent {
-        filename,
-        content,
-    }))
+    Ok(Json(AnalysisFileContent { filename, content }))
 }
 
 /// `POST /v1/characters/:character_id/analysis/*filename`
@@ -282,8 +284,7 @@ pub(super) async fn enhance_or_apply_character_analysis(
             let original_md = std::fs::read_to_string(&path)?;
             // L3 修复（issue #92）：HTTP 端点也真正调 LLM 增强 MD。
             // 与 EnhanceAnalysisTool 同路径：state.config + http_client + call_streaming_api_auto。
-            let enhanced_md =
-                enhance_md_via_llm(&state, &original_md, &filename).await?;
+            let enhanced_md = enhance_md_via_llm(&state, &original_md, &filename).await?;
             let has_changes = enhanced_md != original_md.trim();
             Ok(Json(serde_json::to_value(EnhancePreview {
                 filename,

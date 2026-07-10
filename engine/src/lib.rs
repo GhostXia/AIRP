@@ -27,6 +27,7 @@ pub mod config;
 pub mod daemon;
 pub mod data_dir;
 pub mod decompose;
+pub mod domain;
 pub mod error;
 pub mod orchestrator;
 pub mod png_parser;

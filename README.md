@@ -33,10 +33,10 @@ D:\AIRP-Dev/
 ## 当前状态
 
 - engine 已具备单回合 SSE 对话、OpenAI/Anthropic adapter、角色/会话/状态/场景/基础世界书、卷系统、拆解/analysis 和 settings/models 等 API。PR #100 留有一次 WebUI → engine → 真实 DeepSeek 的成功流式证据。
-- 默认 Agent 工具注册表当前为 11 个工具；`/v1/agent/run` 仍是固定计划的 loop 骨架，不是完整的动态 ReAct/plan-act-observe runtime。
-- UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；sidecar 能被打包，但真实 Windows 安装包启动、退出/重启和完整 GUI 闭环仍待验收。
-- 世界书已有 CRUD 与基础关键词触发，但 SillyTavern 高级触发语义、state schema 写入强制、会话生命周期与稳定身份仍未完成。
-- WebUI 仅作为后端可靠性和开发诊断面，不替代 Tauri/Vue 长期产品 UI。PR #106 尚未合并，且对 PR #88 的 V2 设计只完成了部分迁移。
+- 默认 Agent 工具注册表当前为 15 个工具；`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist 门执行 typed observation，并只 finalizer 最终纯净生成。
+- UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；desktop 现在持有并在退出时终止 sidecar，Windows workflow 已加入安装→启动→ready→退出 smoke，等待 CI artifact 实跑证据。
+- 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
+- WebUI 仅作为后端可靠性和开发诊断面，不替代 Tauri/Vue 长期产品 UI。PR #106 已把 V2 运行态落到 `webui/`；provider/endpoint/model/runtime key 可编辑，应用后通过真实 `/v1/models` 请求验证，带真实凭据的远端运行证据仍需手动执行。
 - 2026-07-10 本地 workspace tests 与 UI tests/typecheck 通过；Rust fmt 与 `-D warnings` Clippy 尚未通过，仓库也没有自动 PR gate。
 
 当前权威状态、独立发现和路线排序见 [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)。实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。

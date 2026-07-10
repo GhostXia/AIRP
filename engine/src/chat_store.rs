@@ -474,11 +474,7 @@ impl ChatLog {
                 continue;
             }
             let stored: StoredMessage = serde_json::from_str(line).map_err(|e| {
-                AirpError::Internal(format!(
-                    "chat_log.jsonl 第 {} 行解析失败: {}",
-                    i + 1,
-                    e
-                ))
+                AirpError::Internal(format!("chat_log.jsonl 第 {} 行解析失败: {}", i + 1, e))
             })?;
             msgs.push(stored.msg);
             tss.push(stored.ts);
@@ -879,8 +875,14 @@ mod tests {
         let reloaded = ChatLog::load_or_create(root, "mixed_char").unwrap();
         assert_eq!(reloaded.messages.len(), 3);
         assert_eq!(reloaded.message_timestamps.len(), 3);
-        assert!(reloaded.message_timestamps[0].is_none(), "旧行 ts 应为 None");
-        assert!(reloaded.message_timestamps[1].is_none(), "旧行 ts 应为 None");
+        assert!(
+            reloaded.message_timestamps[0].is_none(),
+            "旧行 ts 应为 None"
+        );
+        assert!(
+            reloaded.message_timestamps[1].is_none(),
+            "旧行 ts 应为 None"
+        );
         assert!(reloaded.message_timestamps[2].is_some(), "新行 ts 应有值");
         assert_eq!(reloaded.messages[2].content, "new_msg");
         // 新行 ts 能 parse 为有效时间

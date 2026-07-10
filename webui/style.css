@@ -31,6 +31,9 @@ button:disabled { opacity:.55; cursor:not-allowed; }
 #left-panel { border-right:1px solid var(--border); } #right-panel { border-left:1px solid var(--border); }
 #center-panel { min-width:0; padding:32px; display:flex; flex-direction:column; }
 .panel-section { margin:0 0 18px; padding:0 0 18px; border-bottom:1px solid var(--border); }
+.settings-form { display:flex; flex-direction:column; gap:7px; margin:8px 0 12px; }
+.settings-form label { display:flex; flex-direction:column; gap:3px; color:var(--muted); font-size:11px; }
+.settings-form input,.settings-form select { width:100%; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); padding:6px; }
 .section-heading { display:flex; align-items:center; justify-content:space-between; font-weight:700; margin-bottom:10px; }
 .section-heading button, summary button { padding:3px 7px; font-size:11px; }
 summary { cursor:pointer; font-weight:700; } summary button { margin-left:6px; }

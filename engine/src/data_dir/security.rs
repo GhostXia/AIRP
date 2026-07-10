@@ -204,8 +204,7 @@ mod tests {
             tail in "[a-zA-Z0-9_]{1,16}",
         ) {
             let base = tempdir().unwrap();
-            let user_path: String = std::iter::repeat("..")
-                .take(dots)
+            let user_path: String = std::iter::repeat_n("..", dots)
                 .collect::<Vec<_>>()
                 .join("/")
                 + "/"

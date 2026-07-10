@@ -5,10 +5,6 @@ mod session;
 mod utils;
 
 pub use migrations::{migrate_legacy_char_dirs, migrate_legacy_presets};
-pub(crate) use paths::{
-    char_card_dir, char_gating_dir, char_greetings_dir, char_world_dir, char_world_lorebook_path,
-    preset_json_path,
-};
 pub use paths::{
     char_analysis_dir_path,
     char_analysis_file_path,
@@ -43,6 +39,10 @@ pub use paths::{
     user_state_dir,
     user_state_history_path,
     user_state_live_path,
+};
+pub(crate) use paths::{
+    char_card_dir, char_gating_dir, char_greetings_dir, char_world_dir, char_world_lorebook_path,
+    preset_json_path,
 };
 pub use security::{safe_resolve_for_write, safe_resolve_under_data_root, validate_id_segment};
 pub use session::{create_session, list_sessions, resolve_session_dir, session_dir};

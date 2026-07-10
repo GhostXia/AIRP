@@ -1,8 +1,7 @@
-//! M_AGENT-1: Tool execution surface — minimal skeleton.
+//! Engine-authoritative Agent tool execution surface.
 //!
 //! 协调器（`AgentLoop`）在每一步选择"派生纯净 subagent / 调一个工具 / 收敛结束"。
-//! 本模块定义工具的抽象（[`Tool`] trait）、注册表（[`ToolRegistry`]）以及一个
-//! 用于 M_AGENT-1 验收的 mock 工具 `echo`。
+//! 本模块定义工具抽象、注册表、capability/allowlist 门和内建 domain tools。
 //!
 //! ## 设计纪律（计划书 §2.1 第 4 条：工具最小授权）
 //! - 每个工具带 [`ToolMeta`]：`readonly` / `mutate` / `destructive` / `append`。
@@ -20,13 +19,16 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::Arc;
 
 use crate::adapter::{ChatMessage, MessageRole};
+#[cfg(test)]
 use crate::chat_store::ChatLog;
 use crate::daemon::DaemonState;
 use crate::data_dir;
+use crate::domain::{ChatService, LorebookService, StateService};
 use crate::types::{CharacterId, SessionId};
+use airp_state_protocol::Capability;
 
 /// 工具副作用分类（驱动 dry-run / 确认流 / 幂等去重）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,7 +76,8 @@ pub trait Tool: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>>;
 }
 
-/// 工具注册表。M_AGENT-1 仅 mock；M_AGENT-2 注入 built-in；M_AGENT-3 合并 MCP upstream。
+/// Tool registry assembled from built-ins; future MCP sources must pass the
+/// same name-collision and authorization gates.
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: HashMap<&'static str, Box<dyn Tool>>,
@@ -104,12 +107,23 @@ impl ToolRegistry {
     }
 
     pub fn list(&self) -> Vec<ToolMeta> {
-        self.tools.values().map(|t| t.meta()).collect()
+        let mut tools: Vec<_> = self.tools.values().map(|t| t.meta()).collect();
+        tools.sort_by_key(|tool| tool.name);
+        tools
     }
 
-    /// 是否授权调用该工具（M_AGENT-5 补 allowlist；M_AGENT-1 全放行）。
-    pub fn allowed(&self, _name: &str) -> bool {
-        true
+    /// Engine-authoritative gate. The model can only select registered tools,
+    /// the caller must explicitly grant `call:tool`, and an optional allowlist
+    /// can further reduce the surface for a run.
+    pub fn allowed(
+        &self,
+        name: &str,
+        capabilities: &[Capability],
+        allowlist: Option<&[String]>,
+    ) -> bool {
+        self.tools.contains_key(name)
+            && capabilities.contains(&Capability::CallTool)
+            && allowlist.is_none_or(|allowed| allowed.iter().any(|item| item == name))
     }
 }
 
@@ -142,7 +156,7 @@ impl Tool for EchoTool {
     }
 }
 
-/// 构造默认注册表。M_AGENT-1 仅 echo；M_AGENT-2 起注入 built-in 工具。
+/// Construct the built-in registry used by the structured Agent loop.
 ///
 /// `state` 让 built-in 工具访问数据层（`data_root`）。echo 等无状态工具
 /// 忽略它。调用方（`AgentLoop::new`）已有 `Arc<DaemonState>`，传入即可。
@@ -186,6 +200,22 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
         state: state.clone(),
     }))
     .expect(COLLISION);
+    reg.register(Box::new(GetCharacterStateTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(UpdateCharacterStateTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(GetLorebookTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(UpdateLorebookTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
     // Decompose Agent Flow（Task 4）：analysis enhance/apply 工具。
     reg.register(Box::new(EnhanceAnalysisTool {
         state: state.clone(),
@@ -196,56 +226,157 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     reg
 }
 
+fn required_character_id(params: &Value) -> Result<CharacterId, AirpError> {
+    let value = params
+        .get("character_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AirpError::BadRequest("missing character_id".to_string()))?;
+    CharacterId::new(value)
+}
+
+struct GetCharacterStateTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for GetCharacterStateTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "get_character_state",
+            description: "Read a character's current state/live.json.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let character = required_character_id(&params)?;
+            let path =
+                data_dir::char_state_dir(&state.data_root, character.as_str()).join("live.json");
+            if !path.exists() {
+                return Err(AirpError::NotFound(format!(
+                    "state for {character} not found"
+                )));
+            }
+            Ok(ToolResult {
+                output: serde_json::from_slice(&std::fs::read(path)?)?,
+                dry_run: false,
+            })
+        })
+    }
+}
+
+struct UpdateCharacterStateTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for UpdateCharacterStateTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "update_character_state",
+            description:
+                "Validate and replace a character's live state, creating a revisioned snapshot.",
+            side_effect: ToolSideEffect::Mutate,
+        }
+    }
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let daemon = self.state.clone();
+        Box::pin(async move {
+            let character = required_character_id(&params)?;
+            let value = params
+                .get("state")
+                .ok_or_else(|| AirpError::BadRequest("missing state".to_string()))?;
+            let snapshot = StateService::new(&daemon.data_root).write(&character, value)?;
+            Ok(ToolResult {
+                output: serde_json::to_value(snapshot)?,
+                dry_run: false,
+            })
+        })
+    }
+}
+
+struct GetLorebookTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for GetLorebookTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "get_lorebook",
+            description: "Read the normalized AIRP v1 lorebook for a character.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let daemon = self.state.clone();
+        Box::pin(async move {
+            let character = required_character_id(&params)?;
+            let lorebook = LorebookService::new(&daemon.data_root).read(&character)?;
+            Ok(ToolResult {
+                output: serde_json::to_value(lorebook)?,
+                dry_run: false,
+            })
+        })
+    }
+}
+
+struct UpdateLorebookTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for UpdateLorebookTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "update_lorebook",
+            description: "Replace a character's normalized AIRP v1 lorebook.",
+            side_effect: ToolSideEffect::Destructive,
+        }
+    }
+    fn call(
+        &self,
+        params: Value,
+        confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let daemon = self.state.clone();
+        Box::pin(async move {
+            let character = required_character_id(&params)?;
+            let raw = params
+                .get("lorebook")
+                .cloned()
+                .ok_or_else(|| AirpError::BadRequest("missing lorebook".to_string()))?;
+            let lorebook: crate::orchestrator::Lorebook = serde_json::from_value(raw)?;
+            if !confirm {
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "character_id": character.as_str(),
+                        "action": "update_lorebook",
+                        "entries": lorebook.entries.len(),
+                        "requires": "confirm=true"
+                    }),
+                    dry_run: true,
+                });
+            }
+            LorebookService::new(&daemon.data_root).write(&character, &lorebook)?;
+            Ok(ToolResult {
+                output: serde_json::json!({"updated": character.as_str(), "entries": lorebook.entries.len()}),
+                dry_run: false,
+            })
+        })
+    }
+}
+
 const MAX_RECENT_CONTEXT: usize = 200;
-
-// 两级锁保证「破坏性整角色删除」与「单会话写」互斥（issue #22）：
-//
-// - `CHAT_LOG_LOCKS`（per-session `Mutex`，key = `character` 或 `character/{sid}`）
-//   保证同一会话的 append/rollback 串行。
-// - `CHARACTER_LOCKS`（per-character `RwLock`，key = `character`）是角色级破坏性锁：
-//   append/rollback 持 `read()`（同角色不同会话仍可并发），delete_character 持
-//   `write()`（独占，排斥该角色下**所有**会话写）。
-//
-// 旧实现只有 per-session `Mutex`，delete 用 key=`character`、命名会话写用
-// key=`character/{sid}`，属不同 entry 互不排斥 → delete 能与会话写交错，
-// 造成半删 / IO race。两级锁获取顺序统一为「先 character 再 session」，无环、无死锁。
-type ChatLogLockMap = StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>;
-
-static CHAT_LOG_LOCKS: OnceLock<ChatLogLockMap> = OnceLock::new();
-
-type CharacterLockMap = StdMutex<HashMap<String, Arc<tokio::sync::RwLock<()>>>>;
-
-static CHARACTER_LOCKS: OnceLock<CharacterLockMap> = OnceLock::new();
-
-/// 取角色级破坏性锁。append/rollback 拿 `read()`，delete_character 拿 `write()`。
-fn character_lock(character_id: &str) -> Arc<tokio::sync::RwLock<()>> {
-    let mut locks = CHARACTER_LOCKS
-        .get_or_init(|| StdMutex::new(HashMap::new()))
-        .lock()
-        .expect("character lock map poisoned");
-    locks
-        .entry(character_id.to_string())
-        .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
-        .clone()
-}
-
-fn chat_log_lock(
-    character_id: &str,
-    session_id: Option<&SessionId>,
-) -> Arc<tokio::sync::Mutex<()>> {
-    let key = match session_id {
-        Some(session_id) => format!("{}/{}", character_id, session_id),
-        None => character_id.to_string(),
-    };
-    let mut locks = CHAT_LOG_LOCKS
-        .get_or_init(|| StdMutex::new(HashMap::new()))
-        .lock()
-        .expect("chat log lock map poisoned");
-    locks
-        .entry(key)
-        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-        .clone()
-}
 
 fn optional_session_id(params: &Value) -> Result<Option<SessionId>, AirpError> {
     match params.get("session_id") {
@@ -315,7 +446,7 @@ impl Tool for ListSessionsTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
             let cid = CharacterId::new(cid_str)?;
-            let sessions = data_dir::list_sessions(&state.data_root, cid.as_str())?;
+            let sessions = ChatService::new(&state.data_root).list_sessions(&cid)?;
             let out: Vec<Value> = sessions
                 .into_iter()
                 .map(|s| serde_json::json!({ "session_id": s.to_string() }))
@@ -359,7 +490,7 @@ impl Tool for StartSessionTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
             let cid = CharacterId::new(cid_str)?;
-            let sid = data_dir::create_session(&state.data_root, cid.as_str())?;
+            let sid = ChatService::new(&state.data_root).create_session(&cid)?;
             Ok(ToolResult {
                 output: serde_json::json!({
                     "session_id": sid.to_string(),
@@ -419,16 +550,7 @@ impl Tool for AppendMessageTool {
             };
             let cid = CharacterId::new(cid_str)?;
             let session_id = optional_session_id(&params)?;
-            let char_lock = character_lock(cid.as_str());
-            let _char_guard = char_lock.read().await;
-            let lock = chat_log_lock(cid.as_str(), session_id.as_ref());
-            let _guard = lock.lock().await;
-            let mut log = ChatLog::load_or_create_for_session(
-                &state.data_root,
-                cid.as_str(),
-                session_id.as_ref(),
-            )?;
-            let total_before = log.messages.len();
+            let service = ChatService::new(&state.data_root);
             if role == MessageRole::System {
                 tracing::info!(
                     character_id = %cid,
@@ -436,8 +558,9 @@ impl Tool for AppendMessageTool {
                     "append_message writes a system message"
                 );
             }
-            log.append(
-                &state.data_root,
+            let (log, total_before) = service.append(
+                &cid,
+                session_id.as_ref(),
                 ChatMessage {
                     role,
                     content: content.to_string(),
@@ -498,12 +621,7 @@ impl Tool for GetRecentContextTool {
             }
             let cid = CharacterId::new(cid_str)?;
             let session_id = optional_session_id(&params)?;
-            let log = ChatLog::load_or_create_for_session(
-                &state.data_root,
-                cid.as_str(),
-                session_id.as_ref(),
-            )?;
-            let recent = log.recent(n);
+            let recent = ChatService::new(&state.data_root).recent(&cid, session_id.as_ref(), n)?;
             let msgs: Vec<Value> = recent
                 .into_iter()
                 .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
@@ -551,23 +669,8 @@ impl Tool for RollbackMessagesTool {
             let index = required_usize_param(&params, "index")?;
             let cid = CharacterId::new(cid_str)?;
             let session_id = optional_session_id(&params)?;
-            let char_lock = character_lock(cid.as_str());
-            let _char_guard = char_lock.read().await;
-            let lock = chat_log_lock(cid.as_str(), session_id.as_ref());
-            let _guard = lock.lock().await;
-            let mut log = ChatLog::load_or_create_for_session(
-                &state.data_root,
-                cid.as_str(),
-                session_id.as_ref(),
-            )?;
-            let total = log.messages.len();
-            if index >= total {
-                return Err(AirpError::BadRequest(format!(
-                    "index {} out of range (total {})",
-                    index, total
-                )));
-            }
-            let dropped = total - index - 1;
+            let service = ChatService::new(&state.data_root);
+            let dropped = service.rollback_preview(&cid, session_id.as_ref(), index)?;
             if !confirm {
                 return Ok(ToolResult {
                     output: serde_json::json!({
@@ -586,7 +689,7 @@ impl Tool for RollbackMessagesTool {
                 dropped,
                 "rollback_messages executed"
             );
-            log.rollback_to(&state.data_root, index)?;
+            let _ = service.rollback(&cid, session_id.as_ref(), index)?;
             Ok(ToolResult {
                 output: serde_json::json!({
                     "rolled_back_to": index,
@@ -737,9 +840,7 @@ impl Tool for DeleteCharacterTool {
             // 破坏性删除：拿角色级写锁，独占排斥该角色下所有会话的 append/rollback
             // （它们持 read 锁）。旧实现用 per-session Mutex 的 key=character，与命名
             // 会话写的 key=character/{sid} 不互斥，故可交错半删（issue #22）。
-            let char_lock = character_lock(cid.as_str());
-            let _char_guard = char_lock.write().await;
-            data_dir::delete_character(&state.data_root, &cid)?;
+            ChatService::new(&state.data_root).delete_character(&cid)?;
             tracing::warn!(character_id = %cid, "delete_character executed");
             Ok(ToolResult {
                 output: serde_json::json!({ "deleted": cid.to_string() }),
@@ -888,8 +989,7 @@ impl Tool for EnhanceAnalysisTool {
             }
 
             let cid = CharacterId::new(cid_str)?;
-            let path =
-                data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
+            let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
             if !path.exists() {
                 return Err(AirpError::NotFound(format!(
                     "analysis file {} not found for character {}",
@@ -899,8 +999,7 @@ impl Tool for EnhanceAnalysisTool {
             let original_md = std::fs::read_to_string(&path)?;
 
             // L3：调共享 helper 增强 MD（审计 CR5：抽公共逻辑防两路径漂移）。
-            let enhanced_md =
-                enhance_md_via_llm_shared(&state, &original_md, filename).await?;
+            let enhanced_md = enhance_md_via_llm_shared(&state, &original_md, filename).await?;
             let has_changes = enhanced_md != original_md.trim();
             Ok(ToolResult {
                 output: serde_json::json!({
@@ -962,8 +1061,7 @@ impl Tool for ApplyEnhancedAnalysisTool {
             }
 
             let cid = CharacterId::new(cid_str)?;
-            let path =
-                data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
+            let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
             if !path.exists() {
                 return Err(AirpError::NotFound(format!(
                     "analysis file {} not found for character {}",
@@ -1305,11 +1403,92 @@ mod tests {
             "list_characters",
             "get_character",
             "delete_character",
+            "get_character_state",
+            "update_character_state",
+            "get_lorebook",
+            "update_lorebook",
             "enhance_analysis",
             "apply_enhanced_analysis",
         ] {
             assert!(reg.get(name).is_some(), "missing tool: {name}");
         }
+    }
+
+    #[tokio::test]
+    async fn state_and_lorebook_tools_roundtrip_with_confirmation() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        let update_state = reg.get("update_character_state").unwrap();
+        let updated = update_state
+            .call(
+                serde_json::json!({"character_id": "alice", "state": {"hp": 90}}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.output["revision"], 1);
+
+        let get_state = reg.get("get_character_state").unwrap();
+        let current = get_state
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+        assert_eq!(current.output["hp"], 90);
+
+        let lorebook = serde_json::json!({
+            "entries": [{
+                "keys": ["AIRP"],
+                "content": "Open runtime",
+                "enabled": true,
+                "priority": 10,
+                "comment": null
+            }]
+        });
+        let update_lorebook = reg.get("update_lorebook").unwrap();
+        let preview = update_lorebook
+            .call(
+                serde_json::json!({"character_id": "alice", "lorebook": lorebook.clone()}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(preview.dry_run);
+        assert_eq!(preview.output["requires"], "confirm=true");
+        assert!(!crate::data_dir::char_world_lorebook_path(&state.data_root, "alice").exists());
+
+        let written = update_lorebook
+            .call(
+                serde_json::json!({"character_id": "alice", "lorebook": lorebook}),
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(!written.dry_run);
+        assert_eq!(written.output["entries"], 1);
+
+        let get_lorebook = reg.get("get_lorebook").unwrap();
+        let current = get_lorebook
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+        assert_eq!(current.output["entries"][0]["content"], "Open runtime");
+    }
+
+    #[test]
+    fn registry_capability_and_allowlist_are_authoritative() {
+        let tmp = tempdir().unwrap();
+        let reg = default_registry(make_state(tmp.path().to_path_buf()));
+        assert!(!reg.allowed("echo", &[], None));
+        assert!(reg.allowed("echo", &[Capability::CallTool], None));
+        assert!(!reg.allowed(
+            "echo",
+            &[Capability::CallTool],
+            Some(&["list_characters".to_string()])
+        ));
+        assert!(!reg.allowed("not_registered", &[Capability::CallTool], None));
     }
 
     #[tokio::test]
@@ -1501,7 +1680,10 @@ mod tests {
         assert_eq!(r.output["original_md"], original);
         // L3：enhanced_md 来自 LLM mock，has_changes=true
         // 注意：enhance 会 trim LLM 输出，故比较时用 trim
-        assert_eq!(r.output["enhanced_md"].as_str().unwrap().trim(), enhanced_content.trim());
+        assert_eq!(
+            r.output["enhanced_md"].as_str().unwrap().trim(),
+            enhanced_content.trim()
+        );
         assert_eq!(r.output["has_changes"], true);
 
         // enhance 不写盘（A1：readonly）
@@ -1622,27 +1804,27 @@ mod tests {
         assert!(reg.get("echo").is_some());
     }
 
-    #[tokio::test]
-    async fn delete_write_lock_excludes_session_writes() {
+    #[test]
+    fn delete_write_lock_excludes_session_writes() {
         // issue #22：delete_character 的角色级写锁必须与 append/rollback 的读锁
         // 互斥。持一把 read guard 时 delete 侧 write() 必须阻塞，直到 read 释放才
         // 推进——证明二者走同一把角色锁，不再各锁各的（旧实现 delete 与命名会话
         // 写属不同 Mutex entry，互不排斥）。用独立 key 避免污染并行测试的角色锁。
         use std::sync::atomic::{AtomicBool, Ordering};
         let key = "issue22-delete-lock-probe";
-        let reader = character_lock(key);
-        let read_guard = reader.read().await;
+        let reader = crate::domain::character_lock(key);
+        let read_guard = reader.read().unwrap();
 
-        let writer = character_lock(key);
+        let writer = crate::domain::character_lock(key);
         let acquired = Arc::new(AtomicBool::new(false));
         let acquired2 = acquired.clone();
-        let handle = tokio::spawn(async move {
-            let _w = writer.write().await;
+        let handle = std::thread::spawn(move || {
+            let _w = writer.write().unwrap();
             acquired2.store(true, Ordering::SeqCst);
         });
 
         // read guard 仍持有：write 不可能拿到。
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(
             !acquired.load(Ordering::SeqCst),
             "write lock must not be acquired while a read guard is held"
@@ -1650,7 +1832,7 @@ mod tests {
 
         // 释放 read → write 应推进。
         drop(read_guard);
-        handle.await.unwrap();
+        handle.join().unwrap();
         assert!(acquired.load(Ordering::SeqCst));
     }
 }

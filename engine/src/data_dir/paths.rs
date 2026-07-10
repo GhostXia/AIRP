@@ -237,10 +237,7 @@ pub(crate) fn char_world_lorebook_path(root: &Path, character_id: &str) -> PathB
 /// 留下空 sidecar 目录。写端点用 `ensure_char_analysis_dir`。
 pub fn char_analysis_dir_path(root: &Path, character_id: &str) -> Result<PathBuf, AirpError> {
     super::security::validate_id_segment(character_id)?;
-    Ok(root
-        .join("characters")
-        .join(character_id)
-        .join("analysis"))
+    Ok(root.join("characters").join(character_id).join("analysis"))
 }
 
 /// `characters/{id}/analysis/` 目录，**会创建**。仅供写端点（decompose/apply）使用。
@@ -260,10 +257,9 @@ pub fn char_analysis_file_path(
 ) -> Result<PathBuf, AirpError> {
     use std::path::Component;
 
-    let valid = filename
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-'))
-        && filename.ends_with(".md")
+    let valid = filename.chars().all(|c| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-')
+    }) && filename.ends_with(".md")
         && !filename.starts_with('/')
         && !filename.contains("..");
     if !valid {
@@ -310,10 +306,9 @@ pub fn preset_analysis_file_path(
 ) -> Result<PathBuf, AirpError> {
     use std::path::Component;
 
-    let valid = filename
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-'))
-        && filename.ends_with(".md")
+    let valid = filename.chars().all(|c| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-')
+    }) && filename.ends_with(".md")
         && !filename.starts_with('/')
         && !filename.contains("..");
     if !valid {
@@ -706,7 +701,11 @@ mod analysis_path_tests {
         let result = char_analysis_file_path(tmp.path(), "alice", "../escape.md");
         assert!(result.is_err());
         assert!(
-            !tmp.path().join("characters").join("alice").join("analysis").exists(),
+            !tmp.path()
+                .join("characters")
+                .join("alice")
+                .join("analysis")
+                .exists(),
             "校验失败不得创建目录"
         );
     }
@@ -805,10 +804,7 @@ mod data_root_tests {
         // 必须不进入 dev 模式，应落 dirs::data_dir() 的 per-user 位
         let (_tmp, fake_toml) = present_toml();
         let r = resolve_data_root_inner(
-            None,
-            /* is_debug= */ false,
-            /* under_cargo= */ false,
-            &fake_toml,
+            None, /* is_debug= */ false, /* under_cargo= */ false, &fake_toml,
         );
         if let Some(per_user) = dirs::data_dir() {
             assert_eq!(

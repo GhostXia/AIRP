@@ -159,18 +159,16 @@ impl BusRelay {
                 let http = self.http.clone();
                 let engine = self.engine_connection();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = run_chat_stream(
-                        app_opt.clone(),
+                    let request = ChatStreamRequest {
+                        app: app_opt.clone(),
                         http,
-                        &engine.url,
-                        engine.access_key.as_deref(),
-                        &character_id,
-                        &text,
-                        &assistant_id,
+                        engine,
+                        character_id,
+                        text,
+                        assistant_id: assistant_id.clone(),
                         n,
-                    )
-                    .await
-                    {
+                    };
+                    if let Err(e) = run_chat_stream(request).await {
                         tracing::error!(err = %e, "engine chat stream failed");
                         emit_state_patch(
                             &app_opt,
@@ -350,13 +348,8 @@ impl BusRelay {
                         "w-settings",
                         serde_json::json!({ "saving": true }),
                     );
-                    match update_settings(
-                        &http,
-                        &engine.url,
-                        engine.access_key.as_deref(),
-                        &params,
-                    )
-                    .await
+                    match update_settings(&http, &engine.url, engine.access_key.as_deref(), &params)
+                        .await
                     {
                         Ok(updated) => {
                             emit_state_set(
@@ -439,16 +432,15 @@ impl BusRelay {
                             let mut order = Vec::with_capacity(messages.len());
                             for (i, msg) in messages.iter().enumerate() {
                                 let id = format!("h{i}");
-                                let role = msg
-                                    .get("role")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("user");
-                                let text = msg
-                                    .get("content")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
+                                let role =
+                                    msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                                let text =
+                                    msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
                                 // 按 index 取 ts；旧 jsonl 无 ts → None → null
-                                let ts = timestamps.get(i).cloned().unwrap_or(serde_json::Value::Null);
+                                let ts = timestamps
+                                    .get(i)
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null);
                                 scope_messages.insert(
                                     id.clone(),
                                     serde_json::json!({
@@ -580,6 +572,16 @@ enum EngineChunk {
     ActionOptions { options: Vec<String> },
 }
 
+struct ChatStreamRequest {
+    app: Option<AppHandle>,
+    http: reqwest::Client,
+    engine: EngineConnection,
+    character_id: String,
+    text: String,
+    assistant_id: String,
+    n: u64,
+}
+
 /// POST the user message to the engine and stream the assistant reply back as
 /// downstream `state` patches on `w-chat`.
 ///
@@ -592,16 +594,19 @@ enum EngineChunk {
 ///    concurrent streams don't race — no chat_lock needed.
 /// 3. `think` chunks are dropped in Phase 0 (reasoning display is Phase 1).
 async fn run_chat_stream(
-    app: Option<AppHandle>,
-    http: reqwest::Client,
-    engine_url: &str,
-    access_key: Option<&str>,
-    character_id: &str,
-    text: &str,
-    assistant_id: &str,
-    n: u64,
+    request: ChatStreamRequest,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use serde_json::json;
+
+    let ChatStreamRequest {
+        app,
+        http,
+        engine,
+        character_id,
+        text,
+        assistant_id,
+        n,
+    } = request;
 
     let body = json!({
         "character_id": character_id,
@@ -610,9 +615,11 @@ async fn run_chat_stream(
     });
 
     let request = http
-        .post(format!("{}/v1/chat/completions", engine_url))
+        .post(format!("{}/v1/chat/completions", engine.url))
         .json(&body);
-    let resp = with_auth(request, access_key).send().await?;
+    let resp = with_auth(request, engine.access_key.as_deref())
+        .send()
+        .await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -683,7 +690,7 @@ async fn run_chat_stream(
                         &app,
                         format!("state-a{n}-body-{chunk_seq}"),
                         "w-chat",
-                        vec![assistant_text_patch(assistant_id, acc.clone())],
+                        vec![assistant_text_patch(&assistant_id, acc.clone())],
                     );
                 }
                 EngineChunk::ActionOptions { options: _ } => continue, // Phase 1: action UI.

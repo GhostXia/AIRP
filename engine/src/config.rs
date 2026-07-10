@@ -88,6 +88,7 @@ pub struct AppConfig {
     /// 上游 chat/completions 端点 URL（含完整路径）。
     pub endpoint: String,
     /// 上游 API key；`None` 时不发 `Authorization` 头。
+    #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
     /// 默认模型 ID（请求体未指定时使用）。
     pub model: String,
@@ -98,7 +99,7 @@ pub struct AppConfig {
     pub volume: VolumeConfig,
     /// DX-2：daemon 访问鉴权 key。设置后 `/v1/*` 端点要求 `Authorization: Bearer <key>`。
     /// 为 None 时不启用鉴权（单用户本地模式默认）。
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub access_api_key: Option<String>,
     /// DX-6：后端引擎；缺省 `Direct`（OpenAI compat）。
     #[serde(default)]
@@ -132,8 +133,12 @@ impl AppConfig {
         if path_ref.exists() {
             let content =
                 fs::read_to_string(path_ref).map_err(|e| format!("无法读取配置文件: {}", e))?;
-            let config: AppConfig =
+            let mut config: AppConfig =
                 serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
+            // Secrets are runtime-only. Legacy files may still contain these fields,
+            // but loading them would silently perpetuate plaintext credential storage.
+            config.api_key = None;
+            config.access_api_key = None;
             Ok(config)
         } else {
             let default_config = AppConfig::default();
@@ -167,9 +172,6 @@ impl AppConfig {
         if let Some(e) = partial.endpoint.filter(|s| !s.is_empty()) {
             self.endpoint = e;
         }
-        if let Some(k) = partial.api_key.filter(|s| !s.is_empty()) {
-            self.api_key = Some(k);
-        }
         if let Some(m) = partial.model.filter(|s| !s.is_empty()) {
             self.model = m;
         }
@@ -178,9 +180,6 @@ impl AppConfig {
         }
         if let Some(v) = partial.volume {
             self.volume = v;
-        }
-        if let Some(k) = partial.access_api_key.filter(|s| !s.is_empty()) {
-            self.access_api_key = Some(k);
         }
         if let Some(e) = partial.engine {
             self.engine = e;
@@ -262,7 +261,10 @@ mod tests {
             "https://custom.example.com/v1/chat/completions"
         );
         assert_eq!(cfg.model, "custom-model");
-        assert_eq!(cfg.api_key.as_deref(), Some("sk-test"));
+        assert!(
+            cfg.api_key.is_none(),
+            "settings.json secrets must be ignored"
+        );
         assert_eq!(cfg.daemon_port, 9001);
     }
 
@@ -283,6 +285,32 @@ mod tests {
         assert_eq!(cfg.endpoint, default_endpoint);
         assert_eq!(cfg.model, default_model);
         assert!(cfg.api_key.is_none());
+    }
+
+    #[test]
+    fn test_load_config_ignores_legacy_plaintext_secrets() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("config.json");
+        let mut raw = serde_json::to_value(AppConfig::default()).unwrap();
+        raw["api_key"] = serde_json::json!("sk-legacy");
+        raw["access_api_key"] = serde_json::json!("daemon-secret");
+        fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert!(cfg.api_key.is_none());
+        assert!(cfg.access_api_key.is_none());
+    }
+
+    #[test]
+    fn test_serialized_config_omits_secrets() {
+        let cfg = AppConfig {
+            api_key: Some("sk-runtime".to_string()),
+            access_api_key: Some("daemon-runtime".to_string()),
+            ..AppConfig::default()
+        };
+        let raw = serde_json::to_value(cfg).unwrap();
+        assert!(raw.get("api_key").is_none());
+        assert!(raw.get("access_api_key").is_none());
     }
 
     #[test]
@@ -319,9 +347,11 @@ mod tests {
 
     #[test]
     fn test_volume_config_validate_rejects_soft_ge_hard() {
-        let mut v = VolumeConfig::default();
-        v.soft_threshold_tokens = 4000;
-        v.hard_threshold_tokens = 3500;
+        let mut v = VolumeConfig {
+            soft_threshold_tokens: 4000,
+            hard_threshold_tokens: 3500,
+            ..VolumeConfig::default()
+        };
         let err = v.validate().unwrap_err();
         assert!(err.contains("soft_threshold_tokens"));
         assert!(err.contains("hard_threshold_tokens"));
@@ -334,8 +364,10 @@ mod tests {
 
     #[test]
     fn test_volume_config_validate_rejects_bad_temperature() {
-        let mut v = VolumeConfig::default();
-        v.seal_temperature = -0.1;
+        let mut v = VolumeConfig {
+            seal_temperature: -0.1,
+            ..VolumeConfig::default()
+        };
         assert!(v.validate().is_err());
         v.seal_temperature = 2.1;
         assert!(v.validate().is_err());
@@ -343,8 +375,10 @@ mod tests {
 
     #[test]
     fn test_volume_config_validate_rejects_zero_interval() {
-        let mut v = VolumeConfig::default();
-        v.maintenance_interval = 0;
+        let v = VolumeConfig {
+            maintenance_interval: 0,
+            ..VolumeConfig::default()
+        };
         assert!(v.validate().is_err());
     }
 

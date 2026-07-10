@@ -11,12 +11,13 @@
 mod bus;
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use airp_state_protocol::{Body, Envelope};
 use bus::BusRelay;
 use serde::Deserialize;
 use tauri::{Emitter, Manager};
-use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tracing_subscriber::EnvFilter;
 
@@ -25,8 +26,10 @@ const DEFAULT_ENGINE_PORT: u16 = 8000;
 #[derive(Debug, Deserialize, Default)]
 struct SidecarSettings {
     daemon_port: Option<u16>,
-    access_api_key: Option<String>,
 }
+
+#[derive(Default)]
+struct EngineSidecar(Mutex<Option<CommandChild>>);
 
 fn main() {
     init_tracing();
@@ -35,6 +38,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(BusRelay::new())
+        .manage(EngineSidecar::default())
         .invoke_handler(tauri::generate_handler![bus::airp_dispatch])
         .setup(|app| {
             // Register the webview as the downstream sink. The relay emits
@@ -45,10 +49,18 @@ fn main() {
 
             let data_root = app.path().app_data_dir()?.join("data");
             std::fs::create_dir_all(&data_root)?;
-            let (port, access_key) = load_sidecar_settings(&data_root);
+            let (port, configured_access_key) = load_sidecar_settings(&data_root);
             let env_engine_url = std::env::var("AIRP_ENGINE_URL")
                 .ok()
                 .filter(|url| !url.trim().is_empty());
+            // A bundled local sidecar always gets a process-scoped random
+            // bearer. Only the trusted BusRelay and child process receive it;
+            // it is never persisted to settings.json.
+            let access_key = if env_engine_url.is_none() {
+                configured_access_key.or_else(|| Some(uuid::Uuid::new_v4().to_string()))
+            } else {
+                configured_access_key
+            };
             let engine_url = env_engine_url
                 .clone()
                 .unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
@@ -83,8 +95,16 @@ fn main() {
                         .current_dir(&data_root)
                         .env("AIRP_DATA_DIR", &data_root)
                         .env("AIRP_ALLOW_LOCAL_PATH", "1");
+                    if let Some(ref access_key) = access_key {
+                        cmd = cmd.env("AIRP_ACCESS_KEY", access_key);
+                    }
                     match cmd.spawn() {
-                        Ok((mut rx, _child)) => {
+                        Ok((mut rx, child)) => {
+                            let pid = child.pid();
+                            *app.state::<EngineSidecar>()
+                                .0
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner()) = Some(child);
                             // Single receiver yields all CommandEvent variants
                             // (Stdout/Stderr/Terminated/...). Log each for
                             // debuggability (透明取向: 引擎状态可观察).
@@ -106,6 +126,7 @@ fn main() {
                             });
                             tracing::info!(
                                 port = port,
+                                pid,
                                 data_root = %data_root.display(),
                                 "engine sidecar spawned"
                             );
@@ -138,8 +159,25 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running AIRP UI");
+        .build(tauri::generate_context!())
+        .expect("error while building AIRP UI")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                let sidecar = app.state::<EngineSidecar>();
+                let child = sidecar
+                    .0
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take();
+                if let Some(child) = child {
+                    let pid = child.pid();
+                    match child.kill() {
+                        Ok(()) => tracing::info!(pid, "engine sidecar stopped with UI"),
+                        Err(error) => tracing::warn!(pid, %error, "failed to stop engine sidecar"),
+                    }
+                }
+            }
+        });
 }
 
 fn init_tracing() {
@@ -165,7 +203,6 @@ fn load_sidecar_settings(data_root: &Path) -> (u16, Option<String>) {
                 if let Some(value) = settings.daemon_port {
                     port = value;
                 }
-                access_key = settings.access_api_key.filter(|key| !key.is_empty());
             }
             None => tracing::warn!(
                 path = %settings_path.display(),
@@ -260,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_settings_reads_port_and_access_key() {
+    fn sidecar_settings_reads_port_but_not_plaintext_access_key() {
         let root = temp_data_root("settings");
         std::fs::write(
             root.join("settings.json"),
@@ -269,7 +306,7 @@ mod tests {
         .unwrap();
         let (port, access_key) = load_sidecar_settings(&root);
         assert_eq!(port, 8123);
-        assert_eq!(access_key.as_deref(), Some("secret"));
+        assert_eq!(access_key, None);
         let _ = std::fs::remove_dir_all(root);
     }
 }

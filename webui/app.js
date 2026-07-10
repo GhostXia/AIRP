@@ -17,6 +17,12 @@
   const settingsDisplay = $('#settings-display');
   const modelsDisplay = $('#models-display');
   const btnRefreshModels = $('#btn-refresh-models');
+  const providerSettings = $('#provider-settings');
+  const providerKind = $('#provider-kind');
+  const providerEndpoint = $('#provider-endpoint');
+  const providerModel = $('#provider-model');
+  const providerApiKey = $('#provider-api-key');
+  const providerSaveStatus = $('#provider-save-status');
   const charSelect = $('#char-select');
   const sessSelect = $('#sess-select');
   const chatLog = $('#chat-log');
@@ -214,6 +220,9 @@
       if (s.api_key) s.api_key = maskSecret(s.api_key);
       if (s.access_api_key) s.access_api_key = maskSecret(s.access_api_key);
       settingsDisplay.textContent = JSON.stringify(s, null, 2);
+      if (providerKind && s.provider) providerKind.value = s.provider;
+      if (providerEndpoint) providerEndpoint.value = s.endpoint || '';
+      if (providerModel) providerModel.value = s.model || '';
       if (accessKeyWarning) {
         const unprotected = s.access_api_key_set === false;
         accessKeyWarning.hidden = !unprotected;
@@ -240,6 +249,33 @@
       modelsDisplay.textContent = 'err:\n' + formatError(r.data, r.text);
     }
   }
+
+  async function saveProviderSettings(event) {
+    event.preventDefault();
+    const endpoint = providerEndpoint.value.trim();
+    const model = providerModel.value.trim();
+    if (!endpoint || !model) {
+      providerSaveStatus.textContent = 'Endpoint 和 Model 必填';
+      return;
+    }
+    providerSaveStatus.textContent = '应用中…';
+    const payload = { provider: providerKind.value, endpoint, model };
+    const key = providerApiKey.value.trim();
+    if (key) payload.api_key = key;
+    const saved = await api('POST', '/v1/settings', payload);
+    providerApiKey.value = '';
+    if (!saved.ok) {
+      providerSaveStatus.textContent = '保存失败: ' + formatError(saved.data, saved.text);
+      return;
+    }
+    const validation = await api('GET', '/v1/models');
+    providerSaveStatus.textContent = validation.ok
+      ? '已应用；真实 /v1/models provider 请求通过'
+      : '已应用；provider 验证失败: ' + formatError(validation.data, validation.text);
+    await Promise.all([refreshSettings(), refreshModels()]);
+  }
+
+  if (providerSettings) providerSettings.addEventListener('submit', saveProviderSettings);
 
   function maskSecret(value) {
     const s = String(value);
@@ -929,7 +965,28 @@
       const res = await fetch(base + path, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ ...buildChatPayload(input), max_steps: maxSteps }),
+        body: JSON.stringify((() => {
+          const payload = { ...buildChatPayload(input), max_steps: maxSteps };
+          const enabled = $('#agent-tools-enabled')?.checked === true;
+          if (enabled) {
+            if (!bearer) {
+              throw new Error('启用 Agent 工具必须先配置 daemon Bearer');
+            }
+            payload.capabilities = ['call:tool'];
+            const allowlist = ($('#agent-tool-allowlist')?.value || '')
+              .split(',').map(value => value.trim()).filter(Boolean);
+            if (allowlist.length) payload.allowed_tools = allowlist;
+            const confirmed = ($('#agent-tool-confirm')?.value || '')
+              .split(',').map(value => value.trim()).filter(Boolean);
+            if (confirmed.length) {
+              if (!confirm('确认允许本次运行执行破坏性工具：' + confirmed.join(', ') + '？')) {
+                throw new Error('已取消破坏性工具确认');
+              }
+              payload.confirm_tools = confirmed;
+            }
+          }
+          return payload;
+        })()),
         signal: agentAbort.signal,
       });
       if (!res.ok) {
@@ -1224,8 +1281,8 @@
       lines.push('[2] GET /v1/settings  → ' + r.status + ' (' + r.ms + 'ms)');
       if (r.ok) {
         const s = r.data || {};
-        const hasApiKey = !!(s.api_key && String(s.api_key).length);
-        const hasAccessKey = !!(s.access_api_key && String(s.access_api_key).length);
+        const hasApiKey = s.api_key_set === true;
+        const hasAccessKey = s.access_api_key_set === true;
         lines.push('    endpoint=' + (s.endpoint || '(unset)'));
         lines.push('    model=' + (s.model || '(unset)'));
         lines.push('    api_key=' + (hasApiKey ? '(set)' : '(MISSING — provider 调用会失败)'));

@@ -56,6 +56,15 @@
         <summary>连接详情 <button id="btn-refresh-models" title="重新加载模型列表">刷新</button></summary>
         <div class="hint">Engine</div><div id="health-info">—</div>
         <div class="hint">Settings</div><pre id="settings-display" class="mono">—</pre>
+        <form id="provider-settings" class="settings-form">
+          <label>Provider<select id="provider-kind"><option value="OpenAI">OpenAI compatible</option></select></label>
+          <label>Endpoint<input id="provider-endpoint" type="url" placeholder="https://…/v1/chat/completions" /></label>
+          <label>Model<input id="provider-model" placeholder="model id" /></label>
+          <label>API key<input id="provider-api-key" type="password" autocomplete="off" placeholder="留空则保持当前运行时 key" /></label>
+          <p class="hint">API key 仅更新当前 engine 进程，不写入 settings.json。</p>
+          <button id="btn-save-provider" type="submit">应用并验证 Provider</button>
+          <span id="provider-save-status" class="hint">—</span>
+        </form>
         <div class="hint">Models</div><pre id="models-display" class="mono">—</pre>
       </details>
 
@@ -94,6 +103,9 @@
           <summary>Agent Run <span id="agent-step-counter" class="hint"></span></summary>
           <textarea id="agent-input" rows="2" placeholder="输入 agent run 指令…"></textarea>
           <label class="inline-label">max_steps <input id="agent-max-steps" type="number" value="3" min="1" max="20" /></label>
+          <label class="inline-label"><input id="agent-tools-enabled" type="checkbox" /> 允许结构化工具调用</label>
+          <label class="inline-label">allowlist <input id="agent-tool-allowlist" placeholder="例如 list_characters,get_character" /></label>
+          <label class="inline-label">confirm <input id="agent-tool-confirm" placeholder="破坏性工具精确名称" /></label>
           <button id="btn-agent-run" class="btn-primary">运行</button><button id="btn-agent-clear">清空</button>
           <div id="agent-output">—</div>
         </details>

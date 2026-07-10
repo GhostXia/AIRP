@@ -8,7 +8,27 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateEnvelope } from "./guard";
+import contract from "../../../protocol/wire-discriminants.json";
+import {
+  BODY_KINDS,
+  CAPABILITIES,
+  ENTRY_KINDS,
+  LAYOUT_KINDS,
+  PATCH_OPS,
+  SET_OR_PATCH,
+  validateEnvelope,
+} from "./guard";
+
+describe("wire discriminant contract", () => {
+  it("matches the shared Rust/UI fixture", () => {
+    expect(BODY_KINDS).toEqual(contract.bodyKinds);
+    expect(SET_OR_PATCH).toEqual(contract.setOrPatch);
+    expect(PATCH_OPS).toEqual(contract.patchOps);
+    expect(CAPABILITIES).toEqual(contract.capabilities);
+    expect(ENTRY_KINDS).toEqual(contract.entryKinds);
+    expect(LAYOUT_KINDS).toEqual(contract.layoutKinds);
+  });
+});
 import type { Envelope, Body, Blueprint, WidgetDef, JsonPatch } from "./types";
 
 function env(body: Body, overrides?: Partial<Envelope>): Envelope {

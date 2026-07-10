@@ -70,12 +70,16 @@ impl Lorebook {
         }
 
         // 3. 按 priority 从高到低排序，拼接 content
-        let mut triggered: Vec<&LorebookEntry> =
-            triggered_idx.iter().map(|&i| &self.entries[i]).collect();
-        triggered.sort_by_key(|e| std::cmp::Reverse(e.priority.unwrap_or(10)));
+        let mut triggered: Vec<(usize, &LorebookEntry)> = triggered_idx
+            .iter()
+            .map(|&index| (index, &self.entries[index]))
+            .collect();
+        triggered.sort_by_key(|(index, entry)| {
+            (std::cmp::Reverse(entry.priority.unwrap_or(10)), *index)
+        });
 
         let mut out = String::from("\n[World Info/Lorebook Information]:\n");
-        for e in triggered {
+        for (_, e) in triggered {
             out.push_str(&e.content);
             out.push('\n');
         }
@@ -188,6 +192,19 @@ mod tests {
         };
         assert!(lb.trigger("含实key 的文本").contains("命中"));
         assert_eq!(lb.trigger("无关文本"), "");
+    }
+
+    #[test]
+    fn airp_v1_contract_fixture_has_deterministic_output() {
+        let fixture = include_str!("../../tests/fixtures/worldbook/airp-v1-basic.json");
+        let lorebook: Lorebook = serde_json::from_str(fixture).unwrap();
+        let output = lorebook
+            .trigger("The moon gate opens near the old observatory; disabled is mentioned.");
+        assert_eq!(
+            output,
+            "\n[World Info/Lorebook Information]:\nThe observatory predates the city.\nThe moon gate opens only at night.\n"
+        );
+        assert!(!output.contains("This must never be injected."));
     }
 
     /// 6.0p 基准对比：朴素 substring 双层循环 vs Aho-Corasick。

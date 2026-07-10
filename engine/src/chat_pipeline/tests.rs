@@ -59,6 +59,7 @@ mod tests_state_extract {
 }
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::*;
     use crate::adapter::{BackendEngine, Provider};

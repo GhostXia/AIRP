@@ -158,7 +158,7 @@
 
 | 块 | 代码成熟度 | 关键桩 / 缺口 | 联调状态 |
 |---|---|---|---|
-| **Core/engine（推理后端）** | 较高——daemon、双 provider 流式 RP、角色/会话/状态/场景/基础世界书、卷与 decompose/analysis 已有测试 | loop 仍是固定计划骨架；默认 registry 已有 11 个工具但 observation 不回灌；state schema 不在写入路径强制；HTTP 与 tool 写路径未统一 | 单回合 daemon 可用；真正 Agent loop、统一服务层与 MCP client 未建 |
+| **Core/engine（推理后端）** | 较高——daemon、双 provider 流式 RP、统一 Chat/State/Lorebook services、结构化 tool-call loop、15 个受 capability/allowlist 控制的内建工具、场景/卷与 decompose/analysis 均有测试 | MCP client、跨 provider tool-call codec、完整 worldbook 高级语义、跨设备稳定身份仍未建 | 本地 Agent loop 与统一服务边界可用；开放式 MCP/插件生态仍后置 |
 | **MCP-Server（数据层）** | 中——框架全，stdio 真 MCP、HTTP 已补 | **酒馆兼容基本假**（角色卡 zTXt-only 读错、世界书 Vec 结构错，见 §3）；`export_context_bundle` 布局破坏前缀缓存 | 从没被 Gateway 或 Core 真消费过 |
 | **Gateway（协议桥）** | 高——已硬化、测试全绿的纯桥 | **streaming(Stage 2)是返回 Unimplemented 的桩**（唯一明确功能缺口）；嵌入 Core(Stage 5)未做 | e2e 全用自带 mock；**从没接真 MCP-Server / Core** |
 | **UI（显示层）** | 高——widget/registry/RFC6902 patch/沙箱/**虚拟滚动(computeWindow已实现)**/边界guard/`.exe`打包已有；AIRP-State-Protocol 原项目曾验证打包 exe 可启动并简单交互；Phase 0 已接 engine SSE；Task 1.2 已把 chat 改为 id-keyed 并去掉 `chat_lock` | **perf spike(10万条)代码在但没跑过**；原项目 exe 验证不覆盖当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收；真实 API key/settings 下的打包启动闭环未验收 | UI↔engine 聊天链路已接；当前 GUI 运行时验收与性能验收待补 |
@@ -249,7 +249,7 @@
 2. **UI↔引擎线协议落地细节**：方向已定为吸收 State-Protocol 的 Blueprint/Widget/RFC6902 patch/Envelope 资产，且默认链路直连 AIRP engine；剩余是具体接口边界、版本策略、错误语义和 engine 侧 capability 强制的实现细节。原 `agentbus` 自重写 Envelope 的重复问题随之消解（引擎直接用 state-protocol 类型）。
 3. **Phase 1 收口顺序**：由本文件开头“当前执行方向”取代旧 Task 顺序。基础世界书、会话和 WebUI 证据已有实现；现在先补自动门禁、桌面 smoke、统一数据/安全边界，再推进真正 Agent loop。
 4. **纯净度代价是否接受**（Core §10-1）：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外。接受（纯净优先），还是留"污染模式"开关兼容那类模型？
-5. **capability 引擎侧强制**：现只 UI 单边限制，引擎侧真强制不存在（State-Protocol §2.5-E）。MVP 要不要先做，还是随扩展面一起？
+5. **capability 扩展范围**：Agent 工具已有 engine-side `call:tool` + allowlist + destructive confirm 强制；未来 widget intent、MCP、hook 与 plugin storage 必须复用同一权威模型，不能退回 UI 单边限制。
 6. **世界书插入引擎完整度**：MVP 先做能解析+关键词触发，还是一步到位补齐 position/depth/selective/递归？且按 §3.2/TAVERN-PARITY §4——position/depth 这些机械插入语义要重组为"给 agent 的建议元数据 + 检索 Tool"，非硬编注入器。
 7. **扩展开放模型**（硬需求）：受控开放（丰富结构化钩子过 capability 门+沙箱，推荐）vs 酒馆式无限制 JS（零门槛但违安全立仓之本）？详见 [TAVERN-PARITY.md](TAVERN-PARITY.md) 第二部分。已倾向受控开放（见 §2.1 不变式⑥）。
 8. **Soul 动态人格演化的实现细节**（已定加入·第二档）：base+drift overlay 的 drift 抽取粒度/回滚 UI 等，做时再细化。

@@ -134,7 +134,7 @@
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
 | Core daemon HTTP 层 | C `daemon/`（axum + 鉴权 + 限流 10req/s） | ✅ | 完整 `/v1/*` API(chat/agent-run/characters/sessions/scenes/state/settings/models/history/rollback/regen) |
-| 常数时间 bearer 鉴权 | C `daemon/` / G `middleware.rs` | ✅ | `AIRP_ACCESS_KEY`。⚠️ 默认无鉴权+CORS`*` 有本地 CSRF/DNS-rebind 风险(C deploy A2-3) |
+| 常数时间 bearer 鉴权 | C `daemon/` / G `middleware.rs` | ✅ | `AIRP_ACCESS_KEY`；默认 loopback + WebUI/Tauri CORS 白名单，自定义来源走 `AIRP_CORS_ORIGINS`。默认无 bearer，仅限本机可信拓扑 |
 | MCP client（stdio+HTTP transport） | G `mcp/{client,transport/{stdio,http}}.rs` | ✅ | 要"引擎接第三方 MCP 工具"时复用。initialize 握手/版本协商/连接池 |
 | 纯桥路由/分发 | G `bridge/mod.rs` + `RouteRule` | 📖 | 声明式 path→tool/resource。**纯 MCP 桥、接不到非 MCP 的 Core**——对单客户端价值有限 |
 | Gateway 安全硬化批 | G ADR-009（SSRF/请求体上限/错误脱敏/优雅关机/OOM 防护） | 📖 | 若引擎 HTTP 要对外，思路可借 |

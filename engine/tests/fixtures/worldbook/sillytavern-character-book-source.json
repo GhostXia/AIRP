@@ -1,0 +1,14 @@
+{
+  "entries": [
+    {
+      "keys": ["moon gate"],
+      "secondary_keys": ["night"],
+      "content": "The moon gate opens only at night.",
+      "enabled": true,
+      "insertion_order": 10,
+      "constant": false,
+      "selective": true,
+      "position": "before_char"
+    }
+  ]
+}

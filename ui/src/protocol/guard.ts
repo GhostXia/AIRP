@@ -23,7 +23,7 @@ import type { Body, Capability, Json, JsonPatch, PatchOpKind } from "./types";
 
 export type GuardResult = { ok: true } | { ok: false; error: string };
 
-const KNOWN_KINDS = new Set<Body["kind"]>([
+export const BODY_KINDS = [
   "blueprint",
   "state",
   "manifest",
@@ -34,27 +34,34 @@ const KNOWN_KINDS = new Set<Body["kind"]>([
   "unsubscribe",
   "hello",
   "ack",
-]);
+] as const satisfies readonly Body["kind"][];
 
-const KNOWN_OPS = new Set(["set", "patch"]);
-const KNOWN_PATCH_OPS = new Set<PatchOpKind>([
+export const SET_OR_PATCH = ["set", "patch"] as const;
+export const PATCH_OPS = [
   "add",
   "remove",
   "replace",
   "move",
   "copy",
   "test",
-]);
-const KNOWN_CAPS = new Set<Capability>([
+] as const satisfies readonly PatchOpKind[];
+export const CAPABILITIES = [
   "read:memory",
   "write:memory",
   "read:worldbook",
   "read:state",
   "write:state",
   "call:tool",
-]);
-const KNOWN_ENTRY_KINDS = new Set(["builtin", "esm"]);
-const KNOWN_LAYOUT_KINDS = new Set(["dock", "grid", "stack", "tabs"]);
+] as const satisfies readonly Capability[];
+export const ENTRY_KINDS = ["builtin", "esm"] as const;
+export const LAYOUT_KINDS = ["dock", "grid", "stack", "tabs"] as const;
+
+const KNOWN_KINDS = new Set<Body["kind"]>(BODY_KINDS);
+const KNOWN_OPS = new Set<string>(SET_OR_PATCH);
+const KNOWN_PATCH_OPS = new Set<PatchOpKind>(PATCH_OPS);
+const KNOWN_CAPS = new Set<Capability>(CAPABILITIES);
+const KNOWN_ENTRY_KINDS = new Set<string>(ENTRY_KINDS);
+const KNOWN_LAYOUT_KINDS = new Set<string>(LAYOUT_KINDS);
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);

@@ -38,7 +38,12 @@ fn kind_of(body: &Body) -> &'static str {
 fn validate(label: &str, text: &str) -> bool {
     match serde_json::from_str::<Envelope>(text) {
         Ok(env) => {
-            println!("OK   {label}: v{} kind={} src={}", env.v, kind_of(&env.body), env.src);
+            println!(
+                "OK   {label}: v{} kind={} src={}",
+                env.v,
+                kind_of(&env.body),
+                env.src
+            );
             true
         }
         Err(e) => {
