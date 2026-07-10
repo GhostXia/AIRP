@@ -7,7 +7,7 @@
 
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
-1. 先把自动 PR gate、`cargo fmt --check`、workspace Clippy、Windows artifact smoke 做成可信基线；
+1. 先把自动 PR gate、`cargo fmt --all -- --check`、workspace Clippy、Windows artifact smoke 做成可信基线；
 2. 抽统一 Chat/State domain services，解决 HTTP 与 Agent tools 的锁、原子写、schema validation 和错误语义漂移；
 3. 完成 secret storage、默认鉴权/CORS 和 Tauri sidecar 生命周期；
 4. 再实现 provider 原生结构化 tool-call loop，让 observation 真正参与下一步决策并走 finalizer；
