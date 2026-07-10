@@ -1,5 +1,7 @@
 # Decompose Agent Flow Implementation Plan
 
+> **历史实施计划**：PR #91 与 #93 已实现并修复主要 decompose/analysis 路径。本文的未勾选 checkbox 和“Execution Handoff”不再表示待执行任务；其中 `airp-engine-console/` WebUI 落点也已由 issue #105 / PR #106 另行处理。当前事实见 [../../PROJECT-AUDIT-2026-07-10.md](../../PROJECT-AUDIT-2026-07-10.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 AIRP-MCP-Server 的 `decompose_character` / `decompose_preset` / `decompose_lorebook` / `enhance_analysis` 四工具移植到 engine，让 UI 显示 agent 整理后的 Markdown 文档（而非 raw JSON），同时为未来 Tauri UI 复用提供 HTTP 端点。

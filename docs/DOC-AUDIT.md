@@ -1,69 +1,44 @@
-# 文档审计待确认项
+# AIRP 文档审计与权威层级
 
-> 最后更新：2026-07-04
-> 目的：把文档整理中发现的矛盾、疑问和需要用户拍板的地方集中列出。事实性过期描述已直接修正；这里保留不能替用户决定的事项。
+> 最后更新：2026-07-10
 
-## 已按当前事实整理
+2026-07-10 已完成一次基于源码、近期 PR、全部 open issues、仓库 Markdown 与本地验证的全项目独立审计。完整结果见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。本文件不再保存已经过期的“待拍板问题”，只定义文档如何使用。
 
-- 根 README：更新为 `engine + protocol + ui` 两盒结构，并说明 `gateway` / `mcp-server` 已退回独立零件来源。
-- `ui/README.md`：更新为 engine 客户端，不再把 Gateway/MockBus 当默认后端。
-- `engine/README.md`：更新测试基线、手动打包 CI、Docker/脚本缺失等当前事实。
-- `docs/DEV-GUIDE.md`：同步 PR #1-#4 状态、D 盘工具链和 npm cache 约束。
-- `docs/PLAN.md` / `docs/PARTS.md`：修正四仓 workspace、mock BusRelay、CI 强制等 2026-07-01 旧状态。
-- `AGENTS.md`：补充 npm cache 必须显式指向 `D:\npm-global\npm-cache`。
-- 2026-07-03 审计 follow-up：PR #6 已合并 Task 1.2 id-keyed chat 并移除 `chat_lock`；PR #12 已修 `ui/build-tauri.ps1`、默认 settings、sandbox `postMessage`、RFC6902 `test` 预校验与仓库 metadata；issue #7-#11 已关闭。
-- 2026-07-04 反冗余审计：Agent UI Test Harness 已收口为 `ui/src/agent-test.ts` 一文件 dev/test 入口；普通用户关闭 agent 控制面只删除该文件后重新手动构建。后续不得把内部测试文件或候选方案暴露成用户操作步骤。
-- 补充历史验证事实：AIRP-State-Protocol 原项目打包后的 exe 曾可正常启动并做简单交互，但未进一步深测；这不等于当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收。
-- 新增 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)：已拍板 AIRP-State-Protocol 的理念定位。Blueprint/Widget/patch/guard/虚拟滚动/consent/sandbox 必须吸收；"通用 Agent UI 标准优先"和"乐高优先"不作为 AIRP 主线。
-- 新增 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：逐项审查 AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol，统一为"吸收资产，不继承产品北极星"。
+## 权威顺序
 
-## 需要用户审核 / 拍板
+1. **源码、manifests、测试和可重复运行证据**：判断已交付能力的最高事实来源；
+2. **[PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)**：当前状态、风险、issue 顺序和近期成功判据；
+3. **[DEV-GUIDE.md](DEV-GUIDE.md)**：当前实施 Agent 的执行入口；
+4. **[PLAN.md](PLAN.md)**：长期产品原则与目标架构，不用于证明某功能已完成；
+5. **专题设计文档**：只约束其明确标注的范围；
+6. **`docs/audits/`、`docs/issues/`、`docs/superpowers/plans/`**：历史证据与实施记录。除非明确更新为当前状态，否则不得当作当前待办或完成清单。
 
-0. **2026-07-04 已拍板的开发方向**
-   - WebUI 是临时后端可靠性验证面，用来验证 engine API/SSE/数据层/错误恢复，不替代 Tauri/Vue 桌面 UI。
-   - 已新增 [WEBUI-BACKEND-VALIDATION.md](WEBUI-BACKEND-VALIDATION.md) 收口 WebUI-first 的执行路线：先端点矩阵和最小 HTTP/SSE 验证面，再把稳定行为回灌到 Tauri UI。
-   - 桌面 UI 是长期产品面，可以慢慢推进控件、布局、交互和性能。
-   - agent 前端自测能力已先按一文件测试面落地：`ui/src/agent-test.ts` 暴露 dev/test-only `window.__AIRP_AGENT_TEST__`。临时控件/插件、Tauri dev-only command、WebUI 前端控制面不再是并行候选；只有当现入口无法提供 GUI smoke 证据链时，才作为替换方案评估。这里不限制上条的后端可靠性 WebUI。
+## 文档类型
 
-1. **Task 1.1 状态怎么写**
-   - 已确认：PR #3 已实现 path-first 角色卡导入 UI，PR #4 已加固派生 ID。
-   - 未确认：本轮没有做 GUI 端到端手动验收。
-   - 建议写法：`已实现，待运行时验收`。若你认可，也可以改成 `Done`，把验收作为单独 QA 项。
+| 类型 | 文件 | 使用规则 |
+|---|---|---|
+| 当前入口 | 根 `README.md` | 只写今天可证明的状态和入口 |
+| 当前审计 | `PROJECT-AUDIT-2026-07-10.md` | 新审计出现前的状态快照 |
+| 长期原则 | `PLAN.md`、`SOURCE-PROJECT-DECISIONS.md`、`UI-PROTOCOL-DECISION.md` | 解释为什么，不自动代表已实现 |
+| 实施手册 | `DEV-GUIDE.md` | 开头的当前接手入口覆盖旧 Phase 记录 |
+| 能力候选 | `PARTS.md`、`MCP-SERVER-ABSORPTION.md`、`TAVERN-PARITY.md` | 候选资产/需求清单，不等于本仓 capability inventory |
+| 研究资料 | `HERMES-*`、`LEARN-*`、`ASSET-SPEC.md` | 路线研究或 draft，必须标注落地状态 |
+| 历史记录 | `docs/audits/`、`docs/issues/`、`docs/superpowers/plans/` | 保留来源与当时判断，不回写成当前事实 |
 
-2. **下一步优先级**
-   - 已完成：Task 1.2 chat 消息 id-keyed 寻址与 `chat_lock` 移除已合并，不再作为路线选择项。
-   - 路线 A：先补可执行文件/GUI runtime 验收和 Perf Spike，再继续功能。
-   - 路线 B：直接进入 Task 1.3 世界书或 Task 1.4 会话操作。
-   - 我倾向 A 后 B，原因是当前首要目标是可运行产物，先把打包、启动、真实配置、最简对话闭环补上更透明。
+## 本轮发现的文档问题
 
-3. **“CI”措辞**
-   - 当前仓库已有 `.github/workflows/manual-build.yml`，但它是 `workflow_dispatch` 手动打包 workflow，不是 PR gate。
-   - 文档应统一写成：本地测试 + 人工 review 是合并前主要门禁；手动 GitHub Actions 用于 fork 用户取得 Windows artifact。
-   - 若后续新增 PR 自动门禁，再把“本地/人工为主”改成对应 workflow 名称和触发条件。
+- 多份文档停留在 PR #13，遗漏 PR #77–#100；
+- `engine/README.md` 混入源 AIRP-Core 的 standalone/乐高定位和不存在的 persona/plugin/MCP 工具；
+- “底层已有能力”“HTTP 已暴露”“Agent 已注册工具”三种状态被混写；
+- 世界书被写成 0%，但实际已有基础实现；Agent tools 被写成仅 echo，但实际 registry 有 11 个；
+- 研究路线和源仓库数字（38 工具、12 prompts、19 resources）被误当成本仓交付目标；
+- decompose implementation plan 已实施，却仍保留未勾选任务和执行交接语气。
 
-4. **`card_path` 安全边界**
-   - 当前 path-first 导入假设 UI 与 engine 是可信本地 sidecar 组合。
-   - 若 engine 暴露到非本机或多用户环境，`card_path` 需要更强的约束：localhost 绑定、access key、文件选择 token、允许目录白名单，或改成受控上传/复制。
-   - 需要你确认：这是马上进入 Phase 1 安全项，还是等 engine 对外暴露前再做。
+## 维护规则
 
-5. **`data/` 中跟踪文件的定位**
-   - `data/items.md`、`data/world.md`、`data/styles/profiles/default.md` 是已跟踪文件。
-   - 需要明确它们是示例 seed、默认模板、还是运行时数据。若是运行时数据，未来多人开发会产生噪声；若是 seed，应在 README/DEV-GUIDE 里明确不可直接写用户私有数据。
-
-6. **旧四仓历史要保留到什么程度**
-   - 当前 README 只简述 `gateway` / `mcp-server` 是零件来源，详细历史留在 `docs/PLAN.md` / `docs/PARTS.md`。
-   - 已新增总决策文档：旧四仓历史保留为资产审计与来源说明，不作为产品路线约束。
-   - 仍需你确认：根 README 是否应该更彻底，只面向当前 AIRP-Dev，不再提旧四仓细节。
-
-7. **State-Protocol 的最终定位已确认**
-   - 已确认：原项目理念不是完全继承。AIRP 吸收 Blueprint/Widget 等好资产，但不继承通用协议优先定位。
-   - 后续待做的是按此决策改代码路线和验收项，不再把"是否以 State-Protocol 为主产品"列为开放题。
-
-8. **四个源项目的最终定位已确认**
-   - 已确认：Core/MCP-Server/Gateway/State-Protocol 全部按"吸收资产，不继承产品北极星"处理。
-   - 后续待做的是按 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md) 改代码路线和验收项，不再把任何源项目自身路线图当 AIRP-Dev 主线。
-
-9. **`docs/PLAN.md` 的体量**
-   - `PLAN.md` 仍是长文，包含大量 2026-07-01 审计记录。
-   - 建议后续拆成：`VISION.md`（长期定位）、`ROADMAP.md`（当前阶段）、`DECISIONS.md`（已拍板）、`DOC-AUDIT.md`（待拍板）。
-   - 这属于结构调整，不应在未确认前直接大搬。
+1. 声称“已实现”必须能指向当前源码入口和验证；
+2. 能力表必须区分 domain/data、HTTP、Agent tool、UI 四层；
+3. 测试数字只在同日实际运行后更新，并写明命令与边界；
+4. 历史 audit/plan 不删除，但在文件顶部标注其历史状态；
+5. 新 PR 若改变当前能力，应至少同步 README 或当前审计/DEV-GUIDE 中的对应入口；
+6. 不把 issue 里的建议措辞升级为架构不变式；不把 helper、schema 或 UI mock 当作用户价值闭环。

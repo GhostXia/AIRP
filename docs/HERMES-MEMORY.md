@@ -1,5 +1,7 @@
 # Hermes Agent 记忆机制学习 → 用到我们 RP 客户端
 
+> **研究与未来方向**：本文描述候选机制，不代表 AIRP 已实现自动记忆、skills、soul 或 FTS5 长程检索。落地必须排在稳定 ID、版本迁移、统一数据服务和真正 Agent loop 之后。当前状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
+
 > 研究对象：Hermes Agent（Nous Research 开源自进化 agent）。"随使用时长能力提升"的核心=持久记忆+技能自建+用户建模的自我进化闭环。
 > 来源：hermes-agent.nousresearch.com/docs、mindstudio 5-支柱解析、glukhov 记忆系统技术贴（2026-07 实读）。
 > 结论先行：这套机制**极适合 RP**，且**主要靠扩展我们已有的件即可实现**，是相对酒馆（每轮重灌静态卡+世界书、无跨会话学习）的**核心差异化**。

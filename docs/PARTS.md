@@ -5,6 +5,8 @@
 > 来源仓库：C=AIRP-Core(D:\AIRPCLI) · M=AIRP-MCP-Server(D:\airp-mcp-server) · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指原仓库路径。
 > 最后更新：2026-07-03
 
+> **使用限制（2026-07-10 审计）**：本文是源项目候选零件目录，不是当前 AIRP capability inventory。✅/🔧 表示源资产可参考或可吸收，不代表本仓已存在 HTTP route、Agent tool 或产品 UI。当前实现状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
+
 > UI 协议拍板：S 的 Blueprint/Widget/patch/guard/虚拟滚动/consent/sandbox 是必须吸收的成熟资产；S 的"通用 Agent UI 标准优先"与"乐高优先"不是 AIRP 产品主线。见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)。
 > 源项目总拍板：C/M/G/S 都是资产来源，统一按"吸收资产，不继承产品北极星"处理。见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)。
 

@@ -1,5 +1,7 @@
 # 后端建设计划书（为 WebUI 验证面做准备）
 
+> **历史实施计划**：主要后端/WebUI 验证能力已由后续 PR 实现；PR #100 已留下真实 SSE smoke evidence。未完成项应回到当前 issues 与 [2026-07-10 审计](PROJECT-AUDIT-2026-07-10.md)，不要按本文重新开工。
+
 > **作者**：AtomCode (GLM-5.2)，2026-07-04
 > **状态**：审计修订版（2026-07-04）：按本文件的收口结论开工；不再把关键安全边界留作实现时临场裁定。
 > **依据**：DEV-GUIDE §3.3/§3.7 + [WEBUI-BACKEND-VALIDATION.md](WEBUI-BACKEND-VALIDATION.md) + [CAPABILITY-ABSORPTION.md](CAPABILITY-ABSORPTION.md) §3 + 源码核实（`engine/src/daemon/mod.rs`、`handlers.rs`）
