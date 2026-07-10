@@ -36,6 +36,17 @@ Temporary browser-based harness to validate engine backend reliability.
 
 4. **One-click diagnostics**: after connecting, click 「一键诊断」 to run a backend reachability sweep (`/version` → `/v1/settings` → `/v1/models` → `/v1/characters`); 「复制摘要」 copies the report for filing as verification evidence.
 
+## V2 layout
+
+`webui/` now hosts the runnable V2 console. It is a zero-build three-page SPA:
+
+- **角色列表** — character selection and import.
+- **对话空间** — sessions, streaming chat, Agent Run, and diagnostics.
+- **工作台** — character-card, lorebook, and decompose tools.
+
+The corresponding files under `../airp-engine-console/` remain design sources only;
+they are not the served WebUI implementation.
+
 ## Scope
 
 **Reachability & config (P0)**

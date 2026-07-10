@@ -37,6 +37,7 @@
   const stateHistoryDisplay = $('#state-history-display');
   const stateHistoryLimit = $('#state-history-limit');
   const btnRefreshState = $('#btn-refresh-state');
+  const characterList = $('#character-list');
 
   // ── state ────────────────────────────────────────────────────────────────
   let base = engineUrl.value.replace(/\/+$/, '');
@@ -243,6 +244,7 @@
       replaceOptions(charSelect, ids);
       if (ids.length && !selectedChar) { selectedChar = ids[0]; charSelect.value = ids[0]; }
       if (selectedChar && ids.includes(selectedChar)) charSelect.value = selectedChar;
+      renderCharacterCards(ids);
       refreshSessions();
       refreshAvatar();
       refreshStateAll();
@@ -262,6 +264,60 @@
       select.appendChild(option);
     });
   }
+
+  // The V2 character page is a view over the same selected character state as
+  // the accessibility-friendly select in the sidebar.  Keeping one source of
+  // truth avoids duplicating the existing session, avatar, and state flows.
+  function renderCharacterCards(ids) {
+    if (!characterList) return;
+    characterList.textContent = '';
+    if (!ids.length) {
+      appendInline(characterList, 'p', 'empty-state', '没有可用角色。请先导入角色卡。');
+      return;
+    }
+    ids.forEach(id => {
+      const characterId = String(id);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'character-card' + (characterId === selectedChar ? ' selected' : '');
+      card.setAttribute('aria-pressed', characterId === selectedChar ? 'true' : 'false');
+      appendInline(card, 'span', 'character-card-name', characterId);
+      appendInline(card, 'span', 'character-card-copy', '选择后加载会话、聊天记录与状态。');
+      appendInline(card, 'span', 'character-card-meta', '打开对话空间 →');
+      card.addEventListener('click', () => {
+        if (charSelect.value !== characterId) {
+          charSelect.value = characterId;
+          charSelect.dispatchEvent(new Event('change'));
+        }
+        showView('session');
+      });
+      characterList.appendChild(card);
+    });
+  }
+
+  function showView(name) {
+    const view = document.getElementById('view-' + name);
+    if (!view) return;
+    document.querySelectorAll('.app-view').forEach(item => {
+      const active = item === view;
+      item.hidden = !active;
+      item.classList.toggle('active', active);
+    });
+    document.querySelectorAll('.page-nav-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.view === name);
+    });
+    if (window.location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  }
+
+  document.querySelectorAll('[data-view]').forEach(control => {
+    control.addEventListener('click', (event) => {
+      event.preventDefault();
+      showView(control.dataset.view);
+    });
+  });
+
+  const initialView = window.location.hash.slice(1);
+  if (initialView === 'characters' || initialView === 'session') showView(initialView);
 
   // summary 内的 button 点击不触发 details toggle
   document.querySelectorAll('summary > button').forEach(b => {
@@ -391,6 +447,7 @@
   charSelect.addEventListener('change', () => {
     selectedChar = charSelect.value;
     selectedSess = '';
+    renderCharacterCards(Array.from(charSelect.options, option => option.value));
     clearChatView();
     refreshSessions();
     refreshAvatar();

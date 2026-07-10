@@ -8,170 +8,119 @@
 </head>
 <body>
 <div id="app">
-  <!-- Top bar -->
   <header id="topbar">
-    <span class="logo">AIRP Engine Console</span>
-    <span id="conn-status" class="status-dot dot-unknown"></span>
-    <span id="conn-text">未连接</span>
-    <label>Engine URL: <input id="engine-url" value="http://127.0.0.1:8000" /></label>
-    <label>Bearer: <input id="bearer-token" type="password" placeholder="(空=无鉴权)" /></label>
-    <button id="btn-connect">连接</button>
+    <a class="logo" href="#characters" data-view="characters">AIRP <span>Engine Console</span></a>
+    <nav class="page-nav" aria-label="Console pages">
+      <button type="button" class="page-nav-item active" data-view="characters">角色列表</button>
+      <button type="button" class="page-nav-item" data-view="session">对话空间</button>
+      <button type="button" id="btn-workbench">工作台</button>
+    </nav>
+    <div class="connection-bar">
+      <span id="conn-status" class="status-dot dot-unknown"></span>
+      <span id="conn-text">未连接</span>
+      <label class="compact-field">Engine URL <input id="engine-url" value="http://127.0.0.1:8000" /></label>
+      <label class="compact-field">Bearer <input id="bearer-token" type="password" placeholder="可选" /></label>
+      <button id="btn-connect" class="btn-primary">连接</button>
+    </div>
   </header>
 
-  <!-- Three-panel body -->
   <div id="body">
-    <!-- Left: character + session -->
     <aside id="left-panel">
-      <details open>
-        <summary>连接信息 <button id="btn-refresh-models" title="重新加载模型列表">reload</button></summary>
-        <div class="hint">Engine</div>
-        <div id="health-info">—</div>
-        <div class="hint">Settings</div>
-        <pre id="settings-display" class="mono">—</pre>
-        <div class="hint">Models</div>
-        <pre id="models-display" class="mono">-</pre>
-      </details>
-      <details open>
-        <summary>Characters <button id="btn-refresh-chars" title="刷新角色列表">↻</button></summary>
+      <section class="panel-section" id="character-context">
+        <div class="section-heading"><span>当前角色</span><button id="btn-refresh-chars" title="刷新角色列表">刷新</button></div>
         <div id="char-avatar-row">
-          <img id="char-avatar" alt="avatar" hidden />
-          <select id="char-select" size="6"></select>
+          <img id="char-avatar" alt="角色头像" hidden />
+          <select id="char-select" size="6" aria-label="角色列表"></select>
         </div>
         <div id="char-actions">
-          <button id="btn-workbench" class="btn-primary">🛠 工作台</button>
-          <button id="btn-reextract" title="重新解包角色卡资产">↻ 重解</button>
+          <button id="btn-reextract" title="重新解包角色卡资源">重新解包</button>
         </div>
-      </details>
-      <details open>
-        <summary>Sessions <button id="btn-new-session" title="新建会话">+</button></summary>
-        <select id="sess-select" size="6"></select>
-      </details>
-      <details id="state-section">
-        <summary>State <button id="btn-refresh-state" title="刷新 state">↻</button></summary>
-        <div class="hint">live.json（404 = 该角色尚未有 state）</div>
+      </section>
+
+      <section class="panel-section" id="session-context">
+        <div class="section-heading"><span>会话</span><button id="btn-new-session" title="新建会话">新建</button></div>
+        <select id="sess-select" size="6" aria-label="会话列表"></select>
+      </section>
+
+      <details id="state-section" class="panel-section">
+        <summary>状态 <button id="btn-refresh-state" title="刷新状态">刷新</button></summary>
+        <div class="hint">live.json（404 表示该角色尚无 state）</div>
         <pre id="state-display" class="mono">—</pre>
-        <div class="hint">State History <label>limit: <input id="state-history-limit" type="number" value="20" min="1" max="1000" /></label></div>
+        <label class="hint">状态历史上限 <input id="state-history-limit" type="number" value="20" min="1" max="1000" /></label>
         <pre id="state-history-display" class="mono">—</pre>
       </details>
-      <details>
-        <summary>Import (M3)</summary>
+
+      <details class="panel-section">
+        <summary>连接详情 <button id="btn-refresh-models" title="重新加载模型列表">刷新</button></summary>
+        <div class="hint">Engine</div><div id="health-info">—</div>
+        <div class="hint">Settings</div><pre id="settings-display" class="mono">—</pre>
+        <div class="hint">Models</div><pre id="models-display" class="mono">—</pre>
+      </details>
+
+      <details class="panel-section" open>
+        <summary>导入角色卡</summary>
+        <p class="hint">仅上传 PNG、JSON 或 V2 卡；不会发送本地路径。</p>
         <input type="file" id="import-file" accept=".png,.json,.card" />
-        <button id="btn-import">上传导入</button>
+        <button id="btn-import">上传并导入</button>
         <div id="import-result" class="hint">—</div>
       </details>
     </aside>
 
-    <!-- Workbench overlay (角色卡 + 世界书编辑) -->
-    <aside id="workbench-panel" hidden>
-      <div id="workbench-resizer" title="左右拖拽调整宽度"></div>
-      <div id="workbench-header">
-        <div id="workbench-title">
-          <h3>工作台</h3>
-          <span id="wb-char-name">—</span>
-          <span id="wb-dirty-dot" hidden title="有未保存修改">●</span>
-        </div>
-        <button id="btn-wb-close" title="关闭 (ESC)">✕</button>
-      </div>
-      <div id="workbench-tabs">
-        <button class="wb-tab active" data-tab="card">角色卡</button>
-        <button class="wb-tab" data-tab="lorebook">世界书</button>
-        <button class="wb-tab" data-tab="decompose">拆解</button>
-      </div>
-      <div id="wb-tab-card" class="wb-tab-content">
-        <div class="hint">编辑角色卡。保存后写回 card.json + raw.json。</div>
-        <div class="wb-fields" id="wb-card-fields"></div>
-        <div class="wb-actions">
-          <button id="btn-wb-save-card" class="btn-primary">保存角色卡</button>
-          <span id="wb-card-status" class="hint">—</span>
-        </div>
-      </div>
-      <div id="wb-tab-lorebook" class="wb-tab-content" hidden>
-        <div class="hint">编辑世界书条目（keys 触发关键词，content 注入内容）。</div>
-        <div id="wb-lore-entries"></div>
-        <div class="wb-actions">
-          <button id="btn-wb-add-lore">+ 添加条目</button>
-          <button id="btn-wb-save-lore" class="btn-primary">保存世界书</button>
-          <span id="wb-lore-status" class="hint">—</span>
-        </div>
-      </div>
-      <div id="wb-tab-decompose" class="wb-tab-content" hidden>
-        <div class="hint">拆解角色卡 / 预设为 analysis MD 骨架（不调 LLM），enhance 走 agent loop。</div>
-        <div class="wb-actions">
-          <button id="btn-wb-decompose" class="btn-primary">拆解角色卡</button>
-          <label class="inline-label"><input id="wb-decompose-force" type="checkbox" /> force 覆盖</label>
-          <button id="btn-wb-list-analysis">刷新文件列表</button>
-          <span id="wb-decompose-status" class="hint">—</span>
-        </div>
-        <div class="wb-actions wb-preset-decompose-row">
-          <button id="btn-wb-decompose-preset">拆解预设</button>
-          <select id="wb-preset-select" class="mono"></select>
-          <span class="hint">（预设拆解产物在 presets/&lt;id&gt;/analysis/，本页仅列角色卡 analysis）</span>
-        </div>
-        <div id="wb-analysis-files" class="wb-analysis-files"></div>
-        <div id="wb-analysis-viewer" class="wb-analysis-viewer" hidden>
-          <div class="wb-analysis-viewer-header">
-            <span id="wb-analysis-filename" class="mono">—</span>
-            <button id="btn-wb-analysis-enhance" title="生成 diff 预览（不写盘）">Enhance 预览</button>
-            <button id="btn-wb-analysis-apply" title="把确认的 enhanced_md 写盘" hidden>Apply 写盘</button>
-            <button id="btn-wb-analysis-close">✕</button>
-          </div>
-          <div class="wb-analysis-diff">
-            <div class="wb-analysis-pane">
-              <div class="wb-analysis-pane-title">原始（只读）</div>
-              <pre id="wb-analysis-original" class="mono"></pre>
-            </div>
-            <div class="wb-analysis-pane">
-              <div class="wb-analysis-pane-title">增强后（可编辑，apply 时写盘）</div>
-              <textarea id="wb-analysis-enhanced" rows="14" class="mono"></textarea>
-            </div>
-          </div>
-        </div>
-      </div>
-    </aside>
-
-    <!-- Center: chat -->
     <main id="center-panel">
-      <div id="chat-log"></div>
-      <div id="chat-composer">
-        <textarea id="chat-input" rows="3" placeholder="输入消息… (Ctrl+Enter 发送)"></textarea>
-        <div id="chat-actions">
-          <button id="btn-send">发送</button>
-          <button id="btn-stop" hidden title="中断正在进行的生成">⏹ 停止</button>
-          <button id="btn-history" title="从 engine 拉取完整聊天记录">↻ 刷新历史</button>
-          <button id="btn-regen">↻ Regenerate</button>
-          <button id="btn-rollback">↩ Rollback</button>
+      <section id="view-characters" class="app-view active" aria-labelledby="characters-title">
+        <div class="view-heading">
+          <div><p class="eyebrow">AIRP ENGINE</p><h1 id="characters-title">角色列表</h1><p>选择角色以进入对话空间，或导入新的 Tavern Card V2。</p></div>
+          <button class="btn-primary" type="button" data-view="session">进入对话空间</button>
         </div>
-      </div>
-      <details id="agent-runner">
-        <summary>Agent Run <span id="agent-step-counter" class="hint"></span></summary>
-        <textarea id="agent-input" rows="2" placeholder="输入 agent run 指令…（如：用 echo 工具探测 loop-skeleton）"></textarea>
-        <label class="inline-label">max_steps: <input id="agent-max-steps" type="number" value="3" min="1" max="20" /></label>
-        <button id="btn-agent-run">Run</button>
-        <button id="btn-agent-clear">清</button>
-        <div id="agent-output">—</div>
-      </details>
-      <details id="concurrent-test">
-        <summary>Concurrent Stream Test (M2)</summary>
-        <div>两条并发 chat stream，验证 id-keyed state 不串扰：</div>
-        <button id="btn-concurrent">启动两条并发流</button>
-        <div id="concurrent-status" class="hint">—</div>
-      </details>
-      <details id="diagnostics">
-        <summary>Diagnostics</summary>
-        <div class="diag-actions">
-          <button id="btn-diag">一键诊断</button>
-          <button id="btn-diag-copy">复制摘要</button>
+        <div id="character-list" class="character-grid" aria-live="polite">
+          <p class="empty-state">连接 Engine 后加载角色。</p>
         </div>
-        <pre id="diag-output" class="mono">—</pre>
-      </details>
+      </section>
+
+      <section id="view-session" class="app-view" aria-labelledby="session-title" hidden>
+        <div class="view-heading compact">
+          <div><p class="eyebrow">SESSION</p><h1 id="session-title">对话空间</h1><p>选择左侧角色和会话后开始对话。</p></div>
+          <div class="view-actions"><button id="btn-history">刷新历史</button><button id="btn-regen">重新生成</button><button id="btn-rollback">回滚</button></div>
+        </div>
+        <div id="chat-log"></div>
+        <div id="chat-composer">
+          <textarea id="chat-input" rows="3" placeholder="输入消息…（Ctrl+Enter 发送）"></textarea>
+          <div id="chat-actions"><button id="btn-send" class="btn-primary">发送</button><button id="btn-stop" hidden>停止</button></div>
+        </div>
+
+        <details id="agent-runner" class="tool-panel">
+          <summary>Agent Run <span id="agent-step-counter" class="hint"></span></summary>
+          <textarea id="agent-input" rows="2" placeholder="输入 agent run 指令…"></textarea>
+          <label class="inline-label">max_steps <input id="agent-max-steps" type="number" value="3" min="1" max="20" /></label>
+          <button id="btn-agent-run" class="btn-primary">运行</button><button id="btn-agent-clear">清空</button>
+          <div id="agent-output">—</div>
+        </details>
+        <details id="concurrent-test" class="tool-panel">
+          <summary>并发流测试</summary>
+          <p class="hint">验证两条并发流不会交叉写入。</p><button id="btn-concurrent">启动测试</button><div id="concurrent-status" class="hint">—</div>
+        </details>
+        <details id="diagnostics" class="tool-panel">
+          <summary>诊断</summary>
+          <div class="diag-actions"><button id="btn-diag">运行诊断</button><button id="btn-diag-copy">复制摘要</button></div>
+          <pre id="diag-output" class="mono">—</pre>
+        </details>
+      </section>
     </main>
 
-    <!-- Right: event log / diagnostics -->
     <aside id="right-panel">
-      <h3>Event Log <button id="btn-clear-log">清</button></h3>
+      <div class="section-heading"><span>Event Log</span><button id="btn-clear-log">清空</button></div>
       <div id="event-log"></div>
     </aside>
   </div>
+
+  <aside id="workbench-panel" hidden aria-label="工作台">
+    <div id="workbench-resizer" title="拖拽调整宽度"></div>
+    <div id="workbench-header"><div id="workbench-title"><p class="eyebrow">WORKBENCH</p><h2 id="wb-char-name">—</h2><span id="wb-dirty-dot" hidden title="有未保存修改">●</span></div><button id="btn-wb-close" title="关闭（ESC）">×</button></div>
+    <div id="workbench-tabs"><button class="wb-tab active" data-tab="card">角色卡</button><button class="wb-tab" data-tab="lorebook">世界书</button><button class="wb-tab" data-tab="decompose">拆解</button></div>
+    <div id="wb-tab-card" class="wb-tab-content"><p class="hint">通过 API 保存角色卡，不依赖内部文件路径。</p><div class="wb-fields" id="wb-card-fields"></div><div class="wb-actions"><button id="btn-wb-save-card" class="btn-primary">保存角色卡</button><span id="wb-card-status" class="hint">—</span></div></div>
+    <div id="wb-tab-lorebook" class="wb-tab-content" hidden><p class="hint">编辑世界书条目。</p><div id="wb-lore-entries"></div><div class="wb-actions"><button id="btn-wb-add-lore">添加条目</button><button id="btn-wb-save-lore" class="btn-primary">保存世界书</button><span id="wb-lore-status" class="hint">—</span></div></div>
+    <div id="wb-tab-decompose" class="wb-tab-content" hidden><p class="hint">拆解角色卡或预设，增强操作会先显示预览。</p><div class="wb-actions"><button id="btn-wb-decompose" class="btn-primary">拆解角色卡</button><label class="inline-label"><input id="wb-decompose-force" type="checkbox" /> 覆盖已有结果</label><button id="btn-wb-list-analysis">刷新文件</button><span id="wb-decompose-status" class="hint">—</span></div><div class="wb-actions wb-preset-decompose-row"><button id="btn-wb-decompose-preset">拆解预设</button><select id="wb-preset-select" class="mono"></select></div><div id="wb-analysis-files" class="wb-analysis-files"></div><div id="wb-analysis-viewer" class="wb-analysis-viewer" hidden><div class="wb-analysis-viewer-header"><span id="wb-analysis-filename" class="mono">—</span><button id="btn-wb-analysis-enhance">Enhance 预览</button><button id="btn-wb-analysis-apply" hidden>写入</button><button id="btn-wb-analysis-close">×</button></div><div class="wb-analysis-diff"><div class="wb-analysis-pane"><div class="wb-analysis-pane-title">原始</div><pre id="wb-analysis-original" class="mono"></pre></div><div class="wb-analysis-pane"><div class="wb-analysis-pane-title">增强后</div><textarea id="wb-analysis-enhanced" rows="14" class="mono"></textarea></div></div></div></div>
+  </aside>
 </div>
 <script src="app.js"></script>
 </body>
