@@ -18,6 +18,7 @@
     <div class="connection-bar">
       <span id="conn-status" class="status-dot dot-unknown"></span>
       <span id="conn-text">未连接</span>
+      <span id="access-key-warning" class="access-warning" hidden></span>
       <label class="compact-field">Engine URL <input id="engine-url" value="http://127.0.0.1:8000" /></label>
       <label class="compact-field">Bearer <input id="bearer-token" type="password" placeholder="可选" /></label>
       <button id="btn-connect" class="btn-primary">连接</button>
@@ -34,6 +35,7 @@
         </div>
         <div id="char-actions">
           <button id="btn-reextract" title="重新解包角色卡资源">重新解包</button>
+          <button id="btn-delete-char" class="btn-danger" title="删除当前角色及其会话">删除角色</button>
         </div>
       </section>
 

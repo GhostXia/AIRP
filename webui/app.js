@@ -12,6 +12,7 @@
   const btnConnect = $('#btn-connect');
   const connStatus = $('#conn-status');
   const connText = $('#conn-text');
+  const accessKeyWarning = $('#access-key-warning');
   const healthInfo = $('#health-info');
   const settingsDisplay = $('#settings-display');
   const modelsDisplay = $('#models-display');
@@ -38,6 +39,7 @@
   const stateHistoryLimit = $('#state-history-limit');
   const btnRefreshState = $('#btn-refresh-state');
   const characterList = $('#character-list');
+  const btnDeleteChar = $('#btn-delete-char');
 
   // ── state ────────────────────────────────────────────────────────────────
   let base = engineUrl.value.replace(/\/+$/, '');
@@ -212,8 +214,16 @@
       if (s.api_key) s.api_key = maskSecret(s.api_key);
       if (s.access_api_key) s.access_api_key = maskSecret(s.access_api_key);
       settingsDisplay.textContent = JSON.stringify(s, null, 2);
+      if (accessKeyWarning) {
+        const unprotected = s.access_api_key_set === false;
+        accessKeyWarning.hidden = !unprotected;
+        accessKeyWarning.textContent = unprotected
+          ? '未设置 Bearer；仅限受信的本地开发环境。'
+          : '';
+      }
     } else {
       settingsDisplay.textContent = 'err: ' + formatError(r.data, r.text);
+      if (accessKeyWarning) accessKeyWarning.hidden = true;
     }
   }
 
@@ -244,7 +254,7 @@
       replaceOptions(charSelect, ids);
       if (ids.length && !selectedChar) { selectedChar = ids[0]; charSelect.value = ids[0]; }
       if (selectedChar && ids.includes(selectedChar)) charSelect.value = selectedChar;
-      renderCharacterCards(ids);
+      await renderCharacterCards(ids);
       refreshSessions();
       refreshAvatar();
       refreshStateAll();
@@ -268,21 +278,33 @@
   // The V2 character page is a view over the same selected character state as
   // the accessibility-friendly select in the sidebar.  Keeping one source of
   // truth avoids duplicating the existing session, avatar, and state flows.
-  function renderCharacterCards(ids) {
+  async function renderCharacterCards(ids) {
     if (!characterList) return;
     characterList.textContent = '';
     if (!ids.length) {
       appendInline(characterList, 'p', 'empty-state', '没有可用角色。请先导入角色卡。');
       return;
     }
-    ids.forEach(id => {
+    const summaries = await Promise.all(ids.map(async id => {
       const characterId = String(id);
+      const r = await api('GET', '/v1/characters/' + encodeURIComponent(characterId));
+      const card = r.ok && r.data && typeof r.data === 'object' ? (r.data.data || r.data) : {};
+      return {
+        id: characterId,
+        name: typeof card.name === 'string' && card.name.trim() ? card.name : characterId,
+        description: typeof card.description === 'string' && card.description.trim()
+          ? card.description
+          : '选择后加载会话、聊天记录与状态。',
+      };
+    }));
+    summaries.forEach(summary => {
+      const characterId = summary.id;
       const card = document.createElement('button');
       card.type = 'button';
       card.className = 'character-card' + (characterId === selectedChar ? ' selected' : '');
       card.setAttribute('aria-pressed', characterId === selectedChar ? 'true' : 'false');
-      appendInline(card, 'span', 'character-card-name', characterId);
-      appendInline(card, 'span', 'character-card-copy', '选择后加载会话、聊天记录与状态。');
+      appendInline(card, 'span', 'character-card-name', summary.name);
+      appendInline(card, 'span', 'character-card-copy', summary.description);
       appendInline(card, 'span', 'character-card-meta', '打开对话空间 →');
       card.addEventListener('click', () => {
         if (charSelect.value !== characterId) {
@@ -306,7 +328,12 @@
     document.querySelectorAll('.page-nav-item').forEach(item => {
       item.classList.toggle('active', item.dataset.view === name);
     });
-    if (window.location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+    if (window.location.hash !== '#' + name) window.location.hash = name;
+  }
+
+  function showViewFromHash() {
+    const view = window.location.hash.slice(1);
+    showView(view === 'session' ? 'session' : 'characters');
   }
 
   document.querySelectorAll('[data-view]').forEach(control => {
@@ -316,8 +343,8 @@
     });
   });
 
-  const initialView = window.location.hash.slice(1);
-  if (initialView === 'characters' || initialView === 'session') showView(initialView);
+  window.addEventListener('hashchange', showViewFromHash);
+  showViewFromHash();
 
   // summary 内的 button 点击不触发 details toggle
   document.querySelectorAll('summary > button').forEach(b => {
@@ -650,11 +677,14 @@
   }
 
   function buildChatPayload(text) {
-    const payload = {
-      character_id: selectedChar,
+    return buildSessionPayload({
       user_profile: { name: 'User', variables: {} },
       message: text,
-    };
+    });
+  }
+
+  function buildSessionPayload(extra) {
+    const payload = { character_id: selectedChar, ...(extra || {}) };
     if (selectedSess) payload.session_id = selectedSess;
     return payload;
   }
@@ -746,7 +776,7 @@
   }
   async function loadHistory() {
     if (!selectedChar) return;
-    const r = await api('POST', '/v1/chat/history', { character_id: selectedChar });
+    const r = await api('POST', '/v1/chat/history', buildSessionPayload());
     if (r.ok) {
       const data = r.data && typeof r.data === 'object' ? r.data : {};
       const msgs = data.messages || r.data || [];
@@ -779,7 +809,7 @@
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
     if (!window.confirm('Regenerate 会重写/删除最后一条 assistant 消息，不可撤销。继续？')) return;
-    const r = await api('POST', '/v1/chat/regen', { character_id: selectedChar });
+    const r = await api('POST', '/v1/chat/regen', buildSessionPayload());
     if (r.ok) loadHistory();
   });
 
@@ -790,7 +820,7 @@
     const idx = parseInt(index);
     if (Number.isNaN(idx) || idx < 0) { logEvent('POST', '/v1/chat/rollback', 0, 0, 'illegal index: ' + index); return; }
     if (!window.confirm('确认截断到 index ' + idx + '？此操作不可撤销。')) return;
-    const r = await api('POST', '/v1/chat/rollback', { character_id: selectedChar, message_index: idx });
+    const r = await api('POST', '/v1/chat/rollback', buildSessionPayload({ message_index: idx }));
     if (r.ok) loadHistory();
   });
 
@@ -1760,6 +1790,7 @@
 
   if (btnWorkbench) btnWorkbench.addEventListener('click', openWorkbench);
   if (btnReextract) btnReextract.addEventListener('click', reextractCurrentChar);
+  if (btnDeleteChar) btnDeleteChar.addEventListener('click', deleteCurrentChar);
   if (btnWbClose) btnWbClose.addEventListener('click', closeWorkbench);
   if (btnWbSaveCard) btnWbSaveCard.addEventListener('click', saveWorkbenchCard);
   if (btnWbSaveLore) btnWbSaveLore.addEventListener('click', saveWorkbenchLore);
@@ -1829,6 +1860,25 @@
     } else {
       alert('重新解包失败: ' + formatError(r.data, r.text));
     }
+  }
+
+  async function deleteCurrentChar() {
+    if (!selectedChar) { alert('请先选择一个角色'); return; }
+    const characterId = selectedChar;
+    if (!confirm('删除「' + characterId + '」会永久移除角色卡、状态与全部会话，无法撤销。确定删除？')) return;
+    const r = await api('DELETE', '/v1/characters/' + encodeURIComponent(characterId));
+    if (!r.ok) {
+      alert('删除失败: ' + formatError(r.data, r.text));
+      return;
+    }
+    if (workbenchPanel) workbenchPanel.hidden = true;
+    wbCardData = null;
+    wbLoreData = null;
+    setWbDirty(false);
+    selectedChar = '';
+    selectedSess = '';
+    chatLog.textContent = '';
+    await refreshChars();
   }
 
   // W-05: 停止生成按钮 — 仅在 chat streaming 进行时显示
