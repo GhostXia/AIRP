@@ -1,9 +1,19 @@
 # AIRP 开发文档（交接给实现 Agent）
 
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
-> **配套设计文档（背景/依据，动手前通读）**：[PLAN.md](PLAN.md)（总设计+待决项）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（四源项目吸收资产/降级北极星）· [PARTS.md](PARTS.md)（四仓零件清单+file:line）· [TAVERN-PARITY.md](TAVERN-PARITY.md)（酒馆功能对标+扩展接口+解耦重组）· [HERMES-MEMORY.md](HERMES-MEMORY.md)（自进化记忆）。
+> **配套文档（按顺序）**：[PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)（当前事实、风险、issue 排序）· [PLAN.md](PLAN.md)（长期原则）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
-> 最后更新：2026-07-04
+> 最后更新：2026-07-10
+
+## 当前接手入口（覆盖下文旧 Phase 顺序）
+
+1. 先把自动 PR gate、`cargo fmt --all -- --check`、workspace Clippy、Windows artifact smoke 做成可信基线；
+2. 抽统一 Chat/State domain services，解决 HTTP 与 Agent tools 的锁、原子写、schema validation 和错误语义漂移；
+3. 完成 secret storage、默认鉴权/CORS 和 Tauri sidecar 生命周期；
+4. 再实现 provider 原生结构化 tool-call loop，让 observation 真正参与下一步决策并走 finalizer；
+5. 最后才扩充世界书高级语义、persona/记忆、MCP/skills/plugin 与 Agent-first workbench。
+
+本顺序来自 2026-07-10 全项目独立审计。下文 2026-07-01 至 2026-07-04 的 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
 
 ---
 
@@ -60,11 +70,11 @@ D:\AIRP-Dev/
 
 **关键事实（决定起点）：**
 - **四块从没端到端一起跑过**（各自 mock 自测）——**Phase 0（本 PR #2）正是首次让 UI↔引擎真跑通**：UI `BusRelay` 已从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，流式回填 `w-chat`。
-- **`engine` 已是完整 RP 后端**（80% 后端功能已实现且带测试）：`/v1/chat/completions`(单回合 SSE)、`/v1/agent/run`(多步 loop M_AGENT-1)、characters/sessions/scenes/state/history/rollback/regen/settings；adapter 双 provider(OpenAI+Anthropic)；orchestrator 装配；fsm+xml_unpacker 流过滤；封卷；**png_parser 正确解析酒馆卡**。
-- **`D:\airp-mcp-server` = 未来刚需·能力要融进 engine**（用户 2026-07-02）：它的 38 工具/12 工作流提示词/19 资源 + 数据模型是 engine 数据层 + agent 内置工具的**完整规格**（engine 现只重实现了子集）。**融入=M_AGENT-2 把数据操作包成 agent 工具**，详见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)。**注意区分**：它的**角色卡/世界书解析确有 bug**（zTXt-only、Vec 结构错）——移植时改用 engine 的 png_parser、修解析；但这是局部要修的点，**不是丢掉整个 MCP-Server 的理由**。
+- **`engine` 已是可用的单回合 RP 后端，但不是完整 Agent 后端**：daemon、双 provider 流式、角色/会话/状态/场景/基础世界书、卷、decompose/analysis 已有实现与测试；`agent/run` 仍是固定计划骨架。
+- **`D:\airp-mcp-server` 是候选规格与资产来源，不是必须逐项复制的完成清单**：本仓默认 Agent registry 当前恰为 11 个工具。新增能力必须先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露，不能把“底层有函数”写成“Agent 已可调用”。
 - **四个源项目统一原则**：吸收资产，不继承产品北极星。Core 是 engine 主核但不继承 standalone 乐高后端叙事；MCP-Server 是数据/工具/工作流规格来源但不继承纯 MCP 数据层边界；Gateway 是传输/安全/MCP-client 资产来源但不继承纯协议桥目标；State-Protocol 是 UI/协议资产来源但不继承通用 Agent UI 标准目标。详见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)。
 
-**起点决策（已落地）：引擎 = 以 `engine` 为核演进，并把 `D:\airp-mcp-server` 的完整能力面（38工具/12提示词/19资源+数据模型）逐步融入 engine 成原生 agent 工具+工作流+数据层**（主载体 = M_AGENT-2，见 [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)）；`D:\AIRP-Gateway` 留作 engine 作 MCP client 接**第三方** MCP 的参考；`ui/` 直接用。
+**当前决策**：以 `engine` 为唯一产品内核；源仓库只提供候选资产。是否吸收某项能力由 AIRP 用户工作流、共享服务边界和验收证据决定，不以“38 工具”等源仓库数量为目标。
 
 ---
 
@@ -109,7 +119,7 @@ D:\AIRP-Dev/
   - 复用 Core 现成资产当库：`adapter::call_streaming_api_auto`、`chat_pipeline::prepare_pipeline` / `build_sse_stream` / `run_finalize`。**一行 SSE/provider/拆包都不重写**（Core 已成熟）。
 - **控制平面 = 结构化 tool-calling**：OpenAI/Anthropic 原生工具字段。`<action>` XML 作不支持结构化工具的模型的回退。
 - **原语面（新建/补全，MVP 后立骨架）**：
-  - **Tool**：`Tool` trait + `ToolRegistry`（Core `agent/tools.rs` 有骨架，现仅 mock echo）。元数据 readonly/mutate/destructive/append。内置工具（数据读写/掷骰/…）+ MCP upstream 工具（`McpClient`，可从 `parts/gateway` 挖）。
+  - **Tool**：`Tool` trait + `ToolRegistry` 当前注册 11 个工具，覆盖 echo、会话、角色和 analysis 子集。元数据有 readonly/mutate/destructive/append；MCP upstream client 尚未实现。
   - **Memory**：三层，见 §6。
   - **Skill**：md+YAML front matter，渐进披露；**兼容 agentskills.io 开放标准**（白捡生态）；从经验自建、反馈更新。
   - **Event Hook**：引擎发全生命周期事件（消息收发/编辑/swipe、生成起止、流式 token、世界书命中、工具调用、state 变更），第三方订阅。对标酒馆 `eventSource`。
@@ -201,7 +211,7 @@ data/
 
 > 原则：每阶段自身可跑、可测、可验收。**MVP 优先证明端到端，再谈扩展。**
 >
-> **📍 当前状态（2026-07-03）**：Phase 0 ✅ 已完成合并（PR #2）。Phase 1 Task 1.1 ✅ 已实现（PR #3）并完成派生 ID 加固（PR #4）。Task 1.2 ✅ 已完成并合并（PR #6，PR #12 追加审计 follow-up）。**下一步 = 可执行文件/GUI 运行时验收 + Perf Spike，然后进入 Task 1.3 世界书或 Task 1.4 会话操作**。
+> **历史状态（2026-07-03）**：本节记录早期 Phase 设计。PR #77–#100 已继续实现多项数据、工具、decompose 与 WebUI smoke 工作；当前顺序以本文开头和 [2026-07-10 审计](PROJECT-AUDIT-2026-07-10.md) 为准。
 
 ### Phase 0 · 引擎+UI 直连，跑通一次干净对话（MVP 地基）—— ✅ 已完成（PR #2 合并入 main）
 - 已落地：`ui/src-tauri/src/bus.rs` 的 `BusRelay` 从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，消费 SSE、按 `w-chat` scope 流式回填；角色列表 `characters.list`。
@@ -238,7 +248,7 @@ data/
 - **实现状态**：`BusRelay` 已移除 `chat_lock`；chat scope 已改为 `{messages, order}`；每个 `chat.send` 用单个 state patch envelope 同时写入 user row、`order` user id、assistant row、`order` assistant id；流式回填只改自己的 `/messages/{assistant_id}/text`。
 - **已验证**：`cargo test -p airp-ui`、`npm run test -- --run`、`npm run typecheck`、`cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` 通过；审计 follow-up 后前端测试 95 个通过。
 
-### 下一步开发接手清单（2026-07-03）
+### 下一步开发接手清单（2026-07-10）
 
 1. 先设置 D 盘工具链环境：
    ```powershell
@@ -248,13 +258,13 @@ data/
    $env:npm_config_cache = "D:\npm-global\npm-cache"
    $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
    ```
-2. 确认 `data/settings.json` 使用真实可用的 `endpoint` / `api_key` / `model`，不要把空 key 示例当运行时验收。
-3. 开发态最简闭环：启动 engine（例如 `cargo run -p airp-core -- daemon --port 8000`），再 `cd ui; npm run tauri dev`，选/导入角色，发一条消息，确认收到流式回复。
-4. 打包态闭环：`cd ui; .\build-tauri.ps1`，启动产物，重复最简对话；记录 artifact 路径、启动方式、settings 来源、sidecar 数据目录和失败时 UI 可见错误。
-5. 若后端可靠性仍不透明，先做临时 WebUI/HTTP harness：不做产品 UI，只验证 engine API、SSE、鉴权、数据目录、角色/会话读写和并发错误。执行路线见 [WEBUI-BACKEND-VALIDATION.md](WEBUI-BACKEND-VALIDATION.md)。
-6. 给 agent 补 UI 自测能力：沿用现有 `ui/src/agent-test.ts` 一文件测试面接 Codex browser control 或 Playwright，使 agent 能自行跑 GUI smoke 并产出截图/状态证据；不要再造平行控制接口。
-7. 跑 Perf Spike：用 10 万条消息验证 `virtual-window.ts` 路径和 ChatWidget 不退化。
-8. 继续功能时优先二选一：Task 1.3 世界书引擎，或 Task 1.4 会话操作（swipe/edit/delete/regenerate）。
+2. 建立 pull_request workflow：workspace tests、UI tests/typecheck、fmt；修清 Clippy 后加入 `-D warnings`。神圣不变式必须在 CI 输出中可见。
+3. 对 ChatLog、state live/history、rollback/regen 写并发测试；随后抽统一服务层，禁止 HTTP 与 Agent tool 各自读写文件。
+4. 完成 state schema 写入校验、atomic replace、revision/idempotency；同时修 secrets、CORS/默认鉴权。
+5. 在 Tauri managed state 持有 sidecar child，补 shutdown/restart/crash/port-conflict 状态机和 Windows artifact smoke。
+6. 修复并按 issue #105 逐项验收 PR #106；WebUI 继续只承担诊断与可靠性验证。
+7. 上述基线稳定后，实现 structured tool-call loop 与 finalizer；不要先复制更多工具。
+8. 跑 Perf Spike，并基于稳定的数据/能力合同再做 Agent-first workbench、世界书高级语义与长期记忆。
 
 Agent UI Test Harness 最小用法：
 
@@ -265,7 +275,8 @@ await window.__AIRP_AGENT_TEST__.waitForText("hello")
 window.__AIRP_AGENT_TEST__.getSnapshot()
 ```
 
-**Task 1.3 · 世界书引擎（最大新建 · 关键路径）** —— 见 §5 + [PARTS.md](PARTS.md) F
+**Task 1.3 · 世界书引擎（基础已实现，高级语义待设计）** —— 见 §5 + [PARTS.md](PARTS.md) F
+- **当前实现**：角色卡内嵌 lorebook、GET/PUT、OR keys、enabled、priority 和 Aho-Corasick 触发已存在。
 - 解析酒馆 world info（`{entries:{"0":{...}}}` uid-keyed object，全字段：keys/secondary_keys/position/depth/order/probability/selective/constant/递归…）入数据层；关键词触发用引擎已有 aho-corasick 扫描。
 - **解耦重组（守 §5 原则）**：position/depth/selective 等**机械插入语义降为"给 agent 的建议元数据 + 检索 Tool**（agent 生成中按需调 `lorebook_lookup`），非硬编注入管线。MVP 先"能解析 + 关键词触发注入"，插入语义增量补。
 - **验收**：真实酒馆世界书文件导入解析无丢字段；对话中相关条目按关键词命中注入角色平面；守干净提示词不变式。

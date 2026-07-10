@@ -1,8 +1,20 @@
 # AIRP 客户端 —— 设计计划
 
-> 状态：草稿，逐条商议修改中。
-> 最后更新：2026-07-04
+> 状态：长期产品原则与目标架构；当前事实和近期排序以 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md) 为准。
+> 最后更新：2026-07-10
 > **权威 = 我们这个客户端的实际需求。** 四个原仓库的文档与代码都**仅供参考**——是作者已想清的宝贵先例/解法，但不是必须遵守的法律。它们的理念、戒律、模块边界、ADR、路线图**均为参考**，与我们实际需求冲突时以需求为准。本 PLAN 的每个决策先问"我们的客户端需要什么"，再问"哪个仓库有可借鉴的现成解法"，**绝不问"文档规定了什么"**。
+
+## 当前执行方向（2026-07-10 审计后）
+
+近期不再按源仓库工具数量横向扩张，按以下顺序闭环：
+
+1. **可信基线**：自动 PR gate、Rust fmt/Clippy 基线、Windows 安装包真实 smoke、修完并验收 PR #106；
+2. **统一数据与安全边界**：Chat/State domain services、并发锁与原子写、state schema enforcement、secret store、默认鉴权与 sidecar lifecycle；
+3. **真正的纯净 Agent runtime**：provider 原生结构化 tool call、typed observation 回灌、动态收敛与 finalizer；
+4. **RP 数据模型成熟化**：稳定 ID/版本/迁移、会话分支、完整 worldbook contract、persona 与长期记忆；
+5. **产品 UI 与开放扩展**：Tauri 工作台先消费稳定合同，之后再开放 MCP client、skills/hooks/plugin storage。
+
+这不是改变“两盒”“干净提示词”“Tauri 长期产品面”等既定原则，而是把实现顺序从功能堆叠改为可验证闭环。详细证据、issue 排序和成功判据见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
 
 ## 0. 背景与定位
 
@@ -19,7 +31,7 @@
 - **四个原仓库 = 参考素材（理念 + 代码都仅供参考）**：作者按需求拆过四个项目、写清了各自的解法。它们是极有价值的先行思考，但**一切以我们客户端的实际需求为准**——不被它们的模块划分/戒律/命名/实现束缚。需要功能时去对应仓库挖可借鉴的代码/思路搬来改。用户对四仓库有完整版权，无侵权顾虑。酒馆当功能清单参考。
 - **源项目统一定位已拍板（2026-07-03，见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)）**：AIRP-Core、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 都按同一原则处理：**吸收资产，不继承产品北极星**。Core 是 engine 主核但不继承其 standalone 乐高后端叙事；MCP-Server 是数据/工具/工作流规格来源但不继承纯 MCP 数据层边界；Gateway 是传输/安全/MCP-client 资产来源但不继承纯协议桥目标；State-Protocol 是 UI/协议资产来源但不继承通用 Agent UI 标准目标。
 - **State-Protocol 定位已拍板（2026-07-03，见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)）**：原 AIRP-State-Protocol 的"通用 Agent UI 标准 / 乐高化显示层"理念不作为 AIRP 主线；但 **Blueprint、Widget Registry/Host、RFC6902 patch、Envelope、guard、虚拟滚动、consent/sandbox** 是必须吸收的成熟资产。结论：**吸收 Blueprint/Widget 架构，降级通用协议优先定位**。
-- **AIRP-Dev 现状（2026-07-04）**：PR #1 已把 workspace 收敛为 `engine + protocol + ui` 两盒结构；`gateway` / `mcp-server` 不再是本 workspace 成员，只作为独立仓库/零件来源。PR #2 已让 UI `BusRelay` 直连 engine `/v1/chat/completions`；PR #3/#4 已实现并加固 path-first 角色卡导入；PR #6 已完成 chat 消息 id-keyed 寻址并移除 `chat_lock`；PR #12 已收口审计 follow-up；PR #13 已让 Tauri 打包链路携带 engine sidecar；手动 GitHub Actions **Manual build** 可产出 Windows artifact；Agent UI Test Harness 已收口为一文件 dev/test 入口 `ui/src/agent-test.ts`。当前剩余是：真实配置下的 GUI/runtime smoke、Perf Spike、临时 WebUI 后端可靠性验证面、Task 1.3 世界书、Task 1.4 会话操作以及后续 engine 数据/工具能力融入。
+- **历史快照（2026-07-04）**：PR #1–#13 完成了 workspace 收敛、UI→engine 直连、角色卡导入、id-keyed chat 和 sidecar 打包链路。此后 PR #77–#100 已继续实现 HTTP CRUD、Agent tools、decompose/analysis、审计修复和真实 WebUI SSE 证据；不要再用本段判断当前完成度，见 [2026-07-10 独立审计](PROJECT-AUDIT-2026-07-10.md)。
 
 ## 1. 产品命根子：干净提示词（干净提示词 / pristine prompt）
 
@@ -140,13 +152,13 @@
 
 ## 2.6 现状真相 + 复用地图（亲读六份承重文档后校准）
 
-> 历史事实：四块原仓从没端到端一起跑过。每块只用 mock 自测——Gateway e2e 用自带 mock（没接真 MCP/Core）、UI 用 MockBus、Core daemon 自测、MCP 独立测。当前 AIRP-Dev 已完成第一段整合：UI `BusRelay` 直连 engine 的聊天 SSE；仍未完成的是 GUI 运行时验收、Perf Spike、id-keyed chat 以及 engine 侧工具/数据能力融入。
+> 本节保留 2026-07-01 的源项目吸收判断。当前 AIRP-Dev 已完成 UI `BusRelay` 直连、id-keyed chat、基础数据工具与 decompose/analysis；GUI 运行时验收、真正 Agent loop 和统一 domain service 仍未完成。当前能力以 [2026-07-10 独立审计](PROJECT-AUDIT-2026-07-10.md) 为准。
 
 ### 什么能用 / 什么是桩 / 什么从没联调
 
 | 块 | 代码成熟度 | 关键桩 / 缺口 | 联调状态 |
 |---|---|---|---|
-| **Core/engine（推理后端）** | 高——daemon 面是完整、带测试、自调 LLM 的流式 RP 后端（`AGENT_CLIENT_ASSESSMENT`："一个 RP 客户端 80% 功能已在 Core"）。当前本地 `cargo test -p airp-core` 全绿 | server-side loop 只到 M_AGENT-1 骨架（仅 mock `echo` 工具，真工具执行 M_AGENT-2+）；`ClaudeCodeSdk` engine 是 stub；state schema min/max **不在写入路径强制**（模型可写 `affection:999`） | daemon 面成熟；loop 与 MCP client（M_AGENT-3）未建 |
+| **Core/engine（推理后端）** | 较高——daemon、双 provider 流式 RP、角色/会话/状态/场景/基础世界书、卷与 decompose/analysis 已有测试 | loop 仍是固定计划骨架；默认 registry 已有 11 个工具但 observation 不回灌；state schema 不在写入路径强制；HTTP 与 tool 写路径未统一 | 单回合 daemon 可用；真正 Agent loop、统一服务层与 MCP client 未建 |
 | **MCP-Server（数据层）** | 中——框架全，stdio 真 MCP、HTTP 已补 | **酒馆兼容基本假**（角色卡 zTXt-only 读错、世界书 Vec 结构错，见 §3）；`export_context_bundle` 布局破坏前缀缓存 | 从没被 Gateway 或 Core 真消费过 |
 | **Gateway（协议桥）** | 高——已硬化、测试全绿的纯桥 | **streaming(Stage 2)是返回 Unimplemented 的桩**（唯一明确功能缺口）；嵌入 Core(Stage 5)未做 | e2e 全用自带 mock；**从没接真 MCP-Server / Core** |
 | **UI（显示层）** | 高——widget/registry/RFC6902 patch/沙箱/**虚拟滚动(computeWindow已实现)**/边界guard/`.exe`打包已有；AIRP-State-Protocol 原项目曾验证打包 exe 可启动并简单交互；Phase 0 已接 engine SSE；Task 1.2 已把 chat 改为 id-keyed 并去掉 `chat_lock` | **perf spike(10万条)代码在但没跑过**；原项目 exe 验证不覆盖当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收；真实 API key/settings 下的打包启动闭环未验收 | UI↔engine 聊天链路已接；当前 GUI 运行时验收与性能验收待补 |
@@ -154,7 +166,7 @@
 ### 复用地图（从哪挖什么 —— 参考，最终按我们需求裁）
 
 - **后端主体挖 Core**：`AGENT_CLIENT_ASSESSMENT §附` 给了精确索引——`adapter.rs`(双 provider 流式)、`chat_pipeline.rs`(prepare→stream→finalize)、`orchestrator/`(装配)、`fsm`/`xml_unpacker`(流过滤)、`png_parser.rs`(角色卡正确解析)。这些当库复用，别重写。
-- **UI 壳挖 State-Protocol**：整套 Tauri+Vue + widget 生态 + 打包，最成熟；原项目打包 exe 曾能正常启动和简单交互。Phase 0 已把 BusRelay 换成连真 engine；主要剩余 = 跑当前 AIRP-Dev GUI/runtime 验收、Perf Spike，并补 chat id-keyed 寻址。
+- **UI 壳挖 State-Protocol**：整套 Tauri+Vue + widget 生态 + 打包仍是主要资产；BusRelay 与 id-keyed chat 已落地。主要剩余是当前 AIRP-Dev Windows artifact 的真实 runtime smoke、sidecar 生命周期和 Perf Spike。
 - **协议桥挖 Gateway**：纯桥/传输/路由/安全硬化可参考；但要补 streaming、且要第一次真接后端。
 - **数据格式解析挖 MCP-Server + Core**：MCP 有数据域框架，Core 有正确的 png_parser；酒馆兼容要按 §3 补齐。
 
@@ -235,7 +247,7 @@
 
 1. **引擎内数据层的存储设计**（原"数据归属"收敛后剩的）：单一真相已定在引擎内；剩的是怎么把 **Core 自带数据层**（png_parser 正确、chat_store/volume/scene）与 **MCP-Server 数据域**（角色/世界书/state/预设的域模型 + 沙箱 + 插件零schema）**熔成一套**——以 Core 为基吸收 MCP 优点，还是反之。多为工程取舍，可动手时定。
 2. **UI↔引擎线协议落地细节**：方向已定为吸收 State-Protocol 的 Blueprint/Widget/RFC6902 patch/Envelope 资产，且默认链路直连 AIRP engine；剩余是具体接口边界、版本策略、错误语义和 engine 侧 capability 强制的实现细节。原 `agentbus` 自重写 Envelope 的重复问题随之消解（引擎直接用 state-protocol 类型）。
-3. **Phase 1 收口顺序**：UI→引擎（Core 核）直连已由 Phase 0 落地；Task 1.1 代码与 Task 1.2 id-keyed chat 已合并，PR #13 已让桌面包携带 engine sidecar，Agent UI Test Harness 已有最小入口。当前应先补真实配置 GUI smoke、临时 WebUI 后端可靠性验证、把现有 harness 接到 Codex/Playwright 并产出截图/日志证据、Perf Spike，再推进 Task 1.3 世界书、Task 1.4 会话操作，之后再谈扩展面。
+3. **Phase 1 收口顺序**：由本文件开头“当前执行方向”取代旧 Task 顺序。基础世界书、会话和 WebUI 证据已有实现；现在先补自动门禁、桌面 smoke、统一数据/安全边界，再推进真正 Agent loop。
 4. **纯净度代价是否接受**（Core §10-1）：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外。接受（纯净优先），还是留"污染模式"开关兼容那类模型？
 5. **capability 引擎侧强制**：现只 UI 单边限制，引擎侧真强制不存在（State-Protocol §2.5-E）。MVP 要不要先做，还是随扩展面一起？
 6. **世界书插入引擎完整度**：MVP 先做能解析+关键词触发，还是一步到位补齐 position/depth/selective/递归？且按 §3.2/TAVERN-PARITY §4——position/depth 这些机械插入语义要重组为"给 agent 的建议元数据 + 检索 Tool"，非硬编注入器。

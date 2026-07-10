@@ -1,5 +1,7 @@
 # WebUI 重构 — 后端对接需求报告
 
+> **PR #88 设计输入，不是运行时完成证明**：设计稿曾落在 `airp-engine-console/`；未合并 PR #106 只部分迁移到 `webui/`，且仍有 CSS 损坏和 acceptance 缺口。当前结论见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md) A-08 与 issue #105。
+
 > 日期：2026-07-07
 > 给：后端开发 Agent
 > 由：UI 设计审计

@@ -32,13 +32,14 @@ D:\AIRP-Dev/
 
 ## 当前状态
 
-- Phase 0 已完成：UI `BusRelay` 直连 engine `/v1/chat/completions`，可流式回填聊天。
-- Phase 1 Task 1.1 已实现：UI 通过 Tauri dialog path-first 导入角色卡，engine 读盘解析并落库。
-- Phase 1 Task 1.2 已完成：chat 状态已改为 id-keyed `{messages, order}`，`BusRelay` 不再依赖 `chat_lock`，每次 `chat.send` 用单个 patch envelope 原子创建 user/assistant 两行。
-- 2026-07-03 审计 follow-up 已完成：Tauri 构建脚本、默认 settings、sandbox `postMessage` 目标、RFC6902 `test` 预校验、仓库 metadata 均已同步修正。
-- PR #13 已完成 Tauri engine sidecar 打包链路，可产出包含 engine 的 Windows 安装包；仍需真实配置下的 GUI smoke 和长期 UI 体验打磨。
-- WebUI 仅作为临时后端可靠性验证面：用浏览器/HTTP 快速压测 engine、验证数据层和推理闭环；不替代 Tauri/Vue 桌面 UI 的长期产品路线。
-- 当前未解决/待验收事项见 [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md) 和 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)。
+- engine 已具备单回合 SSE 对话、OpenAI/Anthropic adapter、角色/会话/状态/场景/基础世界书、卷系统、拆解/analysis 和 settings/models 等 API。PR #100 留有一次 WebUI → engine → 真实 DeepSeek 的成功流式证据。
+- 默认 Agent 工具注册表当前为 11 个工具；`/v1/agent/run` 仍是固定计划的 loop 骨架，不是完整的动态 ReAct/plan-act-observe runtime。
+- UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；sidecar 能被打包，但真实 Windows 安装包启动、退出/重启和完整 GUI 闭环仍待验收。
+- 世界书已有 CRUD 与基础关键词触发，但 SillyTavern 高级触发语义、state schema 写入强制、会话生命周期与稳定身份仍未完成。
+- WebUI 仅作为后端可靠性和开发诊断面，不替代 Tauri/Vue 长期产品 UI。PR #106 尚未合并，且对 PR #88 的 V2 设计只完成了部分迁移。
+- 2026-07-10 本地 workspace tests 与 UI tests/typecheck 通过；Rust fmt 与 `-D warnings` Clippy 尚未通过，仓库也没有自动 PR gate。
+
+当前权威状态、独立发现和路线排序见 [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)。实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
 
 ## 本地环境
 
@@ -120,7 +121,8 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 - [docs/PARTS.md](docs/PARTS.md)：旧仓能力拆件清单
 - [docs/MCP-SERVER-ABSORPTION.md](docs/MCP-SERVER-ABSORPTION.md)：MCP-Server 能力融入 engine 路线
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记
-- [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档审计后的待确认项
+- [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)：当前独立审计、风险和近期优先级
+- [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档权威层级与维护规则
 
 ## Agent UI 测试面与用户控制
 

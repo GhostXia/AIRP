@@ -1,5 +1,7 @@
 # 学习：NeuroBook（notnotype/neuro-book）
 
+> **研究参考**：本文不代表相关 long-form memory、角色知识视角或 authoring workflow 已在 AIRP 实现；其许可证也只允许理念参考，不应复制代码。当前落地状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
+
 > 对象：https://github.com/notnotype/neuro-book —— 本地 AI 工作台 IDE，长篇小说写作 + AI RP。Nuxt/Vue/Bun/SQLite/Prisma，License = PolyForm Noncommercial（非商用，我们 MIT/Apache，仅参考理念不搬代码）。
 > topics 直接含 `airp` / `rp` / `sillytavern` / `harness` / `agent`——与我们**高度同域**，且它**独立收敛出与我们相同的多个核心设计**，佐证方向、并提供可借鉴的具体形态。
 > 性质：学习参考。一切以我们实际需求为准（[[PLAN.md §0]]）。
