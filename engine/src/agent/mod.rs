@@ -1,4 +1,4 @@
-//! M_AGENT-1: Agent loop skeleton — the minimal orchestrator.
+//! Bounded Agent loop with a provider-native structured tool-call control plane.
 //!
 //! 计划书 §4.0/§4.1：loop = 纯净 subagent 的编排器。协调器在每一步选择
 //! 「派生纯净 subagent 生成 / 调一个工具 / 收敛结束」，把现有 `chat_pipeline`
@@ -22,9 +22,10 @@
 
 pub mod tools;
 
-use crate::chat_pipeline::{prepare_pipeline, run_generation_step};
+use crate::chat_pipeline::{finalize_generation, prepare_pipeline, run_generation_step};
 use crate::daemon::{ChatCompletionRequest, DaemonState};
 use crate::error::AirpError;
+use airp_state_protocol::Capability;
 use axum::response::sse::Event;
 use futures_util::{stream, Stream};
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,16 @@ pub struct AgentRunRequest {
     /// 墙钟超时秒数。缺省 = 300s。
     #[serde(default = "default_wall_clock_secs")]
     pub wall_clock_secs: u64,
+    /// Capabilities granted by the trusted host for this run. Tool execution is
+    /// denied unless `call:tool` is present.
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
+    /// Optional per-run tool allowlist, intersected with the engine registry.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    /// Destructive tool names explicitly confirmed by the user/host.
+    #[serde(default)]
+    pub confirm_tools: Vec<String>,
 }
 
 fn default_max_steps() -> u32 {
@@ -60,15 +71,12 @@ fn default_wall_clock_secs() -> u64 {
     300
 }
 
-/// SSE 事件（计划书 M_AGENT-4 协议；M_AGENT-1 先发 plan/tool_call/tool_result/delta/done）。
+/// Stable SSE event protocol: plan/tool_call/tool_result/delta/done.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     /// 协调器规划了一步。
-    Plan {
-        step: u32,
-        action: PlanAction,
-    },
+    Plan { step: u32, action: PlanAction },
     /// 工具被调用。
     ToolCall {
         step: u32,
@@ -83,10 +91,7 @@ pub enum AgentEvent {
         dry_run: bool,
     },
     /// 生成增量（subagent 的拆包 chunk）。
-    Delta {
-        step: u32,
-        chunk: String,
-    },
+    Delta { step: u32, chunk: String },
     /// loop 结束。
     Done {
         stop_reason: StopReason,
@@ -188,60 +193,60 @@ async fn run_loop(
     let token_budget = req.token_budget.unwrap_or(u64::MAX);
     let mut steps_taken: u32 = 0;
     let mut tokens_estimated: u64 = 0;
+    let mut observations = Vec::new();
+    let tool_authority_enabled = state
+        .config
+        .read()
+        .map(|config| {
+            config
+                .access_api_key
+                .as_deref()
+                .is_some_and(|key| !key.is_empty())
+        })
+        .unwrap_or(false);
+    if req.capabilities.contains(&Capability::CallTool) && !tool_authority_enabled {
+        tracing::warn!(
+            "ignoring requested Agent tool capabilities because AIRP_ACCESS_KEY is not configured"
+        );
+    }
 
-    // M_AGENT-1 骨架的简化规划：固定序列 = [call echo, generate, finish]。
-    // 真实 ReAct 规划留 M_AGENT-2（基于模型 tool_calls）。
-    // 这里用固定序列验证"协调器 → 工具 → subagent → 收敛"闭环 + 各道闸。
-    let plan: &[PlanAction] = if max_steps >= 2 {
-        &[
-            PlanAction::CallTool {
-                tool: "echo".to_string(),
-                params: serde_json::json!({"probe": "loop-skeleton"}),
-            },
-            PlanAction::Generate,
-            PlanAction::Finish,
-        ]
-    } else {
-        &[PlanAction::Generate, PlanAction::Finish]
-    };
-
-    let mut plan_idx = 0;
-    while plan_idx < plan.len() {
+    loop {
         // ── 闸：取消 / 墙钟 / step cap / token 预算 ──
         if cancel.is_cancelled() {
-            return emit_done(
-                tx,
-                StopReason::Cancelled,
-                steps_taken,
-                tokens_estimated,
-            )
-            .await;
+            return emit_done(tx, StopReason::Cancelled, steps_taken, tokens_estimated).await;
         }
         if Instant::now() >= deadline {
-            return emit_done(
-                tx,
-                StopReason::WallClock,
-                steps_taken,
-                tokens_estimated,
-            )
-            .await;
+            return emit_done(tx, StopReason::WallClock, steps_taken, tokens_estimated).await;
         }
         if steps_taken >= max_steps {
             return emit_done(tx, StopReason::StepCap, steps_taken, tokens_estimated).await;
         }
         if tokens_estimated >= token_budget {
-            return emit_done(
-                tx,
-                StopReason::TokenBudget,
-                steps_taken,
-                tokens_estimated,
-            )
-            .await;
+            return emit_done(tx, StopReason::TokenBudget, steps_taken, tokens_estimated).await;
         }
 
-        let action = plan[plan_idx].clone();
+        let action = if max_steps == 1
+            || !tool_authority_enabled
+            || !req.capabilities.contains(&Capability::CallTool)
+        {
+            PlanAction::Generate
+        } else {
+            match decide_action(state, registry, req, &observations).await {
+                Ok(action) => action,
+                Err(error) => {
+                    tracing::warn!(%error, "structured tool planner failed");
+                    return emit_done(tx, StopReason::UpstreamError, steps_taken, tokens_estimated)
+                        .await;
+                }
+            }
+        };
         steps_taken += 1;
-        let _ = tx.send(AgentEvent::Plan { step: steps_taken, action: action.clone() }).await;
+        let _ = tx
+            .send(AgentEvent::Plan {
+                step: steps_taken,
+                action: action.clone(),
+            })
+            .await;
 
         match action {
             PlanAction::CallTool { tool, params } => {
@@ -253,12 +258,19 @@ async fn run_loop(
                     })
                     .await;
                 let result = match registry.get(&tool) {
-                    Some(t) if registry.allowed(&tool) => {
-                        // M_AGENT-1：骨架不传 confirm=true（M_AGENT-5 补确认流）。
-                        // 破坏性工具因此走 dry-run。
-                        t.call(params, false).await
+                    Some(t)
+                        if registry.allowed(
+                            &tool,
+                            &req.capabilities,
+                            req.allowed_tools.as_deref(),
+                        ) =>
+                    {
+                        let confirmed = req.confirm_tools.iter().any(|name| name == &tool);
+                        t.call(params.clone(), confirmed).await
                     }
-                    _ => Err(AirpError::BadRequest(format!("unknown tool: {}", tool))),
+                    _ => Err(AirpError::BadRequest(format!(
+                        "tool not granted for this run: {tool}"
+                    ))),
                 };
                 match result {
                     Ok(r) => {
@@ -270,15 +282,32 @@ async fn run_loop(
                                 dry_run: r.dry_run,
                             })
                             .await;
-                        // M_AGENT-1: tool result 暂不回灌入下一步 subagent 上下文
-                        // （那需要扩展 adapter wire format，属 M_AGENT-2/4）。
-                        // 骨架仅验证"协调器能调工具、拿结果、继续"。
+                        observations.push(ControlObservation {
+                            tool,
+                            params,
+                            output: r.output,
+                            dry_run: r.dry_run,
+                        });
                     }
                     Err(e) => {
                         tracing::warn!(err = %e, tool = %tool, "tool call failed");
+                        let error_output = serde_json::json!({"error": e.to_string()});
+                        let _ = tx
+                            .send(AgentEvent::ToolResult {
+                                step: steps_taken,
+                                tool: tool.clone(),
+                                output: error_output.clone(),
+                                dry_run: true,
+                            })
+                            .await;
+                        observations.push(ControlObservation {
+                            tool,
+                            params,
+                            output: error_output,
+                            dry_run: true,
+                        });
                     }
                 }
-                plan_idx += 1;
             }
             PlanAction::Generate => {
                 // 派生纯净 subagent：复用 prepare_pipeline 装配全新上下文。
@@ -296,22 +325,16 @@ async fn run_loop(
                         .await;
                     }
                 };
-                // M_AGENT-1 骨架：run_generation_step 不 finalize（不落库/封卷）。
-                // 最后一步的 finalize 留 M_AGENT-2/6（需协调器显式决策落库时机）。
+                // Generation stays pure while the planner is still deciding;
+                // only this converged generation is finalized below.
                 let result = run_generation_step(pipeline).await;
                 if let Some(e) = result.error {
                     tracing::warn!(err = %e, "generation step upstream error");
-                    return emit_done(
-                        tx,
-                        StopReason::UpstreamError,
-                        steps_taken,
-                        tokens_estimated,
-                    )
-                    .await;
+                    return emit_done(tx, StopReason::UpstreamError, steps_taken, tokens_estimated)
+                        .await;
                 }
                 // 累计 token + 流式下发 chunks。
-                let step_tokens =
-                    crate::volume_store::estimate_tokens(&result.raw_acc) as u64;
+                let step_tokens = crate::volume_store::estimate_tokens(&result.raw_acc) as u64;
                 tokens_estimated += step_tokens;
                 for chunk in &result.chunks {
                     let s = format!("{:?}", chunk);
@@ -322,23 +345,182 @@ async fn run_loop(
                         })
                         .await;
                 }
-                // 单步生成即收敛（M_AGENT-1 骨架：Generate 后直接 Finish）。
-                plan_idx += 1;
+                finalize_generation(result.finalizer, result.raw_acc, result.cleaned_acc).await;
+                return emit_done(tx, StopReason::Converged, steps_taken, tokens_estimated).await;
             }
             PlanAction::Finish => {
-                return emit_done(
-                    tx,
-                    StopReason::Converged,
-                    steps_taken,
-                    tokens_estimated,
-                )
-                .await;
+                return emit_done(tx, StopReason::Converged, steps_taken, tokens_estimated).await;
             }
         }
     }
+}
 
-    // plan 跑完未显式 Finish（理论上不会，因 plan 末项是 Finish）。
-    emit_done(tx, StopReason::Converged, steps_taken, tokens_estimated).await
+#[derive(Debug, Clone, Serialize)]
+struct ControlObservation {
+    tool: String,
+    params: Value,
+    output: Value,
+    dry_run: bool,
+}
+
+/// Provider-neutral decision boundary. Provider-specific wire decoding stays in
+/// this function; the loop only sees typed `PlanAction` and observations.
+async fn decide_action(
+    state: &Arc<DaemonState>,
+    registry: &ToolRegistry,
+    req: &AgentRunRequest,
+    observations: &[ControlObservation],
+) -> Result<PlanAction, AirpError> {
+    let tools: Vec<Value> = registry
+        .list()
+        .into_iter()
+        .filter(|tool| registry.allowed(tool.name, &req.capabilities, req.allowed_tools.as_deref()))
+        .map(|tool| {
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {"type": "object", "additionalProperties": true}
+                }
+            })
+        })
+        .collect();
+    if tools.is_empty() {
+        return Ok(PlanAction::Generate);
+    }
+
+    let (endpoint, api_key, model, engine) = {
+        let config = state
+            .config
+            .read()
+            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+        (
+            req.base
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| config.endpoint.clone()),
+            req.base.api_key.clone().or_else(|| config.api_key.clone()),
+            req.base
+                .model
+                .clone()
+                .unwrap_or_else(|| config.model.clone()),
+            config.engine.clone(),
+        )
+    };
+    let system = "You are AIRP's control-plane planner. Select one function only when it is necessary to satisfy the user request. If no tool is needed, return a normal assistant message. Never write roleplay prose.";
+    let user = serde_json::to_string(&serde_json::json!({
+        "request": req.base.message,
+        "observations": observations,
+    }))?;
+    let mut request = match &engine {
+        crate::adapter::BackendEngine::Direct => {
+            state.http_client.post(endpoint).json(&serde_json::json!({
+                "model": model,
+                "stream": false,
+                "temperature": 0,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user}
+                ],
+                "tools": tools,
+                "tool_choice": "auto"
+            }))
+        }
+        crate::adapter::BackendEngine::AnthropicMessages => {
+            let anthropic_tools: Vec<Value> = tools
+                .iter()
+                .map(|tool| {
+                    serde_json::json!({
+                        "name": tool["function"]["name"],
+                        "description": tool["function"]["description"],
+                        "input_schema": tool["function"]["parameters"]
+                    })
+                })
+                .collect();
+            state
+                .http_client
+                .post(endpoint)
+                .header("anthropic-version", "2023-06-01")
+                .json(&serde_json::json!({
+                    "model": model,
+                    "max_tokens": 512,
+                    "temperature": 0,
+                    "system": system,
+                    "messages": [{"role": "user", "content": user}],
+                    "tools": anthropic_tools,
+                    "tool_choice": {"type": "auto"}
+                }))
+        }
+        crate::adapter::BackendEngine::ClaudeCodeSdk => {
+            return Err(AirpError::Config(
+                "ClaudeCodeSdk structured planner is not implemented".to_string(),
+            ));
+        }
+    };
+    if let Some(api_key) = api_key.filter(|key| !key.is_empty()) {
+        request = match &engine {
+            crate::adapter::BackendEngine::AnthropicMessages => {
+                request.header("x-api-key", api_key)
+            }
+            _ => request.bearer_auth(api_key),
+        };
+    }
+    let response = request
+        .timeout(Duration::from_secs(req.wall_clock_secs.max(1)))
+        .send()
+        .await?;
+    let status = response.status();
+    let bytes = response.bytes().await?;
+    if !status.is_success() {
+        return Err(AirpError::Upstream {
+            status: status.as_u16(),
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        });
+    }
+    let payload: Value = serde_json::from_slice(&bytes)?;
+    let Some((tool, params)) = decode_tool_call(&engine, &payload)? else {
+        return Ok(PlanAction::Generate);
+    };
+    Ok(PlanAction::CallTool { tool, params })
+}
+
+fn decode_tool_call(
+    engine: &crate::adapter::BackendEngine,
+    payload: &Value,
+) -> Result<Option<(String, Value)>, AirpError> {
+    let call = match engine {
+        crate::adapter::BackendEngine::Direct => payload
+            .pointer("/choices/0/message/tool_calls/0/function")
+            .and_then(Value::as_object)
+            .cloned(),
+        crate::adapter::BackendEngine::AnthropicMessages => payload
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|blocks| blocks.iter().find(|block| block["type"] == "tool_use"))
+            .and_then(Value::as_object)
+            .map(|block| {
+                serde_json::Map::from_iter([
+                    ("name".to_string(), block["name"].clone()),
+                    ("arguments".to_string(), block["input"].clone()),
+                ])
+            }),
+        crate::adapter::BackendEngine::ClaudeCodeSdk => None,
+    };
+    let Some(call) = call else {
+        return Ok(None);
+    };
+    let tool = call
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AirpError::BadRequest("tool call missing function.name".to_string()))?
+        .to_string();
+    let params = match call.get("arguments") {
+        Some(Value::String(arguments)) => serde_json::from_str(arguments)?,
+        Some(value) if value.is_object() => value.clone(),
+        _ => serde_json::json!({}),
+    };
+    Ok(Some((tool, params)))
 }
 
 async fn emit_done(
@@ -375,10 +557,13 @@ mod tests {
         let req = AgentRunRequest {
             base: ChatCompletionRequest {
                 character_id: None,
-                character_card_id: Some(serde_json::json!({
-                    "name": "Alice",
-                    "description": "a knight"
-                }).to_string()),
+                character_card_id: Some(
+                    serde_json::json!({
+                        "name": "Alice",
+                        "description": "a knight"
+                    })
+                    .to_string(),
+                ),
                 lorebook_path: None,
                 user_profile: crate::daemon::UserProfile {
                     name: "User".to_string(),
@@ -402,6 +587,9 @@ mod tests {
             max_steps: 3,
             token_budget: None,
             wall_clock_secs: 60,
+            capabilities: vec![],
+            allowed_tools: None,
+            confirm_tools: vec![],
         };
 
         // 角色平面字段（进 system prompt 的种子）
@@ -498,6 +686,9 @@ mod tests {
             max_steps: 3,
             token_budget: None,
             wall_clock_secs: 60,
+            capabilities: vec![],
+            allowed_tools: None,
+            confirm_tools: vec![],
         };
 
         // 与 run_loop Generate 分支完全相同的调用形态。
@@ -596,5 +787,30 @@ mod tests {
         assert_eq!(done["stop_reason"], "upstream_error");
         assert_eq!(done["steps_taken"], 1);
         assert_eq!(done["tokens_estimated"], 42);
+    }
+
+    #[test]
+    fn structured_tool_call_codecs_decode_to_one_internal_shape() {
+        let openai = serde_json::json!({
+            "choices": [{"message": {"tool_calls": [{"function": {
+                "name": "echo", "arguments": "{\"probe\":\"openai\"}"
+            }}]}}]
+        });
+        let anthropic = serde_json::json!({
+            "content": [{"type": "tool_use", "name": "echo", "input": {"probe": "anthropic"}}]
+        });
+        let (name, params) = decode_tool_call(&crate::adapter::BackendEngine::Direct, &openai)
+            .unwrap()
+            .unwrap();
+        assert_eq!(name, "echo");
+        assert_eq!(params["probe"], "openai");
+        let (name, params) = decode_tool_call(
+            &crate::adapter::BackendEngine::AnthropicMessages,
+            &anthropic,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(name, "echo");
+        assert_eq!(params["probe"], "anthropic");
     }
 }

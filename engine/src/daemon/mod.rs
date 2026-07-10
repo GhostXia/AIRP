@@ -1,7 +1,7 @@
 //! Daemon state, config, auth middleware, and axum router factory.
 
-pub(crate) mod handlers;
 pub(crate) mod decompose_handlers;
+pub(crate) mod handlers;
 pub mod types;
 
 pub use types::{
@@ -14,7 +14,7 @@ use crate::config::VolumeConfig;
 use axum::{
     extract::{ConnectInfo, DefaultBodyLimit},
     handler::Handler,
-    http::{header, Request, StatusCode},
+    http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -24,8 +24,12 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use decompose_handlers::{
+    decompose_character, decompose_preset, enhance_or_apply_character_analysis,
+    get_character_analysis_file, list_character_analysis,
+};
 use handlers::{
     add_scene_character_endpoint, agent_run, chat_completion, create_scene_endpoint,
     create_session_endpoint, delete_character_endpoint, get_character_avatar, get_character_card,
@@ -34,10 +38,6 @@ use handlers::{
     get_settings, import_character, list_characters, list_models, list_presets_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, reextract_character_assets, regen_chat,
     rollback_chat, update_character_card, update_character_lorebook, update_settings,
-};
-use decompose_handlers::{
-    decompose_character, decompose_preset, enhance_or_apply_character_analysis,
-    get_character_analysis_file, list_character_analysis,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -101,10 +101,7 @@ impl SettingsView {
             volume_config: cfg.volume_config.clone(),
             engine: cfg.engine.clone(),
             quota: cfg.quota.clone(),
-            access_api_key_set: cfg
-                .access_api_key
-                .as_deref()
-                .is_some_and(|s| !s.is_empty()),
+            access_api_key_set: cfg.access_api_key.as_deref().is_some_and(|s| !s.is_empty()),
             data_root: data_root.to_path_buf(),
         }
     }
@@ -189,10 +186,7 @@ impl tower_governor::key_extractor::KeyExtractor for UserOrIpKeyExtractor {
 
 /// 构造 axum Router：注册所有 `/v1/*` 端点、CORS 中间件、限流中间件。
 pub fn create_router(state: Arc<DaemonState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_methods(Any)
-        .allow_headers(Any)
-        .allow_origin(Any);
+    let cors = cors_layer();
 
     // A2-7: rate limiting previously protected only /v1/chat/completions,
     // leaving import / sync / scene / mcp endpoints unthrottled. Build ONE
@@ -302,6 +296,55 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .with_state(state)
 }
 
+fn cors_layer() -> CorsLayer {
+    let configured = std::env::var("AIRP_CORS_ORIGINS").ok();
+    let origins = allowed_cors_origins(configured.as_deref());
+
+    CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_origin(AllowOrigin::list(origins))
+}
+
+fn allowed_cors_origins(configured: Option<&str>) -> Vec<HeaderValue> {
+    const DEFAULT_ORIGINS: &[&str] = &[
+        "http://127.0.0.1:9001",
+        "http://localhost:9001",
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    ];
+
+    let mut origins: Vec<HeaderValue> = DEFAULT_ORIGINS
+        .iter()
+        .filter_map(|origin| origin.parse().ok())
+        .collect();
+    let additions: Vec<HeaderValue> = configured
+        .into_iter()
+        .flat_map(|value| value.split(',').map(str::trim))
+        .filter(|origin| !origin.is_empty())
+        .filter_map(|origin| match origin.parse() {
+            Ok(value) => Some(value),
+            Err(error) => {
+                tracing::warn!(origin, %error, "ignoring invalid AIRP_CORS_ORIGINS entry");
+                None
+            }
+        })
+        .collect();
+    if configured.is_some() && additions.is_empty() {
+        tracing::warn!(
+            "AIRP_CORS_ORIGINS resolved to zero valid origins; retaining built-in defaults"
+        );
+    }
+    for origin in additions {
+        if !origins.contains(&origin) {
+            origins.push(origin);
+        }
+    }
+
+    origins
+}
+
 /// AUDIT-10: Diagnostic version endpoint for harness / monitoring tools.
 ///
 /// Returns crate name and version. Unauthenticated by design — safe to expose
@@ -327,8 +370,8 @@ async fn health_handler(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
 ) -> axum::Json<HealthInfo> {
     let cfg = state.config.read().unwrap();
-    let provider_configured = cfg.api_key.as_deref().is_some_and(|s| !s.is_empty())
-        && !cfg.endpoint.is_empty();
+    let provider_configured =
+        cfg.api_key.as_deref().is_some_and(|s| !s.is_empty()) && !cfg.endpoint.is_empty();
     drop(cfg);
 
     // data_root 可写检查：尝试写一个临时文件
@@ -385,6 +428,60 @@ mod tests {
                 auth_middleware,
             ));
         Router::new().merge(v1_ping).with_state(state)
+    }
+
+    #[tokio::test]
+    async fn cors_allows_bundled_webui_origin() {
+        let app = create_router(make_state_with_key(None));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .header(header::ORIGIN, "http://127.0.0.1:9001")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("http://127.0.0.1:9001"))
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_rejects_unlisted_origin() {
+        let app = create_router(make_state_with_key(None));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .header(header::ORIGIN, "https://attacker.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+    }
+
+    #[test]
+    fn configured_cors_origins_extend_built_in_defaults() {
+        let origins = super::allowed_cors_origins(Some(
+            "https://example.test, https://example.test, invalid origin",
+        ));
+        assert!(origins.contains(&HeaderValue::from_static("http://127.0.0.1:9001")));
+        assert!(origins.contains(&HeaderValue::from_static("https://example.test")));
+        assert_eq!(
+            origins
+                .iter()
+                .filter(|origin| *origin == "https://example.test")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -841,7 +938,7 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["name"], "airp-core");
-        assert!(v["version"].as_str().unwrap().len() > 0);
+        assert!(!v["version"].as_str().unwrap().is_empty());
     }
 
     // AUDIT-10: /version requires no auth even when access_api_key is set
@@ -993,6 +1090,41 @@ mod tests {
         assert_eq!(v["access_api_key_set"].as_bool(), Some(true));
     }
 
+    #[tokio::test]
+    async fn settings_update_keeps_secrets_runtime_only() {
+        let (state, _tmp) = make_state_no_key();
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/settings")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "api_key": "sk-runtime",
+                            "access_api_key": "daemon-runtime",
+                            "model": "runtime-model"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let runtime = state.config.read().unwrap();
+        assert_eq!(runtime.api_key.as_deref(), Some("sk-runtime"));
+        assert_eq!(runtime.access_api_key.as_deref(), Some("daemon-runtime"));
+        drop(runtime);
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(state.data_root.join("settings.json")).unwrap())
+                .unwrap();
+        assert!(persisted.get("api_key").is_none());
+        assert!(persisted.get("access_api_key").is_none());
+        assert_eq!(persisted["model"], "runtime-model");
+    }
+
     // ── A6: chat/history 支持 session_id 字段 ──────────────────────────────
 
     #[tokio::test]
@@ -1086,10 +1218,7 @@ mod tests {
             "session-scoped log 必须存在: {:?}",
             scoped_jsonl
         );
-        assert_ne!(
-            legacy_jsonl, scoped_jsonl,
-            "A6 核心断言：两个路径必须不同"
-        );
+        assert_ne!(legacy_jsonl, scoped_jsonl, "A6 核心断言：两个路径必须不同");
     }
 
     #[tokio::test]
@@ -1297,7 +1426,12 @@ mod tests_dx4 {
         let ext = UserOrIpKeyExtractor;
         let multibyte_token = "🛡".repeat(40); // U+1F6E1，单码点 4 字节，40 个 = 160 字节
         let req = req_with_auth(&multibyte_token);
-        let key = ext.extract(&req).expect("must not panic on multibyte token");
-        assert_eq!(key, "ip:unknown", "multibyte token rejected by to_str(); expected IP fallback");
+        let key = ext
+            .extract(&req)
+            .expect("must not panic on multibyte token");
+        assert_eq!(
+            key, "ip:unknown",
+            "multibyte token rejected by to_str(); expected IP fallback"
+        );
     }
 }

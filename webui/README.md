@@ -38,11 +38,11 @@ Temporary browser-based harness to validate engine backend reliability.
 
 ## V2 layout
 
-`webui/` now hosts the runnable V2 console. It is a zero-build three-page SPA:
+`webui/` now hosts the runnable V2 console. It is a zero-build surface with two hash-routed views and one workbench overlay:
 
 - **角色列表** — character selection and import.
 - **对话空间** — sessions, streaming chat, Agent Run, and diagnostics.
-- **工作台** — character-card, lorebook, and decompose tools.
+- **工作台** — character-card, lorebook, and decompose tools in an overlay that preserves the current conversation context.
 
 The corresponding files under `../airp-engine-console/` remain design sources only;
 they are not the served WebUI implementation.
@@ -52,6 +52,7 @@ they are not the served WebUI implementation.
 **Reachability & config (P0)**
 -  `/version` (health check)
 -  `/v1/settings` read (API key masked)
+-  `/v1/settings` runtime provider update (secrets are never persisted) followed by a real `/v1/models` provider validation
 -  `/v1/models` provider smoke + typed error display
 -  `/v1/characters` list + avatar preview (`/v1/characters/:id/avatar` fetched as blob with bearer, rendered via object URL)
 -  `/v1/sessions/:character_id` list + create — switching character/session clears the current chat view **and aborts any in-flight chat/agent stream** (防上一 session 残留消息串扰 / 防止 SSE chunk 回写新视图); 新建 session 后自动选中该 session（省手动点）

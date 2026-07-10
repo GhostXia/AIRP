@@ -1,0 +1,80 @@
+name: PR gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Prepare Tauri engine sidecar
+        shell: pwsh
+        run: |
+          cargo build -p airp-core --bin airp-core --locked
+          New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
+          Copy-Item target/debug/airp-core.exe ui/src-tauri/binaries/airp-core-x86_64-pc-windows-msvc.exe
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Workspace tests
+        run: cargo test --workspace --locked
+
+      - name: Sacred prompt-boundary invariants
+        run: cargo test -p airp-core --lib subagent_ --locked -- --nocapture
+
+  ui:
+    name: UI and WebUI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Typecheck UI
+        working-directory: ui
+        run: npm run typecheck
+
+      - name: Test UI
+        working-directory: ui
+        run: npm run test -- --run
+
+      - name: Check WebUI scripts
+        run: |
+          node --check webui/app.js
+          node --check webui/serve.js

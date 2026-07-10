@@ -1,0 +1,23 @@
+{
+  "entries": [
+    {
+      "keys": ["moon gate"],
+      "content": "The moon gate opens only at night.",
+      "enabled": true,
+      "priority": 10,
+      "comment": "equal-priority entry remains after the earlier source entry"
+    },
+    {
+      "keys": ["observatory"],
+      "content": "The observatory predates the city.",
+      "enabled": true,
+      "priority": 20
+    },
+    {
+      "keys": ["disabled"],
+      "content": "This must never be injected.",
+      "enabled": false,
+      "priority": 100
+    }
+  ]
+}

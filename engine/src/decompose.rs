@@ -59,7 +59,10 @@ impl CharacterDecomposer {
         let mut files_written = Vec::new();
 
         let files = [
-            ("basic_info.md", Self::generate_basic_info(character_id, card, raw_meta)),
+            (
+                "basic_info.md",
+                Self::generate_basic_info(character_id, card, raw_meta),
+            ),
             ("personality.md", Self::generate_personality(card)),
             ("world_setting.md", Self::generate_world_setting(card)),
             ("speech_style.md", Self::generate_speech_style(card)),
@@ -229,7 +232,11 @@ impl CharacterDecomposer {
         }
 
         for (i, alt) in d.alternate_greetings.iter().enumerate() {
-            content.push_str(&format!("## 开场白 {}（alternate_greeting {}）\n\n", i + 2, i + 1));
+            content.push_str(&format!(
+                "## 开场白 {}（alternate_greeting {}）\n\n",
+                i + 2,
+                i + 1
+            ));
             content.push_str(alt);
             content.push_str("\n\n");
         }
@@ -291,7 +298,10 @@ impl CharacterDecomposer {
         Ok(files)
     }
 
-    fn generate_lorebook_entry(entry: &crate::orchestrator::lorebook::LorebookEntry, idx: usize) -> String {
+    fn generate_lorebook_entry(
+        entry: &crate::orchestrator::lorebook::LorebookEntry,
+        idx: usize,
+    ) -> String {
         // E4 修复（CR4）：先 bind 到本地变量，避免 unwrap_or(&format!()) 借用临时值
         let name_fallback = format!("entry_{}", idx);
         let name = entry.comment.as_deref().unwrap_or(&name_fallback);
@@ -344,7 +354,8 @@ impl CharacterDecomposer {
             ));
         }
 
-        content.push_str("\n> 世界书条目为只读展示，不参与 Agent enhance（issue #87 精度约束）。\n");
+        content
+            .push_str("\n> 世界书条目为只读展示，不参与 Agent enhance（issue #87 精度约束）。\n");
         content
     }
 
@@ -597,10 +608,16 @@ mod tests {
         assert_eq!(result.asset_type, "character");
         assert!(result.files_written.contains(&"basic_info.md".to_string()));
         assert!(result.files_written.contains(&"personality.md".to_string()));
-        assert!(result.files_written.contains(&"world_setting.md".to_string()));
-        assert!(result.files_written.contains(&"speech_style.md".to_string()));
+        assert!(result
+            .files_written
+            .contains(&"world_setting.md".to_string()));
+        assert!(result
+            .files_written
+            .contains(&"speech_style.md".to_string()));
         assert!(result.files_written.contains(&"greetings.md".to_string()));
-        assert!(result.files_written.contains(&"state_schema.md".to_string()));
+        assert!(result
+            .files_written
+            .contains(&"state_schema.md".to_string()));
         assert!(result.files_written.contains(&"README.md".to_string()));
         assert!(!result.lorebook_decomposed);
     }
@@ -617,10 +634,16 @@ mod tests {
             .unwrap();
 
         assert!(result.lorebook_decomposed);
-        assert!(result.files_written.contains(&"world_book/index.md".to_string()));
+        assert!(result
+            .files_written
+            .contains(&"world_book/index.md".to_string()));
         // B1 修复：文件名用 entry_{:03}.md
-        assert!(result.files_written.contains(&"world_book/entry_001.md".to_string()));
-        assert!(result.files_written.contains(&"world_book/entry_002.md".to_string()));
+        assert!(result
+            .files_written
+            .contains(&"world_book/entry_001.md".to_string()));
+        assert!(result
+            .files_written
+            .contains(&"world_book/entry_002.md".to_string()));
     }
 
     #[tokio::test]
@@ -711,10 +734,12 @@ mod tests {
         // E2 修复后文件名清洗规则：固定 entry_{:03}.md
         for idx in 0..3 {
             let filename = format!("entry_{:03}.md", idx + 1);
-            assert!(filename
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.'))
-                && filename.ends_with(".md"));
+            assert!(
+                filename.chars().all(|c| c.is_ascii_lowercase()
+                    || c.is_ascii_digit()
+                    || matches!(c, '_' | '.'))
+                    && filename.ends_with(".md")
+            );
         }
     }
 
@@ -730,7 +755,8 @@ mod tests {
             .await
             .unwrap();
 
-        let entry_001 = std::fs::read_to_string(analysis_dir.join("world_book/entry_001.md")).unwrap();
+        let entry_001 =
+            std::fs::read_to_string(analysis_dir.join("world_book/entry_001.md")).unwrap();
         assert!(!entry_001.contains("Agent分析后填充"));
         assert!(entry_001.contains("只读展示"));
     }
@@ -759,7 +785,9 @@ mod tests {
 
         assert_eq!(result.asset_id, "mypreset");
         assert_eq!(result.asset_type, "preset");
-        assert!(result.files_written.contains(&"system_prompt.md".to_string()));
+        assert!(result
+            .files_written
+            .contains(&"system_prompt.md".to_string()));
         assert!(result.files_written.contains(&"parameters.md".to_string()));
         assert!(result.files_written.contains(&"README.md".to_string()));
         assert!(!result.lorebook_decomposed);

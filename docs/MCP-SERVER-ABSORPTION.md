@@ -1,6 +1,6 @@
 # MCP-Server 能力融入 engine（agent 内化 catalog）
 
-> **路线 catalog，不是交付清单**：38/12/19 是源 AIRP-MCP-Server 的枚举，不是本仓完成度或必须逐项复制的目标。2026-07-10 本仓默认 Agent registry 为 11 个**已注册**工具；文中“约 20 个内部等价”是历史的 domain/data 能力估算，尚不等于 Agent tool 或 HTTP API。新增能力应先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露。当前状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
+> **路线 catalog，不是交付清单**：38/12/19 是源 AIRP-MCP-Server 的枚举，不是本仓完成度或必须逐项复制的目标。2026-07-10 后续实现使本仓默认 Agent registry 达到 15 个**已注册**工具；文中“约 20 个内部等价”仍只是历史 domain/data 能力估算。新增能力应先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露。当前状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
 
 > 用户 2026-07-02 定调：**把 AIRP-MCP-Server 的能力融进我们的 agent（engine），不是当外部 MCP 后端连**。MCP-Server 绝大部分内容是我们未来发展的**刚需**。
 > 纠正此前误框：我曾因角色卡/世界书**解析有 bug**（属实）就把整个 MCP-Server 当"边缘零件库、可丢"——错。解析 bug 是局部要修的点；MCP-Server 的 **38 工具 / 12 工作流提示词 / 19 资源 + 数据模型**是完整 RP 数据管理面 = engine 的数据层 + agent 工具规格。
@@ -24,7 +24,7 @@
 > **层级约定（#23）**："engine 现状"必须区分三个层级，不可混称——
 > **data 层**（`data_dir`/store 函数）、**agent 工具**（`agent/tools.rs` 注册表，仅 agent loop 内可调）、
 > **HTTP 路由**（daemon 对 WebUI/API 直接暴露）。agent 工具 ≠ HTTP 端点：当前 `/v1/agent/run`
-> 仍是固定计划骨架，不能作为 HTTP get/delete 的实际替代。
+> 当前已由模型原生 structured tool call 动态选择，但这里只列候选映射；未注册或未授权的工具仍不能当作 HTTP 能力的实际替代。
 
 | 类 | MCP 工具 | engine 现状 | 融入动作 |
 |---|---|---|---|

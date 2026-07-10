@@ -13,10 +13,10 @@ use std::sync::Arc;
 use crate::adapter::{
     call_streaming_api_auto, BackendEngine, ChatMessage, GenerationParams, ProviderConfig,
 };
-use crate::chat_store::ChatLog;
 use crate::config::VolumeConfig;
 use crate::daemon::{ChatCompletionRequest, DaemonState};
 use crate::data_dir;
+use crate::domain::ChatService;
 use crate::error::AirpError;
 use crate::fsm::{RegexFilter, StreamingFsm};
 use crate::orchestrator::{
@@ -56,6 +56,8 @@ pub struct PreparedPipeline {
 pub struct FinalizerCtx {
     /// 角色 ID；为 `None` 时跳过 ChatLog 持久化。
     pub character_id: Option<crate::types::CharacterId>,
+    /// Named session scope; `None` keeps the legacy per-character log.
+    pub session_id: Option<crate::types::SessionId>,
     /// 数据根目录。
     pub data_root: PathBuf,
     /// 卷系统 session 目录；为 `None` 时跳过卷副作用。
@@ -313,6 +315,7 @@ fn prepare_scene_pipeline(
         engine: snapshot.engine.clone(),
         finalizer: FinalizerCtx {
             character_id: None,
+            session_id: None,
             data_root: effective_root.clone(),
             session_dir: session_dir_opt,
             provider_config,
@@ -414,8 +417,8 @@ pub fn prepare_pipeline(
     // step 12 appends it explicitly. Reused for both lorebook scan and context.
     let auto_history: Option<Vec<ChatMessage>> = if payload.messages_history.is_none() {
         payload.character_id.as_ref().and_then(|cid| {
-            ChatLog::load_or_create(&effective_root, cid.as_str())
-                .map(|log| log.recent(50))
+            ChatService::new(&effective_root)
+                .recent(cid, payload.session_id.as_ref(), 50)
                 .ok()
         })
     } else {
@@ -435,17 +438,15 @@ pub fn prepare_pipeline(
 
     // 7. Persist user message (early-write; survives stream failures)
     if let Some(ref cid) = payload.character_id {
-        match ChatLog::load_or_create(&effective_root, cid.as_str()) {
-            Ok(mut log) => {
-                let _ = log.append(
-                    &effective_root,
-                    ChatMessage {
-                        role: crate::adapter::MessageRole::User,
-                        content: payload.message.clone(),
-                    },
-                );
-            }
-            Err(e) => tracing::warn!(err = %e, "无法加载 ChatLog，跳过 user 消息持久化"),
+        if let Err(e) = ChatService::new(&effective_root).append(
+            cid,
+            payload.session_id.as_ref(),
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: payload.message.clone(),
+            },
+        ) {
+            tracing::warn!(err = %e, "无法持久化 user 消息");
         }
     }
 
@@ -579,6 +580,7 @@ pub fn prepare_pipeline(
         engine: snapshot.engine.clone(),
         finalizer: FinalizerCtx {
             character_id: payload.character_id.clone(),
+            session_id: payload.session_id,
             data_root: effective_root.clone(),
             session_dir: session_dir_opt,
             provider_config,
@@ -717,19 +719,15 @@ async fn run_finalize(ctx: FinalizerCtx, raw_acc: String, cleaned_acc: String) {
             persist_live_state(&ctx.data_root, cid.as_str(), state).await;
         }
         if !stripped.trim().is_empty() {
-            match ChatLog::load_or_create(&ctx.data_root, cid.as_str()) {
-                Ok(mut log) => {
-                    if let Err(e) = log.append(
-                        &ctx.data_root,
-                        ChatMessage {
-                            role: crate::adapter::MessageRole::Assistant,
-                            content: stripped,
-                        },
-                    ) {
-                        tracing::warn!(err = %e, "持久化 assistant 消息失败");
-                    }
-                }
-                Err(e) => tracing::warn!(err = %e, "无法加载 ChatLog"),
+            if let Err(e) = ChatService::new(&ctx.data_root).append(
+                cid,
+                ctx.session_id.as_ref(),
+                ChatMessage {
+                    role: crate::adapter::MessageRole::Assistant,
+                    content: stripped,
+                },
+            ) {
+                tracing::warn!(err = %e, "持久化 assistant 消息失败");
             }
         }
     }
@@ -980,49 +978,15 @@ async fn persist_live_state(
     character_id: &str,
     state: &serde_json::Value,
 ) {
-    let state_dir = data_root
-        .join("characters")
-        .join(character_id)
-        .join("state");
-    if let Err(e) = std::fs::create_dir_all(&state_dir) {
-        tracing::warn!(err = %e, character_id, "M_LS-1: 创建 state/ 目录失败");
-        return;
-    }
-    match serde_json::to_string_pretty(state) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(state_dir.join("live.json"), json) {
-                tracing::warn!(err = %e, character_id, "M_LS-1: 写 state/live.json 失败");
-                return;
-            }
-            tracing::debug!(character_id, "M_LS-1: state/live.json 已更新");
-
-            // M_LS-3: append snapshot to state/history.jsonl
-            let history_path = crate::data_dir::char_state_history_path(data_root, character_id);
-            let entry = serde_json::json!({
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "state": state,
-            });
-            if let Ok(line) = serde_json::to_string(&entry) {
-                use std::io::Write as _;
-                match std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&history_path)
-                {
-                    Ok(mut f) => {
-                        if let Err(e) = writeln!(f, "{}", line) {
-                            tracing::warn!(err = %e, character_id, "M_LS-3: 写 history.jsonl 失败");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(err = %e, character_id, "M_LS-3: 打开 history.jsonl 失败")
-                    }
-                }
-            }
+    let character = match crate::types::CharacterId::new(character_id) {
+        Ok(character) => character,
+        Err(error) => {
+            tracing::warn!(%error, character_id, "state persistence rejected invalid character id");
+            return;
         }
-        Err(e) => {
-            tracing::warn!(err = %e, "M_LS-1: 序列化 state 失败");
-        }
+    };
+    if let Err(error) = crate::domain::StateService::new(data_root).write(&character, state) {
+        tracing::warn!(%error, character_id, "state persistence rejected");
     }
 }
 
@@ -1047,6 +1011,9 @@ pub struct GenerationStepResult {
     pub chunks: Vec<UnpackedChunk>,
     /// 上游流错误（若有）；存在时 raw/cleaned 为已累积的部分。
     pub error: Option<String>,
+    /// Finalizer retained by the control-plane coordinator and consumed only
+    /// after the model has converged on this generation.
+    pub finalizer: FinalizerCtx,
 }
 
 /// 跑一次生成步骤：复用 `PreparedPipeline` 的全部装配，跑流式生成，返回累积。
@@ -1061,7 +1028,7 @@ pub async fn run_generation_step(pipeline: PreparedPipeline) -> GenerationStepRe
         messages,
         mut fsm,
         mut unpacker,
-        finalizer: _,
+        finalizer,
         http_client,
         engine,
     } = pipeline;
@@ -1108,7 +1075,14 @@ pub async fn run_generation_step(pipeline: PreparedPipeline) -> GenerationStepRe
         cleaned_acc,
         chunks,
         error,
+        finalizer,
     }
+}
+
+/// Commit one converged Agent generation through the same persistence, state,
+/// volume, and maintenance finalizer used by the ordinary chat pipeline.
+pub async fn finalize_generation(finalizer: FinalizerCtx, raw_acc: String, cleaned_acc: String) {
+    run_finalize(finalizer, raw_acc, cleaned_acc).await;
 }
 
 #[cfg(test)]

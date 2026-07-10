@@ -415,7 +415,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let char_dir = tmp.path().join("characters").join("nodis");
         fs::create_dir_all(&char_dir).unwrap();
-        fs::write(&char_dir.join("known.md"), "secret line 1\nsecret line 2").unwrap();
+        fs::write(char_dir.join("known.md"), "secret line 1\nsecret line 2").unwrap();
         let filtered = load_filtered_known(tmp.path(), "nodis", "CP-1");
         assert!(filtered.contains("secret line 1"));
         assert!(filtered.contains("secret line 2"));
@@ -427,8 +427,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let char_dir = tmp.path().join("characters").join("bad_disc");
         fs::create_dir_all(&char_dir).unwrap();
-        fs::write(&char_dir.join("known.md"), "content").unwrap();
-        fs::write(&char_dir.join("disclosure.json"), "{this is not json").unwrap();
+        fs::write(char_dir.join("known.md"), "content").unwrap();
+        fs::write(char_dir.join("disclosure.json"), "{this is not json").unwrap();
         let filtered = load_filtered_known(tmp.path(), "bad_disc", "CP-1");
         assert_eq!(filtered, "content");
     }
@@ -439,9 +439,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let char_dir = tmp.path().join("characters").join("unknown_cp");
         fs::create_dir_all(&char_dir).unwrap();
-        fs::write(&char_dir.join("known.md"), "line A\nline B").unwrap();
+        fs::write(char_dir.join("known.md"), "line A\nline B").unwrap();
         fs::write(
-            &char_dir.join("disclosure.json"),
+            char_dir.join("disclosure.json"),
             r#"{"CP-99": {"forbidden_keys": ["A"]}}"#,
         )
         .unwrap();
@@ -456,9 +456,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let char_dir = tmp.path().join("characters").join("empty_fk");
         fs::create_dir_all(&char_dir).unwrap();
-        fs::write(&char_dir.join("known.md"), "line A\nline B").unwrap();
+        fs::write(char_dir.join("known.md"), "line A\nline B").unwrap();
         fs::write(
-            &char_dir.join("disclosure.json"),
+            char_dir.join("disclosure.json"),
             r#"{"CP-1": {"forbidden_keys": []}}"#,
         )
         .unwrap();
@@ -474,12 +474,12 @@ mod tests {
         let char_dir = tmp.path().join("characters").join("substr");
         fs::create_dir_all(&char_dir).unwrap();
         fs::write(
-            &char_dir.join("known.md"),
+            char_dir.join("known.md"),
             "Alice loves the secret garden.\nBob lives at the manor.",
         )
         .unwrap();
         fs::write(
-            &char_dir.join("disclosure.json"),
+            char_dir.join("disclosure.json"),
             r#"{"CP-1": {"forbidden_keys": ["secret"]}}"#,
         )
         .unwrap();

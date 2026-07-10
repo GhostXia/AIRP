@@ -2,6 +2,7 @@
 use super::types::{ChatCompletionRequest, HistoryQuery, RegenRequest, RollbackRequest};
 use super::{DaemonState, SettingsView};
 use crate::chat_store::ChatLog;
+use crate::domain::{ChatService, LorebookService};
 use crate::error::AirpError;
 use crate::types::{CharacterId, PresetId, SessionId};
 use crate::{chat_pipeline, data_dir};
@@ -118,14 +119,13 @@ pub(super) async fn update_settings(
         cfg.clone()
     };
 
-    // 2) 落盘到 data/settings.json
+    // 2) Persist only non-secret settings. Provider and daemon credentials are
+    // runtime-only and must be supplied through AIRP_* env or this request.
     let on_disk = serde_json::json!({
         "provider": merged.provider,
         "endpoint": merged.endpoint,
-        "api_key": merged.api_key,
         "model": merged.model,
         "volume": merged.volume_config,
-        "access_api_key": merged.access_api_key,
         "engine": merged.engine,
         "quota": merged.quota,
     });
@@ -143,7 +143,7 @@ pub(super) async fn list_sessions_endpoint(
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<SessionId>>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let sessions = data_dir::list_sessions(&state.data_root, cid.as_str())?;
+    let sessions = ChatService::new(&state.data_root).list_sessions(&cid)?;
     Ok(Json(sessions))
 }
 
@@ -153,7 +153,7 @@ pub(super) async fn create_session_endpoint(
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<SessionId>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let sid = data_dir::create_session(&state.data_root, cid.as_str())?;
+    let sid = ChatService::new(&state.data_root).create_session(&cid)?;
     Ok(Json(sid))
 }
 
@@ -205,12 +205,8 @@ pub(super) async fn get_chat_history(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(query): Json<HistoryQuery>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    // A6：session_id 指定时走 session-scoped 路径，省略时回退 legacy per-character。
-    let log = ChatLog::load_or_create_for_session(
-        &state.data_root,
-        query.character_id.as_str(),
-        query.session_id.as_ref(),
-    )?;
+    let log = ChatService::new(&state.data_root)
+        .history(&query.character_id, query.session_id.as_ref())?;
     Ok(Json(log))
 }
 
@@ -219,12 +215,11 @@ pub(super) async fn rollback_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RollbackRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    let mut log = ChatLog::load_or_create_for_session(
-        &state.data_root,
-        req.character_id.as_str(),
+    let (log, _) = ChatService::new(&state.data_root).rollback(
+        &req.character_id,
         req.session_id.as_ref(),
+        req.message_index,
     )?;
-    log.rollback_to(&state.data_root, req.message_index)?;
     Ok(Json(log))
 }
 
@@ -233,14 +228,8 @@ pub(super) async fn regen_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RegenRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    let mut log = ChatLog::load_or_create_for_session(
-        &state.data_root,
-        req.character_id.as_str(),
-        req.session_id.as_ref(),
-    )?;
-    if !log.messages.is_empty() {
-        log.delete_last_n(&state.data_root, 1)?;
-    }
+    let log =
+        ChatService::new(&state.data_root).regen(&req.character_id, req.session_id.as_ref())?;
     Ok(Json(log))
 }
 
@@ -650,10 +639,8 @@ fn convert_character_book_to_lorebook(
 
     let raw_entries: Vec<&serde_json::Value> = if let Some(map) = entries_val.as_object() {
         map.values().collect()
-    } else if let Some(arr) = entries_val.as_array() {
-        arr.iter().collect()
     } else {
-        return None;
+        entries_val.as_array()?.iter().collect()
     };
 
     let mut entries: Vec<LorebookEntry> = raw_entries
@@ -811,7 +798,7 @@ pub(super) async fn delete_character_endpoint(
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    data_dir::delete_character(&state.data_root, &cid)?;
+    ChatService::new(&state.data_root).delete_character(&cid)?;
     Ok(Json(serde_json::json!({
         "deleted": cid.as_str(),
         "status": "ok"
@@ -864,19 +851,8 @@ pub(super) async fn get_character_lorebook(
     // #67 #5 fix: 改用 Result<Json<Value>, AirpError> 统一错误格式。
     // 之前返回 Response + 裸 StatusCode::BAD_REQUEST，客户端 formatError 拿不到结构化 error body。
     let char_id = CharacterId::new(character_id)?;
-    let lb_path = data_dir::char_world_lorebook_path(&state.data_root, char_id.as_str());
-    match fs::read_to_string(&lb_path) {
-        Ok(json) => {
-            // lorebook 文件是合法 JSON，直接 parse 后用 Json<Value> 返回，保持 application/json
-            let value: serde_json::Value = serde_json::from_str(&json)
-                .map_err(|e| AirpError::Internal(format!("lorebook parse error: {e}")))?;
-            Ok(Json(value))
-        }
-        Err(_) => Err(AirpError::NotFound(format!(
-            "lorebook for character {} not found",
-            char_id
-        ))),
-    }
+    let lorebook = LorebookService::new(&state.data_root).read(&char_id)?;
+    Ok(Json(serde_json::to_value(lorebook)?))
 }
 
 /// PUT /v1/characters/:character_id/lorebook — 更新角色级世界书（整体替换）。
@@ -898,11 +874,7 @@ pub(super) async fn update_character_lorebook(
             cid
         )));
     }
-    let json_str = serde_json::to_string_pretty(&body)
-        .map_err(|e| AirpError::BadRequest(format!("lorebook JSON 序列化失败: {}", e)))?;
-    let world_dir = data_dir::char_world_dir(&state.data_root, cid.as_str())?;
-    let lb_path = world_dir.join("lorebook.json");
-    fs::write(&lb_path, json_str)?;
+    LorebookService::new(&state.data_root).write(&cid, &body)?;
     Ok(Json(serde_json::json!({
         "character_id": cid.as_str(),
         "entries_count": body.entries.len(),
@@ -1039,7 +1011,10 @@ pub(super) async fn list_models(
                     .into_response(),
                 Ok(body) => {
                     // #42 F-3：非 2xx 上游留痕，便于诊断（body 已截断脱敏后进响应）。
-                    tracing::warn!(upstream_status = status.as_u16(), "models proxy: upstream returned non-success status");
+                    tracing::warn!(
+                        upstream_status = status.as_u16(),
+                        "models proxy: upstream returned non-success status"
+                    );
                     models_proxy_error(
                         StatusCode::BAD_GATEWAY,
                         "upstream_status",
@@ -1063,7 +1038,10 @@ pub(super) async fn list_models(
             }
         }
         Err(e) if e.is_timeout() => {
-            tracing::warn!(timeout_ms = timeout.as_millis() as u64, "models proxy: upstream request timed out");
+            tracing::warn!(
+                timeout_ms = timeout.as_millis() as u64,
+                "models proxy: upstream request timed out"
+            );
             models_proxy_error(
                 StatusCode::GATEWAY_TIMEOUT,
                 "upstream_timeout",
@@ -1203,18 +1181,37 @@ fn truncate_error_text(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::types::CharacterId;
-    use std::sync::Mutex;
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let original = std::env::var_os(key);
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     fn with_local_path_env<F: FnOnce()>(enabled: bool, f: F) {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
-        if enabled {
-            std::env::set_var("AIRP_ALLOW_LOCAL_PATH", "1");
-        }
+        let _lock = ENV_LOCK.blocking_lock();
+        let _env = EnvVarGuard::set("AIRP_ALLOW_LOCAL_PATH", enabled.then_some("1"));
         f();
-        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
     }
 
     #[test]
@@ -1304,10 +1301,7 @@ mod tests {
     // Gemini Code Assist 建议抽 DaemonState 初始化样板：两个 m3_* 测试共用
     // `make_state_for_http_test`，避免 ~13 行重复。helper 返回 (state, _tmpguard)，
     // `_tmpguard` 持有 tempdir 防止目录被早回收。
-    fn make_state_for_http_test() -> (
-        Arc<super::super::DaemonState>,
-        tempfile::TempDir,
-    ) {
+    fn make_state_for_http_test() -> (Arc<super::super::DaemonState>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let state = Arc::new(super::super::DaemonState {
             data_root: tmp.path().to_path_buf(),
@@ -1331,8 +1325,8 @@ mod tests {
         use axum::body::Body;
         use tower::util::ServiceExt;
 
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
+        let _lock = ENV_LOCK.lock().await;
+        let _env = EnvVarGuard::set("AIRP_ALLOW_LOCAL_PATH", None);
 
         let (state, _tmp) = make_state_for_http_test();
         let app = super::super::create_router(state);
@@ -1368,8 +1362,8 @@ mod tests {
         use axum::body::Body;
         use tower::util::ServiceExt;
 
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("AIRP_ALLOW_LOCAL_PATH");
+        let _lock = ENV_LOCK.lock().await;
+        let _env = EnvVarGuard::set("AIRP_ALLOW_LOCAL_PATH", None);
 
         let (state, _tmp) = make_state_for_http_test();
         let app = super::super::create_router(state);
@@ -1599,7 +1593,9 @@ mod tests {
     #[test]
     fn models_url_strips_query_and_fragment() {
         assert_eq!(
-            models_url_from_endpoint("https://api.example.com/v1/chat/completions?api_key=secret#frag"),
+            models_url_from_endpoint(
+                "https://api.example.com/v1/chat/completions?api_key=secret#frag"
+            ),
             Some("https://api.example.com/v1/models".to_string())
         );
     }
@@ -1611,7 +1607,10 @@ mod tests {
         );
         assert!(!redacted.contains("hunter2"), "password leaked: {redacted}");
         assert!(!redacted.contains("user:"), "username leaked: {redacted}");
-        assert!(!redacted.contains("secret"), "query/fragment leaked: {redacted}");
+        assert!(
+            !redacted.contains("secret"),
+            "query/fragment leaked: {redacted}"
+        );
         assert!(redacted.contains("api.example.com"));
     }
 
@@ -1645,10 +1644,7 @@ mod tests {
             result
         );
         // 不留脏文件
-        assert!(!data_root
-            .path()
-            .join("characters/bad-syntax")
-            .exists());
+        assert!(!data_root.path().join("characters/bad-syntax").exists());
     }
 
     /// JSON 是预设（顶层 prompts[] + 模型参数）→ BadRequest "像 SillyTavern 预设"
@@ -1673,10 +1669,7 @@ mod tests {
             "expected BadRequest rejecting preset-as-card, got: {:?}",
             result
         );
-        assert!(!data_root
-            .path()
-            .join("characters/preset-as-card")
-            .exists());
+        assert!(!data_root.path().join("characters/preset-as-card").exists());
     }
 
     /// 合法 JSON 但缺 data.name → slugify 回退为 "character"，仍可导入（覆盖现有行为）
@@ -1695,14 +1688,8 @@ mod tests {
         })
         .to_string();
         // 传 None 触发 slugify 派生路径，由于 name 为空，应回退为 "character"
-        let (id, _fmt, _json) = import_card_to_disk(
-            data_root.path(),
-            None,
-            None,
-            Some(json),
-            None,
-        )
-        .unwrap();
+        let (id, _fmt, _json) =
+            import_card_to_disk(data_root.path(), None, None, Some(json), None).unwrap();
         assert_eq!(id, "character");
         // 落盘成功
         assert!(data_root
@@ -1725,14 +1712,9 @@ mod tests {
             }
         })
         .to_string();
-        let (id, fmt, _json) = import_card_to_disk(
-            data_root.path(),
-            Some("alice-test"),
-            None,
-            Some(json),
-            None,
-        )
-        .unwrap();
+        let (id, fmt, _json) =
+            import_card_to_disk(data_root.path(), Some("alice-test"), None, Some(json), None)
+                .unwrap();
         assert_eq!(id, "alice-test");
         assert_eq!(fmt, "json");
         assert!(data_root
@@ -1756,9 +1738,6 @@ mod tests {
             result
         );
         // 不留脏文件（审计 CR4：与其他拒绝测试一致防御）
-        assert!(!data_root
-            .path()
-            .join("characters/none")
-            .exists());
+        assert!(!data_root.path().join("characters/none").exists());
     }
 }

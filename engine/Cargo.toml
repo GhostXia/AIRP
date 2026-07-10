@@ -49,6 +49,7 @@ flate2 = { workspace = true }
 # M_AGENT-1: CancellationToken for agent loop cooperative cancellation.
 tokio-util = { workspace = true }
 unicode-normalization = { workspace = true }
+airp-state-protocol = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

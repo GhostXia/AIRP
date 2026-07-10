@@ -35,7 +35,13 @@ pub struct Envelope {
 impl Envelope {
     /// Build an envelope with the current protocol version.
     pub fn new(id: impl Into<String>, ts: i64, src: impl Into<String>, body: Body) -> Self {
-        Self { v: PROTOCOL_VERSION, id: id.into(), ts, src: src.into(), body }
+        Self {
+            v: PROTOCOL_VERSION,
+            id: id.into(),
+            ts,
+            src: src.into(),
+            body,
+        }
     }
 }
 
@@ -251,10 +257,18 @@ pub struct WidgetDef {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
     /// JSON Schema for this widget's props.
-    #[serde(rename = "propsSchema", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "propsSchema",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub props_schema: Option<Value>,
     /// JSON Schema for this widget's state slice.
-    #[serde(rename = "stateSchema", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "stateSchema",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub state_schema: Option<Value>,
     /// Permissions this widget requests; enforced by the engine/runtime.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -442,7 +456,11 @@ mod tests {
 
         let env: Envelope = serde_json::from_value(raw).unwrap();
         match env.body {
-            Body::Blueprint(BlueprintMsg { op: SetOrPatch::Set, blueprint: Some(bp), .. }) => {
+            Body::Blueprint(BlueprintMsg {
+                op: SetOrPatch::Set,
+                blueprint: Some(bp),
+                ..
+            }) => {
                 assert_eq!(bp.version, "bp-uuid");
                 assert_eq!(bp.layout.kind, LayoutKind::Dock);
                 assert_eq!(bp.widgets[0].kind, "chat");
@@ -504,5 +522,98 @@ mod tests {
 
         let back: Envelope = serde_json::from_str(&text).unwrap();
         assert_eq!(env, back);
+    }
+
+    #[test]
+    fn rust_wire_discriminants_match_shared_contract() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../wire-discriminants.json")).unwrap();
+
+        let bodies = vec![
+            Body::Blueprint(BlueprintMsg {
+                op: SetOrPatch::Set,
+                blueprint: None,
+                patch: None,
+            }),
+            Body::State(StateMsg {
+                scope: "session".into(),
+                op: SetOrPatch::Set,
+                state: Some(Value::Null),
+                patch: None,
+            }),
+            Body::Manifest(ManifestMsg {
+                op: SetOrPatch::Set,
+                manifests: vec![],
+            }),
+            Body::Event(EventMsg {
+                topic: "test".into(),
+                data: None,
+            }),
+            Body::Error(ErrorMsg {
+                code: "test".into(),
+                message: "test".into(),
+                detail: None,
+            }),
+            Body::Intent(IntentMsg {
+                name: "test".into(),
+                source: None,
+                params: None,
+            }),
+            Body::Subscribe(SubscribeMsg { scopes: vec![] }),
+            Body::Unsubscribe(SubscribeMsg { scopes: vec![] }),
+            Body::Hello(HelloMsg {
+                client: "test".into(),
+                version: "1".into(),
+                accept: None,
+            }),
+            Body::Ack(AckMsg {
+                ref_: "test".into(),
+            }),
+        ];
+        let body_kinds: Vec<Value> = bodies
+            .into_iter()
+            .map(|body| serde_json::to_value(body).unwrap()["kind"].clone())
+            .collect();
+        assert_eq!(json!(body_kinds), contract["bodyKinds"]);
+
+        assert_eq!(
+            json!([SetOrPatch::Set, SetOrPatch::Patch,]),
+            contract["setOrPatch"]
+        );
+        assert_eq!(
+            json!([
+                PatchOpKind::Add,
+                PatchOpKind::Remove,
+                PatchOpKind::Replace,
+                PatchOpKind::Move,
+                PatchOpKind::Copy,
+                PatchOpKind::Test,
+            ]),
+            contract["patchOps"]
+        );
+        assert_eq!(
+            json!([
+                Capability::ReadMemory,
+                Capability::WriteMemory,
+                Capability::ReadWorldbook,
+                Capability::ReadState,
+                Capability::WriteState,
+                Capability::CallTool,
+            ]),
+            contract["capabilities"]
+        );
+        assert_eq!(
+            json!([EntryKind::Builtin, EntryKind::Esm]),
+            contract["entryKinds"]
+        );
+        assert_eq!(
+            json!([
+                LayoutKind::Dock,
+                LayoutKind::Grid,
+                LayoutKind::Stack,
+                LayoutKind::Tabs,
+            ]),
+            contract["layoutKinds"]
+        );
     }
 }

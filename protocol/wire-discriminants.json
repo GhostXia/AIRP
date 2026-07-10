@@ -1,0 +1,8 @@
+{
+  "bodyKinds": ["blueprint", "state", "manifest", "event", "error", "intent", "subscribe", "unsubscribe", "hello", "ack"],
+  "setOrPatch": ["set", "patch"],
+  "patchOps": ["add", "remove", "replace", "move", "copy", "test"],
+  "capabilities": ["read:memory", "write:memory", "read:worldbook", "read:state", "write:state", "call:tool"],
+  "entryKinds": ["builtin", "esm"],
+  "layoutKinds": ["dock", "grid", "stack", "tabs"]
+}

@@ -22,6 +22,7 @@ name = "airp-core"
 version = "0.1.0"
 dependencies = [
  "aho-corasick",
+ "airp-state-protocol",
  "async-stream",
  "axum",
  "base64 0.22.1",

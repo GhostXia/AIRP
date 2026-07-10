@@ -70,8 +70,8 @@ D:\AIRP-Dev/
 
 **关键事实（决定起点）：**
 - **四块从没端到端一起跑过**（各自 mock 自测）——**Phase 0（本 PR #2）正是首次让 UI↔引擎真跑通**：UI `BusRelay` 已从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，流式回填 `w-chat`。
-- **`engine` 已是可用的单回合 RP 后端，但不是完整 Agent 后端**：daemon、双 provider 流式、角色/会话/状态/场景/基础世界书、卷、decompose/analysis 已有实现与测试；`agent/run` 仍是固定计划骨架。
-- **`D:\airp-mcp-server` 是候选规格与资产来源，不是必须逐项复制的完成清单**：本仓默认 Agent registry 当前恰为 11 个工具。新增能力必须先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露，不能把“底层有函数”写成“Agent 已可调用”。
+- **`engine` 已是可用的 RP/Agent 后端**：daemon、双 provider 流式、结构化 tool-call loop、角色/会话/状态/场景/基础世界书、卷、decompose/analysis 已有实现与测试；MCP client、hook/skill/plugin storage 仍未实现。
+- **`D:\airp-mcp-server` 是候选规格与资产来源，不是必须逐项复制的完成清单**：本仓默认 Agent registry 当前为 15 个工具。新增能力必须先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露，不能把“底层有函数”写成“Agent 已可调用”。
 - **四个源项目统一原则**：吸收资产，不继承产品北极星。Core 是 engine 主核但不继承 standalone 乐高后端叙事；MCP-Server 是数据/工具/工作流规格来源但不继承纯 MCP 数据层边界；Gateway 是传输/安全/MCP-client 资产来源但不继承纯协议桥目标；State-Protocol 是 UI/协议资产来源但不继承通用 Agent UI 标准目标。详见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)。
 
 **当前决策**：以 `engine` 为唯一产品内核；源仓库只提供候选资产。是否吸收某项能力由 AIRP 用户工作流、共享服务边界和验收证据决定，不以“38 工具”等源仓库数量为目标。
@@ -119,7 +119,7 @@ D:\AIRP-Dev/
   - 复用 Core 现成资产当库：`adapter::call_streaming_api_auto`、`chat_pipeline::prepare_pipeline` / `build_sse_stream` / `run_finalize`。**一行 SSE/provider/拆包都不重写**（Core 已成熟）。
 - **控制平面 = 结构化 tool-calling**：OpenAI/Anthropic 原生工具字段。`<action>` XML 作不支持结构化工具的模型的回退。
 - **原语面（新建/补全，MVP 后立骨架）**：
-  - **Tool**：`Tool` trait + `ToolRegistry` 当前注册 11 个工具，覆盖 echo、会话、角色和 analysis 子集。元数据有 readonly/mutate/destructive/append；MCP upstream client 尚未实现。
+  - **Tool**：`Tool` trait + `ToolRegistry` 当前注册 15 个工具，覆盖 echo、会话、角色、state、lorebook 和 analysis 子集。执行过 `call:tool` capability、allowlist 与 destructive confirm；MCP upstream client 尚未实现。
   - **Memory**：三层，见 §6。
   - **Skill**：md+YAML front matter，渐进披露；**兼容 agentskills.io 开放标准**（白捡生态）；从经验自建、反馈更新。
   - **Event Hook**：引擎发全生命周期事件（消息收发/编辑/swipe、生成起止、流式 token、世界书命中、工具调用、state 变更），第三方订阅。对标酒馆 `eventSource`。
@@ -138,7 +138,7 @@ D:\AIRP-Dev/
 - 无头网络服务：Core daemon 已有（axum + `/v1/*` + 鉴权 `AIRP_ACCESS_KEY` + 限流 10req/s）。**web 就绪的关键：引擎是独立 service，不嵌 Tauri**（Tauri 把引擎当 sidecar 打包）。
 - **UI↔引擎线协议**：倾向**复用 State-Protocol Envelope**（`protocol` 已有 Rust/TS 绑定，UI 已配套）。引擎实现 AgentBus 面：上行 `POST /airp/dispatch`(Envelope) + 下行 `GET /airp/stream`(SSE)，或 Tauri IPC。**注意：intent `chat.send` 要路由到引擎的推理 loop（生成），不是路由到某个 MCP 数据工具**——这是原 agentbus demo 的缺口，必须重定。
 - **WebUI 临时定位（2026-07-04）**：WebUI 只用来快速验证 engine 的 API/SSE/鉴权/数据读写/并发/错误恢复。它是后端可靠性 harness，不替代桌面 UI 产品路线；成熟能力再接回 Tauri UI。
-- 安全默认坑（Core deploy A2-3）：默认无鉴权 + CORS `*` 有本地 CSRF/DNS-rebind 风险。桌面本地默认可接受，但要文档化；对外必须设 `AIRP_ACCESS_KEY`。
+- 安全默认：daemon 仅监听 loopback，CORS 使用 WebUI/Tauri 精确白名单；默认仍无 bearer 鉴权。自定义浏览器来源需配置 `AIRP_CORS_ORIGINS`，任何对外暴露都必须设 `AIRP_ACCESS_KEY` 并遵循 [SECURITY.md](SECURITY.md)。
 
 ### 3.4 数据目录布局（沿用 Core）
 

@@ -201,8 +201,8 @@ mod tests {
     #[tokio::test]
     async fn into_response_emits_json_envelope() {
         use axum::body::to_bytes;
-        let resp = AirpError::NotFound("lorebook for character foo not found".to_string())
-            .into_response();
+        let resp =
+            AirpError::NotFound("lorebook for character foo not found".to_string()).into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
