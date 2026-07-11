@@ -35,9 +35,10 @@ use handlers::{
     create_session_endpoint, delete_character_endpoint, get_character_avatar, get_character_card,
     get_character_lorebook, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_preset_endpoint, get_scene_endpoint,
-    get_settings, import_character, list_characters, list_models, list_presets_endpoint,
-    list_scenes_endpoint, list_sessions_endpoint, reextract_character_assets, regen_chat,
-    rollback_chat, update_character_card, update_character_lorebook, update_settings,
+    get_settings, import_character, list_agent_tools, list_characters, list_models,
+    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
+    reextract_character_assets, regen_chat, rollback_chat, update_character_card,
+    update_character_lorebook, update_settings,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -204,6 +205,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
     let v1_routes = Router::new()
         .route("/v1/chat/completions", post(chat_completion))
         .route("/v1/agent/run", post(agent_run))
+        .route("/v1/agent/tools", get(list_agent_tools))
         .route("/v1/chat/history", post(get_chat_history))
         .route("/v1/chat/rollback", post(rollback_chat))
         .route("/v1/chat/regen", post(regen_chat))
@@ -466,6 +468,35 @@ mod tests {
             .headers()
             .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn agent_tool_catalog_exposes_sorted_builtin_metadata() {
+        let app = create_router(make_state_with_key(None));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/agent/tools")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let tools: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let names: Vec<_> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names.len(), 19);
+        assert!(names.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(names.contains(&"export_context_bundle"));
+        assert!(names.contains(&"seal_volume"));
     }
 
     #[test]

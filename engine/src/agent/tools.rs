@@ -27,7 +27,7 @@ use crate::chat_store::ChatLog;
 use crate::daemon::DaemonState;
 use crate::data_dir;
 use crate::domain::{ChatService, LorebookService, StateService};
-use crate::types::{CharacterId, SessionId};
+use crate::types::{CharacterId, PresetId, SessionId};
 use airp_state_protocol::Capability;
 
 /// 工具副作用分类（驱动 dry-run / 确认流 / 幂等去重）。
@@ -216,6 +216,22 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
         state: state.clone(),
     }))
     .expect(COLLISION);
+    reg.register(Box::new(ApplyLorebookTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(MergeLorebooksTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(SealVolumeTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(ExportContextBundleTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
     // Decompose Agent Flow（Task 4）：analysis enhance/apply 工具。
     reg.register(Box::new(EnhanceAnalysisTool {
         state: state.clone(),
@@ -370,6 +386,384 @@ impl Tool for UpdateLorebookTool {
             LorebookService::new(&daemon.data_root).write(&character, &lorebook)?;
             Ok(ToolResult {
                 output: serde_json::json!({"updated": character.as_str(), "entries": lorebook.entries.len()}),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+struct ApplyLorebookTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for ApplyLorebookTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "apply_lorebook",
+            description: "Return enabled lorebook entries triggered by the supplied text.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let character = required_character_id(&params)?;
+            let text = params
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AirpError::BadRequest("missing text".to_string()))?;
+            let lorebook = LorebookService::new(&state.data_root).read(&character)?;
+            let context = lorebook.trigger(text);
+            let output = crate::context_limit::truncate_for_context(&context);
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "character_id": character.as_str(),
+                    "matched": !context.is_empty(),
+                    "context": output,
+                    "truncated": context.len() > crate::context_limit::max_read_bytes(),
+                }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+struct MergeLorebooksTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for MergeLorebooksTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "merge_lorebooks",
+            description:
+                "Merge character lorebooks without writing them; strategy is union or primary_only.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let raw_ids = params
+                .get("character_ids")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    AirpError::BadRequest("character_ids must be a non-empty array".to_string())
+                })?;
+            if raw_ids.is_empty() {
+                return Err(AirpError::BadRequest(
+                    "character_ids must be a non-empty array".to_string(),
+                ));
+            }
+            let characters: Vec<CharacterId> = raw_ids
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| {
+                            AirpError::BadRequest(
+                                "character_ids entries must be strings".to_string(),
+                            )
+                        })
+                        .and_then(CharacterId::new)
+                })
+                .collect::<Result<_, _>>()?;
+            let strategy = params
+                .get("strategy")
+                .and_then(Value::as_str)
+                .unwrap_or("union");
+            if !matches!(strategy, "union" | "primary_only") {
+                return Err(AirpError::BadRequest(
+                    "strategy must be union or primary_only".to_string(),
+                ));
+            }
+
+            let service = LorebookService::new(&state.data_root);
+            let lorebooks = if strategy == "primary_only" {
+                vec![service.read(&characters[0])?]
+            } else {
+                characters
+                    .iter()
+                    .map(|character| service.read(character))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            let merged = crate::orchestrator::merge_lorebooks(&lorebooks);
+            let serialized = serde_json::to_string_pretty(&merged)?;
+            let output = crate::context_limit::truncate_with_notice(
+                &serialized,
+                "merged lorebook exceeds the single-read cap; query source characters separately",
+            );
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "strategy": strategy,
+                    "characters": characters.iter().map(CharacterId::as_str).collect::<Vec<_>>(),
+                    "entries": merged.entries.len(),
+                    "lorebook_json": output,
+                    "truncated": serialized.len() > crate::context_limit::max_read_bytes(),
+                }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+struct SealVolumeTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for SealVolumeTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "seal_volume",
+            description: "Summarize current session memory into the next volume and clear current.md. Destructive — dry-run unless confirmed.",
+            side_effect: ToolSideEffect::Destructive,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let character = required_character_id(&params)?;
+            data_dir::get_character_card(&state.data_root, &character)?;
+            let session_id = optional_session_id(&params)?;
+            let session_dir = data_dir::resolve_session_dir(
+                &state.data_root,
+                character.as_str(),
+                session_id.as_ref(),
+            )?;
+            let current = crate::volume_store::read_current(&session_dir)?;
+            let next_volume = crate::volume_store::next_volume_number(&session_dir);
+            let preview = serde_json::json!({
+                "character_id": character.as_str(),
+                "session_id": session_id.as_ref().map(ToString::to_string),
+                "next_volume": next_volume,
+                "current_bytes": current.len(),
+                "current_tokens_estimated": crate::volume_store::estimate_tokens(&current),
+            });
+            if !confirm {
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "action": "seal_volume",
+                        "preview": preview,
+                        "requires": "confirm=true",
+                    }),
+                    dry_run: true,
+                });
+            }
+            if current.trim().is_empty() {
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "sealed": false,
+                        "reason": "current memory is empty",
+                        "preview": preview,
+                    }),
+                    dry_run: false,
+                });
+            }
+
+            let (provider, params) = {
+                let config = state
+                    .config
+                    .read()
+                    .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+                let volume = &config.volume_config;
+                (
+                    Arc::new(crate::adapter::ProviderConfig {
+                        provider: config.provider.clone(),
+                        endpoint: config.endpoint.clone(),
+                        api_key: config.api_key.clone(),
+                    }),
+                    crate::adapter::GenerationParams {
+                        model: volume
+                            .seal_model
+                            .clone()
+                            .unwrap_or_else(|| config.model.clone()),
+                        temperature: Some(volume.seal_temperature),
+                        max_tokens: None,
+                    },
+                )
+            };
+            crate::volume_manager::run_seal_flow(
+                &state.http_client,
+                &session_dir,
+                provider,
+                params,
+            )
+            .await?;
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "sealed": true,
+                    "character_id": character.as_str(),
+                    "session_id": session_id.as_ref().map(ToString::to_string),
+                    "volume": next_volume,
+                    "file": format!("volumes/vol_{next_volume:03}.md"),
+                }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+struct ExportContextBundleTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for ExportContextBundleTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "export_context_bundle",
+            description: "Write a bounded generic-Markdown context bundle for an isolated subagent under the AIRP data root.",
+            side_effect: ToolSideEffect::Mutate,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let character = required_character_id(&params)?;
+            let preset_id = params
+                .get("preset_id")
+                .and_then(Value::as_str)
+                .map(PresetId::new)
+                .transpose()?;
+            let include_lorebook = params
+                .get("include_lorebook")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let thinking_mode = params
+                .get("thinking_mode_text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty());
+
+            let card = data_dir::get_character_card(&state.data_root, &character)?;
+            let raw_card = data_dir::read_character_card_text(&state.data_root, &character)?;
+            let normalized = crate::orchestrator::card::normalize_v1_to_v2(&raw_card);
+            let orchestrator = crate::orchestrator::Orchestrator::new(Some(&normalized), None)?;
+            let character_name = card
+                .get("data")
+                .and_then(|data| data.get("name"))
+                .or_else(|| card.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or(character.as_str());
+
+            let stable_prompt =
+                orchestrator.build_system_prompt("User", &std::collections::HashMap::new(), "");
+            let mut context = format!(
+                "# RP Context Bundle: {character_name}\n\n> Feed this to an ISOLATED subagent as its system context. A fresh context lets the persona dominate instead of competing with the orchestrator's coding register. Generic Markdown only; wrap it in the host's own skill shape when needed.\n\n---\n\n"
+            );
+            if let Some(text) = thinking_mode {
+                context.push_str("## Thinking mode (verbatim; AIRP does not interpret)\n");
+                context.push_str(text);
+                context.push_str("\n\n");
+            }
+            context.push_str("## Stable character context\n");
+            context.push_str(&stable_prompt);
+
+            if include_lorebook {
+                let lorebook = LorebookService::new(&state.data_root).read(&character)?;
+                let mut enabled: Vec<_> = lorebook
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, entry)| entry.enabled.unwrap_or(true))
+                    .collect();
+                enabled.sort_by_key(|(index, entry)| {
+                    (std::cmp::Reverse(entry.priority.unwrap_or(10)), *index)
+                });
+                if !enabled.is_empty() {
+                    context.push_str("\n\n## World knowledge\n");
+                    for (_, entry) in enabled {
+                        context.push('\n');
+                        context.push_str(&entry.content);
+                        context.push('\n');
+                    }
+                }
+            }
+
+            let state_path =
+                data_dir::char_state_dir(&state.data_root, character.as_str()).join("live.json");
+            let live_state = state_path
+                .exists()
+                .then(|| std::fs::read_to_string(&state_path))
+                .transpose()?;
+
+            let bundle_dir =
+                data_dir::ensure_context_bundle_dir(&state.data_root, character.as_str())?;
+            for stale in ["preset_raw.json", "extensions.json"] {
+                let path = bundle_dir.join(stale);
+                if path.exists() {
+                    std::fs::remove_file(path)?;
+                }
+            }
+
+            let mut files = vec!["context.md".to_string()];
+            if let Some(preset) = preset_id.as_ref() {
+                let raw_path = data_dir::preset_json_path(&state.data_root, preset.as_str());
+                if !raw_path.exists() {
+                    return Err(AirpError::NotFound(format!(
+                        "preset {} has no preset.json",
+                        preset
+                    )));
+                }
+                std::fs::copy(raw_path, bundle_dir.join("preset_raw.json"))?;
+                files.push("preset_raw.json".to_string());
+                context.push_str("\n> `preset_raw.json` is verbatim passthrough; AIRP does not interpret its prompts.\n");
+            }
+
+            let extensions = card
+                .get("data")
+                .and_then(|data| data.get("extensions"))
+                .or_else(|| card.get("extensions"));
+            if let Some(extensions) = extensions.filter(|value| {
+                !value.is_null() && value.as_object().is_none_or(|object| !object.is_empty())
+            }) {
+                std::fs::write(
+                    bundle_dir.join("extensions.json"),
+                    serde_json::to_vec_pretty(extensions)?,
+                )?;
+                files.push("extensions.json".to_string());
+                context.push_str("\n> `extensions.json` is raw bundled-card passthrough; AIRP does not interpret it.\n");
+            }
+
+            if let Some(live_state) = live_state {
+                context.push_str(
+                    "\n\n## Current state (volatile; keep after stable context)\n```json\n",
+                );
+                context.push_str(live_state.trim());
+                context.push_str("\n```\n");
+            }
+
+            let context_bytes = context.len();
+            let stored_context = crate::context_limit::truncate_for_context(&context);
+            std::fs::write(bundle_dir.join("context.md"), &stored_context)?;
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "character_id": character.as_str(),
+                    "bundle_path": format!("exports/context-bundles/{}", character.as_str()),
+                    "files": files,
+                    "context_bytes": context_bytes,
+                    "stored_bytes": stored_context.len(),
+                    "truncated": context_bytes > crate::context_limit::max_read_bytes(),
+                }),
                 dry_run: false,
             })
         })
@@ -768,19 +1162,7 @@ impl Tool for GetCharacterTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
             let cid = CharacterId::new(cid_str)?;
-            let card_text = data_dir::get_character(&state.data_root, &cid)?;
-            let card: Value = serde_json::from_str(&card_text).map_err(|e| {
-                AirpError::BadRequest(format!(
-                    "character {} card.json is invalid JSON: {}",
-                    cid, e
-                ))
-            })?;
-            if !card.is_object() {
-                return Err(AirpError::BadRequest(format!(
-                    "character {} card.json must be a JSON object",
-                    cid
-                )));
-            }
+            let card = data_dir::get_character_card(&state.data_root, &cid)?;
             Ok(ToolResult {
                 output: serde_json::json!({ "card": card }),
                 dry_run: false,
@@ -1407,6 +1789,10 @@ mod tests {
             "update_character_state",
             "get_lorebook",
             "update_lorebook",
+            "apply_lorebook",
+            "merge_lorebooks",
+            "seal_volume",
+            "export_context_bundle",
             "enhance_analysis",
             "apply_enhanced_analysis",
         ] {
@@ -1475,6 +1861,206 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(current.output["entries"][0]["content"], "Open runtime");
+    }
+
+    #[tokio::test]
+    async fn lorebook_apply_and_merge_are_readonly() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let service = LorebookService::new(&state.data_root);
+        for (character, entries) in [
+            (
+                "alice",
+                vec![crate::orchestrator::LorebookEntry {
+                    keys: vec!["moon".to_string()],
+                    content: "Moon knowledge".to_string(),
+                    enabled: Some(true),
+                    priority: Some(20),
+                    comment: None,
+                }],
+            ),
+            (
+                "bob",
+                vec![
+                    crate::orchestrator::LorebookEntry {
+                        keys: vec!["moon".to_string()],
+                        content: "Moon knowledge".to_string(),
+                        enabled: Some(true),
+                        priority: Some(20),
+                        comment: None,
+                    },
+                    crate::orchestrator::LorebookEntry {
+                        keys: vec!["gate".to_string()],
+                        content: "Gate knowledge".to_string(),
+                        enabled: Some(true),
+                        priority: Some(10),
+                        comment: None,
+                    },
+                ],
+            ),
+        ] {
+            service
+                .write(
+                    &CharacterId::new(character).unwrap(),
+                    &crate::orchestrator::Lorebook { entries },
+                )
+                .unwrap();
+        }
+        let reg = default_registry(state);
+
+        let applied = reg
+            .get("apply_lorebook")
+            .unwrap()
+            .call(
+                serde_json::json!({"character_id": "alice", "text": "the moon rises"}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(applied.output["matched"], true);
+        assert!(applied.output["context"]
+            .as_str()
+            .unwrap()
+            .contains("Moon knowledge"));
+
+        let merged = reg
+            .get("merge_lorebooks")
+            .unwrap()
+            .call(
+                serde_json::json!({"character_ids": ["alice", "bob"], "strategy": "union"}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(merged.output["entries"], 2);
+        assert!(!merged.dry_run);
+    }
+
+    #[tokio::test]
+    async fn export_context_bundle_output_directs_isolated_subagent() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let card_dir = state.data_root.join("characters/alice/card");
+        std::fs::create_dir_all(&card_dir).unwrap();
+        std::fs::write(
+            card_dir.join("card.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "spec": "chara_card_v2",
+                "spec_version": "2.0",
+                "data": {
+                    "name": "Alice",
+                    "description": "A test character",
+                    "personality": "Curious",
+                    "scenario": "An observatory",
+                    "extensions": {"depth_prompt": "raw extension"}
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        StateService::new(&state.data_root)
+            .write(
+                &CharacterId::new("alice").unwrap(),
+                &serde_json::json!({"hp": 9}),
+            )
+            .unwrap();
+        LorebookService::new(&state.data_root)
+            .write(
+                &CharacterId::new("alice").unwrap(),
+                &crate::orchestrator::Lorebook {
+                    entries: vec![crate::orchestrator::LorebookEntry {
+                        keys: vec!["observatory".to_string()],
+                        content: "Stable world fact".to_string(),
+                        enabled: Some(true),
+                        priority: Some(10),
+                        comment: None,
+                    }],
+                },
+            )
+            .unwrap();
+        let preset_dir = state.data_root.join("presets/story");
+        std::fs::create_dir_all(&preset_dir).unwrap();
+        std::fs::write(preset_dir.join("preset.json"), r#"{"prompts":[]}"#).unwrap();
+
+        let result = default_registry(state.clone())
+            .get("export_context_bundle")
+            .unwrap()
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "preset_id": "story",
+                    "include_lorebook": true,
+                    "thinking_mode_text": "Stay immersed"
+                }),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(!result.dry_run);
+        let bundle = state.data_root.join("exports/context-bundles/alice");
+        let context = std::fs::read_to_string(bundle.join("context.md")).unwrap();
+        assert!(context.contains("ISOLATED subagent"));
+        assert!(context.contains("fresh context"));
+        assert!(context.contains("Stable world fact"));
+        assert!(context.contains("\"hp\": 9"));
+        assert!(
+            context.find("Stable character context").unwrap()
+                < context.find("Current state (volatile").unwrap()
+        );
+        assert!(bundle.join("preset_raw.json").exists());
+        assert!(bundle.join("extensions.json").exists());
+    }
+
+    #[tokio::test]
+    async fn seal_volume_dry_run_then_confirm() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let archive = "<卷索引>\n- 卷标题: Test\n</卷索引>\n<卷内容>\nArchived scene\n</卷内容>\n<全局index更新>\n</全局index更新>";
+        let event = serde_json::json!({"choices": [{"delta": {"content": archive}}]});
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!("data: {event}\n\ndata: [DONE]\n\n")),
+            )
+            .mount(&server)
+            .await;
+
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        state.config.write().unwrap().endpoint = format!("{}/v1/chat/completions", server.uri());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let card_dir = state.data_root.join("characters/alice/card");
+        std::fs::create_dir_all(&card_dir).unwrap();
+        std::fs::write(card_dir.join("card.json"), r#"{"name":"Alice"}"#).unwrap();
+        let memory = crate::data_dir::resolve_session_dir(&state.data_root, "alice", None).unwrap();
+        crate::volume_store::append_to_current(&memory, "A scene to archive").unwrap();
+        let reg = default_registry(state);
+        let tool = reg.get("seal_volume").unwrap();
+
+        let preview = tool
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+        assert!(preview.dry_run);
+        assert_eq!(preview.output["requires"], "confirm=true");
+        assert!(crate::volume_store::list_volume_numbers(&memory).is_empty());
+
+        let sealed = tool
+            .call(serde_json::json!({"character_id": "alice"}), true)
+            .await
+            .unwrap();
+        assert!(!sealed.dry_run);
+        assert_eq!(sealed.output["volume"], 1);
+        assert_eq!(crate::volume_store::list_volume_numbers(&memory), vec![1]);
+        assert!(crate::volume_store::read_current(&memory)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

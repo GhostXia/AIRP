@@ -24,6 +24,7 @@ pub mod agent;
 pub mod chat_pipeline;
 pub mod chat_store;
 pub mod config;
+mod context_limit;
 pub mod daemon;
 pub mod data_dir;
 pub mod decompose;

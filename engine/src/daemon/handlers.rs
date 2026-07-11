@@ -286,6 +286,12 @@ pub(super) async fn agent_run(
     Ok(Sse::new(looper.run(payload, cancel)))
 }
 
+pub(super) async fn list_agent_tools(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+) -> Json<Vec<crate::agent::tools::ToolMeta>> {
+    Json(crate::agent::tools::default_registry(state).list())
+}
+
 // ── Character card import ─────────────────────────────────────────────────────
 
 /// M_MCP MCP-2: 角色卡导入的内部实现（pub(crate) 供 daemon HTTP handler 与 MCP tool 共享）。
@@ -785,10 +791,7 @@ pub(super) async fn get_character_card(
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let json_str = data_dir::get_character(&state.data_root, &cid)?;
-    let value: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| AirpError::BadRequest(format!("card.json 解析失败: {}", e)))?;
-    Ok(Json(value))
+    Ok(Json(data_dir::get_character_card(&state.data_root, &cid)?))
 }
 
 /// DELETE /v1/characters/:character_id — 删除整个角色目录（card + state + sessions + ...）。

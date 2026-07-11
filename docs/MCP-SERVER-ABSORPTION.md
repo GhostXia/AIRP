@@ -1,6 +1,6 @@
 # MCP-Server 能力融入 engine（agent 内化 catalog）
 
-> **路线 catalog，不是交付清单**：38/12/19 是源 AIRP-MCP-Server 的枚举，不是本仓完成度或必须逐项复制的目标。2026-07-10 后续实现使本仓默认 Agent registry 达到 15 个**已注册**工具；文中“约 20 个内部等价”仍只是历史 domain/data 能力估算。新增能力应先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露。当前状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
+> **路线 catalog，不是交付清单**：38/12/19 是源 AIRP-MCP-Server 的枚举，不是本仓完成度或必须逐项复制的目标。2026-07-11 本仓默认 Agent registry 为 19 个**已注册**工具，并由 `GET /v1/agent/tools` 公开实际目录；文中“约 20 个内部等价”仍只是历史 domain/data 能力估算。新增能力应先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露。当前状态见 [DOC-AUDIT.md](DOC-AUDIT.md)。
 
 > 用户 2026-07-02 定调：**把 AIRP-MCP-Server 的能力融进我们的 agent（engine），不是当外部 MCP 后端连**。MCP-Server 绝大部分内容是我们未来发展的**刚需**。
 > 纠正此前误框：我曾因角色卡/世界书**解析有 bug**（属实）就把整个 MCP-Server 当"边缘零件库、可丢"——错。解析 bug 是局部要修的点；MCP-Server 的 **38 工具 / 12 工作流提示词 / 19 资源 + 数据模型**是完整 RP 数据管理面 = engine 的数据层 + agent 工具规格。
@@ -33,18 +33,18 @@
 | 角色 | `analyze_card`(4档) | 🆕 | 移植（+ `analyze_preset` 同族） |
 | 角色 | `decompose_character` | 🆕 | 移植（拆 7 md，配 prompt） |
 | 会话 | `start_session` `list_sessions` `append_message` `get_recent_context` `rollback_messages` | ✅ chat_store + daemon | 包成工具 |
-| 世界书 | `apply_lorebook` `update_lorebook` | 🔧 orchestrator 有 aho-corasick 扫描；**解析结构错需修**（Task 1.3） | 修解析 + 包成工具 + §5 检索工具化 |
+| 世界书 | `apply_lorebook` `update_lorebook` | ✅ 共享 lorebook service + 关键词扫描 + Agent tools | 高级 SillyTavern 语义仍按需扩展 |
 | 状态 | `get_live_state` `update_state`(RFC7386) | ✅ state live.json+history | 包成工具；补 schema clamp |
-| 记忆 | `seal_volume` | ✅ volume_store/manager | 包成工具（阈值信号→loop 拍板） |
+| 记忆 | `seal_volume` | ✅ volume_store/manager + destructive confirm Agent tool | 阈值信号仍由 loop/调用方拍板 |
 | 闸门 | `get_gating_status` | ✅ gating/checkpoints | 包成工具 |
 | 预设 | `import_preset` `list_presets` `get_preset` | 🔧 orchestrator preset；解析需补字段 | 修 + 包 |
 | 预设 | `write_preset_artifact` `list_preset_regex_scripts` `remove_preset_regex_script` `set_preset_regex_enabled` | 🔧 preset_regex 有骨架 | 移植正则脚本管理 + artifact 写 |
 | 预设 | `decompose_preset` | 🆕 | 移植 |
-| 场景 | `create_scene` `list_scenes` `get_scene` `add_character_to_scene` `merge_lorebooks` `build_scene_system_prompt` | ✅ scene.rs + orchestrator 多角色 | 包成工具 |
-| 导出 | `export_context_bundle` | 🆕 | 移植（喂纯净 subagent 的成品上下文包，正合 loop=subagent 编排器；注意修 §3.5 载荷排序） |
+| 场景 | `create_scene` `list_scenes` `get_scene` `add_character_to_scene` `merge_lorebooks` `build_scene_system_prompt` | 🔧 scene.rs + orchestrator 多角色；`merge_lorebooks` 已注册 | 其余只在出现真实 Agent 工作流时暴露 |
+| 导出 | `export_context_bundle` | ✅ 已注册；固定安全目录、稳定块在前、live state 在后、UTF-8 安全截断 | 保持 generic Markdown 与隔离 subagent 不变式 |
 | 插件 | `plugin_kv_get/set` `plugin_jsonl_append/read` `plugin_blob_write/read` | 🆕 | 移植——**零 schema 插件数据 = 扩展/记忆的数据底座**（§3.8 + Hermes 外部记忆 provider） |
 
-> 汇总（历史 catalog）：约 20 个指底层 domain/data 等价能力的估算，并非当前已注册工具数；当前 registry 的确切数是 11。analyze/decompose 族、preset 正则/artifact、export_context_bundle、plugin 零schema 仍须按当前源码重新核验后再决定是否暴露。
+> 汇总（历史 catalog）：约 20 个指底层 domain/data 等价能力的估算，并非当前已注册工具数；当前 registry 的确切数是 19。未注册的 analyze/decompose 族、preset 正则/artifact、plugin 零 schema 仍须按当前源码与真实工作流重新核验后再决定是否暴露。
 
 ## 2. 工作流提示词（12）→ engine agent 工作流/技能
 
@@ -64,9 +64,9 @@ characters（列表/card/greetings/world·lorebook/state·live/memory·{current,
 ## 5. 落地映射（并入路线）
 - **M_AGENT-2（agent 内置工具）= 本融入的主载体**：把上表工具逐批包进 `agent/tools.rs`。engine 已有的先包，🆕 的从 `D:\airp-mcp-server` 移植。
 - Task 1.1 导入：复用 `validate_card`+`decompose_character`+`import_card`（inspect→unpack→import）。
-- Task 1.3 世界书：修 `apply_lorebook`/`update_lorebook` 解析 + §5 检索工具化。
+- Task 1.3 世界书：基础 `apply_lorebook`/`update_lorebook`/`merge_lorebooks` 已工具化；高级语义继续增量实现。
 - Task 1.5 预设：`import_preset` + 正则脚本全套 + `analyze/tune/decompose_preset`。
-- Phase 2 扩展/记忆：plugin 零schema 6 工具（扩展数据底座 + Hermes 外部记忆）；`export_context_bundle`（喂纯净 subagent）。
+- Phase 2 扩展/记忆：`seal_volume` 与 `export_context_bundle` 已注册；plugin 零 schema 6 工具仍待真实扩展工作流驱动。
 - 12 工作流提示词 → engine 内置技能（agentskills.io 兼容）。
 - **保留**：engine 作 MCP client 接第三方 MCP（§3.8）——内化自有能力，不放弃 MCP 生态接入。
 

@@ -21,7 +21,7 @@
 | 六条有界 Agent 戒律 | C `README.md:39-46` | 📖 | 有界/可取消/可观测/最小授权/幂等隔离/上下文纯净。作我们引擎的设计律采纳 |
 | orchestrator 装配 | C `orchestrator/mod.rs` | ✅ | card→preset→gating→known→卷→lorebook 默认序；多角色 `build_multi_char_system_prompt`；schema min/max 渲染 `:289-302` |
 | chat_pipeline 三段式 | C `chat_pipeline.rs`（prepare `:296`/stream `:596`/finalize `:694`） | ✅ | 单回合流水线，被 agent loop 当库复用。AGENT_CLIENT_ASSESSMENT 认证"80% 后端已在此" |
-| 载荷按可变性排序（缓存友好） | C orchestrator + M `prompt-caching.md` §4 | 🔧 | 稳定块在前、易变在后保稳定前缀。M 的 `export_context_bundle` 现把易变 state 夹中间(破缓存)，需修 |
+| 载荷按可变性排序（缓存友好） | C orchestrator + M `prompt-caching.md` §4 | ✅ | AIRP-Dev `export_context_bundle` 保持稳定 card/preset/extensions/lorebook 在前、易变 live state 在后 |
 
 ## B. LLM 连接层
 
@@ -37,8 +37,8 @@
 
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
-| AgentLoop 骨架 | C `agent/mod.rs`（M_AGENT-1） | 🔧 | 有界 loop + 四道闸(step/token/墙钟/cancel) + SSE 事件。**仅 mock echo 工具**，真工具执行待建 |
-| Tool trait + ToolRegistry | C `agent/tools.rs` | 🔧 | 框架在，built-in 工具集待注入(M_AGENT-2 未做) |
+| AgentLoop | C `agent/mod.rs`（M_AGENT-1） | ✅ | 双 provider structured planner + 有界 plan-act-observe + finalizer + SSE 事件 |
+| Tool trait + ToolRegistry | C `agent/tools.rs` | ✅ | 19 个 built-in 工具；capability/allowlist/confirm 门控；HTTP runtime catalog |
 | loop=纯净 subagent 编排器 | C `AGENT_BACKEND_PLAN.md:130-149` | 📖 | 每步派生全新纯净上下文 subagent，协调器噪声不进 subagent。设计思路 |
 | 四道闸计量基建 | C `quota.rs` + `tokio JoinSet` | ✅ | 预算计量 + 子任务收敛现成 |
 | SSE 多步事件协议 | C `/v1/agent/run`：plan/tool_call/tool_result/delta/done | ✅ | 已定义 |

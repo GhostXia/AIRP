@@ -33,11 +33,11 @@ D:\AIRP-Dev/
 ## 当前状态
 
 - engine 已具备单回合 SSE 对话、OpenAI/Anthropic adapter、角色/会话/状态/场景/基础世界书、卷系统、拆解/analysis 和 settings/models 等 API。PR #100 留有一次 WebUI → engine → 真实 DeepSeek 的成功流式证据。
-- 默认 Agent 工具注册表当前为 15 个工具；`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist 门执行 typed observation，并只 finalizer 最终纯净生成。
+- 默认 Agent 工具注册表当前为 19 个工具；`GET /v1/agent/tools` 提供排序后的运行时目录，`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist/confirm 门执行 typed observation，并只由 finalizer 做最终纯净生成。
 - UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；desktop 现在持有并在退出时终止 sidecar，Windows workflow 已加入安装→启动→ready→退出 smoke，等待 CI artifact 实跑证据。
 - 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
 - WebUI 仅作为后端可靠性和开发诊断面，不替代 Tauri/Vue 长期产品 UI。PR #106 已把 V2 运行态落到 `webui/`；provider/endpoint/model/runtime key 可编辑，应用后通过真实 `/v1/models` 请求验证，带真实凭据的远端运行证据仍需手动执行。
-- 2026-07-10 本地 workspace tests 与 UI tests/typecheck 通过；Rust fmt 与 `-D warnings` Clippy 尚未通过，仓库也没有自动 PR gate。
+- 2026-07-11 本地 workspace tests、UI tests/typecheck、Rust fmt 与 `-D warnings` Clippy 均通过；仓库已有自动 PR gate。
 
 当前权威状态、独立发现和路线排序见 [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)。实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
 

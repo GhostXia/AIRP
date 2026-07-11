@@ -15,7 +15,7 @@ pub use paths::{
     ensure_char_analysis_dir,
     ensure_data_dirs,
     ensure_preset_analysis_dir,
-    get_character,
+    get_character_card,
     list_characters,
     list_presets,
     // M_MS: scene paths
@@ -24,6 +24,7 @@ pub use paths::{
     list_users,
     preset_analysis_dir_path,
     preset_analysis_file_path,
+    read_character_card_text,
     resolve_data_root,
     // DX-1: per-user data root
     resolve_effective_root,
@@ -42,7 +43,7 @@ pub use paths::{
 };
 pub(crate) use paths::{
     char_card_dir, char_gating_dir, char_greetings_dir, char_world_dir, char_world_lorebook_path,
-    preset_json_path,
+    ensure_context_bundle_dir, preset_json_path,
 };
 pub use security::{safe_resolve_for_write, safe_resolve_under_data_root, validate_id_segment};
 pub use session::{create_session, list_sessions, resolve_session_dir, session_dir};
@@ -579,5 +580,31 @@ mod tests {
         assert!(list.contains(&"md_only".to_string()));
         assert!(list.contains(&"flat".to_string()));
         assert!(!list.contains(&"empty_dir".to_string()), "空目录不应被列出");
+    }
+
+    #[test]
+    fn parsed_character_card_contract_rejects_invalid_and_non_object_json() {
+        let tmp = tempdir().unwrap();
+        let character = crate::types::CharacterId::new("contract").unwrap();
+        let card_dir = tmp.path().join("characters").join("contract").join("card");
+        fs::create_dir_all(&card_dir).unwrap();
+
+        fs::write(card_dir.join("card.json"), "not-json").unwrap();
+        assert!(matches!(
+            get_character_card(tmp.path(), &character),
+            Err(crate::error::AirpError::BadRequest(_))
+        ));
+
+        fs::write(card_dir.join("card.json"), "[]").unwrap();
+        assert!(matches!(
+            get_character_card(tmp.path(), &character),
+            Err(crate::error::AirpError::BadRequest(_))
+        ));
+
+        fs::write(card_dir.join("card.json"), r#"{"name":"Contract"}"#).unwrap();
+        assert_eq!(
+            get_character_card(tmp.path(), &character).unwrap()["name"],
+            "Contract"
+        );
     }
 }

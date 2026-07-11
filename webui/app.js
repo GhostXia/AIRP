@@ -35,6 +35,8 @@
   const agentInput = $('#agent-input');
   const btnAgentRun = $('#btn-agent-run');
   const agentOutput = $('#agent-output');
+  const agentToolCatalog = $('#agent-tool-catalog');
+  const btnAgentTools = $('#btn-agent-tools');
   const eventLog = $('#event-log');
   const btnClearLog = $('#btn-clear-log');
   const btnRefreshChars = $('#btn-refresh-chars');
@@ -201,7 +203,13 @@
 
   // ── refresh all left-panel data ──────────────────────────────────────────
   async function refreshAll() {
-    await Promise.all([refreshHealth(), refreshSettings(), refreshModels(), refreshChars()]);
+    await Promise.all([
+      refreshHealth(),
+      refreshSettings(),
+      refreshModels(),
+      refreshChars(),
+      refreshAgentTools(),
+    ]);
     // 初次连接后自动加载当前角色的 chat history（PLAN §9 P1 "交互收口"）。
     // refreshChars 内部已设置 selectedChar；此处 await 完成后即可拉 history。
     if (selectedChar) loadHistory();
@@ -211,6 +219,72 @@
     const r = await api('GET', '/version');
     if (r.ok) healthInfo.textContent = 'version: ' + (r.data?.version || r.text);
     else healthInfo.textContent = 'err: ' + formatError(r.data, r.text);
+  }
+
+  async function refreshAgentTools() {
+    if (!agentToolCatalog) return;
+    agentToolCatalog.textContent = '加载中…';
+    const response = await api('GET', '/v1/agent/tools');
+    if (!response.ok || !Array.isArray(response.data)) {
+      agentToolCatalog.textContent = '工具目录加载失败：' + formatError(response.data, response.text);
+      return;
+    }
+    agentToolCatalog.replaceChildren();
+    for (const tool of response.data) {
+      const row = document.createElement('label');
+      row.className = 'agent-tool-option';
+
+      const allow = document.createElement('input');
+      allow.type = 'checkbox';
+      allow.className = 'agent-tool-allow';
+      allow.dataset.toolName = String(tool.name || '');
+      row.appendChild(allow);
+
+      const details = document.createElement('span');
+      details.className = 'agent-tool-details';
+      appendInline(details, 'strong', '', String(tool.name || 'unnamed'));
+      appendInline(details, 'small', '', String(tool.description || ''));
+      row.appendChild(details);
+
+      const effect = document.createElement('span');
+      effect.className = 'agent-tool-effect effect-' + String(tool.side_effect || 'unknown');
+      effect.textContent = String(tool.side_effect || 'unknown');
+      row.appendChild(effect);
+
+      if (tool.side_effect === 'destructive') {
+        const confirmLabel = document.createElement('span');
+        confirmLabel.className = 'agent-tool-confirm-label';
+        const confirmBox = document.createElement('input');
+        confirmBox.type = 'checkbox';
+        confirmBox.className = 'agent-tool-confirm';
+        confirmBox.dataset.toolName = String(tool.name || '');
+        confirmBox.addEventListener('change', () => {
+          if (confirmBox.checked) allow.checked = true;
+        });
+        confirmLabel.append(confirmBox, '确认');
+        row.appendChild(confirmLabel);
+      }
+      agentToolCatalog.appendChild(row);
+    }
+  }
+
+  if (btnAgentTools) btnAgentTools.addEventListener('click', refreshAgentTools);
+
+  function commaSeparatedValues(selector) {
+    return (document.querySelector(selector)?.value || '')
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean);
+  }
+
+  function checkedToolNames(selector) {
+    return Array.from(document.querySelectorAll(selector + ':checked'))
+      .map(input => input.dataset.toolName)
+      .filter(Boolean);
+  }
+
+  function uniqueValues(values) {
+    return Array.from(new Set(values));
   }
 
   async function refreshSettings() {
@@ -973,11 +1047,15 @@
               throw new Error('启用 Agent 工具必须先配置 daemon Bearer');
             }
             payload.capabilities = ['call:tool'];
-            const allowlist = ($('#agent-tool-allowlist')?.value || '')
-              .split(',').map(value => value.trim()).filter(Boolean);
+            const allowlist = uniqueValues([
+              ...commaSeparatedValues('#agent-tool-allowlist'),
+              ...checkedToolNames('.agent-tool-allow'),
+            ]);
             if (allowlist.length) payload.allowed_tools = allowlist;
-            const confirmed = ($('#agent-tool-confirm')?.value || '')
-              .split(',').map(value => value.trim()).filter(Boolean);
+            const confirmed = uniqueValues([
+              ...commaSeparatedValues('#agent-tool-confirm'),
+              ...checkedToolNames('.agent-tool-confirm'),
+            ]);
             if (confirmed.length) {
               if (!confirm('确认允许本次运行执行破坏性工具：' + confirmed.join(', ') + '？')) {
                 throw new Error('已取消破坏性工具确认');
