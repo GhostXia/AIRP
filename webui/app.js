@@ -231,13 +231,14 @@
     }
     agentToolCatalog.replaceChildren();
     for (const tool of response.data) {
-      const row = document.createElement('label');
+      const row = document.createElement('div');
       row.className = 'agent-tool-option';
 
       const allow = document.createElement('input');
       allow.type = 'checkbox';
       allow.className = 'agent-tool-allow';
       allow.dataset.toolName = String(tool.name || '');
+      allow.setAttribute('aria-label', '允许工具 ' + String(tool.name || ''));
       row.appendChild(allow);
 
       const details = document.createElement('span');
@@ -252,7 +253,7 @@
       row.appendChild(effect);
 
       if (tool.side_effect === 'destructive') {
-        const confirmLabel = document.createElement('span');
+        const confirmLabel = document.createElement('label');
         confirmLabel.className = 'agent-tool-confirm-label';
         const confirmBox = document.createElement('input');
         confirmBox.type = 'checkbox';

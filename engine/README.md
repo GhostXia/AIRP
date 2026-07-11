@@ -15,7 +15,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
-- settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer，浏览器 origin 受内建默认值与 `AIRP_CORS_ORIGINS` 精确列表约束。
+- settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；CORS 内建允许 `127.0.0.1:9001`、`localhost:9001` 与 Tauri origins，并只追加 `AIRP_CORS_ORIGINS` 中的精确来源。
 
 ## 必须诚实区分的边界
 

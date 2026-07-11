@@ -3,7 +3,7 @@
 > 目的：把四个原仓库拆成**功能零件**，脱离原仓库的模块边界，供"当新项目重组"时按需取用。
 > 状态图例：✅ 可原样复用 ｜ 🔧 有基础但需修/补 ｜ 🆕 四仓皆无，需新建 ｜ 📖 仅作参考/思路（代码不直接搬）
 > 来源仓库：C=AIRP-Core(D:\AIRPCLI) · M=AIRP-MCP-Server(D:\airp-mcp-server) · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指原仓库路径。
-> 最后更新：2026-07-03
+> 最后更新：2026-07-11
 
 > **使用限制（2026-07-10 审计）**：本文是源项目候选零件目录，不是当前 AIRP capability inventory。✅/🔧 表示源资产可参考或可吸收，不代表本仓已存在 HTTP route、Agent tool 或产品 UI。当前实现状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
 
@@ -162,7 +162,7 @@
 ## 汇总：拆件的性质分布
 
 - **✅ 可原样复用（引擎心脏 + UI 主体）**：干净 prompt 内核、双 provider adapter、流式 FSM/拆包、封卷、Core 数据层与 daemon、整套 Tauri+Vue UI + Blueprint/widget + 协议契约。**这些是白捡的成熟资产。**
-- **🔧 有基础需修/补**：agent loop 真工具、酒馆预设正则字段、state clamp、虚拟滚动验证、BusRelay 的 chat/id-keyed 后续债务、载荷排序、数据层若干 E 系列。
+- **🔧 有基础需修/补**：酒馆预设正则字段、世界书高级语义、虚拟滚动验证、BusRelay 后续债务与数据层若干 E 系列。Agent 真工具、state schema 边界和 context bundle 载荷排序已完成。
 - **🆕 必须新建**：**世界书完整解析+插入引擎**（最大工作量）、capability 引擎侧强制、Perf Spike 实跑、（可选）RAG/ClaudeCodeSdk/第三方 MCP 接入。UI→引擎聊天推理路由已先行落地，后续要把它从最小直连接成更完整的 State-Protocol/Blueprint 流。
 - **📖 仅参考**：六戒律/两平面/性能契约/责任边界等设计律，Gateway 纯桥路由（对单客户端价值有限），State-Protocol 的公共标准化/通用 Agent 浏览器定位。
 - **不继承的北极星**：Core 的 standalone 乐高 Agent 后端叙事、MCP-Server 的纯 MCP 数据层边界、Gateway 的纯协议桥目标、State-Protocol 的通用 Agent UI 标准化目标，均不作为 AIRP-Dev 主线。

@@ -417,7 +417,7 @@ impl Tool for ApplyLorebookTool {
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or_else(|| AirpError::BadRequest("missing text".to_string()))?;
-            let lorebook = LorebookService::new(&state.data_root).read(&character)?;
+            let lorebook = read_lorebook_or_empty(&state.data_root, &character)?;
             let context = lorebook.trigger(text);
             let output = crate::context_limit::truncate_for_context(&context);
             Ok(ToolResult {
@@ -488,13 +488,12 @@ impl Tool for MergeLorebooksTool {
                 ));
             }
 
-            let service = LorebookService::new(&state.data_root);
             let lorebooks = if strategy == "primary_only" {
-                vec![service.read(&characters[0])?]
+                vec![read_lorebook_or_empty(&state.data_root, &characters[0])?]
             } else {
                 characters
                     .iter()
-                    .map(|character| service.read(character))
+                    .map(|character| read_lorebook_or_empty(&state.data_root, character))
                     .collect::<Result<Vec<_>, _>>()?
             };
             let merged = crate::orchestrator::merge_lorebooks(&lorebooks);
@@ -554,6 +553,16 @@ impl Tool for SealVolumeTool {
                 "current_bytes": current.len(),
                 "current_tokens_estimated": crate::volume_store::estimate_tokens(&current),
             });
+            if current.trim().is_empty() {
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "sealed": false,
+                        "reason": "current memory is empty",
+                        "preview": preview,
+                    }),
+                    dry_run: true,
+                });
+            }
             if !confirm {
                 return Ok(ToolResult {
                     output: serde_json::json!({
@@ -564,17 +573,6 @@ impl Tool for SealVolumeTool {
                     dry_run: true,
                 });
             }
-            if current.trim().is_empty() {
-                return Ok(ToolResult {
-                    output: serde_json::json!({
-                        "sealed": false,
-                        "reason": "current memory is empty",
-                        "preview": preview,
-                    }),
-                    dry_run: false,
-                });
-            }
-
             let (provider, params) = {
                 let config = state
                     .config
@@ -597,20 +595,23 @@ impl Tool for SealVolumeTool {
                     },
                 )
             };
-            crate::volume_manager::run_seal_flow(
+            let written_volume = crate::volume_manager::run_seal_flow(
                 &state.http_client,
                 &session_dir,
                 provider,
                 params,
             )
-            .await?;
+            .await?
+            .ok_or_else(|| {
+                AirpError::Volume("current memory became empty before sealing".into())
+            })?;
             Ok(ToolResult {
                 output: serde_json::json!({
                     "sealed": true,
                     "character_id": character.as_str(),
                     "session_id": session_id.as_ref().map(ToString::to_string),
-                    "volume": next_volume,
-                    "file": format!("volumes/vol_{next_volume:03}.md"),
+                    "volume": written_volume,
+                    "file": format!("volumes/vol_{written_volume:03}.md"),
                 }),
                 dry_run: false,
             })
@@ -701,30 +702,31 @@ impl Tool for ExportContextBundleTool {
 
             let state_path =
                 data_dir::char_state_dir(&state.data_root, character.as_str()).join("live.json");
-            let live_state = state_path
-                .exists()
-                .then(|| std::fs::read_to_string(&state_path))
-                .transpose()?;
+            let live_state = match tokio::fs::read_to_string(&state_path).await {
+                Ok(state) => Some(state),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
 
             let bundle_dir =
                 data_dir::ensure_context_bundle_dir(&state.data_root, character.as_str())?;
             for stale in ["preset_raw.json", "extensions.json"] {
                 let path = bundle_dir.join(stale);
-                if path.exists() {
-                    std::fs::remove_file(path)?;
+                if tokio::fs::try_exists(&path).await? {
+                    tokio::fs::remove_file(path).await?;
                 }
             }
 
             let mut files = vec!["context.md".to_string()];
             if let Some(preset) = preset_id.as_ref() {
                 let raw_path = data_dir::preset_json_path(&state.data_root, preset.as_str());
-                if !raw_path.exists() {
+                if !tokio::fs::try_exists(&raw_path).await? {
                     return Err(AirpError::NotFound(format!(
                         "preset {} has no preset.json",
                         preset
                     )));
                 }
-                std::fs::copy(raw_path, bundle_dir.join("preset_raw.json"))?;
+                tokio::fs::copy(raw_path, bundle_dir.join("preset_raw.json")).await?;
                 files.push("preset_raw.json".to_string());
                 context.push_str("\n> `preset_raw.json` is verbatim passthrough; AIRP does not interpret its prompts.\n");
             }
@@ -736,10 +738,11 @@ impl Tool for ExportContextBundleTool {
             if let Some(extensions) = extensions.filter(|value| {
                 !value.is_null() && value.as_object().is_none_or(|object| !object.is_empty())
             }) {
-                std::fs::write(
+                tokio::fs::write(
                     bundle_dir.join("extensions.json"),
                     serde_json::to_vec_pretty(extensions)?,
-                )?;
+                )
+                .await?;
                 files.push("extensions.json".to_string());
                 context.push_str("\n> `extensions.json` is raw bundled-card passthrough; AIRP does not interpret it.\n");
             }
@@ -754,7 +757,7 @@ impl Tool for ExportContextBundleTool {
 
             let context_bytes = context.len();
             let stored_context = crate::context_limit::truncate_for_context(&context);
-            std::fs::write(bundle_dir.join("context.md"), &stored_context)?;
+            tokio::fs::write(bundle_dir.join("context.md"), &stored_context).await?;
             Ok(ToolResult {
                 output: serde_json::json!({
                     "character_id": character.as_str(),
@@ -771,6 +774,19 @@ impl Tool for ExportContextBundleTool {
 }
 
 const MAX_RECENT_CONTEXT: usize = 200;
+
+fn read_lorebook_or_empty(
+    data_root: &std::path::Path,
+    character: &CharacterId,
+) -> Result<crate::orchestrator::Lorebook, AirpError> {
+    match LorebookService::new(data_root).read(character) {
+        Ok(lorebook) => Ok(lorebook),
+        Err(AirpError::NotFound(_)) => Ok(crate::orchestrator::Lorebook {
+            entries: Vec::new(),
+        }),
+        Err(error) => Err(error),
+    }
+}
 
 fn optional_session_id(params: &Value) -> Result<Option<SessionId>, AirpError> {
     match params.get("session_id") {
@@ -1924,6 +1940,17 @@ mod tests {
             .unwrap()
             .contains("Moon knowledge"));
 
+        let empty = reg
+            .get("apply_lorebook")
+            .unwrap()
+            .call(
+                serde_json::json!({"character_id": "charlie", "text": "moon"}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(empty.output["matched"], false);
+
         let merged = reg
             .get("merge_lorebooks")
             .unwrap()
@@ -1935,6 +1962,17 @@ mod tests {
             .unwrap();
         assert_eq!(merged.output["entries"], 2);
         assert!(!merged.dry_run);
+
+        let merged_with_missing = reg
+            .get("merge_lorebooks")
+            .unwrap()
+            .call(
+                serde_json::json!({"character_ids": ["alice", "charlie"], "strategy": "union"}),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(merged_with_missing.output["entries"], 1);
     }
 
     #[tokio::test]

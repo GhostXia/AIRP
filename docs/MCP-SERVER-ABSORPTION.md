@@ -6,7 +6,7 @@
 > 纠正此前误框：我曾因角色卡/世界书**解析有 bug**（属实）就把整个 MCP-Server 当"边缘零件库、可丢"——错。解析 bug 是局部要修的点；MCP-Server 的 **38 工具 / 12 工作流提示词 / 19 资源 + 数据模型**是完整 RP 数据管理面 = engine 的数据层 + agent 工具规格。
 > 架构落点：**engine 原生内化**（拆解重组进 engine），**非**"engine 当 MCP client 连独立 MCP-Server"。这正是 Core 路线图 **M_AGENT-2**"把进程内数据操作包成 built-in 工具"的目标规格。
 > 权威源：`D:\airp-mcp-server\src\mcp\{mod.rs,tools.rs,prompts.rs,resources.rs}`（本 catalog 从源码枚举）。
-> 最后更新：2026-07-05（#23：区分 data 层 / agent 工具 / HTTP 路由三个层级）
+> 最后更新：2026-07-11（区分 data 层 / agent 工具 / HTTP 路由，并同步 19-tool registry）
 
 ---
 
