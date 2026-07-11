@@ -15,30 +15,33 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
-- settings/models/version/health 和 rate limit；默认 daemon 未鉴权且 CORS 全开放，只适合 loopback 本地开发。
+- settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；CORS 内建允许 `127.0.0.1:9001`、`localhost:9001` 与 Tauri origins，并只追加 `AIRP_CORS_ORIGINS` 中的精确来源。
 
 ## 必须诚实区分的边界
 
-### Agent loop 仍是骨架
+### Agent loop 已可动态规划和调用工具
 
-当前计划是固定的 `echo → generate → finish`（`max_steps > 1`）或 `generate → finish`。工具结果会作为 SSE 事件输出，但不会进入下一次模型决策；generate 后也没有走 chat finalizer 持久化 assistant 消息。因此它验证了有界 loop 外壳和纯净上下文，不代表动态 ReAct/plan-act-observe 已完成。
+当前 planner 使用 OpenAI/Anthropic 原生 structured tool call，在 step/token/wall-clock/cancel 边界内进行 plan-act-observe；工具执行受 capability、allowlist 和 destructive confirm 三层门控。finalizer 只接收整理后的 observation，并保持角色平面不含协调器噪声。它仍不是完整 MCP/skills/plugin runtime。
 
-### 默认 Agent 工具恰为 11 个
+### 默认 Agent 工具恰为 19 个
 
 | 分组 | 工具 |
 |---|---|
 | 基础 | `echo` |
 | 会话 | `list_sessions`、`start_session`、`append_message`、`get_recent_context`、`rollback_messages` |
 | 角色 | `list_characters`、`get_character`、`delete_character` |
+| 状态 | `get_character_state`、`update_character_state` |
+| 世界书 | `get_lorebook`、`update_lorebook`、`apply_lorebook`、`merge_lorebooks` |
+| 记忆/导出 | `seal_volume`、`export_context_bundle` |
 | Analysis | `enhance_analysis`、`apply_enhanced_analysis` |
 
-底层模块或 HTTP route 存在，不等于 Agent registry 已注册。persona、plugin data、MCP client/server、skills、完整记忆 runtime 均尚未实现。
+目录由 `GET /v1/agent/tools` 从实际 registry 生成。底层模块或 HTTP route 存在仍不等于 Agent registry 已注册；persona、plugin data、MCP client/server、skills、完整记忆 runtime 均尚未实现。
 
 ### Worldbook 与 state 都是部分实现
 
 - Worldbook 尚无 selective/secondary、constant、probability、sticky/cooldown/delay、group、position/depth/order 的完整 AIRP 合同；
-- state schema 当前用于读取和提示展示，模型输出写盘前不强制类型/range/字段策略；
-- HTTP chat/state 写路径尚未与 Agent tools 统一锁和事务边界。
+- state schema 在写入前强制 required/type/range/additionalProperties，并以 revisioned atomic replace 更新 live/history；
+- Chat/State/Lorebook 的 HTTP、pipeline 与 Agent tools 已复用共享 domain services；更广泛的跨资源事务仍需逐项设计。
 
 ### 部署安全边界尚未产品化
 
@@ -56,7 +59,7 @@ $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
 cargo run -p airp-core -- daemon --port 8000
 ```
 
-默认配置由程序默认值、`data/settings.json`、环境变量按顺序合并。运行时也可通过 `POST /v1/settings` 更新。当前 secret 会明文落盘，这是已登记风险，不要提交真实 key。
+默认配置由程序默认值、`data/settings.json`、环境变量按顺序合并。运行时也可通过 `POST /v1/settings` 更新。provider/access secrets 仅在进程内或环境变量中存在，序列化会跳过它们并忽略旧明文字段。
 
 CLI 调试单次流式输出：
 
@@ -71,7 +74,8 @@ cargo run -p airp-core -- run --message "hello"
 | Method | Path | 说明 |
 |---|---|---|
 | POST | `/v1/chat/completions` | 单回合 RP SSE |
-| POST | `/v1/agent/run` | 固定计划 Agent loop 骨架 SSE |
+| GET | `/v1/agent/tools` | 排序后的实际工具目录与副作用等级 |
+| POST | `/v1/agent/run` | 动态 structured tool-call Agent loop SSE |
 | POST | `/v1/chat/history` | 读取历史 |
 | POST | `/v1/chat/rollback` | 回滚到消息位置 |
 | POST | `/v1/chat/regen` | 删除最后 assistant 消息以便重生成 |
@@ -147,7 +151,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-两者在 2026-07-10 的 `main` 均失败；仓库也只有手动打包 workflow，没有自动 PR gate。详见独立审计 A-06。
+两者与 workspace tests、UI tests/typecheck 均由 `.github/workflows/pr-gate.yml` 自动执行；2026-07-11 本地严格验证通过。
 
 ## License
 

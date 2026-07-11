@@ -106,6 +106,8 @@
           <label class="inline-label"><input id="agent-tools-enabled" type="checkbox" /> 允许结构化工具调用</label>
           <label class="inline-label">allowlist <input id="agent-tool-allowlist" placeholder="例如 list_characters,get_character" /></label>
           <label class="inline-label">confirm <input id="agent-tool-confirm" placeholder="破坏性工具精确名称" /></label>
+          <div class="agent-tool-catalog-head"><span>Engine 工具目录</span><button id="btn-agent-tools" type="button">刷新</button></div>
+          <div id="agent-tool-catalog" class="agent-tool-catalog hint">连接 engine 后加载。</div>
           <button id="btn-agent-run" class="btn-primary">运行</button><button id="btn-agent-clear">清空</button>
           <div id="agent-output">—</div>
         </details>

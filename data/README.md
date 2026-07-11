@@ -6,6 +6,8 @@
 2. `cwd/data`（开发模式：cwd 含 `Cargo.toml`）
 3. `dirs::data_dir().join("airp")`（打包 .exe 双击：OS per-user 位）
 
+Agent context exports 只写入 `exports/context-bundles/<character_id>/`。每次导出包含 `context.md` 和可用的 preset/extension 原始 sidecar；稳定材料位于易变 live state 之前，模型可见文本受 `AIRP_MAX_READ_BYTES`（默认 32 KiB）限制且不会截断 UTF-8 code point。
+
 本目录入仓的仅引擎默认配置与示例风格，**不含任何玩家会话产物**。
 
 ## 入仓文件（引擎默认配置）

@@ -208,10 +208,10 @@ pub async fn run_seal_flow(
     session_dir: &Path,
     provider: Arc<ProviderConfig>,
     params: GenerationParams,
-) -> Result<(), AirpError> {
+) -> Result<Option<u32>, AirpError> {
     let current = volume_store::read_current(session_dir)?;
     if current.trim().is_empty() {
-        return Ok(()); // 没有内容可封
+        return Ok(None); // 没有内容可封
     }
     let index = volume_store::read_index(session_dir)?;
     let next_n = volume_store::next_volume_number(session_dir);
@@ -279,7 +279,7 @@ pub async fn run_seal_flow(
     // 清空 current.md
     volume_store::clear_current(session_dir)?;
 
-    Ok(())
+    Ok(Some(next_n))
 }
 
 /// 从某一卷 `[卷索引]` 头部的 `- 登场: ...` 行解析角色名列表。

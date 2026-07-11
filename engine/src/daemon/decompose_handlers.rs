@@ -131,7 +131,7 @@ pub(super) async fn decompose_character(
     }
 
     // 读角色卡
-    let json_str = data_dir::get_character(&state.data_root, &cid)?;
+    let json_str = data_dir::read_character_card_text(&state.data_root, &cid)?;
     let card: TavernCardV2 = serde_json::from_str(&json_str)
         .map_err(|e| AirpError::BadRequest(format!("card.json 解析失败: {}", e)))?;
 

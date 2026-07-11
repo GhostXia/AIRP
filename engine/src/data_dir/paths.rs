@@ -430,9 +430,11 @@ pub fn list_characters(root: &Path) -> Result<Vec<String>, AirpError> {
     Ok(result)
 }
 
-/// Read a character's card.json (兼容迁移后 `card/card.json` 与旧 `card.json`)。
-/// 返回原始 JSON 文本；调用方自行 parse。角色不存在 → `NotFound`。
-pub fn get_character(root: &Path, character_id: &CharacterId) -> Result<String, AirpError> {
+/// Read a character's card.json as raw text for format-specific consumers.
+pub fn read_character_card_text(
+    root: &Path,
+    character_id: &CharacterId,
+) -> Result<String, AirpError> {
     let dir = root.join("characters").join(character_id.as_str());
     if !dir.is_dir() {
         return Err(AirpError::NotFound(format!(
@@ -450,6 +452,40 @@ pub fn get_character(root: &Path, character_id: &CharacterId) -> Result<String, 
         )));
     }
     fs::read_to_string(&path).map_err(AirpError::from)
+}
+
+pub(crate) fn ensure_context_bundle_dir(
+    root: &Path,
+    character_id: &str,
+) -> Result<PathBuf, AirpError> {
+    super::security::validate_id_segment(character_id)?;
+    let dir = root
+        .join("exports")
+        .join("context-bundles")
+        .join(character_id);
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Read and validate the shared card API contract: a JSON object.
+pub fn get_character_card(
+    root: &Path,
+    character_id: &CharacterId,
+) -> Result<serde_json::Value, AirpError> {
+    let raw = read_character_card_text(root, character_id)?;
+    let card: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+        AirpError::BadRequest(format!(
+            "character {} card.json is invalid JSON: {}",
+            character_id, error
+        ))
+    })?;
+    if !card.is_object() {
+        return Err(AirpError::BadRequest(format!(
+            "character {} card.json must be a JSON object",
+            character_id
+        )));
+    }
+    Ok(card)
 }
 
 /// Delete a character directory entirely (card + state + memory + sessions + ...)。

@@ -3,7 +3,7 @@
 > 目的：把四个原仓库拆成**功能零件**，脱离原仓库的模块边界，供"当新项目重组"时按需取用。
 > 状态图例：✅ 可原样复用 ｜ 🔧 有基础但需修/补 ｜ 🆕 四仓皆无，需新建 ｜ 📖 仅作参考/思路（代码不直接搬）
 > 来源仓库：C=AIRP-Core(D:\AIRPCLI) · M=AIRP-MCP-Server(D:\airp-mcp-server) · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指原仓库路径。
-> 最后更新：2026-07-03
+> 最后更新：2026-07-11
 
 > **使用限制（2026-07-10 审计）**：本文是源项目候选零件目录，不是当前 AIRP capability inventory。✅/🔧 表示源资产可参考或可吸收，不代表本仓已存在 HTTP route、Agent tool 或产品 UI。当前实现状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
 
@@ -21,7 +21,7 @@
 | 六条有界 Agent 戒律 | C `README.md:39-46` | 📖 | 有界/可取消/可观测/最小授权/幂等隔离/上下文纯净。作我们引擎的设计律采纳 |
 | orchestrator 装配 | C `orchestrator/mod.rs` | ✅ | card→preset→gating→known→卷→lorebook 默认序；多角色 `build_multi_char_system_prompt`；schema min/max 渲染 `:289-302` |
 | chat_pipeline 三段式 | C `chat_pipeline.rs`（prepare `:296`/stream `:596`/finalize `:694`） | ✅ | 单回合流水线，被 agent loop 当库复用。AGENT_CLIENT_ASSESSMENT 认证"80% 后端已在此" |
-| 载荷按可变性排序（缓存友好） | C orchestrator + M `prompt-caching.md` §4 | 🔧 | 稳定块在前、易变在后保稳定前缀。M 的 `export_context_bundle` 现把易变 state 夹中间(破缓存)，需修 |
+| 载荷按可变性排序（缓存友好） | C orchestrator + M `prompt-caching.md` §4 | ✅ | AIRP-Dev `export_context_bundle` 保持稳定 card/preset/extensions/lorebook 在前、易变 live state 在后 |
 
 ## B. LLM 连接层
 
@@ -37,8 +37,8 @@
 
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
-| AgentLoop 骨架 | C `agent/mod.rs`（M_AGENT-1） | 🔧 | 有界 loop + 四道闸(step/token/墙钟/cancel) + SSE 事件。**仅 mock echo 工具**，真工具执行待建 |
-| Tool trait + ToolRegistry | C `agent/tools.rs` | 🔧 | 框架在，built-in 工具集待注入(M_AGENT-2 未做) |
+| AgentLoop | C `agent/mod.rs`（M_AGENT-1） | ✅ | 双 provider structured planner + 有界 plan-act-observe + finalizer + SSE 事件 |
+| Tool trait + ToolRegistry | C `agent/tools.rs` | ✅ | 19 个 built-in 工具；capability/allowlist/confirm 门控；HTTP runtime catalog |
 | loop=纯净 subagent 编排器 | C `AGENT_BACKEND_PLAN.md:130-149` | 📖 | 每步派生全新纯净上下文 subagent，协调器噪声不进 subagent。设计思路 |
 | 四道闸计量基建 | C `quota.rs` + `tokio JoinSet` | ✅ | 预算计量 + 子任务收敛现成 |
 | SSE 多步事件协议 | C `/v1/agent/run`：plan/tool_call/tool_result/delta/done | ✅ | 已定义 |
@@ -162,7 +162,7 @@
 ## 汇总：拆件的性质分布
 
 - **✅ 可原样复用（引擎心脏 + UI 主体）**：干净 prompt 内核、双 provider adapter、流式 FSM/拆包、封卷、Core 数据层与 daemon、整套 Tauri+Vue UI + Blueprint/widget + 协议契约。**这些是白捡的成熟资产。**
-- **🔧 有基础需修/补**：agent loop 真工具、酒馆预设正则字段、state clamp、虚拟滚动验证、BusRelay 的 chat/id-keyed 后续债务、载荷排序、数据层若干 E 系列。
+- **🔧 有基础需修/补**：酒馆预设正则字段、世界书高级语义、虚拟滚动验证、BusRelay 后续债务与数据层若干 E 系列。Agent 真工具、state schema 边界和 context bundle 载荷排序已完成。
 - **🆕 必须新建**：**世界书完整解析+插入引擎**（最大工作量）、capability 引擎侧强制、Perf Spike 实跑、（可选）RAG/ClaudeCodeSdk/第三方 MCP 接入。UI→引擎聊天推理路由已先行落地，后续要把它从最小直连接成更完整的 State-Protocol/Blueprint 流。
 - **📖 仅参考**：六戒律/两平面/性能契约/责任边界等设计律，Gateway 纯桥路由（对单客户端价值有限），State-Protocol 的公共标准化/通用 Agent 浏览器定位。
 - **不继承的北极星**：Core 的 standalone 乐高 Agent 后端叙事、MCP-Server 的纯 MCP 数据层边界、Gateway 的纯协议桥目标、State-Protocol 的通用 Agent UI 标准化目标，均不作为 AIRP-Dev 主线。

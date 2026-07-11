@@ -152,14 +152,14 @@
 
 ## 2.6 现状真相 + 复用地图（亲读六份承重文档后校准）
 
-> 本节保留 2026-07-01 的源项目吸收判断。当前 AIRP-Dev 已完成 UI `BusRelay` 直连、id-keyed chat、基础数据工具与 decompose/analysis；GUI 运行时验收、真正 Agent loop 和统一 domain service 仍未完成。当前能力以 [2026-07-10 独立审计](PROJECT-AUDIT-2026-07-10.md) 为准。
+> 本节保留 2026-07-01 的源项目吸收判断。当前 AIRP-Dev 已完成 UI `BusRelay` 直连、id-keyed chat、动态 Agent loop、统一 Chat/State/Lorebook services 与 decompose/analysis；仍待闭合的是 Windows GUI artifact 实跑、MCP/skills/plugin 生态与跨 provider 扩展。当前能力以本表和 [文档审计索引](DOC-AUDIT.md) 为准。
 
 ### 什么能用 / 什么是桩 / 什么从没联调
 
 | 块 | 代码成熟度 | 关键桩 / 缺口 | 联调状态 |
 |---|---|---|---|
-| **Core/engine（推理后端）** | 较高——daemon、双 provider 流式 RP、统一 Chat/State/Lorebook services、结构化 tool-call loop、15 个受 capability/allowlist 控制的内建工具、场景/卷与 decompose/analysis 均有测试 | MCP client、跨 provider tool-call codec、完整 worldbook 高级语义、跨设备稳定身份仍未建 | 本地 Agent loop 与统一服务边界可用；开放式 MCP/插件生态仍后置 |
-| **MCP-Server（数据层）** | 中——框架全，stdio 真 MCP、HTTP 已补 | **酒馆兼容基本假**（角色卡 zTXt-only 读错、世界书 Vec 结构错，见 §3）；`export_context_bundle` 布局破坏前缀缓存 | 从没被 Gateway 或 Core 真消费过 |
+| **Core/engine（推理后端）** | 较高——daemon、双 provider 流式 RP、统一 Chat/State/Lorebook services、结构化 tool-call loop、19 个受 capability/allowlist/confirm 控制的内建工具、运行时工具目录、场景/卷与 decompose/analysis 均有测试 | MCP client、完整 worldbook 高级语义、跨设备稳定身份仍未建 | 本地 Agent loop、统一服务边界和 context bundle 可用；开放式 MCP/插件生态仍后置 |
+| **MCP-Server（资产来源）** | 中——框架全，stdio 真 MCP、HTTP 已补；其 truncate、lorebook merge/apply、seal volume、context bundle 资产已按本仓边界吸收 | 源仓的解析与产品边界不能直接视为本仓事实 | 不作为 AIRP-Dev 运行时依赖；只吸收经过复核的资产 |
 | **Gateway（协议桥）** | 高——已硬化、测试全绿的纯桥 | **streaming(Stage 2)是返回 Unimplemented 的桩**（唯一明确功能缺口）；嵌入 Core(Stage 5)未做 | e2e 全用自带 mock；**从没接真 MCP-Server / Core** |
 | **UI（显示层）** | 高——widget/registry/RFC6902 patch/沙箱/**虚拟滚动(computeWindow已实现)**/边界guard/`.exe`打包已有；AIRP-State-Protocol 原项目曾验证打包 exe 可启动并简单交互；Phase 0 已接 engine SSE；Task 1.2 已把 chat 改为 id-keyed 并去掉 `chat_lock` | **perf spike(10万条)代码在但没跑过**；原项目 exe 验证不覆盖当前 AIRP-Dev 与 engine 集成后的完整 GUI 验收；真实 API key/settings 下的打包启动闭环未验收 | UI↔engine 聊天链路已接；当前 GUI 运行时验收与性能验收待补 |
 
@@ -215,7 +215,7 @@
 - **需求**：card+preset+gating+memory+lorebook+history+用户输入的拼装、token 预算、**零脚手架**。
 - **文档解法**：Core `orchestrator/` 拥有，**默认**装配顺序 `card → preset → checkpoint gating → known context → 卷 → lorebook`（`AIRPCLI/README.md:210`）——这是 Core 的干净装配默认序，**不是回放导入预设的排版**（预设是建议素材，见 §3.3）。`chat_pipeline` 三段式 prepare→stream→finalize。多角色场景每个 NPC 独立纯净上下文。token 估算是 ±30% 启发式（非真 tiktoken）。
 - **载荷排序（prompt-caching 承重决策）**：装配输出必须按可变性排——稳定块（persona/preset/lorebook）在前、易变块（live state/per-turn）在后，保证稳定前缀跨轮字节一致 → 命中缓存。缓存翻译（`[[CACHE_BREAK]]`→`cache_control`）在引擎 adapter 层做。**与 §3.4 Hermes frozen-snapshot 同原理**（记忆/装配当稳定前缀）。
-- **状态**：核心资产，最该保护。注意 Core `export_context_bundle` 现有布局把易变 state 夹在稳定块中间、破坏前缀缓存（已知待修，`airp-mcp-server` ROADMAP §2.C），装配时按可变性排。
+- **状态**：核心资产，最该保护。AIRP-Dev 的 `export_context_bundle` 已按稳定 card/preset/extensions/lorebook 在前、易变 live state 在后的顺序输出，并受 UTF-8 安全的上下文大小上限保护。
 
 ### 3.6 LLM 连接层
 - **需求**：多 provider、流式、参数预设。
