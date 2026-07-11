@@ -23,13 +23,13 @@
 
 下表记录已经在文档或 GitHub issue 中形成明确研究结论的第三方项目。
 
-| 项目 | AIRP 研究或吸收的经验 | 当前关系 | 许可证核验（2026-07-11） | AIRP 记录 |
-|---|---|---|---|---|
-| [SillyTavern](https://github.com/SillyTavern/SillyTavern) | RP 功能清单、角色卡/世界书兼容面、Preset 与 Persona 交互、扩展生态 | 功能与互操作性参考；AIRP 按自身架构独立实现 | AGPL-3.0 | [TAVERN-PARITY.md](TAVERN-PARITY.md)、[#114](https://github.com/GhostXia/AIRP/issues/114) |
-| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 有界长期记忆、frozen snapshot、skills、用户建模、headless Agent 形态 | 重要架构理念参考 | MIT | [HERMES-MEMORY.md](HERMES-MEMORY.md) |
-| [NeuroBook](https://github.com/notnotype/neuro-book) | 结构化 prompt 装配、长篇记忆、角色知识视角与 authoring workflow | 研究参考；未作为当前 capability 事实 | AGPL-3.0 | [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md) |
-| [pi-forge](https://github.com/MacroSony/pi-forge) | Preset 导入报告、prompt assembly trace、一次性 payload inspector、history integrity | 规划参考，尚待 issue 实施 | MIT | [#115](https://github.com/GhostXia/AIRP/issues/115) |
-| [llmlint](https://github.com/notnotype/llmlint) | 声明式风格规则、候选诊断、确认式修复、误报与分层评测 | 规划参考，尚待 issue 实施 | PolyForm Noncommercial 1.0.0 | [#116](https://github.com/GhostXia/AIRP/issues/116) |
+| 项目 | AIRP 研究或吸收的经验 | 当前关系 | 审查基线（2026-07-11） | 许可证核验 | AIRP 记录 |
+|---|---|---|---|---|---|
+| [SillyTavern](https://github.com/SillyTavern/SillyTavern) | RP 功能清单、角色卡/世界书兼容面、Preset 与 Persona 交互、扩展生态 | 功能与互操作性参考；AIRP 按自身架构独立实现 | `8172dcd0ee` | AGPL-3.0 | [TAVERN-PARITY.md](TAVERN-PARITY.md)、[#114](https://github.com/GhostXia/AIRP/issues/114) |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 有界长期记忆、frozen snapshot、skills、用户建模、headless Agent 形态、credential redirect 边界 | 重要架构理念参考 | `3b2ef789df` | MIT | [HERMES-MEMORY.md](HERMES-MEMORY.md)、[#117](https://github.com/GhostXia/AIRP/issues/117) |
+| [NeuroBook](https://github.com/notnotype/neuro-book) | 结构化 prompt 装配、长篇记忆、角色知识视角、Agent change inbox 与 authoring workflow | 研究参考；未作为当前 capability 事实 | `138e16d216` | AGPL-3.0 | [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md)、[#117](https://github.com/GhostXia/AIRP/issues/117) |
+| [pi-forge](https://github.com/MacroSony/pi-forge) | Preset 导入报告、prompt assembly trace、一次性 payload inspector、history integrity | 规划参考，尚待 issue 实施 | `161f434ba5` | MIT | [#115](https://github.com/GhostXia/AIRP/issues/115) |
+| [llmlint](https://github.com/notnotype/llmlint) | 声明式风格规则、候选诊断、确认式修复、误报与分层评测 | 规划参考，尚待 issue 实施 | `9aabfc2839` | PolyForm Noncommercial 1.0.0 | [#116](https://github.com/GhostXia/AIRP/issues/116) |
 
 列入本表仅表示 AIRP 曾研究其公开设计、产品行为或互操作格式，不表示原项目维护者认可、参与或支持 AIRP，也不自动表示 AIRP 复用了其代码、规则、数据、测试或视觉资产。
 
