@@ -31,6 +31,7 @@ pub mod decompose;
 pub mod domain;
 pub mod error;
 pub mod orchestrator;
+pub mod outbound;
 pub mod png_parser;
 pub mod quota;
 pub mod scene;

@@ -470,6 +470,14 @@ async fn decide_action(
         .timeout(Duration::from_secs(req.wall_clock_secs.max(1)))
         .send()
         .await?;
+    // #117 A：redirect 拒截先于 success/4xx/5xx 分流，typed 升级避免凭据泄露旁路。
+    let response = if let Some(classified) =
+        crate::outbound::classify_redirect_response(&response)
+    {
+        return Err(classified);
+    } else {
+        response
+    };
     let status = response.status();
     let bytes = response.bytes().await?;
     if !status.is_success() {

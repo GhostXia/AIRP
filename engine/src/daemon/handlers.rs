@@ -1004,6 +1004,24 @@ pub(super) async fn list_models(
 
     match req.send().await {
         Ok(resp) => {
+            // #117 A：redirect 必须先于 success/non-success 分流判定，给 typed 脱敏文案。
+            if let Some(classified) = crate::outbound::classify_redirect_response(&resp) {
+                tracing::warn!(
+                    upstream_status = classified.status().as_u16(),
+                    "models proxy: upstream redirected; outbound policy rejected"
+                );
+                return models_proxy_error(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_redirect_rejected",
+                    format!(
+                        "model provider /models redirected; outbound policy rejected to protect credentials: {}",
+                        classified
+                    ),
+                    Some(classified.status().as_u16()),
+                    None,
+                    None,
+                );
+            }
             let status = resp.status();
             match resp.bytes().await {
                 Ok(body) if status.is_success() => (
