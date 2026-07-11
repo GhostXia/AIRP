@@ -250,6 +250,60 @@ pub(super) async fn get_preset_endpoint(
     Ok(Json(preset.prompts.unwrap_or_default()))
 }
 
+// ── Preset import（#114，WEBUI-MVP-PLAN §3.1：最小 JSON 导入）────────────────────
+//
+// 接收 `{preset_id, preset_json}`，校验 TavernPreset schema 后原子写盘到
+// `presets/{id}/preset.json`。保留 raw sidecar（原样写盘，不解释 prompt 内容），
+// 拒绝脚本执行和路径输入（preset_id 走 PresetId::new 校验，preset_json 走 serde
+// 反序列化 TavernPreset）。rename/duplicate/export、字段级迁移报告、PromptAssemblyTrace
+// 留 #115。
+
+/// POST /v1/presets/import — 校验 + 落盘一份 preset JSON。
+pub(super) async fn import_preset_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(req): Json<ImportPresetRequest>,
+) -> Result<Json<ImportPresetResponse>, AirpError> {
+    let preset_id = PresetId::new(req.preset_id)?;
+    // 校验 JSON 形状：必须是 TavernPreset（顶层 prompts[] + 模型参数）。
+    // 反序列化失败 → BadRequest，不落盘，避免脏文件残留。
+    let cleaned = data_dir::strip_utf8_bom(&req.preset_json).to_owned();
+    let parsed: crate::orchestrator::TavernPreset = serde_json::from_str(&cleaned)
+        .map_err(|e| AirpError::BadRequest(format!("preset_json 不是有效 TavernPreset JSON: {}", e)))?;
+    // 再序列化为规范 pretty JSON 写盘（保留 raw sidecar，原样不解释 prompt）。
+    let bytes = serde_json::to_vec_pretty(&parsed)
+        .map_err(|e| AirpError::Internal(format!("preset 序列化失败: {}", e)))?;
+
+    let dir = state.data_root.join("presets").join(preset_id.as_str());
+    fs::create_dir_all(&dir)?;
+    // 原子替换：先写 .tmp 再 rename，避免半写态被并发 GET 读到。
+    let final_path = dir.join("preset.json");
+    let tmp_path = dir.join("preset.json.tmp");
+    fs::write(&tmp_path, &bytes)?;
+    fs::rename(&tmp_path, &final_path)?;
+
+    Ok(Json(ImportPresetResponse {
+        preset_id: preset_id.to_string(),
+        prompts_count: parsed.prompts.map(|p| p.len()).unwrap_or(0),
+    }))
+}
+
+/// POST /v1/presets/import 的请求体。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ImportPresetRequest {
+    /// 目标 preset ID；走 PresetId::new 校验，拒路径遍历。
+    pub preset_id: String,
+    /// TavernPreset 规范的 JSON 文本（原样 sidecar，不解释）。
+    pub preset_json: String,
+}
+
+/// POST /v1/presets/import 的响应体。
+#[derive(Debug, Serialize)]
+pub(super) struct ImportPresetResponse {
+    pub preset_id: String,
+    pub prompts_count: usize,
+}
+
 // ── Chat handlers ─────────────────────────────────────────────────────────────
 
 /// POST /v1/chat/history — get chat history for a character
@@ -1812,5 +1866,103 @@ mod tests {
         );
         // 不留脏文件（审计 CR4：与其他拒绝测试一致防御）
         assert!(!data_root.path().join("characters/none").exists());
+    }
+
+    // ── import_preset（#114）──────────────────────────────────────────────────────
+
+    /// #114：合法 TavernPreset 导入应写盘到 presets/{id}/preset.json，且 prompts_count 正确。
+    #[tokio::test]
+    async fn import_preset_writes_preset_json_and_returns_count() {
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+
+        let body = serde_json::json!({
+            "preset_id": "myrp",
+            "preset_json": r#"{"prompts":[{"identifier":"main","name":"Main","prompt":"hi","enabled":true}]}"#
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/presets/import")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["preset_id"], "myrp");
+        assert_eq!(v["prompts_count"], 1);
+
+        // 写盘：presets/myrp/preset.json 存在且可回解析
+        let written = std::fs::read_to_string(
+            state.data_root.join("presets").join("myrp").join("preset.json"),
+        )
+        .unwrap();
+        let back: crate::orchestrator::TavernPreset = serde_json::from_str(&written).unwrap();
+        assert_eq!(back.prompts.unwrap().len(), 1);
+    }
+
+    /// #114：preset_id 路径遍历 → BadRequest，不写盘。
+    #[tokio::test]
+    async fn import_preset_rejects_traversal_preset_id() {
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+
+        let body = serde_json::json!({
+            "preset_id": "../evil",
+            "preset_json": r#"{"prompts":[]}"#
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/presets/import")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        // 关键：无 preset.json 落盘（路径遍历被 PresetId::new 拒，未进写盘分支）
+        assert!(
+            !state.data_root.join("presets").join("evil").exists(),
+            "traversal preset_id must not write any preset file"
+        );
+    }
+
+    /// #114：preset_json 非 TavernPreset 形状 → BadRequest，不写盘。
+    #[tokio::test]
+    async fn import_preset_rejects_invalid_preset_json() {
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+
+        let body = serde_json::json!({
+            "preset_id": "bad",
+            "preset_json": "not json at all"
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/presets/import")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(!state.data_root.join("presets").join("bad").exists());
     }
 }

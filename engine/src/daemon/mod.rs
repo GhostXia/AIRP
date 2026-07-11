@@ -35,7 +35,7 @@ use handlers::{
     create_session_endpoint, delete_character_endpoint, get_character_avatar, get_character_card,
     get_character_lorebook, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_persona_endpoint, get_preset_endpoint,
-    get_scene_endpoint, get_settings, import_character, list_agent_tools, list_characters,
+    get_scene_endpoint, get_settings, import_character, import_preset_endpoint, list_agent_tools, list_characters,
     list_models, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
     reextract_character_assets, regen_chat, rollback_chat, update_character_card,
     update_character_lorebook, update_persona_endpoint, update_settings,
@@ -257,6 +257,10 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/v1/models", get(list_models))
         .route("/v1/presets", get(list_presets_endpoint))
         .route("/v1/presets/:preset_id", get(get_preset_endpoint))
+        .route(
+            "/v1/presets/import",
+            post(import_preset_endpoint).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
         .route(
             "/v1/users/:user_id/persona",
             get(get_persona_endpoint).put(update_persona_endpoint),
