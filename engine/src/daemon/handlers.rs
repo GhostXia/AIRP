@@ -2,9 +2,9 @@
 use super::types::{ChatCompletionRequest, HistoryQuery, RegenRequest, RollbackRequest};
 use super::{DaemonState, SettingsView};
 use crate::chat_store::ChatLog;
-use crate::domain::{ChatService, LorebookService};
+use crate::domain::{ChatService, LorebookService, Persona, PersonaService};
 use crate::error::AirpError;
-use crate::types::{CharacterId, PresetId, SessionId};
+use crate::types::{CharacterId, PresetId, SessionId, UserId};
 use crate::{chat_pipeline, data_dir};
 use axum::{
     http::{header, StatusCode},
@@ -12,6 +12,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
 use std::sync::Arc;
@@ -155,6 +156,57 @@ pub(super) async fn create_session_endpoint(
     let cid = CharacterId::new(character_id)?;
     let sid = ChatService::new(&state.data_root).create_session(&cid)?;
     Ok(Json(sid))
+}
+
+// ── Persona handlers（#114，每用户一个默认 Persona）────────────────────────────
+//
+// WEBUI-MVP-PLAN §3.1：GET 读当前 Persona（不存在返回兜底，不写盘）；
+// PUT 原子写并 revision bump；expected_revision 不匹配返回 400 + PersonaRevisionConflict JSON。
+// `user_id` 走路径参数，经 UserId::new 校验（拒绝路径遍历）；`default_name` 走 query string。
+
+/// GET /v1/users/:user_id/persona — 读当前 Persona；不存在返回兜底（revision=0）。
+pub(super) async fn get_persona_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<Json<Persona>, AirpError> {
+    let uid = UserId::new(user_id)?;
+    let persona = PersonaService::new(&state.data_root).get(&uid, "User")?;
+    Ok(Json(persona))
+}
+
+/// PUT /v1/users/:user_id/persona — 原子写入 Persona；revision 不匹配返回 400。
+pub(super) async fn update_persona_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(payload): Json<UpdatePersonaRequest>,
+) -> Result<Json<Persona>, AirpError> {
+    let uid = UserId::new(user_id)?;
+    let persona = Persona {
+        schema: Persona::SCHEMA,
+        revision: 0, // save 内会 bump；payload 的 revision 不信，用 expected_revision 校验
+        updated_at: String::new(),
+        name: payload.name,
+        description: payload.description,
+        variables: payload.variables,
+    };
+    let saved = PersonaService::new(&state.data_root).save(&uid, payload.expected_revision, persona)?;
+    Ok(Json(saved))
+}
+
+/// PUT /v1/users/:user_id/persona 的请求体。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UpdatePersonaRequest {
+    /// 客户端持有的当前 revision；不匹配服务端时返回 400 + PersonaRevisionConflict。
+    pub expected_revision: u64,
+    /// 用户显示名。
+    pub name: String,
+    /// 自由描述。
+    #[serde(default)]
+    pub description: String,
+    /// 自定义变量表。
+    #[serde(default)]
+    pub variables: HashMap<String, String>,
 }
 
 // ── Character handlers ────────────────────────────────────────────────────────

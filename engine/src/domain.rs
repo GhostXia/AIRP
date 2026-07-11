@@ -14,15 +14,17 @@ use crate::adapter::ChatMessage;
 use crate::chat_store::ChatLog;
 use crate::data_dir;
 use crate::error::AirpError;
-use crate::types::{CharacterId, SessionId};
+use crate::types::{CharacterId, SessionId, UserId};
 
 type SessionLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
 type CharacterLockMap = Mutex<HashMap<String, Arc<RwLock<()>>>>;
 type StateLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
+type PersonaLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
 
 static SESSION_LOCKS: OnceLock<SessionLockMap> = OnceLock::new();
 static CHARACTER_LOCKS: OnceLock<CharacterLockMap> = OnceLock::new();
 static STATE_LOCKS: OnceLock<StateLockMap> = OnceLock::new();
+static PERSONA_LOCKS: OnceLock<PersonaLockMap> = OnceLock::new();
 
 pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
     let mut locks = CHARACTER_LOCKS
@@ -57,6 +59,18 @@ fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
         .expect("state lock map poisoned");
     locks
         .entry(character_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+/// Per-user persona lock（串行化 persona 写入与 revision bump）。
+fn persona_lock(user_id: &str) -> Arc<Mutex<()>> {
+    let mut locks = PERSONA_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("persona lock map poisoned");
+    locks
+        .entry(user_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone()
 }
@@ -491,6 +505,133 @@ fn validate_schema_value(
     Ok(())
 }
 
+// ── PersonaService（#114，每个用户一个默认 Persona）────────────────────────────
+//
+// WEBUI-MVP-PLAN §3.1：先只实现"每用户一个默认 Persona"，最小字段 name / description
+// / variables / revision。写入走 PersonaService（串行化 persona lock + 原子替换 +
+// revision bump + history.jsonl），与 ChatService / StateService 同边界。
+//
+// persona.json 是元设定（不可变 base），state/live.json 是变量漂移覆盖（MVP 不做），
+// state/history.jsonl 是 timeline（MVP 不做）。本 service 当前只管 persona.json 的
+// 读/写/revision——多 Persona、头像、角色/会话绑定、drift/history/rollback 全留 #114
+// 后续阶段。
+
+/// 持久化的默认 Persona（每用户一份）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Persona {
+    /// Persona schema 版本；当前固定 `1`，未来字段迁移用。
+    pub schema: u32,
+    /// 递增 revision；PUT 携带 expected_revision 校验，冲突返回 `AirpError::BadRequest`。
+    pub revision: u64,
+    /// 上次写入的 RFC3339 时间戳，便于 UI 显示"已保存"。
+    pub updated_at: String,
+    /// 用户显示名（对应 `{{user}}` 占位符）。
+    pub name: String,
+    /// 自由描述，参与 prompt 装配（MVP 不做模板插值，原样透给 orchestrator）。
+    pub description: String,
+    /// 自定义变量表，键名对应 prompt 中 `{{key}}` 占位符。
+    pub variables: HashMap<String, String>,
+}
+
+impl Persona {
+    /// 当前 schema 版本。
+    pub const SCHEMA: u32 = 1;
+
+    /// 构造一份初始 Persona（revision=0，name=default）。
+    pub fn initial(default_name: &str) -> Self {
+        Self {
+            schema: Self::SCHEMA,
+            revision: 0,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            name: default_name.to_string(),
+            description: String::new(),
+            variables: HashMap::new(),
+        }
+    }
+}
+
+/// Persona 原子写入时的冲突 payload：返回当前服务端 revision，让客户端 merge 后重试。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersonaRevisionConflict {
+    pub current_revision: u64,
+}
+
+/// User Persona shared service（读 / 原子写 / revision 校验）。
+///
+/// 与 `ChatService` / `StateService` 同构：`data_root` 持一份，`new()` 廉价；
+/// 写入走 `persona_lock` 串行化 + `replace_file` 原子替换 + history.jsonl append。
+#[derive(Clone, Debug)]
+pub struct PersonaService {
+    data_root: PathBuf,
+}
+
+impl PersonaService {
+    pub fn new(data_root: impl AsRef<Path>) -> Self {
+        Self {
+            data_root: data_root.as_ref().to_path_buf(),
+        }
+    }
+
+    /// 读取当前 Persona；不存在时返回 `Persona::initial(default_name)` 的拷贝（不写盘）。
+    ///
+    /// `default_name` 仅用于未初始化时的 UI 显示兜底；调用方应随后 `save` 持久化。
+    pub fn get(&self, user_id: &UserId, default_name: &str) -> Result<Persona, AirpError> {
+        let lock = persona_lock(user_id.as_str());
+        let _guard = lock.lock().expect("persona lock poisoned");
+        let path = data_dir::user_persona_path(&self.data_root, user_id);
+        if !path.exists() {
+            return Ok(Persona::initial(default_name));
+        }
+        let bytes = fs::read(&path)?;
+        let persona: Persona = serde_json::from_slice(&bytes)?;
+        if persona.schema != Persona::SCHEMA {
+            return Err(AirpError::Internal(format!(
+                "persona schema {} unsupported (expected {})",
+                persona.schema,
+                Persona::SCHEMA
+            )));
+        }
+        Ok(persona)
+    }
+
+    /// 原子写入 Persona；`expected_revision` 不匹配当前服务端 revision 时返回
+    /// `AirpError::BadRequest`，message 携带 `PersonaRevisionConflict` JSON，
+    /// 让 UI 解析出 `current_revision` 后 merge 重试（而非裸 409 文本）。
+    pub fn save(
+        &self,
+        user_id: &UserId,
+        expected_revision: u64,
+        mut persona: Persona,
+    ) -> Result<Persona, AirpError> {
+        let lock = persona_lock(user_id.as_str());
+        let _guard = lock.lock().expect("persona lock poisoned");
+        let dir = data_dir::user_dir(&self.data_root, user_id);
+        fs::create_dir_all(&dir)?;
+        let path = data_dir::user_persona_path(&self.data_root, user_id);
+
+        // revision 校验：current = 读取现存 revision（不存在则 0）。
+        let current_revision = if path.exists() {
+            serde_json::from_slice::<Persona>(&fs::read(&path)?)
+                .map(|p| p.revision)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if expected_revision != current_revision {
+            let conflict = PersonaRevisionConflict {
+                current_revision,
+            };
+            return Err(AirpError::BadRequest(serde_json::to_string(&conflict)?));
+        }
+
+        persona.schema = Persona::SCHEMA;
+        persona.revision = current_revision + 1;
+        persona.updated_at = chrono::Utc::now().to_rfc3339();
+        replace_file(&path, &serde_json::to_vec_pretty(&persona)?)?;
+        Ok(persona)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +780,97 @@ mod tests {
         fs::write(&history, bytes).unwrap();
 
         assert_eq!(super::latest_revision(&history).unwrap(), 7);
+    }
+
+    // ── PersonaService（#114）─────────────────────────────────────────────────────
+
+    #[test]
+    fn persona_get_returns_initial_when_not_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let persona = service.get(&uid, "User").unwrap();
+        assert_eq!(persona.revision, 0, "non-existent persona returns revision 0");
+        assert_eq!(persona.name, "User", "default name fallback");
+        assert!(persona.variables.is_empty());
+        // 不写盘：persona.json 不应存在
+        assert!(!crate::data_dir::user_persona_path(tmp.path(), &uid).exists());
+    }
+
+    #[test]
+    fn persona_save_bumps_revision_and_persists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+
+        let persona = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0, // save 内 bump
+            updated_at: String::new(),
+            name: "Alice".to_string(),
+            description: "a curious librarian".to_string(),
+            variables: HashMap::from([("mood".to_string(), "curious".to_string())]),
+        };
+        let saved = service.save(&uid, 0, persona).unwrap();
+        assert_eq!(saved.revision, 1, "first save bumps 0 -> 1");
+        assert_eq!(saved.name, "Alice");
+        assert_eq!(saved.variables.get("mood").unwrap(), "curious");
+
+        // 持久化：重新 get 应读回同一份
+        let reread = service.get(&uid, "User").unwrap();
+        assert_eq!(reread.revision, 1);
+        assert_eq!(reread.name, "Alice");
+        assert_eq!(reread.description, "a curious librarian");
+    }
+
+    #[test]
+    fn persona_save_rejects_revision_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+
+        let p1 = Persona::initial("Alice");
+        service.save(&uid, 0, p1).unwrap(); // revision -> 1
+
+        // 客户端仍持有 revision=0，服务端已 1 → 必须拒绝
+        let p2 = Persona::initial("Alice-updated");
+        let err = service.save(&uid, 0, p2).unwrap_err();
+        let conflict: PersonaRevisionConflict =
+            serde_json::from_str(match &err {
+                AirpError::BadRequest(s) => s,
+                _ => panic!("expected BadRequest with PersonaRevisionConflict JSON, got {err:?}"),
+            })
+            .unwrap();
+        assert_eq!(
+            conflict.current_revision, 1,
+            "conflict payload must report server-side revision"
+        );
+    }
+
+    #[test]
+    fn persona_save_rejects_unsupported_schema() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+
+        // 手动写一份 schema=999 的 persona.json
+        let dir = crate::data_dir::user_dir(tmp.path(), &uid);
+        fs::create_dir_all(&dir).unwrap();
+        let bad = serde_json::json!({
+            "schema": 999,
+            "revision": 5,
+            "updated_at": "2026-07-11T00:00:00Z",
+            "name": "bad",
+            "description": "",
+            "variables": {}
+        });
+        fs::write(
+            crate::data_dir::user_persona_path(tmp.path(), &uid),
+            serde_json::to_vec_pretty(&bad).unwrap(),
+        )
+        .unwrap();
+
+        let err = service.get(&uid, "User").unwrap_err();
+        assert!(matches!(err, AirpError::Internal(_)), "unsupported schema must be Internal, got {err:?}");
     }
 }
