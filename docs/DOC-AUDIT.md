@@ -40,3 +40,7 @@
 4. 历史 audit/plan 不删除，但在文件顶部标注其历史状态或由本文明确分类；
 5. 新 PR 若改变当前能力，应至少同步 README 或本文/DEV-GUIDE 中的对应入口；
 6. 不把 issue 的建议措辞升级为架构不变式；不把 helper、schema 或 UI mock 当作用户价值闭环。
+
+## 当前近期计划入口（2026-07-11）
+
+[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 是当前唯一近期实施顺序，以“最快形成基本可用 WebUI”为目标。它覆盖 `DEV-GUIDE.md` 中旧的下一步清单和 `PLAN.md` 此前的近期排序，但不覆盖长期产品原则。完成该里程碑后必须基于真实 browser smoke 与开放 issue 重新排序，不能自动延续其中的临时裁剪。

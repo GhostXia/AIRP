@@ -1,25 +1,25 @@
 # AIRP 开发文档（交接给实现 Agent）
 
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
-> **配套文档（按顺序）**：[PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)（当前事实、风险、issue 排序）· [PLAN.md](PLAN.md)（长期原则）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
+> **配套文档（按顺序）**：[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)（当前近期执行计划）· [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)（当前事实与风险基线）· [PLAN.md](PLAN.md)（长期原则）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
-> 最后更新：2026-07-10
+> 最后更新：2026-07-11
 
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
-1. 先把自动 PR gate、`cargo fmt --all -- --check`、workspace Clippy、Windows artifact smoke 做成可信基线；
-2. 抽统一 Chat/State domain services，解决 HTTP 与 Agent tools 的锁、原子写、schema validation 和错误语义漂移；
-3. 完成 secret storage、默认鉴权/CORS 和 Tauri sidecar 生命周期；
-4. 再实现 provider 原生结构化 tool-call loop，让 observation 真正参与下一步决策并走 finalizer；
-5. 最后才扩充世界书高级语义、persona/记忆、MCP/skills/plugin 与 Agent-first workbench。
+1. 阅读 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)，不要继续按旧 Phase 横向加功能；
+2. PR A 做完整纵向闭环：credential redirect policy、单默认 Persona、Preset 最小导入/选择、session delete/隔离、WebUI 接线和测试；
+3. PR B 启动真实 engine + 本地 mock provider + WebUI，跑连接到三轮 RP、刷新恢复、regen/rollback、删除会话的浏览器 smoke；
+4. 只修 smoke 暴露的阻塞 bug并同步文档；非阻塞项合并后写 issue；
+5. MVP 完成前不做 Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、Tauri 重构、MCP/skills/plugin 或世界书高级语义。
 
-本顺序来自 2026-07-10 全项目独立审计。下文 2026-07-01 至 2026-07-04 的 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
+本顺序来自 2026-07-11 对当前源码与全部开放 issue 的复核。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
 
 ---
 
 ## 0. 一句话与铁律（先读，任何时候不许破）
 
-**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（长期产品 UI = Tauri/Vue 桌面端；WebUI = 临时后端可靠性验证面），专精 RP。
+**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（长期产品 UI = Tauri/Vue 桌面端；WebUI = 当前轻量浏览器 RP 客户端兼可靠性验证面），专精 RP。
 
 **代码取向（用户 2026-07-03 定）**：代码必须更开放、更透明、在未来更易修正、且更易迭代更新。落地判据：接口和扩展点清晰开放；状态、决策、错误和验收结果可观察；模块边界低耦合、可替换；协议/数据结构版本化，允许小步迁移而不是一次性重写。
 
@@ -137,7 +137,7 @@ D:\AIRP-Dev/
 
 - 无头网络服务：Core daemon 已有（axum + `/v1/*` + 鉴权 `AIRP_ACCESS_KEY` + 限流 10req/s）。**web 就绪的关键：引擎是独立 service，不嵌 Tauri**（Tauri 把引擎当 sidecar 打包）。
 - **UI↔引擎线协议**：倾向**复用 State-Protocol Envelope**（`protocol` 已有 Rust/TS 绑定，UI 已配套）。引擎实现 AgentBus 面：上行 `POST /airp/dispatch`(Envelope) + 下行 `GET /airp/stream`(SSE)，或 Tauri IPC。**注意：intent `chat.send` 要路由到引擎的推理 loop（生成），不是路由到某个 MCP 数据工具**——这是原 agentbus demo 的缺口，必须重定。
-- **WebUI 临时定位（2026-07-04）**：WebUI 只用来快速验证 engine 的 API/SSE/鉴权/数据读写/并发/错误恢复。它是后端可靠性 harness，不替代桌面 UI 产品路线；成熟能力再接回 Tauri UI。
+- **WebUI 当前定位（2026-07-11 更新）**：WebUI 是最快形成基础 RP 闭环的轻量浏览器客户端，同时继续验证 engine 的 API/SSE/鉴权/数据读写/并发/错误恢复；它不替代桌面 UI 产品路线，稳定合同仍需回灌 Tauri UI。
 - 安全默认：daemon 仅监听 loopback，CORS 使用 WebUI/Tauri 精确白名单；默认仍无 bearer 鉴权。自定义浏览器来源需配置 `AIRP_CORS_ORIGINS`，任何对外暴露都必须设 `AIRP_ACCESS_KEY` 并遵循 [SECURITY.md](SECURITY.md)。
 
 ### 3.4 数据目录布局（沿用 Core）
@@ -248,7 +248,9 @@ data/
 - **实现状态**：`BusRelay` 已移除 `chat_lock`；chat scope 已改为 `{messages, order}`；每个 `chat.send` 用单个 state patch envelope 同时写入 user row、`order` user id、assistant row、`order` assistant id；流式回填只改自己的 `/messages/{assistant_id}/text`。
 - **已验证**：`cargo test -p airp-ui`、`npm run test -- --run`、`npm run typecheck`、`cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` 通过；审计 follow-up 后前端测试 95 个通过。
 
-### 下一步开发接手清单（2026-07-10）
+### 下一步开发接手清单（2026-07-11 WebUI MVP 覆盖）
+
+本节旧清单已由 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 覆盖。实现 agent 应以其中 PR A/PR B 为唯一近期顺序；以下历史任务只用于理解已有工程背景，不得自行恢复为当前优先级。
 
 1. 先设置 D 盘工具链环境：
    ```powershell
@@ -299,7 +301,7 @@ window.__AIRP_AGENT_TEST__.getSnapshot()
 ### Phase 3+ · 酒馆功能补齐 + 扩展态 + web
 - Author's Note/Character's Note/Instruct Mode/Connection Profiles/群聊调度；slash 命令+脚本+Quick Replies；消息格式化管线。
 - 扩展态（走扩展接口，不进内核）：TTS/STT/图像生成/翻译/Web搜索/立绘/Data Bank-RAG。
-- **web UI**：近期只作为后端可靠性验证 harness；未来若产品需要，再把它升级为正式 Web 客户端。不要让临时 WebUI 反向决定桌面 UI 架构。
+- **web UI**：当前先完成 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 的基础 RP 闭环；保持轻量，不让 WebUI 的临时交互反向决定桌面 UI 架构。
 
 ---
 

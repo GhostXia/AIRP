@@ -1,7 +1,7 @@
-# AIRP Engine Console — WebUI Backend Validation Harness
+# AIRP WebUI — Basic RP Client and Backend Validation Harness
 
-Temporary browser-based harness to validate engine backend reliability.
-**Not a product UI.** See [docs/WEBUI-BACKEND-PLAN.md](../docs/WEBUI-BACKEND-PLAN.md).
+Browser-based lightweight client for basic RP use and engine backend validation.
+It is the fastest current path to a usable browser workflow, but it is not the final polished product UI and does not replace the long-term Tauri/Vue client. Current delivery scope: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
 
 ## Quick Start
 
@@ -49,6 +49,8 @@ they are not the served WebUI implementation.
 
 ## Scope
 
+The current implementation already covers connection, provider settings, character import, sessions, streaming chat/history, regen/rollback, Agent Run and diagnostics. The active MVP plan adds persistent basic User Persona, chat-time Preset selection/import, session deletion/isolation and an automated full browser smoke. Until those land, the fixed `User` profile and missing chat preset selector are known blockers to calling the WebUI fully usable.
+
 **Reachability & config (P0)**
 -  `/version` (health check)
 -  `/v1/settings` read (API key masked)
@@ -80,9 +82,9 @@ they are not the served WebUI implementation.
 
 ## Not in scope (deferred)
 
--  Error path coverage as automated regression suite (M2) — currently manual via diagnostics + event log.
+-  Exhaustive error-path regression beyond the MVP browser smoke; the MVP still covers 401, provider error, SSE interruption and stale-response isolation.
 -  Multipart upload endpoint (M3); this harness currently uses JSON/base64 fallback.
--  Product UI polish, auth management UI, deployment, i18n, or plugin/runtime decisions.
+-  Product UI polish, multi-Persona management, Style Review, ChangeInbox, auth management UI, deployment, i18n, or plugin/runtime decisions.
 -  Tauri desktop UI changes — WebUI never edits `ui/`.
 
 ## Verification Evidence
