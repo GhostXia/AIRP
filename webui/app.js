@@ -1052,6 +1052,10 @@
     if (r.ok) {
       const data = r.data && typeof r.data === 'object' ? r.data : {};
       const msgs = data.messages || r.data || [];
+      // harness 已知限制（WEBUI-AUDIT-v2 A-05）：此处全量 innerHTML='' + 逐条 appendMsg
+      // 违反性能契约 §2.5 约束 #3（patch 优先，禁每轮全量重灌）。WebUI 是临时诊断面，
+      // 单次会话很少超 500 条，可接受。产品 UI（Tauri/Vue）须走虚拟滚动 + 窗口分页，
+      // 不得复用此全量重建路径。
       // #73 方案 B：消息级时间戳（与 messages 一一对应）。旧会话可能无 ts → null。
       const tss = Array.isArray(data.message_timestamps) ? data.message_timestamps : [];
       // A-3：长度不匹配是 engine bug，显式 warn 暴露而非静默降级
