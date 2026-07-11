@@ -52,6 +52,17 @@ fn session_lock(character_id: &str, session_id: Option<&SessionId>) -> Arc<Mutex
         .clone()
 }
 
+fn remove_deleted_session_lock(character_id: &str, session_id: &SessionId) {
+    let Some(lock_map) = SESSION_LOCKS.get() else {
+        return;
+    };
+    let key = format!("{character_id}/{session_id}");
+    let mut locks = lock_map.lock().expect("session lock map poisoned");
+    // The tombstone is durable before this runs, so every waiter or future
+    // caller will fail closed even if it holds/creates a different lock Arc.
+    locks.remove(&key);
+}
+
 fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
     let mut locks = STATE_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -97,18 +108,11 @@ impl ChatService {
         let _character_guard = character.read().expect("character lock poisoned");
         let session = session_lock(character_id.as_str(), session_id);
         let _session_guard = session.lock().expect("session lock poisoned");
-        // #35/#37：命名会话被删除后，append/history/regen/rollback 必须返回 NotFound，
-        // 不能静默复活目录（load_or_create_for_session → resolve_session_dir 会 create_dir_all）。
-        // 默认会话（None）保留"按需创建"语义（单会话向后兼容）。
-        // ⚠️ 不走 resolve_session_dir（内含 create_dir_all 会复活），直接判 sessions/{sid} 目录存在性。
+        // A never-seen named ID retains the legacy lazy-create behavior. Only
+        // an explicitly deleted ID is rejected, using a tombstone so it cannot
+        // be silently revived by load_or_create_for_session.
         if let Some(sid) = session_id {
-            let sessions_root = crate::data_dir::character_dir(
-                &self.data_root,
-                character_id.as_str(),
-            )?
-            .join("sessions")
-            .join(sid.to_string());
-            if !sessions_root.exists() {
+            if data_dir::session_was_deleted(&self.data_root, character_id.as_str(), sid) {
                 return Err(AirpError::NotFound(format!(
                     "session {sid} for character {character_id} not found"
                 )));
@@ -252,9 +256,13 @@ impl ChatService {
         character_id: &CharacterId,
         session_id: &SessionId,
     ) -> Result<(), AirpError> {
-        self.with_session(character_id, Some(session_id), || {
+        let result = self.with_session(character_id, Some(session_id), || {
             data_dir::delete_session(&self.data_root, character_id.as_str(), session_id)
-        })
+        });
+        if result.is_ok() {
+            remove_deleted_session_lock(character_id.as_str(), session_id);
+        }
+        result
     }
 }
 
@@ -649,9 +657,7 @@ impl PersonaService {
             0
         };
         if expected_revision != current_revision {
-            let conflict = PersonaRevisionConflict {
-                current_revision,
-            };
+            let conflict = PersonaRevisionConflict { current_revision };
             return Err(AirpError::BadRequest(serde_json::to_string(&conflict)?));
         }
 
@@ -821,7 +827,10 @@ mod tests {
         let service = PersonaService::new(tmp.path());
         let uid = UserId::new("alice").unwrap();
         let persona = service.get(&uid, "User").unwrap();
-        assert_eq!(persona.revision, 0, "non-existent persona returns revision 0");
+        assert_eq!(
+            persona.revision, 0,
+            "non-existent persona returns revision 0"
+        );
         assert_eq!(persona.name, "User", "default name fallback");
         assert!(persona.variables.is_empty());
         // 不写盘：persona.json 不应存在
@@ -866,12 +875,11 @@ mod tests {
         // 客户端仍持有 revision=0，服务端已 1 → 必须拒绝
         let p2 = Persona::initial("Alice-updated");
         let err = service.save(&uid, 0, p2).unwrap_err();
-        let conflict: PersonaRevisionConflict =
-            serde_json::from_str(match &err {
-                AirpError::BadRequest(s) => s,
-                _ => panic!("expected BadRequest with PersonaRevisionConflict JSON, got {err:?}"),
-            })
-            .unwrap();
+        let conflict: PersonaRevisionConflict = serde_json::from_str(match &err {
+            AirpError::BadRequest(s) => s,
+            _ => panic!("expected BadRequest with PersonaRevisionConflict JSON, got {err:?}"),
+        })
+        .unwrap();
         assert_eq!(
             conflict.current_revision, 1,
             "conflict payload must report server-side revision"
@@ -902,7 +910,10 @@ mod tests {
         .unwrap();
 
         let err = service.get(&uid, "User").unwrap_err();
-        assert!(matches!(err, AirpError::Internal(_)), "unsupported schema must be Internal, got {err:?}");
+        assert!(
+            matches!(err, AirpError::Internal(_)),
+            "unsupported schema must be Internal, got {err:?}"
+        );
     }
 
     // ── delete_session + session-scoped lifecycle（#35/#37）──────────────────────
@@ -931,10 +942,16 @@ mod tests {
             .join("alice")
             .join("sessions")
             .join(sid.to_string());
-        assert!(sessions_dir.is_dir(), "session dir must exist before delete");
+        assert!(
+            sessions_dir.is_dir(),
+            "session dir must exist before delete"
+        );
 
         service.delete_session(&character, &sid).unwrap();
-        assert!(!sessions_dir.exists(), "session dir must be gone after delete");
+        assert!(
+            !sessions_dir.exists(),
+            "session dir must be gone after delete"
+        );
         let listed = service.list_sessions(&character).unwrap();
         assert!(
             !listed.contains(&sid),
@@ -966,99 +983,159 @@ mod tests {
 
         // default session：2 条
         service
-            .append(&character, None, ChatMessage { role: MessageRole::User, content: "default-1".to_string() })
+            .append(
+                &character,
+                None,
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "default-1".to_string(),
+                },
+            )
             .unwrap();
         service
-            .append(&character, None, ChatMessage { role: MessageRole::User, content: "default-2".to_string() })
+            .append(
+                &character,
+                None,
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "default-2".to_string(),
+                },
+            )
             .unwrap();
 
         // named session A：3 条
         let sid_a = service.create_session(&character).unwrap();
         for content in ["a-1", "a-2", "a-3"] {
             service
-                .append(&character, Some(&sid_a), ChatMessage { role: MessageRole::User, content: content.to_string() })
+                .append(
+                    &character,
+                    Some(&sid_a),
+                    ChatMessage {
+                        role: MessageRole::User,
+                        content: content.to_string(),
+                    },
+                )
                 .unwrap();
         }
 
         // 隔离断言：default history 不含 named 的消息
         let default_log = service.history(&character, None).unwrap();
-        assert_eq!(default_log.messages.len(), 2, "default session must keep its own 2 messages");
+        assert_eq!(
+            default_log.messages.len(),
+            2,
+            "default session must keep its own 2 messages"
+        );
         assert!(
-            default_log.messages.iter().all(|m| m.content.starts_with("default-")),
+            default_log
+                .messages
+                .iter()
+                .all(|m| m.content.starts_with("default-")),
             "default session must not leak named session messages"
         );
 
         let named_log = service.history(&character, Some(&sid_a)).unwrap();
-        assert_eq!(named_log.messages.len(), 3, "named session A must keep its own 3 messages");
+        assert_eq!(
+            named_log.messages.len(),
+            3,
+            "named session A must keep its own 3 messages"
+        );
         assert!(
-            named_log.messages.iter().all(|m| m.content.starts_with("a-")),
+            named_log
+                .messages
+                .iter()
+                .all(|m| m.content.starts_with("a-")),
             "named session A must not leak default session messages"
         );
 
         // delete named A → default 不受影响
         service.delete_session(&character, &sid_a).unwrap();
         let default_log_after = service.history(&character, None).unwrap();
-        assert_eq!(default_log_after.messages.len(), 2, "default session must survive named session delete");
+        assert_eq!(
+            default_log_after.messages.len(),
+            2,
+            "default session must survive named session delete"
+        );
         assert!(
             !service.list_sessions(&character).unwrap().contains(&sid_a),
             "deleted named session A must not appear in list_sessions"
         );
     }
 
-    /// #35：delete_session 与并发 append 同边界串行化——append 持 session lock，
-    /// delete 持同一 session lock，二者不能同时改写目录。本测试用 barrier 让 8 个
-    /// worker 同时 append 到命名会话，再 delete；delete 完成后 history 应 0 条
-    /// （目录已删）。若 lock 失效，delete 会在 append 半态删目录，后续 append 报错
-    /// 或 history 残留脏文件。
+    /// #35：delete_session 与 append 同时起跑。共享 session lock 必须保证每个 append
+    /// 要么完整落盘，要么在 delete 的 tombstone 后返回 NotFound，不能半写或复活目录。
     #[test]
     fn delete_session_serializes_with_concurrent_appends() {
         let tmp = tempfile::tempdir().unwrap();
         let service = Arc::new(ChatService::new(tmp.path()));
         let character = CharacterId::new("concurrent").unwrap();
         let sid = service.create_session(&character).unwrap();
-        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let barrier = Arc::new(std::sync::Barrier::new(9));
         let mut workers = Vec::new();
 
         for index in 0..8 {
             let service = service.clone();
             let character = character.clone();
-            let sid = sid.clone();
             let barrier = barrier.clone();
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
-                service
-                    .append(
-                        &character,
-                        Some(&sid),
-                        ChatMessage {
-                            role: MessageRole::User,
-                            content: format!("message-{index}"),
-                        },
-                    )
-                    .unwrap();
+                service.append(
+                    &character,
+                    Some(&sid),
+                    ChatMessage {
+                        role: MessageRole::User,
+                        content: format!("message-{index}"),
+                    },
+                )
             }));
         }
+        let delete_service = service.clone();
+        let delete_character = character.clone();
+        let delete_barrier = barrier.clone();
+        let delete_worker = std::thread::spawn(move || {
+            delete_barrier.wait();
+            delete_service.delete_session(&delete_character, &sid)
+        });
         for worker in workers {
-            worker.join().unwrap();
+            let result = worker.join().unwrap();
+            assert!(
+                result.is_ok() || matches!(result, Err(AirpError::NotFound(_))),
+                "append racing delete must either commit or return NotFound, got {result:?}"
+            );
         }
-        assert_eq!(
-            service.history(&character, Some(&sid)).unwrap().messages.len(),
-            8,
-            "all 8 concurrent appends must land before delete"
-        );
-
-        service.delete_session(&character, &sid).unwrap();
+        delete_worker.join().unwrap().unwrap();
         assert!(
             !service.list_sessions(&character).unwrap().contains(&sid),
             "deleted concurrent session must not appear in list_sessions"
         );
         // delete 后再 append 到同一命名会话 → NotFound（目录被删，load_or_create 不复活命名会话）
         let err = service
-            .append(&character, Some(&sid), ChatMessage { role: MessageRole::User, content: "post-delete".to_string() })
+            .append(
+                &character,
+                Some(&sid),
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "post-delete".to_string(),
+                },
+            )
             .unwrap_err();
         assert!(
             matches!(err, AirpError::NotFound(_)),
             "append to deleted named session must be NotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn deleting_unknown_session_does_not_create_character() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("missing-character").unwrap();
+        let sid = SessionId::new();
+
+        let err = service.delete_session(&character, &sid).unwrap_err();
+        assert!(matches!(err, AirpError::NotFound(_)));
+        assert!(
+            !tmp.path().join("characters/missing-character").exists(),
+            "a failed delete must not create an empty character"
         );
     }
 }

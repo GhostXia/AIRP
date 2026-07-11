@@ -33,13 +33,13 @@ use decompose_handlers::{
 use handlers::{
     add_scene_character_endpoint, agent_run, chat_completion, create_scene_endpoint,
     create_session_endpoint, delete_character_endpoint, delete_session_endpoint,
-    get_character_avatar, get_character_card,
-    get_character_lorebook, get_character_state, get_character_state_history,
-    get_character_state_schema, get_chat_history, get_persona_endpoint, get_preset_endpoint,
-    get_scene_endpoint, get_settings, import_character, import_preset_endpoint, list_agent_tools, list_characters,
-    list_models, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
-    reextract_character_assets, regen_chat, rollback_chat, update_character_card,
-    update_character_lorebook, update_persona_endpoint, update_settings,
+    get_character_avatar, get_character_card, get_character_lorebook, get_character_state,
+    get_character_state_history, get_character_state_schema, get_chat_history,
+    get_persona_endpoint, get_preset_endpoint, get_scene_endpoint, get_settings, import_character,
+    import_preset_endpoint, list_agent_tools, list_characters, list_models, list_presets_endpoint,
+    list_scenes_endpoint, list_sessions_endpoint, reextract_character_assets, regen_chat,
+    rollback_chat, update_character_card, update_character_lorebook, update_persona_endpoint,
+    update_settings,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。

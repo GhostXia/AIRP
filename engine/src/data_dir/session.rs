@@ -92,6 +92,28 @@ pub fn create_session(
     Ok(sid)
 }
 
+fn deleted_session_marker(
+    root: &Path,
+    character_id: &str,
+    session_id: &crate::types::SessionId,
+) -> PathBuf {
+    root.join("characters")
+        .join(character_id)
+        .join("deleted_sessions")
+        .join(session_id.to_string())
+}
+
+/// Distinguish a deleted named session from a never-seen ID. Legacy clients may
+/// address a fresh valid ID directly and rely on lazy creation; a tombstone is
+/// therefore required to prevent only explicitly deleted sessions from reviving.
+pub fn session_was_deleted(
+    root: &Path,
+    character_id: &str,
+    session_id: &crate::types::SessionId,
+) -> bool {
+    deleted_session_marker(root, character_id, session_id).is_file()
+}
+
 /// #35：删除一个命名会话目录（`characters/{id}/sessions/{sid}/`）。
 ///
 /// 会话不存在 → `NotFound`。destructive：调用方负责确认。删除的是整个会话目录
@@ -101,7 +123,10 @@ pub fn delete_session(
     character_id: &str,
     session_id: &crate::types::SessionId,
 ) -> Result<(), AirpError> {
-    let dir = super::paths::character_dir(root, character_id)?
+    super::security::validate_id_segment(character_id)?;
+    let dir = root
+        .join("characters")
+        .join(character_id)
         .join("sessions")
         .join(session_id.to_string());
     if !dir.is_dir() {
@@ -109,5 +134,12 @@ pub fn delete_session(
             "session {session_id} for character {character_id} not found"
         )));
     }
-    fs::remove_dir_all(&dir).map_err(AirpError::from)
+    fs::remove_dir_all(&dir)?;
+    let marker = deleted_session_marker(root, character_id, session_id);
+    let marker_parent = marker
+        .parent()
+        .ok_or_else(|| AirpError::Internal("deleted session marker has no parent".to_string()))?;
+    fs::create_dir_all(marker_parent)?;
+    fs::write(marker, [])?;
+    Ok(())
 }

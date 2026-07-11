@@ -205,7 +205,8 @@ pub(super) async fn update_persona_endpoint(
         description: payload.description,
         variables: payload.variables,
     };
-    let saved = PersonaService::new(&state.data_root).save(&uid, payload.expected_revision, persona)?;
+    let saved =
+        PersonaService::new(&state.data_root).save(&uid, payload.expected_revision, persona)?;
     Ok(Json(saved))
 }
 
@@ -283,8 +284,10 @@ pub(super) async fn import_preset_endpoint(
     // 校验 JSON 形状：必须是 TavernPreset（顶层 prompts[] + 模型参数）。
     // 反序列化失败 → BadRequest，不落盘，避免脏文件残留。
     let cleaned = data_dir::strip_utf8_bom(&req.preset_json).to_owned();
-    let parsed: crate::orchestrator::TavernPreset = serde_json::from_str(&cleaned)
-        .map_err(|e| AirpError::BadRequest(format!("preset_json 不是有效 TavernPreset JSON: {}", e)))?;
+    let parsed: crate::orchestrator::TavernPreset =
+        serde_json::from_str(&cleaned).map_err(|e| {
+            AirpError::BadRequest(format!("preset_json 不是有效 TavernPreset JSON: {}", e))
+        })?;
     // 再序列化为规范 pretty JSON 写盘（保留 raw sidecar，原样不解释 prompt）。
     let bytes = serde_json::to_vec_pretty(&parsed)
         .map_err(|e| AirpError::Internal(format!("preset 序列化失败: {}", e)))?;
@@ -1910,14 +1913,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["preset_id"], "myrp");
         assert_eq!(v["prompts_count"], 1);
 
         // 写盘：presets/myrp/preset.json 存在且可回解析
         let written = std::fs::read_to_string(
-            state.data_root.join("presets").join("myrp").join("preset.json"),
+            state
+                .data_root
+                .join("presets")
+                .join("myrp")
+                .join("preset.json"),
         )
         .unwrap();
         let back: crate::orchestrator::TavernPreset = serde_json::from_str(&written).unwrap();

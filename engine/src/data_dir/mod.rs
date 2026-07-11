@@ -46,7 +46,10 @@ pub(crate) use paths::{
     ensure_context_bundle_dir, preset_json_path,
 };
 pub use security::{safe_resolve_for_write, safe_resolve_under_data_root, validate_id_segment};
-pub use session::{create_session, delete_session, list_sessions, resolve_session_dir, session_dir};
+pub use session::{
+    create_session, delete_session, list_sessions, resolve_session_dir, session_dir,
+    session_was_deleted,
+};
 pub(crate) use utils::strip_utf8_bom;
 
 #[cfg(test)]

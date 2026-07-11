@@ -471,8 +471,7 @@ async fn decide_action(
         .send()
         .await?;
     // #117 A：redirect 拒截先于 success/4xx/5xx 分流，typed 升级避免凭据泄露旁路。
-    let response = if let Some(classified) =
-        crate::outbound::classify_redirect_response(&response)
+    let response = if let Some(classified) = crate::outbound::classify_redirect_response(&response)
     {
         return Err(classified);
     } else {
