@@ -27,12 +27,7 @@
 //! 目标，断言：不跟随（拿到 302 本身）、目标 server 0 次收到 Authorization、
 //! classify_redirect_response 升级为 `AirpError::Upstream(302)`。
 
-use std::time::Duration;
-
 use crate::error::AirpError;
-
-/// 默认 outbound 请求超时（秒）。覆盖 chat / agent / models proxy。
-pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 /// 构造一份 credential-safe 的 outbound [`reqwest::Client`]。
 ///
@@ -40,14 +35,14 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
 ///
 /// - `redirect::Policy::none()`：不跟随任何 redirect，杜绝 cross-origin / downgrade
 ///   时携带 Authorization / x-api-key / 自定义 secret header；
-/// - 单一 timeout（覆盖 connect / read / write），与 adapter 现有 timeout 对齐；
+/// - 不设置全请求 timeout，避免把长时间 SSE body 在固定时限后截断；连接到响应头、
+///   planner 和 models probe 继续使用各调用点已有的有界 timeout；
 /// - 不开启 HTTP 2 prior knowledge（provider 多为 HTTPS/1.1，避免误降级）；
 /// - 不设 referer / user-agent 追踪头，避免泄露部署指纹。
 pub fn outbound_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-        .connect_timeout(Duration::from_secs(15))
+        .connect_timeout(std::time::Duration::from_secs(15))
         .build()
         .expect("reqwest outbound client builder config is valid")
 }
