@@ -255,10 +255,16 @@ pub(super) async fn get_preset_endpoint(
     axum::extract::Path(preset_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<crate::orchestrator::TavernPrompt>>, AirpError> {
     let preset_id = PresetId::new(preset_id)?;
-    let preset_path = state
+    let normalized_path = data_dir::preset_json_path(&state.data_root, preset_id.as_str());
+    let legacy_path = state
         .data_root
         .join("presets")
         .join(format!("{}.json", preset_id));
+    let preset_path = if normalized_path.exists() {
+        normalized_path
+    } else {
+        legacy_path
+    };
     if !preset_path.exists() {
         return Err(AirpError::NotFound(format!(
             "Preset {} not found",
@@ -304,7 +310,11 @@ pub(super) async fn import_preset_endpoint(
     let dir = state.data_root.join("presets").join(preset_id.as_str());
     fs::create_dir_all(&dir)?;
     let final_path = dir.join("preset.json");
-    if final_path.exists() {
+    let legacy_path = state
+        .data_root
+        .join("presets")
+        .join(format!("{}.json", preset_id));
+    if final_path.exists() || legacy_path.exists() {
         return Err(AirpError::BadRequest(format!(
             "preset {} already exists; explicit overwrite is not supported",
             preset_id.as_str()
@@ -1918,6 +1928,7 @@ mod tests {
             "preset_json": r#"{"prompts":[{"identifier":"main","name":"Main","prompt":"hi","enabled":true}]}"#
         });
         let resp = app
+            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
@@ -1947,6 +1958,27 @@ mod tests {
         .unwrap();
         let back: crate::orchestrator::TavernPreset = serde_json::from_str(&written).unwrap();
         assert_eq!(back.prompts.unwrap().len(), 1);
+
+        let get = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/presets/myrp")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(get.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let prompts: Vec<crate::orchestrator::TavernPrompt> =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            prompts.len(),
+            1,
+            "an imported preset must be immediately readable"
+        );
     }
 
     #[tokio::test]

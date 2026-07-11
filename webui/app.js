@@ -48,12 +48,27 @@
   const btnRefreshState = $('#btn-refresh-state');
   const characterList = $('#character-list');
   const btnDeleteChar = $('#btn-delete-char');
+  const btnDeleteSession = $('#btn-delete-session');
+  const personaForm = $('#persona-form');
+  const personaUserId = $('#persona-user-id');
+  const personaName = $('#persona-name');
+  const personaDescription = $('#persona-description');
+  const personaVariables = $('#persona-variables');
+  const personaStatus = $('#persona-status');
+  const btnLoadPersona = $('#btn-load-persona');
+  const presetSelect = $('#preset-select');
+  const presetImportFile = $('#preset-import-file');
+  const presetImportId = $('#preset-import-id');
+  const btnImportPreset = $('#btn-import-preset');
+  const presetStatus = $('#preset-status');
 
   // ── state ────────────────────────────────────────────────────────────────
   let base = engineUrl.value.replace(/\/+$/, '');
   let bearer = '';
   let selectedChar = '';
   let selectedSess = '';
+  let personaRevision = 0;
+  let activePersona = { name: 'User', description: '', variables: {} };
   let abortController = null;   // for chat SSE
   let agentAbort = null;        // for agent run SSE — 二次点击先 abort 前一个，防事件交错竞态（issue #43/#44 D）
 
@@ -209,6 +224,8 @@
       refreshModels(),
       refreshChars(),
       refreshAgentTools(),
+      refreshPersona(),
+      refreshPresets(),
     ]);
     // 初次连接后自动加载当前角色的 chat history（PLAN §9 P1 "交互收口"）。
     // refreshChars 内部已设置 selectedChar；此处 await 完成后即可拉 history。
@@ -363,7 +380,7 @@
     if (r.ok) {
       const ids = Array.isArray(r.data) ? r.data : [];
       replaceOptions(charSelect, ids);
-      if (ids.length && !selectedChar) { selectedChar = ids[0]; charSelect.value = ids[0]; }
+      if (ids.length && !ids.includes(selectedChar)) { selectedChar = ids[0]; selectedSess = ''; }
       if (selectedChar && ids.includes(selectedChar)) charSelect.value = selectedChar;
       await renderCharacterCards(ids);
       refreshSessions();
@@ -385,6 +402,127 @@
       select.appendChild(option);
     });
   }
+
+  function rememberWorkspace() {
+    try {
+      localStorage.setItem('airp_user_id', personaUserId.value.trim() || 'default');
+      localStorage.setItem('airp_preset_id', presetSelect.value || '');
+      localStorage.setItem('airp_character_id', selectedChar || '');
+      localStorage.setItem('airp_session_id', selectedSess || '');
+    } catch {}
+  }
+
+  function parsePersonaVariables() {
+    let value;
+    try { value = JSON.parse(personaVariables.value || '{}'); }
+    catch { throw new Error('变量必须是有效 JSON'); }
+    if (!value || Array.isArray(value) || typeof value !== 'object') {
+      throw new Error('变量必须是 JSON object');
+    }
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item !== 'string') throw new Error('变量 ' + key + ' 必须是字符串');
+    }
+    return value;
+  }
+
+  async function refreshPersona() {
+    if (!personaUserId) return;
+    const userId = personaUserId.value.trim() || 'default';
+    personaStatus.textContent = '加载中…';
+    const r = await api('GET', '/v1/users/' + encodeURIComponent(userId) + '/persona');
+    if (!r.ok) {
+      personaStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    const persona = r.data || {};
+    personaRevision = Number(persona.revision) || 0;
+    activePersona = {
+      name: persona.name || 'User',
+      description: persona.description || '',
+      variables: persona.variables && typeof persona.variables === 'object' ? persona.variables : {},
+    };
+    personaName.value = activePersona.name;
+    personaDescription.value = activePersona.description;
+    personaVariables.value = JSON.stringify(activePersona.variables, null, 2);
+    personaStatus.textContent = 'revision ' + personaRevision + (persona.updated_at ? ' · ' + persona.updated_at : '');
+    rememberWorkspace();
+  }
+
+  async function savePersona(event) {
+    event.preventDefault();
+    const userId = personaUserId.value.trim() || 'default';
+    let variables;
+    try { variables = parsePersonaVariables(); }
+    catch (error) { personaStatus.textContent = error.message; return; }
+    personaStatus.textContent = '保存中…';
+    const payload = {
+      expected_revision: personaRevision,
+      name: personaName.value.trim() || 'User',
+      description: personaDescription.value.trim(),
+      variables,
+    };
+    const r = await api('PUT', '/v1/users/' + encodeURIComponent(userId) + '/persona', payload);
+    if (!r.ok) {
+      personaStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    await refreshPersona();
+    personaStatus.textContent = '已保存 · revision ' + personaRevision;
+  }
+
+  async function refreshPresets() {
+    if (!presetSelect) return;
+    const previous = presetSelect.value;
+    const r = await api('GET', '/v1/presets');
+    if (!r.ok) {
+      presetStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    const ids = Array.isArray(r.data) ? r.data.map(String) : [];
+    presetSelect.textContent = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '不使用预设';
+    presetSelect.appendChild(none);
+    ids.forEach(id => {
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = id;
+      presetSelect.appendChild(option);
+    });
+    const stored = (() => { try { return localStorage.getItem('airp_preset_id') || ''; } catch { return ''; } })();
+    presetSelect.value = ids.includes(previous) ? previous : (ids.includes(stored) ? stored : '');
+    presetStatus.textContent = ids.length + ' 个可用预设';
+    rememberWorkspace();
+  }
+
+  async function importPreset() {
+    const file = presetImportFile.files && presetImportFile.files[0];
+    const presetId = presetImportId.value.trim();
+    if (!file || !presetId) {
+      presetStatus.textContent = '请选择 JSON 文件并填写 Preset ID';
+      return;
+    }
+    presetStatus.textContent = '导入中…';
+    let presetJson;
+    try { presetJson = await file.text(); }
+    catch (error) { presetStatus.textContent = '读取失败: ' + error.message; return; }
+    const r = await api('POST', '/v1/presets/import', { preset_id: presetId, preset_json: presetJson });
+    if (!r.ok) {
+      presetStatus.textContent = '导入失败: ' + formatError(r.data, r.text);
+      return;
+    }
+    await refreshPresets();
+    presetSelect.value = presetId;
+    presetImportFile.value = '';
+    rememberWorkspace();
+    presetStatus.textContent = '已导入 ' + presetId + ' · prompts ' + (r.data?.prompts_count ?? 0);
+  }
+
+  if (personaForm) personaForm.addEventListener('submit', savePersona);
+  if (btnLoadPersona) btnLoadPersona.addEventListener('click', refreshPersona);
+  if (presetSelect) presetSelect.addEventListener('change', rememberWorkspace);
+  if (btnImportPreset) btnImportPreset.addEventListener('click', importPreset);
 
   // The V2 character page is a view over the same selected character state as
   // the accessibility-friendly select in the sidebar.  Keeping one source of
@@ -593,11 +731,13 @@
     // 自动加载 history：切角色后立即拉取该角色已有 chat history，
     // 避免用户每次都需手点 History 按钮（PLAN §9 P1 "交互收口"）。
     loadHistory();
+    rememberWorkspace();
   });
   sessSelect.addEventListener('change', () => {
     selectedSess = sessSelect.value;
     clearChatView();
     loadHistory();
+    rememberWorkspace();
   });
 
   btnNewSession.addEventListener('click', async () => {
@@ -609,7 +749,24 @@
       if (newId) selectedSess = newId;
       clearChatView();
       await refreshSessions();
+      rememberWorkspace();
     }
+  });
+
+  if (btnDeleteSession) btnDeleteSession.addEventListener('click', async () => {
+    if (!selectedChar || !selectedSess) return;
+    const doomed = selectedSess;
+    if (!window.confirm('删除当前会话 ' + doomed + '？此操作不可撤销。')) return;
+    const r = await api('DELETE', '/v1/sessions/' + encodeURIComponent(selectedChar) + '/' + encodeURIComponent(doomed));
+    if (!r.ok) {
+      appendMsg('assistant', '[session delete failed] ' + formatError(r.data, r.text), false, new Date());
+      return;
+    }
+    selectedSess = '';
+    clearChatView();
+    await refreshSessions();
+    rememberWorkspace();
+    if (selectedSess) loadHistory();
   });
 
   // ── chat: send & stream ─────────────────────────────────────────────────
@@ -789,7 +946,11 @@
 
   function buildChatPayload(text) {
     return buildSessionPayload({
-      user_profile: { name: 'User', variables: {} },
+      user_profile: {
+        name: activePersona.name || 'User',
+        variables: activePersona.variables || {},
+      },
+      preset_id: presetSelect.value || undefined,
       message: text,
     });
   }
@@ -2030,6 +2191,11 @@
     const savedBearer = sessionStorage.getItem('airp_bearer');
     if (savedUrl) engineUrl.value = savedUrl;
     if (savedBearer) bearerToken.value = savedBearer;
+  } catch {}
+  try {
+    personaUserId.value = localStorage.getItem('airp_user_id') || 'default';
+    selectedChar = localStorage.getItem('airp_character_id') || '';
+    selectedSess = localStorage.getItem('airp_session_id') || '';
   } catch {}
 
   // ── auto-connect on load ─────────────────────────────────────────────────
