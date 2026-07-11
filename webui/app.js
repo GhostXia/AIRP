@@ -1380,7 +1380,8 @@
     let assertion = '';
     if (ok) {
       try {
-        const h = await api('POST', '/v1/chat/history', { character_id: selectedChar });
+        // MVP §3.2：补传 session_id，避免读回该角色所有会话的消息（旁路 session 隔离）。
+        const h = await api('POST', '/v1/chat/history', buildSessionPayload());
         if (h.ok) {
           const data = h.data && typeof h.data === 'object' ? h.data : {};
           const msgs = Array.isArray(data.messages) ? data.messages : [];
