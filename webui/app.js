@@ -23,6 +23,7 @@
   const providerModel = $('#provider-model');
   const providerApiKey = $('#provider-api-key');
   const providerSaveStatus = $('#provider-save-status');
+  const btnSaveProvider = $('#btn-save-provider');
   const charSelect = $('#char-select');
   const sessSelect = $('#sess-select');
   const chatLog = $('#chat-log');
@@ -56,6 +57,7 @@
   const personaVariables = $('#persona-variables');
   const personaStatus = $('#persona-status');
   const btnLoadPersona = $('#btn-load-persona');
+  const btnSavePersona = $('#btn-save-persona');
   const presetSelect = $('#preset-select');
   const presetImportFile = $('#preset-import-file');
   const presetImportId = $('#preset-import-id');
@@ -351,6 +353,7 @@
       return;
     }
     providerSaveStatus.textContent = '应用中…';
+    if (btnSaveProvider) btnSaveProvider.disabled = true;
     const payload = { provider: providerKind.value, endpoint, model };
     const key = providerApiKey.value.trim();
     if (key) payload.api_key = key;
@@ -358,6 +361,7 @@
     providerApiKey.value = '';
     if (!saved.ok) {
       providerSaveStatus.textContent = '保存失败: ' + formatError(saved.data, saved.text);
+      if (btnSaveProvider) btnSaveProvider.disabled = false;
       return;
     }
     const validation = await api('GET', '/v1/models');
@@ -365,6 +369,7 @@
       ? '已应用；真实 /v1/models provider 请求通过'
       : '已应用；provider 验证失败: ' + formatError(validation.data, validation.text);
     await Promise.all([refreshSettings(), refreshModels()]);
+    if (btnSaveProvider) btnSaveProvider.disabled = false;
   }
 
   if (providerSettings) providerSettings.addEventListener('submit', saveProviderSettings);
@@ -457,6 +462,7 @@
     try { variables = parsePersonaVariables(); }
     catch (error) { personaStatus.textContent = error.message; return; }
     personaStatus.textContent = '保存中…';
+    if (btnSavePersona) btnSavePersona.disabled = true;
     const payload = {
       expected_revision: personaRevision,
       name: personaName.value.trim() || 'User',
@@ -466,10 +472,12 @@
     const r = await api('PUT', '/v1/users/' + encodeURIComponent(userId) + '/persona', payload);
     if (!r.ok) {
       personaStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+      if (btnSavePersona) btnSavePersona.disabled = false;
       return;
     }
     await refreshPersona();
     personaStatus.textContent = '已保存 · ' + personaStatus.textContent;
+    if (btnSavePersona) btnSavePersona.disabled = false;
   }
 
   async function refreshPresets() {
@@ -506,12 +514,14 @@
       return;
     }
     presetStatus.textContent = '导入中…';
+    if (btnImportPreset) btnImportPreset.disabled = true;
     let presetJson;
     try { presetJson = await file.text(); }
-    catch (error) { presetStatus.textContent = '读取失败: ' + error.message; return; }
+    catch (error) { presetStatus.textContent = '读取失败: ' + error.message; if (btnImportPreset) btnImportPreset.disabled = false; return; }
     const r = await api('POST', '/v1/presets/import', { preset_id: presetId, preset_json: presetJson });
     if (!r.ok) {
       presetStatus.textContent = '导入失败: ' + formatError(r.data, r.text);
+      if (btnImportPreset) btnImportPreset.disabled = false;
       return;
     }
     await refreshPresets();
@@ -520,6 +530,7 @@
     presetImportId.value = '';
     rememberWorkspace();
     presetStatus.textContent = '已导入 ' + presetId + ' · prompts ' + (r.data?.prompts_count ?? 0);
+    if (btnImportPreset) btnImportPreset.disabled = false;
   }
 
   if (personaForm) personaForm.addEventListener('submit', savePersona);
