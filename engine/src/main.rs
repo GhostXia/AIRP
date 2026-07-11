@@ -99,7 +99,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // M0 F-01：构造一份共享 HTTP 客户端，整个进程生命周期复用其连接池。
-    let http_client = reqwest::Client::new();
+    // #117 A：必须走 outbound::outbound_client() —— reqwest 默认 redirect policy
+    // 会在 cross-origin / scheme downgrade 时携带 Authorization / x-api-key / 自定义
+    // secret header，对 provider key 是真实泄露风险。绝不在本仓任何处再用裸
+    // `reqwest::Client::new()` 发凭据请求。
+    let http_client = airp_core::outbound::outbound_client();
 
     match cli.command {
         Commands::Daemon { port } => {

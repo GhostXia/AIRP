@@ -150,10 +150,22 @@ pub fn call_streaming_api(
         // "建连到响应头"阶段。send() 收到响应头即返回，body streaming 在 send 返回后
         // 才由 bytes_stream() 消费——故慢 token 不误杀，恰挡"建连后挂死"。
         // ⚠️ 不用 RequestBuilder::timeout（套到整个 response body 接收完成，会误杀长文本流式）。
+        //
+        // #117 A：outbound client 已设 `redirect::Policy::none()`，provider 任何 3xx 都会
+        // 原样返回给此处。把它升级成可行动的脱敏文案，而不是把 reqwest 的内部 redirect
+        // 文本泄露给 UI/日志，也不让 3xx 走 generic "非 success" 分支丢失语义。
         let response = tokio::time::timeout(chat_request_timeout(), request.json(&payload).send())
             .await
             .map_err(|_| "请求超时: 等待响应头超时".to_string())?
             .map_err(|e| format!("发送请求失败: {}", e))?;
+
+        let response = if let Some(classified) =
+            crate::outbound::classify_redirect_response(&response)
+        {
+            Err(format!("上游 redirect 已被 outbound policy 拒截: {}", classified))?
+        } else {
+            response
+        };
 
         let mut byte_stream = if !response.status().is_success() {
             let status = response.status();
@@ -243,10 +255,19 @@ pub fn call_streaming_api_anthropic(
 
         // #67 #7 / 审计 G2：同 openai 路径，tokio::time::timeout 包 send().await，
         // 仅保护建连到响应头，不误杀流式 body。
+        // #117 A：redirect 拒截文案同 openai 路径，避免泄露 reqwest 内部文本。
         let response = tokio::time::timeout(chat_request_timeout(), request.json(&payload).send())
             .await
             .map_err(|_| "请求超时: 等待响应头超时".to_string())?
             .map_err(|e| format!("发送请求失败: {}", e))?;
+
+        let response = if let Some(classified) =
+            crate::outbound::classify_redirect_response(&response)
+        {
+            Err(format!("上游 redirect 已被 outbound policy 拒截: {}", classified))?
+        } else {
+            response
+        };
 
         let mut byte_stream = if !response.status().is_success() {
             let status = response.status();

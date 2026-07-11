@@ -32,13 +32,14 @@ use decompose_handlers::{
 };
 use handlers::{
     add_scene_character_endpoint, agent_run, chat_completion, create_scene_endpoint,
-    create_session_endpoint, delete_character_endpoint, get_character_avatar, get_character_card,
-    get_character_lorebook, get_character_state, get_character_state_history,
-    get_character_state_schema, get_chat_history, get_preset_endpoint, get_scene_endpoint,
-    get_settings, import_character, list_agent_tools, list_characters, list_models,
-    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
-    reextract_character_assets, regen_chat, rollback_chat, update_character_card,
-    update_character_lorebook, update_settings,
+    create_session_endpoint, delete_character_endpoint, delete_session_endpoint,
+    get_character_avatar, get_character_card, get_character_lorebook, get_character_state,
+    get_character_state_history, get_character_state_schema, get_chat_history,
+    get_persona_endpoint, get_preset_endpoint, get_scene_endpoint, get_settings, import_character,
+    import_preset_endpoint, list_agent_tools, list_characters, list_models, list_presets_endpoint,
+    list_scenes_endpoint, list_sessions_endpoint, reextract_character_assets, regen_chat,
+    rollback_chat, update_character_card, update_character_lorebook, update_persona_endpoint,
+    update_settings,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -258,8 +259,20 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/v1/presets", get(list_presets_endpoint))
         .route("/v1/presets/:preset_id", get(get_preset_endpoint))
         .route(
+            "/v1/presets/import",
+            post(import_preset_endpoint).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/users/:user_id/persona",
+            get(get_persona_endpoint).put(update_persona_endpoint),
+        )
+        .route(
             "/v1/sessions/:character_id",
             get(list_sessions_endpoint).post(create_session_endpoint),
+        )
+        .route(
+            "/v1/sessions/:character_id/:session_id",
+            axum::routing::delete(delete_session_endpoint),
         )
         .route("/v1/settings", get(get_settings).post(update_settings))
         // ── Decompose Agent Flow（Task 7） ──────────────────────────────────

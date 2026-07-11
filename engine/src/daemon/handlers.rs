@@ -2,9 +2,9 @@
 use super::types::{ChatCompletionRequest, HistoryQuery, RegenRequest, RollbackRequest};
 use super::{DaemonState, SettingsView};
 use crate::chat_store::ChatLog;
-use crate::domain::{ChatService, LorebookService};
+use crate::domain::{ChatService, LorebookService, Persona, PersonaService};
 use crate::error::AirpError;
-use crate::types::{CharacterId, PresetId, SessionId};
+use crate::types::{CharacterId, PresetId, SessionId, UserId};
 use crate::{chat_pipeline, data_dir};
 use axum::{
     http::{header, StatusCode},
@@ -12,14 +12,20 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_DERIVED_CHARACTER_ID_BYTES: usize = 120;
 const MODELS_PROXY_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);
+
+// Preset imports are infrequent administrative writes. A single process-wide
+// lock keeps the fixed temporary/backup names safe without retaining an
+// unbounded per-preset lock map.
+static PRESET_IMPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// #42 F-6：/v1/models 上游超时。默认 5s，可用 `AIRP_MODELS_PROXY_TIMEOUT_MS`
 /// 覆盖（跨境 provider 偏慢时无需重编译；测试也借此走快速超时路径）。
@@ -157,6 +163,74 @@ pub(super) async fn create_session_endpoint(
     Ok(Json(sid))
 }
 
+/// DELETE /v1/sessions/:character_id/:session_id — 删除一个命名会话目录。
+/// #35：destructive，调用方负责确认。返回 `{deleted, status}`。会话不存在 → 404。
+pub(super) async fn delete_session_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path((character_id, session_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AirpError> {
+    let cid = CharacterId::new(character_id)?;
+    let sid = SessionId::parse(&session_id)?;
+    ChatService::new(&state.data_root).delete_session(&cid, &sid)?;
+    Ok(Json(serde_json::json!({
+        "deleted": sid.to_string(),
+        "character_id": cid.as_str(),
+        "status": "ok"
+    })))
+}
+
+// ── Persona handlers（#114，每用户一个默认 Persona）────────────────────────────
+//
+// WEBUI-MVP-PLAN §3.1：GET 读当前 Persona（不存在返回兜底，不写盘）；
+// PUT 原子写并 revision bump；expected_revision 不匹配返回 400 + PersonaRevisionConflict JSON。
+// `user_id` 走路径参数，经 UserId::new 校验（拒绝路径遍历）；`default_name` 走 query string。
+
+/// GET /v1/users/:user_id/persona — 读当前 Persona；不存在返回兜底（revision=0）。
+pub(super) async fn get_persona_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<Json<Persona>, AirpError> {
+    let uid = UserId::new(user_id)?;
+    let persona = PersonaService::new(&state.data_root).get(&uid, "User")?;
+    Ok(Json(persona))
+}
+
+/// PUT /v1/users/:user_id/persona — 原子写入 Persona；revision 不匹配返回 400。
+pub(super) async fn update_persona_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(payload): Json<UpdatePersonaRequest>,
+) -> Result<Json<Persona>, AirpError> {
+    let uid = UserId::new(user_id)?;
+    let persona = Persona {
+        schema: Persona::SCHEMA,
+        revision: 0, // save 内会 bump；payload 的 revision 不信，用 expected_revision 校验
+        updated_at: String::new(),
+        name: payload.name,
+        description: payload.description,
+        variables: payload.variables,
+    };
+    let saved =
+        PersonaService::new(&state.data_root).save(&uid, payload.expected_revision, persona)?;
+    Ok(Json(saved))
+}
+
+/// PUT /v1/users/:user_id/persona 的请求体。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UpdatePersonaRequest {
+    /// 客户端持有的当前 revision；不匹配服务端时返回 400 + PersonaRevisionConflict。
+    pub expected_revision: u64,
+    /// 用户显示名。
+    pub name: String,
+    /// 自由描述。
+    #[serde(default)]
+    pub description: String,
+    /// 自定义变量表。
+    #[serde(default)]
+    pub variables: HashMap<String, String>,
+}
+
 // ── Character handlers ────────────────────────────────────────────────────────
 
 /// GET /v1/characters — list all available character folder names
@@ -196,6 +270,69 @@ pub(super) async fn get_preset_endpoint(
         .map_err(|e| AirpError::BadRequest(format!("Invalid preset JSON: {}", e)))?;
 
     Ok(Json(preset.prompts.unwrap_or_default()))
+}
+
+// ── Preset import（#114，WEBUI-MVP-PLAN §3.1：最小 JSON 导入）────────────────────
+//
+// 接收 `{preset_id, preset_json}`，校验 TavernPreset schema 后原子写盘到
+// `presets/{id}/preset.json`。保留 raw sidecar（原样写盘，不解释 prompt 内容），
+// 拒绝脚本执行和路径输入（preset_id 走 PresetId::new 校验，preset_json 走 serde
+// 反序列化 TavernPreset）。rename/duplicate/export、字段级迁移报告、PromptAssemblyTrace
+// 留 #115。
+
+/// POST /v1/presets/import — 校验 + 落盘一份 preset JSON。
+pub(super) async fn import_preset_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(req): Json<ImportPresetRequest>,
+) -> Result<Json<ImportPresetResponse>, AirpError> {
+    let preset_id = PresetId::new(req.preset_id)?;
+    // 校验 JSON 形状：必须是 TavernPreset（顶层 prompts[] + 模型参数）。
+    // 反序列化失败 → BadRequest，不落盘，避免脏文件残留。
+    let cleaned = data_dir::strip_utf8_bom(&req.preset_json).to_owned();
+    let parsed: crate::orchestrator::TavernPreset =
+        serde_json::from_str(&cleaned).map_err(|e| {
+            AirpError::BadRequest(format!("preset_json 不是有效 TavernPreset JSON: {}", e))
+        })?;
+    // 再序列化为规范 pretty JSON 写盘（保留 raw sidecar，原样不解释 prompt）。
+    let bytes = serde_json::to_vec_pretty(&parsed)
+        .map_err(|e| AirpError::Internal(format!("preset 序列化失败: {}", e)))?;
+
+    let _guard = PRESET_IMPORT_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("preset import lock poisoned");
+    let dir = state.data_root.join("presets").join(preset_id.as_str());
+    fs::create_dir_all(&dir)?;
+    let final_path = dir.join("preset.json");
+    if final_path.exists() {
+        return Err(AirpError::BadRequest(format!(
+            "preset {} already exists; explicit overwrite is not supported",
+            preset_id.as_str()
+        )));
+    }
+    data_dir::replace_file(&final_path, &bytes)?;
+
+    Ok(Json(ImportPresetResponse {
+        preset_id: preset_id.to_string(),
+        prompts_count: parsed.prompts.map(|p| p.len()).unwrap_or(0),
+    }))
+}
+
+/// POST /v1/presets/import 的请求体。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ImportPresetRequest {
+    /// 目标 preset ID；走 PresetId::new 校验，拒路径遍历。
+    pub preset_id: String,
+    /// TavernPreset 规范的 JSON 文本（原样 sidecar，不解释）。
+    pub preset_json: String,
+}
+
+/// POST /v1/presets/import 的响应体。
+#[derive(Debug, Serialize)]
+pub(super) struct ImportPresetResponse {
+    pub preset_id: String,
+    pub prompts_count: usize,
 }
 
 // ── Chat handlers ─────────────────────────────────────────────────────────────
@@ -1004,6 +1141,28 @@ pub(super) async fn list_models(
 
     match req.send().await {
         Ok(resp) => {
+            // #117 A：redirect 必须先于 success/non-success 分流判定，给 typed 脱敏文案。
+            if let Some(classified) = crate::outbound::classify_redirect_response(&resp) {
+                let upstream_status = match &classified {
+                    AirpError::Upstream { status, .. } => *status,
+                    _ => unreachable!("redirect classifier must return AirpError::Upstream"),
+                };
+                tracing::warn!(
+                    upstream_status,
+                    "models proxy: upstream redirected; outbound policy rejected"
+                );
+                return models_proxy_error(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_redirect_rejected",
+                    format!(
+                        "model provider /models redirected; outbound policy rejected to protect credentials: {}",
+                        classified
+                    ),
+                    Some(upstream_status),
+                    None,
+                    None,
+                );
+            }
             let status = resp.status();
             match resp.bytes().await {
                 Ok(body) if status.is_success() => (
@@ -1742,5 +1901,153 @@ mod tests {
         );
         // 不留脏文件（审计 CR4：与其他拒绝测试一致防御）
         assert!(!data_root.path().join("characters/none").exists());
+    }
+
+    // ── import_preset（#114）──────────────────────────────────────────────────────
+
+    /// #114：合法 TavernPreset 导入应写盘到 presets/{id}/preset.json，且 prompts_count 正确。
+    #[tokio::test]
+    async fn import_preset_writes_preset_json_and_returns_count() {
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+
+        let body = serde_json::json!({
+            "preset_id": "myrp",
+            "preset_json": r#"{"prompts":[{"identifier":"main","name":"Main","prompt":"hi","enabled":true}]}"#
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/presets/import")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["preset_id"], "myrp");
+        assert_eq!(v["prompts_count"], 1);
+
+        // 写盘：presets/myrp/preset.json 存在且可回解析
+        let written = std::fs::read_to_string(
+            state
+                .data_root
+                .join("presets")
+                .join("myrp")
+                .join("preset.json"),
+        )
+        .unwrap();
+        let back: crate::orchestrator::TavernPreset = serde_json::from_str(&written).unwrap();
+        assert_eq!(back.prompts.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_imports_do_not_overwrite_the_same_preset() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+        let request = |prompt: &'static str| {
+            let body = serde_json::json!({
+                "preset_id": "same-id",
+                "preset_json": format!(r#"{{"prompts":[{{"identifier":"main","name":"Main","prompt":"{prompt}","enabled":true}}]}}"#)
+            });
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/presets/import")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+
+        let (first, second) = tokio::join!(
+            app.clone().oneshot(request("first")),
+            app.oneshot(request("second"))
+        );
+        let statuses = [first.unwrap().status(), second.unwrap().status()];
+        assert_eq!(
+            statuses.iter().filter(|status| status.is_success()).count(),
+            1
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|status| **status == axum::http::StatusCode::BAD_REQUEST)
+                .count(),
+            1
+        );
+
+        let dir = state.data_root.join("presets/same-id");
+        let written = std::fs::read_to_string(dir.join("preset.json")).unwrap();
+        serde_json::from_str::<crate::orchestrator::TavernPreset>(&written).unwrap();
+        assert!(!dir.join("preset.json.tmp").exists());
+        assert!(!dir.join("preset.json.bak").exists());
+    }
+
+    /// #114：preset_id 路径遍历 → BadRequest，不写盘。
+    #[tokio::test]
+    async fn import_preset_rejects_traversal_preset_id() {
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+
+        let body = serde_json::json!({
+            "preset_id": "../evil",
+            "preset_json": r#"{"prompts":[]}"#
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/presets/import")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        // 关键：无 preset.json 落盘（路径遍历被 PresetId::new 拒，未进写盘分支）
+        assert!(
+            !state.data_root.join("presets").join("evil").exists(),
+            "traversal preset_id must not write any preset file"
+        );
+    }
+
+    /// #114：preset_json 非 TavernPreset 形状 → BadRequest，不写盘。
+    #[tokio::test]
+    async fn import_preset_rejects_invalid_preset_json() {
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+
+        let body = serde_json::json!({
+            "preset_id": "bad",
+            "preset_json": "not json at all"
+        });
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/presets/import")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(!state.data_root.join("presets").join("bad").exists());
     }
 }
