@@ -10,7 +10,7 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端，当前仓库已经收敛
 
 AIRP-State-Protocol 同样按零件来源处理：必须吸收 Blueprint、Widget、state patch、guard、虚拟滚动、consent/sandbox 等成熟资产，但不继承其"通用 Agent UI 标准优先"的产品定位。见 [docs/UI-PROTOCOL-DECISION.md](docs/UI-PROTOCOL-DECISION.md)。
 
-四个源项目统一按"吸收资产，不继承产品北极星"处理，详见 [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)。
+AIRP-Core/AIRPCLI、AIRP-MCP-Server、AIRP-Gateway 与 AIRP-State-Protocol 均为本项目作者自己的前序项目。当前仓库汇聚并重构其中经过复核的资产，而不是把它们作为第三方依赖；四个源项目统一按"吸收资产，不继承产品北极星"处理，详见 [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)。
 
 ## 项目取向
 
@@ -123,6 +123,7 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记
 - [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)：当前独立审计、风险和近期优先级
 - [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档权威层级与维护规则
+- [docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md)：项目沿革、第三方设计参考与许可证边界（持续更新）
 
 ## Agent UI 测试面与用户控制
 
@@ -135,6 +136,12 @@ Remove-Item ui\src\agent-test.ts
 ```
 
 删除后再运行 **Manual build**。`ui/src/App.vue` 只在文件存在时加载该模块，相关单测在模块不存在时不会阻断构建，因此不需要再改别的源码；构建出的 artifact 不会包含该测试面。
+
+## 设计参考与致谢
+
+AIRP 感谢角色扮演与 Agent 开源生态中公开分享设计和实现经验的项目。当前明确研究过的第三方项目包括 [SillyTavern](https://github.com/SillyTavern/SillyTavern)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[NeuroBook](https://github.com/notnotype/neuro-book)、[pi-forge](https://github.com/MacroSony/pi-forge) 和 [llmlint](https://github.com/notnotype/llmlint)。
+
+列入此处表示设计、产品或互操作性研究，不表示双方存在从属、合作或背书关系，也不自动表示复用了对方的代码、规则、数据或视觉资产。任何实际第三方资产复用都必须另行记录来源、版本、修改和许可证义务。详细分类及核验状态见 [docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md)。该清单是**待持续更新的活文档**，后续研究或采用新的项目时应同步补充。
 
 ## License
 
