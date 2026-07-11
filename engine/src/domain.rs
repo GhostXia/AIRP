@@ -256,9 +256,14 @@ impl ChatService {
         character_id: &CharacterId,
         session_id: &SessionId,
     ) -> Result<(), AirpError> {
-        let result = self.with_session(character_id, Some(session_id), || {
-            data_dir::delete_session(&self.data_root, character_id.as_str(), session_id)
-        });
+        let character = character_lock(character_id.as_str());
+        let _character_guard = character.read().expect("character lock poisoned");
+        let session = session_lock(character_id.as_str(), Some(session_id));
+        let _session_guard = session.lock().expect("session lock poisoned");
+        // A previous attempt may have written the fail-closed tombstone but
+        // failed to remove the directory. Deletion must bypass `with_session`'s
+        // tombstone rejection so a retry can finish that cleanup.
+        let result = data_dir::delete_session(&self.data_root, character_id.as_str(), session_id);
         if result.is_ok() {
             remove_deleted_session_lock(character_id.as_str(), session_id);
         }
@@ -318,7 +323,7 @@ impl LorebookService {
         let _resource_guard = resource.lock().expect("resource lock poisoned");
         data_dir::char_world_dir(&self.data_root, character_id.as_str())?;
         let path = data_dir::char_world_lorebook_path(&self.data_root, character_id.as_str());
-        replace_file(&path, &serde_json::to_vec_pretty(lorebook)?)
+        data_dir::replace_file(&path, &serde_json::to_vec_pretty(lorebook)?)
     }
 }
 
@@ -356,7 +361,7 @@ impl StateService {
             state: state.clone(),
         };
 
-        replace_file(
+        data_dir::replace_file(
             &state_dir.join("live.json"),
             &serde_json::to_vec_pretty(state)?,
         )?;
@@ -402,30 +407,6 @@ fn latest_revision(path: &Path) -> Result<u64, AirpError> {
         position = start;
     }
     Ok(serde_json::from_slice::<StateSnapshot>(&suffix).map_or(0, |entry| entry.revision))
-}
-
-fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), AirpError> {
-    let temporary = path.with_extension("json.tmp");
-    let backup = path.with_extension("json.bak");
-    {
-        let mut file = fs::File::create(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    if path.exists() {
-        let _ = fs::remove_file(&backup);
-        fs::rename(path, &backup)?;
-    }
-    if let Err(error) = fs::rename(&temporary, path) {
-        if backup.exists() {
-            let _ = fs::rename(&backup, path);
-        }
-        return Err(error.into());
-    }
-    if backup.exists() {
-        fs::remove_file(backup)?;
-    }
-    Ok(())
 }
 
 fn validate_state(schema: &serde_json::Value, state: &serde_json::Value) -> Result<(), AirpError> {
@@ -618,10 +599,13 @@ impl PersonaService {
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
         let path = data_dir::user_persona_path(&self.data_root, user_id);
-        if !path.exists() {
-            return Ok(Persona::initial(default_name));
-        }
-        let bytes = fs::read(&path)?;
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Persona::initial(default_name));
+            }
+            Err(error) => return Err(error.into()),
+        };
         let persona: Persona = serde_json::from_slice(&bytes)?;
         if persona.schema != Persona::SCHEMA {
             return Err(AirpError::Internal(format!(
@@ -664,7 +648,7 @@ impl PersonaService {
         persona.schema = Persona::SCHEMA;
         persona.revision = current_revision + 1;
         persona.updated_at = chrono::Utc::now().to_rfc3339();
-        replace_file(&path, &serde_json::to_vec_pretty(&persona)?)?;
+        data_dir::replace_file(&path, &serde_json::to_vec_pretty(&persona)?)?;
         Ok(persona)
     }
 }
@@ -970,6 +954,29 @@ mod tests {
             matches!(err, AirpError::NotFound(_)),
             "unknown session delete must be NotFound, got {err:?}"
         );
+    }
+
+    #[test]
+    fn delete_session_retries_cleanup_after_tombstone_was_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("alice").unwrap();
+        let sid = service.create_session(&character).unwrap();
+        let marker = tmp
+            .path()
+            .join("characters/alice/deleted_sessions")
+            .join(sid.to_string());
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, []).unwrap();
+
+        service.delete_session(&character, &sid).unwrap();
+
+        assert!(marker.is_file());
+        assert!(!tmp
+            .path()
+            .join("characters/alice/sessions")
+            .join(sid.to_string())
+            .exists());
     }
 
     /// #35/#37：命名会话与默认会话隔离——append 到命名会话不污染默认会话 history，

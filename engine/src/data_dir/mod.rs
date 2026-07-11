@@ -50,7 +50,7 @@ pub use session::{
     create_session, delete_session, list_sessions, resolve_session_dir, session_dir,
     session_was_deleted,
 };
-pub(crate) use utils::strip_utf8_bom;
+pub(crate) use utils::{replace_file, strip_utf8_bom};
 
 #[cfg(test)]
 mod tests {

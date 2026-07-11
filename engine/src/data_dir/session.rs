@@ -134,12 +134,12 @@ pub fn delete_session(
             "session {session_id} for character {character_id} not found"
         )));
     }
-    fs::remove_dir_all(&dir)?;
     let marker = deleted_session_marker(root, character_id, session_id);
     let marker_parent = marker
         .parent()
         .ok_or_else(|| AirpError::Internal("deleted session marker has no parent".to_string()))?;
     fs::create_dir_all(marker_parent)?;
-    fs::write(marker, [])?;
+    fs::File::create(marker)?.sync_all()?;
+    fs::remove_dir_all(&dir)?;
     Ok(())
 }

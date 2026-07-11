@@ -15,12 +15,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_DERIVED_CHARACTER_ID_BYTES: usize = 120;
 const MODELS_PROXY_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);
+
+// Preset imports are infrequent administrative writes. A single process-wide
+// lock keeps the fixed temporary/backup names safe without retaining an
+// unbounded per-preset lock map.
+static PRESET_IMPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// #42 F-6：/v1/models 上游超时。默认 5s，可用 `AIRP_MODELS_PROXY_TIMEOUT_MS`
 /// 覆盖（跨境 provider 偏慢时无需重编译；测试也借此走快速超时路径）。
@@ -292,13 +297,20 @@ pub(super) async fn import_preset_endpoint(
     let bytes = serde_json::to_vec_pretty(&parsed)
         .map_err(|e| AirpError::Internal(format!("preset 序列化失败: {}", e)))?;
 
+    let _guard = PRESET_IMPORT_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("preset import lock poisoned");
     let dir = state.data_root.join("presets").join(preset_id.as_str());
     fs::create_dir_all(&dir)?;
-    // 原子替换：先写 .tmp 再 rename，避免半写态被并发 GET 读到。
     let final_path = dir.join("preset.json");
-    let tmp_path = dir.join("preset.json.tmp");
-    fs::write(&tmp_path, &bytes)?;
-    fs::rename(&tmp_path, &final_path)?;
+    if final_path.exists() {
+        return Err(AirpError::BadRequest(format!(
+            "preset {} already exists; explicit overwrite is not supported",
+            preset_id.as_str()
+        )));
+    }
+    data_dir::replace_file(&final_path, &bytes)?;
 
     Ok(Json(ImportPresetResponse {
         preset_id: preset_id.to_string(),
@@ -1131,8 +1143,12 @@ pub(super) async fn list_models(
         Ok(resp) => {
             // #117 A：redirect 必须先于 success/non-success 分流判定，给 typed 脱敏文案。
             if let Some(classified) = crate::outbound::classify_redirect_response(&resp) {
+                let upstream_status = match &classified {
+                    AirpError::Upstream { status, .. } => *status,
+                    _ => unreachable!("redirect classifier must return AirpError::Upstream"),
+                };
                 tracing::warn!(
-                    upstream_status = classified.status().as_u16(),
+                    upstream_status,
                     "models proxy: upstream redirected; outbound policy rejected"
                 );
                 return models_proxy_error(
@@ -1142,7 +1158,7 @@ pub(super) async fn list_models(
                         "model provider /models redirected; outbound policy rejected to protect credentials: {}",
                         classified
                     ),
-                    Some(classified.status().as_u16()),
+                    Some(upstream_status),
                     None,
                     None,
                 );
@@ -1931,6 +1947,50 @@ mod tests {
         .unwrap();
         let back: crate::orchestrator::TavernPreset = serde_json::from_str(&written).unwrap();
         assert_eq!(back.prompts.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_imports_do_not_overwrite_the_same_preset() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let app = super::super::create_router(state.clone());
+        let request = |prompt: &'static str| {
+            let body = serde_json::json!({
+                "preset_id": "same-id",
+                "preset_json": format!(r#"{{"prompts":[{{"identifier":"main","name":"Main","prompt":"{prompt}","enabled":true}}]}}"#)
+            });
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/presets/import")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+
+        let (first, second) = tokio::join!(
+            app.clone().oneshot(request("first")),
+            app.oneshot(request("second"))
+        );
+        let statuses = [first.unwrap().status(), second.unwrap().status()];
+        assert_eq!(
+            statuses.iter().filter(|status| status.is_success()).count(),
+            1
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|status| **status == axum::http::StatusCode::BAD_REQUEST)
+                .count(),
+            1
+        );
+
+        let dir = state.data_root.join("presets/same-id");
+        let written = std::fs::read_to_string(dir.join("preset.json")).unwrap();
+        serde_json::from_str::<crate::orchestrator::TavernPreset>(&written).unwrap();
+        assert!(!dir.join("preset.json.tmp").exists());
+        assert!(!dir.join("preset.json.bak").exists());
     }
 
     /// #114：preset_id 路径遍历 → BadRequest，不写盘。
