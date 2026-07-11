@@ -91,3 +91,23 @@ pub fn create_session(
     let _ = resolve_session_dir(root, character_id, Some(&sid))?;
     Ok(sid)
 }
+
+/// #35：删除一个命名会话目录（`characters/{id}/sessions/{sid}/`）。
+///
+/// 会话不存在 → `NotFound`。destructive：调用方负责确认。删除的是整个会话目录
+/// （memory + volumes + history + meta），不可恢复——与 `delete_character` 同边界。
+pub fn delete_session(
+    root: &Path,
+    character_id: &str,
+    session_id: &crate::types::SessionId,
+) -> Result<(), AirpError> {
+    let dir = super::paths::character_dir(root, character_id)?
+        .join("sessions")
+        .join(session_id.to_string());
+    if !dir.is_dir() {
+        return Err(AirpError::NotFound(format!(
+            "session {session_id} for character {character_id} not found"
+        )));
+    }
+    fs::remove_dir_all(&dir).map_err(AirpError::from)
+}

@@ -158,6 +158,22 @@ pub(super) async fn create_session_endpoint(
     Ok(Json(sid))
 }
 
+/// DELETE /v1/sessions/:character_id/:session_id — 删除一个命名会话目录。
+/// #35：destructive，调用方负责确认。返回 `{deleted, status}`。会话不存在 → 404。
+pub(super) async fn delete_session_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path((character_id, session_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AirpError> {
+    let cid = CharacterId::new(character_id)?;
+    let sid = SessionId::parse(&session_id)?;
+    ChatService::new(&state.data_root).delete_session(&cid, &sid)?;
+    Ok(Json(serde_json::json!({
+        "deleted": sid.to_string(),
+        "character_id": cid.as_str(),
+        "status": "ok"
+    })))
+}
+
 // ── Persona handlers（#114，每用户一个默认 Persona）────────────────────────────
 //
 // WEBUI-MVP-PLAN §3.1：GET 读当前 Persona（不存在返回兜底，不写盘）；
