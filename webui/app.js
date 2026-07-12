@@ -405,8 +405,10 @@
 
   function rememberWorkspace() {
     try {
-      localStorage.setItem('airp_user_id', personaUserId.value.trim() || 'default');
-      localStorage.setItem('airp_preset_id', presetSelect.value || '');
+      const userId = personaUserId ? (personaUserId.value.trim() || 'default') : 'default';
+      const presetId = presetSelect ? (presetSelect.value || '') : '';
+      localStorage.setItem('airp_user_id', userId);
+      localStorage.setItem('airp_preset_id', presetId);
       localStorage.setItem('airp_character_id', selectedChar || '');
       localStorage.setItem('airp_session_id', selectedSess || '');
     } catch {}
@@ -467,7 +469,7 @@
       return;
     }
     await refreshPersona();
-    personaStatus.textContent = '已保存 · revision ' + personaRevision;
+    personaStatus.textContent = '已保存 · ' + personaStatus.textContent;
   }
 
   async function refreshPresets() {
@@ -515,6 +517,7 @@
     await refreshPresets();
     presetSelect.value = presetId;
     presetImportFile.value = '';
+    presetImportId.value = '';
     rememberWorkspace();
     presetStatus.textContent = '已导入 ' + presetId + ' · prompts ' + (r.data?.prompts_count ?? 0);
   }
@@ -2193,7 +2196,7 @@
     if (savedBearer) bearerToken.value = savedBearer;
   } catch {}
   try {
-    personaUserId.value = localStorage.getItem('airp_user_id') || 'default';
+    if (personaUserId) personaUserId.value = localStorage.getItem('airp_user_id') || 'default';
     selectedChar = localStorage.getItem('airp_character_id') || '';
     selectedSess = localStorage.getItem('airp_session_id') || '';
   } catch {}
