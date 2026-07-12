@@ -231,7 +231,7 @@ impl ChatLog {
                 } else {
                     // meta 丢失 → 确定性派生 session_id（不再随机 UUID），
                     // 保证同一 fixture 多次加载产生同一 session_id。
-                    Self::derive_meta(character_id, Some(&scope_session_id))
+                    Self::derive_meta(character_id, Some(&scope_session_id), &jsonl)
                 };
                 let log = Self {
                     session_id: m.session_id,
@@ -265,7 +265,7 @@ impl ChatLog {
                 serde_json::from_str(&fs::read_to_string(&meta_p)?)?
             } else {
                 // meta 丢失 → 确定性派生（不再随机 UUID）。
-                Self::derive_meta(character_id, None)
+                Self::derive_meta(character_id, None, &jsonl)
             };
             let log = Self {
                 session_id: m.session_id,
@@ -288,7 +288,7 @@ impl ChatLog {
             let m: ChatLogMeta = if pre_cf2_meta.exists() {
                 serde_json::from_str(&fs::read_to_string(&pre_cf2_meta)?)?
             } else {
-                Self::derive_meta(character_id, None)
+                Self::derive_meta(character_id, None, &pre_cf2_jsonl)
             };
             let log = Self {
                 session_id: m.session_id,
@@ -369,7 +369,7 @@ impl ChatLog {
     /// 保证同一 fixture 多次加载产生同一 `session_id`。`created_at` / `updated_at`
     /// 取 jsonl 文件的 mtime（若读不到则 fallback 到 epoch）——meta 丢失本身是边缘场景，
     /// 时间精度损失可接受，关键是 session_id 稳定。
-    fn derive_meta(character_id: &str, scope: Option<&str>) -> ChatLogMeta {
+    fn derive_meta(character_id: &str, scope: Option<&str>, jsonl_path: &Path) -> ChatLogMeta {
         // 稳定 hash：FNV-1a over (character_id ++ scope_or_"legacy")，输出格式化成 UUIDv4 形。
         let salt = scope.unwrap_or("legacy");
         let mut h: u64 = 0xcbf29ce484222325;
@@ -390,13 +390,17 @@ impl ChatLog {
             (h.wrapping_mul(31) & 0xFFFF) as u16,
             h.wrapping_mul(97) & 0xFFFF_FFFF_FFFF
         );
-        // created_at / updated_at 用 epoch fallback（meta 丢失 = 时间不可考）。
-        let epoch = "1970-01-01T00:00:00+00:00".to_string();
+        // meta 丢失时用 history 文件 mtime 恢复可排序时间；仅 metadata 不可读时回退 epoch。
+        let recovered_at = fs::metadata(jsonl_path)
+            .and_then(|metadata| metadata.modified())
+            .map(chrono::DateTime::<Utc>::from)
+            .map(|timestamp| timestamp.to_rfc3339())
+            .unwrap_or_else(|_| "1970-01-01T00:00:00+00:00".to_string());
         ChatLogMeta {
             session_id,
             character_id: character_id.to_string(),
-            created_at: epoch.clone(),
-            updated_at: epoch,
+            created_at: recovered_at.clone(),
+            updated_at: recovered_at,
         }
     }
 
@@ -1191,6 +1195,8 @@ mod tests {
             a.session_id, b.session_id,
             "meta-loss derive must be deterministic"
         );
+        assert_ne!(a.updated_at, "1970-01-01T00:00:00+00:00");
+        assert_eq!(a.updated_at, b.updated_at);
     }
 
     #[test]
