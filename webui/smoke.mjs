@@ -327,6 +327,21 @@ for (let i = 0; i < sentMessages.length; i++) {
   // scope_session_id 暴露给前端以便关联（#85 O1）
   ok(hist.data?.scope_session_id === sessionId || hist.data?.session_id === sessionId,
     'history 暴露 scope session id');
+  ok(Array.isArray(hist.data?.message_ids) && hist.data.message_ids.length === msgs.length,
+    'history 暴露 durable message_ids 且与 messages 等长');
+
+  const tail = await api('POST', '/v1/chat/history', {
+    character_id: characterId, session_id: sessionId, limit: 2,
+  });
+  ok(tail.ok, 'history cursor 首屏查询成功');
+  eq((tail.data?.messages || []).length, 2, 'history cursor 首屏按 limit 返回 2 条');
+  eq(tail.data?.total, 6, 'history cursor total 保留完整消息数');
+  ok(tail.data?.has_more === true && Boolean(tail.data?.oldest_id), 'history cursor 暴露 has_more/oldest_id');
+  const earlier = await api('POST', '/v1/chat/history', {
+    character_id: characterId, session_id: sessionId, limit: 2, before: tail.data.oldest_id,
+  });
+  ok(earlier.ok, 'history cursor 加载更早成功');
+  eq((earlier.data?.messages || []).length, 2, 'history cursor 更早页长度正确');
 }
 
 // 判据 4 续：跨 session 无串扰——另一个 session 的 history 应为空（不含本 session 的消息）
@@ -341,11 +356,13 @@ for (let i = 0; i < sentMessages.length; i++) {
 }
 
 // 判据 7：regen 和 rollback；破坏性操作有确认
-// rollback_to(index) 语义：保留 0..=index（含 index 那条），即 truncate(index+1)（chat_store.rs::rollback_to）。
 {
-  // rollback 到 index 3：保留 0..=3 = 4 条，丢弃第 5、6 条（第 3 轮 user+assistant）
-  const rb = await api('POST', '/v1/chat/rollback', { character_id: characterId, session_id: sessionId, message_index: 3 });
-  ok(rb.ok, 'rollback 成功');
+  // rollback 到第 4 条 durable ID：保留前 4 条，丢弃第 3 轮 user+assistant。
+  const beforeRollback = await api('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId });
+  const rollbackId = beforeRollback.data?.message_ids?.[3];
+  ok(Boolean(rollbackId), 'rollback 取得 durable message ID');
+  const rb = await api('POST', '/v1/chat/rollback', { character_id: characterId, session_id: sessionId, message_id: rollbackId });
+  ok(rb.ok, 'rollback-by-ID 成功');
   eq((rb.data?.messages || []).length, 4, 'rollback 后剩 4 条消息');
 
   // regen 删除最后一条（剩 4 条中的最后一条 assistant）

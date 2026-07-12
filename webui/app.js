@@ -33,6 +33,9 @@
   const btnHistory = $('#btn-history');
   const btnRegen = $('#btn-regen');
   const btnRollback = $('#btn-rollback');
+  const historyToolbar = $('#history-toolbar');
+  const btnLoadEarlier = $('#btn-load-earlier');
+  const historyStatus = $('#history-status');
   const agentInput = $('#agent-input');
   const btnAgentRun = $('#btn-agent-run');
   const agentOutput = $('#agent-output');
@@ -73,6 +76,12 @@
   let activePersona = { name: 'User', description: '', variables: {} };
   let abortController = null;   // for chat SSE
   let agentAbort = null;        // for agent run SSE — 二次点击先 abort 前一个，防事件交错竞态（issue #43/#44 D）
+  const HISTORY_PAGE_SIZE = 50;
+  const countFormatter = new Intl.NumberFormat();
+  let historyRequestSeq = 0;
+  let historyState = { scope: '', oldestId: '', hasMore: false, total: 0, loading: false };
+  let selectedMessageId = '';
+  const messageNodes = new Map();
 
   // ── event log ────────────────────────────────────────────────────────────
   function logEvent(method, path, status, ms, detail) {
@@ -390,7 +399,7 @@
       if (ids.length && !ids.includes(selectedChar)) { selectedChar = ids[0]; selectedSess = ''; }
       if (selectedChar && ids.includes(selectedChar)) charSelect.value = selectedChar;
       await renderCharacterCards(ids);
-      refreshSessions();
+      await refreshSessions();
       refreshAvatar();
       refreshStateAll();
     }
@@ -665,7 +674,22 @@
   // 切换 session / character / 新建 session 时统一：终止在飞 stream + 清空视图。
   function clearChatView() {
     abortInFlightStreams();
-    chatLog.innerHTML = '';
+    resetHistoryView();
+  }
+
+  function currentHistoryScope() {
+    return selectedChar + '::' + (selectedSess || 'legacy');
+  }
+
+  function resetHistoryView() {
+    historyRequestSeq++;
+    chatLog.textContent = '';
+    messageNodes.clear();
+    selectedMessageId = '';
+    historyState = { scope: currentHistoryScope(), oldestId: '', hasMore: false, total: 0, loading: false };
+    historyToolbar.hidden = true;
+    historyStatus.textContent = '';
+    btnLoadEarlier.disabled = false;
   }
 
   // ── avatar: fetch as blob with bearer, render via object URL ─────────────
@@ -740,12 +764,12 @@
   if (btnRefreshState) btnRefreshState.addEventListener('click', refreshStateAll);
   if (stateHistoryLimit) stateHistoryLimit.addEventListener('change', refreshStateHistory);
 
-  charSelect.addEventListener('change', () => {
+  charSelect.addEventListener('change', async () => {
     selectedChar = charSelect.value;
     selectedSess = '';
     renderCharacterCards(Array.from(charSelect.options, option => option.value));
     clearChatView();
-    refreshSessions();
+    await refreshSessions();
     refreshAvatar();
     refreshStateAll();
     // 自动加载 history：切角色后立即拉取该角色已有 chat history，
@@ -858,10 +882,27 @@
   // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
   // W-06 fix: 加可选 ts 参数（Date 或省略）。流式新消息传 new Date() 显示 HH:MM:SS；
   // loadHistory 不传（engine 的 chat_log.jsonl 不存消息时间戳，避免用加载时刻误导用户）。
-  function appendMsg(role, text, isStreaming, ts) {
-    const div = document.createElement('div');
+  function appendMsg(role, text, isStreaming, ts, messageId, options) {
+    const opts = options || {};
+    let div = messageId ? messageNodes.get(messageId) : null;
+    const isNew = !div;
+    if (!div) div = document.createElement('div');
     const safeRole = role === 'user' ? 'user' : 'assistant';
     div.className = 'msg ' + safeRole;
+    if (messageId === selectedMessageId) div.classList.add('selected');
+    div.textContent = '';
+    if (messageId) {
+      div.dataset.messageId = messageId;
+      div.tabIndex = 0;
+      div.setAttribute('role', 'button');
+      div.setAttribute('aria-label', '选择此消息作为回滚位置');
+      const select = () => selectRollbackMessage(messageId);
+      div.onclick = select;
+      div.onkeydown = e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); }
+      };
+      messageNodes.set(messageId, div);
+    }
     if (ts instanceof Date) {
       const hh = String(ts.getHours()).padStart(2, '0');
       const mm = String(ts.getMinutes()).padStart(2, '0');
@@ -876,9 +917,18 @@
     } else {
       textNode.innerHTML = renderMarkdown(text);
     }
-    chatLog.appendChild(div);
-    chatLog.scrollTop = chatLog.scrollHeight;
+    if (isNew) {
+      if (opts.prepend) chatLog.prepend(div);
+      else chatLog.appendChild(div);
+    }
+    if (opts.scroll !== false) chatLog.scrollTop = chatLog.scrollHeight;
     return textNode;
+  }
+
+  function selectRollbackMessage(messageId) {
+    if (selectedMessageId) messageNodes.get(selectedMessageId)?.classList.remove('selected');
+    selectedMessageId = messageId;
+    messageNodes.get(messageId)?.classList.add('selected');
   }
 
   async function doSend() {
@@ -1026,98 +1076,94 @@
 
   // ── history / regen / rollback (P1: destructive confirm) ────────────────
   // loadHistory 抽出来供 charSelect/sessSelect 切换时自动复用，避免用户每次手点。
-  // #73 方案A: 同时显示会话时间范围（created_at → updated_at），让用户能识别
-  // 历史会话的"新鲜度"，避免误把陈旧会话当作活跃会话继续聊。
-  function formatSessionTime(iso) {
-    // ISO 8601 → 本地可读格式 "YYYY-MM-DD HH:MM"。无效输入返回空串。
-    if (!iso || typeof iso !== 'string') return '';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return '';
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mi = String(d.getMinutes()).padStart(2, '0');
-    return yyyy + '-' + mm + '-' + dd + ' ' + hh + ':' + mi;
+  function updateHistoryToolbar() {
+    const loaded = messageNodes.size;
+    historyToolbar.hidden = historyState.total === 0;
+    historyStatus.textContent = countFormatter.format(loaded) + ' / ' + countFormatter.format(historyState.total) + ' 条消息';
+    btnLoadEarlier.hidden = !historyState.hasMore;
+    btnLoadEarlier.disabled = historyState.loading;
+    btnLoadEarlier.textContent = historyState.loading ? '加载中…' : '加载更早';
   }
-  function renderSessionInfo(data) {
-    const msgs = data?.messages;
-    const hasMsgs = Array.isArray(msgs) && msgs.length > 0;
-    const created = formatSessionTime(data?.created_at);
-    const updated = formatSessionTime(data?.updated_at);
-    if (!hasMsgs) {
-      // 空会话：不显示时间条，避免在新建角色/会话时占用顶部空间。
-      return null;
-    }
-    const div = document.createElement('div');
-    div.className = 'session-info';
-    let text;
-    if (created && updated && created.slice(0, 10) === updated.slice(0, 10)) {
-      // 同一天：只显示一次日期 + 时间范围
-      text = '会话时间：' + created + ' → ' + updated.slice(11);
-    } else if (created && updated) {
-      text = '会话时间：' + created + ' → ' + updated;
-    } else if (updated) {
-      text = '会话时间：' + updated;
-    } else {
-      // 时间戳缺失（异常路径）：退化为消息数提示，不阻断渲染。
-      text = '会话消息数：' + msgs.length;
-    }
-    div.textContent = text;
-    return div;
-  }
-  async function loadHistory() {
+
+  async function loadHistory(options) {
     if (!selectedChar) return;
-    const r = await api('POST', '/v1/chat/history', buildSessionPayload());
+    const opts = options || {};
+    const scope = currentHistoryScope();
+    if (historyState.scope !== scope || opts.reset) resetHistoryView();
+    const before = opts.before || '';
+    if (historyState.loading) return;
+    historyState.loading = true;
+    updateHistoryToolbar();
+    const requestSeq = ++historyRequestSeq;
+    const payload = buildSessionPayload({ limit: HISTORY_PAGE_SIZE });
+    if (before) payload.before = before;
+    const r = await api('POST', '/v1/chat/history', payload);
+    if (requestSeq !== historyRequestSeq || scope !== currentHistoryScope()) return;
+    historyState.loading = false;
     if (r.ok) {
       const data = r.data && typeof r.data === 'object' ? r.data : {};
       const msgs = data.messages || r.data || [];
-      // harness 已知限制（WEBUI-AUDIT-v2 A-05）：此处全量 innerHTML='' + 逐条 appendMsg
-      // 违反性能契约 §2.5 约束 #3（patch 优先，禁每轮全量重灌）。WebUI 是临时诊断面，
-      // 单次会话很少超 500 条，可接受。产品 UI（Tauri/Vue）须走虚拟滚动 + 窗口分页，
-      // 不得复用此全量重建路径。
       // #73 方案 B：消息级时间戳（与 messages 一一对应）。旧会话可能无 ts → null。
       const tss = Array.isArray(data.message_timestamps) ? data.message_timestamps : [];
+      const ids = Array.isArray(data.message_ids) ? data.message_ids : [];
       // A-3：长度不匹配是 engine bug，显式 warn 暴露而非静默降级
-      if (tss.length !== msgs.length) {
-        console.warn('engine bug: message_timestamps.length (' + tss.length + ') !== messages.length (' + msgs.length + ')');
+      if (tss.length !== msgs.length || ids.length !== msgs.length) {
+        console.warn('engine bug: history parallel arrays must have equal lengths');
       }
-      chatLog.innerHTML = '';
-      const info = renderSessionInfo(data);
-      if (info) chatLog.appendChild(info);
-      msgs.forEach((m, i) => {
+      const previousHeight = chatLog.scrollHeight;
+      // 持久化窗口到达后移除已完成的 optimistic 节点，避免刷新产生重复消息。
+      if (!before && !abortController) {
+        chatLog.querySelectorAll('.msg:not([data-message-id])').forEach(node => node.remove());
+      }
+      // prepend 时逆序插入，最终 DOM 仍保持服务端的时间正序。
+      const indexes = before ? Array.from(msgs.keys()).reverse() : Array.from(msgs.keys());
+      indexes.forEach(i => {
+        const m = msgs[i];
         const tsRaw = tss[i];
         const ts = tsRaw ? new Date(tsRaw) : null;
-        appendMsg(m.role || 'assistant', m.text || m.content || '', false, ts);
+        appendMsg(m.role || 'assistant', m.text || m.content || '', false, ts, ids[i], {
+          prepend: Boolean(before),
+          scroll: false,
+        });
       });
+      historyState.oldestId = data.oldest_id || historyState.oldestId;
+      historyState.hasMore = Boolean(data.has_more);
+      historyState.total = Number(data.total) || msgs.length;
+      if (before) chatLog.scrollTop += chatLog.scrollHeight - previousHeight;
+      else if (opts.scroll !== false) chatLog.scrollTop = chatLog.scrollHeight;
+      updateHistoryToolbar();
     } else if (r.status === 404) {
       // #68 #8：404 = 角色无 history（engine #67 #4 已改 NotFound），视为无内容而非错误，
       // 静默清空 chatLog 避免用户无操作却见 [history err 404]。仅渲染 session info（如有）。
-      chatLog.innerHTML = '';
+      resetHistoryView();
     } else if (r.status !== 0) {
       // 0 = 网络层失败（已 logEvent），其它状态码显式提示
       appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false, new Date());
+      updateHistoryToolbar();
     }
   }
 
-  btnHistory.addEventListener('click', loadHistory);
+  btnHistory.addEventListener('click', () => loadHistory({ scroll: false }));
+  btnLoadEarlier.addEventListener('click', () => {
+    if (historyState.hasMore && historyState.oldestId) loadHistory({ before: historyState.oldestId, scroll: false });
+  });
 
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
     if (!window.confirm('Regenerate 会重写/删除最后一条 assistant 消息，不可撤销。继续？')) return;
     const r = await api('POST', '/v1/chat/regen', buildSessionPayload());
-    if (r.ok) loadHistory();
+    if (r.ok) loadHistory({ reset: true });
   });
 
   btnRollback.addEventListener('click', async () => {
     if (!selectedChar) return;
-    const index = prompt('Rollback to message index (0-based)：\n（将截断该 index 之后的所有消息，不可撤销）', '0');
-    if (index === null) return;
-    const idx = parseInt(index);
-    if (Number.isNaN(idx) || idx < 0) { logEvent('POST', '/v1/chat/rollback', 0, 0, 'illegal index: ' + index); return; }
-    if (!window.confirm('确认截断到 index ' + idx + '？此操作不可撤销。')) return;
-    const r = await api('POST', '/v1/chat/rollback', buildSessionPayload({ message_index: idx }));
-    if (r.ok) loadHistory();
+    if (!selectedMessageId) {
+      window.alert('请先在对话中点选要保留的最后一条消息。');
+      return;
+    }
+    if (!window.confirm('确认回滚到选中的消息？其后的消息将被删除且不可撤销。')) return;
+    const r = await api('POST', '/v1/chat/rollback', buildSessionPayload({ message_id: selectedMessageId }));
+    if (r.ok) loadHistory({ reset: true });
   });
 
   // ── agent run (P1: classified event log + collapsible raw JSON) ─────────

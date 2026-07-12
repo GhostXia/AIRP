@@ -116,7 +116,11 @@
           <div><p class="eyebrow">SESSION</p><h1 id="session-title">对话空间</h1><p>选择左侧角色和会话后开始对话。</p></div>
           <div class="view-actions"><button id="btn-history">刷新历史</button><button id="btn-regen">重新生成</button><button id="btn-rollback">回滚</button></div>
         </div>
-        <div id="chat-log"></div>
+        <div id="history-toolbar" hidden>
+          <button id="btn-load-earlier" type="button">加载更早</button>
+          <span id="history-status" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="chat-log" aria-live="polite"></div>
         <div id="chat-composer">
           <textarea id="chat-input" rows="3" placeholder="输入消息…（Ctrl+Enter 发送）"></textarea>
           <div id="chat-actions"><button id="btn-send" class="btn-primary">发送</button><button id="btn-stop" hidden>停止</button></div>
