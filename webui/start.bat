@@ -13,10 +13,12 @@ set npm_config_cache=D:\npm-global\npm-cache
 set PATH=D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;%PATH%
 
 REM ── 业务配置（按需改）─────────────────────────────────────────────────
-REM provider endpoint / model / data dir：未设则 engine 用默认值
-REM set AIRP_ENDPOINT=http://127.0.0.1:8889/v1/chat/completions
-REM set AIRP_MODEL=gemini-3.1-pro-preview
-REM set AIRP_DATA_DIR=d:\AIRP-Dev\target\webui-smoke-data
+REM 默认启用零密钥 mock provider（PR B 验收用；要换真 provider 改这里）
+set AIRP_ENDPOINT=http://127.0.0.1:8889/v1/chat/completions
+set AIRP_MODEL=airp-mock-1
+set AIRP_API_KEY=mock-key-not-checked
+REM 验收用临时 data root，避免污染个人 data/，且让"全新 data root 上完成闭环"判据可复现
+set AIRP_DATA_DIR=d:\AIRP-Dev\target\webui-smoke-data
 REM set AIRP_ACCESS_KEY=
 
 REM ── WebUI server 端口/绑定（serve.js 读）──────────────────────────────
@@ -31,6 +33,10 @@ echo Cleaning stale engine processes ...
 taskkill /F /IM airp-core.exe >nul 2>&1
 REM 释放 8000 端口给新 engine
 REM 注意：node serve.js 用 9001，不与 engine 冲突，无需 kill node
+
+REM ── 启动零密钥 mock provider（新窗口；PR B 验收用，真 provider 时可注释掉）──
+echo Starting mock provider on http://127.0.0.1:8889 ...
+start "AIRP Mock Provider" cmd /k "node webui\mock-provider.js & echo. & echo [mock exited, code %errorlevel%] & pause"
 
 REM ── 启动 engine（新窗口，强制有头：失败时窗口停留显示错误）────────────
 REM cmd /k 链：先跑 cargo，无论成败都 echo + pause。
@@ -49,10 +55,11 @@ timeout /t 5 /nobreak >nul
 start "" http://%WEBUI_HOST%:%WEBUI_PORT%/
 
 echo.
+echo Mock:    http://127.0.0.1:8889   (零密钥；真 provider 时注释掉 mock 启动块)
 echo Engine:  http://127.0.0.1:8000
 echo WebUI:   http://%WEBUI_HOST%:%WEBUI_PORT%
 echo.
-echo 两个窗口已弹出。关闭窗口即停止对应服务。
+echo 三个窗口已弹出。关闭窗口即停止对应服务。
 echo Engine 窗口在编译/运行失败时会停留显示错误（强制有头）。
 echo 本窗口可关闭。
 endlocal
