@@ -1,7 +1,9 @@
 # PR #123 独立审计
 
-> 审计日期：2026-07-12  
-> 范围：`pr-b/mock-provider-browser-smoke` 相对 `main`  
+> 审计日期：2026-07-12
+>
+> 范围：`pr-b/mock-provider-browser-smoke` 相对 `main`
+>
 > 原则：源码、依赖 API 语义与真实运行结果优先，不沿用 PR 原结论。
 
 ## 结论
