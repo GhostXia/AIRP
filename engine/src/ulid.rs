@@ -15,7 +15,7 @@ pub fn new_id() -> String {
 pub fn derive_legacy_id(scope_salt: &str, index: usize) -> String {
     let mut h1: u64 = 0xcbf29ce484222325;
     let mut h2: u64 = 0x84222325cbf29ce4;
-    for b in scope_salt.bytes().chain(index.to_le_bytes()) {
+    for b in scope_salt.bytes().chain((index as u64).to_le_bytes()) {
         h1 ^= b as u64;
         h1 = h1.wrapping_mul(0x100000001b3);
         h2 = h2.wrapping_add(b as u64).wrapping_mul(0x100000001b3);
@@ -48,7 +48,16 @@ pub fn is_valid_id(value: &str) -> bool {
         return false;
     }
     (value.len() == 33 && value.bytes().skip(1).all(|b| b.is_ascii_hexdigit()))
-        || (value.len() == 27 && value.bytes().skip(1).all(|b| CROCKFORD.contains(&b)))
+        || (value.len() == 27
+            && value
+                .bytes()
+                .skip(1)
+                .all(|b| CROCKFORD.contains(&b.to_ascii_uppercase())))
+}
+
+/// IDs use case-insensitive alphabets; accept normalized client representations.
+pub fn matches(stored: &str, candidate: &str) -> bool {
+    is_valid_id(stored) && is_valid_id(candidate) && stored.eq_ignore_ascii_case(candidate)
 }
 
 #[cfg(test)]
@@ -71,6 +80,8 @@ mod tests {
         assert_ne!(a, derive_legacy_id("alice/session-a", 4));
         assert_ne!(a, derive_legacy_id("alice/session-b", 3));
         assert!(is_valid_id(&a));
+        assert!(is_valid_id(&a.to_ascii_lowercase()));
+        assert!(matches(&a, &a.to_ascii_lowercase()));
     }
 
     #[test]

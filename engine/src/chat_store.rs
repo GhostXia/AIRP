@@ -574,7 +574,7 @@ impl ChatLog {
             // #37：无 id 的 legacy 行 → 确定性派生（同 fixture 多次加载同 ID）。
             let id = stored
                 .id
-                .unwrap_or_else(|| ulid::derive_legacy_id(scope_salt, i));
+                .unwrap_or_else(|| ulid::derive_legacy_id(scope_salt, msgs.len()));
             msgs.push(stored.msg);
             ids.push(id);
             tss.push(stored.ts);
@@ -1139,6 +1139,28 @@ mod tests {
             a.message_ids[0].starts_with("m0"),
             "derived id carries zero-ts marker"
         );
+    }
+
+    #[test]
+    fn legacy_derived_ids_ignore_blank_jsonl_lines() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let cid = "legacy_blank_lines";
+        make_char_dir(root, cid);
+        let jsonl = root
+            .join("characters")
+            .join(cid)
+            .join("history")
+            .join("chat_log.jsonl");
+        fs::create_dir_all(jsonl.parent().unwrap()).unwrap();
+        let first = r#"{"role":"user","content":"first"}"#;
+        let second = r#"{"role":"assistant","content":"second"}"#;
+        fs::write(&jsonl, format!("{first}\n\n{second}\n")).unwrap();
+        let with_blank = ChatLog::load_or_create(root, cid).unwrap().message_ids;
+
+        fs::write(&jsonl, format!("{first}\n{second}\n")).unwrap();
+        let without_blank = ChatLog::load_or_create(root, cid).unwrap().message_ids;
+        assert_eq!(with_blank, without_blank);
     }
 
     #[test]

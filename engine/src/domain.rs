@@ -187,7 +187,7 @@ impl ChatService {
                 let idx = log
                     .message_ids
                     .iter()
-                    .position(|x| x == id)
+                    .position(|x| ulid::matches(x, id))
                     .ok_or_else(|| {
                         AirpError::BadRequest(format!(
                             "cursor {id} not in this session (cursor cannot cross character/session)"
@@ -251,7 +251,7 @@ impl ChatService {
             let idx = log
                 .message_ids
                 .iter()
-                .position(|x| x == message_id)
+                .position(|x| ulid::matches(x, message_id))
                 .ok_or_else(|| {
                     AirpError::BadRequest(format!("message_id {message_id} not in this session"))
                 })?;
@@ -1342,7 +1342,7 @@ mod tests {
         let tail = service
             .history_window(&character, session_id.as_ref(), Some(4), None)
             .unwrap();
-        let cursor = tail.oldest_id.unwrap();
+        let cursor = tail.oldest_id.unwrap().to_ascii_lowercase();
 
         // before=cursor → 返回 cursor 严格之前（更早）的消息，limit 3。
         let earlier = service
