@@ -36,6 +36,7 @@ pub mod png_parser;
 pub mod quota;
 pub mod scene;
 pub mod types;
+pub mod ulid;
 
 // M0 F-50 / 6.0n：实现细节模块收紧为 pub(crate)，仅 crate 内部互调。
 // 这些模块不被 main.rs / 外部消费者直接引用，未来重构无 API 兼容包袱。

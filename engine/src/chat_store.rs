@@ -7,20 +7,21 @@ use std::path::{Path, PathBuf};
 use crate::adapter::ChatMessage;
 use crate::error::AirpError;
 use crate::types::SessionId;
+use crate::ulid;
 
-/// ChatLog 滚动上限：超过此值时丢弃最早的消息。
+/// 默认上下文读取上限（#37 / #122 长会话合同）。
 ///
-/// 设计动机：ChatLog 仅用于短期上下文与 UI 回放；长期记忆由卷系统
-/// （`current.md` + `vol_XXX.md` + `index.md`）承担。无上限增长会导致
-/// 单次 load_or_create 反序列化变慢且占用大量内存。
+/// **语义（2026-07-12 重定义）**：这是调用方选择近期上下文时可使用的默认上限，
+/// **不是持久化删除阈值**。完整历史必须留在 `ChatLog` 和 jsonl 中；模型上下文由
+/// `recent` 在读取边界裁剪。后续可引入流式分页读取来降低全量反序列化成本。
 pub const MAX_MESSAGES: usize = 1000;
 
 /// A complete chat log for one character session.
 ///
 /// **CF-2 持久化模型**：消息列表写入 `history/chat_log.jsonl`（每行一条 JSON 消息），
 /// 元数据（session_id / 时间戳）写入 `history/chat_log_meta.json`。
-/// `append` 走 `OpenOptions::append` 实现 O(1) 追加；只有在滚动截断
-/// （`MAX_MESSAGES`）/ delete_last_n / rollback_to 等需要重写历史的路径才会
+/// `append` 走 `OpenOptions::append` 实现 O(1) 追加；只有在迁移、delete_last_n、
+/// rollback_to 等需要改变持久化真相的路径才会
 /// 触发整体重写。
 ///
 /// 迁移链：`chat_log.json`（<6.0e）→ `chat_log.jsonl`（6.0e，根目录）
@@ -34,6 +35,14 @@ pub struct ChatLog {
     pub character_id: String,
     /// Ordered list of messages (user + assistant interleaved)
     pub messages: Vec<ChatMessage>,
+    /// #37 durable message-id contract：每条消息的稳定 durable ID，与 `messages` 一一对应。
+    ///
+    /// - 新写入 → `ulid::new_id()`（UUIDv4-backed opaque ID，JSON Pointer 安全）。
+    /// - 旧 jsonl 无 id → 加载时**确定性派生**（`ulid::derive_legacy_id(scope_salt, index)`），
+    ///   同一 fixture 多次加载产生相同 ID（不写回 jsonl，lazy 兼容）。
+    /// - 长度始终等于 `messages.len()`（save/append/delete/rollback 同步维护）。
+    #[serde(default)]
+    pub message_ids: Vec<String>,
     /// #73 方案 B：消息级时间戳（ISO 8601），与 `messages` 一一对应。
     ///
     /// 旧 jsonl 无 ts → 对应位置为 `None`（向后兼容，不强制迁移）。
@@ -66,20 +75,23 @@ struct ChatLogMeta {
     updated_at: String,
 }
 
-/// #73 方案 B：jsonl 行的持久化结构。
+/// #73 方案 B / #37 durable id：jsonl 行的持久化结构。
 ///
 /// 用 `#[serde(flatten)]` 平铺 `ChatMessage`（role/content，OpenAI 协议兼容），
-/// 额外存 `ts`（消息写入时间，ISO 8601）。
+/// 额外存 `ts`（消息写入时间，ISO 8601）与 `id`（durable message ID）。
 ///
-/// - 旧 jsonl（无 ts）→ deserialize 时 `ts: None`（向后兼容，不强制迁移）
-/// - 新写入 → `ts: Some(now)`
+/// - 旧 jsonl（无 ts / id）→ deserialize 时 `ts: None` / `id: None`（向后兼容，不强制迁移）
+/// - 新写入 → `ts: Some(now)` / `id: Some(ulid::new_id())`
 ///
-/// `ChatLog.messages` 仍是 `Vec<ChatMessage>`（保持 OpenAI 协议兼容），
-/// `ts` 单独存在 `ChatLog.message_timestamps` 中，与 messages 一一对应。
+/// `ChatLog.messages` 仍是 `Vec<ChatMessage>`（保持 OpenAI 协议兼容，durable id 不进
+/// OpenAI 协议类型），`ts` / `id` 单独存在 `ChatLog.message_timestamps` /
+/// `ChatLog.message_ids` 中，与 messages 一一对应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredMessage {
     #[serde(flatten)]
     msg: ChatMessage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ts: Option<String>,
 }
@@ -92,6 +104,7 @@ impl ChatLog {
             session_id: uuid::Uuid::new_v4().to_string(),
             character_id: character_id.to_string(),
             messages: Vec::new(),
+            message_ids: Vec::new(),
             message_timestamps: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
@@ -104,6 +117,12 @@ impl ChatLog {
         let mut log = Self::new(character_id);
         log.scope_session_id = Some(session_id.to_string());
         log
+    }
+
+    /// #85 O1：暴露 scope session id 给 HTTP 响应（`HistoryWindow.scope_session_id`），
+    /// 让前端能把它与 session 列表关联。`None` = legacy per-character log。
+    pub fn scope_session_id(&self) -> Option<&str> {
+        self.scope_session_id.as_deref()
     }
 
     fn history_dir(
@@ -187,6 +206,13 @@ impl ChatLog {
     /// `None` preserves the historical per-character log and migration behavior. Named sessions
     /// use `characters/{id}/sessions/{session_id}/history/` and intentionally do not import the
     /// legacy per-character chat log.
+    ///
+    /// #37 durable message-id contract:
+    /// - 旧 jsonl 行无 `id` → 加载时**确定性派生**（`ulid::derive_legacy_id(scope_salt, index)`），
+    ///   同一 fixture 多次加载产生相同 ID。派生 ID 只在内存 `ChatLog.message_ids` 里补，**不写回 jsonl**
+    ///   （守 lazy + 不删旧文件原则，避免迁移半态）。
+    /// - meta 丢失重建改**确定性派生**（hash `character_id` + scope 或 "legacy"），不再用 `Uuid::new_v4()`——
+    ///   保证多次加载同一 fixture 产生同一 `session_id`（坐实"legacy fixture 多次加载产生相同 ID"验收）。
     pub fn load_or_create_for_session(
         data_root: &Path,
         character_id: &str,
@@ -198,27 +224,26 @@ impl ChatLog {
             let jsonl = Self::scoped_jsonl_path(data_root, character_id, Some(&scope_session_id));
             let meta_p = Self::scoped_meta_path(data_root, character_id, Some(&scope_session_id));
             if jsonl.exists() {
-                let (messages, message_timestamps) = Self::read_messages_jsonl(&jsonl)?;
+                let salt = Self::legacy_scope_salt(character_id, Some(&scope_session_id));
+                let parsed = Self::read_messages_jsonl(&jsonl, &salt)?;
                 let m: ChatLogMeta = if meta_p.exists() {
                     serde_json::from_str(&fs::read_to_string(&meta_p)?)?
                 } else {
-                    let now = Utc::now().to_rfc3339();
-                    ChatLogMeta {
-                        session_id: uuid::Uuid::new_v4().to_string(),
-                        character_id: character_id.to_string(),
-                        created_at: now.clone(),
-                        updated_at: now,
-                    }
+                    // meta 丢失 → 确定性派生 session_id（不再随机 UUID），
+                    // 保证同一 fixture 多次加载产生同一 session_id。
+                    Self::derive_meta(character_id, Some(&scope_session_id))
                 };
-                return Ok(Self {
+                let log = Self {
                     session_id: m.session_id,
                     character_id: m.character_id,
-                    messages,
-                    message_timestamps,
+                    messages: parsed.messages,
+                    message_ids: parsed.message_ids,
+                    message_timestamps: parsed.message_timestamps,
                     created_at: m.created_at,
                     updated_at: m.updated_at,
                     scope_session_id: Some(scope_session_id),
-                });
+                };
+                return Ok(log);
             }
 
             let log = ChatLog::new_for_session(character_id, session_id);
@@ -234,56 +259,49 @@ impl ChatLog {
 
         // ── 1. CF-2 新位置 ────────────────────────────────────────────────────
         if jsonl.exists() {
-            let (messages, message_timestamps) = Self::read_messages_jsonl(&jsonl)?;
+            let salt = Self::legacy_scope_salt(character_id, None);
+            let parsed = Self::read_messages_jsonl(&jsonl, &salt)?;
             let m: ChatLogMeta = if meta_p.exists() {
                 serde_json::from_str(&fs::read_to_string(&meta_p)?)?
             } else {
-                // meta 丢失 → 重建最小元数据
-                let now = Utc::now().to_rfc3339();
-                ChatLogMeta {
-                    session_id: uuid::Uuid::new_v4().to_string(),
-                    character_id: character_id.to_string(),
-                    created_at: now.clone(),
-                    updated_at: now,
-                }
+                // meta 丢失 → 确定性派生（不再随机 UUID）。
+                Self::derive_meta(character_id, None)
             };
-            return Ok(Self {
+            let log = Self {
                 session_id: m.session_id,
                 character_id: m.character_id,
-                messages,
-                message_timestamps,
+                messages: parsed.messages,
+                message_ids: parsed.message_ids,
+                message_timestamps: parsed.message_timestamps,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
-            });
+            };
+            return Ok(log);
         }
 
         // ── 2. pre-CF2 迁移：根目录 chat_log.jsonl → history/ ─────────────────
         if pre_cf2_jsonl.exists() {
             tracing::info!(char = character_id, "CF-2 迁移: chat_log.jsonl → history/");
-            let (messages, message_timestamps) = Self::read_messages_jsonl(&pre_cf2_jsonl)?;
+            let salt = Self::legacy_scope_salt(character_id, None);
+            let parsed = Self::read_messages_jsonl(&pre_cf2_jsonl, &salt)?;
             let m: ChatLogMeta = if pre_cf2_meta.exists() {
                 serde_json::from_str(&fs::read_to_string(&pre_cf2_meta)?)?
             } else {
-                let now = Utc::now().to_rfc3339();
-                ChatLogMeta {
-                    session_id: uuid::Uuid::new_v4().to_string(),
-                    character_id: character_id.to_string(),
-                    created_at: now.clone(),
-                    updated_at: now,
-                }
+                Self::derive_meta(character_id, None)
             };
             let log = Self {
                 session_id: m.session_id,
                 character_id: m.character_id,
-                messages,
-                message_timestamps,
+                messages: parsed.messages,
+                message_ids: parsed.message_ids,
+                message_timestamps: parsed.message_timestamps,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
             };
             log.save(data_root)?;
-            // 删除旧文件，失败不阻塞
+            // 删除旧文件，失败不阻塞（新位置已写；下次加载走新位置）
             if let Err(e) = fs::remove_file(&pre_cf2_jsonl) {
                 tracing::warn!(path = ?pre_cf2_jsonl, err = %e, "CF-2 迁移: 删除旧 chat_log.jsonl 失败");
             }
@@ -309,11 +327,27 @@ impl ChatLog {
             if log.message_timestamps.len() != log.messages.len() {
                 log.message_timestamps = log.messages.iter().map(|_| None).collect();
             }
+            // #37：旧 ChatLog JSON 无 message_ids 字段（#[serde(default)] 给空 Vec），
+            // 但 messages 有内容 → 长度不匹配。确定性派生补齐（legacy fixture 多次加载同 ID）。
+            if log.message_ids.len() != log.messages.len() {
+                let salt = Self::legacy_scope_salt(character_id, None);
+                log.message_ids = log
+                    .messages
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| ulid::derive_legacy_id(&salt, i))
+                    .collect();
+            }
             // A-2：迁移后验证等长不变量
             debug_assert_eq!(
                 log.message_timestamps.len(),
                 log.messages.len(),
                 "legacy JSON 迁移后 message_timestamps.len() != messages.len()"
+            );
+            debug_assert_eq!(
+                log.message_ids.len(),
+                log.messages.len(),
+                "legacy JSON 迁移后 message_ids.len() != messages.len()"
             );
             log.save(data_root)?;
             if let Err(e) = fs::remove_file(&legacy) {
@@ -329,7 +363,55 @@ impl ChatLog {
         Ok(log)
     }
 
-    /// 整体重写 jsonl + meta（用于 delete/rollback/滚动截断）。
+    /// 确定性派生 `ChatLogMeta`（用于 meta 丢失重建）。
+    ///
+    /// `session_id` 用 `character_id` + scope 的稳定 hash 派生（不再随机 UUID），
+    /// 保证同一 fixture 多次加载产生同一 `session_id`。`created_at` / `updated_at`
+    /// 取 jsonl 文件的 mtime（若读不到则 fallback 到 epoch）——meta 丢失本身是边缘场景，
+    /// 时间精度损失可接受，关键是 session_id 稳定。
+    fn derive_meta(character_id: &str, scope: Option<&str>) -> ChatLogMeta {
+        // 稳定 hash：FNV-1a over (character_id ++ scope_or_"legacy")，输出格式化成 UUIDv4 形。
+        let salt = scope.unwrap_or("legacy");
+        let mut h: u64 = 0xcbf29ce484222325;
+        for &b in character_id.as_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        for &b in salt.as_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        // 把 64-bit hash 展成 UUIDv4 形字符串（8-4-4-4-12），够稳定且形如旧 meta。
+        let session_id = format!(
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            (h & 0xFFFF_FFFF) as u32,
+            ((h >> 32) & 0xFFFF) as u16,
+            ((h >> 48) & 0xFFFF) as u16,
+            (h.wrapping_mul(31) & 0xFFFF) as u16,
+            h.wrapping_mul(97) & 0xFFFF_FFFF_FFFF
+        );
+        // created_at / updated_at 用 epoch fallback（meta 丢失 = 时间不可考）。
+        let epoch = "1970-01-01T00:00:00+00:00".to_string();
+        ChatLogMeta {
+            session_id,
+            character_id: character_id.to_string(),
+            created_at: epoch.clone(),
+            updated_at: epoch,
+        }
+    }
+
+    /// 用于 legacy 派生 ID 的 scope salt：`character_id` 或 `character_id/sessions/{sid}`。
+    fn legacy_scope_salt(character_id: &str, scope: Option<&str>) -> String {
+        match scope {
+            Some(sid) => format!("{character_id}/sessions/{sid}"),
+            None => format!("{character_id}/legacy"),
+        }
+    }
+
+    /// 整体重写 jsonl + meta（用于 delete/rollback）。
+    ///
+    /// **#37 注意**：`save` 永远写**全量** `messages`。上下文窗口由 `recent` 在读取时
+    /// 裁剪，不能改变持久化历史。`save` 只被迁移、delete、rollback 等路径调用。
     pub fn save(&self, data_root: &Path) -> Result<(), AirpError> {
         let scope = self.scope_session_id.as_deref();
         let jsonl = Self::scoped_jsonl_path(data_root, &self.character_id, scope);
@@ -342,11 +424,16 @@ impl ChatLog {
             }
         }
 
-        // 写 jsonl：一行一条 StoredMessage（含 ts）
+        // 写 jsonl：一行一条 StoredMessage（含 id + ts）
         let mut buf = String::new();
         for (i, m) in self.messages.iter().enumerate() {
+            let id = self.message_ids.get(i).cloned();
             let ts = self.message_timestamps.get(i).cloned().flatten();
-            let stored = StoredMessage { msg: m.clone(), ts };
+            let stored = StoredMessage {
+                msg: m.clone(),
+                id,
+                ts,
+            };
             buf.push_str(&serde_json::to_string(&stored)?);
             buf.push('\n');
         }
@@ -368,23 +455,21 @@ impl ChatLog {
     ///
     /// 常规路径 O(1)：以 `OpenOptions::append` 在 jsonl 末尾追加一行，
     /// 然后用 ~小常数大小的 meta 文件刷新 `updated_at`。
-    /// 仅当超过 `MAX_MESSAGES` 触发 FIFO 滚动时才会发生整体重写。
+    ///
+    /// #37 durable message-id contract：
+    /// - 每条新消息生成 UUIDv4-backed ID，写入 jsonl 行 + 内存 `message_ids`。
+    /// - **`MAX_MESSAGES` 不再物理删除消息**：jsonl 和内存 `ChatLog` 都保留完整历史；
+    ///   orchestrator 通过 `recent(MAX_MESSAGES)` 获取有界上下文。这样分页、回滚和保存
+    ///   始终基于同一份完整历史，避免窗口态覆盖持久化真相。
     ///
     /// #73 方案 B：同时写入消息级 `ts`（ISO 8601 now），并同步 push 到
     /// `message_timestamps` 保持与 `messages` 等长。
     pub fn append(&mut self, data_root: &Path, msg: ChatMessage) -> Result<(), AirpError> {
         let now = Utc::now().to_rfc3339();
+        let id = ulid::new_id();
         self.messages.push(msg.clone());
+        self.message_ids.push(id.clone());
         self.message_timestamps.push(Some(now.clone()));
-
-        if self.messages.len() > MAX_MESSAGES {
-            // 滚动截断 → 走整体重写。同步 drain timestamps。
-            let drop = self.messages.len() - MAX_MESSAGES;
-            self.messages.drain(..drop);
-            self.message_timestamps.drain(..drop);
-            self.updated_at = Utc::now().to_rfc3339();
-            return self.save(data_root);
-        }
 
         // 常规追加：jsonl O(1) 写入 + meta 小文件刷新。
         let scope = self.scope_session_id.as_deref();
@@ -395,7 +480,11 @@ impl ChatLog {
                 fs::create_dir_all(parent)?;
             }
         }
-        let stored = StoredMessage { msg, ts: Some(now) };
+        let stored = StoredMessage {
+            msg,
+            id: Some(id),
+            ts: Some(now),
+        };
         let mut line = serde_json::to_string(&stored)?;
         line.push('\n');
         let mut f = fs::OpenOptions::new()
@@ -414,19 +503,22 @@ impl ChatLog {
         };
         let meta_path = Self::scoped_meta_path(data_root, &self.character_id, scope);
         fs::write(&meta_path, serde_json::to_string_pretty(&m)?)?;
+
         Ok(())
     }
 
     /// Deletes the last N messages (for regen: delete last assistant message).
     ///
-    /// #73 方案 B：同步截断 `message_timestamps` 保持等长。
+    /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     pub fn delete_last_n(&mut self, data_root: &Path, n: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if n > len {
             self.messages.clear();
+            self.message_ids.clear();
             self.message_timestamps.clear();
         } else {
             self.messages.truncate(len - n);
+            self.message_ids.truncate(len - n);
             self.message_timestamps.truncate(len - n);
         }
         self.updated_at = Utc::now().to_rfc3339();
@@ -435,10 +527,11 @@ impl ChatLog {
 
     /// Rolls back to a specific message index (keeps messages 0..=index).
     ///
-    /// #73 方案 B：同步截断 `message_timestamps` 保持等长。
+    /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     pub fn rollback_to(&mut self, data_root: &Path, index: usize) -> Result<(), AirpError> {
         if index < self.messages.len() {
             self.messages.truncate(index + 1);
+            self.message_ids.truncate(index + 1);
             self.message_timestamps.truncate(index + 1);
             self.updated_at = Utc::now().to_rfc3339();
             self.save(data_root)?;
@@ -458,15 +551,17 @@ impl ChatLog {
 
     /// 逐行解析 jsonl。空行忽略；非法行返回错误（不静默吞掉，避免历史丢失）。
     ///
-    /// #73 方案 B：返回 `(messages, timestamps)` — 用 `StoredMessage` 反序列化。
-    /// `StoredMessage` 用 `#[serde(flatten)]` 平铺 `ChatMessage`，配合
-    /// `ts: Option<String>` + `#[serde(default)]`，旧 jsonl（无 ts 字段）
-    /// 会直接解析为 `ts: None`，无需单独的 `ChatMessage` 回退路径。
-    fn read_messages_jsonl(
-        path: &Path,
-    ) -> Result<(Vec<ChatMessage>, Vec<Option<String>>), AirpError> {
+    /// #37 durable id：返回 `(messages, message_ids, timestamps)`。
+    /// - `StoredMessage.id` 为 `Some` → 直接用（新写入路径）。
+    /// - `StoredMessage.id` 为 `None` → **确定性派生**（`ulid::derive_legacy_id(scope_salt, index)`），
+    ///   同一 legacy fixture 多次加载产生相同 ID。派生 ID 不写回 jsonl（lazy 兼容）。
+    ///
+    /// `scope_salt` 来自 character/session 的逻辑身份，而不是绝对路径，因此移动数据根目录
+    /// 或恢复备份不会改变 legacy 消息 ID。
+    fn read_messages_jsonl(path: &Path, scope_salt: &str) -> Result<JsonlParseResult, AirpError> {
         let content = fs::read_to_string(path)?;
         let mut msgs = Vec::new();
+        let mut ids: Vec<String> = Vec::new();
         let mut tss = Vec::new();
         for (i, line) in content.lines().enumerate() {
             let line = line.trim();
@@ -476,18 +571,38 @@ impl ChatLog {
             let stored: StoredMessage = serde_json::from_str(line).map_err(|e| {
                 AirpError::Internal(format!("chat_log.jsonl 第 {} 行解析失败: {}", i + 1, e))
             })?;
+            // #37：无 id 的 legacy 行 → 确定性派生（同 fixture 多次加载同 ID）。
+            let id = stored
+                .id
+                .unwrap_or_else(|| ulid::derive_legacy_id(scope_salt, i));
             msgs.push(stored.msg);
+            ids.push(id);
             tss.push(stored.ts);
         }
-        // A-2：等长不变量防御。msgs 和 tss 在同一循环中 push，理论上永远等长。
-        // 此 assert 防止未来修改破坏不变量。
+        // A-2：等长不变量防御。三 Vec 在同一循环中 push，理论上永远等长。
         debug_assert_eq!(
             msgs.len(),
             tss.len(),
             "read_messages_jsonl: msgs.len() != tss.len()"
         );
-        Ok((msgs, tss))
+        debug_assert_eq!(
+            msgs.len(),
+            ids.len(),
+            "read_messages_jsonl: msgs.len() != ids.len()"
+        );
+        Ok(JsonlParseResult {
+            messages: msgs,
+            message_ids: ids,
+            message_timestamps: tss,
+        })
     }
+}
+
+/// `read_messages_jsonl` 的返回聚合（避免 clippy::type_complexity 巨元 tuple）。
+struct JsonlParseResult {
+    messages: Vec<ChatMessage>,
+    message_ids: Vec<String>,
+    message_timestamps: Vec<Option<String>>,
 }
 
 #[cfg(test)]
@@ -698,7 +813,7 @@ mod tests {
         fs::create_dir_all(root.join("characters").join("roller")).unwrap();
 
         let mut log = ChatLog::new("roller");
-        // 写入 MAX_MESSAGES + 50 条；前 50 条应被丢弃，留下最后 MAX_MESSAGES 条。
+        // 写入 MAX_MESSAGES + 50 条；完整历史不得因上下文上限而丢弃。
         let total = MAX_MESSAGES + 50;
         for i in 0..total {
             log.append(
@@ -715,12 +830,8 @@ mod tests {
             .unwrap();
         }
 
-        assert_eq!(log.messages.len(), MAX_MESSAGES);
-        // 第一条应是 msg-50（前 50 条被滚动丢弃）
-        assert_eq!(
-            log.messages[0].content,
-            format!("msg-{}", total - MAX_MESSAGES)
-        );
+        assert_eq!(log.messages.len(), total);
+        assert_eq!(log.messages[0].content, "msg-0");
         // 最后一条应是 msg-(total-1)
         assert_eq!(
             log.messages.last().unwrap().content,
@@ -944,5 +1055,210 @@ mod tests {
         assert_eq!(reloaded.message_timestamps.len(), 2);
         assert_eq!(reloaded.messages[0].content, "msg0");
         assert_eq!(reloaded.messages[1].content, "msg1");
+    }
+
+    // ── #37 durable message-id contract 不变式 ──────────────────────────────
+
+    fn make_char_dir(root: &Path, cid: &str) {
+        fs::create_dir_all(root.join("characters").join(cid)).unwrap();
+    }
+
+    #[test]
+    fn durable_id_unique_within_session() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "uniq_char");
+        let mut log = ChatLog::new("uniq_char");
+        for _ in 0..5 {
+            log.append(
+                root,
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: "x".to_string(),
+                },
+            )
+            .unwrap();
+        }
+        // 不变量 1：同 session 内任意两条 durable ID 不同。
+        let mut seen = std::collections::HashSet::new();
+        for id in &log.message_ids {
+            assert!(seen.insert(id.clone()), "duplicate durable id: {id}");
+        }
+    }
+
+    #[test]
+    fn durable_id_stable_across_reload() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "stable_char");
+        let mut log = ChatLog::new("stable_char");
+        log.append(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "first".to_string(),
+            },
+        )
+        .unwrap();
+        let id_before = log.message_ids[0].clone();
+
+        // 重启模拟：reload 同 fixture。
+        let reloaded = ChatLog::load_or_create(root, "stable_char").unwrap();
+        // 不变量 2：消息落盘后，重启 / 多次 load → 同一消息同一 ID。
+        assert_eq!(reloaded.message_ids.len(), 1);
+        assert_eq!(reloaded.message_ids[0], id_before);
+    }
+
+    #[test]
+    fn legacy_derived_id_stable_across_loads() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let cid = "legacy_char";
+        make_char_dir(root, cid);
+
+        // 手写一行无 id 的 legacy jsonl（模拟旧 fixture）。
+        let jsonl = root
+            .join("characters")
+            .join(cid)
+            .join("history")
+            .join("chat_log.jsonl");
+        fs::create_dir_all(jsonl.parent().unwrap()).unwrap();
+        let legacy_line = r#"{"role":"user","content":"hello"}"#;
+        fs::write(&jsonl, format!("{legacy_line}\n")).unwrap();
+
+        // 不变量 3：同一 legacy fixture 多次加载 → 同一派生 ID。
+        let a = ChatLog::load_or_create(root, cid).unwrap();
+        let b = ChatLog::load_or_create(root, cid).unwrap();
+        assert_eq!(a.message_ids.len(), 1);
+        assert_eq!(
+            a.message_ids[0], b.message_ids[0],
+            "legacy derive must be stable"
+        );
+        // 派生 ID 形如 m0…（legacy marker）。
+        assert!(
+            a.message_ids[0].starts_with("m0"),
+            "derived id carries zero-ts marker"
+        );
+    }
+
+    #[test]
+    fn legacy_meta_loss_rebuild_is_deterministic() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let cid = "meta_loss_char";
+        make_char_dir(root, cid);
+
+        // 写 jsonl 但不写 meta → meta 丢失路径。
+        let jsonl = root
+            .join("characters")
+            .join(cid)
+            .join("history")
+            .join("chat_log.jsonl");
+        fs::create_dir_all(jsonl.parent().unwrap()).unwrap();
+        fs::write(
+            &jsonl,
+            r#"{"role":"user","content":"a"}
+"#,
+        )
+        .unwrap();
+
+        // 多次加载 → derive_meta 产出同一 session_id（不再随机 UUID）。
+        let a = ChatLog::load_or_create(root, cid).unwrap();
+        let b = ChatLog::load_or_create(root, cid).unwrap();
+        assert_eq!(
+            a.session_id, b.session_id,
+            "meta-loss derive must be deterministic"
+        );
+    }
+
+    #[test]
+    fn ids_timestamps_messages_equal_length_after_mutations() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let cid = "eq_char";
+        make_char_dir(root, cid);
+        let mut log = ChatLog::new(cid);
+        for _ in 0..3 {
+            log.append(
+                root,
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: "x".to_string(),
+                },
+            )
+            .unwrap();
+        }
+        // 不变量 4：三 Vec 等长。
+        assert_eq!(
+            log.messages.len(),
+            log.message_ids.len(),
+            "messages.len() != message_ids.len()"
+        );
+        assert_eq!(
+            log.messages.len(),
+            log.message_timestamps.len(),
+            "messages.len() != message_timestamps.len()"
+        );
+
+        // rollback 后仍等长。
+        log.rollback_to(root, 0).unwrap();
+        assert_eq!(log.messages.len(), 1);
+        assert_eq!(log.messages.len(), log.message_ids.len());
+        assert_eq!(log.messages.len(), log.message_timestamps.len());
+
+        // delete_last_n 后仍等长。
+        log.delete_last_n(root, 1).unwrap();
+        assert_eq!(log.messages.len(), 0);
+        assert_eq!(log.messages.len(), log.message_ids.len());
+        assert_eq!(log.messages.len(), log.message_timestamps.len());
+    }
+
+    #[test]
+    fn max_messages_does_not_delete_persistence() {
+        // 不变量 8：append 超量后，jsonl 与 ChatLog 都保留全部消息。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let cid = "cap_char";
+        make_char_dir(root, cid);
+        let mut log = ChatLog::new(cid);
+        // 写 MAX_MESSAGES + 5 条。
+        for i in 0..(MAX_MESSAGES + 5) {
+            log.append(
+                root,
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: format!("msg{i}"),
+                },
+            )
+            .unwrap();
+        }
+        // 内存态与持久化态都保留完整历史；上下文限制只在 recent() 读取时应用。
+        assert_eq!(
+            log.messages.len(),
+            MAX_MESSAGES + 5,
+            "ChatLog must retain the complete history"
+        );
+        assert_eq!(log.message_ids.len(), MAX_MESSAGES + 5);
+        assert_eq!(log.message_timestamps.len(), MAX_MESSAGES + 5);
+        assert_eq!(log.recent(MAX_MESSAGES).len(), MAX_MESSAGES);
+
+        // jsonl 物理全留：reload 走 read_messages_jsonl 读全量行数。
+        let jsonl = root
+            .join("characters")
+            .join(cid)
+            .join("history")
+            .join("chat_log.jsonl");
+        let raw = fs::read_to_string(&jsonl).unwrap();
+        let line_count = raw.lines().filter(|l| !l.trim().is_empty()).count();
+        assert_eq!(
+            line_count,
+            MAX_MESSAGES + 5,
+            "jsonl must retain all messages (no physical delete)"
+        );
+
+        // reload 仍可访问最早消息，供 cursor 分页和按 ID 回滚。
+        let reloaded = ChatLog::load_or_create(root, cid).unwrap();
+        assert_eq!(reloaded.messages.len(), MAX_MESSAGES + 5);
+        assert_eq!(reloaded.messages[0].content, "msg0");
     }
 }

@@ -1676,7 +1676,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_reports_persisted_index_after_fifo_truncation() {
+    async fn append_reports_full_history_index_after_context_threshold() {
         let tmp = tempdir().unwrap();
         let state = make_state(tmp.path().to_path_buf());
         crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
@@ -1706,10 +1706,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(r.output["index"], MAX_MESSAGES - 1);
-        assert_eq!(r.output["total"], MAX_MESSAGES);
-        assert_eq!(r.output["truncated"], true);
-        assert_eq!(r.output["truncated_count"], 1);
+        assert_eq!(r.output["index"], MAX_MESSAGES);
+        assert_eq!(r.output["total"], MAX_MESSAGES + 1);
+        assert_eq!(r.output["truncated"], false);
+        assert_eq!(r.output["truncated_count"], 0);
     }
 
     #[tokio::test]
