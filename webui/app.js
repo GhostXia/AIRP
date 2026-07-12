@@ -23,6 +23,7 @@
   const providerModel = $('#provider-model');
   const providerApiKey = $('#provider-api-key');
   const providerSaveStatus = $('#provider-save-status');
+  const btnSaveProvider = $('#btn-save-provider');
   const charSelect = $('#char-select');
   const sessSelect = $('#sess-select');
   const chatLog = $('#chat-log');
@@ -56,6 +57,7 @@
   const personaVariables = $('#persona-variables');
   const personaStatus = $('#persona-status');
   const btnLoadPersona = $('#btn-load-persona');
+  const btnSavePersona = $('#btn-save-persona');
   const presetSelect = $('#preset-select');
   const presetImportFile = $('#preset-import-file');
   const presetImportId = $('#preset-import-id');
@@ -351,20 +353,25 @@
       return;
     }
     providerSaveStatus.textContent = '应用中…';
-    const payload = { provider: providerKind.value, endpoint, model };
-    const key = providerApiKey.value.trim();
-    if (key) payload.api_key = key;
-    const saved = await api('POST', '/v1/settings', payload);
-    providerApiKey.value = '';
-    if (!saved.ok) {
-      providerSaveStatus.textContent = '保存失败: ' + formatError(saved.data, saved.text);
-      return;
+    if (btnSaveProvider) btnSaveProvider.disabled = true;
+    try {
+      const payload = { provider: providerKind.value, endpoint, model };
+      const key = providerApiKey.value.trim();
+      if (key) payload.api_key = key;
+      const saved = await api('POST', '/v1/settings', payload);
+      providerApiKey.value = '';
+      if (!saved.ok) {
+        providerSaveStatus.textContent = '保存失败: ' + formatError(saved.data, saved.text);
+        return;
+      }
+      const validation = await api('GET', '/v1/models');
+      providerSaveStatus.textContent = validation.ok
+        ? '已应用；真实 /v1/models provider 请求通过'
+        : '已应用；provider 验证失败: ' + formatError(validation.data, validation.text);
+      await Promise.all([refreshSettings(), refreshModels()]);
+    } finally {
+      if (btnSaveProvider) btnSaveProvider.disabled = false;
     }
-    const validation = await api('GET', '/v1/models');
-    providerSaveStatus.textContent = validation.ok
-      ? '已应用；真实 /v1/models provider 请求通过'
-      : '已应用；provider 验证失败: ' + formatError(validation.data, validation.text);
-    await Promise.all([refreshSettings(), refreshModels()]);
   }
 
   if (providerSettings) providerSettings.addEventListener('submit', saveProviderSettings);
@@ -457,19 +464,24 @@
     try { variables = parsePersonaVariables(); }
     catch (error) { personaStatus.textContent = error.message; return; }
     personaStatus.textContent = '保存中…';
-    const payload = {
-      expected_revision: personaRevision,
-      name: personaName.value.trim() || 'User',
-      description: personaDescription.value.trim(),
-      variables,
-    };
-    const r = await api('PUT', '/v1/users/' + encodeURIComponent(userId) + '/persona', payload);
-    if (!r.ok) {
-      personaStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
-      return;
+    if (btnSavePersona) btnSavePersona.disabled = true;
+    try {
+      const payload = {
+        expected_revision: personaRevision,
+        name: personaName.value.trim() || 'User',
+        description: personaDescription.value.trim(),
+        variables,
+      };
+      const r = await api('PUT', '/v1/users/' + encodeURIComponent(userId) + '/persona', payload);
+      if (!r.ok) {
+        personaStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+        return;
+      }
+      await refreshPersona();
+      personaStatus.textContent = '已保存 · ' + personaStatus.textContent;
+    } finally {
+      if (btnSavePersona) btnSavePersona.disabled = false;
     }
-    await refreshPersona();
-    personaStatus.textContent = '已保存 · ' + personaStatus.textContent;
   }
 
   async function refreshPresets() {
@@ -506,20 +518,25 @@
       return;
     }
     presetStatus.textContent = '导入中…';
-    let presetJson;
-    try { presetJson = await file.text(); }
-    catch (error) { presetStatus.textContent = '读取失败: ' + error.message; return; }
-    const r = await api('POST', '/v1/presets/import', { preset_id: presetId, preset_json: presetJson });
-    if (!r.ok) {
-      presetStatus.textContent = '导入失败: ' + formatError(r.data, r.text);
-      return;
+    if (btnImportPreset) btnImportPreset.disabled = true;
+    try {
+      let presetJson;
+      try { presetJson = await file.text(); }
+      catch (error) { presetStatus.textContent = '读取失败: ' + error.message; return; }
+      const r = await api('POST', '/v1/presets/import', { preset_id: presetId, preset_json: presetJson });
+      if (!r.ok) {
+        presetStatus.textContent = '导入失败: ' + formatError(r.data, r.text);
+        return;
+      }
+      await refreshPresets();
+      presetSelect.value = presetId;
+      presetImportFile.value = '';
+      presetImportId.value = '';
+      rememberWorkspace();
+      presetStatus.textContent = '已导入 ' + presetId + ' · prompts ' + (r.data?.prompts_count ?? 0);
+    } finally {
+      if (btnImportPreset) btnImportPreset.disabled = false;
     }
-    await refreshPresets();
-    presetSelect.value = presetId;
-    presetImportFile.value = '';
-    presetImportId.value = '';
-    rememberWorkspace();
-    presetStatus.textContent = '已导入 ' + presetId + ' · prompts ' + (r.data?.prompts_count ?? 0);
   }
 
   if (personaForm) personaForm.addEventListener('submit', savePersona);
@@ -1055,6 +1072,10 @@
     if (r.ok) {
       const data = r.data && typeof r.data === 'object' ? r.data : {};
       const msgs = data.messages || r.data || [];
+      // harness 已知限制（WEBUI-AUDIT-v2 A-05）：此处全量 innerHTML='' + 逐条 appendMsg
+      // 违反性能契约 §2.5 约束 #3（patch 优先，禁每轮全量重灌）。WebUI 是临时诊断面，
+      // 单次会话很少超 500 条，可接受。产品 UI（Tauri/Vue）须走虚拟滚动 + 窗口分页，
+      // 不得复用此全量重建路径。
       // #73 方案 B：消息级时间戳（与 messages 一一对应）。旧会话可能无 ts → null。
       const tss = Array.isArray(data.message_timestamps) ? data.message_timestamps : [];
       // A-3：长度不匹配是 engine bug，显式 warn 暴露而非静默降级
@@ -1383,7 +1404,8 @@
     let assertion = '';
     if (ok) {
       try {
-        const h = await api('POST', '/v1/chat/history', { character_id: selectedChar });
+        // MVP §3.2：补传 session_id，避免读回该角色所有会话的消息（旁路 session 隔离）。
+        const h = await api('POST', '/v1/chat/history', buildSessionPayload());
         if (h.ok) {
           const data = h.data && typeof h.data === 'object' ? h.data : {};
           const msgs = Array.isArray(data.messages) ? data.messages : [];
