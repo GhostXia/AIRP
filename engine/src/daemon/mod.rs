@@ -23,6 +23,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -186,6 +187,9 @@ impl tower_governor::key_extractor::KeyExtractor for UserOrIpKeyExtractor {
     }
 }
 
+const RATE_LIMIT_PERIOD: Duration = Duration::from_millis(100);
+const RATE_LIMIT_BURST: u32 = 20;
+
 /// 构造 axum Router：注册所有 `/v1/*` 端点、CORS 中间件、限流中间件。
 pub fn create_router(state: Arc<DaemonState>) -> Router {
     let cors = cors_layer();
@@ -197,7 +201,9 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
     // the same budget. 10 req/s sustained, burst 20 per IP.
     let governor_conf = Arc::new({
         let mut b = GovernorConfigBuilder::default();
-        b.per_second(10).burst_size(20);
+        // tower_governor's `per_second(n)` means one token every n seconds,
+        // not n tokens per second. A 100ms period is the intended 10 req/s.
+        b.period(RATE_LIMIT_PERIOD).burst_size(RATE_LIMIT_BURST);
         b.key_extractor(UserOrIpKeyExtractor)
             .finish()
             .expect("GovernorConfigBuilder 配置有效")
@@ -1394,7 +1400,7 @@ mod tests {
 
 #[cfg(test)]
 mod tests_dx4 {
-    use super::UserOrIpKeyExtractor;
+    use super::{UserOrIpKeyExtractor, RATE_LIMIT_BURST, RATE_LIMIT_PERIOD};
     use axum::extract::ConnectInfo;
     use axum::http::Request;
     use std::net::SocketAddr;
@@ -1416,6 +1422,12 @@ mod tests_dx4 {
         let mut req = Request::builder().body(()).unwrap();
         req.extensions_mut().insert(ConnectInfo(addr));
         req
+    }
+
+    #[test]
+    fn rate_limit_matches_ten_requests_per_second_with_twenty_burst() {
+        assert_eq!(RATE_LIMIT_PERIOD, std::time::Duration::from_millis(100));
+        assert_eq!(RATE_LIMIT_BURST, 20);
     }
 
     #[test]
