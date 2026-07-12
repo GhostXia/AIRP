@@ -344,6 +344,10 @@ pub(crate) fn preset_json_path(root: &Path, preset_id: &str) -> PathBuf {
     root.join("presets").join(preset_id).join("preset.json")
 }
 
+pub(crate) fn legacy_preset_json_path(root: &Path, preset_id: &str) -> PathBuf {
+    root.join("presets").join(format!("{preset_id}.json"))
+}
+
 #[allow(dead_code)]
 pub(crate) fn preset_regex_dir(root: &Path, preset_id: &str) -> Result<PathBuf, AirpError> {
     let dir = root.join("presets").join(preset_id).join("regex");

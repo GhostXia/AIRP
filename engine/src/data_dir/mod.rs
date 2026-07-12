@@ -43,7 +43,7 @@ pub use paths::{
 };
 pub(crate) use paths::{
     char_card_dir, char_gating_dir, char_greetings_dir, char_world_dir, char_world_lorebook_path,
-    ensure_context_bundle_dir, preset_json_path,
+    ensure_context_bundle_dir, legacy_preset_json_path, preset_json_path,
 };
 pub use security::{safe_resolve_for_write, safe_resolve_under_data_root, validate_id_segment};
 pub use session::{

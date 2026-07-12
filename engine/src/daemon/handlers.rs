@@ -256,10 +256,7 @@ pub(super) async fn get_preset_endpoint(
 ) -> Result<Json<Vec<crate::orchestrator::TavernPrompt>>, AirpError> {
     let preset_id = PresetId::new(preset_id)?;
     let normalized_path = data_dir::preset_json_path(&state.data_root, preset_id.as_str());
-    let legacy_path = state
-        .data_root
-        .join("presets")
-        .join(format!("{}.json", preset_id));
+    let legacy_path = data_dir::legacy_preset_json_path(&state.data_root, preset_id.as_str());
     let preset_path = if normalized_path.exists() {
         normalized_path
     } else {
@@ -308,18 +305,15 @@ pub(super) async fn import_preset_endpoint(
         .lock()
         .expect("preset import lock poisoned");
     let dir = state.data_root.join("presets").join(preset_id.as_str());
-    fs::create_dir_all(&dir)?;
     let final_path = dir.join("preset.json");
-    let legacy_path = state
-        .data_root
-        .join("presets")
-        .join(format!("{}.json", preset_id));
+    let legacy_path = data_dir::legacy_preset_json_path(&state.data_root, preset_id.as_str());
     if final_path.exists() || legacy_path.exists() {
         return Err(AirpError::BadRequest(format!(
             "preset {} already exists; explicit overwrite is not supported",
             preset_id.as_str()
         )));
     }
+    fs::create_dir_all(&dir)?;
     data_dir::replace_file(&final_path, &bytes)?;
 
     Ok(Json(ImportPresetResponse {
@@ -2023,6 +2017,36 @@ mod tests {
         serde_json::from_str::<crate::orchestrator::TavernPreset>(&written).unwrap();
         assert!(!dir.join("preset.json.tmp").exists());
         assert!(!dir.join("preset.json.bak").exists());
+    }
+
+    #[tokio::test]
+    async fn import_preset_rejects_legacy_duplicate_without_creating_directory() {
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let presets = state.data_root.join("presets");
+        std::fs::create_dir_all(&presets).unwrap();
+        std::fs::write(presets.join("legacy.json"), r#"{"prompts":[]}"#).unwrap();
+        let app = super::super::create_router(state.clone());
+        let body = serde_json::json!({
+            "preset_id": "legacy",
+            "preset_json": r#"{"prompts":[]}"#
+        });
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/presets/import")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(!presets.join("legacy").exists());
     }
 
     /// #114：preset_id 路径遍历 → BadRequest，不写盘。
