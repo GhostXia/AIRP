@@ -40,9 +40,32 @@
       </section>
 
       <section class="panel-section" id="session-context">
-        <div class="section-heading"><span>会话</span><button id="btn-new-session" title="新建会话">新建</button></div>
+        <div class="section-heading"><span>会话</span><span><button id="btn-new-session" title="新建会话">新建</button><button id="btn-delete-session" class="btn-danger" title="删除当前会话">删除</button></span></div>
         <select id="sess-select" size="6" aria-label="会话列表"></select>
       </section>
+
+      <details class="panel-section" id="persona-section" open>
+        <summary>User 设定</summary>
+        <form id="persona-form" class="settings-form">
+          <label>User ID<input id="persona-user-id" value="default" autocomplete="username" /></label>
+          <label>显示名<input id="persona-name" value="User" /></label>
+          <label>描述<textarea id="persona-description" rows="3"></textarea></label>
+          <label>变量（JSON object）<textarea id="persona-variables" class="mono" rows="3">{}</textarea></label>
+          <div class="form-actions"><button id="btn-load-persona" type="button">加载</button><button class="btn-primary" type="submit">保存</button></div>
+          <span id="persona-status" class="hint">—</span>
+        </form>
+      </details>
+
+      <details class="panel-section" id="preset-section" open>
+        <summary>预设</summary>
+        <div class="settings-form">
+          <label>当前预设<select id="preset-select"><option value="">不使用预设</option></select></label>
+          <label>导入 JSON<input id="preset-import-file" type="file" accept=".json" /></label>
+          <label>Preset ID<input id="preset-import-id" placeholder="例如 roleplay-default" /></label>
+          <button id="btn-import-preset" type="button">导入预设</button>
+          <span id="preset-status" class="hint">—</span>
+        </div>
+      </details>
 
       <details id="state-section" class="panel-section">
         <summary>状态 <button id="btn-refresh-state" title="刷新状态">刷新</button></summary>

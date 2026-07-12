@@ -6,6 +6,8 @@
 >
 > 目标：以最短路径让普通用户通过浏览器完成一次可持续的基础 RP 使用闭环，而不是继续扩张候选能力。
 
+> 2026-07-11 进度：PR #118 已合并后端 Persona/Preset/session/outbound 契约；当前分支已接通 WebUI Persona、Preset、session 删除和工作区恢复。尚未完成的唯一发布门槛是零密钥 mock-provider 全链路浏览器验收及其暴露问题的回归修复。
+
 ## 1. “基本可用”的唯一判据
 
 在全新 data root 上，用户能够：

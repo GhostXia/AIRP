@@ -49,7 +49,9 @@ they are not the served WebUI implementation.
 
 ## Scope
 
-The current implementation already covers connection, provider settings, character import, sessions, streaming chat/history, regen/rollback, Agent Run and diagnostics. The active MVP plan adds persistent basic User Persona, chat-time Preset selection/import, session deletion/isolation and an automated full browser smoke. Until those land, the fixed `User` profile and missing chat preset selector are known blockers to calling the WebUI fully usable.
+The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. The remaining release gate is the zero-secret mock-provider browser smoke covering multi-turn chat, refresh recovery and destructive operations; until that passes, this remains an MVP candidate rather than a declared fully usable release.
+
+Workspace choices (non-secret User ID, selected character/session and Preset) are restored from browser-local state. Engine URL and optional bearer remain tab-scoped in `sessionStorage`; provider secrets are never written to `localStorage`.
 
 **Reachability & config (P0)**
 -  `/version` (health check)
