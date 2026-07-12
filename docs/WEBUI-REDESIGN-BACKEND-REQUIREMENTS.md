@@ -1,6 +1,6 @@
 # WebUI 重构 — 后端对接需求报告
 
-> **PR #88 设计输入，不是运行时完成证明**：设计稿保留在 `airp-engine-console/`；PR #106 已把角色/会话视图与工作台运行态迁入 `webui/`。后续分支又补了可编辑 provider 配置和真实 `/v1/models` 请求验证；带真实凭据的远端证据与设计源遗留项仍见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md) A-08 与 issue #105。
+> **PR #88 历史设计输入，不是运行时完成证明**：设计稿保留在 `airp-engine-console/`；PR #106 已把角色/会话视图与工作台运行态迁入 `webui/`，PR #118/#119/#121 又完成基础 Persona/Preset/session 接线。正文中的旧 CORS/缺口描述不可作为当前事实；见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 > 日期：2026-07-07
 > 给：后端开发 Agent

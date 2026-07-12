@@ -32,15 +32,17 @@ D:\AIRP-Dev/
 
 ## 当前状态
 
+> 2026-07-12 的权威实现、缺口和下一阶段顺序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。dated audits 只保留历史证据。
+
 - engine 已具备单回合 SSE 对话、OpenAI/Anthropic adapter、角色/会话/状态/场景/基础世界书、卷系统、拆解/analysis 和 settings/models 等 API。PR #100 留有一次 WebUI → engine → 真实 DeepSeek 的成功流式证据。
 - 默认 Agent 工具注册表当前为 19 个工具；`GET /v1/agent/tools` 提供排序后的运行时目录，`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist/confirm 门执行 typed observation，并只由 finalizer 做最终纯净生成。
 - UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；desktop 现在持有并在退出时终止 sidecar，Windows workflow 已加入安装→启动→ready→退出 smoke，等待 CI artifact 实跑证据。
 - 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
 - WebUI 当前是轻量浏览器 RP 客户端兼后端诊断面，不替代 Tauri/Vue 长期产品 UI。PR #106 已把 V2 运行态落到 `webui/`；provider/endpoint/model/runtime key 可编辑，应用后通过真实 `/v1/models` 请求验证，带真实凭据的远端运行证据仍需手动执行。
-- 当前近期里程碑改为“最快形成基本可用 WebUI”：补单默认 Persona、Preset 选择/导入、session delete/隔离和零密钥浏览器 smoke，使其能完成基础 RP 日常闭环；详细范围见 [docs/WEBUI-MVP-PLAN.md](docs/WEBUI-MVP-PLAN.md)。
-- 2026-07-11 本地 workspace tests、UI tests/typecheck、Rust fmt 与 `-D warnings` Clippy 均通过；仓库已有自动 PR gate。
+- WebUI 的单默认 Persona、Preset 选择/导入、session delete/隔离和 busy-state 收口已由 PR #118/#119/#121 完成；当前唯一 MVP 发布门槛是零密钥 mock-provider 全链路浏览器验收。
+- 2026-07-12 本地与 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；具体快照见当前基线。
 
-当前权威状态、独立发现和路线排序见 [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)。实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
+当前权威状态和路线排序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。[docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md) 是历史审计；实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
 
 ## 本地环境
 
@@ -77,7 +79,7 @@ npm run typecheck
 npm run test
 ```
 
-本仓有手动 GitHub Actions 打包 workflow，但它不是 PR gate。本地测试和人工 review 仍是主要门禁。`subagent_context_has_no_orchestrator_noise` 是干净提示词不变式，不得删除或削弱。
+本仓的 `.github/workflows/pr-gate.yml` 会自动执行 Rust/UI 质量门禁；手动打包 workflow 另行负责 Windows artifact。人工 review 仍决定是否合并。`subagent_context_has_no_orchestrator_noise` 是干净提示词不变式，不得删除或削弱。
 
 ## 运行
 
@@ -116,14 +118,15 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 
 - [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)：当前开发交接与工程纪律
 - [docs/PLAN.md](docs/PLAN.md)：长期设计计划
-- [docs/WEBUI-MVP-PLAN.md](docs/WEBUI-MVP-PLAN.md)：当前最快形成基本可用 WebUI 的两 PR 执行计划
+- [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)：当前事实、剩余门槛与新 session 入口
+- [docs/WEBUI-MVP-PLAN.md](docs/WEBUI-MVP-PLAN.md)：WebUI 基本可用验收合同；实现阶段已完成，剩余 browser acceptance
 - [docs/WEBUI-BACKEND-VALIDATION.md](docs/WEBUI-BACKEND-VALIDATION.md)：临时 WebUI 后端可靠性验证路线
 - [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)：四个源项目的资产吸收/北极星降级决策
 - [docs/UI-PROTOCOL-DECISION.md](docs/UI-PROTOCOL-DECISION.md)：UI 协议与 Widget 的采纳/降级决策
 - [docs/PARTS.md](docs/PARTS.md)：旧仓能力拆件清单
 - [docs/MCP-SERVER-ABSORPTION.md](docs/MCP-SERVER-ABSORPTION.md)：MCP-Server 能力融入 engine 路线
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记
-- [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)：当前独立审计、风险和近期优先级
+- [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)：2026-07-10 独立审计历史快照
 - [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档权威层级与维护规则
 - [docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md)：项目沿革、第三方设计参考与许可证边界（持续更新）
 

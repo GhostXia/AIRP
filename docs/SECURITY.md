@@ -1,5 +1,7 @@
 # Security and deployment boundary
 
+> Baseline reviewed: 2026-07-12. Current implementation status and release gates are in [CURRENT-BASELINE.md](CURRENT-BASELINE.md).
+
 AIRP defaults to a single-user local topology. The daemon binds to loopback; the bundled desktop UI owns its sidecar process and stops it when the UI exits.
 
 ## Credentials

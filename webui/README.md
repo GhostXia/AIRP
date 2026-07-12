@@ -1,7 +1,7 @@
 # AIRP WebUI — Basic RP Client and Backend Validation Harness
 
 Browser-based lightweight client for basic RP use and engine backend validation.
-It is the fastest current path to a usable browser workflow, but it is not the final polished product UI and does not replace the long-term Tauri/Vue client. Current delivery scope: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
+It is the fastest current path to a usable browser workflow, but it is not the final polished product UI and does not replace the long-term Tauri/Vue client. Current repository baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); acceptance contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
 
 ## Quick Start
 

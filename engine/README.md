@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态与风险以 [全项目独立审计](../docs/PROJECT-AUDIT-2026-07-10.md) 为准。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；2026-07-10 全项目独立审计仅作历史证据。
 
 ## 当前能力
 
@@ -45,7 +45,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ### 部署安全边界尚未产品化
 
-默认 daemon 的 `access_api_key` 为空且 CORS 为 `Any`，没有受支持的外网部署姿势。`AIRP_ACCESS_KEY` 可为临时本地访问加 Bearer 保护，但在可配置的 restrictive CORS 与调用方 capability enforcement 落地前，不能把 engine 暴露给局域网、互联网或不可信浏览器 origin。
+默认 daemon 绑定 loopback，CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。当前仍没有受支持的外网部署姿势：远程部署必须另行具备 TLS、持久身份认证、网络访问控制和调用方 capability enforcement，不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
 
 ## 快速开始
 

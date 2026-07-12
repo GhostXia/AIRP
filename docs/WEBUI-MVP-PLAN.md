@@ -1,12 +1,12 @@
 # WebUI 最快可用推进计划
 
-> 状态：当前近期执行计划，覆盖旧 Phase/Task 排序
+> 状态：实现阶段已完成；当前作为浏览器验收合同与近期唯一执行入口
 >
-> 基线日期：2026-07-11
+> 基线日期：2026-07-12
 >
 > 目标：以最短路径让普通用户通过浏览器完成一次可持续的基础 RP 使用闭环，而不是继续扩张候选能力。
 
-> 2026-07-11 进度：PR #118 已合并后端 Persona/Preset/session/outbound 契约；当前分支已接通 WebUI Persona、Preset、session 删除和工作区恢复。尚未完成的唯一发布门槛是零密钥 mock-provider 全链路浏览器验收及其暴露问题的回归修复。
+> 2026-07-12 进度：PR #118、#119、#121 已合并后端与 WebUI 的 Persona/Preset/session/outbound 契约、恢复与 busy-state 修复。PR A 已完成；尚未完成的唯一发布门槛是 PR B 的零密钥 mock-provider 全链路浏览器验收及其暴露问题的回归修复。当前事实见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 ## 1. “基本可用”的唯一判据
 
@@ -37,7 +37,7 @@
 
 这些能力应修补和串成闭环，不再重写第三套 WebUI，也不从参考项目复用 UI 或代码。
 
-## 3. 近期范围
+## 3. 已交付范围（PR #118/#119/#121）
 
 ### 3.1 必做：最小 RP Profile
 
@@ -78,9 +78,9 @@
 - character/session/preset/persona 切换会中止旧请求并清除不再有效的视图状态；
 - API key 只存在 engine runtime memory 与密码输入框的当次提交，不进入 localStorage、URL、event log 或复制摘要。
 
-## 4. 两个 PR 完成
+## 4. 实施记录与当前验收阶段
 
-### PR A：WebUI RP MVP 纵向闭环（最大化单 PR 有效任务量）
+### PR A：WebUI RP MVP 纵向闭环（已完成）
 
 一个 PR 同时交付 shared domain → HTTP → WebUI → tests：
 
@@ -94,7 +94,7 @@
 
 该 PR 可以较大，但不得夹带 Style Review、ChangeInbox、Tauri UI 重构、MCP/skills/plugin、世界书高级语义或视觉重做。
 
-### PR B：真实验收、回归修复与文档收口
+### PR B：真实验收、回归修复与文档收口（当前阶段）
 
 1. 启动真实 engine + 本地 mock OpenAI-compatible provider + `webui/serve.js`；
 2. 浏览器自动执行连接→配置→导入角色→Persona/Preset→建会话→三轮聊天→刷新恢复→regen/rollback→删会话；
@@ -104,7 +104,7 @@
 
 PR B 只修验收暴露的阻塞 bug；非阻塞建议按 AGENTS.md 在合并后进入 issue，不扩张范围。
 
-## 5. Issue 排序
+## 5. Issue 排序（完成项只作追溯）
 
 ### 本里程碑消费
 
@@ -132,7 +132,7 @@ PR B 只修验收暴露的阻塞 bug；非阻塞建议按 AGENTS.md 在合并后
 
 ## 6. 验证门
 
-PR A 合并前至少执行：
+实现阶段已经执行并通过以下质量门；验收修复不得降低这些门禁：
 
 ```powershell
 cargo fmt --all -- --check

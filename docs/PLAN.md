@@ -1,18 +1,17 @@
 # AIRP 客户端 —— 设计计划
 
-> 状态：长期产品原则与目标架构；当前事实见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)，近期执行顺序以 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 为准。
-> 最后更新：2026-07-11
+> 状态：长期产品原则与目标架构；当前事实见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，近期执行入口见 [DEV-GUIDE.md](DEV-GUIDE.md)。
+> 最后更新：2026-07-12
 > **权威 = 我们这个客户端的实际需求。** 四个原仓库的文档与代码都**仅供参考**——是作者已想清的宝贵先例/解法，但不是必须遵守的法律。它们的理念、戒律、模块边界、ADR、路线图**均为参考**，与我们实际需求冲突时以需求为准。本 PLAN 的每个决策先问"我们的客户端需要什么"，再问"哪个仓库有可借鉴的现成解法"，**绝不问"文档规定了什么"**。
 
-## 当前执行方向（2026-07-11：最快形成基本可用 WebUI）
+## 当前执行方向（2026-07-12：完成基本可用 WebUI 的验收）
 
-近期暂停横向扩张，以浏览器能够完成基础 RP 日常使用为唯一里程碑：
+PR #118、#119、#121 已完成 credential redirect、单默认 Persona、Preset 选择/JSON 导入、session delete/隔离与 busy-state 收口。近期继续暂停横向扩张，以真实 engine + 本地 mock provider 完成浏览器基础 RP 验收为唯一里程碑：
 
-1. **安全可连接**：完成 #117 的 credential redirect policy，保住 provider key；
-2. **最小 RP Profile**：单默认 User Persona + Preset 选择/JSON 导入，消除 WebUI 固定 `User` 和无法选择 preset 的缺口；
-3. **会话可管理**：session delete、session-scoped history/regen/rollback 和切换隔离；
-4. **浏览器纵向闭环**：连接→配置 provider→导入角色→Persona/Preset→三轮流式聊天→刷新恢复→regen/rollback→删会话；
-5. **自动验收**：真实 engine + 本地 mock provider + WebUI browser smoke，不消耗真实密钥。
+1. **启动无秘密环境**：真实 engine + 本地 mock provider + WebUI，不消耗真实密钥；
+2. **执行纵向闭环**：连接→配置 provider→导入角色→Persona/Preset→三轮流式聊天→刷新恢复→regen/rollback→删会话；
+3. **验证持久化事实**：刷新、回滚、重生成和删除均以 engine 返回及磁盘状态为准，不接受只看 DOM 的假通过；
+4. **只修阻塞项**：验收暴露的阻塞 bug 在同一推进周期修复；非阻塞性能项继续由 issue #122 等跟踪。
 
 Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、swipe/branch/pagination、Tauri 打包与扩展生态全部后移，不阻塞本里程碑。这不改变“两盒”“干净提示词”“Tauri 长期产品面”等既定原则；只是把 WebUI 从纯诊断 harness 提升为可完成基础 RP 的轻量客户端。完整范围、两个 PR 的拆分和验收判据见 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)。
 
@@ -52,7 +51,7 @@ Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、swipe/bran
 | **控制平面** | 工具定义 / 工具调用 / 工具结果 | 走模型 API 的**原生结构化字段**（OpenAI `tools`+`tool_calls`+`tool` role；Anthropic `tools`+`tool_use`+`tool_result` block），**永不拼进角色平面的自然语言** |
 
 - **不用 in-prompt ReAct**：把 ReAct 指令写进 prompt 文本 = 控制平面灌进角色平面 = 自我污染。结构化工具调用是守此律的唯一干净路径。
-- **本地/未来 PR CI 强制**：`tests::subagent_context_has_no_orchestrator_noise`——断言送进 adapter 的角色平面 prompt 字符串里不含任何 agent 脚手架标记（工具名/规划指令/observe 包装），违反即红。这个测试必须保留、优先保护；当前只有手动打包 workflow，不是 PR gate，由本地测试 + 人工 review 承接。
+- **本地/PR CI 强制**：`tests::subagent_context_has_no_orchestrator_noise`——断言送进 adapter 的角色平面 prompt 字符串里不含任何 agent 脚手架标记（工具名/规划指令/observe 包装），违反即红。这个测试必须保留、优先保护；自动 PR gate 与人工 review 共同承接门禁。
 - **已知代价（诚实声明）**：此律把靠 in-context ReAct 脚手架的纯文本模型挡在门外。为"纯净后端"接受此代价。
 
 ### loop = 纯净 subagent 的编排器（`AGENT_BACKEND_PLAN §4.0` 最深表述）

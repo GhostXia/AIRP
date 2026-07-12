@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-11. Current documentation authority is in [DOC-AUDIT.md](DOC-AUDIT.md); the dated project audit remains historical evidence.
+> Last reviewed: 2026-07-12. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [DOC-AUDIT.md](DOC-AUDIT.md) defines documentation authority, and dated audits remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 

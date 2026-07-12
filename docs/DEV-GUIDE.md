@@ -1,19 +1,19 @@
 # AIRP 开发文档（交接给实现 Agent）
 
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
-> **配套文档（按顺序）**：[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)（当前近期执行计划）· [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)（当前事实与风险基线）· [PLAN.md](PLAN.md)（长期原则）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
+> **配套文档（按顺序）**：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)（当前事实与下一步）· [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)（当前验收合同）· [PLAN.md](PLAN.md)（长期原则）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
-> 最后更新：2026-07-11
+> 最后更新：2026-07-12
 
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
-1. 阅读 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)，不要继续按旧 Phase 横向加功能；
-2. PR A 做完整纵向闭环：credential redirect policy、单默认 Persona、Preset 最小导入/选择、session delete/隔离、WebUI 接线和测试；
-3. PR B 启动真实 engine + 本地 mock provider + WebUI，跑连接到三轮 RP、刷新恢复、regen/rollback、删除会话的浏览器 smoke；
-4. 只修 smoke 暴露的阻塞 bug并同步文档；非阻塞项合并后写 issue；
-5. MVP 完成前不做 Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、Tauri 重构、MCP/skills/plugin 或世界书高级语义。
+1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，不要重复 PR #118/#119/#121 已完成的实现；
+2. 启动真实 engine + 本地零密钥 mock provider + WebUI，跑连接到三轮 RP、刷新恢复、regen/rollback、删除会话的 browser acceptance；
+3. 断言 engine 端 history、Persona/Preset/session ID 与错误类型，不以按钮出现或 HTTP 200 代替验收；
+4. 只修 acceptance 暴露的阻塞 bug并同步文档；非阻塞项合并后写 issue；
+5. acceptance 通过前不扩张到 Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、MCP/skills/plugin 或高级世界书语义。
 
-本顺序来自 2026-07-11 对当前源码与全部开放 issue 的复核。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
+本顺序来自 2026-07-12 对当前源码与全部开放 issue 的复核。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
 
 ---
 
@@ -211,7 +211,7 @@ data/
 
 > 原则：每阶段自身可跑、可测、可验收。**MVP 优先证明端到端，再谈扩展。**
 >
-> **历史状态（2026-07-03）**：本节记录早期 Phase 设计。PR #77–#100 已继续实现多项数据、工具、decompose 与 WebUI smoke 工作；当前顺序以本文开头和 [2026-07-10 审计](PROJECT-AUDIT-2026-07-10.md) 为准。
+> **历史状态（2026-07-03）**：本节记录早期 Phase 设计。后续 PR 已继续实现多项数据、工具、decompose 与 WebUI 工作；当前顺序以本文开头和 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准。
 
 ### Phase 0 · 引擎+UI 直连，跑通一次干净对话（MVP 地基）—— ✅ 已完成（PR #2 合并入 main）
 - 已落地：`ui/src-tauri/src/bus.rs` 的 `BusRelay` 从 mock 改为 HTTP 直连引擎 `/v1/chat/completions`，消费 SSE、按 `w-chat` scope 流式回填；角色列表 `characters.list`。
@@ -248,9 +248,9 @@ data/
 - **实现状态**：`BusRelay` 已移除 `chat_lock`；chat scope 已改为 `{messages, order}`；每个 `chat.send` 用单个 state patch envelope 同时写入 user row、`order` user id、assistant row、`order` assistant id；流式回填只改自己的 `/messages/{assistant_id}/text`。
 - **已验证**：`cargo test -p airp-ui`、`npm run test -- --run`、`npm run typecheck`、`cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` 通过；审计 follow-up 后前端测试 95 个通过。
 
-### 下一步开发接手清单（2026-07-11 WebUI MVP 覆盖）
+### 下一步开发接手清单（2026-07-12 基线）
 
-本节旧清单已由 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 覆盖。实现 agent 应以其中 PR A/PR B 为唯一近期顺序；以下历史任务只用于理解已有工程背景，不得自行恢复为当前优先级。
+PR A 已由 #118/#119/#121 完成。实现 agent 只执行 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 的 PR B 浏览器验收，不得恢复旧任务排序。
 
 1. 先设置 D 盘工具链环境：
    ```powershell
@@ -260,13 +260,12 @@ data/
    $env:npm_config_cache = "D:\npm-global\npm-cache"
    $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
    ```
-2. 建立 pull_request workflow：workspace tests、UI tests/typecheck、fmt；修清 Clippy 后加入 `-D warnings`。神圣不变式必须在 CI 输出中可见。
-3. 对 ChatLog、state live/history、rollback/regen 写并发测试；随后抽统一服务层，禁止 HTTP 与 Agent tool 各自读写文件。
-4. 完成 state schema 写入校验、atomic replace、revision/idempotency；同时修 secrets、CORS/默认鉴权。
-5. 在 Tauri managed state 持有 sidecar child，补 shutdown/restart/crash/port-conflict 状态机和 Windows artifact smoke。
-6. 修复并按 issue #105 逐项验收 PR #106；WebUI 继续只承担诊断与可靠性验证。
-7. 上述基线稳定后，实现 structured tool-call loop 与 finalizer；不要先复制更多工具。
-8. 跑 Perf Spike，并基于稳定的数据/能力合同再做 Agent-first workbench、世界书高级语义与长期记忆。
+2. 启动真实 engine、本地零密钥 OpenAI-compatible mock provider 与 `webui/serve.js`。
+3. 用浏览器执行连接、provider、角色导入、Persona/Preset、会话和三轮流式聊天主路径。
+4. 刷新并断言 engine 端真实 history；执行 regen、rollback、删除会话，并确认没有跨 session 回填。
+5. 覆盖 401、provider error、SSE 中断和 stale-response isolation。
+6. 只修上述验收暴露的阻塞问题；保持自动 PR gate 与神圣不变式全绿。
+7. PR 合并后，把审计中未修的非阻塞建议去重写入 GitHub issue，再按 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 重排下一阶段。
 
 Agent UI Test Harness 最小用法：
 

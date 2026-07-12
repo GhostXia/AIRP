@@ -1,13 +1,13 @@
 # AIRP 文档审计与权威层级
 
-> 最后更新：2026-07-11
+> 最后更新：2026-07-12
 
-2026-07-10 已完成一次基于源码、近期 PR、全部 open issues、仓库 Markdown 与本地验证的全项目独立审计。完整结果见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。本文补充 2026-07-11 的源码复核结果，并定义历史证据与当前事实如何分层。
+2026-07-12 已在 PR #118/#119/#121 合并后重新核对源码、开放 issues、仓库 Markdown 与验证结果。[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是实时事实入口；[PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md) 保留其 dated audit 价值。
 
 ## 权威顺序
 
 1. **源码、manifests、测试、运行时工具目录和可重复运行证据**：判断已交付能力的最高事实来源；
-2. **当前入口 README、本文与 [DEV-GUIDE.md](DEV-GUIDE.md)**：当前能力和实施入口；
+2. **[CURRENT-BASELINE.md](CURRENT-BASELINE.md)、当前入口 README、本文与 [DEV-GUIDE.md](DEV-GUIDE.md)**：当前能力和实施入口；
 3. **[PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)**：带明确基线的历史状态、风险和排序；
 4. **[PLAN.md](PLAN.md)**：长期产品原则与目标架构，不用于证明某功能已完成；
 5. **专题设计文档**：只约束其明确标注的范围；
@@ -20,6 +20,7 @@
 - 模型可见的大文本使用 UTF-8 安全上限，`AIRP_MAX_READ_BYTES` 默认 32 KiB。
 - `apply_lorebook`、`merge_lorebooks`、`seal_volume`、`export_context_bundle` 已注册；替换和封卷继续受 destructive confirm 保护。
 - context bundle 固定写入 data root，稳定材料在易变 state 之前，并明确供 fresh isolated subagent 使用。产物措辞测试不替代独立的 no-orchestrator-noise 不变式。
+- WebUI 已接通 Persona/Preset/session lifecycle；剩余门槛是零密钥 mock-provider 全链路 browser acceptance。
 
 ## 文档类型与本轮全量审计处置
 
@@ -41,6 +42,6 @@
 5. 新 PR 若改变当前能力，应至少同步 README 或本文/DEV-GUIDE 中的对应入口；
 6. 不把 issue 的建议措辞升级为架构不变式；不把 helper、schema 或 UI mock 当作用户价值闭环。
 
-## 当前近期计划入口（2026-07-11）
+## 当前近期计划入口（2026-07-12）
 
-[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 是当前唯一近期实施顺序，以“最快形成基本可用 WebUI”为目标。它覆盖 `DEV-GUIDE.md` 中旧的下一步清单和 `PLAN.md` 此前的近期排序，但不覆盖长期产品原则。完成该里程碑后必须基于真实 browser smoke 与开放 issue 重新排序，不能自动延续其中的临时裁剪。
+[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 继续定义验收合同：PR A 实现范围已经完成，当前只执行 browser acceptance 与其阻塞修复。通过后必须基于真实证据和开放 issue 重新排序。

@@ -2,6 +2,8 @@
 
 `ui/` 是 AIRP 的 Tauri + Vue 桌面客户端。它是 engine 的客户端，不再假设独立 Gateway 或 MockBus 作为默认后端。
 
+当前全仓状态与发布门槛见 [`../docs/CURRENT-BASELINE.md`](../docs/CURRENT-BASELINE.md)。
+
 UI 继承 AIRP-State-Protocol 的 Blueprint、Widget、patch、guard、虚拟滚动和沙箱资产，但不继承其通用协议优先定位。当前目标是 AIRP 专用桌面客户端；Widget 扩展必须先服务 RP 工作流。详见 [`../docs/UI-PROTOCOL-DECISION.md`](../docs/UI-PROTOCOL-DECISION.md)。
 
 ## 当前职责
@@ -66,7 +68,7 @@ cargo test -p airp-ui
 - Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested.
 - Character import is path-first: the UI sends only `card_path`; it must not put base64 card blobs into Vue state or widget props.
 - Chat state is id-keyed as `{ messages, order }`. `BusRelay` no longer uses `chat_lock`; each `chat.send` opens the user and assistant rows with one patch envelope, then streams into `/messages/{assistant_id}/text`.
-- WebUI is a temporary backend reliability harness only. Product UI work continues here in Tauri/Vue.
+- WebUI is the lightweight browser RP client and fastest current acceptance surface. Long-term product UI work continues here in Tauri/Vue.
 - Agent UI Test Harness is dev/test-only. Enable with `?airp_agent_test=1`, `localStorage.AIRP_AGENT_TEST=1`, or `VITE_AIRP_AGENT_TEST=1`; then use `window.__AIRP_AGENT_TEST__` from Codex browser control or Playwright.
 - Users who do not want any agent-control surface can delete `src/agent-test.ts` before building. `App.vue` loads the harness only when the module exists, and the related test does not block the build when the module is absent.
 
@@ -76,7 +78,7 @@ The root `.github/workflows/manual-build.yml` workflow can be run manually on a 
 
 ## Open Items
 
-- AIRP-Dev GUI end-to-end verification after packaging and engine integration.
+- AIRP-Dev packaged GUI end-to-end verification; source-level engine integration is already present.
 - Package/runtime smoke: build the desktop artifact, launch it, select/import a character, send one message, and receive a streamed reply with real settings.
 - Agent UI Test Harness: connect the current `window.__AIRP_AGENT_TEST__` surface to Codex browser plugin / Playwright GUI smoke and store screenshots/logs as artifacts.
 - Perf spike with 100k messages.

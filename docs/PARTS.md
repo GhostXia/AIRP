@@ -5,7 +5,7 @@
 > 来源仓库：C=AIRP-Core(D:\AIRPCLI) · M=AIRP-MCP-Server(D:\airp-mcp-server) · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指原仓库路径。
 > 最后更新：2026-07-11
 
-> **使用限制（2026-07-10 审计）**：本文是源项目候选零件目录，不是当前 AIRP capability inventory。✅/🔧 表示源资产可参考或可吸收，不代表本仓已存在 HTTP route、Agent tool 或产品 UI。当前实现状态见 [PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md)。
+> **使用限制（2026-07-12 校准）**：本文是源项目候选零件目录，不是当前 AIRP capability inventory。✅/🔧 表示源资产可参考或可吸收，不代表本仓已存在 HTTP route、Agent tool 或产品 UI。当前实现状态见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 > UI 协议拍板：S 的 Blueprint/Widget/patch/guard/虚拟滚动/consent/sandbox 是必须吸收的成熟资产；S 的"通用 Agent UI 标准优先"与"乐高优先"不是 AIRP 产品主线。见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)。
 > 源项目总拍板：C/M/G/S 都是资产来源，统一按"吸收资产，不继承产品北极星"处理。见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)。
@@ -17,7 +17,7 @@
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
 | 两平面物理隔离机制 | C `AGENT_BACKEND_PLAN.md:187-201` + `chat_pipeline.rs` | ✅ | 角色平面(RP数据)/控制平面(结构化 tool-calling)分离；orchestrator 只装 RP 数据，工具走 API 原生字段 |
-| 戒律#6 本地/未来 PR CI 不变式 | C `tests::subagent_context_has_no_orchestrator_noise` | ✅ | 断言角色平面 prompt 无脚手架标记，违反即红。**必须随内核一起保留**；当前只有手动打包 workflow，不是 PR gate，由本地测试 + 人工 review 承接 |
+| 戒律#6 本地/PR CI 不变式 | C `tests::subagent_context_has_no_orchestrator_noise` | ✅ | 断言角色平面 prompt 无脚手架标记，违反即红。**必须随内核一起保留**；自动 PR gate + 人工 review 承接 |
 | 六条有界 Agent 戒律 | C `README.md:39-46` | 📖 | 有界/可取消/可观测/最小授权/幂等隔离/上下文纯净。作我们引擎的设计律采纳 |
 | orchestrator 装配 | C `orchestrator/mod.rs` | ✅ | card→preset→gating→known→卷→lorebook 默认序；多角色 `build_multi_char_system_prompt`；schema min/max 渲染 `:289-302` |
 | chat_pipeline 三段式 | C `chat_pipeline.rs`（prepare `:296`/stream `:596`/finalize `:694`） | ✅ | 单回合流水线，被 agent loop 当库复用。AGENT_CLIENT_ASSESSMENT 认证"80% 后端已在此" |

@@ -1,6 +1,6 @@
 # WebUI 审计 v2 — 上次报告后的变更复核
 
-> **历史快照**：审计基线只到 PR #63，已被后续 PR #64–#100 和 [2026-07-10 全项目独立审计](PROJECT-AUDIT-2026-07-10.md) 取代。原 finding 编号仅作追溯。
+> **历史快照**：审计基线只到 PR #63，已被后续实现取代。原 finding 编号仅作追溯；当前事实与未完成门槛见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 > 日期：2026-07-06
 > 审计基线：`docs/WEBUI-ANALYSIS-AND-OPTIMIZATION.md`（初版报告）
