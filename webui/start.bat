@@ -19,6 +19,7 @@ set AIRP_MODEL=airp-mock-1
 set AIRP_API_KEY=mock-key-not-checked
 REM 验收用临时 data root，避免污染个人 data/，且让"全新 data root 上完成闭环"判据可复现
 set AIRP_DATA_DIR=d:\AIRP-Dev\target\webui-smoke-data
+if exist "%AIRP_DATA_DIR%" rmdir /S /Q "%AIRP_DATA_DIR%"
 REM set AIRP_ACCESS_KEY=
 
 REM ── WebUI server 端口/绑定（serve.js 读）──────────────────────────────
@@ -36,17 +37,17 @@ REM 注意：node serve.js 用 9001，不与 engine 冲突，无需 kill node
 
 REM ── 启动零密钥 mock provider（新窗口；PR B 验收用，真 provider 时可注释掉）──
 echo Starting mock provider on http://127.0.0.1:8889 ...
-start "AIRP Mock Provider" cmd /k "node webui\mock-provider.js & echo. & echo [mock exited, code %errorlevel%] & pause"
+start "AIRP Mock Provider" cmd /V:ON /k "node webui\mock-provider.js & echo. & echo [mock exited, code !errorlevel!] & pause"
 
 REM ── 启动 engine（新窗口，强制有头：失败时窗口停留显示错误）────────────
 REM cmd /k 链：先跑 cargo，无论成败都 echo + pause。
 REM 注意：cmd /k 内 %errorlevel% 是退出时实时值（cmd /k 不像 /c 提前展开）。
 echo Starting engine on http://127.0.0.1:8000 ...
-start "AIRP Engine" cmd /k "cargo run -p airp-core -- daemon --port 8000 & echo. & echo [engine exited, code %errorlevel%] & pause"
+start "AIRP Engine" cmd /V:ON /k "cargo run -p airp-core -- daemon --port 8000 & echo. & echo [engine exited, code !errorlevel!] & pause"
 
 REM ── 启动 WebUI 静态 server（新窗口）───────────────────────────────────
 echo Starting WebUI on http://%WEBUI_HOST%:%WEBUI_PORT% ...
-start "AIRP WebUI" cmd /k "node webui\serve.js & echo. & echo [webui exited, code %errorlevel%] & pause"
+start "AIRP WebUI" cmd /V:ON /k "node webui\serve.js & echo. & echo [webui exited, code !errorlevel!] & pause"
 
 REM ── 自动打开浏览器（等 engine 编译 + 启动）─────────────────────────────
 REM cargo build 增量约 3-5s，首次 cold build 可能 60s+。等 5s 后开浏览器，

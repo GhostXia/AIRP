@@ -2,7 +2,7 @@
 
 > 基线日期：2026-07-12
 >
-> Git 基线：`main` / `2a96dea`（PR #121 已合并）
+> Git 基线：PR #123 验收分支（合并后以 `main` 为准）
 >
 > 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
 
@@ -16,18 +16,17 @@
 
 ## 2. 尚不能宣称的能力
 
-- WebUI 尚未通过“零密钥 mock provider → 三轮流式 RP → 刷新恢复 → regen/rollback → 删除 session”的自动化全链路验收，因此仍是 MVP candidate，不宣称正式基本可用。
+- WebUI 已通过零密钥 mock provider 验收：自动 engine 真相 harness 为 56/56，真实浏览器完成连接、数据恢复、发送消息与 24-chunk SSE 渲染。它现在是基本可用的轻量 RP 客户端，但仍不是长期 Tauri/Vue 产品 UI。
 - 当前 AIRP-Dev Windows 安装包尚缺真实 artifact 的安装、启动、sidecar ready、简单对话和退出证据。
 - MCP upstream client、skills/plugin runtime、完整 ChangeInbox、完整 Persona 生命周期、Preset migration/trace、SillyTavern 高级 worldbook 语义、长会话分页/虚拟化仍未完成。
 - WebUI `loadHistory` 仍全量重建消息 DOM，已由 issue #122 跟踪；不得把该路径复制到产品 UI。
 
-## 3. 下一阶段唯一优先顺序
+## 3. 下一阶段优先顺序
 
-1. 建立本地零密钥 OpenAI-compatible mock provider；
-2. 自动执行 WebUI 连接、provider 配置、角色/Persona/Preset、建 session、三轮流式聊天、刷新恢复、regen/rollback、删 session；
-3. 断言 engine 端真实 history、有效 Persona/Preset/session ID、错误类型与无跨 session 串扰；
-4. 只修验收暴露的阻塞问题，开 PR、独立审计、CI 全绿后合并；
-5. 基本可用门槛通过后，再在桌面 artifact 验收、长会话（#37/#122）和完整 Persona/Preset（#114/#115）之间重排。
+1. 桌面 artifact 安装/启动/sidecar/简单对话/退出验收；
+2. 长会话性能与 durable message ID（#37/#122）；
+3. 完整 Persona/Preset 生命周期与 trace（#114/#115）；
+4. 继续保持零密钥 WebUI smoke 与神圣提示词不变式为回归门禁。
 
 ## 4. 当前开放风险/issue 分组
 
@@ -39,7 +38,14 @@
 
 ## 5. 最近验证证据
 
-PR #119/#121 合并前在本地与 GitHub PR gate 验证：
+PR #123 合并前新增验证：
+
+- `node webui/smoke.mjs`：56 checks / 0 failures，覆盖三轮持久化、session 隔离、rollback/regen/delete 与 typed errors；
+- 真实浏览器：WebUI 连接成功，恢复角色/会话/预设，页面发送消息后收到 24 个 SSE chunks 并渲染 user/assistant；
+- rate-limit 回归确认 100ms/token（10 req/s）与 burst 20；
+- 完整 Rust/UI 门禁以 PR #123 GitHub checks 为准。
+
+PR #119/#121 的上一轮证据：
 
 - `cargo fmt --all -- --check`；
 - `cargo clippy --workspace --all-targets -- -D warnings`；

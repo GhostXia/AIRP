@@ -80,7 +80,7 @@ function handleChatCompletions(req, res) {
   res.write('data: ' + JSON.stringify({
     id: 'chatcmpl-airp-mock',
     object: 'chat.completion.chunk',
-    created: Date.now(),
+    created: Math.floor(Date.now() / 1000),
     model: MODEL,
     choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
   }) + '\n\n');
@@ -93,7 +93,7 @@ function handleChatCompletions(req, res) {
       res.write('data: ' + JSON.stringify({
         id: 'chatcmpl-airp-mock',
         object: 'chat.completion.chunk',
-        created: Date.now(),
+        created: Math.floor(Date.now() / 1000),
         model: MODEL,
         choices: [{ index: 0, delta: { content: chunks[i] }, finish_reason: null }],
       }) + '\n\n');
@@ -104,7 +104,7 @@ function handleChatCompletions(req, res) {
       res.write('data: ' + JSON.stringify({
         id: 'chatcmpl-airp-mock',
         object: 'chat.completion.chunk',
-        created: Date.now(),
+        created: Math.floor(Date.now() / 1000),
         model: MODEL,
         choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
       }) + '\n\n');
@@ -113,8 +113,9 @@ function handleChatCompletions(req, res) {
     }
   }, 12); // 12ms/帧 ≈ 真实流式节奏，且整段 ~2s 内完成，不拖慢验收
 
-  // 客户端断开时清 timer，避免向已关闭 socket 写触发 EPIPE 抛错。
-  req.on('close', () => clearInterval(timer));
+  // 响应连接断开时清 timer。不能监听 req.close：POST 请求体读完就会触发，
+  // 那会在 finish chunk / [DONE] 前误停流，导致 engine 无法 finalize assistant。
+  res.on('close', () => clearInterval(timer));
 }
 
 const server = http.createServer((req, res) => {

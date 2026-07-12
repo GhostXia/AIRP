@@ -20,7 +20,7 @@
 - 模型可见的大文本使用 UTF-8 安全上限，`AIRP_MAX_READ_BYTES` 默认 32 KiB。
 - `apply_lorebook`、`merge_lorebooks`、`seal_volume`、`export_context_bundle` 已注册；替换和封卷继续受 destructive confirm 保护。
 - context bundle 固定写入 data root，稳定材料在易变 state 之前，并明确供 fresh isolated subagent 使用。产物措辞测试不替代独立的 no-orchestrator-noise 不变式。
-- WebUI 已接通 Persona/Preset/session lifecycle；剩余门槛是零密钥 mock-provider 全链路 browser acceptance。
+- WebUI 已接通 Persona/Preset/session lifecycle，并在 PR #123 通过零密钥 engine-truth harness（56/56）与真实浏览器连接/恢复/流式渲染验收。
 
 ## 文档类型与本轮全量审计处置
 
@@ -44,4 +44,4 @@
 
 ## 当前近期计划入口（2026-07-12）
 
-[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 继续定义验收合同：PR A 实现范围已经完成，当前只执行 browser acceptance 与其阻塞修复。通过后必须基于真实证据和开放 issue 重新排序。
+[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 保留已完成的验收合同；PR #123 后按当前基线与开放 issues 重新排序。

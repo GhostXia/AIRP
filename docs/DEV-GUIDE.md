@@ -7,11 +7,11 @@
 
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
-1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，不要重复 PR #118/#119/#121 已完成的实现；
-2. 启动真实 engine + 本地零密钥 mock provider + WebUI，跑连接到三轮 RP、刷新恢复、regen/rollback、删除会话的 browser acceptance；
-3. 断言 engine 端 history、Persona/Preset/session ID 与错误类型，不以按钮出现或 HTTP 200 代替验收；
-4. 只修 acceptance 暴露的阻塞 bug并同步文档；非阻塞项合并后写 issue；
-5. acceptance 通过前不扩张到 Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、MCP/skills/plugin 或高级世界书语义。
+1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，不要重复 PR #118/#119/#121/#123 已完成的实现与验收；
+2. 保持 `node webui/smoke.mjs` 的 56 项 engine 真相断言与真实浏览器交互验收可复现；
+3. 下一阶段从桌面 artifact、长会话（#37/#122）和完整 Persona/Preset（#114/#115）按当前基线选择；
+4. 每个 PR 只修其范围内问题并同步文档；审计非阻塞遗留项在合并后写 issue；
+5. 不因 WebUI 基本可用而把它误写成最终 Tauri/Vue 产品 UI。
 
 本顺序来自 2026-07-12 对当前源码与全部开放 issue 的复核。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
 

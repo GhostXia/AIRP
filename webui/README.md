@@ -10,11 +10,12 @@ It is the fastest current path to a usable browser workflow, but it is not the f
 双击 `webui/start.bat` 即可。脚本会：
 
 1. 按 `AGENTS.md` 设好 Rust/Node/MSYS2 工具链环境（产物落 D: 盘）
-2. 在新窗口起 engine：`cargo run -p airp-core -- daemon --port 8000`
-3. 在新窗口起 WebUI 静态 server：`node webui/serve.js`（零依赖纯 node，无需 npx/python）
-4. 自动打开浏览器到 http://127.0.0.1:9001
+2. 清理可丢弃的 `target/webui-smoke-data`，在新窗口起零密钥 mock provider
+3. 在新窗口起 engine：`cargo run -p airp-core -- daemon --port 8000`
+4. 在新窗口起 WebUI 静态 server：`node webui/serve.js`（零依赖纯 node，无需 npx/python）
+5. 自动打开浏览器到 http://127.0.0.1:9001
 
-关闭两个弹出的窗口即停止对应服务。业务配置（`AIRP_ENDPOINT` / `AIRP_MODEL` / `AIRP_ACCESS_KEY` 等）在 .bat 顶部注释里取消注释即可。
+关闭三个弹出的窗口即停止对应服务。业务配置（`AIRP_ENDPOINT` / `AIRP_MODEL` / `AIRP_ACCESS_KEY` 等）在 .bat 顶部修改即可。
 
 跨设备访问（手机浏览器连桌面 engine）：把 .bat 里 `WEBUI_HOST=127.0.0.1` 改成 `0.0.0.0`，再用桌面机 IP 访问。
 
@@ -49,7 +50,7 @@ they are not the served WebUI implementation.
 
 ## Scope
 
-The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. The remaining release gate is the zero-secret mock-provider browser smoke covering multi-turn chat, refresh recovery and destructive operations; until that passes, this remains an MVP candidate rather than a declared fully usable release.
+The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. PR #123 closed the zero-secret acceptance gate with a 56-check engine-truth harness plus a real browser interaction pass; this is now a basically usable lightweight RP client, not the final desktop product.
 
 Workspace choices (non-secret User ID, selected character/session and Preset) are restored from browser-local state. Engine URL and optional bearer remain tab-scoped in `sessionStorage`; provider secrets are never written to `localStorage`.
 
@@ -90,6 +91,8 @@ Workspace choices (non-secret User ID, selected character/session and Preset) ar
 -  Tauri desktop UI changes — WebUI never edits `ui/`.
 
 ## Verification Evidence
+
+For the deterministic engine-truth layer, start the mock provider and engine, then run `node webui/smoke.mjs`. The script is deliberately not described as browser automation: it verifies persisted history, Persona/Preset/session IDs, three streaming turns, isolation, rollback/regen/delete and typed errors through HTTP/SSE. A separate real-browser pass verifies WebUI connection, recovery, interaction and rendering.
 
 Each validation session should record:
 - engine start command + URL

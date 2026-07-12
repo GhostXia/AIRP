@@ -1,4 +1,4 @@
-// WebUI MVP PR B —— 零密钥 mock-provider 浏览器全链路 smoke。
+// WebUI MVP PR B —— 零密钥 mock-provider 引擎闭环 smoke。
 // 不依赖浏览器，也不依赖 Playwright/puppeteer——直接打 engine HTTP/SSE，
 // 断言 engine 端真实持久化（ChatLog / persona / preset / session），而非看 DOM。
 //
@@ -77,9 +77,11 @@ async function streamChat(payload) {
   });
   ok(res.ok, 'chat SSE 200 OK');
   if (!res.ok) return { chunks: [], text: '', error: await res.text() };
+  if (!res.body) return { chunks: [], text: '', error: 'chat SSE response has no body' };
 
   const chunks = [];
   let text = '';
+  let errorText = '';
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -111,8 +113,7 @@ async function streamChat(payload) {
         try {
           const obj = JSON.parse(dta);
           if (obj && typeof obj.text === 'string') {
-            chunks.push(obj.text);
-            text += obj.text;
+            errorText += obj.text;
           }
         } catch (e) {
           ok(false, 'error chunk JSON 解析失败: ' + e.message);
@@ -120,7 +121,7 @@ async function streamChat(payload) {
       }
     }
   }
-  return { chunks, text, error: null };
+  return { chunks, text, error: errorText || null };
 }
 
 async function waitFor(url, { name = '', timeoutMs = 10000 } = {}) {
