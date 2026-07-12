@@ -69,16 +69,43 @@ pub struct ChatResponseChunk {
 }
 
 /// `POST /v1/chat/rollback` 请求体。
+///
+/// #37 durable message-id contract：
+/// - `message_id`（新）→ 走 ID 寻址 rollback（推荐）；ID 不存在 → `BadRequest`。
+/// - `message_index`（legacy）→ 走数组下标 rollback（向后兼容保留）。
+/// - 同时传两个 → `BadRequest`（显式二义）。
+/// - 都不传 → `BadRequest`（必填其一）。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RollbackRequest {
     /// 目标角色 ID。
     pub character_id: CharacterId,
     /// 回滚到的消息索引（保留 [0, message_index) 区间，丢弃其后所有消息）。
-    pub message_index: usize,
+    /// legacy 路径，向后兼容保留；与 `message_id` 二选一。
+    pub message_index: Option<usize>,
+    /// #37：回滚到的消息 durable ID（保留该 ID 及其之前所有消息，丢弃其后）。
+    /// 推荐路径；与 `message_index` 二选一。
+    pub message_id: Option<String>,
     /// A6：可选 session ID。指定则操作 `characters/{id}/sessions/{session_id}/history/`；
     /// 省略则回退 legacy per-character `characters/{id}/history/`。
     pub session_id: Option<SessionId>,
+}
+
+impl RollbackRequest {
+    /// 校验 `message_index` / `message_id` 二选一规则。返回 `Ok(())` 或 `BadRequest`。
+    pub fn validate_rollback_target(&self) -> Result<(), String> {
+        match (self.message_index, self.message_id.as_deref()) {
+            (Some(_), Some(_)) => Err(
+                "rollback target is ambiguous: pass exactly one of message_index or message_id"
+                    .to_string(),
+            ),
+            (None, None) => Err(
+                "rollback target is required: pass message_id (preferred) or message_index"
+                    .to_string(),
+            ),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// `POST /v1/chat/regen` 请求体。
@@ -92,6 +119,13 @@ pub struct RegenRequest {
 }
 
 /// `POST /v1/chat/history` 请求体。
+///
+/// #37 durable message-id contract：
+/// - 不传 `limit` / `before` → 全量返回（向后兼容旧客户端）。
+/// - 传 `limit` → 最多返回 `limit` 条（clamp [1, 200]，默认 50）。
+/// - 传 `before` → cursor 分页：返回该 durable ID 严格之前（更早）的消息。
+///   `before` 必须命中当前 session 的某条 durable ID，否则 `BadRequest`
+///   （cursor 不能跨 character/session）。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryQuery {
@@ -99,4 +133,8 @@ pub struct HistoryQuery {
     pub character_id: CharacterId,
     /// A6：可选 session ID（语义同 `RollbackRequest.session_id`）。
     pub session_id: Option<SessionId>,
+    /// #37：本次最多返回多少条（clamp [1, 200]，默认 50）。不传 → 全量返回（兼容）。
+    pub limit: Option<usize>,
+    /// #37：cursor；某条消息的 durable ID，返回该 ID 严格之前（更早）的消息。
+    pub before: Option<String>,
 }

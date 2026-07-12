@@ -345,10 +345,21 @@ pub(super) struct ImportPresetResponse {
 pub(super) async fn get_chat_history(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(query): Json<HistoryQuery>,
-) -> Result<Json<ChatLog>, AirpError> {
+) -> Result<Json<serde_json::Value>, AirpError> {
+    // #37 cursor 分页：传 limit/before 走窗口；不传 → 全量（向后兼容旧客户端）。
+    if query.limit.is_some() || query.before.is_some() {
+        let window = ChatService::new(&state.data_root).history_window(
+            &query.character_id,
+            query.session_id.as_ref(),
+            query.limit,
+            query.before.as_deref(),
+        )?;
+        return Ok(Json(serde_json::to_value(window)?));
+    }
+    // legacy 全量返回必须保留 ChatLog 的既有响应形状。
     let log = ChatService::new(&state.data_root)
         .history(&query.character_id, query.session_id.as_ref())?;
-    Ok(Json(log))
+    Ok(Json(serde_json::to_value(log)?))
 }
 
 /// POST /v1/chat/rollback — rollback to a specific message index
@@ -356,11 +367,23 @@ pub(super) async fn rollback_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RollbackRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    let (log, _) = ChatService::new(&state.data_root).rollback(
-        &req.character_id,
-        req.session_id.as_ref(),
-        req.message_index,
-    )?;
+    // #37：message_id / message_index 二选一校验。
+    if let Err(msg) = req.validate_rollback_target() {
+        return Err(AirpError::BadRequest(msg));
+    }
+    let service = ChatService::new(&state.data_root);
+    let (log, _) = match (req.message_index, req.message_id.as_deref()) {
+        (Some(idx), None) => service.rollback(&req.character_id, req.session_id.as_ref(), idx)?,
+        (None, Some(id)) => {
+            service.rollback_to_id(&req.character_id, req.session_id.as_ref(), id)?
+        }
+        // validate_rollback_target 已挡住二义与都空，这里不可达。
+        _ => {
+            return Err(AirpError::BadRequest(
+                "rollback target invariant violated".into(),
+            ))
+        }
+    };
     Ok(Json(log))
 }
 
@@ -1495,7 +1518,7 @@ mod tests {
         let _env = EnvVarGuard::set("AIRP_ALLOW_LOCAL_PATH", None);
 
         let (state, _tmp) = make_state_for_http_test();
-        let app = super::super::create_router(state);
+        let app = super::super::create_router(state.clone());
         let body = serde_json::json!({ "card_path": "/etc/passwd" });
         let resp = app
             .oneshot(
@@ -1697,7 +1720,7 @@ mod tests {
         )
         .unwrap();
 
-        let app = super::super::create_router(state);
+        let app = super::super::create_router(state.clone());
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -1717,14 +1740,46 @@ mod tests {
             .await
             .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        // 无分页字段时必须保持 legacy ChatLog 响应形状。
+        assert_eq!(v["character_id"], "ts_http_char");
+        assert!(v["session_id"].is_string());
         // messages 数组长度 = 2
         assert_eq!(v["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(v["message_ids"].as_array().unwrap().len(), 2);
         // message_timestamps 字段存在且长度等于 messages
         let tss = v["message_timestamps"].as_array().unwrap();
         assert_eq!(tss.len(), 2, "message_timestamps 长度应等于 messages");
         // 每条都有 ts（非 null）
         assert!(tss[0].is_string(), "ts[0] 应为字符串");
         assert!(tss[1].is_string(), "ts[1] 应为字符串");
+
+        // 显式 limit 才切换到分页窗口响应，并保留完整 total。
+        let app = super::super::create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/history")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "character_id": "ts_http_char",
+                            "limit": 1
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["has_more"], true);
     }
 
     #[test]

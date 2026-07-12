@@ -15,6 +15,7 @@ use crate::chat_store::ChatLog;
 use crate::data_dir;
 use crate::error::AirpError;
 use crate::types::{CharacterId, SessionId, UserId};
+use crate::ulid;
 
 type SessionLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
 type CharacterLockMap = Mutex<HashMap<String, Arc<RwLock<()>>>>;
@@ -91,6 +92,28 @@ pub struct ChatService {
     data_root: PathBuf,
 }
 
+/// #37 cursor 分页窗口（`ChatService::history_window` 返回）。
+///
+/// `messages` / `message_ids` / `message_timestamps` 等长，按时间正序排列，
+/// 是原 session 的一个切片（更早的一段或最近的一段）。
+///
+/// - `has_more`：cursor 之前还有更早消息可加载。
+/// - `oldest_id`：本窗口最老消息的 durable ID，前端下次作 `before` cursor。
+/// - `total`：session 消息总数（含未加载），前端显示 "X / N"。
+/// - `scope_session_id`：#85 O1——当前 window 所属的 scope session id（None = legacy），
+///   前端用它关联 session 列表。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HistoryWindow {
+    pub messages: Vec<ChatMessage>,
+    pub message_ids: Vec<String>,
+    pub message_timestamps: Vec<Option<String>>,
+    pub has_more: bool,
+    pub oldest_id: Option<String>,
+    pub total: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_session_id: Option<String>,
+}
+
 impl ChatService {
     pub fn new(data_root: impl AsRef<Path>) -> Self {
         Self {
@@ -128,6 +151,113 @@ impl ChatService {
     ) -> Result<ChatLog, AirpError> {
         self.with_session(character_id, session_id, || {
             ChatLog::load_or_create_for_session(&self.data_root, character_id.as_str(), session_id)
+        })
+    }
+
+    /// #37 cursor 分页窗口：返回 `before` ID 严格之前（更早）的消息，limit 上界。
+    ///
+    /// **cursor 语义**：`before` = 某条消息的 durable ID，返回该 ID **严格之前**的消息
+    /// （更早的），按时间正序排列。`before` 必须命中当前 session 的某条 durable ID
+    /// （含 legacy 派生 ID），否则 `BadRequest`——**cursor 不能跨 character/session 使用**。
+    ///
+    /// 不传 `before` → 返回最近 `limit` 条（时间正序）。
+    /// 不传 `limit` → 默认 50；上界 200，超过 clamp。
+    ///
+    /// `has_more` = cursor 之前还有更早消息。`oldest_id` = 本窗口里最老消息的 ID，
+    /// 供前端下次作 `before`。`total` = session 消息总数（含未加载）。
+    pub fn history_window(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        limit: Option<usize>,
+        before: Option<&str>,
+    ) -> Result<HistoryWindow, AirpError> {
+        let limit = limit.unwrap_or(50).clamp(1, 200);
+        let log = self.history(character_id, session_id)?;
+        let total = log.messages.len();
+
+        // 找 cursor 切点：before ID 在 message_ids 里的位置；返回该位置严格之前。
+        let cut = match before {
+            Some(id) => {
+                if !ulid::is_valid_id(id) {
+                    return Err(AirpError::BadRequest(format!(
+                        "cursor is not a valid durable message id: {id}"
+                    )));
+                }
+                let idx = log
+                    .message_ids
+                    .iter()
+                    .position(|x| ulid::matches(x, id))
+                    .ok_or_else(|| {
+                        AirpError::BadRequest(format!(
+                            "cursor {id} not in this session (cursor cannot cross character/session)"
+                        ))
+                    })?;
+                idx // 返回 [0, idx) 即更早的
+            }
+            None => total, // 无 cursor → 取最近 limit 条 = 尾部
+        };
+
+        // 窗口 = [start, end)，按时间正序。
+        let end = cut.min(total);
+        let start = end.saturating_sub(limit);
+        let window_messages = log.messages[start..end].to_vec();
+        let window_ids = log.message_ids[start..end].to_vec();
+        let window_ts = log.message_timestamps[start..end].to_vec();
+
+        // has_more = 切点之前还有消息（start > 0）。
+        let has_more = start > 0;
+        // oldest_id = 本窗口最老消息的 ID（窗口首条）。
+        let oldest_id = window_ids.first().cloned();
+
+        Ok(HistoryWindow {
+            messages: window_messages,
+            message_ids: window_ids,
+            message_timestamps: window_ts,
+            has_more,
+            oldest_id,
+            total,
+            scope_session_id: log.scope_session_id().map(|s| s.to_string()),
+        })
+    }
+
+    /// #37 rollback-by-ID：找到 `message_id` 在 `messages` 里的位置，调 `rollback_to(index)`。
+    ///
+    /// ID 不存在 → `BadRequest`。ID 寻址仍走 `with_session` 串行化，与并发 append 不产生半态。
+    /// 同 `rollback`，返回 `(ChatLog, dropped_count)`。
+    pub fn rollback_to_id(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message_id: &str,
+    ) -> Result<(ChatLog, usize), AirpError> {
+        if !ulid::is_valid_id(message_id) {
+            return Err(AirpError::BadRequest(format!(
+                "message_id is not a valid durable message id: {message_id}"
+            )));
+        }
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let total = log.messages.len();
+            if total == 0 {
+                return Err(AirpError::BadRequest(format!(
+                    "message_id {message_id} not in this empty session"
+                )));
+            }
+            let idx = log
+                .message_ids
+                .iter()
+                .position(|x| ulid::matches(x, message_id))
+                .ok_or_else(|| {
+                    AirpError::BadRequest(format!("message_id {message_id} not in this session"))
+                })?;
+            let dropped = total - idx - 1;
+            log.rollback_to(&self.data_root, idx)?;
+            Ok((log, dropped))
         })
     }
 
@@ -1143,6 +1273,277 @@ mod tests {
         assert!(
             !tmp.path().join("characters/missing-character").exists(),
             "a failed delete must not create an empty character"
+        );
+    }
+
+    // ── #37 durable message-id contract：cursor / rollback-by-ID 不变式 ──────
+
+    fn seed_session_with_n(
+        root: &Path,
+        cid: &str,
+        sid: Option<SessionId>,
+        n: usize,
+    ) -> (ChatService, CharacterId, Option<SessionId>) {
+        let character = CharacterId::new(cid).unwrap();
+        let session_id = sid;
+        let service = ChatService::new(root);
+        for i in 0..n {
+            service
+                .append(
+                    &character,
+                    session_id.as_ref(),
+                    ChatMessage {
+                        role: if i % 2 == 0 {
+                            crate::adapter::MessageRole::User
+                        } else {
+                            crate::adapter::MessageRole::Assistant
+                        },
+                        content: format!("msg-{i}"),
+                    },
+                )
+                .unwrap();
+        }
+        (service, character, session_id)
+    }
+
+    fn parse_sid(s: &str) -> SessionId {
+        // 用固定 UUID 字符串做测试 sid，避免 SessionId::new() 的非确定性。
+        SessionId::parse(s).unwrap()
+    }
+
+    #[test]
+    fn history_window_limit_returns_tail_in_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, character, session_id) =
+            seed_session_with_n(tmp.path(), "win_char", None, 10);
+
+        // 取最近 4 条 → 应是 msg-6..msg-9，时间正序。
+        let win = service
+            .history_window(&character, session_id.as_ref(), Some(4), None)
+            .unwrap();
+        assert_eq!(win.messages.len(), 4);
+        assert_eq!(win.messages[0].content, "msg-6");
+        assert_eq!(win.messages[3].content, "msg-9");
+        assert_eq!(win.total, 10);
+        assert!(
+            win.has_more,
+            "loading tail of 10 with limit 4 must have more"
+        );
+        assert!(win.oldest_id.is_some());
+    }
+
+    #[test]
+    fn history_window_before_cursor_returns_strictly_earlier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, character, session_id) =
+            seed_session_with_n(tmp.path(), "cursor_char", None, 10);
+
+        // 取最近 4 条拿到 oldest_id 当 cursor。
+        let tail = service
+            .history_window(&character, session_id.as_ref(), Some(4), None)
+            .unwrap();
+        let cursor = tail.oldest_id.unwrap().to_ascii_lowercase();
+
+        // before=cursor → 返回 cursor 严格之前（更早）的消息，limit 3。
+        let earlier = service
+            .history_window(&character, session_id.as_ref(), Some(3), Some(&cursor))
+            .unwrap();
+        assert_eq!(earlier.messages.len(), 3);
+        // cursor 是 msg-6，更早 3 条 = msg-3..msg-5。
+        assert_eq!(earlier.messages[0].content, "msg-3");
+        assert_eq!(earlier.messages[2].content, "msg-5");
+        assert!(earlier.has_more, "there are still earlier messages");
+    }
+
+    #[test]
+    fn cursor_rejects_id_from_other_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        // session A 拿一个真实 ID。
+        let (svc_a, char_a, sess_a) = seed_session_with_n(
+            tmp.path(),
+            "cross_a",
+            Some(parse_sid("550e8400-e29b-41d4-a716-446655440001")),
+            3,
+        );
+        let log_a = svc_a.history(&char_a, sess_a.as_ref()).unwrap();
+        let id_a = log_a.message_ids[0].clone();
+
+        // session B 用 A 的 ID 当 cursor → BadRequest（cursor 不能跨 session）。
+        let (svc_b, char_b, sess_b) = seed_session_with_n(
+            tmp.path(),
+            "cross_b",
+            Some(parse_sid("550e8400-e29b-41d4-a716-446655440002")),
+            3,
+        );
+        let err = svc_b
+            .history_window(&char_b, sess_b.as_ref(), Some(2), Some(&id_a))
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref msg) if msg.contains("not in this session")),
+            "cross-session cursor must be BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_rejects_malformed_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, character, session_id) = seed_session_with_n(tmp.path(), "mal_char", None, 3);
+        let err = service
+            .history_window(&character, session_id.as_ref(), Some(2), Some("not-a-ulid"))
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref m) if m.contains("not a valid durable message id")),
+            "malformed cursor must be BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rollback_by_id_equivalent_to_by_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, character, session_id) =
+            seed_session_with_n(tmp.path(), "rbid_char", None, 5);
+
+        // index 2 的 ID → rollback_to_id(id_at_2) 应等价 rollback(2)：保留 0..=2 = 3 条。
+        let log = service.history(&character, session_id.as_ref()).unwrap();
+        let id_at_2 = log.message_ids[2].clone();
+
+        let (log_after, dropped) = service
+            .rollback_to_id(&character, session_id.as_ref(), &id_at_2)
+            .unwrap();
+        assert_eq!(dropped, 2, "rollback to index 2 drops 2 (total 5, kept 3)");
+        assert_eq!(log_after.messages.len(), 3);
+        assert_eq!(log_after.messages[2].content, "msg-2");
+
+        // 不变量 6：同位置等价。
+        let log_check = service.history(&character, session_id.as_ref()).unwrap();
+        assert_eq!(log_check.messages.len(), 3);
+    }
+
+    #[test]
+    fn rollback_by_id_rejects_unknown_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, character, session_id) =
+            seed_session_with_n(tmp.path(), "rbid_unknown", None, 3);
+        // 合形但不在 session 的 ID（派生一个不命中的）。
+        let fake = crate::ulid::derive_legacy_id("some-other-scope", 99);
+        let err = service
+            .rollback_to_id(&character, session_id.as_ref(), &fake)
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref m) if m.contains("not in this session")),
+            "unknown message_id must be BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rollback_by_id_rejects_malformed_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, character, session_id) = seed_session_with_n(tmp.path(), "rbid_mal", None, 3);
+        let err = service
+            .rollback_to_id(&character, session_id.as_ref(), "not-a-ulid")
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref m) if m.contains("not a valid durable message id")),
+            "malformed message_id must be BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rollback_validation_rejects_both_and_neither() {
+        // 不变量 7 的 HTTP 入口校验：RollbackRequest.validate_rollback_target。
+        use crate::daemon::RollbackRequest;
+        use crate::types::CharacterId;
+        let cid = CharacterId::new("vchar").unwrap();
+
+        let both = RollbackRequest {
+            character_id: cid.clone(),
+            message_index: Some(2),
+            message_id: Some("m0abc".to_string()),
+            session_id: None,
+        };
+        assert!(both.validate_rollback_target().is_err());
+
+        let neither = RollbackRequest {
+            character_id: cid,
+            message_index: None,
+            message_id: None,
+            session_id: None,
+        };
+        assert!(neither.validate_rollback_target().is_err());
+
+        let ok_id = RollbackRequest {
+            character_id: CharacterId::new("v2").unwrap(),
+            message_index: None,
+            message_id: Some("m0abc".to_string()),
+            session_id: None,
+        };
+        assert!(ok_id.validate_rollback_target().is_ok());
+
+        let ok_idx = RollbackRequest {
+            character_id: CharacterId::new("v3").unwrap(),
+            message_index: Some(2),
+            message_id: None,
+            session_id: None,
+        };
+        assert!(ok_idx.validate_rollback_target().is_ok());
+    }
+
+    #[test]
+    fn concurrent_append_and_rollback_no_half_state() {
+        // 不变量 7：with_session 串行化 → 并发 append/rollback 不产生半态。
+        let tmp = tempfile::tempdir().unwrap();
+        let cid = CharacterId::new("conc_char").unwrap();
+        let sid = parse_sid("550e8400-e29b-41d4-a716-446655440010");
+        let svc = ChatService::new(tmp.path());
+        // 先种 5 条。
+        for _ in 0..5 {
+            svc.append(
+                &cid,
+                Some(&sid),
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: "seed".to_string(),
+                },
+            )
+            .unwrap();
+        }
+
+        let svc_arc = std::sync::Arc::new(svc);
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let s = svc_arc.clone();
+            let cidc = cid.clone();
+            let sidc = sid;
+            handles.push(std::thread::spawn(move || {
+                if i % 2 == 0 {
+                    s.append(
+                        &cidc,
+                        Some(&sidc),
+                        ChatMessage {
+                            role: crate::adapter::MessageRole::Assistant,
+                            content: format!("concurrent-{i}"),
+                        },
+                    )
+                } else {
+                    // rollback 到 index 2（保留前 3）。
+                    s.rollback(&cidc, Some(&sidc), 2)
+                }
+            }));
+        }
+        for h in handles {
+            let _ = h.join();
+        }
+        // 不变量：最终态自洽——messages/ids/timestamps 等长，无半态。
+        let final_log = svc_arc.history(&cid, Some(&sid)).unwrap();
+        assert_eq!(
+            final_log.messages.len(),
+            final_log.message_ids.len(),
+            "concurrent mutations must keep messages/ids equal length"
+        );
+        assert_eq!(
+            final_log.messages.len(),
+            final_log.message_timestamps.len(),
+            "concurrent mutations must keep messages/timestamps equal length"
         );
     }
 }
