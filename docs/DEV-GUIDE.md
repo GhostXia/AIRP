@@ -8,10 +8,10 @@
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
 1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，不要重复 PR #118/#119/#121/#123 已完成的实现与验收；
-2. 保持 `node webui/smoke.mjs` 的 56 项 engine 真相断言与真实浏览器交互验收可复现；
-3. 下一阶段从桌面 artifact、长会话（#37/#122）和完整 Persona/Preset（#114/#115）按当前基线选择；
+2. 当前以 WebUI 为后端能力孵化、合同验证和基础 RP 使用主开发面；每项能力纵向贯通 engine shared service → HTTP/SSE → WebUI → tests；
+3. 按长会话 #37/#122 → Persona/Preset 与 trace #114/#115 → ChangeInbox #117 → Agent-first 工作台 #87 → Style Review #116 推进；
 4. 每个 PR 只修其范围内问题并同步文档；审计非阻塞遗留项在合并后写 issue；
-5. 不因 WebUI 基本可用而把它误写成最终 Tauri/Vue 产品 UI。
+5. 保持 `node webui/smoke.mjs` 的 56 项 engine 真相断言与真实浏览器验收；Tauri/Vue 仍是长期产品面，#98/#29 作为阶段性 release gate。
 
 本顺序来自 2026-07-12 对当前源码与全部开放 issue 的复核。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
 
@@ -37,9 +37,11 @@
 
 **反冗余门禁（2026-07-04 审计补充）**：任何临时机制、测试面、兼容层或候选方案落地后，必须收成**一个默认路径 + 一个关闭/迁移动作**。候选列表要改为当前决策，不得继续作为开放题悬挂。普通用户文档不得暴露内部测试文件、备选实现或二级删除步骤；测试代码可以覆盖实现，但不能成为用户关闭功能的必要操作。若要新增第二套 agent 前端控制入口（例如 WebUI 控制 harness、Tauri dev command、临时 widget 与 `window.__AIRP_AGENT_TEST__` 并存），必须先删或降级旧入口，并在 PR/提交说明里写清为什么一个入口不足；这不限制后端可靠性 WebUI。
 
-**🎯 首要目标（用户 2026-07-03 定，优先级高于一切 Phase/Task 排序）**：**开发出可执行文件并能简单运行。**
+**编排策略边界（2026-07-12）**：AIRP 可以提供单 Agent、规划者/执行者、独立候选仲裁、流水线等参考 profile，但不得把其中任何一个固化为唯一方案。用户可自定义角色、模型/provider、任务图、并发、validator、升级和人工节点；engine 必须统一强制 capability、预算、取消、trace、单写者仲裁与角色平面纯净度。实施规范见 [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)。
 
-- 这条压倒 DEV-GUIDE/PLAN 里所有 Phase 1/2/3 的功能拆分与 Task 顺序——任何 agent 接手时，**第一动作应是让项目产出可双击运行的产物（桌面端 .exe / 可执行）并跑通最简对话闭环**，而非按 Task 1.x 清单逐项推进。
+**🎯 产品首要目标（用户 2026-07-03 定）**：**开发出可执行文件并能简单运行。** 当前执行策略由用户于 2026-07-12 校准为先围绕 WebUI 稳定后端能力与合同，再集中接入桌面端；因此本节是产品交付门槛，不再覆盖本文开头的近期开发顺序。
+
+- 这条仍是产品交付的最终硬门槛，但不再压过当前 WebUI/后端增补顺序；任何阶段准备对外发布时，都必须回到可双击产物与最简对话闭环验收。
 - "简单运行"判据：用户拿到产物 → 双击/启动 → 选角色 → 发一条消息 → 收到流式回复。这一条不过，其余 Task 1.3/1.4/1.5、Perf Spike、扩展生态都属空谈——不可运行的代码对用户价值为零。
 - 已知阻塞项（动手前先核对，别重做）：
   - `ui/build-tauri.ps1` 已在 2026-07-03 审计 follow-up 修复；优先用它产出桌面 artifact，或用 `npm run tauri dev` 做开发态验收。
@@ -81,7 +83,7 @@ D:\AIRP-Dev/
 ## 2. 目标架构（2 盒）
 
 ```
-┌─ UI（Tauri 桌面优先；未来 web）──────────────────────────────┐
+┌─ UI（WebUI 当前开发主面；Tauri 长期产品交付面）───────────────┐
 │  Vue：Blueprint 渲染 · widget 注册表 · RFC6902 patch store    │
 │  · 虚拟滚动 · esm 沙箱 · consent 门                           │
 └──────── State-Protocol Envelope（Tauri IPC 现 / SSE / 将来 WS）┘
@@ -219,7 +221,7 @@ data/
 - **遗留到 Phase 1**：角色卡导入 UI 运行时验收（Phase 0 用预置 `data/characters/` 卡验证；Task 1.1 代码已合并）；当前 AIRP-Dev `.exe` 打包后真跑 GUI；Perf Spike 10 万条（§7）；reasoning/action 渲染。
 
 ### Phase 1 · 酒馆导入完整 + 基础会话
-> 按下列顺序推进，每个 Task 自身可验收。**当前先收口可执行文件/GUI 运行时验收与 Perf Spike，再进入 Task 1.3/1.4。**
+> 下列为早期 Phase 1 设计顺序，不是当前任务队列；当前执行顺序以本文开头和 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准。
 
 **Task 1.1 · 角色卡导入 UI** —— PR #3 已实现，PR #4 已加固派生 ID；当前需要运行时验收与文档收口
 - UI 加"导入卡"：Tauri 文件对话框拿路径 → `characters.import` intent（只带路径）→ 引擎读盘 + png_parser 解析落盘 → 刷新 `characters.list`。
@@ -248,9 +250,9 @@ data/
 - **实现状态**：`BusRelay` 已移除 `chat_lock`；chat scope 已改为 `{messages, order}`；每个 `chat.send` 用单个 state patch envelope 同时写入 user row、`order` user id、assistant row、`order` assistant id；流式回填只改自己的 `/messages/{assistant_id}/text`。
 - **已验证**：`cargo test -p airp-ui`、`npm run test -- --run`、`npm run typecheck`、`cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` 通过；审计 follow-up 后前端测试 95 个通过。
 
-### 下一步开发接手清单（2026-07-12 基线）
+### 下一步开发接手清单（2026-07-12 校准）
 
-PR A 已由 #118/#119/#121 完成。实现 agent 只执行 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 的 PR B 浏览器验收，不得恢复旧任务排序。
+WebUI 基础里程碑已由 PR #118/#119/#121/#123 完成。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留验收合同与历史记录，不再提供当前任务排序。
 
 1. 先设置 D 盘工具链环境：
    ```powershell
@@ -260,12 +262,12 @@ PR A 已由 #118/#119/#121 完成。实现 agent 只执行 [WEBUI-MVP-PLAN.md](W
    $env:npm_config_cache = "D:\npm-global\npm-cache"
    $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
    ```
-2. 启动真实 engine、本地零密钥 OpenAI-compatible mock provider 与 `webui/serve.js`。
-3. 用浏览器执行连接、provider、角色导入、Persona/Preset、会话和三轮流式聊天主路径。
-4. 刷新并断言 engine 端真实 history；执行 regen、rollback、删除会话，并确认没有跨 session 回填。
-5. 覆盖 401、provider error、SSE 中断和 stale-response isolation。
-6. 只修上述验收暴露的阻塞问题；保持自动 PR gate 与神圣不变式全绿。
-7. PR 合并后，把审计中未修的非阻塞建议去重写入 GitHub issue，再按 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 重排下一阶段。
+2. 先实施 #37/#122：durable message ID、分页/游标、增量 history、窗口化与长会话性能；禁止把数组索引固化为长期消息身份。
+3. 再实施 #114/#115：完整 Persona/Preset 生命周期、绑定、migration report 与 PromptAssemblyTrace。
+4. 再实施 #117 revisioned ChangeInbox，使 Agent 建议经 preview/diff/accept/reject 和冲突检测进入确定性写路径。
+5. 让 #87 Agent-first 工作台消费已稳定的 trace/change/tool/state 合同；#116 Style Review 最后接入建议层。
+6. 每项都通过 WebUI 完成真实用户闭环，并断言 engine 返回、持久化、错误与并发事实；保持自动 PR gate、零密钥 smoke 和神圣不变式全绿。
+7. 桌面 #98/#29 不删除、不伪装完成；当前不扩张其功能，阶段性交付时集中执行 artifact/sidecar release gate。
 
 Agent UI Test Harness 最小用法：
 
@@ -297,10 +299,10 @@ window.__AIRP_AGENT_TEST__.getSnapshot()
 - 扩展接口骨架：**事件总线 + 函数工具注册（走 MCP）+ 宏系统**（尽早立，第三方生态越晚开接口越难改）；agentskills.io 兼容技能。
 - **验收**：跨会话记忆生效（关掉重开记得你）；用户偏好自动积累；一个第三方 MCP 工具能接入并被 agent 调用；一个第三方技能能装载。
 
-### Phase 3+ · 酒馆功能补齐 + 扩展态 + web
+### Phase 3+ · 酒馆功能补齐 + 扩展态
 - Author's Note/Character's Note/Instruct Mode/Connection Profiles/群聊调度；slash 命令+脚本+Quick Replies；消息格式化管线。
 - 扩展态（走扩展接口，不进内核）：TTS/STT/图像生成/翻译/Web搜索/立绘/Data Bank-RAG。
-- **web UI**：当前先完成 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 的基础 RP 闭环；保持轻量，不让 WebUI 的临时交互反向决定桌面 UI 架构。
+- **WebUI 边界**：当前作为后端能力孵化和合同验证主开发面；保持协议与 shared service 客户端无关，不让 WebUI 的具体 DOM/交互结构反向固化桌面 UI 架构。
 
 ---
 

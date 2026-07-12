@@ -1,7 +1,7 @@
 # AIRP WebUI — Basic RP Client and Backend Validation Harness
 
 Browser-based lightweight client for basic RP use and engine backend validation.
-It is the fastest current path to a usable browser workflow, but it is not the final polished product UI and does not replace the long-term Tauri/Vue client. Current repository baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); acceptance contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
+It is the current primary development surface for incubating backend capabilities, validating API/data contracts, and completing basic RP workflows. It is not the final polished product UI and does not replace the long-term Tauri/Vue client. Current repository baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); completed acceptance contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
 
 ## Quick Start
 
@@ -51,6 +51,8 @@ they are not the served WebUI implementation.
 ## Scope
 
 The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. PR #123 closed the zero-secret acceptance gate with a 56-check engine-truth harness plus a real browser interaction pass; this is now a basically usable lightweight RP client, not the final desktop product.
+
+New capabilities should normally be delivered vertically through engine shared services, HTTP/SSE contracts, this WebUI, and tests. WebUI-specific DOM or interaction choices must not become engine contracts; stable client-neutral contracts are later consumed by the desktop UI.
 
 Workspace choices (non-secret User ID, selected character/session and Preset) are restored from browser-local state. Engine URL and optional bearer remain tab-scoped in `sessionStorage`; provider secrets are never written to `localStorage`.
 

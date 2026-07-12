@@ -1,12 +1,12 @@
 # WebUI 最快可用推进计划
 
-> 状态：实现阶段已完成；当前作为浏览器验收合同与近期唯一执行入口
+> 状态：PR #123 已完成；作为基础可用验收合同与历史实施记录保留，不再是近期执行入口
 >
 > 基线日期：2026-07-12
 >
 > 目标：以最短路径让普通用户通过浏览器完成一次可持续的基础 RP 使用闭环，而不是继续扩张候选能力。
 
-> 2026-07-12 进度：PR #118、#119、#121 已合并后端与 WebUI 的 Persona/Preset/session/outbound 契约、恢复与 busy-state 修复。PR A 已完成；尚未完成的唯一发布门槛是 PR B 的零密钥 mock-provider 全链路浏览器验收及其暴露问题的回归修复。当前事实见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> 2026-07-12 完成记录：PR #118、#119、#121 交付 Persona/Preset/session/outbound 契约、恢复与 busy-state；PR #123 完成零密钥 engine-truth harness（56/56）、真实浏览器交互验收及阻塞修复。当前方向与后续排序见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 ## 1. “基本可用”的唯一判据
 
@@ -94,7 +94,7 @@
 
 该 PR 可以较大，但不得夹带 Style Review、ChangeInbox、Tauri UI 重构、MCP/skills/plugin、世界书高级语义或视觉重做。
 
-### PR B：真实验收、回归修复与文档收口（当前阶段）
+### PR B：真实验收、回归修复与文档收口（PR #123 已完成）
 
 1. 启动真实 engine + 本地 mock OpenAI-compatible provider + `webui/serve.js`；
 2. 浏览器自动执行连接→配置→导入角色→Persona/Preset→建会话→三轮聊天→刷新恢复→regen/rollback→删会话；
@@ -141,8 +141,8 @@ cargo test --workspace
 cargo test -p airp-core subagent_context_has_no_orchestrator_noise
 ```
 
-WebUI 还必须执行零密钥 mock-provider 浏览器 smoke。验收断言要检查 engine 端真实 history、有效 Persona/Preset/session ID 和错误类型，不能只检查按钮、HTTP 200 或 DOM 出现文本。
+PR #123 已执行零密钥 mock-provider 验收：自动 harness 检查 engine 端真实 history、有效 Persona/Preset/session ID、错误类型和隔离；真实浏览器另行验证连接、恢复、交互与流式渲染。后续改动不得降低这些门禁。
 
 ## 7. 完成后的产品边界
 
-完成本计划后，`webui/` 是**可日常完成基础 RP 的轻量浏览器客户端，同时保留后端诊断能力**；它仍不是最终视觉产品，也不替代长期 Tauri/Vue 产品面。之后再依据真实使用反馈决定先做长会话、完整 Persona/Preset、Agent-first workbench 还是桌面打包。
+完成本计划后，`webui/` 是**可日常完成基础 RP 的轻量浏览器客户端，同时是当前后端能力孵化与合同验证主开发面**；它仍不是最终视觉产品，也不替代长期 Tauri/Vue 产品面。后续顺序已在 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 校准。

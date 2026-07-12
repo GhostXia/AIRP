@@ -21,6 +21,7 @@
 - `apply_lorebook`、`merge_lorebooks`、`seal_volume`、`export_context_bundle` 已注册；替换和封卷继续受 destructive confirm 保护。
 - context bundle 固定写入 data root，稳定材料在易变 state 之前，并明确供 fresh isolated subagent 使用。产物措辞测试不替代独立的 no-orchestrator-noise 不变式。
 - WebUI 已接通 Persona/Preset/session lifecycle，并在 PR #123 通过零密钥 engine-truth harness（56/56）与真实浏览器连接/恢复/流式渲染验收。
+- 2026-07-12 用户校准：WebUI 是当前后端能力孵化、合同验证与基础 RP 使用主开发面；Tauri/Vue 保持长期产品交付面，桌面 artifact/sidecar 验收作为阶段性 release gate。
 
 ## 文档类型与本轮全量审计处置
 
@@ -28,6 +29,7 @@
 |---|---|---|
 | 当前入口 | 根、`engine/`、`protocol/`、`ui/`、`webui/`、`data/` README，`AGENTS.md` | 已检查；受本轮影响的工具数、验证与数据路径已同步。`AGENTS.md` 保持为操作政策。 |
 | 当前架构/运维 | `PLAN.md`、`DEV-GUIDE.md`、`SECURITY.md`、`RISK-REGISTER.md`、`SOURCE-PROJECT-DECISIONS.md`、`UI-PROTOCOL-DECISION.md`、`ASSET-SPEC.md` | 已检查；同步受影响的 Agent/data 边界，无关协议和资产合同保持不变。 |
+| Agent 编排策略 | `AGENT-ORCHESTRATION.md` | 当前为待实现规范；参考 profile 不等于已交付 runtime，用户自定义也不能突破 capability、预算、审计和纯净度边界。 |
 | 能力候选 | `PARTS.md`、`MCP-SERVER-ABSORPTION.md`、`TAVERN-PARITY.md`、`HERMES-*`、`LEARN-*`、extension/widget 文档 | 已检查；仍是候选资产/路线，不等于本仓 capability inventory；受影响条目已同步。 |
 | WebUI 计划/验证 | `WEBUI-BACKEND-*`、`WEBUI-ANALYSIS-AND-OPTIMIZATION.md`、`WEBUI-REDESIGN-BACKEND-REQUIREMENTS.md`、smoke evidence | 已检查；dated plans 保留历史状态，当前行为以 `webui/README.md` 为准。 |
 | dated project/PR audits | `PROJECT-AUDIT-2026-07-10.md`、`AUDIT-AND-ROADMAP-2026-07.md`、`docs/audits/*.md` | 保留为证据。项目审计增加 post-baseline 注记；合并后的 PR audit 不改写。 |
@@ -44,4 +46,4 @@
 
 ## 当前近期计划入口（2026-07-12）
 
-[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 保留已完成的验收合同；PR #123 后按当前基线与开放 issues 重新排序。
+[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留已完成的验收合同；当前按 WebUI/后端增补顺序推进。

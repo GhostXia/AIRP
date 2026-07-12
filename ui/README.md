@@ -68,7 +68,7 @@ cargo test -p airp-ui
 - Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested.
 - Character import is path-first: the UI sends only `card_path`; it must not put base64 card blobs into Vue state or widget props.
 - Chat state is id-keyed as `{ messages, order }`. `BusRelay` no longer uses `chat_lock`; each `chat.send` opens the user and assistant rows with one patch envelope, then streams into `/messages/{assistant_id}/text`.
-- WebUI is the lightweight browser RP client and fastest current acceptance surface. Long-term product UI work continues here in Tauri/Vue.
+- WebUI is currently the primary backend-incubation, contract-validation, and basic RP development surface. This Tauri/Vue client remains the long-term product delivery surface and should consume stable client-neutral contracts after they mature.
 - Agent UI Test Harness is dev/test-only. Enable with `?airp_agent_test=1`, `localStorage.AIRP_AGENT_TEST=1`, or `VITE_AIRP_AGENT_TEST=1`; then use `window.__AIRP_AGENT_TEST__` from Codex browser control or Playwright.
 - Users who do not want any agent-control surface can delete `src/agent-test.ts` before building. `App.vue` loads the harness only when the module exists, and the related test does not block the build when the module is absent.
 

@@ -38,8 +38,8 @@ D:\AIRP-Dev/
 - 默认 Agent 工具注册表当前为 19 个工具；`GET /v1/agent/tools` 提供排序后的运行时目录，`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist/confirm 门执行 typed observation，并只由 finalizer 做最终纯净生成。
 - UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；desktop 现在持有并在退出时终止 sidecar，Windows workflow 已加入安装→启动→ready→退出 smoke，等待 CI artifact 实跑证据。
 - 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
-- WebUI 当前是轻量浏览器 RP 客户端兼后端诊断面，不替代 Tauri/Vue 长期产品 UI。PR #106 已把 V2 运行态落到 `webui/`；provider/endpoint/model/runtime key 可编辑，应用后通过真实 `/v1/models` 请求验证，带真实凭据的远端运行证据仍需手动执行。
-- WebUI 的单默认 Persona、Preset 选择/导入、session delete/隔离和 busy-state 收口已由 PR #118/#119/#121 完成；当前唯一 MVP 发布门槛是零密钥 mock-provider 全链路浏览器验收。
+- WebUI 是当前后端能力孵化、合同验证和基础 RP 使用的主开发面，不替代 Tauri/Vue 长期产品 UI。新能力优先贯通 engine → HTTP/SSE → WebUI → tests，以降低后续桌面端接入时的后端返工。
+- WebUI 的单默认 Persona、Preset 选择/导入、session delete/隔离和 busy-state 收口已由 PR #118/#119/#121 完成；PR #123 已通过零密钥 engine-truth harness 与真实浏览器验收。
 - 2026-07-12 本地与 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；具体快照见当前基线。
 
 当前权威状态和路线排序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。[docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md) 是历史审计；实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
@@ -118,9 +118,10 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 
 - [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)：当前开发交接与工程纪律
 - [docs/PLAN.md](docs/PLAN.md)：长期设计计划
+- [docs/AGENT-ORCHESTRATION.md](docs/AGENT-ORCHESTRATION.md)：可插拔 Agent 编排、用户 profile 与升级闸门规范草案
 - [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)：当前事实、剩余门槛与新 session 入口
-- [docs/WEBUI-MVP-PLAN.md](docs/WEBUI-MVP-PLAN.md)：WebUI 基本可用验收合同；实现阶段已完成，剩余 browser acceptance
-- [docs/WEBUI-BACKEND-VALIDATION.md](docs/WEBUI-BACKEND-VALIDATION.md)：临时 WebUI 后端可靠性验证路线
+- [docs/WEBUI-MVP-PLAN.md](docs/WEBUI-MVP-PLAN.md)：已完成的 WebUI 基本可用验收合同与历史实施记录
+- [docs/WEBUI-BACKEND-VALIDATION.md](docs/WEBUI-BACKEND-VALIDATION.md)：WebUI 后端验证历史、证据与回归清单
 - [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)：四个源项目的资产吸收/北极星降级决策
 - [docs/UI-PROTOCOL-DECISION.md](docs/UI-PROTOCOL-DECISION.md)：UI 协议与 Widget 的采纳/降级决策
 - [docs/PARTS.md](docs/PARTS.md)：旧仓能力拆件清单

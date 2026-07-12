@@ -4,16 +4,20 @@
 > 最后更新：2026-07-12
 > **权威 = 我们这个客户端的实际需求。** 四个原仓库的文档与代码都**仅供参考**——是作者已想清的宝贵先例/解法，但不是必须遵守的法律。它们的理念、戒律、模块边界、ADR、路线图**均为参考**，与我们实际需求冲突时以需求为准。本 PLAN 的每个决策先问"我们的客户端需要什么"，再问"哪个仓库有可借鉴的现成解法"，**绝不问"文档规定了什么"**。
 
-## 当前执行方向（2026-07-12：完成基本可用 WebUI 的验收）
+## 当前执行方向（2026-07-12：以 WebUI 孵化和稳定后端能力）
 
-PR #118、#119、#121 已完成 credential redirect、单默认 Persona、Preset 选择/JSON 导入、session delete/隔离与 busy-state 收口。近期继续暂停横向扩张，以真实 engine + 本地 mock provider 完成浏览器基础 RP 验收为唯一里程碑：
+PR #118、#119、#121 已完成 credential redirect、单默认 Persona、Preset 选择/JSON 导入、session delete/隔离与 busy-state 收口；PR #123 已完成零密钥 engine 真相断言和真实浏览器验收。近期继续围绕 WebUI 增补开发，把它作为后端能力孵化、API/数据合同验证与基础 RP 使用的主开发面：
 
-1. **启动无秘密环境**：真实 engine + 本地 mock provider + WebUI，不消耗真实密钥；
-2. **执行纵向闭环**：连接→配置 provider→导入角色→Persona/Preset→三轮流式聊天→刷新恢复→regen/rollback→删会话；
-3. **验证持久化事实**：刷新、回滚、重生成和删除均以 engine 返回及磁盘状态为准，不接受只看 DOM 的假通过；
-4. **只修阻塞项**：验收暴露的阻塞 bug 在同一推进周期修复；非阻塞性能项继续由 issue #122 等跟踪。
+1. **长会话合同优先**：先处理 #37/#122，建立 durable message ID、分页/游标、增量恢复、窗口化与有界性能；
+2. **完善 RP Profile**：随后处理 #114/#115，补完整 Persona/Preset 生命周期、绑定、迁移报告与 PromptAssemblyTrace；
+3. **建立 Agent 变更闭环**：处理 #117 的 revisioned ChangeInbox，再让 #87 Agent-first 工作台消费稳定的 trace/change/tool/state 合同；
+4. **后置建议层**：#116 Style Review 在 trace 与 ChangeInbox 稳定后接入，只产出建议，不绕过确定性写入边界；
+5. **纵向交付纪律**：每项能力优先贯通 engine shared service → HTTP/SSE → WebUI → tests，验收以 engine 持久化和返回合同为准，不以 DOM 或 HTTP 200 代替；
+6. **桌面边界**：Tauri/Vue 仍是长期产品交付面，#98/#29 保留为阶段性 release gate；当前不扩张桌面功能，待核心合同稳定后集中接入。
 
-Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、swipe/branch/pagination、Tauri 打包与扩展生态全部后移，不阻塞本里程碑。这不改变“两盒”“干净提示词”“Tauri 长期产品面”等既定原则；只是把 WebUI 从纯诊断 harness 提升为可完成基础 RP 的轻量客户端。完整范围、两个 PR 的拆分和验收判据见 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)。
+Agent 调度采用**可插拔编排策略**，不把某个“强模型规划 + 固定数量低成本 executor”配方写死为产品唯一方案。系统提供有界执行、capability、trace、validator 和升级闸门；用户可以编排自己的角色、模型/provider、任务图、并发、预算、验收、仲裁与人工节点。完整原则见 [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)。
+
+这不改变“两盒”“干净提示词”“数据单一真相”或“Tauri 长期产品面”等既定原则。WebUI 决定的是当前开发顺序和最快反馈面，不垄断 UI 架构；稳定合同必须保持客户端无关，并最终回灌桌面端。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 现作为已完成的基础可用验收合同保留。
 
 ## 0. 背景与定位
 
@@ -246,7 +250,7 @@ Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、swipe/bran
 
 1. **引擎内数据层的存储设计**（原"数据归属"收敛后剩的）：单一真相已定在引擎内；剩的是怎么把 **Core 自带数据层**（png_parser 正确、chat_store/volume/scene）与 **MCP-Server 数据域**（角色/世界书/state/预设的域模型 + 沙箱 + 插件零schema）**熔成一套**——以 Core 为基吸收 MCP 优点，还是反之。多为工程取舍，可动手时定。
 2. **UI↔引擎线协议落地细节**：方向已定为吸收 State-Protocol 的 Blueprint/Widget/RFC6902 patch/Envelope 资产，且默认链路直连 AIRP engine；剩余是具体接口边界、版本策略、错误语义和 engine 侧 capability 强制的实现细节。原 `agentbus` 自重写 Envelope 的重复问题随之消解（引擎直接用 state-protocol 类型）。
-3. **近期收口顺序**：已由 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 拍板，不再开放讨论；先完成 credential 安全、单默认 Persona、Preset、session lifecycle 与 browser smoke，再依据真实使用反馈重排。
+3. **近期收口顺序**：基础 WebUI 里程碑已由 PR #123 完成；当前顺序为长会话 #37/#122 → Persona/Preset 与 trace #114/#115 → ChangeInbox #117 → Agent-first 工作台 #87 → Style Review #116。桌面 #98/#29 是阶段性 release gate。
 4. **纯净度代价是否接受**（Core §10-1）：干净提示词把靠 in-prompt-ReAct 的纯文本模型挡在 loop 工具外。接受（纯净优先），还是留"污染模式"开关兼容那类模型？
 5. **capability 扩展范围**：Agent 工具已有 engine-side `call:tool` + allowlist + destructive confirm 强制；未来 widget intent、MCP、hook 与 plugin storage 必须复用同一权威模型，不能退回 UI 单边限制。
 6. **世界书插入引擎完整度**：MVP 先做能解析+关键词触发，还是一步到位补齐 position/depth/selective/递归？且按 §3.2/TAVERN-PARITY §4——position/depth 这些机械插入语义要重组为"给 agent 的建议元数据 + 检索 Tool"，非硬编注入器。
@@ -255,6 +259,8 @@ Style Review、完整 ChangeInbox/PromptAssemblyTrace、多 Persona、swipe/bran
 
 ## 5. 修订记录
 
+- 2026-07-12：用户校准当前开发策略：继续围绕 WebUI 增补，优先借此提升 engine shared service、HTTP/SSE、数据合同和可观测能力，降低未来 Tauri/Vue 接入时的后端返工；桌面 artifact/sidecar 验收保留为阶段性 release gate。
+- 2026-07-12：新增 [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)，明确内建分级执行与升级闸门只是参考 profile；用户可编排特有方案，系统只强制安全、有界、纯净、可观测与确定性验收边界。
 - 2026-07-11：近期执行基准改为“最快形成基本可用 WebUI”，新增 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)。以一个纵向实现 PR + 一个验收收口 PR 完成单默认 Persona、Preset 选择/导入、session lifecycle、provider redirect 安全与三轮 RP 浏览器 smoke；高级能力统一后移。
 - 2026-07-04：用户澄清 WebUI 定位：它是临时后端可靠性验证面，用来验证 engine/API/SSE/数据层，不替代 Tauri/Vue 桌面 UI；桌面 UI 继续作为长期产品面慢慢推进。Agent UI Test Harness 已收口为 `ui/src/agent-test.ts` 一文件 dev/test 入口，默认关闭、能力白名单；普通用户删除这一文件即可在 fork 构建中移除 agent 控制面。补入反冗余要求：不要并行新增第二套测试面或把内部测试文件暴露成用户操作步骤。
 - 2026-07-03：同步 GitHub 合并历史后的当前状态：PR #1 收敛两盒 workspace，PR #2 完成 UI↔engine 直连，PR #3/#4 完成并加固 path-first 角色卡导入；将仍写着 mock BusRelay、四仓入 workspace、CI 强制等旧状态的段落改成当前事实，并把未能代替用户拍板的事项移入 [DOC-AUDIT.md](DOC-AUDIT.md)。

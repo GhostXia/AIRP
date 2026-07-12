@@ -2,7 +2,7 @@
 
 > 基线日期：2026-07-12
 >
-> Git 基线：PR #123 验收分支（合并后以 `main` 为准）
+> Git 基线：`main` / `dc88a6f`（PR #123 已合并）
 >
 > 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
 
@@ -11,22 +11,25 @@
 - `engine/` 是唯一 RP/Agent 内核：OpenAI-compatible/Anthropic 流式调用、角色卡、命名会话、state、基础 lorebook、preset、scene、volume、decompose/analysis、HTTP/SSE 与有界 structured tool-call Agent loop。
 - 默认 Agent registry 有 19 个工具；运行时真相由 `GET /v1/agent/tools` 提供，执行受 capability、allowlist 和 destructive confirmation 约束。
 - WebUI 已完成 provider 配置、角色导入、单默认 Persona、Preset 选择/JSON 导入、session 创建/切换/删除、session-scoped history/regen/rollback、流式聊天、Agent Run 与非敏感工作区恢复。
+- WebUI 是当前后端能力孵化、API/数据合同验证与基础 RP 使用的主开发面；新增能力应优先纵向贯通 engine shared service → HTTP/SSE → WebUI → tests，再把稳定合同接入桌面端。
 - Tauri/Vue UI 已通过 `TauriBus`/`BusRelay` 直连 engine，具有 id-keyed chat、Blueprint/widget、RFC6902 patch、guard、sandbox/consent 和 sidecar 生命周期基础。
 - Provider redirect 统一 fail-closed；CORS 使用内建 WebUI/Tauri origins，并只追加 `AIRP_CORS_ORIGINS` 的合法精确来源。
 
 ## 2. 尚不能宣称的能力
 
-- WebUI 已通过零密钥 mock provider 验收：自动 engine 真相 harness 为 56/56，真实浏览器完成连接、数据恢复、发送消息与 24-chunk SSE 渲染。它现在是基本可用的轻量 RP 客户端，但仍不是长期 Tauri/Vue 产品 UI。
 - 当前 AIRP-Dev Windows 安装包尚缺真实 artifact 的安装、启动、sidecar ready、简单对话和退出证据。
 - MCP upstream client、skills/plugin runtime、完整 ChangeInbox、完整 Persona 生命周期、Preset migration/trace、SillyTavern 高级 worldbook 语义、长会话分页/虚拟化仍未完成。
+- 可配置多 Agent 编排尚未交付；[AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md) 目前是产品原则与待实现规范，不得把参考 profile 写成现有 runtime 能力。
 - WebUI `loadHistory` 仍全量重建消息 DOM，已由 issue #122 跟踪；不得把该路径复制到产品 UI。
 
 ## 3. 下一阶段优先顺序
 
-1. 桌面 artifact 安装/启动/sidecar/简单对话/退出验收；
-2. 长会话性能与 durable message ID（#37/#122）；
-3. 完整 Persona/Preset 生命周期与 trace（#114/#115）；
-4. 继续保持零密钥 WebUI smoke 与神圣提示词不变式为回归门禁。
+1. 长会话与 durable message contract（#37/#122）：稳定 message ID、分页/游标、增量恢复、窗口化与 10k/100k 消息性能；
+2. 完整 Persona/Preset 生命周期与 PromptAssemblyTrace（#114/#115）；
+3. revisioned ChangeInbox（#117），再推进 Agent-first 工作台（#87）；
+4. Style Review（#116）在 trace/change 合同稳定后接入；
+5. 桌面 artifact 与 sidecar 可靠性（#98/#29）保留为阶段性 release gate，不在当前 WebUI/后端增补周期抢占主线；
+6. 每阶段继续保持零密钥 WebUI smoke 与神圣提示词不变式为回归门禁。
 
 ## 4. 当前开放风险/issue 分组
 
