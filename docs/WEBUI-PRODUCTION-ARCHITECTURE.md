@@ -71,8 +71,10 @@ engine validation, documentation and smoke tests do not invent parallel schemas.
 | Setting | Required | Owner | Rule |
 |---|---:|---|---|
 | `AIRP_DEPLOYMENT_MODE=production` | yes | engine | Enables fail-closed production validation; an unknown value is an error |
-| `AIRP_PUBLIC_ORIGIN` | yes | bundle/gateway | One canonical `https://host[:port]` origin; no path, query, fragment or wildcard |
-| `AIRP_ACCESS_KEY` | yes | gateway + engine | At least 32 random bytes represented without whitespace; runtime secret, never persisted or returned |
+| `AIRP_PUBLIC_ORIGIN` | yes | gateway + engine | One canonical `https://host[:port]` origin; no path, query, fragment or wildcard |
+| `AIRP_TLS_MODE` | yes | gateway | `public`, `internal` or `files`; defaults are not guessed from reachability |
+| `AIRP_TLS_CERT_FILE` / `AIRP_TLS_KEY_FILE` | `files` only | gateway | Read-only PEM secret mounts whose SAN covers the public origin |
+| `AIRP_ACCESS_KEY` | yes | gateway + engine | Exactly 32 CSPRNG bytes encoded as 43-character unpadded base64url (`A-Z a-z 0-9 _ -`); runtime secret, never persisted or returned |
 | `AIRP_ADMIN_USER` | yes | gateway | Non-empty perimeter username |
 | `AIRP_ADMIN_PASSWORD_HASH` | yes | gateway | Caddy-supported Argon2id or bcrypt hash; plaintext is rejected/not accepted by the bundle |
 | `AIRP_DATA_DIR` | yes | engine | Fixed container path backed by the persistent data volume |
@@ -83,7 +85,7 @@ engine validation, documentation and smoke tests do not invent parallel schemas.
 Production validation happens before the listener is opened. In production mode the engine
 must fail startup when:
 
-- `AIRP_ACCESS_KEY` is missing, empty or below the strength floor;
+- `AIRP_ACCESS_KEY` is not exactly 43 ASCII characters from the unpadded base64url alphabet;
 - `AIRP_PUBLIC_ORIGIN` is not one exact HTTPS origin;
 - `AIRP_ALLOW_LOCAL_PATH` is enabled;
 - `AIRP_DATA_DIR` is not an existing writable absolute directory, or resolves to the
@@ -92,6 +94,11 @@ must fail startup when:
 
 `AIRP_PUBLIC_ORIGIN` is also the sole production CORS origin. Built-in development/Tauri
 origins must not be silently added in production mode.
+
+The engine can validate the key's representation, not its entropy. The first-party bootstrap
+must generate exactly 32 bytes with an operating-system CSPRNG and encode them as unpadded
+base64url. Operator-supplied keys must follow the same process; memorable text padded to 43
+characters does not satisfy the contract even though representation validation cannot detect it.
 
 Runtime `POST /v1/settings` must not replace `AIRP_ACCESS_KEY` in production: changing it in
 only the engine would desynchronize the gateway and lock out all proxied calls. Engine bearer
@@ -104,7 +111,11 @@ the operator updates the deployment secret.
 The first executable configuration must enforce all of the following and validate the rendered
 Caddy configuration before startup:
 
-- TLS is mandatory; port 80 may exist only for redirect/ACME challenge handling.
+- TLS is mandatory; port 80 may exist only for redirect/ACME challenge handling. `public` mode
+  uses Caddy-managed public certificates, `internal` uses Caddy's internal CA, and `files` loads
+  an operator-provided PEM certificate/key pair. Internal-CA deployments must document how to
+  export and install the root CA on every client. Smoke tests must use a trusted chain and must
+  not bypass certificate verification.
 - Basic authentication covers static files and every proxied route. Only password hashes enter
   configuration; plaintext credentials do not.
 - Engine route matching is an explicit allowlist: `/v1/*`, `/health` and `/version`. Unknown
@@ -126,9 +137,17 @@ Caddy configuration before startup:
   no-store` for API responses and unversioned WebUI assets to prevent mixed-version UI state;
   immutable caching waits for content-hashed assets.
 - Proxy connect/response-header timeouts are bounded, while SSE bodies are not given a short
-  total-response timeout. `text/event-stream` must flush incrementally through the gateway.
-- Access logs omit request/response bodies and redact `Authorization`, cookies, query secrets
-  and upstream credentials. Runtime logs have a documented retention/size bound before P3.
+  total-response timeout. Engine SSE responses must retain `Content-Type: text/event-stream`
+  and `Cache-Control: no-cache`; the engine route must not enable `response_buffers` or forced
+  compression. This deliberately uses Caddy's immediate flush for `text/event-stream` rather
+  than `flush_interval -1`, because the latter also keeps the upstream request alive after an
+  early client disconnect. The smoke must assert incremental delivery and cancellation.
+- Access logs omit request/response bodies and the complete query string. The Caddy `log`
+  formatter must filter `request>uri` with the regexp `\?.*$` → empty string, and explicitly
+  delete `request>headers>Authorization`, `request>headers>Proxy-Authorization`,
+  `request>headers>Cookie` and `response>headers>Set-Cookie` even though Caddy redacts common
+  credential headers by default. Runtime logs have a documented retention/size bound before
+  P3; `log_credentials` must never be enabled.
 
 The gateway is a security boundary, but not the only one. Engine bearer validation, endpoint
 body limits, typed validation, outbound redirect policy and path guards remain mandatory.
@@ -168,7 +187,7 @@ flow. That exception does not cross into the WebUI production profile.
 | Direct engine exposure | No published engine port; private network only | Host connection to engine port fails; gateway path succeeds |
 | Anonymous access | TLS + Basic auth over the whole site | Missing/wrong credentials return `401`; valid credentials load UI/API |
 | Browser obtains engine bearer | Gateway-owned secret and header replacement | Static assets/config/logs contain no bearer; supplied bearer cannot pass through |
-| Weak/missing production secret | Pre-listener engine validation | Empty/short key causes non-zero startup and no listening socket |
+| Weak/missing production secret | Canonical generated 32-byte key plus pre-listener representation validation | Missing, non-43-character or non-base64url key causes non-zero startup and no listening socket |
 | Server-side arbitrary file read | Production rejects local-path mode and `card_path` | Authenticated `card_path` request returns typed `400`; upload still succeeds |
 | Cross-origin drive-by request | Exact HTTPS origin + perimeter auth + production CORS | Foreign Origin preflight/request is rejected |
 | Script injection/clickjacking | Strict CSP, no unsafe inline/eval, removal of dynamic inline-style writes, frame denial, output escaping | Header assertions, zero CSP violations on main flows, plus browser injection fixtures |
@@ -226,6 +245,8 @@ The dependency and gateway decisions were checked on 2026-07-13 against the upst
 [Basic authentication](https://caddyserver.com/docs/caddyfile/directives/basic_auth),
 [request-body limit](https://caddyserver.com/docs/caddyfile/directives/request_body),
 [response header](https://caddyserver.com/docs/caddyfile/directives/header) and
-[reverse proxy/SSE](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
+[reverse proxy/SSE](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy),
+[TLS](https://caddyserver.com/docs/caddyfile/directives/tls) and
+[access log filtering](https://caddyserver.com/docs/caddyfile/directives/log)
 documentation. Caddy v2.11.4 is Apache-2.0; the executable slice must additionally record the
 official image digest and the complete base-image/SBOM license set.
