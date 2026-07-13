@@ -129,9 +129,10 @@ Caddy configuration before startup:
   connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';
   form-action 'self'`, plus `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
   `X-Frame-Options: DENY` and a restrictive `Permissions-Policy`.
-- The executable slice must first replace the current `document.body.style.userSelect` and
-  `workbenchPanel.style.width` writes with CSP-compatible state/classes. Until that refactor and
-  a real-browser CSP pass exist, the gateway configuration is not production-ready; silently
+- The executable slice must first replace **every** dynamic inline-style write with
+  CSP-compatible state/classes: currently the two `document.body.style.userSelect` assignments
+  and the one `workbenchPanel.style.width` assignment. Until all three are removed and a
+  real-browser CSP pass exists, the gateway configuration is not production-ready; silently
   weakening `style-src` with `unsafe-inline` is not the accepted fix.
 - HSTS is emitted only by the HTTPS production site. The first slice uses `Cache-Control:
   no-store` for API responses and unversioned WebUI assets to prevent mixed-version UI state;
