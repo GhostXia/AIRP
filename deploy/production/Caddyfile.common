@@ -3,6 +3,7 @@
 		format filter {
 			wrap json
 			fields {
+				user_id delete
 				request>uri replace `\?.*$` ``
 				request>headers>Authorization delete
 				request>headers>Proxy-Authorization delete
@@ -21,7 +22,7 @@
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
 	}
 
-	basic_auth {
+	basic_auth {$AIRP_ADMIN_HASH_ALGORITHM:bcrypt} {
 		{$AIRP_ADMIN_USER} {$AIRP_ADMIN_PASSWORD_HASH}
 	}
 

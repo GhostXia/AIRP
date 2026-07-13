@@ -58,5 +58,18 @@ docker compose --env-file .env -f compose.yaml down
 
 `down` preserves the named `airp-data`, `airp-caddy-data`, and `airp-caddy-config` volumes. Do
 not use `down --volumes` on a real deployment. Image tags come from `AIRP_VERSION`; never replace
-them with `latest`. P2 backup/restore and upgrade rollback are not yet release-supported, so this
-bundle remains a P0 preview until the production topology smoke and later release gates land.
+them with `latest`.
+
+## CI topology proof
+
+`smoke-ci.sh` plus `smoke-compose.yaml` are CI-only acceptance assets, not operator startup
+commands. They create unique disposable data/Caddy volumes and a synthetic HTTPS provider, then
+prove HTTPS perimeter auth, host-inaccessible engine, headers/CSP/body limits, content-only card
+import, three incremental SSE turns, restart persistence, exact ephemeral-certificate SPKI trust,
+system-Chrome injection/stream-cancel
+behavior and absence of synthetic secrets/private runner paths in logs, image metadata and WebUI
+assets. Cleanup deletes only the uniquely named smoke volumes.
+
+Passing this P0 topology gate does not make the bundle a formal release. P1 RP management, P2
+backup/restore and upgrade rollback, and P3 provenance/compatibility/release-candidate gates remain
+required by `docs/WEBUI-PRODUCTION-PLAN.md`.

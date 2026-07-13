@@ -3,3 +3,11 @@ secrets/*
 !secrets/.gitkeep
 certs/*
 !certs/.gitkeep
+smoke-*
+!smoke-ci.sh
+!smoke-compose.yaml
+*-smoke.log
+mock-provider.log
+oversized.json
+card-path-response.json
+topology-smoke.log

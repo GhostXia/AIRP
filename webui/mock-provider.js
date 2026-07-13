@@ -14,10 +14,17 @@
 // 故意不依赖任何外部包：验收环境零安装、可复现，且不污染 D 盘工具链。
 
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 
 const PORT = parseInt(process.env.MOCK_PROVIDER_PORT || '8889', 10);
 const HOST = process.env.MOCK_PROVIDER_HOST || '127.0.0.1';
 const MODEL = process.env.MOCK_PROVIDER_MODEL || 'airp-mock-1';
+const TLS_CERT_FILE = process.env.MOCK_PROVIDER_TLS_CERT_FILE || '';
+const TLS_KEY_FILE = process.env.MOCK_PROVIDER_TLS_KEY_FILE || '';
+if (Boolean(TLS_CERT_FILE) !== Boolean(TLS_KEY_FILE)) {
+  throw new Error('MOCK_PROVIDER_TLS_CERT_FILE and MOCK_PROVIDER_TLS_KEY_FILE must be set together');
+}
 
 // 健鉴权：mock 不要求任何 key，但若调用方带了 Authorization 头则回显一行日志便于验收断言。
 // 不做真鉴权——零密钥是本里程碑的硬约束（WEBUI-MVP-PLAN.md §1.2/§4 PR B）。
@@ -118,7 +125,7 @@ function handleChatCompletions(req, res) {
   res.on('close', () => clearInterval(timer));
 }
 
-const server = http.createServer((req, res) => {
+const handler = (req, res) => {
   // CORS 预检
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -136,10 +143,14 @@ const server = http.createServer((req, res) => {
 
   // 404 用 OpenAI 风格 JSON，便于 engine adapter 的 typed error 路径也被覆盖。
   sendJson(res, 404, { error: { message: 'unknown endpoint: ' + req.method + ' ' + url, type: 'not_found' } });
-});
+};
+const tlsEnabled = Boolean(TLS_CERT_FILE);
+const server = tlsEnabled
+  ? https.createServer({ cert: fs.readFileSync(TLS_CERT_FILE), key: fs.readFileSync(TLS_KEY_FILE) }, handler)
+  : http.createServer(handler);
 
 server.listen(PORT, HOST, () => {
-  console.log('AIRP mock provider on http://' + HOST + ':' + PORT);
+  console.log('AIRP mock provider on ' + (tlsEnabled ? 'https://' : 'http://') + HOST + ':' + PORT);
   console.log('  GET  /v1/models');
   console.log('  POST /v1/chat/completions  (SSE, model=' + MODEL + ')');
   console.log('零密钥；不做真鉴权。按 Ctrl+C 停止。');

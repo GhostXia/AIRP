@@ -13,8 +13,13 @@
 //
 // 退出码：0 = 全绿；1 = 有断言失败（含详细 diff）。非零即验收未过。
 
+import { writeFileSync } from 'node:fs';
+
 const ENGINE = process.env.AIRP_ENGINE_URL || 'http://127.0.0.1:8000';
 const MOCK = process.env.AIRP_MOCK_URL || 'http://127.0.0.1:8889';
+const AUTH_HEADER = process.env.AIRP_AUTH_HEADER || '';
+const KEEP_SESSION = process.env.AIRP_SMOKE_KEEP_SESSION === '1';
+const RESULT_FILE = process.env.AIRP_SMOKE_RESULT_FILE || '';
 
 // ── 断言工具 ─────────────────────────────────────────────────────────────
 const failures = [];
@@ -51,6 +56,7 @@ async function api(method, path, body, { bearer } = {}) {
   lastReqAt = Date.now();
   const headers = { 'Content-Type': 'application/json' };
   if (bearer) headers['Authorization'] = 'Bearer ' + bearer;
+  else if (AUTH_HEADER) headers['Authorization'] = AUTH_HEADER;
   const res = await fetch(ENGINE + path, {
     method,
     headers,
@@ -70,9 +76,13 @@ async function api(method, path, body, { bearer } = {}) {
 //   `event: error\ndata: {"type":"body_chunk","text":"[Error/...]"}\n\n`
 // UnpackedChunk 序列化为 `{type, text}`（xml_unpacker.rs `#[serde(tag="type", content="text")]`）。
 async function streamChat(payload) {
+  const startedAt = Date.now();
   const res = await fetch(ENGINE + '/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
+    },
     body: JSON.stringify(payload),
   });
   ok(res.ok, 'chat SSE 200 OK');
@@ -82,12 +92,14 @@ async function streamChat(payload) {
   const chunks = [];
   let text = '';
   let errorText = '';
+  let readBatches = 0;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+    readBatches++;
     buf += decoder.decode(value, { stream: true });
     let idx;
     while ((idx = buf.indexOf('\n\n')) >= 0) {
@@ -121,14 +133,16 @@ async function streamChat(payload) {
       }
     }
   }
-  return { chunks, text, error: errorText || null };
+  return { chunks, text, error: errorText || null, readBatches, elapsedMs: Date.now() - startedAt };
 }
 
 async function waitFor(url, { name = '', timeoutMs = 10000 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const r = await fetch(url);
+      const r = await fetch(url, {
+        headers: url.startsWith(ENGINE) && AUTH_HEADER ? { Authorization: AUTH_HEADER } : {},
+      });
       if (r.ok) return true;
     } catch {}
     await sleep(250);
@@ -194,9 +208,13 @@ await waitFor(ENGINE + '/health', { name: 'engine' });
 // 判据 2：provider 通过真实 /v1/models 验证
 {
   const m = await api('GET', '/v1/models');
+  const models = Array.isArray(m.data?.data) ? m.data.data : [];
+  if (!m.ok) {
+    console.error(`  models proxy diagnostic: status=${m.status} code=${m.data?.error?.code || 'unknown'}`);
+  }
   ok(m.ok, '/v1/models 200');
-  ok(Array.isArray(m.data?.data) && m.data.data.length >= 1, '/v1/models 返回 model 列表');
-  ok(m.data?.data.some((x) => x.id === 'airp-mock-1'), 'model 列表含 airp-mock-1');
+  ok(models.length >= 1, '/v1/models 返回 model 列表');
+  ok(models.some((x) => x.id === 'airp-mock-1'), 'model 列表含 airp-mock-1');
 }
 
 // 判据 3：导入并选择角色（用 card_json fallback；smoke 是可信本地进程，但守 RR-001 不走 card_path）
@@ -306,6 +324,7 @@ for (let i = 0; i < sentMessages.length; i++) {
     message: sentMessages[i],
   });
   ok(out.chunks.length >= 1, `第 ${i + 1} 轮流式产生 ≥1 chunk`);
+  ok(out.readBatches >= 2 && out.elapsedMs >= 30, `第 ${i + 1} 轮 SSE 经多次读取增量到达`);
   ok(out.text.length > 0, `第 ${i + 1} 轮回复非空`);
   replies.push(out.text);
 }
@@ -393,9 +412,13 @@ for (let i = 0; i < sentMessages.length; i++) {
   ok(!badPreset.ok && badPreset.status === 400, '非法 preset JSON 返回 400');
 }
 
-// 判据 4 续：删除会话，且删除后不可再访问（确定性生命周期）
+if (RESULT_FILE) {
+  writeFileSync(RESULT_FILE, JSON.stringify({ character_id: characterId, session_id: sessionId }) + '\n');
+}
+
+// 判据 4 续：删除会话，且删除后不可再访问（确定性生命周期）。
 // 链路末端 burst 桶已被前面请求打空，前置 sleep 让令牌桶恢复避 429 误伤。
-{
+if (!KEEP_SESSION) {
   await sleep(4000);
   const del = await api('DELETE', '/v1/sessions/' + characterId + '/' + sessionId);
   ok(del.ok, 'delete session 成功');

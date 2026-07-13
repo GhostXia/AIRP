@@ -40,7 +40,7 @@ D:\AIRP-Dev/
 - 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
 - WebUI 是当前正式产品交付主面。Tauri/Vue 代码与客户端无关合同继续保留，但桌面 UI 开发、打包验收和性能计划暂时搁置；新能力优先贯通 engine → HTTP/SSE → WebUI → production tests。
 - WebUI 的基础 RP 闭环由 PR #118/#119/#121/#123 完成；PR #124/#125 又交付 durable message ID、cursor history、rollback-by-ID、50 条窗口、增量 DOM 与加载更早。
-- 2026-07-13 最近 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；WebUI engine-truth smoke 为 64/64，具体证据见当前基线。
+- 2026-07-13 最近 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；WebUI engine-truth smoke 为 67/67，production topology gate 覆盖真实 HTTPS/Compose/system-Chrome 链路，具体证据见当前基线。
 
 当前权威状态和路线排序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。[docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md) 是历史审计；实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
 

@@ -6,7 +6,7 @@
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
-P0 的已接受实现合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。该文档锁定了首方 OCI/Compose + Caddy 同源入口、生产配置、鉴权与远端导入边界；它是设计事实，不表示部署产物或 production smoke 已经交付。
+P0 的已接受实现合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。首方 OCI/Compose + Caddy 同源入口、生产配置、鉴权、远端导入边界与 production topology smoke 已实现；P1-P3 仍是正式上线前置，不能把 P0 全绿写成正式发布。
 
 ## 1. 首发边界
 
@@ -70,17 +70,17 @@ Browser
 - 基础 WebUI RP 闭环、provider 设置、角色导入、默认 Persona、Preset 导入/选择、命名会话、SSE 聊天、Agent Run、诊断和错误恢复已存在。
 - durable message ID、cursor history、50 条窗口、增量 DOM、rollback-by-ID 已交付。
 - engine 已有 loopback 默认、精确 CORS、可选 bearer、限流、统一 outbound redirect policy、typed error 和 `/health`/`/version`。
-- `deploy/production/` 已有 digest-pinned OCI build、Compose/Caddy 同源 HTTPS 拓扑、私有 engine 网络、secret bootstrap 和 production WebUI runtime config；CI 会 build 镜像、展开 Compose 并验证 Caddy 配置。
+- `deploy/production/` 已有 digest-pinned OCI build、Compose/Caddy 同源 HTTPS 拓扑、私有 engine 网络、secret bootstrap 和 production WebUI runtime config；CI 会 build 镜像并启动一次性真实拓扑，验证 perimeter auth、私有 engine、CSP/headers、content-only import、三轮增量 SSE、重启持久化、浏览器注入/取消和 secret scan。
 - PR #127 已建立 schema v2 多 Persona 存储、legacy/default 协调、revision、绑定与路径校验；WebUI/API 仍未形成完整多 Persona 生命周期。
 
 ### 尚缺的上线能力
 
-- 首方部署 artifact 已落地，但尚缺真实 topology smoke、正式升级/回滚流程、SBOM/notices 与发布签名，因此仍是 P0 preview。
+- P0 首方部署 artifact 与真实 topology smoke 已落地；正式升级/回滚流程、SBOM/notices、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
 - Persona/Preset/Worldbook 管理与有效配置合同未闭合；#114/#115/#126 仍是 RP 首发主链。
 - 缺备份/恢复、数据迁移发布纪律、soft-delete/回收站、生产日志和运行手册。
-- smoke 以 engine truth 为主；真实浏览器、生产拓扑、升级恢复与安全负向门禁不足。
+- engine-truth smoke 与 production system-Chrome smoke 已并行进入 CI；浏览器兼容矩阵、升级恢复与完整发布安全门禁仍不足。
 
 ## 4. 推进顺序
 
@@ -135,7 +135,6 @@ Browser
 ## 6. 下一批可执行工作
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
-2. P0 架构/威胁模型已由 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 锁定；engine production-mode fail-closed 与 `deploy/production/` OCI/Compose/Caddy artifact 已进入实现，但不等于部署已上线；
-3. 下一项是在该 artifact 上完成真实 production topology smoke：HTTPS/perimeter auth、私有 engine 负向、headers/CSP、content upload、三轮 SSE、刷新/重启恢复与 secret scan；
-4. 然后按 #114/#115/#126 完成 RP 使用面，不再先做 #117/#87/#116；
-5. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。
+2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
+3. 下一项按 #114/#115/#126 完成 RP 使用面，不再先做 #117/#87/#116；
+4. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

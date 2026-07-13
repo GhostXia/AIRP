@@ -122,12 +122,12 @@
 - 并发 append/rollback 不产生半态（`with_session` 串行化保留）。
 - `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 全绿。
 - `cargo test -p airp-core subagent_context_has_no_orchestrator_noise` 绿。
-- `node webui/smoke.mjs` 当前为 64 checks / 0 failures，覆盖 cursor、durable IDs 与 rollback-by-ID。
+- `node webui/smoke.mjs` 当前为 67 checks / 0 failures，覆盖 cursor、durable IDs、rollback-by-ID 与三轮 SSE 增量读取。
 
 ## 5. WebUI 实施结果（PR #125）与剩余项
 
 - 已完成：首屏 `limit=50`、`before=oldest_id` 加载更早、durable-ID 节点复用、stale response guard、prepend 滚动保持、键盘可达的 rollback-by-ID。
-- 已完成：engine-truth smoke 扩到 64/64；真实浏览器验证 50/54 → 54/54 且视口保持。
+- 已完成：engine-truth smoke 扩到 67/67；真实浏览器验证 50/54 → 54/54 且视口保持，production topology gate 另覆盖 system-Chrome 重启恢复与取消流。
 - 已完成：按 frontend-design 与最新 Web Interface Guidelines 补 focus-visible、reduced-motion、touch、localized counts 和 `content-visibility`。
 - 剩余：WebUI/Tauri 的 10k/100k 性能采样、内存上界与真正虚拟列表；因此 #122 不关闭。
 - 剩余：regen 仍按“最后一条 assistant”语义执行，不需要伪造 message ID 参数；branch/swipe/edit 属 #37 后续。
