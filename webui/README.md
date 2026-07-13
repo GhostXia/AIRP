@@ -50,7 +50,7 @@ they are not the served WebUI implementation.
 
 ## Scope
 
-The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. PR #123 closed the zero-secret acceptance gate with a 56-check engine-truth harness plus a real browser interaction pass; this is now a basically usable lightweight RP client, not the final desktop product.
+The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. PR #123 closed the basic zero-secret acceptance gate; PR #124/#125 added durable IDs, cursor history, rollback-by-ID and a 50-message WebUI window. The engine-truth harness now has 64 checks plus a real-browser 50/54 → 54/54 prepend/scroll pass. This is a basically usable lightweight RP client, not the final desktop product.
 
 New capabilities should normally be delivered vertically through engine shared services, HTTP/SSE contracts, this WebUI, and tests. WebUI-specific DOM or interaction choices must not become engine contracts; stable client-neutral contracts are later consumed by the desktop UI.
 

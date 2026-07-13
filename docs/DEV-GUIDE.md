@@ -3,15 +3,15 @@
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
 > **配套文档（按顺序）**：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)（当前事实与下一步）· [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)（当前验收合同）· [PLAN.md](PLAN.md)（长期原则）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
-> 最后更新：2026-07-12
+> 最后更新：2026-07-13
 
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
-1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，不要重复 PR #118/#119/#121/#123 已完成的实现与验收；
+1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，不要重复 PR #118/#119/#121/#123/#124/#125 已完成的实现与验收；
 2. 当前以 WebUI 为后端能力孵化、合同验证和基础 RP 使用主开发面；每项能力纵向贯通 engine shared service → HTTP/SSE → WebUI → tests；
-3. 按长会话 #37/#122 → Persona/Preset 与 trace #114/#115 → ChangeInbox #117 → Agent-first 工作台 #87 → Style Review #116 推进；
+3. durable history/WebUI window 已由 PR #124/#125 完成；当前按 Persona/Preset 与 trace #114/#115 → ChangeInbox #117 → Agent-first 工作台 #87 → Style Review #116 推进；#37/#122 只保留 branch/swipe/edit 与产品 UI 性能剩余项；
 4. 每个 PR 只修其范围内问题并同步文档；审计非阻塞遗留项在合并后写 issue；
-5. 保持 `node webui/smoke.mjs` 的 56 项 engine 真相断言与真实浏览器验收；Tauri/Vue 仍是长期产品面，#98/#29 作为阶段性 release gate。
+5. 保持 `node webui/smoke.mjs` 的 64 项 engine 真相断言与真实浏览器验收；Tauri/Vue 仍是长期产品面，#98/#29 作为阶段性 release gate。
 
 本顺序来自 2026-07-12 对当前源码与全部开放 issue 的复核。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
 
@@ -250,9 +250,9 @@ data/
 - **实现状态**：`BusRelay` 已移除 `chat_lock`；chat scope 已改为 `{messages, order}`；每个 `chat.send` 用单个 state patch envelope 同时写入 user row、`order` user id、assistant row、`order` assistant id；流式回填只改自己的 `/messages/{assistant_id}/text`。
 - **已验证**：`cargo test -p airp-ui`、`npm run test -- --run`、`npm run typecheck`、`cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` 通过；审计 follow-up 后前端测试 95 个通过。
 
-### 下一步开发接手清单（2026-07-12 校准）
+### 下一步开发接手清单（2026-07-13 校准）
 
-WebUI 基础里程碑已由 PR #118/#119/#121/#123 完成。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留验收合同与历史记录，不再提供当前任务排序。
+WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#124/#125 完成。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留验收合同与历史记录，不再提供当前任务排序。
 
 1. 先设置 D 盘工具链环境：
    ```powershell
@@ -262,12 +262,12 @@ WebUI 基础里程碑已由 PR #118/#119/#121/#123 完成。[WEBUI-MVP-PLAN.md](
    $env:npm_config_cache = "D:\npm-global\npm-cache"
    $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
    ```
-2. 先实施 #37/#122：durable message ID、分页/游标、增量 history、窗口化与长会话性能；禁止把数组索引固化为长期消息身份。
-3. 再实施 #114/#115：完整 Persona/Preset 生命周期、绑定、migration report 与 PromptAssemblyTrace。
+2. 当前实施 #114/#115：先把 preset 文件写入收敛为 shared `PresetService`，补 raw sidecar、migration report、dry-run、revision/conflict；再扩多 Persona 与绑定。
+3. 在 shared RP Profile 上补 `PromptAssemblyTrace`，让有效 persona/preset/provider/model、来源、revision、大小与截断可观察。
 4. 再实施 #117 revisioned ChangeInbox，使 Agent 建议经 preview/diff/accept/reject 和冲突检测进入确定性写路径。
 5. 让 #87 Agent-first 工作台消费已稳定的 trace/change/tool/state 合同；#116 Style Review 最后接入建议层。
 6. 每项都通过 WebUI 完成真实用户闭环，并断言 engine 返回、持久化、错误与并发事实；保持自动 PR gate、零密钥 smoke 和神圣不变式全绿。
-7. 桌面 #98/#29 不删除、不伪装完成；当前不扩张其功能，阶段性交付时集中执行 artifact/sidecar release gate。
+7. #37/#122 的 durable ID、cursor、WebUI window 不得重复开发；剩余 branch/swipe/edit、Tauri 虚拟化与 10k/100k 性能另行验收。桌面 #98/#29 不删除、不伪装完成。
 
 Agent UI Test Harness 最小用法：
 

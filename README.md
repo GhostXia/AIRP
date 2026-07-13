@@ -32,15 +32,15 @@ D:\AIRP-Dev/
 
 ## 当前状态
 
-> 2026-07-12 的权威实现、缺口和下一阶段顺序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。dated audits 只保留历史证据。
+> 2026-07-13 的权威实现、缺口和下一阶段顺序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。dated audits 只保留历史证据。
 
 - engine 已具备单回合 SSE 对话、OpenAI/Anthropic adapter、角色/会话/状态/场景/基础世界书、卷系统、拆解/analysis 和 settings/models 等 API。PR #100 留有一次 WebUI → engine → 真实 DeepSeek 的成功流式证据。
 - 默认 Agent 工具注册表当前为 19 个工具；`GET /v1/agent/tools` 提供排序后的运行时目录，`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist/confirm 门执行 typed observation，并只由 finalizer 做最终纯净生成。
 - UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；desktop 现在持有并在退出时终止 sidecar，Windows workflow 已加入安装→启动→ready→退出 smoke，等待 CI artifact 实跑证据。
 - 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
 - WebUI 是当前后端能力孵化、合同验证和基础 RP 使用的主开发面，不替代 Tauri/Vue 长期产品 UI。新能力优先贯通 engine → HTTP/SSE → WebUI → tests，以降低后续桌面端接入时的后端返工。
-- WebUI 的单默认 Persona、Preset 选择/导入、session delete/隔离和 busy-state 收口已由 PR #118/#119/#121 完成；PR #123 已通过零密钥 engine-truth harness 与真实浏览器验收。
-- 2026-07-12 本地与 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；具体快照见当前基线。
+- WebUI 的基础 RP 闭环由 PR #118/#119/#121/#123 完成；PR #124/#125 又交付 durable message ID、cursor history、rollback-by-ID、50 条窗口、增量 DOM 与加载更早。
+- 2026-07-13 最近 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；WebUI engine-truth smoke 为 64/64，具体证据见当前基线。
 
 当前权威状态和路线排序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。[docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md) 是历史审计；实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
 

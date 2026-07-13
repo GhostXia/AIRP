@@ -1,6 +1,6 @@
 # AIRP WebUI 分析与优化报告
 
-> **历史快照**：本文早于后续 PR #77–#121，其中 UI/IPC 完成度和百分比已过期。保留用于追溯 2026-07-06 的判断；当前结论见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> **历史快照**：本文早于后续 PR #77–#125，其中 UI/IPC 完成度、全量 history 判断和百分比已过期。PR #124/#125 已交付 durable history 与 WebUI window；产品 UI 虚拟化/性能门仍开放。当前结论见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 > 日期：2026-07-06
 > 范围：`webui/`（临时浏览器验证 harness）+ `ui/`（Tauri 桌面产品端）

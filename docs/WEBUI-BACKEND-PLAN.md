@@ -1,6 +1,6 @@
 # 后端建设计划书（为 WebUI 验证面做准备）
 
-> **历史实施计划**：主要后端/WebUI 验证能力已由后续 PR 实现；PR #100 已留下真实 SSE smoke evidence，PR #118/#119/#121 又完成 Persona/Preset/session MVP 接线。未完成项应回到 [当前基线](CURRENT-BASELINE.md) 与当前 issues，不要按本文重新开工。正文中的 `CORS Any` 等描述是历史设计上下文，不代表当前实现。
+> **历史实施计划**：主要后端/WebUI 验证能力已由后续 PR 实现；PR #100 留下真实 SSE evidence，PR #118/#119/#121/#123 完成基础 RP 闭环，PR #124/#125 完成 durable history 与 WebUI window。未完成项应回到 [当前基线](CURRENT-BASELINE.md) 与当前 issues，不要按本文重新开工。
 > **作者**：AtomCode (GLM-5.2)，2026-07-04
 > **状态**：审计修订版（2026-07-04）：按本文件的收口结论开工；不再把关键安全边界留作实现时临场裁定。
 > **依据**：DEV-GUIDE §3.3/§3.7 + [WEBUI-BACKEND-VALIDATION.md](WEBUI-BACKEND-VALIDATION.md) + [CAPABILITY-ABSORPTION.md](CAPABILITY-ABSORPTION.md) §3 + 源码核实（`engine/src/daemon/mod.rs`、`handlers.rs`）

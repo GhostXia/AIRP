@@ -1,16 +1,16 @@
 # Durable message / history 合同
 
-> 状态：PR #1（domain / API / persistence）的权威设计入口。
+> 状态：PR #124（domain/API/persistence）与 PR #125（WebUI window）已实现；本文是合同与剩余边界入口。
 >
 > 日期：2026-07-12
 >
-> 范围：先于实现。本文由独立审计当前源码后写出，不把 issue #37/#122 或既往注释当作不可质疑前提。
+> 实现基线：`main` / `7fb766e`，2026-07-13 校准。
 >
 > 关联 issue：#37（durable message-id contract）、#122（WebUI 窗口化）。
 >
-> 实施顺序：PR 1 只做 domain / HTTP / persistence / tests（本文）。PR 2 在 PR 1 合并后做 WebUI 分页、增量 DOM 和窗口化。
+> 已交付：durable ID、legacy deterministic ID、完整历史保留、cursor、rollback-by-ID、50 条 WebUI 窗口、加载更早、增量 DOM 与滚动保持。
 
-## 1. 现状真相（独立审计结论）
+## 1. 实施前现状（历史审计结论）
 
 - `engine/src/adapter.rs::ChatMessage` 只有 `role` + `content`，**无稳定 ID**。
 - 消息身份完全靠 **`Vec` 数组索引**：`rollback_to(index)`、`delete_last_n`、`recent(n)`、`RollbackRequest.message_index`、WebUI `msgs.forEach((m, i) => …)`、rollback UI 让用户手输 `prompt('message index')`。
@@ -41,7 +41,7 @@
 **决策：lazy + deterministic 派生，不批量迁移、不删旧文件。**
 
 - 旧 jsonl 行反序列化为 `StoredMessage` 时 `id` 字段 `#[serde(default)]` → `None`。
-- `load_or_create_for_session` 读完 messages 后，对 `None` 的消息**就地按数组位置确定性派生**：`m{fixed_padding_of_index_and_session_salt}`。具体：`legacy_id = "m" + &keccak-ish(session_scope_salt + index)` 取前 25 字符。session_scope_salt = `scope_session_id` 或 `character_id`（legacy）的 hash 前缀。
+- `load_or_create_for_session` 读完 messages 后，对 `None` 的消息按逻辑消息位置与 character/session scope 确定性派生；空 JSONL 行不参与位置计算，索引固定按 `u64` 编码，移动 data root 不改变 ID。
   - 关键：**同一 legacy fixture 多次加载 → 同一 salt + 同一 index → 同一派生 ID**。坐实"legacy fixture 多次加载产生相同 ID"验收。
   - 派生 ID 只在内存 `ChatLog.message_ids` 里补，**不写回 jsonl**（守 lazy + 不删旧文件原则；避免迁移半态）。新 append 的消息写 UUIDv4-backed ID。
 - 当前 `load_or_create_for_session` 的迁移逻辑有两个 bug 必须修：
@@ -72,8 +72,7 @@
   - 传 `message_id` → 走 ID 寻址：在 `messages` 里找该 durable ID 的位置，`rollback_to(that_index)`。ID 不存在 → `BadRequest`。
   - 不传 `message_id`（旧客户端）→ 走 `message_index`，行为不变。
   - 同时传两个 → `BadRequest`（显式二义）。
-- `rollback_preview` 同理增 `message_id` 路径。
-- **不删 `message_index`**：向后兼容期保留（见 §2.7）。WebUI 在 PR 2 切到 `message_id`。
+- **不删 `message_index`**：向后兼容期保留；WebUI 已在 PR #125 切到 `message_id`。
 - ID 寻址仍走 `with_session` 串行化，与并发 append 不产生半态。
 
 ### 2.5 MAX_MESSAGES 与完整历史保留
@@ -89,30 +88,30 @@
 
 ### 2.6 API 向后兼容周期
 
-**决策：所有新增字段 `Option` + 旧端点不动 + 新端点不互斥。兼容期至少 2 个 minor release。**
+**决策：所有新增请求字段 `Option`，旧端点和旧请求形状保持兼容；移除 legacy index 前必须另行版本化决策。**
 
 - `ChatMessage` 保持 wire-compatible 的 `role` + `content`；`ChatLog.message_ids` 与其等长并行，legacy 派生或新 UUID 均在该数组中暴露。
 - `StoredMessage`（jsonl 行）`id: Option<String>`，`#[serde(default, skip_serializing_if = "Option::is_none")]`——旧 jsonl 无 id 行仍能解析，新行写真实 id。
 - `HistoryQuery` / `RollbackRequest` 新增字段全 `Option`。
 - HTTP 路径不变：`/v1/chat/history`、`/v1/chat/rollback`、`/v1/chat/regen`。无新端点。
 - 不传新字段的旧客户端：
-  - `history` 不传 `limit`/`before` → 全量返回（或 capped at `ACTIVE_HISTORY_WINDOW`，但保留 cursor meta）。**MVP 取全量返回**，PR 2 WebUI 切窗口后再默认 cap。
+  - `history` 不传 `limit`/`before` → 保持 legacy `ChatLog` 全量响应；WebUI 显式传 `limit=50` 使用窗口响应。
   - `rollback` 不传 `message_id` → 走 `message_index`。
-- 弃用计划（文档声明，不在 PR 1 删）：`message_index` 在 PR 2 WebUI 切完后，下个 minor 标 `#[deprecated]`，再下个 minor 删。`before` cursor 与 `message_id` 永留。
+- `message_index` 当前仍是兼容合同；不得仅凭本文假定具体 minor release 删除时间。
 
-## 3. 不变量（PR 1 必须有测试覆盖）
+## 3. 不变量（backend contract 必须有测试覆盖）
 
 1. **ID 唯一**：同一 session 内任意两条消息 durable ID 不同。
 2. **ID 稳定**：消息落盘后，重启 / 多次 `load_or_create` → 同一消息同一 ID。
 3. **Legacy 派生稳定**：同一 legacy fixture 多次加载 → 同一派生 ID。
-4. **`order`/`messages` 一致**：未来若引 id-keyed map + order 数组（PR 2 候选），`order.len() == messages.len()` 且无重复 ID。PR 1 暂用 `Vec`，不变量是 `messages.iter().map(|m| &m.id).all unique`。
+4. **并行数组一致**：`messages.len() == message_ids.len() == message_timestamps.len()`，同一 session 的 `message_ids` 无重复。
 5. **cursor session-scoped**：`before` 跨 session → `BadRequest`。
 6. **rollback-by-ID 与 rollback-by-index 在同一位置等价**：`rollback_to_id(id_at_index_k) == rollback_to(k)`。
 7. **并发 append/rollback 不半态**：`with_session` 串行化保留；并发调用要么全成功要么全失败，无部分写入。
 8. **MAX_MESSAGES 不删持久化**：append 超量后，jsonl 物理仍含全部消息；`history` 能加载超量部分。
 9. **神圣不变式绿**：`subagent_context_has_no_orchestrator_noise` 不破。
 
-## 4. 验收清单（PR 1）
+## 4. 验收清单
 
 - 新消息 ID 持久化且跨重启稳定（`append` → reload → ID 不变）。
 - legacy fixture 多次加载产生相同 ID（含 meta 丢失重建场景）。
@@ -123,21 +122,17 @@
 - 并发 append/rollback 不产生半态（`with_session` 串行化保留）。
 - `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 全绿。
 - `cargo test -p airp-core subagent_context_has_no_orchestrator_noise` 绿。
-- `node webui/smoke.mjs` 56 checks / 0 failures（PR 1 不动 WebUI，但 smoke 必须仍绿——engine 新字段不破坏现有断言）。
+- `node webui/smoke.mjs` 当前为 64 checks / 0 failures，覆盖 cursor、durable IDs 与 rollback-by-ID。
 
-## 5. PR 2 范围预告（不在 PR 1 做）
+## 5. WebUI 实施结果（PR #125）与剩余项
 
-- WebUI `loadHistory` 改分页 + cursor：首屏 `limit=50`，滚到顶 `before=oldest_id` prepend 更早。
-- 增量 DOM：`appendMsg` 按 durable ID 复用节点，refresh 不全量 `innerHTML=''` 重建。
-- prepend 后滚动位置保持（记 `scrollHeight` → prepend → `scrollTop += delta`）。
-- session/character 切换取消在飞 stream + 清 stale response（已有 `clearChatView`，补 stale guard）。
-- regen/rollback 改用 `message_id`。
-- 10k fixture 性能采样：首屏耗时、加载耗时、DOM 节点数。
-- 真实浏览器 smoke：发送、刷新、加载更早、切换 session、regen、rollback。
-- `webui/smoke.mjs` 增 cursor / window 断言，保持全绿。
-- 用 `frontend-design` 做现状审查与交互设计，`web-design-guidelines` 做完成后可访问性 / UX 审计。
+- 已完成：首屏 `limit=50`、`before=oldest_id` 加载更早、durable-ID 节点复用、stale response guard、prepend 滚动保持、键盘可达的 rollback-by-ID。
+- 已完成：engine-truth smoke 扩到 64/64；真实浏览器验证 50/54 → 54/54 且视口保持。
+- 已完成：按 frontend-design 与最新 Web Interface Guidelines 补 focus-visible、reduced-motion、touch、localized counts 和 `content-visibility`。
+- 剩余：WebUI/Tauri 的 10k/100k 性能采样、内存上界与真正虚拟列表；因此 #122 不关闭。
+- 剩余：regen 仍按“最后一条 assistant”语义执行，不需要伪造 message ID 参数；branch/swipe/edit 属 #37 后续。
 
-## 6. 显式不做（PR 1）
+## 6. 显式不做与剩余边界
 
 - 不改 WebUI DOM 结构、不迁 React/Vue、不增第二套 UI。
 - 不改 Tauri/Vue `ui/` 任何代码。

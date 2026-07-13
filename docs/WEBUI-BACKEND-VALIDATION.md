@@ -1,6 +1,6 @@
 # WebUI 后端可靠性验证路线
 
-> **状态更新（2026-07-12）**：PR #100 归档了两个阶段的真实 smoke：本文件的本地 Tracy → Gemini P0 验证，以及 [smoke-evidence](smoke-evidence/README.md) 中直连 DeepSeek 的真流式重验。两者都不覆盖当前 Persona/Preset/session MVP 的完整浏览器路径。本文后续矩阵保留为验证清单；当前唯一发布门槛和执行顺序见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 与 [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)。
+> **状态更新（2026-07-13）**：PR #100 归档早期真实 provider smoke；PR #123 完成基础 WebUI 验收，PR #124/#125 完成 durable history 与 64/64 engine-truth harness。本文后续矩阵保留为历史验证清单；当前发布门槛和执行顺序见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 > 最后更新：2026-07-05
 > 目的：把当前“先用 WebUI 验证后端，并让用户先体验完整 agent 能力”的方向整理成可执行开发路线。本文里的 WebUI 是临时后端验证面和早期可用入口，不是 AIRP 的长期产品 UI。
 

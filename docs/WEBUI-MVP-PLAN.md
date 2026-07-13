@@ -2,11 +2,11 @@
 
 > 状态：PR #123 已完成；作为基础可用验收合同与历史实施记录保留，不再是近期执行入口
 >
-> 基线日期：2026-07-12
+> 基线日期：2026-07-13
 >
 > 目标：以最短路径让普通用户通过浏览器完成一次可持续的基础 RP 使用闭环，而不是继续扩张候选能力。
 
-> 2026-07-12 完成记录：PR #118、#119、#121 交付 Persona/Preset/session/outbound 契约、恢复与 busy-state；PR #123 完成零密钥 engine-truth harness（56/56）、真实浏览器交互验收及阻塞修复。当前方向与后续排序见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> 完成记录：PR #118、#119、#121 交付 Persona/Preset/session/outbound 契约、恢复与 busy-state；PR #123 完成基础零密钥验收；PR #124/#125 将 harness 扩到 64/64，并交付 durable history 与 WebUI window。当前方向见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 ## 1. “基本可用”的唯一判据
 
@@ -63,7 +63,7 @@
 - history、regen、rollback、并发诊断全部必须携带当前 `session_id`；
 - 修复当前并发诊断读取 history 时只传 `character_id` 的旁路；
 - URL/hash 或本地状态只恢复仍存在的 character/session；不存在时回到安全空态；
-- #37 的 swipe、分支、分页和长会话压缩不阻塞 MVP，但 durable message ID 不能被后续 UI 写死为数组索引。
+- #37 的 durable ID、cursor pagination 与 WebUI window 已在 MVP 后由 PR #124/#125 实现；swipe、分支、编辑和产品 UI 性能仍后移。
 
 ### 3.3 必做：provider 请求安全
 
@@ -141,7 +141,7 @@ cargo test --workspace
 cargo test -p airp-core subagent_context_has_no_orchestrator_noise
 ```
 
-PR #123 已执行零密钥 mock-provider 验收：自动 harness 检查 engine 端真实 history、有效 Persona/Preset/session ID、错误类型和隔离；真实浏览器另行验证连接、恢复、交互与流式渲染。后续改动不得降低这些门禁。
+PR #123 已执行基础零密钥验收；PR #125 的自动 harness 为 64/64，并另有 50/54 → 54/54、滚动保持和键盘选择 rollback target 的真实浏览器证据。后续改动不得降低这些门禁。
 
 ## 7. 完成后的产品边界
 

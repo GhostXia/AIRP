@@ -1,6 +1,6 @@
 # WebUI 审计 v2 — 上次报告后的变更复核
 
-> **历史快照**：审计基线只到 PR #63，已被后续实现取代。原 finding 编号仅作追溯；当前事实与未完成门槛见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> **历史快照**：审计基线只到 PR #63，已被后续实现取代。原 finding 编号仅作追溯；A-05/A-06 的全量历史重建已由 PR #124/#125 的 cursor window、增量 DOM 与统一 reset 取代。当前事实见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 > 日期：2026-07-06
 > 审计基线：`docs/WEBUI-ANALYSIS-AND-OPTIMIZATION.md`（初版报告）

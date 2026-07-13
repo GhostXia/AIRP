@@ -2,7 +2,7 @@
 
 > **需求对标，不是兼容性声明**：表内 ✅/🔧 表示 2026-07-01 源项目资产状态，不证明当前 AIRP-Dev 已交付；“AIRP-Dev 落点/缺口”列必须以当前源码复核。Worldbook 当前为基础 CRUD/关键词触发；单默认 Persona 已有 API/WebUI 与 chat 注入，多 Persona/base+drift 和 plugin/完整扩展 API 尚未完成。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 > 目的：(1) 列全酒馆功能，标出候选能力；(2) 落实硬需求——**充分暴露接口，无门槛无缝支持第三方扩展**。来源：docs.sillytavern.app（2026-07 实读）。图例：✅ 源项目已有 ｜ 🔧 源项目部分有需补 ｜ 🆕 源项目皆无，需新加 ｜ ➖ 暂不做/低优先。
-> 最后更新：2026-07-01
+> 最后更新：2026-07-13（同步 durable history/WebUI window 与 RP Profile 下一阶段）
 
 ---
 

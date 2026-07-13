@@ -1,8 +1,8 @@
 # AIRP 文档审计与权威层级
 
-> 最后更新：2026-07-12
+> 最后更新：2026-07-13
 
-2026-07-12 已在 PR #118/#119/#121 合并后重新核对源码、开放 issues、仓库 Markdown 与验证结果。[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是实时事实入口；[PROJECT-AUDIT-2026-07-10.md](PROJECT-AUDIT-2026-07-10.md) 保留其 dated audit 价值。
+2026-07-13 已在 PR #124/#125 合并后重新核对源码、开放 issues、仓库 Markdown 与验证结果。[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是实时事实入口；dated audits 保留历史价值，不提供当前任务排序。
 
 ## 权威顺序
 
@@ -20,7 +20,7 @@
 - 模型可见的大文本使用 UTF-8 安全上限，`AIRP_MAX_READ_BYTES` 默认 32 KiB。
 - `apply_lorebook`、`merge_lorebooks`、`seal_volume`、`export_context_bundle` 已注册；替换和封卷继续受 destructive confirm 保护。
 - context bundle 固定写入 data root，稳定材料在易变 state 之前，并明确供 fresh isolated subagent 使用。产物措辞测试不替代独立的 no-orchestrator-noise 不变式。
-- WebUI 已接通 Persona/Preset/session lifecycle，并在 PR #123 通过零密钥 engine-truth harness（56/56）与真实浏览器连接/恢复/流式渲染验收。
+- WebUI 已接通 Persona/Preset/session lifecycle；PR #123 完成基础零密钥验收，PR #124/#125 完成 durable history backend/WebUI 接线。当前 engine-truth harness 为 64/64，并有 50/54 → 54/54、滚动保持和键盘 rollback target 的真实浏览器证据。
 - 2026-07-12 用户校准：WebUI 是当前后端能力孵化、合同验证与基础 RP 使用主开发面；Tauri/Vue 保持长期产品交付面，桌面 artifact/sidecar 验收作为阶段性 release gate。
 
 ## 文档类型与本轮全量审计处置
@@ -44,6 +44,6 @@
 5. 新 PR 若改变当前能力，应至少同步 README 或本文/DEV-GUIDE 中的对应入口；
 6. 不把 issue 的建议措辞升级为架构不变式；不把 helper、schema 或 UI mock 当作用户价值闭环。
 
-## 当前近期计划入口（2026-07-12）
+## 当前近期计划入口（2026-07-13）
 
-[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留已完成的验收合同；当前按 WebUI/后端增补顺序推进。
+[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留已完成的验收合同；当前从 #114/#115 的 shared RP Profile、migration report 与 trace 开始推进。
