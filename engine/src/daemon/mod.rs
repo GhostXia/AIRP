@@ -348,10 +348,19 @@ fn allowed_cors_origins(
     configured: Option<&str>,
 ) -> Vec<HeaderValue> {
     if deployment_mode == DeploymentMode::Production {
-        return public_origin
-            .and_then(|origin| origin.parse().ok())
-            .into_iter()
-            .collect();
+        return match public_origin.map(|origin| origin.parse::<HeaderValue>()) {
+            Some(Ok(value)) => vec![value],
+            Some(Err(error)) => {
+                tracing::warn!(%error, "invalid AIRP_PUBLIC_ORIGIN; CORS will reject all origins");
+                Vec::new()
+            }
+            None => {
+                tracing::warn!(
+                    "AIRP_PUBLIC_ORIGIN is unset in production; CORS will reject all origins"
+                );
+                Vec::new()
+            }
+        };
     }
 
     const DEFAULT_ORIGINS: &[&str] = &[

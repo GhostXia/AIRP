@@ -43,11 +43,10 @@
 
 - 正式上线判据只认 [WEBUI-PRODUCTION-PLAN.md §2](WEBUI-PRODUCTION-PLAN.md#2-正式上线唯一判据)：生产部署、安全、RP 使用闭环、数据恢复与发布质量缺一不可。
 - 本地“简单运行”仍是最低层 smoke，但不能替代 HTTPS 同源拓扑、强制鉴权、升级恢复和真实浏览器验收。
-- 已知阻塞项（动手前先核对，别重做）：
-  - `ui/build-tauri.ps1` 已在 2026-07-03 审计 follow-up 修复；优先用它产出桌面 artifact，或用 `npm run tauri dev` 做开发态验收。
-  - Tauri bundler 缓存需留 D 盘（PR #5 已加 `bundle.useLocalToolsDir`，守 AGENTS.md 工具链不下 C 盘）。
+- 当前阻塞项（动手前先核对，别重做）：
   - `data/settings.json` 的死链 model 已修；但真实运行仍需要有效 `endpoint`/`api_key`/`model`。不要把示例空 key 当作已完成运行时验收。
-  - 当前真正未闭环的是：打包产物启动、真实配置下最简对话、GUI 角色导入路径与大卡不卡顿、Perf Spike。
+  - WebUI 尚缺首方 OCI/Compose + Caddy 产物、production smoke、正式 RP 使用面、备份恢复与 release gates。
+- 暂停的桌面历史项：`ui/build-tauri.ps1` 修复、D 盘 bundler 缓存、artifact 启动、GUI 角色导入、大卡与 Perf Spike 只作为恢复桌面计划时的背景，不是当前阻塞或执行指令。
 - 与"更开放/透明/易修正/易迭代"取向一致：可运行 = 最朴素的透明（用户能自己验证它动不动）；不可运行 = 最深的封闭。
 
 ---
