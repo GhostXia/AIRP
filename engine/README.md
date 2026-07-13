@@ -45,7 +45,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ### 部署安全边界尚未产品化
 
-默认 daemon 绑定 loopback，development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用，但首方 OCI/Compose + Caddy 产物与 production smoke 尚未交付，因此仍没有受支持的外网部署姿势，不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
+默认 daemon 绑定 loopback；只有隔离容器网络中的首方部署才显式传 `daemon --host 0.0.0.0`，且 Compose 不发布 engine 端口。development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用；`deploy/production/` 已提供 OCI/Compose + Caddy P0 preview artifact，但 production topology smoke 尚未交付，因此仍不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
 
 ## 快速开始
 

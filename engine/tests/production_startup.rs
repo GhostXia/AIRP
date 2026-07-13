@@ -82,3 +82,31 @@ fn production_daemon_rejects_local_path_import_before_serving() {
     assert!(stderr(&output).contains("AIRP_ALLOW_LOCAL_PATH is forbidden"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Gateway running"));
 }
+
+#[test]
+fn development_daemon_rejects_non_loopback_listener() {
+    let temp = tempfile::tempdir().expect("temp data root");
+    let config = temp.path().join("config.json");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_airp-core"));
+    command
+        .args([
+            "--config",
+            config.to_str().expect("utf8 config path"),
+            "daemon",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "0",
+        ])
+        .env("AIRP_DATA_DIR", temp.path())
+        .env("AIRP_DEPLOYMENT_MODE", "development");
+    let output = output_with_timeout(&mut command);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("non-loopback --host is allowed only in production mode"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Gateway running"));
+}

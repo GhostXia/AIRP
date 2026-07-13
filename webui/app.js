@@ -7,6 +7,8 @@
   // ── DOM refs ─────────────────────────────────────────────────────────────
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => document.querySelectorAll(s);
+  const runtimeConfig = window.AIRP_WEBUI_CONFIG || { mode: 'development' };
+  const productionMode = runtimeConfig.mode === 'production';
   const engineUrl = $('#engine-url');
   const bearerToken = $('#bearer-token');
   const btnConnect = $('#btn-connect');
@@ -68,7 +70,7 @@
   const presetStatus = $('#preset-status');
 
   // ── state ────────────────────────────────────────────────────────────────
-  let base = engineUrl.value.replace(/\/+$/, '');
+  let base = productionMode ? window.location.origin : engineUrl.value.replace(/\/+$/, '');
   let bearer = '';
   let selectedChar = '';
   let selectedSess = '';
@@ -174,15 +176,17 @@
     // #68 #5: 任何路径进入 connect() 都取消 pending auto-connect，避免
     // keydown Enter / btn-click 后 300ms 又被 setTimeout 触发一次（重复请求）。
     cancelAutoConnect();
-    base = engineUrl.value.replace(/\/+$/, '');
-    bearer = bearerToken.value || '';
+    base = productionMode ? window.location.origin : engineUrl.value.replace(/\/+$/, '');
+    bearer = productionMode ? '' : (bearerToken.value || '');
     // W-01: 持久化到 sessionStorage（关 tab 即清，缩短泄漏 token 的存活窗口）
     // 注意：sessionStorage 不缓解 XSS——同 tab 任意脚本仍可读。选它而非 localStorage
     // 只是为了让「tab 关闭后 token 失效」，降低意外跨会话复用的风险。
-    try {
-      sessionStorage.setItem('airp_engine_url', base);
-      sessionStorage.setItem('airp_bearer', bearer);
-    } catch {}
+    if (!productionMode) {
+      try {
+        sessionStorage.setItem('airp_engine_url', base);
+        sessionStorage.setItem('airp_bearer', bearer);
+      } catch {}
+    }
     connStatus.className = 'status-dot dot-unknown';
     connText.textContent = '连接中…';
     const r = await api('GET', '/version');
@@ -1564,8 +1568,10 @@
     const lines = [];
     lines.push('=== AIRP Engine Diagnostics ===');
     lines.push('time: ' + new Date().toISOString());
-    lines.push('engine_url: ' + base);
-    lines.push('bearer: ' + (bearer ? '(set, len=' + bearer.length + ')' : '(empty — engine 无鉴权或未配 bearer)'));
+    lines.push('engine_url: ' + (productionMode ? '(same-origin gateway)' : base));
+    lines.push('bearer: ' + (productionMode
+      ? '(gateway-managed; unavailable to browser)'
+      : (bearer ? '(set, len=' + bearer.length + ')' : '(empty — engine 无鉴权或未配 bearer)')));
     lines.push('');
 
     // 1. version
@@ -2190,7 +2196,7 @@
     const endDrag = () => {
       if (!dragging) return;
       dragging = false;
-      document.body.style.userSelect = '';
+      document.body.classList.remove('workbench-resizing');
       if (onMove) window.removeEventListener('mousemove', onMove);
       if (onUp) window.removeEventListener('mouseup', onUp);
       onMove = null; onUp = null;
@@ -2198,14 +2204,15 @@
     resizer.addEventListener('mousedown', (e) => {
       if (dragging) return;
       dragging = true;
-      document.body.style.userSelect = 'none';
+      document.body.classList.add('workbench-resizing');
       const startX = e.clientX;
       const startW = workbenchPanel.offsetWidth;
       onMove = (ev) => {
         if (!dragging) return;
         const delta = startX - ev.clientX;
         const next = Math.min(Math.max(startW + delta, 320), window.innerWidth * 0.65);
-        workbenchPanel.style.width = next + 'px';
+        const widthStep = Math.round(next / 20) * 20;
+        workbenchPanel.dataset.width = String(Math.min(Math.max(widthStep, 320), 760));
       };
       onUp = () => endDrag();
       window.addEventListener('mousemove', onMove);
@@ -2256,13 +2263,20 @@
     });
   }
 
-  // W-01: 页面加载时从 sessionStorage 恢复连接参数（关 tab 即清）
-  try {
-    const savedUrl = sessionStorage.getItem('airp_engine_url');
-    const savedBearer = sessionStorage.getItem('airp_bearer');
-    if (savedUrl) engineUrl.value = savedUrl;
-    if (savedBearer) bearerToken.value = savedBearer;
-  } catch {}
+  // Production always uses the authenticated same-origin gateway. Development
+  // retains the explicit URL/bearer harness and tab-scoped restoration.
+  if (productionMode) {
+    $$('.development-connection').forEach(element => { element.hidden = true; });
+    const productionConnection = $('#production-connection');
+    if (productionConnection) productionConnection.hidden = false;
+  } else {
+    try {
+      const savedUrl = sessionStorage.getItem('airp_engine_url');
+      const savedBearer = sessionStorage.getItem('airp_bearer');
+      if (savedUrl) engineUrl.value = savedUrl;
+      if (savedBearer) bearerToken.value = savedBearer;
+    } catch {}
+  }
   try {
     if (personaUserId) personaUserId.value = localStorage.getItem('airp_user_id') || 'default';
     selectedChar = localStorage.getItem('airp_character_id') || '';

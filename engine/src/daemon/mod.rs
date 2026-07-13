@@ -165,6 +165,37 @@ pub async fn auth_middleware(
     next.run(request).await
 }
 
+/// Production responses are never stored by browser/proxy caches. SSE retains
+/// `no-cache` so intermediaries do not buffer or reuse a stream; all other
+/// engine responses use `no-store`.
+async fn production_cache_policy(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let production = {
+        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        cfg.deployment_mode == DeploymentMode::Production
+    };
+    let mut response = next.run(request).await;
+    if production {
+        let is_event_stream = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(if is_event_stream {
+                "no-cache"
+            } else {
+                "no-store"
+            }),
+        );
+    }
+    response
+}
+
 /// DX-4: Rate-limit key extractor — Bearer token for authenticated requests, peer IP otherwise.
 #[derive(Debug, Clone, Copy)]
 struct UserOrIpKeyExtractor;
@@ -323,6 +354,10 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/version", get(version_handler))
         .route("/health", get(health_handler))
         .merge(v1_routes)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            production_cache_policy,
+        ))
         .layer(cors)
         .with_state(state)
 }
@@ -559,6 +594,64 @@ mod tests {
         assert_eq!(
             response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
             Some(&HeaderValue::from_static("http://127.0.0.1:9001"))
+        );
+    }
+
+    #[tokio::test]
+    async fn production_cache_policy_keeps_streams_unbuffered_and_other_responses_unstored() {
+        let state = make_state_with_key(None);
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.deployment_mode = DeploymentMode::Production;
+            cfg.public_origin = Some("https://airp.example.com".to_string());
+        }
+        let app = Router::new()
+            .route(
+                "/json",
+                get(|| async { axum::Json(serde_json::json!({"ok": true})) }),
+            )
+            .route(
+                "/stream",
+                get(|| async {
+                    (
+                        [(header::CONTENT_TYPE, "text/event-stream")],
+                        "data: ok\n\n",
+                    )
+                }),
+            )
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                production_cache_policy,
+            ))
+            .with_state(state);
+
+        let json = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+
+        let stream = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-cache"))
         );
     }
 

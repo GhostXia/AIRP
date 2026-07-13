@@ -1,0 +1,55 @@
+(airp_site) {
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>uri replace `\?.*$` ``
+				request>headers>Authorization delete
+				request>headers>Proxy-Authorization delete
+				request>headers>Cookie delete
+				response>headers>Set-Cookie delete
+			}
+		}
+	}
+
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+	}
+
+	basic_auth {
+		{$AIRP_ADMIN_USER} {$AIRP_ADMIN_PASSWORD_HASH}
+	}
+
+	@engine path /v1/* /health /version
+	handle @engine {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy engine:8000 {
+			header_up Authorization "Bearer {$AIRP_ACCESS_KEY}"
+			header_up -Proxy-Authorization
+			header_up -Cookie
+			transport http {
+				dial_timeout 10s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	@reserved path /v1 /v1/* /health* /version*
+	handle @reserved {
+		respond 404
+	}
+
+	handle {
+		header Cache-Control "no-store"
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

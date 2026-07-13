@@ -1,6 +1,6 @@
 # WebUI production architecture and threat boundary
 
-> Status: accepted P0 implementation contract; engine fail-closed validation slice implemented; **not yet a shipped deployment**
+> Status: accepted P0 implementation contract; engine fail-closed and deployment-artifact slices implemented; **production topology smoke still open**
 >
 > Decision date: 2026-07-13
 >
@@ -231,12 +231,12 @@ This is a P0 topology smoke, not yet the P2 backup/restore or P3 release-candida
 
 1. Engine production-mode validation and immutable production bearer tests. **Implemented in the first P0 execution slice.**
 2. First-party engine/WebUI images, pinned Compose/Caddy configuration and operator secret
-   bootstrap.
+   bootstrap. **Implemented in `deploy/production/`; CI image/config validation is required on every PR.**
 3. Production topology smoke covering the evidence table above.
 4. P1 RP management surface, followed by P2 recovery/operations and P3 release gates.
 
-Until slices 1-3 land with evidence, repository documentation must continue to describe the
-WebUI as a development/preview build rather than a supported production deployment.
+Until slice 3 lands with evidence, repository documentation must continue to describe the
+production bundle as a P0 preview rather than a supported production deployment.
 
 ## 10. Upstream verification basis
 
@@ -249,5 +249,7 @@ The dependency and gateway decisions were checked on 2026-07-13 against the upst
 [reverse proxy/SSE](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy),
 [TLS](https://caddyserver.com/docs/caddyfile/directives/tls) and
 [access log filtering](https://caddyserver.com/docs/caddyfile/directives/log)
-documentation. Caddy v2.11.4 is Apache-2.0; the executable slice must additionally record the
-official image digest and the complete base-image/SBOM license set.
+documentation. Caddy v2.11.4 is Apache-2.0. The P0 artifact pins the Caddy, Rust builder and
+Debian runtime multi-platform image digests in its Dockerfiles and records them in
+[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md). Complete package-level notices/SBOM remain a P3
+formal-release gate; their absence is one reason the current artifact is only a preview.

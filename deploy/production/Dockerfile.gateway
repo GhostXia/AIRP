@@ -1,0 +1,11 @@
+FROM caddy:2.11.4@sha256:af5fdcd76f2db5e4e974ee92f96ee8c0fc3edb55bd4ba5032547cbf3f65e486d
+COPY webui/index.html webui/app.js webui/style.css /srv/
+COPY deploy/production/runtime-config.js /srv/runtime-config.js
+COPY deploy/production/Caddyfile.common /etc/caddy/Caddyfile.common
+COPY deploy/production/Caddyfile.public /etc/caddy/Caddyfile.public
+COPY deploy/production/Caddyfile.internal /etc/caddy/Caddyfile.internal
+COPY deploy/production/Caddyfile.files /etc/caddy/Caddyfile.files
+COPY deploy/production/gateway-entrypoint.sh /usr/local/bin/airp-gateway-entrypoint
+RUN chmod 0555 /usr/local/bin/airp-gateway-entrypoint \
+    && find /srv /etc/caddy -type f -exec chmod 0444 {} +
+ENTRYPOINT ["/usr/local/bin/airp-gateway-entrypoint"]

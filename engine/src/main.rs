@@ -1,12 +1,12 @@
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use airp_core::chat_pipeline;
-use airp_core::config::AppConfig;
+use airp_core::config::{AppConfig, DeploymentMode};
 use airp_core::daemon::{
     create_router, ChatCompletionRequest, DaemonState, MutableConfig, UserProfile,
 };
@@ -36,6 +36,10 @@ enum Commands {
         /// 监听端口，若不指定则使用配置文件中的 daemon_port 端口 (默认 8000)
         #[arg(short, long)]
         port: Option<u16>,
+
+        /// 监听地址。默认仅 loopback；容器部署必须显式传入 0.0.0.0，且不得发布 engine 端口。
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
     },
     /// 在终端控制台直接运行单次流式过滤
     Run {
@@ -109,8 +113,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_client = airp_core::outbound::outbound_client();
 
     match cli.command {
-        Commands::Daemon { port } => {
+        Commands::Daemon { port, host } => {
             let daemon_port = port.unwrap_or(app_config.daemon_port);
+            let bind_ip = host
+                .parse::<IpAddr>()
+                .map_err(|_| "--host must be an IP literal such as 127.0.0.1 or 0.0.0.0")?;
+            if !bind_ip.is_loopback() && app_config.deployment_mode != DeploymentMode::Production {
+                return Err("non-loopback --host is allowed only in production mode".into());
+            }
 
             let state = Arc::new(DaemonState {
                 data_root,
@@ -130,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             let router = create_router(state);
-            let addr = format!("127.0.0.1:{}", daemon_port);
+            let addr = SocketAddr::new(bind_ip, daemon_port);
             let listener = TcpListener::bind(&addr).await?;
 
             println!("AIRP-Core Gateway running at http://{}", addr);
