@@ -71,7 +71,7 @@ Workspace choices (non-secret User ID, selected character/session and Preset) ar
 
 **Chat & agent loop**
 -  `/v1/chat/completions` (SSE streaming, token-by-token render); 流式期间用 raw textContent（保 cursor 动画），完成后切 markdown 渲染
--  `/v1/chat/history`, `regen`, `rollback` — destructive ops (regen/rollback) require explicit confirm dialog; 切换 character/session 或初次连接后自动 load history（无需手点 History）
+-  `/v1/chat/history`, `regen`, `rollback` — history 首屏按 50 条窗口加载，可按 durable cursor 加载更早；消息节点按 durable ID 增量复用，rollback 先点选消息再确认；切换 character/session 或初次连接后自动加载当前 session
 -  `/v1/agent/run` (SSE agent event log) — events classified as `PLAN` / `TOOL_CALL` / `TOOL_RESULT` / `DELTA` / `DONE` with color-coded labels, one-line summary, and collapsible raw JSON per event; step counter shows `stop_reason · steps_taken · ms`
 -  `/v1/agent/tools` — runtime tool catalog; allow and destructive-confirm selections are generated from engine metadata while manual comma-separated overrides remain available
 -  Concurrent chat stream test (M2) — two parallel `/v1/chat/completions` to verify id-keyed chat state doesn't cross-talk
