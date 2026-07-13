@@ -98,6 +98,8 @@ async fn setup_with_quota(
                 max_requests_per_day,
                 max_tokens_per_day: 0,
             },
+            deployment_mode: Default::default(),
+            public_origin: None,
         }),
     });
     (state, tmp)
@@ -125,6 +127,8 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
             access_api_key: None,
             engine: BackendEngine::default(),
             quota: QuotaConfig::default(),
+            deployment_mode: Default::default(),
+            public_origin: None,
         }),
     });
     (state, tmp)
@@ -150,6 +154,8 @@ async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::T
             access_api_key: None,
             engine: BackendEngine::default(),
             quota: QuotaConfig::default(),
+            deployment_mode: Default::default(),
+            public_origin: None,
         }),
     });
     (state, tmp)

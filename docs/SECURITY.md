@@ -9,27 +9,27 @@ AIRP defaults to a single-user local topology. The daemon binds to loopback; the
 - `AIRP_API_KEY` supplies the upstream provider credential.
 - `AIRP_ACCESS_KEY` enables bearer authentication for `/v1/*`.
 - Provider and access keys are runtime-only. `config.json` and `data/settings.json` no longer serialize them, and legacy plaintext fields are ignored when loading.
-- `POST /v1/settings` may replace a key for the current process, but its persisted settings omit secrets.
+- In development, `POST /v1/settings` may replace a key for the current process, but its persisted settings omit secrets. In production, the engine bearer is immutable through this endpoint and must be rotated with the gateway secret followed by restart.
 
 Use the operating system/service secret facility for non-interactive deployment. Do not put keys in repository files, installer arguments, logs, or copied diagnostics.
 
 ## Browser origins and network exposure
 
-Default CORS origins are the bundled WebUI (`127.0.0.1:9001` and `localhost:9001`) plus Tauri origins. Set `AIRP_CORS_ORIGINS` to a comma-separated exact allowlist when using another trusted frontend. Wildcard origins are not supported.
+Development CORS origins are the bundled WebUI (`127.0.0.1:9001` and `localhost:9001`) plus Tauri origins. `AIRP_CORS_ORIGINS` extends this development allowlist. Production ignores those conveniences and allows only the canonical HTTPS `AIRP_PUBLIC_ORIGIN`. Wildcard origins are not supported.
 
 Loopback plus CORS is not authentication. Before exposing the daemon through a reverse proxy or non-loopback bind, set `AIRP_ACCESS_KEY`, terminate TLS at the proxy, restrict trusted origins, and apply network-level access control.
 
-## WebUI production profile (accepted design, not yet shipped)
+## WebUI production profile (engine validation implemented; deployment not yet shipped)
 
 The first supported WebUI deployment is specified by [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md): a versioned OCI/Compose bundle with Caddy as the only public HTTPS entry point and `airp-core` on a private network.
 
 - Caddy authenticates the user at the perimeter and replaces the incoming `Authorization` header with the server-held engine bearer for `/v1/*`, `/health` and `/version`.
 - The browser never receives `AIRP_ACCESS_KEY`, provider credentials or the engine address. Static files are behind the same perimeter authentication.
-- `AIRP_DEPLOYMENT_MODE=production` will fail before listen unless a strong access key and one exact `AIRP_PUBLIC_ORIGIN` are present; it will reject `AIRP_ALLOW_LOCAL_PATH` and runtime engine-bearer replacement.
+- `AIRP_DEPLOYMENT_MODE=production` fails before listen unless `AIRP_ACCESS_KEY` is exactly 32 bytes encoded as canonical unpadded base64url, `AIRP_PUBLIC_ORIGIN` is one canonical HTTPS origin, and `AIRP_DATA_DIR` is absolute, existing, writable and not a filesystem root. It rejects `AIRP_ALLOW_LOCAL_PATH` and runtime engine-bearer replacement.
 - Production WebUI imports upload JSON/PNG content only. `card_path`, host/UNC paths, file URLs and arbitrary remote fetches are outside this trust boundary even for authenticated callers.
 - The private engine keeps its own bearer, validation, body limits, path guards and outbound redirect policy. Gateway controls do not replace engine controls.
 
-These are implementation requirements, not claims about the current development server. Until the executable slice and production smoke land, do not expose `webui/serve.js` or port 8000 as a supported remote deployment.
+The engine-side fail-closed slice is implemented; the OCI/Compose + Caddy artifact and production smoke are not. Until those remaining slices land, do not expose `webui/serve.js` or port 8000 as a supported remote deployment.
 
 ## Widgets and Agent tools
 

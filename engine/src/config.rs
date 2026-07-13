@@ -1,8 +1,21 @@
 use crate::adapter::{BackendEngine, Provider};
 use crate::quota::QuotaConfig;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::Path;
+
+/// Controls whether the daemon may use development conveniences.
+///
+/// This value is environment-only: persisting it in user-editable settings would
+/// let an authenticated HTTP request weaken process-level deployment policy.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentMode {
+    #[default]
+    Development,
+    Production,
+}
 
 /// M4.3：`data/settings.json` 的 partial schema。所有字段 Option，缺省即沿用上一层。
 #[derive(Debug, Deserialize, Default)]
@@ -107,6 +120,12 @@ pub struct AppConfig {
     /// DX-3：每日配额；缺省不限制。
     #[serde(default)]
     pub quota: QuotaConfig,
+    /// Process-level deployment policy, supplied only by AIRP_DEPLOYMENT_MODE.
+    #[serde(skip)]
+    pub deployment_mode: DeploymentMode,
+    /// Canonical public HTTPS origin used by production CORS policy.
+    #[serde(skip)]
+    pub public_origin: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -121,6 +140,8 @@ impl Default for AppConfig {
             access_api_key: None,
             engine: BackendEngine::default(),
             quota: QuotaConfig::default(),
+            deployment_mode: DeploymentMode::Development,
+            public_origin: None,
         }
     }
 }
@@ -202,7 +223,19 @@ impl AppConfig {
     /// 注：自统一为 OpenAI 兼容协议后，`AIRP_PROVIDER` 仅保留用于向后兼容；
     /// 任何非空值都解析为 `Provider::OpenAI`。多 provider 切换由 `AIRP_ENDPOINT`
     /// （指向不同兼容端点）和 `AIRP_MODEL`（指向不同模型 ID）完成。
-    pub fn override_with_env(&mut self) {
+    pub fn override_with_env(&mut self) -> Result<(), String> {
+        if let Ok(mode) = std::env::var("AIRP_DEPLOYMENT_MODE") {
+            self.deployment_mode = match mode.as_str() {
+                "development" => DeploymentMode::Development,
+                "production" => DeploymentMode::Production,
+                _ => {
+                    return Err(format!(
+                        "AIRP_DEPLOYMENT_MODE must be 'development' or 'production', got {mode:?}"
+                    ));
+                }
+            };
+        }
+        self.public_origin = std::env::var("AIRP_PUBLIC_ORIGIN").ok();
         if std::env::var("AIRP_PROVIDER").is_ok() {
             self.provider = Provider::OpenAI;
         }
@@ -232,7 +265,100 @@ impl AppConfig {
                 _ => self.engine = BackendEngine::Direct,
             }
         }
+        Ok(())
     }
+
+    /// Validate daemon-only production invariants before creating directories or
+    /// binding the listener. Development mode intentionally retains existing
+    /// local defaults.
+    pub fn validate_daemon_startup(&self, data_root: &Path) -> Result<(), String> {
+        if self.deployment_mode == DeploymentMode::Development {
+            return Ok(());
+        }
+        self.validate_production_daemon(data_root, local_path_import_enabled())
+    }
+
+    fn validate_production_daemon(
+        &self,
+        data_root: &Path,
+        local_path_enabled: bool,
+    ) -> Result<(), String> {
+        let key = self.access_api_key.as_deref().ok_or_else(|| {
+            "AIRP_ACCESS_KEY is required when AIRP_DEPLOYMENT_MODE=production".to_string()
+        })?;
+        let decoded_key = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(key);
+        let valid_key = decoded_key.as_ref().is_ok_and(|bytes| {
+            bytes.len() == 32
+                && base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes) == key
+        });
+        if !valid_key {
+            return Err(
+                "AIRP_ACCESS_KEY must be 32 random bytes encoded as 43-character unpadded base64url"
+                    .to_string(),
+            );
+        }
+
+        let public_origin = self.public_origin.as_deref().ok_or_else(|| {
+            "AIRP_PUBLIC_ORIGIN is required when AIRP_DEPLOYMENT_MODE=production".to_string()
+        })?;
+        let parsed = reqwest::Url::parse(public_origin)
+            .map_err(|e| format!("AIRP_PUBLIC_ORIGIN is invalid: {e}"))?;
+        let canonical_origin = parsed.origin().ascii_serialization();
+        if parsed.scheme() != "https"
+            || parsed.host().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || canonical_origin != public_origin
+        {
+            return Err(
+                "AIRP_PUBLIC_ORIGIN must be a canonical HTTPS origin such as https://airp.example.com"
+                    .to_string(),
+            );
+        }
+
+        if local_path_enabled {
+            return Err(
+                "AIRP_ALLOW_LOCAL_PATH is forbidden when AIRP_DEPLOYMENT_MODE=production"
+                    .to_string(),
+            );
+        }
+        if !data_root.is_absolute() {
+            return Err("AIRP_DATA_DIR must be an absolute path in production".to_string());
+        }
+        let canonical = data_root.canonicalize().map_err(|e| {
+            format!(
+                "AIRP_DATA_DIR must already exist in production ({}): {e}",
+                data_root.display()
+            )
+        })?;
+        if !canonical.is_dir() {
+            return Err("AIRP_DATA_DIR must identify a directory in production".to_string());
+        }
+        if canonical.parent().is_none() {
+            return Err("AIRP_DATA_DIR must not be a filesystem root in production".to_string());
+        }
+
+        let probe = canonical.join(format!(".airp-write-probe-{}", uuid::Uuid::new_v4()));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .map_err(|e| format!("AIRP_DATA_DIR must be writable in production: {e}"))?;
+        drop(file);
+        fs::remove_file(&probe).map_err(|e| {
+            format!("AIRP_DATA_DIR write probe could not be removed in production: {e}")
+        })?;
+        Ok(())
+    }
+}
+
+pub fn local_path_import_enabled() -> bool {
+    std::env::var("AIRP_ALLOW_LOCAL_PATH")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -390,6 +516,95 @@ mod tests {
         assert!(cfg.validate().is_err());
     }
 
+    fn valid_production_config() -> AppConfig {
+        AppConfig {
+            access_api_key: Some("A".repeat(43)),
+            deployment_mode: DeploymentMode::Production,
+            public_origin: Some("https://airp.example.com".to_string()),
+            ..AppConfig::default()
+        }
+    }
+
+    #[test]
+    fn production_daemon_accepts_complete_fail_closed_configuration() {
+        let tmp = tempdir().unwrap();
+        valid_production_config()
+            .validate_production_daemon(tmp.path(), false)
+            .unwrap();
+        assert!(fs::read_dir(tmp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".airp-write-probe-")));
+    }
+
+    #[test]
+    fn production_daemon_rejects_missing_or_malformed_access_key() {
+        let tmp = tempdir().unwrap();
+        let mut cfg = valid_production_config();
+        cfg.access_api_key = None;
+        assert!(cfg
+            .validate_production_daemon(tmp.path(), false)
+            .unwrap_err()
+            .contains("AIRP_ACCESS_KEY is required"));
+
+        cfg.access_api_key = Some("not-base64url!".to_string());
+        assert!(cfg
+            .validate_production_daemon(tmp.path(), false)
+            .unwrap_err()
+            .contains("43-character unpadded base64url"));
+    }
+
+    #[test]
+    fn production_daemon_rejects_noncanonical_or_non_https_origin() {
+        let tmp = tempdir().unwrap();
+        for origin in [
+            "http://airp.example.com",
+            "https://airp.example.com/",
+            "https://airp.example.com/path",
+            "https://airp.example.com?query=1",
+        ] {
+            let mut cfg = valid_production_config();
+            cfg.public_origin = Some(origin.to_string());
+            assert!(cfg
+                .validate_production_daemon(tmp.path(), false)
+                .unwrap_err()
+                .contains("canonical HTTPS origin"));
+        }
+    }
+
+    #[test]
+    fn production_daemon_rejects_local_path_import_and_invalid_data_roots() {
+        let tmp = tempdir().unwrap();
+        let cfg = valid_production_config();
+        assert!(cfg
+            .validate_production_daemon(tmp.path(), true)
+            .unwrap_err()
+            .contains("AIRP_ALLOW_LOCAL_PATH"));
+        assert!(cfg
+            .validate_production_daemon(Path::new("relative-data"), false)
+            .unwrap_err()
+            .contains("absolute path"));
+        assert!(cfg
+            .validate_production_daemon(&tmp.path().join("missing"), false)
+            .unwrap_err()
+            .contains("must already exist"));
+
+        let file_path = tmp.path().join("not-a-directory");
+        fs::write(&file_path, b"x").unwrap();
+        assert!(cfg
+            .validate_production_daemon(&file_path, false)
+            .unwrap_err()
+            .contains("must identify a directory"));
+
+        let canonical_tmp = tmp.path().canonicalize().unwrap();
+        let filesystem_root = canonical_tmp.ancestors().last().unwrap();
+        assert!(cfg
+            .validate_production_daemon(filesystem_root, false)
+            .unwrap_err()
+            .contains("must not be a filesystem root"));
+    }
+
     // ── M4.6：三层合并顺序验收 ──────────────────────────────────────────────
     //
     // 完整顺序：`default → config.json → data/settings.json → env → request body`。
@@ -412,6 +627,10 @@ mod tests {
             "AIRP_API_KEY",
             "AIRP_MODEL",
             "AIRP_DAEMON_PORT",
+            "AIRP_ACCESS_KEY",
+            "AIRP_DEPLOYMENT_MODE",
+            "AIRP_PUBLIC_ORIGIN",
+            "AIRP_ALLOW_LOCAL_PATH",
         ];
         for k in KEYS {
             std::env::remove_var(k);
@@ -452,7 +671,7 @@ mod tests {
             || {
                 let mut cfg = AppConfig::default();
                 cfg.merge_data_settings(root).unwrap();
-                cfg.override_with_env();
+                cfg.override_with_env().unwrap();
 
                 // env 覆盖 settings.json
                 assert_eq!(
@@ -488,7 +707,7 @@ mod tests {
                 let default_port = AppConfig::default().daemon_port;
                 let mut cfg = AppConfig::default();
                 cfg.merge_data_settings(root).unwrap();
-                cfg.override_with_env();
+                cfg.override_with_env().unwrap();
 
                 // endpoint 来自 settings（env 未设）
                 assert_eq!(cfg.endpoint, "https://from-settings.example.com/v1");
@@ -508,8 +727,39 @@ mod tests {
         with_env_vars(&[("AIRP_DAEMON_PORT", Some("not-a-port"))], || {
             let mut cfg = AppConfig::default();
             let before = cfg.daemon_port;
-            cfg.override_with_env();
+            cfg.override_with_env().unwrap();
             assert_eq!(cfg.daemon_port, before, "非法端口字符串应被忽略");
+        });
+    }
+
+    #[test]
+    fn deployment_policy_is_loaded_only_from_valid_environment_values() {
+        with_env_vars(
+            &[
+                ("AIRP_DEPLOYMENT_MODE", Some("production")),
+                ("AIRP_PUBLIC_ORIGIN", Some("https://airp.example.com")),
+                (
+                    "AIRP_ACCESS_KEY",
+                    Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+                ),
+            ],
+            || {
+                let mut cfg = AppConfig::default();
+                cfg.override_with_env().unwrap();
+                assert_eq!(cfg.deployment_mode, DeploymentMode::Production);
+                assert_eq!(
+                    cfg.public_origin.as_deref(),
+                    Some("https://airp.example.com")
+                );
+            },
+        );
+
+        with_env_vars(&[("AIRP_DEPLOYMENT_MODE", Some("prod"))], || {
+            let mut cfg = AppConfig::default();
+            assert!(cfg
+                .override_with_env()
+                .unwrap_err()
+                .contains("AIRP_DEPLOYMENT_MODE"));
         });
     }
 

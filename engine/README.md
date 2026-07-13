@@ -15,7 +15,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
-- settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；CORS 内建允许 `127.0.0.1:9001`、`localhost:9001` 与 Tauri origins，并只追加 `AIRP_CORS_ORIGINS` 中的精确来源。
+- settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；development CORS 保留 WebUI/Tauri 精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
 
 ## 必须诚实区分的边界
 
@@ -45,7 +45,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ### 部署安全边界尚未产品化
 
-默认 daemon 绑定 loopback，CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。当前仍没有受支持的外网部署姿势：远程部署必须另行具备 TLS、持久身份认证、网络访问控制和调用方 capability enforcement，不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
+默认 daemon 绑定 loopback，development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用，但首方 OCI/Compose + Caddy 产物与 production smoke 尚未交付，因此仍没有受支持的外网部署姿势，不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
 
 ## 快速开始
 

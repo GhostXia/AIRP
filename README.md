@@ -38,7 +38,7 @@ D:\AIRP-Dev/
 - 默认 Agent 工具注册表当前为 19 个工具；`GET /v1/agent/tools` 提供排序后的运行时目录，`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist/confirm 门执行 typed observation，并只由 finalizer 做最终纯净生成。
 - UI `BusRelay` 已直连 engine，角色导入与 id-keyed chat 已实现；desktop 现在持有并在退出时终止 sidecar，Windows workflow 已加入安装→启动→ready→退出 smoke，等待 CI artifact 实跑证据。
 - 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
-- WebUI 是当前后端能力孵化、合同验证和基础 RP 使用的主开发面，不替代 Tauri/Vue 长期产品 UI。新能力优先贯通 engine → HTTP/SSE → WebUI → tests，以降低后续桌面端接入时的后端返工。
+- WebUI 是当前正式产品交付主面。Tauri/Vue 代码与客户端无关合同继续保留，但桌面 UI 开发、打包验收和性能计划暂时搁置；新能力优先贯通 engine → HTTP/SSE → WebUI → production tests。
 - WebUI 的基础 RP 闭环由 PR #118/#119/#121/#123 完成；PR #124/#125 又交付 durable message ID、cursor history、rollback-by-ID、50 条窗口、增量 DOM 与加载更早。
 - 2026-07-13 最近 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；WebUI engine-truth smoke 为 64/64，具体证据见当前基线。
 

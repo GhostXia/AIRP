@@ -1,6 +1,6 @@
 # AIRP WebUI
 
-Browser-based AIRP client for RP use. The current implementation is a basically usable development build; the active target is a production-ready, single-instance self-hosted WebUI. Current baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); production gates: [docs/WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md); accepted P0 architecture (not yet shipped): [docs/WEBUI-PRODUCTION-ARCHITECTURE.md](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md); completed MVP contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
+Browser-based AIRP client for RP use. The current implementation is a basically usable development build; the active target is a production-ready, single-instance self-hosted WebUI. Current baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); production gates: [docs/WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md); accepted P0 architecture and implementation status: [docs/WEBUI-PRODUCTION-ARCHITECTURE.md](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md); completed MVP contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
 
 > `start.bat`, `serve.js`, `cargo run`, manually entered engine URLs and optional bearer tokens are development paths. They are not the supported production deployment. Do not expose port 8000 or this static development server directly to the public Internet.
 
@@ -53,7 +53,7 @@ they are not the served WebUI implementation.
 
 The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. PR #123 closed the basic zero-secret acceptance gate; PR #124/#125 added durable IDs, cursor history, rollback-by-ID and a 50-message WebUI window. The engine-truth harness has 64 checks plus a real-browser 50/54 → 54/54 prepend/scroll pass. This is a basically usable RP development client, not yet a production release; formal release additionally requires the deployment, security, data recovery and release gates in [WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md).
 
-New capabilities should normally be delivered vertically through engine shared services, HTTP/SSE contracts, this WebUI, and tests. WebUI-specific DOM or interaction choices must not become engine contracts; stable client-neutral contracts are later consumed by the desktop UI.
+New capabilities should normally be delivered vertically through engine shared services, HTTP/SSE contracts, this WebUI, and tests. WebUI-specific DOM or interaction choices must not become engine contracts. Client-neutral contracts remain reusable, while desktop UI implementation is paused.
 
 Workspace choices (non-secret User ID, selected character/session and Preset) are restored from browser-local state. Engine URL and optional bearer remain tab-scoped in `sessionStorage`; provider secrets are never written to `localStorage`.
 

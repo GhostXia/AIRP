@@ -1523,6 +1523,8 @@ mod tests {
                 access_api_key: None,
                 engine: BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         })
     }
@@ -2276,6 +2278,8 @@ mod tests {
                 access_api_key: None,
                 engine: BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         });
         crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();

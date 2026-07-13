@@ -649,6 +649,8 @@ mod tests {
                 access_api_key: None,
                 engine: crate::adapter::BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         });
 

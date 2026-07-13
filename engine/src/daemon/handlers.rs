@@ -90,6 +90,22 @@ pub(super) async fn update_settings(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(patch): Json<crate::config::PartialAppConfig>,
 ) -> Result<Json<SettingsView>, AirpError> {
+    if patch
+        .access_api_key
+        .as_deref()
+        .is_some_and(|key| !key.is_empty())
+    {
+        let cfg = state
+            .config
+            .read()
+            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+        if cfg.deployment_mode == crate::config::DeploymentMode::Production {
+            return Err(AirpError::BadRequest(
+                "AIRP_ACCESS_KEY cannot be changed through /v1/settings in production; rotate the gateway and engine secret together, then restart"
+                    .to_string(),
+            ));
+        }
+    }
     // 1) 合并到内存
     let merged = {
         let mut cfg = state
@@ -497,9 +513,7 @@ pub(crate) fn import_card_to_disk(
         // Tauri sidecar 启动脚本带此变量；对外暴露的 engine 不带 → Web/远端
         // 调用方即使伪造 JSON body 带 card_path 也被拒。不可伪造（env 在进程
         // 启动时定，非请求头）。审计裁定：Web 永不走 card_path，即使持 bearer。
-        let allow_local_path = std::env::var("AIRP_ALLOW_LOCAL_PATH")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let allow_local_path = crate::config::local_path_import_enabled();
         if !allow_local_path {
             return Err(AirpError::BadRequest(
                     "card_path 任意路径读已禁用（AIRP_ALLOW_LOCAL_PATH 未设）。Web/远端调用方请用 card_png_base64 或 card_json 字段（JSON body，非 multipart）。".to_string(),
@@ -1509,6 +1523,8 @@ mod tests {
                 access_api_key: None,
                 engine: crate::adapter::BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         });
         (state, tmp)

@@ -105,6 +105,8 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
             access_api_key: Some("test-access-key".to_string()),
             engine: BackendEngine::default(),
             quota: QuotaConfig::default(),
+            deployment_mode: Default::default(),
+            public_origin: None,
         }),
     });
     (state, tmp)
