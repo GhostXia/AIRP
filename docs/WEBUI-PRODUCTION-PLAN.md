@@ -6,6 +6,8 @@
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
+P0 的已接受实现合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。该文档锁定了首方 OCI/Compose + Caddy 同源入口、生产配置、鉴权与远端导入边界；它是设计事实，不表示部署产物或 production smoke 已经交付。
+
 ## 1. 首发边界
 
 首个正式版本采用**单实例、自托管、单用户**拓扑：
@@ -83,11 +85,11 @@ Browser
 
 ### Phase P0：生产地基与威胁边界
 
-1. 固化同源反代拓扑、生产配置合同和首方部署形式；
-2. 禁止公网直连 engine，生产启动强制 access key；
-3. 关闭远端 `card_path`，只保留上传；
+1. 按 [P0 架构与威胁边界](WEBUI-PRODUCTION-ARCHITECTURE.md) 实现同源反代拓扑、生产配置合同和首方部署形式；
+2. 禁止公网直连 engine，增加 `AIRP_DEPLOYMENT_MODE=production` 的启动前 fail-closed 校验并强制 access key；
+3. 生产模式关闭远端 `card_path`，只保留内容上传；
 4. 增加安全 headers、body/cache policy、secret/logging 约束；
-5. 建立 production smoke：HTTPS 入口 → health → provider → 三轮聊天 → 刷新恢复。
+5. 建立 production smoke：HTTPS 入口 → perimeter auth → private engine 负向验证 → health → provider → 三轮聊天 → 刷新/重启恢复。
 
 退出条件：全新环境按文档一次部署成功，浏览器不需要知道 engine 私有地址或 bearer。
 
@@ -131,8 +133,8 @@ Browser
 
 ## 6. 下一批可执行工作
 
-1. 建立 WebUI production umbrella issue，把 P0-P3 拆成可独立验收的纵向 PR；
-2. 先做 P0 架构/威胁模型 PR：生产拓扑、配置 schema、remote import policy、部署 artifact 选择；
-3. 紧接可运行的 production slice PR：同源入口 + 私有 engine + 强制密钥 + production smoke；
+1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
+2. P0 架构/威胁模型已由 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 锁定，仍不计为运行能力；
+3. 下一项是 engine production-mode fail-closed 校验，再接首方 OCI/Compose + Caddy 同源入口与 production smoke；
 4. 然后按 #114/#115/#126 完成 RP 使用面，不再先做 #117/#87/#116；
 5. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

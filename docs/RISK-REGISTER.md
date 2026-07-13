@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-12. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [DOC-AUDIT.md](DOC-AUDIT.md) defines documentation authority, and dated audits remain historical evidence.
+> Last reviewed: 2026-07-13. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [DOC-AUDIT.md](DOC-AUDIT.md) defines documentation authority, and dated audits remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -66,3 +66,11 @@
 - **Risk**: Packaged installer/runtime behavior and provider-backed remote smoke are intentionally outside routine PR CI.
 - **Current control**: Required PR checks plus local/human review; checkout credentials are not persisted.
 - **Required direction**: Keep release artifact smoke as a separate release gate and expand CI only when deterministic fixtures exist.
+
+## RR-009 · Production gateway/engine authority confusion
+
+- **Status**: Design accepted in the P0 architecture; implementation and production smoke remain open under #130.
+- **Surface**: A same-origin WebUI gateway authenticates a browser and calls the private engine with `AIRP_ACCESS_KEY`.
+- **Risk**: Forwarding the browser's `Authorization` header, exposing the engine bearer to JavaScript, allowing runtime bearer replacement, or publishing the engine port could bypass or desynchronize the intended two-layer boundary.
+- **Planned control**: The gateway authenticates the whole site, replaces (never appends) `Authorization` for explicit engine routes, and holds the engine bearer server-side. The engine has no published port; production mode requires a strong key and exact HTTPS origin, rejects local-path import mode, and makes bearer rotation an operator restart action.
+- **Evidence gate**: Production smoke must prove anonymous/wrong credentials fail, direct host access to the engine fails, a caller-supplied bearer cannot pass through, short/missing keys prevent listen, `card_path` is rejected, and logs/assets contain no credentials. See [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md).
