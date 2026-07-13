@@ -104,6 +104,7 @@ try {
       body: JSON.stringify({
         character_id: characterId,
         session_id: sessionId,
+        user_profile: { name: 'Tester', variables: {} },
         message: 'cancel this synthetic stream',
       }),
       signal: controller.signal,
