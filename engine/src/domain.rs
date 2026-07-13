@@ -666,10 +666,15 @@ fn validate_schema_value(
 // 读/写/revision——多 Persona、头像、角色/会话绑定、drift/history/rollback 全留 #114
 // 后续阶段。
 
-/// 持久化的默认 Persona（每用户一份）。
+/// 持久化的 Persona（每用户一份，#114 MVP；#115 扩多份与绑定）。
+///
+/// 历史只有一个默认 Persona（`users/{uid}/persona.json`）。#115 起支持每用户多份
+/// Persona（`users/{uid}/personas/{pid}.json`），原默认那份迁移到 `personas/default.json`
+/// 并保留兼容兜底（无多份时 `get_default` 仍读旧路径）。`bindings` 记录该 Persona 绑定
+/// 的角色/会话，让 UI 在选角色时自动激活对应 Persona。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Persona {
-    /// Persona schema 版本；当前固定 `1`，未来字段迁移用。
+    /// Persona schema 版本；当前固定 `2`（#115 加 `id` / `bindings`），未来字段迁移用。
     pub schema: u32,
     /// 递增 revision；PUT 携带 expected_revision 校验，冲突返回 `AirpError::BadRequest`。
     pub revision: u64,
@@ -681,13 +686,25 @@ pub struct Persona {
     pub description: String,
     /// 自定义变量表，键名对应 prompt 中 `{{key}}` 占位符。
     pub variables: HashMap<String, String>,
+    /// #115：Persona 自己的 ID（多份 Persona 寿名）；schema=1 时默认 `"default"`。
+    /// serde `default` 让旧 persona.json（无此字段）反序列化不破。
+    #[serde(default = "Persona::default_id")]
+    pub id: String,
+    /// #115：该 Persona 绑定的角色/会话列表；UI 选角色时自动激活匹配的 Persona。
+    /// 元素 `{character_id, session_id?}`；session_id 缺省表示全会话通用。
+    #[serde(default)]
+    pub bindings: Vec<PersonaBinding>,
 }
 
 impl Persona {
-    /// 当前 schema 版本。
-    pub const SCHEMA: u32 = 1;
+    /// 当前 schema 版本。#115 升到 2（加 `id` / `bindings`）；旧 schema=1 自动迁移。
+    pub const SCHEMA: u32 = 2;
+    /// schema=1 兼容默认 id。
+    fn default_id() -> String {
+        "default".to_string()
+    }
 
-    /// 构造一份初始 Persona（revision=0，name=default）。
+    /// 构造一份初始 Persona（revision=0，name=default，id=default）。
     pub fn initial(default_name: &str) -> Self {
         Self {
             schema: Self::SCHEMA,
@@ -696,8 +713,19 @@ impl Persona {
             name: default_name.to_string(),
             description: String::new(),
             variables: HashMap::new(),
+            id: Self::default_id(),
+            bindings: Vec::new(),
         }
     }
+}
+
+/// #115：Persona 与角色/会话的绑定。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersonaBinding {
+    pub character_id: String,
+    /// `None` = 该角色下所有会话通用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Persona 原子写入时的冲突 payload：返回当前服务端 revision，让客户端 merge 后重试。
@@ -706,10 +734,14 @@ pub struct PersonaRevisionConflict {
     pub current_revision: u64,
 }
 
-/// User Persona shared service（读 / 原子写 / revision 校验）。
+/// User Persona shared service（读 / 原子写 / revision 校验 / 多份 / 绑定）。
 ///
 /// 与 `ChatService` / `StateService` 同构：`data_root` 持一份，`new()` 廉价；
 /// 写入走 `persona_lock` 串行化 + `replace_file` 原子替换 + history.jsonl append。
+///
+/// #115 起支持每用户多份 Persona（`users/{uid}/personas/{pid}.json`），原默认那份
+/// (`persona.json`) 保留兜底：`get_default` / `save_default` 维护兼容路径，
+/// `list` / `get` / `save` / `delete` 操作多份集合。
 #[derive(Clone, Debug)]
 pub struct PersonaService {
     data_root: PathBuf,
@@ -722,64 +754,279 @@ impl PersonaService {
         }
     }
 
-    /// 读取当前 Persona；不存在时返回 `Persona::initial(default_name)` 的拷贝（不写盘）。
+    // ── 默认 Persona（兼容老路径）────────────────────────────────────────────
+
+    /// 读取当前默认 Persona；不存在时返回 `Persona::initial(default_name)` 的拷贝（不写盘）。
     ///
-    /// `default_name` 仅用于未初始化时的 UI 显示兜底；调用方应随后 `save` 持久化。
-    pub fn get(&self, user_id: &UserId, default_name: &str) -> Result<Persona, AirpError> {
+    /// `default_name` 仅用于未初始化时的 UI 显示兜底；调用方应随后 `save_default` 持久化。
+    pub fn get_default(&self, user_id: &UserId, default_name: &str) -> Result<Persona, AirpError> {
+        self.get(user_id, "default", default_name)
+    }
+
+    /// 原子写入默认 Persona；`expected_revision` 不匹配当前服务端 revision 时返回
+    /// `AirpError::BadRequest`，message 携带 `PersonaRevisionConflict` JSON，
+    /// 让 UI 解析出 `current_revision` 后 merge 重试（而非裸 409 文本）。
+    pub fn save_default(
+        &self,
+        user_id: &UserId,
+        expected_revision: u64,
+        persona: Persona,
+    ) -> Result<Persona, AirpError> {
+        self.save(user_id, "default", expected_revision, persona)
+    }
+
+    // ── 多份 Persona（#115）────────────────────────────────────────────────────
+
+    /// 列出该用户的所有 Persona id（含 `default`）。无多份目录时返回 `["default"]`。
+    pub fn list(&self, user_id: &UserId) -> Result<Vec<String>, AirpError> {
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
-        let path = data_dir::user_persona_path(&self.data_root, user_id);
+        let dir = data_dir::user_personas_dir(&self.data_root, user_id);
+        let mut ids: Vec<String> = Vec::new();
+        if dir.exists() {
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if let Some(stem) = name.strip_suffix(".json") {
+                    if data_dir::validate_id_segment(stem).is_ok() {
+                        ids.push(stem.to_string());
+                    }
+                }
+            }
+        }
+        // 兜底：若多份目录不在但旧 persona.json 在，补 `default`。
+        if !ids.iter().any(|i| i == "default")
+            && data_dir::user_persona_path(&self.data_root, user_id).exists()
+        {
+            ids.push("default".to_string());
+        }
+        if ids.is_empty() {
+            ids.push("default".to_string());
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
+    /// 读取指定 id 的 Persona；不存在时返回 `Persona::initial(default_name)` 并设 `id`。
+    pub fn get(
+        &self,
+        user_id: &UserId,
+        persona_id: &str,
+        default_name: &str,
+    ) -> Result<Persona, AirpError> {
+        let lock = persona_lock(user_id.as_str());
+        let _guard = lock.lock().expect("persona lock poisoned");
+        let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Persona::initial(default_name));
+                // 兜底：`default` 也读旧路径。
+                if persona_id == "default" {
+                    let legacy = data_dir::user_persona_path(&self.data_root, user_id);
+                    match fs::read(&legacy) {
+                        Ok(b) => b,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            let mut p = Persona::initial(default_name);
+                            p.id = persona_id.to_string();
+                            return Ok(p);
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                } else {
+                    let mut p = Persona::initial(default_name);
+                    p.id = persona_id.to_string();
+                    return Ok(p);
+                }
             }
             Err(error) => return Err(error.into()),
         };
-        let persona: Persona = serde_json::from_slice(&bytes)?;
-        if persona.schema != Persona::SCHEMA {
-            return Err(AirpError::Internal(format!(
-                "persona schema {} unsupported (expected {})",
-                persona.schema,
-                Persona::SCHEMA
-            )));
-        }
+        let mut persona = self.parse_persona_bytes(&bytes)?;
+        persona.id = persona_id.to_string();
         Ok(persona)
     }
 
-    /// 原子写入 Persona；`expected_revision` 不匹配当前服务端 revision 时返回
-    /// `AirpError::BadRequest`，message 携带 `PersonaRevisionConflict` JSON，
-    /// 让 UI 解析出 `current_revision` 后 merge 重试（而非裸 409 文本）。
+    /// 原子写入指定 id 的 Persona（多份）；`expected_revision` 校验同 `save_default`。
+    /// 写入到 `users/{uid}/personas/{pid}.json`；若 pid == "default" 同时回写兼容老路径。
     pub fn save(
         &self,
         user_id: &UserId,
+        persona_id: &str,
         expected_revision: u64,
         mut persona: Persona,
     ) -> Result<Persona, AirpError> {
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
-        let dir = data_dir::user_dir(&self.data_root, user_id);
+        let dir = data_dir::user_personas_dir(&self.data_root, user_id);
         fs::create_dir_all(&dir)?;
-        let path = data_dir::user_persona_path(&self.data_root, user_id);
+        let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
 
-        // revision 校验：current = 读取现存 revision（不存在则 0）。
-        let current_revision = if path.exists() {
-            serde_json::from_slice::<Persona>(&fs::read(&path)?)
-                .map(|p| p.revision)
-                .unwrap_or(0)
+        let current_revision = if persona_id == "default" && !path.exists() {
+            self.current_revision_at(&data_dir::user_persona_path(&self.data_root, user_id))?
         } else {
-            0
+            self.current_revision_at(&path)?
         };
         if expected_revision != current_revision {
             let conflict = PersonaRevisionConflict { current_revision };
             return Err(AirpError::BadRequest(serde_json::to_string(&conflict)?));
         }
 
+        Self::validate_bindings(&persona.bindings)?;
         persona.schema = Persona::SCHEMA;
+        persona.id = persona_id.to_string();
         persona.revision = current_revision + 1;
         persona.updated_at = chrono::Utc::now().to_rfc3339();
         data_dir::replace_file(&path, &serde_json::to_vec_pretty(&persona)?)?;
+
+        // `default` 同步回写兼容老路径，避免旧读链断裂。
+        if persona_id == "default" {
+            let legacy = data_dir::user_persona_path(&self.data_root, user_id);
+            data_dir::replace_file(&legacy, &serde_json::to_vec_pretty(&persona)?)?;
+        }
         Ok(persona)
+    }
+
+    /// 删除指定 id 的 Persona；`default` 不允许删（返 BadRequest）。删除文件不可逆。
+    pub fn delete(&self, user_id: &UserId, persona_id: &str) -> Result<(), AirpError> {
+        if persona_id == "default" {
+            return Err(AirpError::BadRequest(
+                "default persona 不可删除；可用 save 重置内容".to_string(),
+            ));
+        }
+        let lock = persona_lock(user_id.as_str());
+        let _guard = lock.lock().expect("persona lock poisoned");
+        let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    // ── 绑定（#115）────────────────────────────────────────────────────────────
+
+    /// 给 Persona 加一条绑定；幂等（同 character_id+session_id 不重复追加）。
+    pub fn bind(
+        &self,
+        user_id: &UserId,
+        persona_id: &str,
+        binding: PersonaBinding,
+    ) -> Result<Persona, AirpError> {
+        CharacterId::new(&binding.character_id)?;
+        if let Some(session_id) = &binding.session_id {
+            SessionId::parse(session_id)?;
+        }
+        let mut persona = self.get(user_id, persona_id, "User")?;
+        if persona
+            .bindings
+            .iter()
+            .any(|b| b.character_id == binding.character_id && b.session_id == binding.session_id)
+        {
+            return Ok(persona);
+        }
+        persona.bindings.push(binding);
+        let rev = persona.revision;
+        self.save(user_id, persona_id, rev, persona)
+    }
+
+    /// 移除一条绑定；幂等。返回更新后的 Persona。
+    pub fn unbind(
+        &self,
+        user_id: &UserId,
+        persona_id: &str,
+        character_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<Persona, AirpError> {
+        CharacterId::new(character_id)?;
+        if let Some(session_id) = session_id {
+            SessionId::parse(session_id)?;
+        }
+        let mut persona = self.get(user_id, persona_id, "User")?;
+        let previous_len = persona.bindings.len();
+        persona
+            .bindings
+            .retain(|b| !(b.character_id == character_id && b.session_id.as_deref() == session_id));
+        if persona.bindings.len() == previous_len {
+            return Ok(persona);
+        }
+        let rev = persona.revision;
+        self.save(user_id, persona_id, rev, persona)
+    }
+
+    /// 查找该用户下绑定到指定角色/会话的 Persona id（首个匹配）。
+    /// 优先匹配带 session_id 的精确绑定，再匹配全会话通用绑定。
+    pub fn find_for_character(
+        &self,
+        user_id: &UserId,
+        character_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<Option<String>, AirpError> {
+        CharacterId::new(character_id)?;
+        if let Some(session_id) = session_id {
+            SessionId::parse(session_id)?;
+        }
+        let ids = self.list(user_id)?;
+        // 精确 session 绑定优先。
+        let mut generic: Option<String> = None;
+        for pid in &ids {
+            let persona = self.get(user_id, pid, "User")?;
+            for b in &persona.bindings {
+                if b.character_id != character_id {
+                    continue;
+                }
+                match (&b.session_id, session_id) {
+                    (Some(b_sid), Some(q_sid)) if b_sid == q_sid => return Ok(Some(pid.clone())),
+                    (None, _) => {
+                        generic = Some(pid.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(generic)
+    }
+
+    // ── 内部────────────────────────────────────────────────────────────────────
+
+    fn parse_persona_bytes(&self, bytes: &[u8]) -> Result<Persona, AirpError> {
+        let mut persona: Persona = serde_json::from_slice(bytes)?;
+        // schema=1（无 id/bindings）靠 serde default 升到 2；若 schema>2 拒。
+        if persona.schema > Persona::SCHEMA {
+            return Err(AirpError::Internal(format!(
+                "persona schema {} unsupported (expected <= {})",
+                persona.schema,
+                Persona::SCHEMA
+            )));
+        }
+        if persona.schema < Persona::SCHEMA {
+            persona.schema = Persona::SCHEMA;
+        }
+        Ok(persona)
+    }
+
+    fn current_revision_at(&self, path: &Path) -> Result<u64, AirpError> {
+        if !path.exists() {
+            return Ok(0);
+        }
+        let bytes = fs::read(path)?;
+        Ok(self.parse_persona_bytes(&bytes)?.revision)
+    }
+
+    fn validate_bindings(bindings: &[PersonaBinding]) -> Result<(), AirpError> {
+        let mut seen = std::collections::HashSet::new();
+        for binding in bindings {
+            CharacterId::new(&binding.character_id)?;
+            if let Some(session_id) = &binding.session_id {
+                SessionId::parse(session_id)?;
+            }
+            if !seen.insert((&binding.character_id, &binding.session_id)) {
+                return Err(AirpError::BadRequest(
+                    "duplicate persona binding".to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -940,7 +1187,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let service = PersonaService::new(tmp.path());
         let uid = UserId::new("alice").unwrap();
-        let persona = service.get(&uid, "User").unwrap();
+        let persona = service.get_default(&uid, "User").unwrap();
         assert_eq!(
             persona.revision, 0,
             "non-existent persona returns revision 0"
@@ -964,14 +1211,16 @@ mod tests {
             name: "Alice".to_string(),
             description: "a curious librarian".to_string(),
             variables: HashMap::from([("mood".to_string(), "curious".to_string())]),
+            id: "default".to_string(),
+            bindings: Vec::new(),
         };
-        let saved = service.save(&uid, 0, persona).unwrap();
+        let saved = service.save_default(&uid, 0, persona).unwrap();
         assert_eq!(saved.revision, 1, "first save bumps 0 -> 1");
         assert_eq!(saved.name, "Alice");
         assert_eq!(saved.variables.get("mood").unwrap(), "curious");
 
         // 持久化：重新 get 应读回同一份
-        let reread = service.get(&uid, "User").unwrap();
+        let reread = service.get_default(&uid, "User").unwrap();
         assert_eq!(reread.revision, 1);
         assert_eq!(reread.name, "Alice");
         assert_eq!(reread.description, "a curious librarian");
@@ -984,11 +1233,11 @@ mod tests {
         let uid = UserId::new("alice").unwrap();
 
         let p1 = Persona::initial("Alice");
-        service.save(&uid, 0, p1).unwrap(); // revision -> 1
+        service.save_default(&uid, 0, p1).unwrap(); // revision -> 1
 
         // 客户端仍持有 revision=0，服务端已 1 → 必须拒绝
         let p2 = Persona::initial("Alice-updated");
-        let err = service.save(&uid, 0, p2).unwrap_err();
+        let err = service.save_default(&uid, 0, p2).unwrap_err();
         let conflict: PersonaRevisionConflict = serde_json::from_str(match &err {
             AirpError::BadRequest(s) => s,
             _ => panic!("expected BadRequest with PersonaRevisionConflict JSON, got {err:?}"),
@@ -1023,10 +1272,102 @@ mod tests {
         )
         .unwrap();
 
-        let err = service.get(&uid, "User").unwrap_err();
+        let err = service.get_default(&uid, "User").unwrap_err();
         assert!(
             matches!(err, AirpError::Internal(_)),
             "unsupported schema must be Internal, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn persona_save_does_not_overwrite_corrupt_existing_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let path = crate::data_dir::user_persona_multi_path(tmp.path(), &uid, "default").unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"not-json").unwrap();
+
+        assert!(service
+            .save_default(&uid, 0, Persona::initial("Alice"))
+            .is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"not-json");
+    }
+
+    #[test]
+    fn persona_multi_storage_rejects_traversal_and_preserves_legacy_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+
+        let legacy = service
+            .save_default(&uid, 0, Persona::initial("Legacy"))
+            .unwrap();
+        assert_eq!(legacy.revision, 1);
+
+        let migrated = service.save(&uid, "default", 1, legacy.clone()).unwrap();
+        assert_eq!(migrated.revision, 2);
+        assert_eq!(service.get_default(&uid, "User").unwrap().revision, 2);
+        assert!(service.get(&uid, "../escape", "User").is_err());
+        assert!(service
+            .save(&uid, "..\\escape", 0, Persona::initial("Bad"))
+            .is_err());
+    }
+
+    #[test]
+    fn persona_binding_prefers_session_and_idempotent_bind_does_not_bump_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let session = SessionId::new().to_string();
+
+        service
+            .save(&uid, "generic", 0, Persona::initial("Generic"))
+            .unwrap();
+        service
+            .save(&uid, "specific", 0, Persona::initial("Specific"))
+            .unwrap();
+        let generic = service
+            .bind(
+                &uid,
+                "generic",
+                PersonaBinding {
+                    character_id: "char-a".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        let unchanged = service
+            .bind(
+                &uid,
+                "generic",
+                PersonaBinding {
+                    character_id: "char-a".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(unchanged.revision, generic.revision);
+
+        service
+            .bind(
+                &uid,
+                "specific",
+                PersonaBinding {
+                    character_id: "char-a".to_string(),
+                    session_id: Some(session.clone()),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .find_for_character(&uid, "char-a", Some(&session))
+                .unwrap(),
+            Some("specific".to_string())
+        );
+        assert_eq!(
+            service.find_for_character(&uid, "char-a", None).unwrap(),
+            Some("generic".to_string())
         );
     }
 

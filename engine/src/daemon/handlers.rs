@@ -191,7 +191,7 @@ pub(super) async fn get_persona_endpoint(
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<Json<Persona>, AirpError> {
     let uid = UserId::new(user_id)?;
-    let persona = PersonaService::new(&state.data_root).get(&uid, "User")?;
+    let persona = PersonaService::new(&state.data_root).get_default(&uid, "User")?;
     Ok(Json(persona))
 }
 
@@ -209,9 +209,14 @@ pub(super) async fn update_persona_endpoint(
         name: payload.name,
         description: payload.description,
         variables: payload.variables,
+        id: "default".to_string(),
+        bindings: Vec::new(),
     };
-    let saved =
-        PersonaService::new(&state.data_root).save(&uid, payload.expected_revision, persona)?;
+    let saved = PersonaService::new(&state.data_root).save_default(
+        &uid,
+        payload.expected_revision,
+        persona,
+    )?;
     Ok(Json(saved))
 }
 

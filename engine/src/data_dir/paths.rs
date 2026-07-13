@@ -564,6 +564,24 @@ pub fn user_persona_path(root: &Path, user_id: &crate::types::UserId) -> PathBuf
     user_dir(root, user_id).join("persona.json")
 }
 
+/// `users/{user_id}/personas/` — multi-persona storage introduced by #114.
+pub fn user_personas_dir(root: &Path, user_id: &crate::types::UserId) -> PathBuf {
+    user_dir(root, user_id).join("personas")
+}
+
+/// `users/{user_id}/personas/{persona_id}.json`.
+///
+/// Persona IDs are untrusted path segments, so validation happens before the
+/// path is constructed.
+pub fn user_persona_multi_path(
+    root: &Path,
+    user_id: &crate::types::UserId,
+    persona_id: &str,
+) -> Result<PathBuf, AirpError> {
+    super::security::validate_id_segment(persona_id)?;
+    Ok(user_personas_dir(root, user_id).join(format!("{persona_id}.json")))
+}
+
 /// `users/{user_id}/persona.lock` — sentinel; existence = persona is sealed.
 pub fn user_persona_lock_path(root: &Path, user_id: &crate::types::UserId) -> PathBuf {
     user_dir(root, user_id).join("persona.lock")
