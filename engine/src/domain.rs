@@ -815,26 +815,18 @@ impl PersonaService {
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
+        if persona_id == "default" {
+            let legacy = data_dir::user_persona_path(&self.data_root, user_id);
+            return Ok(self
+                .newest_default_copy(&path, &legacy)?
+                .unwrap_or_else(|| Persona::initial(default_name)));
+        }
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // 兜底：`default` 也读旧路径。
-                if persona_id == "default" {
-                    let legacy = data_dir::user_persona_path(&self.data_root, user_id);
-                    match fs::read(&legacy) {
-                        Ok(b) => b,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            let mut p = Persona::initial(default_name);
-                            p.id = persona_id.to_string();
-                            return Ok(p);
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                } else {
-                    return Err(AirpError::NotFound(format!(
-                        "persona {persona_id} does not exist"
-                    )));
-                }
+                return Err(AirpError::NotFound(format!(
+                    "persona {persona_id} does not exist"
+                )));
             }
             Err(error) => return Err(error.into()),
         };
@@ -858,8 +850,12 @@ impl PersonaService {
         fs::create_dir_all(&dir)?;
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
 
-        let current_revision = if persona_id == "default" && !path.exists() {
-            self.current_revision_at(&data_dir::user_persona_path(&self.data_root, user_id))?
+        let current_revision = if persona_id == "default" {
+            self.newest_default_copy(
+                &path,
+                &data_dir::user_persona_path(&self.data_root, user_id),
+            )?
+            .map_or(0, |persona| persona.revision)
         } else {
             self.current_revision_at(&path)?
         };
@@ -1011,6 +1007,39 @@ impl PersonaService {
         }
         let bytes = fs::read(path)?;
         Ok(self.parse_persona_bytes(&bytes)?.revision)
+    }
+
+    fn newest_default_copy(
+        &self,
+        canonical: &Path,
+        legacy: &Path,
+    ) -> Result<Option<Persona>, AirpError> {
+        let read = |path: &Path| -> Result<Option<(Persona, std::time::SystemTime)>, AirpError> {
+            let bytes = match fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            let persona = self.parse_persona_bytes(&bytes)?;
+            let modified = fs::metadata(path)?
+                .modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            Ok(Some((persona, modified)))
+        };
+
+        match (read(canonical)?, read(legacy)?) {
+            (None, None) => Ok(None),
+            (Some((persona, _)), None) | (None, Some((persona, _))) => Ok(Some(persona)),
+            (Some((canonical, canonical_time)), Some((legacy, legacy_time))) => {
+                if legacy.revision > canonical.revision
+                    || (legacy.revision == canonical.revision && legacy_time > canonical_time)
+                {
+                    Ok(Some(legacy))
+                } else {
+                    Ok(Some(canonical))
+                }
+            }
+        }
     }
 
     fn validate_bindings(bindings: &[PersonaBinding]) -> Result<(), AirpError> {
@@ -1388,6 +1417,36 @@ mod tests {
         let persisted: Persona = serde_json::from_slice(&fs::read(canonical).unwrap()).unwrap();
         assert_eq!(persisted.revision, 0);
         assert_eq!(persisted.name, "Before");
+    }
+
+    #[test]
+    fn persona_default_uses_newer_legacy_revision_and_resynchronizes_on_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let canonical = service
+            .save_default(&uid, 0, Persona::initial("Canonical"))
+            .unwrap();
+        assert_eq!(canonical.revision, 1);
+
+        let legacy_path = crate::data_dir::user_persona_path(tmp.path(), &uid);
+        let mut legacy = Persona::initial("Legacy edit");
+        legacy.revision = 2;
+        fs::write(&legacy_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let selected = service.get_default(&uid, "User").unwrap();
+        assert_eq!(selected.revision, 2);
+        assert_eq!(selected.name, "Legacy edit");
+        let saved = service.save_default(&uid, 2, selected).unwrap();
+        assert_eq!(saved.revision, 3);
+        let canonical_path =
+            crate::data_dir::user_persona_multi_path(tmp.path(), &uid, "default").unwrap();
+        let canonical_after: Persona =
+            serde_json::from_slice(&fs::read(canonical_path).unwrap()).unwrap();
+        let legacy_after: Persona =
+            serde_json::from_slice(&fs::read(legacy_path).unwrap()).unwrap();
+        assert_eq!(canonical_after.revision, 3);
+        assert_eq!(legacy_after.revision, 3);
     }
 
     #[test]
