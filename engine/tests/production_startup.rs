@@ -45,9 +45,11 @@ fn output_with_timeout(command: &mut Command) -> Output {
 #[test]
 fn production_daemon_exits_before_serving_when_access_key_is_missing() {
     let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("production-startup-test-config.json");
     let output = output_with_timeout(&mut production_command(tmp.path(), tmp.path()));
     assert!(!output.status.success());
     assert!(stderr(&output).contains("AIRP_ACCESS_KEY is required"));
+    assert!(!config.exists());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Gateway running"));
 }
 
@@ -55,6 +57,7 @@ fn production_daemon_exits_before_serving_when_access_key_is_missing() {
 fn production_daemon_exits_before_creating_a_missing_data_root() {
     let tmp = tempfile::tempdir().unwrap();
     let data_root = tmp.path().join("must-already-exist");
+    let config = tmp.path().join("production-startup-test-config.json");
     let mut command = production_command(tmp.path(), &data_root);
     command.env(
         "AIRP_ACCESS_KEY",
@@ -64,12 +67,14 @@ fn production_daemon_exits_before_creating_a_missing_data_root() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("must already exist"));
     assert!(!data_root.exists());
+    assert!(!config.exists());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Gateway running"));
 }
 
 #[test]
 fn production_daemon_rejects_local_path_import_before_serving() {
     let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("production-startup-test-config.json");
     let mut command = production_command(tmp.path(), tmp.path());
     command
         .env(
@@ -80,6 +85,25 @@ fn production_daemon_rejects_local_path_import_before_serving() {
     let output = output_with_timeout(&mut command);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("AIRP_ALLOW_LOCAL_PATH is forbidden"));
+    assert!(!config.exists());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Gateway running"));
+}
+
+#[test]
+fn production_daemon_rejects_invalid_origin_before_config_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("production-startup-test-config.json");
+    let mut command = production_command(tmp.path(), tmp.path());
+    command
+        .env(
+            "AIRP_ACCESS_KEY",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .env("AIRP_PUBLIC_ORIGIN", "http://airp.example.com");
+    let output = output_with_timeout(&mut command);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("canonical HTTPS origin"));
+    assert!(!config.exists());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Gateway running"));
 }
 

@@ -25,7 +25,7 @@ The first supported WebUI deployment is specified by [WEBUI-PRODUCTION-ARCHITECT
 
 - Caddy authenticates the user at the perimeter and replaces the incoming `Authorization` header with the server-held engine bearer for `/v1/*`, `/health` and `/version`.
 - The browser never receives `AIRP_ACCESS_KEY`, provider credentials or the engine address. Static files are behind the same perimeter authentication.
-- `AIRP_DEPLOYMENT_MODE=production` fails before listen unless `AIRP_ACCESS_KEY` is exactly 32 bytes encoded as canonical unpadded base64url, `AIRP_PUBLIC_ORIGIN` is one canonical HTTPS origin, and `AIRP_DATA_DIR` is absolute, existing, writable and not a filesystem root. It rejects `AIRP_ALLOW_LOCAL_PATH` and runtime engine-bearer replacement.
+- `AIRP_DEPLOYMENT_MODE=production` validates its environment-only policy before loading or creating persisted config, and fails before listen unless `AIRP_ACCESS_KEY` is exactly 32 bytes encoded as canonical unpadded base64url, `AIRP_PUBLIC_ORIGIN` is one canonical HTTPS origin, and `AIRP_DATA_DIR` is absolute, existing, writable and not a filesystem root. It rejects `AIRP_ALLOW_LOCAL_PATH` and runtime engine-bearer replacement.
 - Production WebUI imports upload JSON/PNG content only. `card_path`, host/UNC paths, file URLs and arbitrary remote fetches are outside this trust boundary even for authenticated callers.
 - The private engine keeps its own bearer, validation, body limits, path guards and outbound redirect policy. Gateway controls do not replace engine controls.
 
