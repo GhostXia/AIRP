@@ -27,6 +27,7 @@ assert.doesNotMatch(gatewayImage, /mock-provider|smoke\.mjs|serve\.js|start\.bat
 assert.doesNotMatch(smokeCompose, /^\s+ports:/m, 'smoke override must not publish engine ports');
 assert.match(smokeCompose, /airp-smoke-data-\$\{AIRP_SMOKE_ID/);
 assert.match(smokeScript, /AIRP_ENDPOINT=https:\/\/host\.docker\.internal/);
+assert.match(smokeScript, /chmod 0644 "\$mock_root"/);
 assert.doesNotMatch(smokeScript, /curl[^\n]*(?:-k|--insecure)/);
 
 assert.match(caddy, /basic_auth/);

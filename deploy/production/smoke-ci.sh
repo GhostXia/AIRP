@@ -42,6 +42,9 @@ openssl x509 -req -days 1 -sha256 \
   -in "$deploy/certs/mock-provider.csr" \
   -CA "$mock_root" -CAkey "$deploy/certs/mock-root.key" -CAcreateserial \
   -extfile "$deploy/certs/mock-provider.ext" -out "$mock_cert" >/dev/null 2>&1
+# The engine runs as uid 65532 and must be able to read only the public CA certificate.
+# Private CA/provider keys retain the restrictive umask.
+chmod 0644 "$mock_root"
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$deploy/secrets/engine_access_key"
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$deploy/secrets/provider_api_key"
 docker run --rm --entrypoint caddy airp-gateway:0.1.0 \

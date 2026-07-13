@@ -208,9 +208,13 @@ await waitFor(ENGINE + '/health', { name: 'engine' });
 // 判据 2：provider 通过真实 /v1/models 验证
 {
   const m = await api('GET', '/v1/models');
+  const models = Array.isArray(m.data?.data) ? m.data.data : [];
+  if (!m.ok) {
+    console.error(`  models proxy diagnostic: status=${m.status} code=${m.data?.error?.code || 'unknown'}`);
+  }
   ok(m.ok, '/v1/models 200');
-  ok(Array.isArray(m.data?.data) && m.data.data.length >= 1, '/v1/models 返回 model 列表');
-  ok(m.data?.data.some((x) => x.id === 'airp-mock-1'), 'model 列表含 airp-mock-1');
+  ok(models.length >= 1, '/v1/models 返回 model 列表');
+  ok(models.some((x) => x.id === 'airp-mock-1'), 'model 列表含 airp-mock-1');
 }
 
 // 判据 3：导入并选择角色（用 card_json fallback；smoke 是可信本地进程，但守 RR-001 不走 card_path）
