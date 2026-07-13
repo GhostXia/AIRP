@@ -202,6 +202,8 @@ pub(super) async fn update_persona_endpoint(
     Json(payload): Json<UpdatePersonaRequest>,
 ) -> Result<Json<Persona>, AirpError> {
     let uid = UserId::new(user_id)?;
+    let service = PersonaService::new(&state.data_root);
+    let current = service.get_default(&uid, "User")?;
     let persona = Persona {
         schema: Persona::SCHEMA,
         revision: 0, // save 内会 bump；payload 的 revision 不信，用 expected_revision 校验
@@ -209,14 +211,12 @@ pub(super) async fn update_persona_endpoint(
         name: payload.name,
         description: payload.description,
         variables: payload.variables,
-        id: "default".to_string(),
-        bindings: Vec::new(),
+        id: current.id,
+        // The legacy endpoint does not own schema-v2 binding fields. Preserve
+        // them so editing a name or description cannot silently unbind chats.
+        bindings: current.bindings,
     };
-    let saved = PersonaService::new(&state.data_root).save_default(
-        &uid,
-        payload.expected_revision,
-        persona,
-    )?;
+    let saved = service.save_default(&uid, payload.expected_revision, persona)?;
     Ok(Json(saved))
 }
 

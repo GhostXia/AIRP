@@ -452,6 +452,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_persona_update_preserves_schema_v2_bindings() {
+        let state = make_state_with_key(None);
+        let uid = crate::types::UserId::new("alice").unwrap();
+        let service = crate::domain::PersonaService::new(&state.data_root);
+        let saved = service
+            .save_default(
+                &uid,
+                0,
+                crate::domain::Persona {
+                    schema: crate::domain::Persona::SCHEMA,
+                    revision: 0,
+                    updated_at: String::new(),
+                    name: "Old".to_string(),
+                    description: String::new(),
+                    variables: std::collections::HashMap::new(),
+                    id: "default".to_string(),
+                    bindings: vec![crate::domain::PersonaBinding {
+                        character_id: "char-a".to_string(),
+                        session_id: None,
+                    }],
+                },
+            )
+            .unwrap();
+
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/users/alice/persona")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": saved.revision,
+                            "name": "New",
+                            "description": "updated",
+                            "variables": {}
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let updated: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated.name, "New");
+        assert_eq!(updated.bindings.len(), 1);
+        assert_eq!(updated.bindings[0].character_id, "char-a");
+    }
+
+    #[tokio::test]
     async fn cors_allows_bundled_webui_origin() {
         let app = create_router(make_state_with_key(None));
         let response = app
