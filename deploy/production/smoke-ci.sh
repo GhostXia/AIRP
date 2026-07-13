@@ -19,6 +19,7 @@ mock_key="$deploy/certs/mock-provider.key"
 mock_cert="$deploy/certs/mock-provider.crt"
 trust_bundle="$deploy/smoke-trust.pem"
 gateway_leaf="$deploy/smoke-gateway-leaf.crt"
+webui_asset="$deploy/smoke-app.js"
 compose="docker compose --env-file $deploy/.env -f $deploy/compose.yaml -f $deploy/smoke-compose.yaml"
 
 cleanup() {
@@ -86,14 +87,11 @@ $compose cp "gateway:$gateway_leaf_path" "$gateway_leaf" >/dev/null
 chrome_spki=$(openssl x509 -in "$gateway_leaf" -pubkey -noout \
   | openssl pkey -pubin -outform der \
   | openssl dgst -sha256 -binary \
-  | base64 -w 0)
+  | openssl base64 -A)
 [ -n "$chrome_spki" ]
-sudo install -m 0644 "$root_ca" /usr/local/share/ca-certificates/airp-smoke.crt
-sudo install -m 0644 "$mock_root" /usr/local/share/ca-certificates/airp-smoke-mock.crt
-sudo update-ca-certificates >/dev/null
 cat "$root_ca" "$mock_root" > "$trust_bundle"
 
-auth_header="Basic $(printf '%s' "$admin_user:$admin_password" | base64 -w 0)"
+auth_header="Basic $(printf '%s' "$admin_user:$admin_password" | openssl base64 -A)"
 curl_tls="curl --silent --show-error --cacert $root_ca"
 
 anonymous_status=$($curl_tls --output /dev/null --write-out '%{http_code}' "$origin/")
@@ -174,23 +172,24 @@ $compose logs --no-color > "$deploy/topology-smoke.log"
 engine_key=$(cat "$deploy/secrets/engine_access_key")
 provider_key=$(cat "$deploy/secrets/provider_api_key")
 admin_hash=$(cat "$deploy/secrets/admin_password_hash")
-basic_value=$(printf '%s' "$admin_user:$admin_password" | base64 -w 0)
-for forbidden in "$engine_key" "$provider_key" "$admin_hash" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work'; do
+basic_value=$(printf '%s' "$admin_user:$admin_password" | openssl base64 -A)
+for forbidden in "$engine_key" "$provider_key" "$admin_hash" "$admin_user" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work'; do
   if grep -F -- "$forbidden" "$deploy/topology-smoke.log" >/dev/null; then
     echo "secret or private path leaked to runtime logs" >&2
     exit 1
   fi
 done
 for image in airp-engine:0.1.0 airp-gateway:0.1.0; do
-  for secret in "$engine_key" "$provider_key"; do
-    if docker image inspect "$image" | grep -F -- "$secret" >/dev/null; then
+  for forbidden in "$engine_key" "$provider_key" "$admin_hash" "$admin_user" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work'; do
+    if docker image inspect "$image" | grep -F -- "$forbidden" >/dev/null; then
       echo "runtime secret leaked to image metadata" >&2
       exit 1
     fi
   done
 done
-for secret in "$engine_key" "$provider_key"; do
-  if $curl_tls --user "$admin_user:$admin_password" "$origin/app.js" | grep -F -- "$secret" >/dev/null; then
+$curl_tls --user "$admin_user:$admin_password" --fail "$origin/app.js" > "$webui_asset"
+for forbidden in "$engine_key" "$provider_key" "$admin_hash" "$admin_user" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work'; do
+  if grep -F -- "$forbidden" "$webui_asset" >/dev/null; then
     echo "runtime secret leaked to WebUI asset" >&2
     exit 1
   fi

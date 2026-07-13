@@ -30,6 +30,8 @@ assert.match(smokeScript, /AIRP_ENDPOINT=https:\/\/host\.docker\.internal/);
 assert.match(smokeScript, /chmod 0644 "\$mock_root"/);
 assert.match(smokeScript, /AIRP_CHROME_SPKI="\$chrome_spki"/);
 assert.doesNotMatch(read('../../ui/production-browser-smoke.mjs'), /ignoreHTTPSErrors:\s*true/);
+assert.doesNotMatch(smokeScript, /base64 -w/);
+assert.doesNotMatch(smokeScript, /\bsudo\b/);
 assert.doesNotMatch(smokeScript, /curl[^\n]*(?:-k|--insecure)/);
 
 assert.match(caddy, /basic_auth/);
