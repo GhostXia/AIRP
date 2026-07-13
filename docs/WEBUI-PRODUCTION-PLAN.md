@@ -79,12 +79,12 @@ Browser
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
 - Persona/Preset/Worldbook 管理与有效配置合同未闭合；#114/#115/#126 仍是 RP 首发主链。
-- 缺备份/恢复、数据迁移发布纪律、soft-delete/回收站、生产日志和运行手册。
+- 缺备份/恢复、数据迁移发布纪律、soft-delete/回收站、完整 production observability contract 和运行手册；当前 Caddy access log/filter 只是 P0 局部实现，仍需在 P2 决定是否保留及其用途、字段、输出和保留策略。
 - engine-truth smoke 与 production system-Chrome smoke 已并行进入 CI；浏览器兼容矩阵、升级恢复与完整发布安全门禁仍不足。
 
 ## 4. 推进顺序
 
-### Phase P0：生产地基与威胁边界
+### Phase P0：生产地基与威胁边界（已完成）
 
 1. 按 [P0 架构与威胁边界](WEBUI-PRODUCTION-ARCHITECTURE.md) 实现同源反代拓扑、生产配置合同和首方部署形式；
 2. 禁止公网直连 engine，增加 `AIRP_DEPLOYMENT_MODE=production` 的启动前 fail-closed 校验并强制 access key；
@@ -92,7 +92,7 @@ Browser
 4. 增加安全 headers、body/cache policy、secret/logging 约束；
 5. 建立 production smoke：HTTPS 入口 → perimeter auth → private engine 负向验证 → health → provider → 三轮聊天 → 刷新/重启恢复。
 
-退出条件：全新环境按文档一次部署成功，浏览器不需要知道 engine 私有地址或 bearer。
+退出条件已由 PR #132/#133/#135/#136 和 GitHub run `29249333920` 满足：一次性环境可启动真实 HTTPS/Compose 拓扑，浏览器不需要知道 engine 私有地址或 bearer。P0 的局部 access-log filtering 不等于 P2 结构化可观测性已经完成。
 
 ### Phase P1：RP 正式使用面
 

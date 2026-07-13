@@ -2,7 +2,7 @@
 
 > 基线日期：2026-07-13
 >
-> 起始 Git 基线：`main` / `c91ccc9`（PR #135 已合并）；本文同时记录当前 production topology smoke 实现切片
+> Git 基线：`main` / `6046327`（PR #136 已合并）
 >
 > 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
 
@@ -38,11 +38,14 @@
 
 ## 4. 当前开放风险/issue 分组
 
-- RP Profile/诊断：#114、#115、#116、#117；#114 已有基础 Preset 与多 Persona 存储地基，但多 Persona HTTP/WebUI 生命周期和完整绑定闭环仍未交付。
+- Production umbrella：#130（P0 已完成，P1-P3 仍开放）。
+- RP Profile/诊断：#114、#115、#116、#117、#126；#114 已有基础 Preset 与多 Persona 存储地基，但多 Persona HTTP/WebUI 生命周期、完整绑定闭环与 worldbook constant/shared normalization 仍未交付。
 - Session/长期使用：#35、#37、#122；durable ID、cursor 与 WebUI window 已完成，剩余是 branch/swipe/edit、per-user/长期记忆和产品 UI 性能。
+- WebUI/design：#105。
 - Agent/extension：#32、#87。
 - Desktop：#29、#98。
-- Process/docs：#69、#70、#99、#104、#113。
+- Process/docs：#69、#70、#99、#104、#113、#128。
+- Security/dependencies：#137（Vite/Vitest 开发工具链 audit 告警；不在 production runtime image 内，但需在 P1 期间升级验证）。
 
 ## 5. 最近验证证据
 
@@ -70,7 +73,7 @@ PR #132（production-mode fail-closed）：
 - `cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 通过；
 - `agent::tests::subagent_context_has_no_orchestrator_noise` 单独精确运行：1 passed。
 
-当前 production topology smoke 切片（本分支）：
+PR #136（production topology P0）：
 
 - `deploy/production/verify-config.mjs`：通过，断言 engine 无 host port、私有 backend、secret file mounts、固定 image digest、Caddy auth/header replacement/body cap/CSP/log redaction；
 - Caddy v2.11.4 本地官方二进制：`public`、`internal` 配置 `validate` 通过，`files` 配置 `adapt` 通过（本机未配置真实 PEM，故未做证书加载）；
@@ -78,7 +81,8 @@ PR #132（production-mode fail-closed）：
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` 与 fmt 通过；神圣不变式 `agent::tests::subagent_context_has_no_orchestrator_noise` 精确运行 1 passed；
 - `node webui/smoke.mjs`：67 checks / 0 failures，除三轮 SSE、持久化、history/cursor、rollback/regen 与 session 隔离外，新增三轮响应均经多个 read batch 增量到达的断言；
 - `npm run typecheck` 与 `npm run test -- --run`：13 files / 98 tests passed；deployment/browser JS、POSIX shell 静态/语法检查通过；
-- GitHub `Production topology` gate 在 Ubuntu 上构建真实 images、启动 Compose/Caddy internal-TLS 拓扑并执行 HTTPS/auth/private-engine/headers/CSP/body-limit/content-import/SSE/restart/browser/secret-scan 全链路；该 gate 全绿是本切片合并前置条件。
+- GitHub run `29249333920`：`Production topology` 3m17s、`Rust workspace` 7m14s、`UI and WebUI` 17s、CodeRabbit 全绿；拓扑内 WebUI smoke 为 64 checks / 0 failures，system-Chrome 与最终 secret/private-path scan 通过。
+- 2026-07-13 独立复杂度审计的初步结论：Caddy 作为可替换的边缘进程有明确职责；可疑的提前复杂度是 P0 主动启用 access logging，继而需要 field filter。当前配置未在本轮文档校准中改动，P2 可观测性阶段应在“删除 access log”与“补全用途/字段/输出/保留合同”之间作显式选择，见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md#41-independent-complexity-audit-2026-07-13)。
 
 数字是 2026-07-13 的证据快照，不是永久质量承诺；修改后必须重新运行相关验证。
 

@@ -129,11 +129,12 @@ Caddy configuration before startup:
   connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';
   form-action 'self'`, plus `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
   `X-Frame-Options: DENY` and a restrictive `Permissions-Policy`.
-- The executable slice must first replace **every** dynamic inline-style write with
-  CSP-compatible state/classes: currently the two `document.body.style.userSelect` assignments
-  and the one `workbenchPanel.style.width` assignment. Until all three are removed and a
-  real-browser CSP pass exists, the gateway configuration is not production-ready; silently
-  weakening `style-src` with `unsafe-inline` is not the accepted fix.
+- Dynamic inline-style writes are outside the production CSP contract. Commit `7866dbf` replaced
+  the two `document.body.style.userSelect` assignments with a CSS class and replaced
+  `workbenchPanel.style.width` with bounded `data-width` states. The system-Chrome smoke listens
+  for `securitypolicyviolation`, asserts an empty violation list and has passed through the
+  production gateway. Future UI changes must preserve that test; weakening `style-src` with
+  `unsafe-inline` is not an accepted fix.
 - HSTS is emitted only by the HTTPS production site. The first slice uses `Cache-Control:
   no-store` for API responses and unversioned WebUI assets to prevent mixed-version UI state;
   immutable caching waits for content-hashed assets.
@@ -145,13 +146,44 @@ Caddy configuration before startup:
   early client disconnect. The smoke must assert incremental delivery and cancellation.
 - Access logs omit request/response bodies and the complete query string. The Caddy `log`
   formatter must filter `request>uri` with the regexp `\?.*$` → empty string, and explicitly
-  delete `request>headers>Authorization`, `request>headers>Proxy-Authorization`,
+  delete `user_id`, `request>headers>Authorization`, `request>headers>Proxy-Authorization`,
   `request>headers>Cookie` and `response>headers>Set-Cookie` even though Caddy redacts common
-  credential headers by default. Runtime logs have a documented retention/size bound before
-  P3; `log_credentials` must never be enabled.
+  credential headers by default. Runtime/access logging must receive an explicit retention/size
+  contract in P2; `log_credentials` must never be enabled.
 
 The gateway is a security boundary, but not the only one. Engine bearer validation, endpoint
 body limits, typed validation, outbound redirect policy and path guards remain mandatory.
+
+### 4.1 Independent complexity audit (2026-07-13)
+
+This audit does not treat the merged P0 design as an unquestionable premise. Its current
+disposition is:
+
+- **Keep the edge-process boundary.** TLS termination, static WebUI serving, same-origin API
+  routing, browser-facing authentication, security headers and replacement of the browser's
+  credentials with the server-held engine bearer are real production responsibilities. Removing
+  Caddy would move those responsibilities into the RP engine or replace Caddy with another edge
+  proxy; it would not remove them. Caddy remains replaceable infrastructure, not a third AIRP
+  domain service and not a revival of the historical AIRP-Gateway product boundary.
+- **Reconsider site access logging.** Caddy's site-level `log` directive is optional request
+  logging and is separate from Caddy runtime logs. It is not required for TLS, authentication,
+  static files or reverse proxying. The initial deployment artifact enabled it in commit
+  `7866dbf`, including the filter for queries and credential-bearing headers. Commit `c968580`
+  only added `user_id delete` after the topology leak gate proved that successful Basic auth
+  placed the administrator username in the access record.
+- **Preliminary finding: localized but premature complexity.** The filter is appropriate only
+  while access logging is enabled; it is not independently useful. Enabling access logs in P0
+  pulled part of the P2 observability problem forward before AIRP had specified the operator use
+  case, stable field set, output destination and retention contract. Compose currently bounds
+  container logs, but that does not complete the P2 observability design.
+- **Smallest follow-up decision.** At P2, choose explicitly between (a) removing the whole
+  site-level access-log block and retaining only runtime/startup logs, or (b) keeping access logs
+  and completing a bounded, documented operator contract. Do not retain the filter merely
+  because the smoke test scans it. Until that decision is implemented, every field filter in the
+  current block remains required because the access log is still enabled.
+
+This calibration is documentation-only; it deliberately does not change the merged gateway
+configuration. The unresolved choice belongs to the P2 redacted-observability gate.
 
 ## 5. Remote import policy
 
