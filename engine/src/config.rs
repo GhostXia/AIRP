@@ -147,6 +147,16 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Validate process-level daemon policy before loading or creating any
+    /// persisted configuration. Production deployment mode, public origin,
+    /// access key and data-root policy are environment-only, so this preflight
+    /// can fail without mutating application state.
+    pub fn validate_daemon_environment_before_io(data_root: &Path) -> Result<(), String> {
+        let mut environment = Self::default();
+        environment.override_with_env()?;
+        environment.validate_daemon_startup(data_root)
+    }
+
     /// 从指定路径的 JSON 配置文件中加载配置。
     /// 如果文件不存在，则写入默认配置并返回。
     pub fn load_or_create<P: AsRef<Path>>(path: P) -> Result<Self, String> {

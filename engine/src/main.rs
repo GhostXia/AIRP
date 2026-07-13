@@ -87,8 +87,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    layer 2b = `data/settings.json`（用户层，覆盖上一层非空字段）
     //    layer 3 = 环境变量
     //    layer 4 = HTTP 请求 body（在 chat_pipeline::prepare_pipeline 里处理）
-    let mut app_config = AppConfig::load_or_create(&cli.config)?;
     let data_root = airp_core::data_dir::resolve_data_root();
+    if matches!(&cli.command, Commands::Daemon { .. }) {
+        AppConfig::validate_daemon_environment_before_io(&data_root)?;
+    }
+    let mut app_config = AppConfig::load_or_create(&cli.config)?;
     app_config.merge_data_settings(&data_root)?;
     app_config.override_with_env()?;
     // M0 F-12 / 5.0b：全部合并完成后 fast-fail 校验跨字段不变量
