@@ -129,11 +129,12 @@ Caddy configuration before startup:
   connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';
   form-action 'self'`, plus `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
   `X-Frame-Options: DENY` and a restrictive `Permissions-Policy`.
-- The executable slice must first replace **every** dynamic inline-style write with
-  CSP-compatible state/classes: currently the two `document.body.style.userSelect` assignments
-  and the one `workbenchPanel.style.width` assignment. Until all three are removed and a
-  real-browser CSP pass exists, the gateway configuration is not production-ready; silently
-  weakening `style-src` with `unsafe-inline` is not the accepted fix.
+- Dynamic inline-style writes are outside the production CSP contract. Commit `7866dbf` replaced
+  the two `document.body.style.userSelect` assignments with a CSS class and replaced
+  `workbenchPanel.style.width` with bounded `data-width` states. The system-Chrome smoke listens
+  for `securitypolicyviolation`, asserts an empty violation list and has passed through the
+  production gateway. Future UI changes must preserve that test; weakening `style-src` with
+  `unsafe-inline` is not an accepted fix.
 - HSTS is emitted only by the HTTPS production site. The first slice uses `Cache-Control:
   no-store` for API responses and unversioned WebUI assets to prevent mixed-version UI state;
   immutable caching waits for content-hashed assets.
@@ -145,7 +146,7 @@ Caddy configuration before startup:
   early client disconnect. The smoke must assert incremental delivery and cancellation.
 - Access logs omit request/response bodies and the complete query string. The Caddy `log`
   formatter must filter `request>uri` with the regexp `\?.*$` → empty string, and explicitly
-  delete `request>headers>Authorization`, `request>headers>Proxy-Authorization`,
+  delete `user_id`, `request>headers>Authorization`, `request>headers>Proxy-Authorization`,
   `request>headers>Cookie` and `response>headers>Set-Cookie` even though Caddy redacts common
   credential headers by default. Runtime/access logging must receive an explicit retention/size
   contract in P2; `log_credentials` must never be enabled.
