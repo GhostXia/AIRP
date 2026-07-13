@@ -18,6 +18,7 @@ mock_root="$deploy/certs/mock-root.crt"
 mock_key="$deploy/certs/mock-provider.key"
 mock_cert="$deploy/certs/mock-provider.crt"
 trust_bundle="$deploy/smoke-trust.pem"
+gateway_leaf="$deploy/smoke-gateway-leaf.crt"
 compose="docker compose --env-file $deploy/.env -f $deploy/compose.yaml -f $deploy/smoke-compose.yaml"
 
 cleanup() {
@@ -79,6 +80,14 @@ for _ in $(seq 1 60); do
 done
 $compose exec -T gateway test -s /data/caddy/pki/authorities/local/root.crt
 $compose cp gateway:/data/caddy/pki/authorities/local/root.crt "$root_ca" >/dev/null
+gateway_leaf_path=$($compose exec -T gateway sh -c "find /data/caddy/certificates/local -type f -name '*.crt' | head -n 1" | tr -d '\r')
+[ -n "$gateway_leaf_path" ]
+$compose cp "gateway:$gateway_leaf_path" "$gateway_leaf" >/dev/null
+chrome_spki=$(openssl x509 -in "$gateway_leaf" -pubkey -noout \
+  | openssl pkey -pubin -outform der \
+  | openssl dgst -sha256 -binary \
+  | base64 -w 0)
+[ -n "$chrome_spki" ]
 sudo install -m 0644 "$root_ca" /usr/local/share/ca-certificates/airp-smoke.crt
 sudo install -m 0644 "$mock_root" /usr/local/share/ca-certificates/airp-smoke-mock.crt
 sudo update-ca-certificates >/dev/null
@@ -156,6 +165,7 @@ AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
 AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
 AIRP_SMOKE_RESULT_FILE="$result_file" \
+AIRP_CHROME_SPKI="$chrome_spki" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-smoke.mjs"
 

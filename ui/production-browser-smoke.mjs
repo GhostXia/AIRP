@@ -7,13 +7,20 @@ const username = process.env.AIRP_SMOKE_ADMIN_USER;
 const password = process.env.AIRP_SMOKE_ADMIN_PASSWORD;
 const resultFile = process.env.AIRP_SMOKE_RESULT_FILE;
 const executablePath = process.env.AIRP_CHROME_PATH || '/usr/bin/google-chrome';
+const chromeSpki = process.env.AIRP_CHROME_SPKI;
 
-for (const [name, value] of Object.entries({ origin, username, password, resultFile })) {
+for (const [name, value] of Object.entries({ origin, username, password, resultFile, chromeSpki })) {
   assert.ok(value, `${name} is required`);
 }
+assert.match(chromeSpki, /^[A-Za-z0-9+/]{43}=$/, 'chromeSpki must be one SHA-256 hash');
 
 const persisted = JSON.parse(readFileSync(resultFile, 'utf8'));
-const browser = await chromium.launch({ headless: true, executablePath });
+const browser = await chromium.launch({
+  headless: true,
+  executablePath,
+  // Trust only the disposable Caddy leaf key; never disable TLS verification globally.
+  args: [`--ignore-certificate-errors-spki-list=${chromeSpki}`],
+});
 try {
   const context = await browser.newContext({
     httpCredentials: { username, password },

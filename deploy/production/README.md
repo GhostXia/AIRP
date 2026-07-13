@@ -65,7 +65,8 @@ them with `latest`.
 `smoke-ci.sh` plus `smoke-compose.yaml` are CI-only acceptance assets, not operator startup
 commands. They create unique disposable data/Caddy volumes and a synthetic HTTPS provider, then
 prove HTTPS perimeter auth, host-inaccessible engine, headers/CSP/body limits, content-only card
-import, three incremental SSE turns, restart persistence, system-Chrome injection/stream-cancel
+import, three incremental SSE turns, restart persistence, exact ephemeral-certificate SPKI trust,
+system-Chrome injection/stream-cancel
 behavior and absence of synthetic secrets/private runner paths in logs, image metadata and WebUI
 assets. Cleanup deletes only the uniquely named smoke volumes.
 
