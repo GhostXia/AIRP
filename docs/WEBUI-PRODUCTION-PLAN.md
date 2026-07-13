@@ -134,7 +134,7 @@ Browser
 ## 6. 下一批可执行工作
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
-2. P0 架构/威胁模型已由 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 锁定，仍不计为运行能力；
-3. 下一项是 engine production-mode fail-closed 校验，再接首方 OCI/Compose + Caddy 同源入口与 production smoke；
+2. P0 架构/威胁模型已由 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 锁定；engine production-mode fail-closed 与不可热更 production bearer 已进入首个实现切片，但不等于部署已上线；
+3. 下一项是首方 OCI/Compose + Caddy 同源入口、operator secret bootstrap 与 production smoke；
 4. 然后按 #114/#115/#126 完成 RP 使用面，不再先做 #117/#87/#116；
 5. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

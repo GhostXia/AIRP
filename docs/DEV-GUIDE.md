@@ -9,17 +9,17 @@
 
 1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 与 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，不要重复 PR #118/#119/#121/#123/#124/#125/#127 已完成的实现与验收；
 2. 当前目标是 WebUI 单实例、自托管、单用户正式上线；每项能力纵向贯通 engine shared service → HTTP/SSE → WebUI → production tests；
-3. 当前顺序为 production P0 → #114/#115/#126 RP 使用面 → 数据恢复/运维 → release candidate；P0 先按 [架构合同](WEBUI-PRODUCTION-ARCHITECTURE.md) 实现 engine production-mode fail-closed，再交付同源部署 slice 与 smoke；#117/#87/#116 后移；
+3. 当前顺序为 production P0 → #114/#115/#126 RP 使用面 → 数据恢复/运维 → release candidate；engine production-mode fail-closed 已进入当前切片，下一步交付首方 OCI/Compose + Caddy 同源部署与 smoke；#117/#87/#116 后移；
 4. 每个 PR 只修其范围内问题并同步文档；审计非阻塞遗留项在合并后写 issue；
-5. 保持 `node webui/smoke.mjs` 的 engine 真相断言与真实浏览器验收，并新增生产拓扑、认证负向、升级/恢复门禁；Tauri #98/#29 不再阻塞 WebUI 首发。
+5. 保持 `node webui/smoke.mjs` 的 engine 真相断言与真实浏览器验收，并新增生产拓扑、认证负向、升级/恢复门禁；桌面 #98/#29/#122 保留但开发计划暂停。
 
-本顺序来自 2026-07-13 的用户目标校准与源码/部署审计。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
+本顺序来自 2026-07-13 的用户目标校准与源码/部署审计。下文旧 Phase/Task，尤其 Tauri 详细设计、打包和 Perf Spike，保留为设计背景，不是当前待办。
 
 ---
 
 ## 0. 一句话与铁律（先读，任何时候不许破）
 
-**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI。当前正式产品交付主面是 WebUI；Tauri/Vue 保留为后续桌面客户端。
+**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI。当前正式产品交付主面是 WebUI；Tauri/Vue 资产保留，开发计划暂停。
 
 **代码取向（用户 2026-07-03 定）**：代码必须更开放、更透明、在未来更易修正、且更易迭代更新。落地判据：接口和扩展点清晰开放；状态、决策、错误和验收结果可观察；模块边界低耦合、可替换；协议/数据结构版本化，允许小步迁移而不是一次性重写。
 
@@ -268,7 +268,7 @@ WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#12
 5. 建立 release gates：真实浏览器主路径、安全负向、旧数据升级、备份恢复、长会话 soak、artifact 与回滚演练。
 6. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review 后移，不得抢占正式上线主链。
 7. 每项都通过 engine shared service → HTTP/SSE → WebUI → production tests 纵向交付；保持自动 PR gate、零密钥 smoke 和神圣不变式全绿。
-8. #37/#122 已交付部分不得重复开发；branch/swipe/edit 需为首发明确取舍。桌面 #98/#29 保留，但不再阻塞 WebUI 首发。
+8. #37 已交付部分不得重复开发；branch/swipe/edit 需为首发明确取舍。桌面 #98/#29/#122 保留追踪，但 UI 开发、打包与 Perf Spike 暂停。
 
 Agent UI Test Harness 最小用法：
 

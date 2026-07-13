@@ -1,6 +1,6 @@
 # WebUI production architecture and threat boundary
 
-> Status: accepted P0 implementation contract; **not yet a shipped deployment**
+> Status: accepted P0 implementation contract; engine fail-closed validation slice implemented; **not yet a shipped deployment**
 >
 > Decision date: 2026-07-13
 >
@@ -229,7 +229,7 @@ This is a P0 topology smoke, not yet the P2 backup/restore or P3 release-candida
 
 ## 9. Follow-up implementation slices
 
-1. Engine production-mode validation and immutable production bearer tests.
+1. Engine production-mode validation and immutable production bearer tests. **Implemented in the first P0 execution slice.**
 2. First-party engine/WebUI images, pinned Compose/Caddy configuration and operator secret
    bootstrap.
 3. Production topology smoke covering the evidence table above.

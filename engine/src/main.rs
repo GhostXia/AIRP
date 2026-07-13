@@ -85,11 +85,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    layer 4 = HTTP 请求 body（在 chat_pipeline::prepare_pipeline 里处理）
     let mut app_config = AppConfig::load_or_create(&cli.config)?;
     let data_root = airp_core::data_dir::resolve_data_root();
-    airp_core::data_dir::ensure_data_dirs(&data_root)?;
     app_config.merge_data_settings(&data_root)?;
-    app_config.override_with_env();
+    app_config.override_with_env()?;
     // M0 F-12 / 5.0b：全部合并完成后 fast-fail 校验跨字段不变量
     app_config.validate()?;
+    if matches!(&cli.command, Commands::Daemon { .. }) {
+        app_config.validate_daemon_startup(&data_root)?;
+    }
+    airp_core::data_dir::ensure_data_dirs(&data_root)?;
     tracing::info!(
         endpoint = %app_config.endpoint,
         model = %app_config.model,
@@ -121,6 +124,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     access_api_key: app_config.access_api_key,
                     engine: app_config.engine,
                     quota: app_config.quota,
+                    deployment_mode: app_config.deployment_mode,
+                    public_origin: app_config.public_origin,
                 }),
             });
 
@@ -194,6 +199,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     access_api_key: None, // Run 命令不涉及 HTTP 鉴权
                     engine: app_config.engine,
                     quota: app_config.quota,
+                    deployment_mode: app_config.deployment_mode,
+                    public_origin: app_config.public_origin,
                 }),
             });
 

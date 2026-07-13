@@ -83,6 +83,8 @@ mod tests {
                 access_api_key: None,
                 engine: BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         })
     }
@@ -491,6 +493,8 @@ mod tests_ms6 {
                 access_api_key: None,
                 engine: BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         })
     }
@@ -633,6 +637,8 @@ mod tests_issue27 {
                 access_api_key: None,
                 engine: BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         })
     }
@@ -782,6 +788,8 @@ mod tests_dx1 {
                 access_api_key: None,
                 engine: BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         })
     }

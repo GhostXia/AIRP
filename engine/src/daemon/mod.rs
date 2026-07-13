@@ -10,7 +10,7 @@ pub use types::{
 };
 
 use crate::adapter::{BackendEngine, Provider};
-use crate::config::VolumeConfig;
+use crate::config::{DeploymentMode, VolumeConfig};
 use axum::{
     extract::{ConnectInfo, DefaultBodyLimit},
     handler::Handler,
@@ -71,6 +71,12 @@ pub struct MutableConfig {
     /// DX-3：每日配额限制。
     #[serde(default)]
     pub quota: crate::quota::QuotaConfig,
+    /// Process-level policy; immutable through /v1/settings.
+    #[serde(default)]
+    pub deployment_mode: DeploymentMode,
+    /// Production public origin; immutable through /v1/settings.
+    #[serde(default)]
+    pub public_origin: Option<String>,
 }
 
 /// `GET /v1/settings` 返回值：api_key 脱敏为 `Some("***")` / `None`。
@@ -92,6 +98,8 @@ pub struct SettingsView {
     /// 数据落盘根目录真值（`AIRP_DATA_DIR` 或默认 `./data/`，由 `resolve_data_root` 定）。
     /// 审计 PR #100：暴露让调用方稳定寻产物，逼外部硬编路径是可观察性缺口。
     pub data_root: PathBuf,
+    pub deployment_mode: DeploymentMode,
+    pub public_origin: Option<String>,
 }
 
 impl SettingsView {
@@ -106,6 +114,8 @@ impl SettingsView {
             quota: cfg.quota.clone(),
             access_api_key_set: cfg.access_api_key.as_deref().is_some_and(|s| !s.is_empty()),
             data_root: data_root.to_path_buf(),
+            deployment_mode: cfg.deployment_mode,
+            public_origin: cfg.public_origin.clone(),
         }
     }
 }
@@ -192,7 +202,7 @@ const RATE_LIMIT_BURST: u32 = 20;
 
 /// 构造 axum Router：注册所有 `/v1/*` 端点、CORS 中间件、限流中间件。
 pub fn create_router(state: Arc<DaemonState>) -> Router {
-    let cors = cors_layer();
+    let cors = cors_layer(&state);
 
     // A2-7: rate limiting previously protected only /v1/chat/completions,
     // leaving import / sync / scene / mcp endpoints unthrottled. Build ONE
@@ -317,9 +327,14 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .with_state(state)
 }
 
-fn cors_layer() -> CorsLayer {
+fn cors_layer(state: &DaemonState) -> CorsLayer {
     let configured = std::env::var("AIRP_CORS_ORIGINS").ok();
-    let origins = allowed_cors_origins(configured.as_deref());
+    let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+    let origins = allowed_cors_origins(
+        cfg.deployment_mode,
+        cfg.public_origin.as_deref(),
+        configured.as_deref(),
+    );
 
     CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
@@ -327,7 +342,18 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(AllowOrigin::list(origins))
 }
 
-fn allowed_cors_origins(configured: Option<&str>) -> Vec<HeaderValue> {
+fn allowed_cors_origins(
+    deployment_mode: DeploymentMode,
+    public_origin: Option<&str>,
+    configured: Option<&str>,
+) -> Vec<HeaderValue> {
+    if deployment_mode == DeploymentMode::Production {
+        return public_origin
+            .and_then(|origin| origin.parse().ok())
+            .into_iter()
+            .collect();
+    }
+
     const DEFAULT_ORIGINS: &[&str] = &[
         "http://127.0.0.1:9001",
         "http://localhost:9001",
@@ -437,6 +463,8 @@ mod tests {
                 access_api_key: key.map(|s| s.to_string()),
                 engine: crate::adapter::BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         })
     }
@@ -575,9 +603,11 @@ mod tests {
 
     #[test]
     fn configured_cors_origins_extend_built_in_defaults() {
-        let origins = super::allowed_cors_origins(Some(
-            "https://example.test, https://example.test, invalid origin",
-        ));
+        let origins = super::allowed_cors_origins(
+            crate::config::DeploymentMode::Development,
+            None,
+            Some("https://example.test, https://example.test, invalid origin"),
+        );
         assert!(origins.contains(&HeaderValue::from_static("http://127.0.0.1:9001")));
         assert!(origins.contains(&HeaderValue::from_static("https://example.test")));
         assert_eq!(
@@ -586,6 +616,19 @@ mod tests {
                 .filter(|origin| *origin == "https://example.test")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn production_cors_uses_only_the_public_origin() {
+        let origins = super::allowed_cors_origins(
+            crate::config::DeploymentMode::Production,
+            Some("https://airp.example.com"),
+            Some("https://operator-added.example,http://127.0.0.1:9001"),
+        );
+        assert_eq!(
+            origins,
+            vec![HeaderValue::from_static("https://airp.example.com")]
         );
     }
 
@@ -696,6 +739,8 @@ mod tests {
                 access_api_key: None,
                 engine: crate::adapter::BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         });
         (state, tmp)
@@ -1079,6 +1124,8 @@ mod tests {
                 access_api_key: None,
                 engine: crate::adapter::BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         });
         let app = create_router(state);
@@ -1132,6 +1179,8 @@ mod tests {
                 access_api_key: None,
                 engine: crate::adapter::BackendEngine::default(),
                 quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
             }),
         });
         let app = create_router(state);
@@ -1228,6 +1277,42 @@ mod tests {
         assert!(persisted.get("api_key").is_none());
         assert!(persisted.get("access_api_key").is_none());
         assert_eq!(persisted["model"], "runtime-model");
+    }
+
+    #[tokio::test]
+    async fn production_settings_rejects_access_key_replacement_without_partial_update() {
+        let state = make_state_with_key(Some("old-production-key"));
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.deployment_mode = crate::config::DeploymentMode::Production;
+            cfg.public_origin = Some("https://airp.example.com".to_string());
+        }
+        let response = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/settings")
+                    .header(header::AUTHORIZATION, "Bearer old-production-key")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "access_api_key": "replacement-key",
+                            "model": "must-not-change"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let runtime = state.config.read().unwrap();
+        assert_eq!(
+            runtime.access_api_key.as_deref(),
+            Some("old-production-key")
+        );
+        assert_ne!(runtime.model, "must-not-change");
+        assert!(!state.data_root.join("settings.json").exists());
     }
 
     // ── A6: chat/history 支持 session_id 字段 ──────────────────────────────
