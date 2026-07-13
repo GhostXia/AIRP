@@ -92,6 +92,9 @@ try {
   assert.equal(await page.locator('img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);
 
+  // Initial UI hydration and the injection fixture share the engine's burst bucket.
+  // Let it refill so this assertion measures stream cancellation rather than rate limiting.
+  await page.waitForTimeout(4_000);
   const cancellation = await page.evaluate(async ({ characterId, sessionId }) => {
     const controller = new AbortController();
     const startedAt = performance.now();
