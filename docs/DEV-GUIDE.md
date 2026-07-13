@@ -1,25 +1,25 @@
 # AIRP 开发文档（交接给实现 Agent）
 
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
-> **配套文档（按顺序）**：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)（当前事实与下一步）· [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)（当前验收合同）· [PLAN.md](PLAN.md)（长期原则）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
+> **配套文档（按顺序）**：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)（当前事实）· [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)（当前执行与上线合同）· [PLAN.md](PLAN.md)（长期原则）· [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)（历史基础验收）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
 > 最后更新：2026-07-13
 
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
-1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，不要重复 PR #118/#119/#121/#123/#124/#125 已完成的实现与验收；
-2. 当前以 WebUI 为后端能力孵化、合同验证和基础 RP 使用主开发面；每项能力纵向贯通 engine shared service → HTTP/SSE → WebUI → tests；
-3. durable history/WebUI window 已由 PR #124/#125 完成；当前按 Persona/Preset 与 trace #114/#115 → ChangeInbox #117 → Agent-first 工作台 #87 → Style Review #116 推进；#37/#122 只保留 branch/swipe/edit 与产品 UI 性能剩余项；
+1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 与 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，不要重复 PR #118/#119/#121/#123/#124/#125/#127 已完成的实现与验收；
+2. 当前目标是 WebUI 单实例、自托管、单用户正式上线；每项能力纵向贯通 engine shared service → HTTP/SSE → WebUI → production tests；
+3. 当前顺序为 production P0 → #114/#115/#126 RP 使用面 → 数据恢复/运维 → release candidate；#117/#87/#116 后移；
 4. 每个 PR 只修其范围内问题并同步文档；审计非阻塞遗留项在合并后写 issue；
-5. 保持 `node webui/smoke.mjs` 的 64 项 engine 真相断言与真实浏览器验收；Tauri/Vue 仍是长期产品面，#98/#29 作为阶段性 release gate。
+5. 保持 `node webui/smoke.mjs` 的 engine 真相断言与真实浏览器验收，并新增生产拓扑、认证负向、升级/恢复门禁；Tauri #98/#29 不再阻塞 WebUI 首发。
 
-本顺序来自 2026-07-12 对当前源码与全部开放 issue 的复核。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
+本顺序来自 2026-07-13 的用户目标校准与源码/部署审计。下文旧 Phase/Task 细节保留为设计背景，不能再单独作为当前待办。
 
 ---
 
 ## 0. 一句话与铁律（先读，任何时候不许破）
 
-**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI（长期产品 UI = Tauri/Vue 桌面端；WebUI = 当前轻量浏览器 RP 客户端兼可靠性验证面），专精 RP。
+**我们做的是"专精 Role Play 的 AI Agent 框架"**：一个无头 Agent 引擎（Claude Code/Codex 级能力：bounded loop + 工具 + MCP + 记忆 + 技能 + 子agent + 扩展钩子）+ 一个可换 UI。当前正式产品交付主面是 WebUI；Tauri/Vue 保留为后续桌面客户端。
 
 **代码取向（用户 2026-07-03 定）**：代码必须更开放、更透明、在未来更易修正、且更易迭代更新。落地判据：接口和扩展点清晰开放；状态、决策、错误和验收结果可观察；模块边界低耦合、可替换；协议/数据结构版本化，允许小步迁移而不是一次性重写。
 
@@ -39,10 +39,10 @@
 
 **编排策略边界（2026-07-12）**：AIRP 可以提供单 Agent、规划者/执行者、独立候选仲裁、流水线等参考 profile，但不得把其中任何一个固化为唯一方案。用户可自定义角色、模型/provider、任务图、并发、validator、升级和人工节点；engine 必须统一强制 capability、预算、取消、trace、单写者仲裁与角色平面纯净度。实施规范见 [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)。
 
-**🎯 产品首要目标（用户 2026-07-03 定）**：**开发出可执行文件并能简单运行。** 当前执行策略由用户于 2026-07-12 校准为先围绕 WebUI 稳定后端能力与合同，再集中接入桌面端；因此本节是产品交付门槛，不再覆盖本文开头的近期开发顺序。
+**🎯 当前产品首要目标（用户 2026-07-13 定）**：**WebUI 能够正式上线使用。** “开发出可运行闭环”的旧阶段目标已经完成；现在必须达到可安全部署、可持续日用、可升级、可备份恢复和可复核发布。
 
-- 这条仍是产品交付的最终硬门槛，但不再压过当前 WebUI/后端增补顺序；任何阶段准备对外发布时，都必须回到可双击产物与最简对话闭环验收。
-- "简单运行"判据：用户拿到产物 → 双击/启动 → 选角色 → 发一条消息 → 收到流式回复。这一条不过，其余 Task 1.3/1.4/1.5、Perf Spike、扩展生态都属空谈——不可运行的代码对用户价值为零。
+- 正式上线判据只认 [WEBUI-PRODUCTION-PLAN.md §2](WEBUI-PRODUCTION-PLAN.md)：生产部署、安全、RP 使用闭环、数据恢复与发布质量缺一不可。
+- 本地“简单运行”仍是最低层 smoke，但不能替代 HTTPS 同源拓扑、强制鉴权、升级恢复和真实浏览器验收。
 - 已知阻塞项（动手前先核对，别重做）：
   - `ui/build-tauri.ps1` 已在 2026-07-03 审计 follow-up 修复；优先用它产出桌面 artifact，或用 `npm run tauri dev` 做开发态验收。
   - Tauri bundler 缓存需留 D 盘（PR #5 已加 `bundle.useLocalToolsDir`，守 AGENTS.md 工具链不下 C 盘）。
@@ -139,7 +139,7 @@ D:\AIRP-Dev/
 
 - 无头网络服务：Core daemon 已有（axum + `/v1/*` + 鉴权 `AIRP_ACCESS_KEY` + 限流 10req/s）。**web 就绪的关键：引擎是独立 service，不嵌 Tauri**（Tauri 把引擎当 sidecar 打包）。
 - **UI↔引擎线协议**：倾向**复用 State-Protocol Envelope**（`protocol` 已有 Rust/TS 绑定，UI 已配套）。引擎实现 AgentBus 面：上行 `POST /airp/dispatch`(Envelope) + 下行 `GET /airp/stream`(SSE)，或 Tauri IPC。**注意：intent `chat.send` 要路由到引擎的推理 loop（生成），不是路由到某个 MCP 数据工具**——这是原 agentbus demo 的缺口，必须重定。
-- **WebUI 当前定位（2026-07-11 更新）**：WebUI 是最快形成基础 RP 闭环的轻量浏览器客户端，同时继续验证 engine 的 API/SSE/鉴权/数据读写/并发/错误恢复；它不替代桌面 UI 产品路线，稳定合同仍需回灌 Tauri UI。
+- **WebUI 当前定位（2026-07-13 更新）**：WebUI 是正式产品交付主面，目标为单实例、自托管、单用户上线；它继续验证 engine 的 API/SSE/鉴权/数据读写/并发/错误恢复，稳定合同保持客户端无关并可供后续 Tauri 使用。
 - 安全默认：daemon 仅监听 loopback，CORS 使用 WebUI/Tauri 精确白名单；默认仍无 bearer 鉴权。自定义浏览器来源需配置 `AIRP_CORS_ORIGINS`，任何对外暴露都必须设 `AIRP_ACCESS_KEY` 并遵循 [SECURITY.md](SECURITY.md)。
 
 ### 3.4 数据目录布局（沿用 Core）
@@ -252,7 +252,7 @@ data/
 
 ### 下一步开发接手清单（2026-07-13 校准）
 
-WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#124/#125 完成。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留验收合同与历史记录，不再提供当前任务排序。
+WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#124/#125 完成，PR #127 已建立多 Persona 存储地基。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留历史验收合同；当前唯一执行入口是 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，目标为单实例、自托管、单用户 WebUI 正式上线。
 
 1. 先设置 D 盘工具链环境：
    ```powershell
@@ -262,12 +262,13 @@ WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#12
    $env:npm_config_cache = "D:\npm-global\npm-cache"
    $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
    ```
-2. 当前实施 #114/#115：先把 preset 文件写入收敛为 shared `PresetService`，补 raw sidecar、migration report、dry-run、revision/conflict；再扩多 Persona 与绑定。
-3. 在 shared RP Profile 上补 `PromptAssemblyTrace`，让有效 persona/preset/provider/model、来源、revision、大小与截断可观察。
-4. 再实施 #117 revisioned ChangeInbox，使 Agent 建议经 preview/diff/accept/reject 和冲突检测进入确定性写路径。
-5. 让 #87 Agent-first 工作台消费已稳定的 trace/change/tool/state 合同；#116 Style Review 最后接入建议层。
-6. 每项都通过 WebUI 完成真实用户闭环，并断言 engine 返回、持久化、错误与并发事实；保持自动 PR gate、零密钥 smoke 和神圣不变式全绿。
-7. #37/#122 的 durable ID、cursor、WebUI window 不得重复开发；剩余 branch/swipe/edit、Tauri 虚拟化与 10k/100k 性能另行验收。桌面 #98/#29 不删除、不伪装完成。
+2. 先实施 production P0：同源 HTTPS 入口、私有 engine、强制生产 access key、remote import policy、首方部署产物与 production smoke。不得把 `serve.js`/`start.bat`/`cargo run` 宣称为生产部署。
+3. 再按 #114/#115/#126 闭合 RP 正式使用面：shared PresetService、raw sidecar、migration report、dry-run/revision、多 Persona API/UI/绑定、PromptAssemblyTrace 摘要和 constant worldbook 语义。
+4. 补版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志和运维 runbook；升级失败必须保留可恢复数据。
+5. 建立 release gates：真实浏览器主路径、安全负向、旧数据升级、备份恢复、长会话 soak、artifact 与回滚演练。
+6. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review 后移，不得抢占正式上线主链。
+7. 每项都通过 engine shared service → HTTP/SSE → WebUI → production tests 纵向交付；保持自动 PR gate、零密钥 smoke 和神圣不变式全绿。
+8. #37/#122 已交付部分不得重复开发；branch/swipe/edit 需为首发明确取舍。桌面 #98/#29 保留，但不再阻塞 WebUI 首发。
 
 Agent UI Test Harness 最小用法：
 
@@ -302,7 +303,7 @@ window.__AIRP_AGENT_TEST__.getSnapshot()
 ### Phase 3+ · 酒馆功能补齐 + 扩展态
 - Author's Note/Character's Note/Instruct Mode/Connection Profiles/群聊调度；slash 命令+脚本+Quick Replies；消息格式化管线。
 - 扩展态（走扩展接口，不进内核）：TTS/STT/图像生成/翻译/Web搜索/立绘/Data Bank-RAG。
-- **WebUI 边界**：当前作为后端能力孵化和合同验证主开发面；保持协议与 shared service 客户端无关，不让 WebUI 的具体 DOM/交互结构反向固化桌面 UI 架构。
+- **WebUI 边界**：当前是正式产品交付主面；仍须保持协议与 shared service 客户端无关，不让 WebUI 的具体 DOM/交互结构反向固化 engine 或其他客户端架构。
 
 ---
 
