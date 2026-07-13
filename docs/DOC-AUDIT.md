@@ -2,7 +2,7 @@
 
 > 最后更新：2026-07-13
 
-2026-07-13 已在 PR #124/#125 合并后重新核对源码、开放 issues、仓库 Markdown 与验证结果。[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是实时事实入口；dated audits 保留历史价值，不提供当前任务排序。
+2026-07-13 已在 PR #136 合并后重新核对源码、开放 issues、仓库 Markdown、P0 deployment artifact 与 GitHub run `29249333920`。[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是实时事实入口；dated audits 保留历史价值，不提供当前任务排序。
 
 ## 权威顺序
 
@@ -20,15 +20,16 @@
 - 模型可见的大文本使用 UTF-8 安全上限，`AIRP_MAX_READ_BYTES` 默认 32 KiB。
 - `apply_lorebook`、`merge_lorebooks`、`seal_volume`、`export_context_bundle` 已注册；替换和封卷继续受 destructive confirm 保护。
 - context bundle 固定写入 data root，稳定材料在易变 state 之前，并明确供 fresh isolated subagent 使用。产物措辞测试不替代独立的 no-orchestrator-noise 不变式。
-- WebUI 已接通 Persona/Preset/session lifecycle；PR #123 完成基础零密钥验收，PR #124/#125 完成 durable history backend/WebUI 接线。当前 engine-truth harness 为 64/64，并有 50/54 → 54/54、滚动保持和键盘 rollback target 的真实浏览器证据。
-- 2026-07-12 用户校准：WebUI 是当前后端能力孵化、合同验证与基础 RP 使用主开发面；Tauri/Vue 保持长期产品交付面，桌面 artifact/sidecar 验收作为阶段性 release gate。
+- WebUI 已接通 Persona/Preset/session lifecycle；当前 engine-truth smoke 为 67/67。PR #136 的 disposable production topology 另跑 64/64，并通过 HTTPS/Compose/system-Chrome、重启持久化和 secret/private-path scan。
+- 2026-07-13 用户校准：WebUI 是当前正式产品交付主面；Tauri/Vue 资产保留，但桌面开发、artifact 验收与性能计划暂停，不属于近期 release gate。
+- Production P0 已完成；当前开发入口是 #114/#115/#126。Caddy 边缘职责成立，但主动启用 access logging 是否属于提前复杂化已进入独立审计，结论与未决项集中写在 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md#41-independent-complexity-audit-2026-07-13)。
 
 ## 文档类型与本轮全量审计处置
 
 | 类型 | 文件范围 | 使用规则 / 处置 |
 |---|---|---|
 | 当前入口 | 根、`engine/`、`protocol/`、`ui/`、`webui/`、`data/` README，`AGENTS.md` | 已检查；受本轮影响的工具数、验证与数据路径已同步。`AGENTS.md` 保持为操作政策。 |
-| 当前架构/运维 | `PLAN.md`、`DEV-GUIDE.md`、`SECURITY.md`、`RISK-REGISTER.md`、`SOURCE-PROJECT-DECISIONS.md`、`UI-PROTOCOL-DECISION.md`、`ASSET-SPEC.md` | 已检查；同步受影响的 Agent/data 边界，无关协议和资产合同保持不变。 |
+| 当前架构/运维 | `PLAN.md`、`WEBUI-PRODUCTION-PLAN.md`、`WEBUI-PRODUCTION-ARCHITECTURE.md`、`DEV-GUIDE.md`、`SECURITY.md`、`RISK-REGISTER.md`、`SOURCE-PROJECT-DECISIONS.md`、`UI-PROTOCOL-DECISION.md`、`ASSET-SPEC.md` | 已检查；production docs 分别承担 release gates 与 P0 topology/复杂度审计，不把局部实现升级为正式发布事实。 |
 | Agent 编排策略 | `AGENT-ORCHESTRATION.md` | 当前为待实现规范；参考 profile 不等于已交付 runtime，用户自定义也不能突破 capability、预算、审计和纯净度边界。 |
 | 能力候选 | `PARTS.md`、`MCP-SERVER-ABSORPTION.md`、`TAVERN-PARITY.md`、`HERMES-*`、`LEARN-*`、extension/widget 文档 | 已检查；仍是候选资产/路线，不等于本仓 capability inventory；受影响条目已同步。 |
 | WebUI 计划/验证 | `WEBUI-BACKEND-*`、`WEBUI-ANALYSIS-AND-OPTIMIZATION.md`、`WEBUI-REDESIGN-BACKEND-REQUIREMENTS.md`、smoke evidence | 已检查；dated plans 保留历史状态，当前行为以 `webui/README.md` 为准。 |
@@ -46,4 +47,4 @@
 
 ## 当前近期计划入口（2026-07-13）
 
-[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留已完成的验收合同；当前从 #114/#115 的 shared RP Profile、migration report 与 trace 开始推进。
+[CURRENT-BASELINE.md](CURRENT-BASELINE.md) 是新 session 的唯一实时入口。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留已完成的验收合同；production P0 已完成，当前从 #114/#115/#126 的 shared RP Profile、migration report、trace 与 worldbook semantics 开始推进。
