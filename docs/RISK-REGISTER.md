@@ -69,7 +69,7 @@
 
 ## RR-009 · Production gateway/engine authority confusion
 
-- **Status**: Design accepted in the P0 architecture; implementation and production smoke remain open under #130.
+- **Status**: P0 gateway/engine controls and production topology smoke implemented under #130; P1-P3 product and release gates remain open.
 - **Surface**: A same-origin WebUI gateway authenticates a browser and calls the private engine with `AIRP_ACCESS_KEY`.
 - **Risk**: Forwarding the browser's `Authorization` header, exposing the engine bearer to JavaScript, allowing runtime bearer replacement, or publishing the engine port could bypass or desynchronize the intended two-layer boundary.
 - **Planned control**: The gateway authenticates the whole site, replaces (never appends) `Authorization` for explicit engine routes, and holds the engine bearer server-side. The engine has no published port; production mode requires a strong key and exact HTTPS origin, rejects local-path import mode, and makes bearer rotation an operator restart action.

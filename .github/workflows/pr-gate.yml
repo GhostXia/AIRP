@@ -82,13 +82,24 @@ jobs:
           node deploy/production/verify-config.mjs
 
   production-images:
-    name: Production images
+    name: Production topology
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install browser smoke dependency
+        working-directory: ui
+        run: npm ci
 
       - name: Create synthetic deployment inputs
         working-directory: deploy/production
@@ -130,3 +141,6 @@ jobs:
             -e AIRP_TLS_KEY_FILE=/run/airp-tls/privkey.pem \
             --entrypoint caddy airp-gateway:0.1.0 \
             adapt --config /etc/caddy/Caddyfile.files --adapter caddyfile > /dev/null
+
+      - name: Production HTTPS topology smoke
+        run: bash deploy/production/smoke-ci.sh

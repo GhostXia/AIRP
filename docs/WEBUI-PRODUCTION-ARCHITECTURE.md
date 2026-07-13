@@ -1,6 +1,6 @@
 # WebUI production architecture and threat boundary
 
-> Status: accepted P0 implementation contract; engine fail-closed and deployment-artifact slices implemented; **production topology smoke still open**
+> Status: accepted P0 implementation contract; engine fail-closed, deployment artifact and production topology smoke implemented
 >
 > Decision date: 2026-07-13
 >
@@ -232,11 +232,12 @@ This is a P0 topology smoke, not yet the P2 backup/restore or P3 release-candida
 1. Engine production-mode validation and immutable production bearer tests. **Implemented in the first P0 execution slice.**
 2. First-party engine/WebUI images, pinned Compose/Caddy configuration and operator secret
    bootstrap. **Implemented in `deploy/production/`; CI image/config validation is required on every PR.**
-3. Production topology smoke covering the evidence table above.
+3. Production topology smoke covering the evidence table above. **Implemented by the `Production topology` PR gate with disposable data/Caddy volumes, a synthetic HTTPS provider and a real system-Chrome pass.**
 4. P1 RP management surface, followed by P2 recovery/operations and P3 release gates.
 
-Until slice 3 lands with evidence, repository documentation must continue to describe the
-production bundle as a P0 preview rather than a supported production deployment.
+P0 topology proof does not make the product a formal release. P1 RP management, P2
+backup/restore and migration, and P3 compatibility/provenance/release-candidate gates remain
+required by [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md).
 
 ## 10. Upstream verification basis
 

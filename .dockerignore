@@ -6,5 +6,10 @@ data
 ui/node_modules
 ui/dist
 deploy/production/secrets
+deploy/production/certs
 deploy/production/.env
+deploy/production/smoke-*
+deploy/production/*-smoke.log
+deploy/production/oversized.json
+deploy/production/card-path-response.json
 docs/smoke-evidence

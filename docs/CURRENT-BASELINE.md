@@ -2,7 +2,7 @@
 
 > 基线日期：2026-07-13
 >
-> 起始 Git 基线：`main` / `66745d7`（PR #132 已合并）；本文同时记录当前 production deployment 实现切片
+> 起始 Git 基线：`main` / `c91ccc9`（PR #135 已合并）；本文同时记录当前 production topology smoke 实现切片
 >
 > 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
 
@@ -14,7 +14,7 @@
 - WebUI 已完成 provider 配置、角色导入、单默认 Persona、Preset 选择/JSON 导入、session 生命周期、流式聊天、Agent Run、非敏感恢复，以及 50 条首屏窗口、加载更早、durable-ID DOM 复用和按消息回滚。
 - WebUI 已成为当前正式产品交付主面；近期目标从“基础验证面”升级为“可安全部署、可持续日用、可升级恢复的单实例自托管正式版”。生产边界与 release gates 见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
 - P0 生产拓扑、配置与威胁边界已经在 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 形成实现合同。engine production mode 在读取/创建 config 前 fail-closed 校验 deployment mode、32-byte base64url access key、canonical HTTPS public origin、绝对且已存在可写的数据目录，并拒绝 local-path import；production CORS 只接受 public origin，`POST /v1/settings` 不能单边替换 bearer。
-- 当前 deployment 切片新增 `deploy/production/`：digest-pinned engine/Caddy images、版本化 Compose、仅 gateway 发布端口的私有 engine 网络、Compose secret mounts、三种显式 TLS 模式、安全 headers、同源 WebUI runtime config 和 operator bootstrap。浏览器在 production mode 不再接收或存储 engine URL/bearer；engine 容器监听非 loopback 必须显式传 `--host 0.0.0.0`。
+- `deploy/production/` 已包含 digest-pinned engine/Caddy images、版本化 Compose、仅 gateway 发布端口的私有 engine 网络、Compose secret mounts、三种显式 TLS 模式、安全 headers、同源 WebUI runtime config 和 operator bootstrap。production topology CI 会从一次性 volume 启动真实 HTTPS 栈，执行 perimeter auth、私有 engine、CSP/headers、content-only import、SSE、浏览器注入/取消、重启持久化和 secret scan。浏览器在 production mode 不接收或存储 engine URL/bearer；engine 容器监听非 loopback 必须显式传 `--host 0.0.0.0`。
 - PR #127 已交付 schema v2 多 Persona 存储、revision、角色/会话绑定、legacy/default 协调和路径校验；现有 WebUI/HTTP 仍主要使用单 default Persona，不能宣称多 Persona 产品闭环完成。
 - Tauri/Vue UI 代码与既有能力继续保留，但自 2026-07-13 起桌面 UI 开发、打包验收和性能 spike 暂停，不属于近期里程碑；恢复时须重新校准基线。
 - Provider redirect 统一 fail-closed；development CORS 保留内建 WebUI/Tauri origins 并追加合法精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
@@ -26,16 +26,15 @@
 - WebUI 已窗口分页，但不是虚拟列表；Tauri/Vue 的 10k/100k 性能、内存上界和虚拟滚动验收仍未完成，属于暂停桌面计划的保留缺口。
 - #37 的 branch/swipe/edit、per-user isolation 和长期记忆仍开放；durable ID、cursor pagination 与 rollback-by-ID 已交付，不应再列为缺口。
 - 可配置多 Agent 编排尚未交付；[AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md) 是产品原则与待实现规范，不得把示例 profile 写成现有 runtime 能力。
-- 当前已有 engine 生产鉴权/配置强制校验和首方 OCI/Compose/Caddy artifact，但仍没有完成真实 production topology smoke、备份/恢复或升级回滚；在 smoke 与后续 release gates 全绿前仍只能称 P0 preview。`webui/start.bat`、`serve.js` 和 `cargo run` 只属于开发启动路径。
+- 当前已有 engine 生产鉴权/配置强制校验、首方 OCI/Compose/Caddy artifact 与真实 production topology CI；仍没有完成 RP 正式使用面、备份/恢复、升级回滚和 P3 发布门禁，因此仍不能称正式发布。`webui/start.bat`、`serve.js` 和 `cargo run` 只属于开发启动路径。
 
 ## 3. 下一阶段优先顺序
 
-1. WebUI production P0 下一切片：在已落地的 OCI/Compose + Caddy artifact 上完成真实 HTTPS topology smoke，包括 perimeter auth、私有 engine 负向、headers/CSP、content-only import、三轮 SSE、刷新/重启恢复和 secret scan；
-2. RP 正式使用面：完成 #114/#115/#126 的 Persona/Preset/Worldbook 管理、有效配置、迁移报告和 trace 摘要；
-3. 数据可靠性：版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志和运维 runbook；
-4. 发布候选：真实浏览器、安全负向、升级/恢复、长会话 soak 和发布 artifact 门禁；
-5. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review 后移到 WebUI 正式版主链之后；
-6. 桌面 #98/#29/#122 仅保留追踪，桌面 UI 开发计划暂时搁置，不参与近期排期。
+1. RP 正式使用面：完成 #114/#115/#126 的 Persona/Preset/Worldbook 管理、有效配置、迁移报告和 trace 摘要；
+2. 数据可靠性：版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志和运维 runbook；
+3. 发布候选：浏览器兼容、安全负向、升级/恢复、长会话 soak 和发布 artifact 门禁；
+4. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review 后移到 WebUI 正式版主链之后；
+5. 桌面 #98/#29/#122 仅保留追踪，桌面 UI 开发计划暂时搁置，不参与近期排期。
 
 ## 4. 当前开放风险/issue 分组
 
@@ -71,14 +70,15 @@ PR #132（production-mode fail-closed）：
 - `cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 通过；
 - `agent::tests::subagent_context_has_no_orchestrator_noise` 单独精确运行：1 passed。
 
-当前 production deployment 切片（本分支）：
+当前 production topology smoke 切片（本分支）：
 
 - `deploy/production/verify-config.mjs`：通过，断言 engine 无 host port、私有 backend、secret file mounts、固定 image digest、Caddy auth/header replacement/body cap/CSP/log redaction；
 - Caddy v2.11.4 本地官方二进制：`public`、`internal` 配置 `validate` 通过，`files` 配置 `adapt` 通过（本机未配置真实 PEM，故未做证书加载）；
 - `cargo test --workspace --locked`：engine lib 462 passed、1 ignored，workspace/integration/protocol/UI suites 全绿；production startup 5 passed（含失败前 config 不落盘与 development 非 loopback 拒绝），production cache policy 普通响应/SSE 分支均通过；
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` 与 fmt 通过；神圣不变式 `agent::tests::subagent_context_has_no_orchestrator_noise` 精确运行 1 passed；
-- `node webui/smoke.mjs`：64 checks / 0 failures，三轮 SSE、持久化、history/cursor、rollback/regen 与 session 隔离均通过；deployment JS、PowerShell、POSIX shell 静态/语法检查通过；
-- 当前机器没有 Docker runtime；实际 Linux image build、Compose render 与 Caddy container validation 由新增 `Production images` PR gate 执行，尚不能把未运行的 topology smoke 写成已验证事实。
+- `node webui/smoke.mjs`：67 checks / 0 failures，除三轮 SSE、持久化、history/cursor、rollback/regen 与 session 隔离外，新增三轮响应均经多个 read batch 增量到达的断言；
+- `npm run typecheck` 与 `npm run test -- --run`：13 files / 98 tests passed；deployment/browser JS、POSIX shell 静态/语法检查通过；
+- GitHub `Production topology` gate 在 Ubuntu 上构建真实 images、启动 Compose/Caddy internal-TLS 拓扑并执行 HTTPS/auth/private-engine/headers/CSP/body-limit/content-import/SSE/restart/browser/secret-scan 全链路；该 gate 全绿是本切片合并前置条件。
 
 数字是 2026-07-13 的证据快照，不是永久质量承诺；修改后必须重新运行相关验证。
 

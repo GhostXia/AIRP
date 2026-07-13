@@ -9,6 +9,8 @@ const compose = read('compose.yaml');
 const caddy = read('Caddyfile.common');
 const engineImage = read('Dockerfile.engine');
 const gatewayImage = read('Dockerfile.gateway');
+const smokeCompose = read('smoke-compose.yaml');
+const smokeScript = read('smoke-ci.sh');
 
 const engineBlock = compose.match(/^  engine:\s*$[\s\S]*?(?=^  [a-zA-Z0-9_-]+:\s*$|^secrets:)/m)?.[0];
 assert.ok(engineBlock, 'engine service block must exist');
@@ -22,6 +24,10 @@ assert.doesNotMatch(compose, /AIRP_ACCESS_KEY:\s*\$/);
 assert.doesNotMatch(compose, /latest/);
 assert.doesNotMatch(gatewayImage, /COPY webui \/srv/);
 assert.doesNotMatch(gatewayImage, /mock-provider|smoke\.mjs|serve\.js|start\.bat/);
+assert.doesNotMatch(smokeCompose, /^\s+ports:/m, 'smoke override must not publish engine ports');
+assert.match(smokeCompose, /airp-smoke-data-\$\{AIRP_SMOKE_ID/);
+assert.match(smokeScript, /AIRP_ENDPOINT=https:\/\/host\.docker\.internal/);
+assert.doesNotMatch(smokeScript, /curl[^\n]*(?:-k|--insecure)/);
 
 assert.match(caddy, /basic_auth/);
 assert.match(caddy, /header_up Authorization "Bearer \{\$AIRP_ACCESS_KEY\}"/);

@@ -9,7 +9,7 @@
 
 1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 与 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，不要重复 PR #118/#119/#121/#123/#124/#125/#127 已完成的实现与验收；
 2. 当前目标是 WebUI 单实例、自托管、单用户正式上线；每项能力纵向贯通 engine shared service → HTTP/SSE → WebUI → production tests；
-3. 当前顺序为 production P0 → #114/#115/#126 RP 使用面 → 数据恢复/运维 → release candidate；engine production-mode fail-closed 已进入当前切片，下一步交付首方 OCI/Compose + Caddy 同源部署与 smoke；#117/#87/#116 后移；
+3. 当前顺序为 #114/#115/#126 RP 使用面 → 数据恢复/运维 → release candidate；production P0 的 engine fail-closed、首方 OCI/Compose + Caddy 同源部署与真实 topology smoke 已实现；#117/#87/#116 后移；
 4. 每个 PR 只修其范围内问题并同步文档；审计非阻塞遗留项在合并后写 issue；
 5. 保持 `node webui/smoke.mjs` 的 engine 真相断言与真实浏览器验收，并新增生产拓扑、认证负向、升级/恢复门禁；桌面 #98/#29/#122 保留但开发计划暂停。
 

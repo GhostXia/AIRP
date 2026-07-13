@@ -1,0 +1,19 @@
+services:
+  engine:
+    environment:
+      SSL_CERT_FILE: /run/airp-mock-ca.crt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - type: bind
+        source: ./certs/mock-root.crt
+        target: /run/airp-mock-ca.crt
+        read_only: true
+
+volumes:
+  airp-data:
+    name: airp-smoke-data-${AIRP_SMOKE_ID:?set AIRP_SMOKE_ID}
+  caddy-data:
+    name: airp-smoke-caddy-data-${AIRP_SMOKE_ID:?set AIRP_SMOKE_ID}
+  caddy-config:
+    name: airp-smoke-caddy-config-${AIRP_SMOKE_ID:?set AIRP_SMOKE_ID}
