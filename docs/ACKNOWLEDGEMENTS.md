@@ -2,7 +2,7 @@
 
 > 状态：**待持续更新的活文档**
 >
-> 最后核验：2026-07-11
+> 最后核验：2026-07-13
 
 本文区分 AIRP 作者自己的前序项目、第三方设计参考，以及未来可能发生的第三方资产复用。新增研究对象、实际采用外部资产或上游许可证变化时，必须同步更新本文。
 
@@ -44,6 +44,14 @@
 5. 若只研究理念并独立实现，保留设计记录和独立实现证据，不复制受保护的表达或资产。
 
 实际第三方资产一旦进入仓库，应从本页的“设计参考”升级为明确的 provenance/notice 记录；不能继续只写“理念参考”。
+
+### 已批准、尚未进入发布产物的普通依赖
+
+| 组件 | 固定版本/核验日期 | 计划用途 | 许可证与 provenance | 当前状态 |
+|---|---|---|---|---|
+| [Caddy](https://github.com/caddyserver/caddy) / [Docker Official Image](https://hub.docker.com/_/caddy) | `2.11.4` / 2026-07-13 | WebUI 首方 OCI/Compose bundle 的 HTTPS、Basic perimeter auth、静态文件、安全 headers 与 reverse proxy | 上游 Caddy `v2.11.4` 为 Apache-2.0；执行 slice 还须固定镜像 digest，并为基础镜像/传递组件生成 notices/SBOM | [P0 架构](WEBUI-PRODUCTION-ARCHITECTURE.md)已批准选择；镜像、Compose 与分发仍未进入仓库 |
+
+AIRP 只配置并分发普通上游组件，不复制、翻译或改写其源码/文档。上表不把“计划采用”写成当前已交付能力；真正加入镜像后必须补 digest、构建 provenance 和机器可读 notices。
 
 ## 4. 维护待办
 

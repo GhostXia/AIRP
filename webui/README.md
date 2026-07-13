@@ -1,6 +1,6 @@
 # AIRP WebUI
 
-Browser-based AIRP client for RP use. The current implementation is a basically usable development build; the active target is a production-ready, single-instance self-hosted WebUI. Current baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); production gates: [docs/WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md); completed MVP contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
+Browser-based AIRP client for RP use. The current implementation is a basically usable development build; the active target is a production-ready, single-instance self-hosted WebUI. Current baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); production gates: [docs/WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md); accepted P0 architecture (not yet shipped): [docs/WEBUI-PRODUCTION-ARCHITECTURE.md](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md); completed MVP contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
 
 > `start.bat`, `serve.js`, `cargo run`, manually entered engine URLs and optional bearer tokens are development paths. They are not the supported production deployment. Do not expose port 8000 or this static development server directly to the public Internet.
 

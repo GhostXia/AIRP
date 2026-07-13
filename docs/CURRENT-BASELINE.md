@@ -2,7 +2,7 @@
 
 > 基线日期：2026-07-13
 >
-> Git 基线：`main` / `6b145dc`（PR #127 已合并）
+> Git 基线：`main` / `ca86901`（PR #129 已合并）
 >
 > 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
 
@@ -13,6 +13,7 @@
 - Chat history 已具备 session-scoped durable message ID、完整 JSONL 保留、`limit`/`before` cursor window、legacy deterministic ID 和 rollback-by-ID；旧 history/rollback 请求仍兼容。
 - WebUI 已完成 provider 配置、角色导入、单默认 Persona、Preset 选择/JSON 导入、session 生命周期、流式聊天、Agent Run、非敏感恢复，以及 50 条首屏窗口、加载更早、durable-ID DOM 复用和按消息回滚。
 - WebUI 已成为当前正式产品交付主面；近期目标从“基础验证面”升级为“可安全部署、可持续日用、可升级恢复的单实例自托管正式版”。生产边界与 release gates 见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
+- P0 生产拓扑、配置与威胁边界已经在 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 形成实现合同：首方 OCI/Compose bundle、Caddy 同源 HTTPS/perimeter auth、私有 engine 与 server-side bearer。该合同尚无可运行 artifact 或 production smoke，不能算已上线能力。
 - PR #127 已交付 schema v2 多 Persona 存储、revision、角色/会话绑定、legacy/default 协调和路径校验；现有 WebUI/HTTP 仍主要使用单 default Persona，不能宣称多 Persona 产品闭环完成。
 - Tauri/Vue UI 已通过 `TauriBus`/`BusRelay` 直连 engine，具有 id-keyed chat、Blueprint/widget、RFC6902 patch、guard、sandbox/consent 和 sidecar 生命周期基础。
 - Provider redirect 统一 fail-closed；CORS 使用内建 WebUI/Tauri origins，并只追加 `AIRP_CORS_ORIGINS` 的合法精确来源。
@@ -71,8 +72,9 @@ PR #127（multi Persona storage）：
 2. [DEV-GUIDE.md](DEV-GUIDE.md)：实现不变式、工具链和开发流程；
 3. [PLAN.md](PLAN.md)：长期产品原则与当前执行方向；
 4. [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)：当前正式上线目标、release gates 与推进顺序；
-5. [LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)：已交付的 durable history 合同与剩余性能边界；
-6. [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)：已完成的基础验收合同；
-7. [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：第一方源仓吸收边界；
-8. [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)：第三方理念参考与独立实现 provenance；
-9. dated audits/plans：只用于历史追溯，不作为当前状态。
+5. [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)：P0 生产拓扑、配置、鉴权和威胁边界；
+6. [LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)：已交付的 durable history 合同与剩余性能边界；
+7. [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)：已完成的基础验收合同；
+8. [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：第一方源仓吸收边界；
+9. [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)：第三方理念参考与独立实现 provenance；
+10. dated audits/plans：只用于历史追溯，不作为当前状态。
