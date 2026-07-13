@@ -3,6 +3,7 @@
 		format filter {
 			wrap json
 			fields {
+				user_id delete
 				request>uri replace `\?.*$` ``
 				request>headers>Authorization delete
 				request>headers>Proxy-Authorization delete

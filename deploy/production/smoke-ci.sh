@@ -173,24 +173,29 @@ engine_key=$(cat "$deploy/secrets/engine_access_key")
 provider_key=$(cat "$deploy/secrets/provider_api_key")
 admin_hash=$(cat "$deploy/secrets/admin_password_hash")
 basic_value=$(printf '%s' "$admin_user:$admin_password" | openssl base64 -A)
-for forbidden in "$engine_key" "$provider_key" "$admin_hash" "$admin_user" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work'; do
+forbidden_labels=('engine access key' 'provider API key' 'admin password hash' 'admin username' 'admin password' 'Basic authorization value' 'query marker' 'runner path')
+forbidden_values=("$engine_key" "$provider_key" "$admin_hash" "$admin_user" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work')
+for index in "${!forbidden_values[@]}"; do
+  forbidden=${forbidden_values[$index]}
   if grep -F -- "$forbidden" "$deploy/topology-smoke.log" >/dev/null; then
-    echo "secret or private path leaked to runtime logs" >&2
+    echo "secret or private path leaked to runtime logs (sentinel: ${forbidden_labels[$index]})" >&2
     exit 1
   fi
 done
 for image in airp-engine:0.1.0 airp-gateway:0.1.0; do
-  for forbidden in "$engine_key" "$provider_key" "$admin_hash" "$admin_user" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work'; do
+  for index in "${!forbidden_values[@]}"; do
+    forbidden=${forbidden_values[$index]}
     if docker image inspect "$image" | grep -F -- "$forbidden" >/dev/null; then
-      echo "runtime secret leaked to image metadata" >&2
+      echo "runtime secret leaked to image metadata (sentinel: ${forbidden_labels[$index]})" >&2
       exit 1
     fi
   done
 done
 $curl_tls --user "$admin_user:$admin_password" --fail "$origin/app.js" > "$webui_asset"
-for forbidden in "$engine_key" "$provider_key" "$admin_hash" "$admin_user" "$admin_password" "$basic_value" 'smoke_secret_query=marker' '/home/runner/work'; do
+for index in "${!forbidden_values[@]}"; do
+  forbidden=${forbidden_values[$index]}
   if grep -F -- "$forbidden" "$webui_asset" >/dev/null; then
-    echo "runtime secret leaked to WebUI asset" >&2
+    echo "runtime secret leaked to WebUI asset (sentinel: ${forbidden_labels[$index]})" >&2
     exit 1
   fi
 done

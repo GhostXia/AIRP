@@ -43,6 +43,7 @@ assert.match(caddy, /max_size 10MB/);
 assert.match(caddy, /Content-Security-Policy/);
 assert.match(caddy, /frame-ancestors 'none'/);
 assert.match(caddy, /request>headers>Authorization delete/);
+assert.match(caddy, /user_id delete/);
 assert.match(caddy, /response>headers>Set-Cookie delete/);
 assert.match(caddy, /handle \{\s*\n\s*header Cache-Control "no-store"/);
 assert.doesNotMatch(caddy, /unsafe-inline|unsafe-eval/);
