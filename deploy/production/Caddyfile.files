@@ -1,0 +1,6 @@
+import Caddyfile.common
+
+{$AIRP_PUBLIC_ORIGIN} {
+	tls {$AIRP_TLS_CERT_FILE} {$AIRP_TLS_KEY_FILE}
+	import airp_site
+}

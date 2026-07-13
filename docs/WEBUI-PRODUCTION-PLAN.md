@@ -70,12 +70,13 @@ Browser
 - 基础 WebUI RP 闭环、provider 设置、角色导入、默认 Persona、Preset 导入/选择、命名会话、SSE 聊天、Agent Run、诊断和错误恢复已存在。
 - durable message ID、cursor history、50 条窗口、增量 DOM、rollback-by-ID 已交付。
 - engine 已有 loopback 默认、精确 CORS、可选 bearer、限流、统一 outbound redirect policy、typed error 和 `/health`/`/version`。
+- `deploy/production/` 已有 digest-pinned OCI build、Compose/Caddy 同源 HTTPS 拓扑、私有 engine 网络、secret bootstrap 和 production WebUI runtime config；CI 会 build 镜像、展开 Compose 并验证 Caddy 配置。
 - PR #127 已建立 schema v2 多 Persona 存储、legacy/default 协调、revision、绑定与路径校验；WebUI/API 仍未形成完整多 Persona 生命周期。
 
 ### 尚缺的上线能力
 
-- 没有首方生产部署产物、同源反代/TLS 配置、生产配置入口、升级和回滚流程。
-- `webui/serve.js` 与 `start.bat` 是开发工具；当前 WebUI 仍要求用户手填 engine URL/bearer。
+- 首方部署 artifact 已落地，但尚缺真实 topology smoke、正式升级/回滚流程、SBOM/notices 与发布签名，因此仍是 P0 preview。
+- `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
 - Persona/Preset/Worldbook 管理与有效配置合同未闭合；#114/#115/#126 仍是 RP 首发主链。
 - 缺备份/恢复、数据迁移发布纪律、soft-delete/回收站、生产日志和运行手册。
@@ -134,7 +135,7 @@ Browser
 ## 6. 下一批可执行工作
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
-2. P0 架构/威胁模型已由 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 锁定；engine production-mode fail-closed 与不可热更 production bearer 已进入首个实现切片，但不等于部署已上线；
-3. 下一项是首方 OCI/Compose + Caddy 同源入口、operator secret bootstrap 与 production smoke；
+2. P0 架构/威胁模型已由 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 锁定；engine production-mode fail-closed 与 `deploy/production/` OCI/Compose/Caddy artifact 已进入实现，但不等于部署已上线；
+3. 下一项是在该 artifact 上完成真实 production topology smoke：HTTPS/perimeter auth、私有 engine 负向、headers/CSP、content upload、三轮 SSE、刷新/重启恢复与 secret scan；
 4. 然后按 #114/#115/#126 完成 RP 使用面，不再先做 #117/#87/#116；
 5. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

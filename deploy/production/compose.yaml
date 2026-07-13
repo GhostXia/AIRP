@@ -1,0 +1,91 @@
+name: airp
+
+services:
+  engine:
+    image: airp-engine:${AIRP_VERSION:?set AIRP_VERSION in .env}
+    build:
+      context: ../..
+      dockerfile: deploy/production/Dockerfile.engine
+    restart: unless-stopped
+    environment:
+      AIRP_DEPLOYMENT_MODE: production
+      AIRP_PUBLIC_ORIGIN: ${AIRP_PUBLIC_ORIGIN:?set AIRP_PUBLIC_ORIGIN in .env}
+      AIRP_DATA_DIR: /var/lib/airp
+      AIRP_ENDPOINT: ${AIRP_ENDPOINT:?set AIRP_ENDPOINT in .env}
+      AIRP_MODEL: ${AIRP_MODEL:?set AIRP_MODEL in .env}
+      AIRP_LOG: ${AIRP_LOG:-info}
+    secrets:
+      - engine_access_key
+      - provider_api_key
+    volumes:
+      - airp-data:/var/lib/airp
+    networks:
+      - backend
+      - provider-egress
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  gateway:
+    image: airp-gateway:${AIRP_VERSION:?set AIRP_VERSION in .env}
+    build:
+      context: ../..
+      dockerfile: deploy/production/Dockerfile.gateway
+    restart: unless-stopped
+    depends_on:
+      - engine
+    environment:
+      AIRP_PUBLIC_ORIGIN: ${AIRP_PUBLIC_ORIGIN:?set AIRP_PUBLIC_ORIGIN in .env}
+      AIRP_TLS_MODE: ${AIRP_TLS_MODE:?set AIRP_TLS_MODE in .env}
+      AIRP_TLS_CERT_FILE: ${AIRP_TLS_CERT_FILE:-}
+      AIRP_TLS_KEY_FILE: ${AIRP_TLS_KEY_FILE:-}
+      AIRP_ADMIN_USER: ${AIRP_ADMIN_USER:?set AIRP_ADMIN_USER in .env}
+    secrets:
+      - engine_access_key
+      - admin_password_hash
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+      - type: bind
+        source: ${AIRP_TLS_CERT_DIR:-./certs}
+        target: /run/airp-tls
+        read_only: true
+    networks:
+      - edge
+      - backend
+    ports:
+      - "${AIRP_HTTPS_PORT:-443}:${AIRP_HTTPS_PORT:-443}"
+      - "${AIRP_HTTP_PORT:-80}:80"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+secrets:
+  engine_access_key:
+    file: ./secrets/engine_access_key
+  provider_api_key:
+    file: ./secrets/provider_api_key
+  admin_password_hash:
+    file: ./secrets/admin_password_hash
+
+volumes:
+  airp-data:
+    name: airp-data
+  caddy-data:
+    name: airp-caddy-data
+  caddy-config:
+    name: airp-caddy-config
+
+networks:
+  edge:
+  backend:
+    internal: true
+  provider-egress:

@@ -45,13 +45,15 @@
 
 实际第三方资产一旦进入仓库，应从本页的“设计参考”升级为明确的 provenance/notice 记录；不能继续只写“理念参考”。
 
-### 已批准、尚未进入发布产物的普通依赖
+### 已批准并进入 P0 preview artifact 的普通依赖
 
 | 组件 | 固定版本/核验日期 | 计划用途 | 许可证与 provenance | 当前状态 |
 |---|---|---|---|---|
-| [Caddy](https://github.com/caddyserver/caddy) / [Docker Official Image](https://hub.docker.com/_/caddy) | `2.11.4` / 2026-07-13 | WebUI 首方 OCI/Compose bundle 的 HTTPS、Basic perimeter auth、静态文件、安全 headers 与 reverse proxy | 上游 Caddy `v2.11.4` 为 Apache-2.0；执行 slice 还须固定镜像 digest，并为基础镜像/传递组件生成 notices/SBOM | [P0 架构](WEBUI-PRODUCTION-ARCHITECTURE.md)已批准选择；镜像、Compose 与分发仍未进入仓库 |
+| [Caddy](https://github.com/caddyserver/caddy) / [Docker Official Image](https://hub.docker.com/_/caddy) | `2.11.4` / 2026-07-13 | WebUI 首方 OCI/Compose bundle 的 HTTPS、Basic perimeter auth、静态文件、安全 headers 与 reverse proxy | 上游 Caddy `v2.11.4` 为 Apache-2.0；官方 multi-platform image 固定为 `sha256:af5fdcd76f2db5e4e974ee92f96ee8c0fc3edb55bd4ba5032547cbf3f65e486d` | 已进入 `deploy/production/Dockerfile.gateway`；仍须在 P3 生成完整基础镜像/传递组件 notices 与 SBOM 后才能正式发布 |
+| [Debian](https://www.debian.org/) Docker Official Image | `bookworm-slim` / 2026-07-13 | `airp-core` runtime base 与 CA trust store | 官方 multi-platform image 固定为 `sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df`；各 Debian package 许可证须由最终 SBOM/notices 枚举 | 已进入 `deploy/production/Dockerfile.engine` runtime stage；正式发布 provenance 仍开放 |
+| [Rust](https://www.rust-lang.org/) Docker Official Image | `1.96.0-bookworm` / 2026-07-13 | 仅用于可重复构建 `airp-core` 的 builder stage，不进入 runtime image | 官方 multi-platform image 固定为 `sha256:5e2214abe154fe26e39f64488952e5c991eeed1d6d6da7cc8381ae83927f0cfc`；Rust toolchain 为 Apache-2.0 OR MIT | 已进入 `deploy/production/Dockerfile.engine` builder stage；不随 runtime 分发 |
 
-AIRP 只配置并分发普通上游组件，不复制、翻译或改写其源码/文档。上表不把“计划采用”写成当前已交付能力；真正加入镜像后必须补 digest、构建 provenance 和机器可读 notices。
+AIRP 只配置并分发普通上游组件，不复制、翻译或改写其源码/文档。上表记录 P0 artifact 已采用的精确镜像；它不把 preview artifact 写成正式发布能力。正式 tag 前仍必须补构建 provenance、机器可读 notices 与完整 SBOM。
 
 ## 4. 维护待办
 

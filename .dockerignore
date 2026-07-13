@@ -1,0 +1,10 @@
+.git
+.github
+.codex
+target
+data
+ui/node_modules
+ui/dist
+deploy/production/secrets
+deploy/production/.env
+docs/smoke-evidence

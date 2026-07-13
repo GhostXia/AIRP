@@ -78,3 +78,55 @@ jobs:
         run: |
           node --check webui/app.js
           node --check webui/serve.js
+          node --check webui/runtime-config.js
+          node deploy/production/verify-config.mjs
+
+  production-images:
+    name: Production images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Create synthetic deployment inputs
+        working-directory: deploy/production
+        run: |
+          cp .env.example .env
+          mkdir -p secrets
+          printf '%s' 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' > secrets/engine_access_key
+          printf '%s' '$2a$14$A4V4qXU.6a8IYjvR8IXtA.2zRfn9czP3Vsl8ZLJ3YoK1vQKPTyphK' > secrets/admin_password_hash
+          : > secrets/provider_api_key
+
+      - name: Render Compose configuration
+        working-directory: deploy/production
+        run: docker compose --env-file .env -f compose.yaml config --quiet
+
+      - name: Build pinned production images
+        working-directory: deploy/production
+        run: docker compose --env-file .env -f compose.yaml build --pull
+
+      - name: Validate rendered Caddy configurations
+        working-directory: deploy/production
+        run: |
+          for mode in public internal; do
+            docker run --rm \
+              -e AIRP_PUBLIC_ORIGIN=https://airp.example.com \
+              -e AIRP_ADMIN_USER=airp-admin \
+              -e AIRP_ADMIN_PASSWORD_HASH='$2a$14$A4V4qXU.6a8IYjvR8IXtA.2zRfn9czP3Vsl8ZLJ3YoK1vQKPTyphK' \
+              -e AIRP_ACCESS_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+              -e AIRP_TLS_CERT_FILE=/run/airp-tls/fullchain.pem \
+              -e AIRP_TLS_KEY_FILE=/run/airp-tls/privkey.pem \
+              --entrypoint caddy airp-gateway:0.1.0 \
+              validate --config "/etc/caddy/Caddyfile.$mode" --adapter caddyfile
+          done
+          docker run --rm \
+            -e AIRP_PUBLIC_ORIGIN=https://airp.example.com \
+            -e AIRP_ADMIN_USER=airp-admin \
+            -e AIRP_ADMIN_PASSWORD_HASH='$2a$14$A4V4qXU.6a8IYjvR8IXtA.2zRfn9czP3Vsl8ZLJ3YoK1vQKPTyphK' \
+            -e AIRP_ACCESS_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+            -e AIRP_TLS_CERT_FILE=/run/airp-tls/fullchain.pem \
+            -e AIRP_TLS_KEY_FILE=/run/airp-tls/privkey.pem \
+            --entrypoint caddy airp-gateway:0.1.0 \
+            adapt --config /etc/caddy/Caddyfile.files --adapter caddyfile > /dev/null

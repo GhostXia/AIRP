@@ -1,0 +1,21 @@
+FROM rust:1.96.0-bookworm@sha256:5e2214abe154fe26e39f64488952e5c991eeed1d6d6da7cc8381ae83927f0cfc AS builder
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY engine ./engine
+COPY protocol ./protocol
+COPY ui/src-tauri ./ui/src-tauri
+RUN cargo build --locked --release -p airp-core --bin airp-core
+
+FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -d -o 65532 -g 65532 /var/lib/airp
+COPY --from=builder /src/target/release/airp-core /usr/local/bin/airp-core
+COPY deploy/production/engine-entrypoint.sh /usr/local/bin/airp-engine-entrypoint
+RUN chmod 0555 /usr/local/bin/airp-core /usr/local/bin/airp-engine-entrypoint
+USER 65532:65532
+WORKDIR /var/lib/airp
+VOLUME ["/var/lib/airp"]
+ENTRYPOINT ["/usr/local/bin/airp-engine-entrypoint"]
+CMD ["--config", "/var/lib/airp/config.json", "daemon", "--host", "0.0.0.0", "--port", "8000"]

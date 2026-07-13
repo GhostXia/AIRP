@@ -19,7 +19,7 @@ Development CORS origins are the bundled WebUI (`127.0.0.1:9001` and `localhost:
 
 Loopback plus CORS is not authentication. Before exposing the daemon through a reverse proxy or non-loopback bind, set `AIRP_ACCESS_KEY`, terminate TLS at the proxy, restrict trusted origins, and apply network-level access control.
 
-## WebUI production profile (engine validation implemented; deployment not yet shipped)
+## WebUI production profile (deployment artifact implemented; topology smoke open)
 
 The first supported WebUI deployment is specified by [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md): a versioned OCI/Compose bundle with Caddy as the only public HTTPS entry point and `airp-core` on a private network.
 
@@ -29,7 +29,7 @@ The first supported WebUI deployment is specified by [WEBUI-PRODUCTION-ARCHITECT
 - Production WebUI imports upload JSON/PNG content only. `card_path`, host/UNC paths, file URLs and arbitrary remote fetches are outside this trust boundary even for authenticated callers.
 - The private engine keeps its own bearer, validation, body limits, path guards and outbound redirect policy. Gateway controls do not replace engine controls.
 
-The engine-side fail-closed slice is implemented; the OCI/Compose + Caddy artifact and production smoke are not. Until those remaining slices land, do not expose `webui/serve.js` or port 8000 as a supported remote deployment.
+The engine fail-closed slice and `deploy/production/` OCI/Compose + Caddy artifact are implemented. The bundle pins base images by digest, mounts runtime secrets from gitignored files, publishes only Caddy, uses a private engine network, and makes the production WebUI same-origin without browser-visible engine credentials. The full production topology smoke is still open, so this remains a P0 preview; never expose `webui/serve.js` or port 8000 as a remote deployment.
 
 ## Widgets and Agent tools
 
