@@ -10,8 +10,8 @@ const caddy = read('Caddyfile.common');
 const engineImage = read('Dockerfile.engine');
 const gatewayImage = read('Dockerfile.gateway');
 
-assert.doesNotMatch(compose, /^\s+ports:\s*$[\s\S]*?engine:/m, 'engine must not publish a host port');
-const engineBlock = compose.slice(compose.indexOf('  engine:'), compose.indexOf('  gateway:'));
+const engineBlock = compose.match(/^  engine:\s*$[\s\S]*?(?=^  [a-zA-Z0-9_-]+:\s*$|^secrets:)/m)?.[0];
+assert.ok(engineBlock, 'engine service block must exist');
 assert.doesNotMatch(engineBlock, /^\s+ports:/m, 'engine service publishes a host port');
 assert.match(engineBlock, /cap_drop:\s*\n\s*- ALL/);
 assert.match(engineBlock, /no-new-privileges:true/);
