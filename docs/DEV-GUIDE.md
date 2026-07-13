@@ -41,7 +41,7 @@
 
 **🎯 当前产品首要目标（用户 2026-07-13 定）**：**WebUI 能够正式上线使用。** “开发出可运行闭环”的旧阶段目标已经完成；现在必须达到可安全部署、可持续日用、可升级、可备份恢复和可复核发布。
 
-- 正式上线判据只认 [WEBUI-PRODUCTION-PLAN.md §2](WEBUI-PRODUCTION-PLAN.md)：生产部署、安全、RP 使用闭环、数据恢复与发布质量缺一不可。
+- 正式上线判据只认 [WEBUI-PRODUCTION-PLAN.md §2](WEBUI-PRODUCTION-PLAN.md#2-正式上线唯一判据)：生产部署、安全、RP 使用闭环、数据恢复与发布质量缺一不可。
 - 本地“简单运行”仍是最低层 smoke，但不能替代 HTTPS 同源拓扑、强制鉴权、升级恢复和真实浏览器验收。
 - 已知阻塞项（动手前先核对，别重做）：
   - `ui/build-tauri.ps1` 已在 2026-07-03 审计 follow-up 修复；优先用它产出桌面 artifact，或用 `npm run tauri dev` 做开发态验收。
