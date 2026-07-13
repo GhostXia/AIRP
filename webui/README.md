@@ -1,7 +1,8 @@
-# AIRP WebUI — Basic RP Client and Backend Validation Harness
+# AIRP WebUI
 
-Browser-based lightweight client for basic RP use and engine backend validation.
-It is the current primary development surface for incubating backend capabilities, validating API/data contracts, and completing basic RP workflows. It is not the final polished product UI and does not replace the long-term Tauri/Vue client. Current repository baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); completed acceptance contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
+Browser-based AIRP client for RP use. The current implementation is a basically usable development build; the active target is a production-ready, single-instance self-hosted WebUI. Current baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); production gates: [docs/WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md); completed MVP contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
+
+> `start.bat`, `serve.js`, `cargo run`, manually entered engine URLs and optional bearer tokens are development paths. They are not the supported production deployment. Do not expose port 8000 or this static development server directly to the public Internet.
 
 ## Quick Start
 
@@ -50,7 +51,7 @@ they are not the served WebUI implementation.
 
 ## Scope
 
-The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. PR #123 closed the basic zero-secret acceptance gate; PR #124/#125 added durable IDs, cursor history, rollback-by-ID and a 50-message WebUI window. The engine-truth harness now has 64 checks plus a real-browser 50/54 → 54/54 prepend/scroll pass. This is a basically usable lightweight RP client, not the final desktop product.
+The current implementation covers connection, provider settings, character import, persistent basic User Persona, Preset selection/JSON import, session create/select/delete, streaming chat/history, regen/rollback, Agent Run and diagnostics. Persona name/variables and the selected Preset are applied to chat requests. PR #123 closed the basic zero-secret acceptance gate; PR #124/#125 added durable IDs, cursor history, rollback-by-ID and a 50-message WebUI window. The engine-truth harness has 64 checks plus a real-browser 50/54 → 54/54 prepend/scroll pass. This is a basically usable RP development client, not yet a production release; formal release additionally requires the deployment, security, data recovery and release gates in [WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md).
 
 New capabilities should normally be delivered vertically through engine shared services, HTTP/SSE contracts, this WebUI, and tests. WebUI-specific DOM or interaction choices must not become engine contracts; stable client-neutral contracts are later consumed by the desktop UI.
 
