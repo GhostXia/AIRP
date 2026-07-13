@@ -783,7 +783,7 @@ impl PersonaService {
         let _guard = lock.lock().expect("persona lock poisoned");
         let dir = data_dir::user_personas_dir(&self.data_root, user_id);
         let mut ids: Vec<String> = Vec::new();
-        if dir.exists() {
+        if dir.is_dir() {
             for entry in fs::read_dir(&dir)? {
                 let entry = entry?;
                 if !entry.file_type()?.is_file() {
@@ -797,13 +797,8 @@ impl PersonaService {
                 }
             }
         }
-        // 兜底：若多份目录不在但旧 persona.json 在，补 `default`。
-        if !ids.iter().any(|i| i == "default")
-            && data_dir::user_persona_path(&self.data_root, user_id).exists()
-        {
-            ids.push("default".to_string());
-        }
-        if ids.is_empty() {
+        // `default` is a virtual profile even before its first save.
+        if !ids.iter().any(|i| i == "default") {
             ids.push("default".to_string());
         }
         ids.sort();
@@ -836,9 +831,9 @@ impl PersonaService {
                         Err(e) => return Err(e.into()),
                     }
                 } else {
-                    let mut p = Persona::initial(default_name);
-                    p.id = persona_id.to_string();
-                    return Ok(p);
+                    return Err(AirpError::NotFound(format!(
+                        "persona {persona_id} does not exist"
+                    )));
                 }
             }
             Err(error) => return Err(error.into()),
@@ -878,12 +873,12 @@ impl PersonaService {
         persona.id = persona_id.to_string();
         persona.revision = current_revision + 1;
         persona.updated_at = chrono::Utc::now().to_rfc3339();
-        data_dir::replace_file(&path, &serde_json::to_vec_pretty(&persona)?)?;
-
-        // `default` 同步回写兼容老路径，避免旧读链断裂。
+        let serialized = serde_json::to_vec_pretty(&persona)?;
         if persona_id == "default" {
             let legacy = data_dir::user_persona_path(&self.data_root, user_id);
-            data_dir::replace_file(&legacy, &serde_json::to_vec_pretty(&persona)?)?;
+            self.replace_default_pair(&path, &legacy, &serialized)?;
+        } else {
+            data_dir::replace_file(&path, &serialized)?;
         }
         Ok(persona)
     }
@@ -970,7 +965,12 @@ impl PersonaService {
         // 精确 session 绑定优先。
         let mut generic: Option<String> = None;
         for pid in &ids {
-            let persona = self.get(user_id, pid, "User")?;
+            let persona = match self.get(user_id, pid, "User") {
+                Ok(persona) => persona,
+                // A concurrent delete may remove a profile after `list`.
+                Err(AirpError::NotFound(_)) => continue,
+                Err(error) => return Err(error),
+            };
             for b in &persona.bindings {
                 if b.character_id != character_id {
                     continue;
@@ -978,7 +978,7 @@ impl PersonaService {
                 match (&b.session_id, session_id) {
                     (Some(b_sid), Some(q_sid)) if b_sid == q_sid => return Ok(Some(pid.clone())),
                     (None, _) => {
-                        generic = Some(pid.clone());
+                        generic.get_or_insert_with(|| pid.clone());
                     }
                     _ => {}
                 }
@@ -1025,6 +1025,33 @@ impl PersonaService {
                     "duplicate persona binding".to_string(),
                 ));
             }
+        }
+        Ok(())
+    }
+
+    fn replace_default_pair(
+        &self,
+        canonical: &Path,
+        legacy: &Path,
+        bytes: &[u8],
+    ) -> Result<(), AirpError> {
+        let previous_canonical = fs::read(canonical).ok();
+        data_dir::replace_file(canonical, bytes)?;
+        if let Err(write_error) = data_dir::replace_file(legacy, bytes) {
+            let rollback = match previous_canonical {
+                Some(previous) => data_dir::replace_file(canonical, &previous),
+                None => match fs::remove_file(canonical) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(error.into()),
+                },
+            };
+            if let Err(rollback_error) = rollback {
+                return Err(AirpError::Internal(format!(
+                    "legacy persona mirror failed ({write_error}); canonical rollback failed ({rollback_error})"
+                )));
+            }
+            return Err(write_error);
         }
         Ok(())
     }
@@ -1300,18 +1327,67 @@ mod tests {
         let service = PersonaService::new(tmp.path());
         let uid = UserId::new("alice").unwrap();
 
-        let legacy = service
-            .save_default(&uid, 0, Persona::initial("Legacy"))
-            .unwrap();
-        assert_eq!(legacy.revision, 1);
+        let mut legacy = Persona::initial("Legacy");
+        legacy.schema = 1;
+        legacy.revision = 7;
+        let legacy_path = crate::data_dir::user_persona_path(tmp.path(), &uid);
+        fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        fs::write(&legacy_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        let canonical =
+            crate::data_dir::user_persona_multi_path(tmp.path(), &uid, "default").unwrap();
+        assert!(!canonical.exists());
 
-        let migrated = service.save(&uid, "default", 1, legacy.clone()).unwrap();
-        assert_eq!(migrated.revision, 2);
-        assert_eq!(service.get_default(&uid, "User").unwrap().revision, 2);
+        let migrated = service.save(&uid, "default", 7, legacy).unwrap();
+        assert_eq!(migrated.revision, 8);
+        let canonical_persona: Persona =
+            serde_json::from_slice(&fs::read(canonical).unwrap()).unwrap();
+        let legacy_persona: Persona =
+            serde_json::from_slice(&fs::read(legacy_path).unwrap()).unwrap();
+        assert_eq!(canonical_persona.revision, 8);
+        assert_eq!(legacy_persona.revision, 8);
         assert!(service.get(&uid, "../escape", "User").is_err());
         assert!(service
             .save(&uid, "..\\escape", 0, Persona::initial("Bad"))
             .is_err());
+    }
+
+    #[test]
+    fn persona_list_always_contains_default_and_custom_get_requires_existing_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        service
+            .save(&uid, "custom", 0, Persona::initial("Custom"))
+            .unwrap();
+
+        assert_eq!(service.list(&uid).unwrap(), vec!["custom", "default"]);
+        assert!(matches!(
+            service.get(&uid, "missing", "User"),
+            Err(AirpError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn persona_default_mirror_failure_rolls_back_canonical_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let canonical =
+            crate::data_dir::user_persona_multi_path(tmp.path(), &uid, "default").unwrap();
+        fs::create_dir_all(canonical.parent().unwrap()).unwrap();
+        fs::write(
+            &canonical,
+            serde_json::to_vec_pretty(&Persona::initial("Before")).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir_all(crate::data_dir::user_persona_path(tmp.path(), &uid)).unwrap();
+
+        assert!(service
+            .save_default(&uid, 0, Persona::initial("After"))
+            .is_err());
+        let persisted: Persona = serde_json::from_slice(&fs::read(canonical).unwrap()).unwrap();
+        assert_eq!(persisted.revision, 0);
+        assert_eq!(persisted.name, "Before");
     }
 
     #[test]
