@@ -30,9 +30,11 @@ case "${AIRP_ADMIN_USER:-}" in
   ''|*[!A-Za-z0-9._-]*) echo "AIRP_ADMIN_USER must use only A-Z, a-z, 0-9, dot, underscore, or hyphen" >&2; exit 1 ;;
 esac
 case "$AIRP_ADMIN_PASSWORD_HASH" in
-  '$argon2id$'*|'$2a$'*|'$2b$'*|'$2y$'*) ;;
+  '$argon2id$'*) AIRP_ADMIN_HASH_ALGORITHM=argon2id ;;
+  '$2a$'*|'$2b$'*|'$2y$'*) AIRP_ADMIN_HASH_ALGORITHM=bcrypt ;;
   *) echo "administrator password secret must contain an Argon2id or bcrypt hash" >&2; exit 1 ;;
 esac
+export AIRP_ADMIN_HASH_ALGORITHM
 
 case "${AIRP_TLS_MODE:-}" in
   public|internal|files) config="/etc/caddy/Caddyfile.${AIRP_TLS_MODE}" ;;

@@ -30,6 +30,9 @@ assert.match(smokeScript, /AIRP_ENDPOINT=https:\/\/host\.docker\.internal/);
 assert.doesNotMatch(smokeScript, /curl[^\n]*(?:-k|--insecure)/);
 
 assert.match(caddy, /basic_auth/);
+assert.match(caddy, /basic_auth \{\$AIRP_ADMIN_HASH_ALGORITHM:bcrypt\}/);
+assert.match(read('gateway-entrypoint.sh'), /AIRP_ADMIN_HASH_ALGORITHM=argon2id/);
+assert.match(read('gateway-entrypoint.sh'), /AIRP_ADMIN_HASH_ALGORITHM=bcrypt/);
 assert.match(caddy, /header_up Authorization "Bearer \{\$AIRP_ACCESS_KEY\}"/);
 assert.match(caddy, /max_size 10MB/);
 assert.match(caddy, /Content-Security-Policy/);
