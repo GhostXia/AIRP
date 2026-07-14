@@ -113,6 +113,7 @@ mod tests {
             max_tokens: None,
             scene_id: None,
             user_id: None,
+            persona_id: None,
         }
     }
 
@@ -522,6 +523,7 @@ mod tests_ms6 {
             max_tokens: None,
             scene_id: Some(scene_id.to_string()),
             user_id: None,
+            persona_id: None,
         }
     }
 
@@ -666,6 +668,7 @@ mod tests_issue27 {
             max_tokens: None,
             scene_id: None,
             user_id: None,
+            persona_id: None,
         }
     }
 
@@ -872,6 +875,7 @@ mod tests_dx1 {
             max_tokens: None,
             scene_id: None,
             user_id: Some("alice".to_string()),
+            persona_id: None,
         };
         // Pipeline should build without error; alice's user root is created
         let result = prepare_pipeline(&req, &state);
@@ -882,5 +886,516 @@ mod tests_dx1 {
         );
         // Verify effective root was alice's dir
         assert!(tmp.path().join("users").join("alice").exists());
+    }
+}
+
+#[cfg(test)]
+mod tests_a1b_merge {
+    use super::*;
+    use crate::daemon::UserProfile;
+    use std::collections::HashMap;
+
+    fn persona_with(name: &str, vars: &[(&str, &str)]) -> Persona {
+        let mut p = Persona::initial(name);
+        p.variables = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        p
+    }
+
+    #[test]
+    fn none_persona_returns_user_profile_unchanged() {
+        let up = UserProfile {
+            name: "Alice".to_string(),
+            variables: HashMap::from([("k".to_string(), "v".to_string())]),
+        };
+        let (name, vars) = merge_persona_into_user_profile(&up, None);
+        assert_eq!(name, "Alice");
+        assert_eq!(vars.get("k").unwrap(), "v");
+    }
+
+    #[test]
+    fn empty_user_name_falls_back_to_persona_name() {
+        let up = UserProfile {
+            name: String::new(),
+            variables: HashMap::new(),
+        };
+        let persona = persona_with("PersonaName", &[]);
+        let (name, _) = merge_persona_into_user_profile(&up, Some(&persona));
+        assert_eq!(name, "PersonaName");
+    }
+
+    #[test]
+    fn nonempty_user_name_overrides_persona_name() {
+        let up = UserProfile {
+            name: "Client".to_string(),
+            variables: HashMap::new(),
+        };
+        let persona = persona_with("PersonaName", &[]);
+        let (name, _) = merge_persona_into_user_profile(&up, Some(&persona));
+        assert_eq!(name, "Client");
+    }
+
+    #[test]
+    fn request_variables_override_persona_variables() {
+        let up = UserProfile {
+            name: "User".to_string(),
+            variables: HashMap::from([("tone".to_string(), "casual".to_string())]),
+        };
+        let persona = persona_with("Persona", &[("tone", "formal"), ("mood", "calm")]);
+        let (_, vars) = merge_persona_into_user_profile(&up, Some(&persona));
+        assert_eq!(vars.get("tone").unwrap(), "casual", "request must override");
+        assert_eq!(
+            vars.get("mood").unwrap(),
+            "calm",
+            "persona-only key must survive"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_a1b_resolve {
+    use super::*;
+    use crate::daemon::UserProfile;
+    use crate::domain::{Persona, PersonaBinding, PersonaService};
+    use crate::types::{CharacterId, SessionId};
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+
+    fn base_request_with_user(user_id: Option<&str>) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            character_id: None,
+            character_card_id: None,
+            lorebook_path: None,
+            user_profile: UserProfile {
+                name: "Client".to_string(),
+                variables: HashMap::new(),
+            },
+            message: "hi".to_string(),
+            messages_history: None,
+            regex_filters: None,
+            preset_id: None,
+            enabled_presets: None,
+            session_id: None,
+            provider: None,
+            endpoint: None,
+            api_key: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            scene_id: None,
+            user_id: user_id.map(str::to_string),
+            persona_id: None,
+        }
+    }
+
+    #[test]
+    fn no_user_id_returns_none_and_is_backward_compatible() {
+        let tmp = tempdir().unwrap();
+        let req = base_request_with_user(None);
+        let persona = resolve_request_persona(&req, tmp.path()).unwrap();
+        assert!(persona.is_none(), "user_id absent → no persona resolution");
+    }
+
+    #[test]
+    fn default_persona_is_returned_when_no_explicit_id_and_no_bindings() {
+        let tmp = tempdir().unwrap();
+        let req = base_request_with_user(Some("alice"));
+        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        assert_eq!(persona.id, "default");
+        assert_eq!(
+            persona.revision, 0,
+            "fresh default is initial, no disk write"
+        );
+        // No persona file should have been written.
+        assert!(!tmp
+            .path()
+            .join("users")
+            .join("alice")
+            .join("persona.json")
+            .exists());
+    }
+
+    #[test]
+    fn explicit_persona_id_resolves_stored_persona() {
+        let tmp = tempdir().unwrap();
+        let uid = crate::types::UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        let stored = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "Writer".to_string(),
+            description: String::new(),
+            variables: HashMap::from([("tone".to_string(), "concise".to_string())]),
+            id: "writer".to_string(),
+            bindings: Vec::new(),
+        };
+        let saved = service.save(&uid, "writer", 0, stored).unwrap();
+        assert_eq!(saved.revision, 1);
+
+        let mut req = base_request_with_user(Some("alice"));
+        req.persona_id = Some("writer".to_string());
+        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        assert_eq!(persona.id, "writer");
+        assert_eq!(persona.name, "Writer");
+        assert_eq!(persona.variables.get("tone").unwrap(), "concise");
+    }
+
+    #[test]
+    fn explicit_persona_id_canonicalizes_default_case_insensitive() {
+        let tmp = tempdir().unwrap();
+        let uid = crate::types::UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        let stored = Persona::initial("StoredDefault");
+        service.save_default(&uid, 0, stored).unwrap();
+
+        let mut req = base_request_with_user(Some("alice"));
+        req.persona_id = Some("DEFAULT".to_string());
+        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        assert_eq!(persona.id, "default");
+    }
+
+    #[test]
+    fn explicit_nonexistent_persona_id_returns_not_found() {
+        let tmp = tempdir().unwrap();
+        let mut req = base_request_with_user(Some("alice"));
+        req.persona_id = Some("ghost".to_string());
+        let err = resolve_request_persona(&req, tmp.path()).unwrap_err();
+        assert!(
+            matches!(err, crate::error::AirpError::NotFound(_)),
+            "expected NotFound, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn bound_persona_is_resolved_via_find_for_character() {
+        let tmp = tempdir().unwrap();
+        let uid = crate::types::UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        let stored = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "Adventurer".to_string(),
+            description: String::new(),
+            variables: HashMap::new(),
+            id: "adventurer".to_string(),
+            bindings: Vec::new(),
+        };
+        service.save(&uid, "adventurer", 0, stored).unwrap();
+        service
+            .bind(
+                &uid,
+                "adventurer",
+                PersonaBinding {
+                    character_id: "hero".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+
+        let mut req = base_request_with_user(Some("alice"));
+        req.character_id = Some(CharacterId::new("hero").unwrap());
+        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        assert_eq!(persona.id, "adventurer");
+        assert_eq!(persona.name, "Adventurer");
+    }
+
+    #[test]
+    fn bound_persona_session_scoped_wins_over_generic() {
+        let tmp = tempdir().unwrap();
+        let uid = crate::types::UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        // generic persona: bound to character "hero" without session_id
+        let generic = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "GenericHero".to_string(),
+            description: String::new(),
+            variables: HashMap::new(),
+            id: "generic-hero".to_string(),
+            bindings: Vec::new(),
+        };
+        service.save(&uid, "generic-hero", 0, generic).unwrap();
+        service
+            .bind(
+                &uid,
+                "generic-hero",
+                PersonaBinding {
+                    character_id: "hero".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        // session-scoped persona: bound to (hero, session-a)
+        let scoped = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "ScopedHero".to_string(),
+            description: String::new(),
+            variables: HashMap::new(),
+            id: "scoped-hero".to_string(),
+            bindings: Vec::new(),
+        };
+        service.save(&uid, "scoped-hero", 0, scoped).unwrap();
+        service
+            .bind(
+                &uid,
+                "scoped-hero",
+                PersonaBinding {
+                    character_id: "hero".to_string(),
+                    session_id: Some("00000000-0000-0000-0000-00000000000a".to_string()),
+                },
+            )
+            .unwrap();
+
+        let mut req = base_request_with_user(Some("alice"));
+        req.character_id = Some(CharacterId::new("hero").unwrap());
+        req.session_id = Some(SessionId::parse("00000000-0000-0000-0000-00000000000a").unwrap());
+        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        assert_eq!(
+            persona.id, "scoped-hero",
+            "session-scoped binding must win over generic"
+        );
+    }
+
+    #[test]
+    fn scene_id_skips_find_for_character_and_falls_back_to_default() {
+        let tmp = tempdir().unwrap();
+        let uid = crate::types::UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        // bind a persona to a character; scene mode should ignore this.
+        let bound = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "ShouldNotActivate".to_string(),
+            description: String::new(),
+            variables: HashMap::new(),
+            id: "bound-persona".to_string(),
+            bindings: Vec::new(),
+        };
+        service.save(&uid, "bound-persona", 0, bound).unwrap();
+        service
+            .bind(
+                &uid,
+                "bound-persona",
+                PersonaBinding {
+                    character_id: "hero".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+
+        let mut req = base_request_with_user(Some("alice"));
+        req.scene_id = Some("scene-1".to_string());
+        req.character_id = Some(CharacterId::new("hero").unwrap());
+        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        assert_eq!(
+            persona.id, "default",
+            "scene mode must skip find_for_character"
+        );
+        assert_ne!(persona.name, "ShouldNotActivate");
+    }
+}
+
+/// 端到端 `prepare_pipeline` 集成测试：验证 A1b 把 persona 的 `variables` 真正
+/// 注入到最终 system_prompt（通过 `{{key}}` 替换）。
+#[cfg(test)]
+mod tests_a1b_pipeline_e2e {
+    use super::*;
+    use crate::adapter::{BackendEngine, Provider};
+    use crate::config::VolumeConfig;
+    use crate::daemon::{MutableConfig, UserProfile};
+    use crate::domain::{Persona, PersonaService};
+    use crate::types::{CharacterId, UserId};
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+
+    fn make_state(data_root: PathBuf) -> Arc<DaemonState> {
+        Arc::new(DaemonState {
+            data_root,
+            http_client: reqwest::Client::new(),
+            config: std::sync::RwLock::new(MutableConfig {
+                provider: Provider::OpenAI,
+                endpoint: "https://example.test/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+                model: "test-model".to_string(),
+                volume_config: VolumeConfig::default(),
+                access_api_key: None,
+                engine: BackendEngine::default(),
+                quota: crate::quota::QuotaConfig::default(),
+                deployment_mode: Default::default(),
+                public_origin: None,
+            }),
+        })
+    }
+
+    /// 极简 chara_card_v2 JSON，description 含 `{{tone}}` 占位符。
+    fn inline_card_with_tone_placeholder() -> String {
+        r#"{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"T","description":"{{tone}} writer","personality":"","scenario":"","first_mes":"Hi","mes_example":"","creator_notes":"","system_prompt":"","post_history_instructions":"","tags":[],"creator":"","character_version":"","alternate_greetings":[],"extensions":{}}}"#
+            .to_string()
+    }
+
+    fn base_chat_request(user_id: Option<&str>, persona_id: Option<&str>) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            character_id: None,
+            character_card_id: Some(inline_card_with_tone_placeholder()),
+            lorebook_path: None,
+            user_profile: UserProfile {
+                name: "Client".to_string(),
+                variables: HashMap::new(),
+            },
+            message: "hi".to_string(),
+            messages_history: Some(vec![]),
+            regex_filters: None,
+            preset_id: None,
+            enabled_presets: None,
+            session_id: None,
+            provider: None,
+            endpoint: None,
+            api_key: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            scene_id: None,
+            user_id: user_id.map(str::to_string),
+            persona_id: persona_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn prepare_pipeline_injects_explicit_persona_variables_into_prompt() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+
+        let uid = UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        let stored = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "Writer".to_string(),
+            description: String::new(),
+            variables: HashMap::from([("tone".to_string(), "concise".to_string())]),
+            id: "writer".to_string(),
+            bindings: Vec::new(),
+        };
+        service.save(&uid, "writer", 0, stored).unwrap();
+
+        let req = base_chat_request(Some("alice"), Some("writer"));
+        let pipeline = prepare_pipeline(&req, &state).expect("pipeline should build");
+        assert!(
+            pipeline.system_prompt.contains("concise writer"),
+            "persona variable must be substituted into prompt; got: {}",
+            pipeline.system_prompt
+        );
+        assert!(
+            !pipeline.system_prompt.contains("{{tone}}"),
+            "placeholder must be replaced; got: {}",
+            pipeline.system_prompt
+        );
+    }
+
+    #[test]
+    fn prepare_pipeline_injects_bound_persona_variables_into_prompt() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+
+        let uid = UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        let stored = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "Adventurer".to_string(),
+            description: String::new(),
+            variables: HashMap::from([("tone".to_string(), "brave".to_string())]),
+            id: "adventurer".to_string(),
+            bindings: Vec::new(),
+        };
+        service.save(&uid, "adventurer", 0, stored).unwrap();
+        service
+            .bind(
+                &uid,
+                "adventurer",
+                crate::domain::PersonaBinding {
+                    character_id: "hero".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+
+        let mut req = base_chat_request(Some("alice"), None);
+        // character_id triggers find_for_character; even with inline card the
+        // bound persona resolves via the user's persona store.
+        req.character_id = Some(CharacterId::new("hero").unwrap());
+        let pipeline = prepare_pipeline(&req, &state).expect("pipeline should build");
+        assert!(
+            pipeline.system_prompt.contains("brave writer"),
+            "bound persona variable must be substituted; got: {}",
+            pipeline.system_prompt
+        );
+    }
+
+    #[test]
+    fn prepare_pipeline_returns_not_found_for_nonexistent_persona_id() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+
+        let req = base_chat_request(Some("alice"), Some("ghost"));
+        let result = prepare_pipeline(&req, &state);
+        match result {
+            Err(crate::error::AirpError::NotFound(_)) => {}
+            other => panic!(
+                "explicit nonexistent persona_id must fail closed with NotFound, got {:?}",
+                other.map(|_| "Ok(..)")
+            ),
+        }
+    }
+
+    #[test]
+    fn prepare_pipeline_request_variables_override_persona_variables() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+
+        let uid = UserId::new("alice").unwrap();
+        let service = PersonaService::new(tmp.path());
+        let stored = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0,
+            updated_at: String::new(),
+            name: "Writer".to_string(),
+            description: String::new(),
+            variables: HashMap::from([("tone".to_string(), "concise".to_string())]),
+            id: "writer".to_string(),
+            bindings: Vec::new(),
+        };
+        service.save(&uid, "writer", 0, stored).unwrap();
+
+        let mut req = base_chat_request(Some("alice"), Some("writer"));
+        req.user_profile
+            .variables
+            .insert("tone".to_string(), "verbose".to_string());
+        let pipeline = prepare_pipeline(&req, &state).expect("pipeline should build");
+        assert!(
+            pipeline.system_prompt.contains("verbose writer"),
+            "request-side variable must override persona default; got: {}",
+            pipeline.system_prompt
+        );
+        assert!(
+            !pipeline.system_prompt.contains("concise writer"),
+            "persona default must not survive when request overrides; got: {}",
+            pipeline.system_prompt
+        );
     }
 }
