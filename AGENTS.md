@@ -45,9 +45,9 @@
 - 若任务确实需要引入普通第三方依赖库，必须单独核验许可证、锁定版本并记录 provenance；这不属于“思维吸收后重构”，不得借本条绕过依赖合规
 - AIRP-Core/AIRPCLI、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 均为作者自己的第一方前序项目，不适用“第三方代码不得复用”的限制，但仍须按 `docs/SOURCE-PROJECT-DECISIONS.md` 复核后吸收
 
-### 流程现状（同日更新）
+### 流程现状（2026-07-14 更新）
 
-原"审计 bot 复核"环节已不存在（bot 已下线）。§11.1 的"PR → 审计 → 合并"现由**开发者自审 + 人工 review** 承接：本地测试全绿（含神圣不变式 `subagent_context_has_no_orchestrator_noise`）即可开 PR，由人决定合并；不阻塞在"等审计 bot"。未来若重新引入审计 agent，本守则即为其入职文档。
+审计 bot 已恢复，并重新作为 §11.1「PR → 审计 → 合并」的**阻塞门禁**。本地测试全绿（含神圣不变式 `subagent_context_has_no_orchestrator_noise`）后可以开 PR，但不得在审计 bot pending、失败或仍有阻塞意见时合并；必须等待审计完成、修复全部阻塞意见并取得通过状态，再由人工 review 决定是否合并。审计 bot 与任何临时审计 agent 均须遵守本守则的独立审计、可提己见、可质疑历史并查证三原则。
 
 ### 审计遗留项处理（2026-07-06 用户立）
 

@@ -80,7 +80,7 @@ npm run typecheck
 npm run test
 ```
 
-本仓的 `.github/workflows/pr-gate.yml` 会自动执行 Rust/UI 质量门禁；手动打包 workflow 另行负责 Windows artifact。人工 review 仍决定是否合并。`subagent_context_has_no_orchestrator_noise` 是干净提示词不变式，不得删除或削弱。
+本仓的 `.github/workflows/pr-gate.yml` 会自动执行 Rust/UI 质量门禁；手动打包 workflow 另行负责 Windows artifact。审计 bot 已恢复并作为合并前阻塞门禁：必须等待审计完成、修复全部阻塞意见并取得通过状态，再由人工 review 决定是否合并。`subagent_context_has_no_orchestrator_noise` 是干净提示词不变式，不得删除或削弱。
 
 ## 运行
 

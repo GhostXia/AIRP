@@ -337,7 +337,7 @@ GitHub 手动构建：`.github/workflows/manual-build.yml` 提供 `workflow_disp
   ```
   用**默认 target dir**（`D:\AIRP-Dev\target`）即可，本轮无 os error 5、无需重定向 `CARGO_TARGET_DIR`。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
 - **本机工具链自检（2026-07-03）**：`D:\.cargo`、`D:\.rustup`、`D:\msys64`、`D:\nodejs`、`D:\npm-global` 均存在；当前 shell 的 `cargo/rustc/rustup` 指向 `D:\.cargo\bin`，`node/npm` 指向 `D:\nodejs`。实测 npm 全局 prefix 为 `D:\npm-global`，但默认 cache 仍可能指向 `C:\Users\<user>\AppData\Local\npm-cache`，所以 npm 命令必须显式设置 `npm_config_cache=D:\npm-global\npm-cache`。**不要把 Rust/Node/npm 全局依赖、缓存或构建工具塞回 C 盘**；若命令试图写 `C:\Users\<user>\.cargo`、`.rustup` 或 npm 全局/cache，先停下来改 env/prefix。
-- **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。审计 bot 已下线（2026-07-03），PR review 由开发者自审 + 人工承接，不阻塞在"等审计 bot"；自审按 `AGENTS.md` 的 Audit Agent Charter 三原则（独立 / 可提己见 / 可质疑历史并查证）。
+- **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。审计 bot 已于 2026-07-14 恢复并重新成为合并前阻塞门禁；本地全绿只代表可以开 PR，不代表可以合并。必须等待审计完成、修复全部阻塞意见并取得通过状态，再由人工 review 决定是否合并；开发者自审和审计 bot 均遵守 `AGENTS.md` 的 Audit Agent Charter 三原则（独立 / 可提己见 / 可质疑历史并查证）。
 - 引擎启动：`cargo run -p airp-core -- daemon --port 8000`。配置三层合并 default→`data/settings.json`→env→request，env 有 `AIRP_ENDPOINT`/`AIRP_API_KEY`/`AIRP_MODEL`/`AIRP_ACCESS_KEY`。UI 侧 `BusRelay` 默认连 `http://127.0.0.1:8000`，`AIRP_ENGINE_URL` 可覆盖。
 
 ---
@@ -356,9 +356,9 @@ GitHub 手动构建：`.github/workflows/manual-build.yml` 提供 `workflow_disp
 - **一 Task 一分支 → PR，禁止把代码 WIP 摊在 `main` 工作树上**：
   - 动手前 `git checkout -b <phase-x-task-name>`（如 `phase-1-card-import`）。
   - **代码改动**（`engine/` `ui/` `protocol/` 等）**一律走分支 → 本地测试绿 → PR → 合并**，**绝不直接 commit/推 `main`**，更不许把改了一半的代码留在 `main` 的工作树里（会跟别的 agent 踩脚、污染共享树）。
-    - **审计环节现状（2026-07-03 更新）**：原"审计 bot 复核"已下线（bot 不存在）。PR 现由**开发者自审 + 人工 review** 承接——本地测试全绿（含神圣不变式）即可开 PR，由人决定合并，不阻塞在"等审计 bot"。未来若重新引入审计 agent，以 `AGENTS.md` 的「Audit Agent Charter」为其入职守则（独立审计 / 可提自己的想法 / 可质疑历史决策并查证）。开发 agent 自审时也应按该 Charter 三原则自我要求，而非机械对照本文档放行。
+    - **审计环节现状（2026-07-14 更新）**：审计 bot 已恢复并重新成为 PR 合并前的**阻塞门禁**。本地测试全绿（含神圣不变式）后可以开 PR；审计 bot pending、失败或仍有阻塞意见时不得合并。必须等待审计完成、修复全部阻塞意见并取得通过状态，再由人工 review 决定是否合并。审计 bot、临时审计 agent 与开发 agent 自审均按 `AGENTS.md` 的「Audit Agent Charter」执行（独立审计 / 可提自己的想法 / 可质疑历史决策并查证），不能机械对照既有文档放行。
   - **仅文档**（`docs/`、`*.md`）改动可直接 commit `main`（低风险），但保持独立 commit、别夹带代码。
-  - AIRP 仓当前只有**手动** GitHub Actions 打包 workflow，不是 PR 自动门禁；本地测试仍是合并前主要门：PR 前必跑 `cargo test -p airp-core`（动引擎时）+ `subagent_context_has_no_orchestrator_noise`（神圣不变式）+ 相关 `cargo test -p airp-ui` / `vitest` / `vue-tsc`。
+  - AIRP 仓的 `.github/workflows/pr-gate.yml` 会对 PR 自动执行 Rust workspace、UI/WebUI 与 production topology 门禁；Windows artifact 打包仍由手动 workflow 负责。合并前必须同时满足本地相关测试、自动 PR gate 与审计 bot 阻塞复核：PR 前必跑 `cargo test -p airp-core`（动引擎时）+ `subagent_context_has_no_orchestrator_noise`（神圣不变式）+ 相关 `cargo test -p airp-ui` / `vitest` / `vue-tsc`。
 - **提交卫生**：
   - **只 `git add <明确文件>`，禁止 `git add -A` / `git add .`**——会把垃圾/临时文件（如 `nul`、`_check.bat`、编辑器/构建产物）扫进提交。
   - 提交前 `git status` 核对暂存清单；发现游离垃圾文件先清（Windows 保留名 `nul` 用 `del \\.\nul`）或加 `.gitignore`。

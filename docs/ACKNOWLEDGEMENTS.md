@@ -23,13 +23,14 @@
 
 下表记录已经在文档或 GitHub issue 中形成明确研究结论的第三方项目。
 
-| 项目 | AIRP 研究或吸收的经验 | 当前关系 | 审查基线（2026-07-11） | 许可证核验 | AIRP 记录 |
+| 项目 | AIRP 研究或吸收的经验 | 当前关系 | 审查基线（固定版本/日期） | 许可证核验 | AIRP 记录 |
 |---|---|---|---|---|---|
 | [SillyTavern](https://github.com/SillyTavern/SillyTavern) | RP 功能清单、角色卡/世界书兼容面、Preset 与 Persona 交互、扩展生态 | 功能与互操作性参考；AIRP 按自身架构独立实现 | `8172dcd0ee` | AGPL-3.0 | [TAVERN-PARITY.md](TAVERN-PARITY.md)、[#114](https://github.com/GhostXia/AIRP/issues/114) |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 有界长期记忆、frozen snapshot、skills、用户建模、headless Agent 形态、credential redirect 边界 | 重要架构理念参考 | `3b2ef789df` | MIT | [HERMES-MEMORY.md](HERMES-MEMORY.md)、[#117](https://github.com/GhostXia/AIRP/issues/117) |
 | [NeuroBook](https://github.com/notnotype/neuro-book) | 结构化 prompt 装配、长篇记忆、角色知识视角、Agent change inbox 与 authoring workflow | 研究参考；未作为当前 capability 事实 | `138e16d216` | AGPL-3.0 | [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md)、[#117](https://github.com/GhostXia/AIRP/issues/117) |
 | [pi-forge](https://github.com/MacroSony/pi-forge) | Preset 导入报告、prompt assembly trace、一次性 payload inspector、history integrity | 规划参考，尚待 issue 实施 | `161f434ba5` | MIT | [#115](https://github.com/GhostXia/AIRP/issues/115) |
 | [llmlint](https://github.com/notnotype/llmlint) | 声明式风格规则、候选诊断、确认式修复、误报与分层评测 | 规划参考，尚待 issue 实施 | `9aabfc2839` | PolyForm Noncommercial 1.0.0 | [#116](https://github.com/GhostXia/AIRP/issues/116) |
+| [caveman PR #554](https://github.com/JuliusBrussee/caveman/pull/554) | CJK 输出邻近结构化 tool call 时发生截断的用户实遇信号；将“已确认现象、根因假设、未验证缓解方案”分层记录，并以真实复现样本作为兼容性扩展门槛 | 仅作审计与兼容性决策方法参考；未确认是 AIRP 缺陷，不复用上游代码、规则文本或 prompt | `5b80d5ae15` / 2026-06-23 | MIT | [#149](https://github.com/GhostXia/AIRP/issues/149)、[AIRP 提交者的复现与换行候选说明](https://github.com/JuliusBrussee/caveman/pull/554#issuecomment-4785334058) |
 
 列入本表仅表示 AIRP 曾研究其公开设计、产品行为或互操作格式，不表示原项目维护者认可、参与或支持 AIRP，也不自动表示 AIRP 复用了其代码、规则、数据、测试或视觉资产。
 
