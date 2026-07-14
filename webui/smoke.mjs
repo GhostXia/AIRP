@@ -286,6 +286,9 @@ const multiPersonaUser = 'smoke-multi-persona';
 
   // 创建一个非 default persona
   const pid = 'writer';
+  const cleanupExisting = await api('DELETE', '/v1/users/' + multiPersonaUser + '/personas/' + pid);
+  ok(cleanupExisting.ok && cleanupExisting.status === 204, 'pre-clean existing writer persona 204');
+
   const created = await api('POST', '/v1/users/' + multiPersonaUser + '/personas', {
     persona_id: pid,
     name: 'Writer',
@@ -296,6 +299,15 @@ const multiPersonaUser = 'smoke-multi-persona';
   eq(created.data?.name, 'Writer', 'created persona name 落盘');
   ok(typeof created.data?.revision === 'number', 'created persona 有 revision');
 
+  // 重复创建同一 persona_id → revision 冲突，不覆盖数据
+  const createDup = await api('POST', '/v1/users/' + multiPersonaUser + '/personas', {
+    persona_id: pid,
+    name: 'overwrite-attempt',
+    description: '',
+    variables: {},
+  });
+  ok(!createDup.ok && createDup.status === 400, 'create duplicate persona_id 被拒绝 400');
+
   // list 应含 default + writer
   const listAfterCreate = await api('GET', '/v1/users/' + multiPersonaUser + '/personas');
   const idsAfterCreate = Array.isArray(listAfterCreate.data) ? listAfterCreate.data : [];
@@ -305,6 +317,7 @@ const multiPersonaUser = 'smoke-multi-persona';
   const got = await api('GET', '/v1/users/' + multiPersonaUser + '/personas/' + pid);
   ok(got.ok, 'get non-default persona 200');
   eq(got.data?.variables?.tone, 'concise', 'get persona variables 正确');
+  eq(got.data?.name, 'Writer', 'duplicate create did not overwrite name');
 
   // get 不存在的 persona → 404
   const notFound = await api('GET', '/v1/users/' + multiPersonaUser + '/personas/nonexistent');

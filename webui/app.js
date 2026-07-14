@@ -248,7 +248,7 @@
       refreshModels(),
       refreshChars(),
       refreshAgentTools(),
-      (async () => { await refreshPersonaList(); await refreshPersona(); })(),
+      refreshPersonaList().then(refreshPersona),
       refreshPresets(),
     ]);
     // 初次连接后自动加载当前角色的 chat history（PLAN §9 P1 "交互收口"）。
@@ -620,7 +620,7 @@
       await refreshPersona();
       personaStatus.textContent = '已删除 · ' + personaStatus.textContent;
     } finally {
-      if (btnDeletePersona) btnDeletePersona.disabled = false;
+      updateDeleteButtonState();
     }
   }
 
@@ -689,7 +689,10 @@
   if (btnNewPersona) btnNewPersona.addEventListener('click', enterCreateMode);
   if (btnDeletePersona) btnDeletePersona.addEventListener('click', deletePersona);
   if (btnCreatePersona) btnCreatePersona.addEventListener('click', createPersona);
-  if (btnCancelCreatePersona) btnCancelCreatePersona.addEventListener('click', exitCreateMode);
+  if (btnCancelCreatePersona) btnCancelCreatePersona.addEventListener('click', async () => {
+    exitCreateMode();
+    await refreshPersona();
+  });
   if (presetSelect) presetSelect.addEventListener('change', rememberWorkspace);
   if (btnImportPreset) btnImportPreset.addEventListener('click', importPreset);
 
