@@ -49,10 +49,23 @@
         <summary>User 设定</summary>
         <form id="persona-form" class="settings-form">
           <label>User ID<input id="persona-user-id" value="default" autocomplete="username" /></label>
+          <label>Persona 列表
+            <div class="persona-list-row">
+              <select id="persona-select" aria-label="Persona 列表"></select>
+              <button id="btn-new-persona" type="button" title="新建 Persona">新建</button>
+              <button id="btn-delete-persona" type="button" class="btn-danger" title="删除当前 Persona（default 不可删除）">删除</button>
+            </div>
+          </label>
+          <label id="persona-new-id-row" hidden>新 Persona ID<input id="persona-new-id" placeholder="例如 writer（不可为 default）" /></label>
           <label>显示名<input id="persona-name" value="User" /></label>
           <label>描述<textarea id="persona-description" rows="3"></textarea></label>
           <label>变量（JSON object）<textarea id="persona-variables" class="mono" rows="3">{}</textarea></label>
-          <div class="form-actions"><button id="btn-load-persona" type="button">加载</button><button id="btn-save-persona" class="btn-primary" type="submit">保存</button></div>
+          <div class="form-actions">
+            <button id="btn-load-persona" type="button">加载</button>
+            <button id="btn-save-persona" class="btn-primary" type="submit">保存</button>
+            <button id="btn-create-persona" type="button" class="btn-primary" hidden>创建</button>
+            <button id="btn-cancel-create-persona" type="button" hidden>取消</button>
+          </div>
           <span id="persona-status" class="hint">—</span>
         </form>
       </details>

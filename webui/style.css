@@ -38,6 +38,9 @@ button:disabled { opacity:.55; cursor:not-allowed; }
 .settings-form input,.settings-form select,.settings-form textarea { width:100%; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); padding:6px; }
 .settings-form textarea { resize:vertical; }
 .form-actions { display:flex; gap:6px; }
+.persona-list-row { display:flex; gap:4px; }
+.persona-list-row select { flex:1; }
+.persona-list-row button { padding:4px 8px; font-size:11px; white-space:nowrap; }
 .section-heading { display:flex; align-items:center; justify-content:space-between; font-weight:700; margin-bottom:10px; }
 .section-heading button, summary button { padding:3px 7px; font-size:11px; }
 summary { cursor:pointer; font-weight:700; } summary button { margin-left:6px; }
