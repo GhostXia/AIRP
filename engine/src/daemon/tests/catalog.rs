@@ -1,14 +1,14 @@
 // `/v1/agent/tools` catalog tests.
 //
-// Moved verbatim from `daemon::tests`. Asserts the catalog returns the
-// expected 19 builtin tool names in sorted order — the same contract that
-// #155 PR 2/3 will rely on when splitting the agent tools module.
+// Moved from `daemon::tests`. Asserts the catalog remains sorted with 19
+// entries and retains the context-export and volume-sealing tools.
 
 use super::*;
 
 #[tokio::test]
 async fn agent_tool_catalog_exposes_sorted_builtin_metadata() {
-    let app = create_router(make_state_with_key(None));
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
     let response = app
         .oneshot(
             axum::http::Request::builder()

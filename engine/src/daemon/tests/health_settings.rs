@@ -4,15 +4,15 @@
 // Moved verbatim from `daemon::tests`. Some health/settings tests build a
 // one-off `DaemonState` inline rather than calling `make_state_with_key`,
 // because they need to vary `api_key` / `endpoint` independently of
-// `access_api_key`; that on-disk tempdir is intentionally leaked for the
-// test's lifetime.
+// `access_api_key`; their local `TempDir` guards keep the paths alive for the
+// test lifetime and clean them up afterward.
 
 use super::*;
 
 // AUDIT-10: /version diagnostic endpoint
 #[tokio::test]
 async fn test_audit_10_version_endpoint_returns_metadata() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let app = create_router(state);
     let resp = app
         .oneshot(
@@ -33,7 +33,7 @@ async fn test_audit_10_version_endpoint_returns_metadata() {
 // AUDIT-10: /version requires no auth even when access_api_key is set
 #[tokio::test]
 async fn test_audit_10_version_unauthenticated_with_key_set() {
-    let state = make_state_with_key(Some("secret-key"));
+    let (state, _tmp) = make_state_with_key(Some("secret-key"));
     let app = create_router(state);
     let resp = app
         .oneshot(
@@ -88,7 +88,7 @@ async fn test_health_endpoint_returns_status() {
 // /health 不鉴权（与 /version 同级）
 #[tokio::test]
 async fn test_health_unauthenticated_with_key_set() {
-    let state = make_state_with_key(Some("secret-key"));
+    let (state, _tmp) = make_state_with_key(Some("secret-key"));
     let app = create_router(state);
     let resp = app
         .oneshot(
@@ -145,7 +145,7 @@ async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
 #[tokio::test]
 async fn test_a5_settings_exposes_access_api_key_set_false_when_none() {
     // 无 access_api_key 时，SettingsView.access_api_key_set 必须为 false
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let app = create_router(state);
     let resp = app
         .oneshot(
@@ -165,7 +165,7 @@ async fn test_a5_settings_exposes_access_api_key_set_false_when_none() {
 #[tokio::test]
 async fn test_a5_settings_exposes_access_api_key_set_true_when_set() {
     // 有 access_api_key 时，SettingsView.access_api_key_set 必须为 true
-    let state = make_state_with_key(Some("secret-key"));
+    let (state, _tmp) = make_state_with_key(Some("secret-key"));
     let app = create_router(state);
     let resp = app
         .oneshot(
@@ -220,7 +220,7 @@ async fn settings_update_keeps_secrets_runtime_only() {
 
 #[tokio::test]
 async fn production_settings_rejects_access_key_replacement_without_partial_update() {
-    let state = make_state_with_key(Some("old-production-key"));
+    let (state, _tmp) = make_state_with_key(Some("old-production-key"));
     {
         let mut cfg = state.config.write().unwrap();
         cfg.deployment_mode = crate::config::DeploymentMode::Production;

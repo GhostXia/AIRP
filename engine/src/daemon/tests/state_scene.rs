@@ -1,9 +1,8 @@
 // Character state, state schema, state history (M_LS-3 / LS-5 / LS-7) and
 // scene management (M_MS-3) endpoint tests.
 //
-// Moved verbatim from `daemon::tests`. All cases construct the router via
-// `create_router(make_state_no_key())` and assert on-disk artifacts under the
-// tempdir returned by the shared fixture.
+// Moved verbatim from `daemon::tests`. All cases keep the shared fixture's
+// tempdir guard alive while exercising the router and on-disk artifacts.
 
 use super::*;
 

@@ -23,11 +23,10 @@ mod security;
 mod state_scene;
 
 /// Build a `DaemonState` rooted at a fresh tempdir, optionally with an
-/// `access_api_key`. The tempdir is leaked intentionally — every test here is
-/// short-lived and process-isolated, so OS cleanup at exit is sufficient.
-pub(super) fn make_state_with_key(key: Option<&str>) -> Arc<DaemonState> {
+/// `access_api_key`. The returned guard must stay alive for the test lifetime.
+pub(super) fn make_state_with_key(key: Option<&str>) -> (Arc<DaemonState>, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    Arc::new(DaemonState {
+    let state = Arc::new(DaemonState {
         data_root: tmp.path().to_path_buf(),
         http_client: reqwest::Client::new(),
         config: std::sync::RwLock::new(MutableConfig {
@@ -42,7 +41,16 @@ pub(super) fn make_state_with_key(key: Option<&str>) -> Arc<DaemonState> {
             deployment_mode: Default::default(),
             public_origin: None,
         }),
-    })
+    });
+    (state, tmp)
+}
+
+#[test]
+fn state_fixture_keeps_data_root_alive_until_guard_drops() {
+    let (state, tmp) = make_state_with_key(None);
+    assert!(state.data_root.exists());
+    drop(tmp);
+    assert!(!state.data_root.exists());
 }
 
 /// Minimal router exercising only `auth_middleware` over `/v1/ping`. Used by

@@ -18,7 +18,8 @@ use tower_governor::key_extractor::KeyExtractor;
 
 #[tokio::test]
 async fn cors_allows_bundled_webui_origin() {
-    let app = create_router(make_state_with_key(None));
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -37,7 +38,7 @@ async fn cors_allows_bundled_webui_origin() {
 
 #[tokio::test]
 async fn production_cache_policy_keeps_streams_unbuffered_and_other_responses_unstored() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     {
         let mut cfg = state.config.write().unwrap();
         cfg.deployment_mode = DeploymentMode::Production;
@@ -95,7 +96,8 @@ async fn production_cache_policy_keeps_streams_unbuffered_and_other_responses_un
 
 #[tokio::test]
 async fn cors_rejects_unlisted_origin() {
-    let app = create_router(make_state_with_key(None));
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -153,7 +155,7 @@ fn test_a2_5_constant_time_eq() {
 
 #[tokio::test]
 async fn test_dx2_no_key_all_pass() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let app = make_router_for_test(state);
     let resp = app
         .oneshot(
@@ -169,7 +171,7 @@ async fn test_dx2_no_key_all_pass() {
 
 #[tokio::test]
 async fn test_dx2_correct_key_passes() {
-    let state = make_state_with_key(Some("secret-key"));
+    let (state, _tmp) = make_state_with_key(Some("secret-key"));
     let app = make_router_for_test(state);
     let resp = app
         .oneshot(
@@ -186,7 +188,7 @@ async fn test_dx2_correct_key_passes() {
 
 #[tokio::test]
 async fn test_dx2_wrong_key_returns_401() {
-    let state = make_state_with_key(Some("secret-key"));
+    let (state, _tmp) = make_state_with_key(Some("secret-key"));
     let app = make_router_for_test(state);
     let resp = app
         .oneshot(
@@ -203,7 +205,7 @@ async fn test_dx2_wrong_key_returns_401() {
 
 #[tokio::test]
 async fn test_dx2_missing_header_returns_401() {
-    let state = make_state_with_key(Some("secret-key"));
+    let (state, _tmp) = make_state_with_key(Some("secret-key"));
     let app = make_router_for_test(state);
     let resp = app
         .oneshot(
@@ -219,7 +221,7 @@ async fn test_dx2_missing_header_returns_401() {
 
 #[tokio::test]
 async fn test_dx2_bearer_prefix_required() {
-    let state = make_state_with_key(Some("secret-key"));
+    let (state, _tmp) = make_state_with_key(Some("secret-key"));
     let app = make_router_for_test(state);
     let resp = app
         .oneshot(

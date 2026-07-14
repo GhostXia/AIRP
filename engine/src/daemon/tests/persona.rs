@@ -8,7 +8,7 @@ use super::*;
 
 #[tokio::test]
 async fn legacy_persona_update_preserves_schema_v2_bindings() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let uid = crate::types::UserId::new("alice").unwrap();
     let service = crate::domain::PersonaService::new(&state.data_root);
     let saved = service
@@ -63,7 +63,7 @@ async fn legacy_persona_update_preserves_schema_v2_bindings() {
 
 #[tokio::test]
 async fn list_personas_returns_default_only_for_fresh_user() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let response = create_router(state)
         .oneshot(
             axum::http::Request::builder()
@@ -84,7 +84,7 @@ async fn list_personas_returns_default_only_for_fresh_user() {
 
 #[tokio::test]
 async fn create_persona_then_get_returns_it() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let create_body = serde_json::json!({
         "persona_id": "alice-alt",
         "name": "Alice Alt",
@@ -133,7 +133,7 @@ async fn create_persona_then_get_returns_it() {
 
 #[tokio::test]
 async fn create_persona_rejects_default_id() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let body =
         serde_json::json!({"persona_id":"default","name":"D","description":"","variables":{}})
             .to_string();
@@ -157,7 +157,8 @@ async fn create_persona_rejects_default_id() {
         "variables": {}
     })
     .to_string();
-    let response = create_router(make_state_with_key(None))
+    let (state, _tmp) = make_state_with_key(None);
+    let response = create_router(state)
         .oneshot(
             axum::http::Request::builder()
                 .method("POST")
@@ -173,7 +174,7 @@ async fn create_persona_rejects_default_id() {
 
 #[tokio::test]
 async fn create_persona_rejects_duplicate() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let body = serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
         .to_string();
     let first = create_router(state.clone())
@@ -204,7 +205,7 @@ async fn create_persona_rejects_duplicate() {
 
 #[tokio::test]
 async fn create_persona_rejects_path_traversal() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let body =
         serde_json::json!({"persona_id":"../etc","name":"X","description":"","variables":{}})
             .to_string();
@@ -224,7 +225,7 @@ async fn create_persona_rejects_path_traversal() {
 
 #[tokio::test]
 async fn update_persona_bumps_revision_and_preserves_bindings() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let create_body =
         serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
             .to_string();
@@ -285,7 +286,7 @@ async fn update_persona_bumps_revision_and_preserves_bindings() {
 
 #[tokio::test]
 async fn update_persona_rejects_wrong_expected_revision() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let create_body =
         serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
             .to_string();
@@ -320,7 +321,7 @@ async fn update_persona_rejects_wrong_expected_revision() {
 
 #[tokio::test]
 async fn update_nonexistent_non_default_returns_404() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let body =
         serde_json::json!({"expected_revision":0,"name":"X","description":"","variables":{}})
             .to_string();
@@ -340,7 +341,7 @@ async fn update_nonexistent_non_default_returns_404() {
 
 #[tokio::test]
 async fn delete_persona_removes_it_and_default_rejected() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let create_body =
         serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
             .to_string();
@@ -392,7 +393,8 @@ async fn delete_persona_removes_it_and_default_rejected() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let response = create_router(make_state_with_key(None))
+    let (state, _tmp) = make_state_with_key(None);
+    let response = create_router(state)
         .oneshot(
             axum::http::Request::builder()
                 .method("DELETE")
@@ -407,7 +409,7 @@ async fn delete_persona_removes_it_and_default_rejected() {
 
 #[tokio::test]
 async fn bind_persona_is_idempotent_and_unbind_removes_it() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let create_body =
         serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
             .to_string();
@@ -497,7 +499,8 @@ async fn bind_persona_is_idempotent_and_unbind_removes_it() {
 
 #[tokio::test]
 async fn unbind_missing_query_uses_airp_error_envelope() {
-    let response = create_router(make_state_with_key(None))
+    let (state, _tmp) = make_state_with_key(None);
+    let response = create_router(state)
         .oneshot(
             axum::http::Request::builder()
                 .method("DELETE")
@@ -521,7 +524,7 @@ async fn unbind_missing_query_uses_airp_error_envelope() {
 
 #[tokio::test]
 async fn bind_rejects_invalid_character_id() {
-    let state = make_state_with_key(None);
+    let (state, _tmp) = make_state_with_key(None);
     let create_body =
         serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
             .to_string();
