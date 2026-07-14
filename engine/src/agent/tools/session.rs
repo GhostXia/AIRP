@@ -21,6 +21,7 @@ use crate::adapter::{ChatMessage, MessageRole};
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
 use crate::error::AirpError;
+use crate::types::CharacterId;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
