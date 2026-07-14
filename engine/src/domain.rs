@@ -957,8 +957,9 @@ impl PersonaService {
         self.save(user_id, persona_id, rev, persona)
     }
 
-    /// 查找该用户下绑定到指定角色/会话的 Persona id（首个匹配）。
-    /// 优先匹配带 session_id 的精确绑定，再匹配全会话通用绑定。
+    /// 查找该用户下绑定到指定角色/会话的 Persona id。
+    /// 优先匹配带 session_id 的精确绑定，再匹配全会话通用绑定；同一优先级
+    /// 命中多份 Persona 时 fail closed，避免按文件名字典序静默切换 Persona。
     pub fn find_for_character(
         &self,
         user_id: &UserId,
@@ -970,8 +971,8 @@ impl PersonaService {
             SessionId::parse(session_id)?;
         }
         let ids = self.list(user_id)?;
-        // 精确 session 绑定优先。
-        let mut generic: Option<String> = None;
+        let mut exact_matches = Vec::new();
+        let mut generic_matches = Vec::new();
         for pid in &ids {
             let persona = match self.get(user_id, pid, "User") {
                 Ok(persona) => persona,
@@ -984,15 +985,29 @@ impl PersonaService {
                     continue;
                 }
                 match (&b.session_id, session_id) {
-                    (Some(b_sid), Some(q_sid)) if b_sid == q_sid => return Ok(Some(pid.clone())),
+                    (Some(b_sid), Some(q_sid)) if b_sid == q_sid => {
+                        exact_matches.push(pid.clone());
+                    }
                     (None, _) => {
-                        generic.get_or_insert_with(|| pid.clone());
+                        generic_matches.push(pid.clone());
                     }
                     _ => {}
                 }
             }
         }
-        Ok(generic)
+        let matches = if exact_matches.is_empty() {
+            generic_matches
+        } else {
+            exact_matches
+        };
+        match matches.as_slice() {
+            [] => Ok(None),
+            [persona_id] => Ok(Some(persona_id.clone())),
+            _ => Err(AirpError::BadRequest(format!(
+                "ambiguous persona binding for character {character_id}: {}",
+                matches.join(", ")
+            ))),
+        }
     }
 
     // ── 内部────────────────────────────────────────────────────────────────────
@@ -1589,6 +1604,46 @@ mod tests {
             service.find_for_character(&uid, "char-a", None).unwrap(),
             Some("generic".to_string())
         );
+    }
+
+    #[test]
+    fn persona_binding_ambiguity_fails_closed_at_each_precedence_tier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let session = SessionId::new().to_string();
+        for id in ["one", "two"] {
+            service.save(&uid, id, 0, Persona::initial(id)).unwrap();
+            service
+                .bind(
+                    &uid,
+                    id,
+                    PersonaBinding {
+                        character_id: "generic-char".to_string(),
+                        session_id: None,
+                    },
+                )
+                .unwrap();
+            service
+                .bind(
+                    &uid,
+                    id,
+                    PersonaBinding {
+                        character_id: "session-char".to_string(),
+                        session_id: Some(session.clone()),
+                    },
+                )
+                .unwrap();
+        }
+
+        assert!(matches!(
+            service.find_for_character(&uid, "generic-char", None),
+            Err(AirpError::BadRequest(_))
+        ));
+        assert!(matches!(
+            service.find_for_character(&uid, "session-char", Some(&session)),
+            Err(AirpError::BadRequest(_))
+        ));
     }
 
     // ── delete_session + session-scoped lifecycle（#35/#37）──────────────────────

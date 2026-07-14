@@ -1071,6 +1071,17 @@ mod tests_a1b_resolve {
     }
 
     #[test]
+    fn explicit_persona_id_rejects_path_traversal_at_pipeline_boundary() {
+        let tmp = tempdir().unwrap();
+        let mut req = base_request_with_user(Some("alice"));
+        req.persona_id = Some("../escape".to_string());
+        assert!(matches!(
+            resolve_request_persona(&req, tmp.path()),
+            Err(crate::error::AirpError::BadRequest(_))
+        ));
+    }
+
+    #[test]
     fn bound_persona_is_resolved_via_find_for_character() {
         let tmp = tempdir().unwrap();
         let uid = crate::types::UserId::new("alice").unwrap();
@@ -1213,6 +1224,8 @@ mod tests_a1b_pipeline_e2e {
     use crate::config::VolumeConfig;
     use crate::daemon::{MutableConfig, UserProfile};
     use crate::domain::{Persona, PersonaService};
+    use crate::scene::{LorebookMerge, SceneConfig};
+    use crate::types::SceneId;
     use crate::types::{CharacterId, UserId};
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -1397,5 +1410,49 @@ mod tests_a1b_pipeline_e2e {
             "persona default must not survive when request overrides; got: {}",
             pipeline.system_prompt
         );
+    }
+
+    #[test]
+    fn prepare_scene_pipeline_substitutes_persona_variables_in_prompt() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let uid = UserId::new("alice").unwrap();
+        PersonaService::new(tmp.path())
+            .save(
+                &uid,
+                "writer",
+                0,
+                Persona {
+                    schema: Persona::SCHEMA,
+                    revision: 0,
+                    updated_at: String::new(),
+                    name: "Writer".to_string(),
+                    description: String::new(),
+                    variables: HashMap::from([("tone".to_string(), "concise".to_string())]),
+                    id: "writer".to_string(),
+                    bindings: Vec::new(),
+                },
+            )
+            .unwrap();
+        let effective_root =
+            crate::data_dir::resolve_effective_root(tmp.path(), Some("alice")).unwrap();
+        SceneConfig {
+            scene_id: SceneId::new("writers-room").unwrap(),
+            description: "A {{tone}} scene".to_string(),
+            characters: Vec::new(),
+            narrator_style: String::new(),
+            lorebook_merge: LorebookMerge::Union,
+            format_hint: String::new(),
+        }
+        .save(&effective_root)
+        .unwrap();
+
+        let mut req = base_chat_request(Some("alice"), Some("writer"));
+        req.character_card_id = None;
+        req.scene_id = Some("writers-room".to_string());
+        let pipeline = prepare_pipeline(&req, &state).unwrap();
+        assert!(pipeline.system_prompt.contains("A concise scene"));
+        assert!(!pipeline.system_prompt.contains("{{tone}}"));
     }
 }

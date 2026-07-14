@@ -106,6 +106,11 @@ contract bit-for-bit.
 | `name` (→ `{{user}}`) | Request `user_profile.name` if non-empty; otherwise persona `name`. |
 | `variables` | Persona `variables` as defaults; request `user_profile.variables` overrides same-name keys. |
 
+If multiple Personas match at the same binding precedence tier, resolution
+fails with `400 bad_request` instead of silently selecting by filename order.
+The merged variables are substituted in both single-character and scene system
+prompts.
+
 Rationale: the request body is the most recent client intent and must win
 on explicit fields; the persona provides durable defaults (tone, persona
 variables, etc.) without forcing the client to resend them every turn.

@@ -129,6 +129,7 @@ fn resolve_request_persona(
 
     // precedence 1: 显式 persona_id
     if let Some(persona_id) = payload.persona_id.as_deref() {
+        data_dir::validate_id_segment(persona_id)?;
         let persona = service.get(&uid, persona_id, "User")?;
         return Ok(Some(persona));
     }
@@ -176,9 +177,7 @@ fn merge_persona_into_user_profile(
         user_profile.name.clone()
     };
     let mut merged = persona.variables.clone();
-    for (k, v) in &user_profile.variables {
-        merged.insert(k.clone(), v.clone());
-    }
+    merged.extend(user_profile.variables.clone());
     (name, merged)
 }
 
@@ -316,6 +315,11 @@ fn prepare_scene_pipeline(
         &triggered_lore,
         &effective_user_name,
     );
+    let mut prompt_variables = effective_user_variables.clone();
+    prompt_variables.insert("user".to_string(), effective_user_name.clone());
+    for (key, value) in prompt_variables {
+        system_prompt = system_prompt.replace(&format!("{{{{{key}}}}}"), &value);
+    }
 
     let session_dir_opt: Option<PathBuf> =
         data_dir::scene_memory_dir(&effective_root, &scene_id).ok();
