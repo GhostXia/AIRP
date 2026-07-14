@@ -1,7 +1,8 @@
 # Multi-Persona HTTP API
 
-> Status: A1a and A1b delivered. This document records the stable HTTP contract
-> and remaining product boundary; it is not an execution log.
+> Status: A1a (PR #151) and A1b (PR #152) delivered. A2a (WebUI multi-Persona
+> CRUD) in flight. This document records the stable HTTP contract and remaining
+> product boundary; it is not an execution log.
 
 ## Scope
 
@@ -10,8 +11,9 @@ The plural `/v1/users/:user_id/personas` surface exposes the existing
 `/v1/users/:user_id/persona` GET/PUT surface remains supported for the default
 persona.
 
-This slice does not add a WebUI management surface (A2). A1b — pipeline
-activation — is delivered alongside this contract.
+A2a adds a WebUI management surface for listing, creating, editing and deleting
+multi-Personas (plural endpoints). Binding/unbinding (A2b) and chat-time
+persona activation switching (A2c) remain deferred.
 
 ## Endpoints
 
@@ -125,7 +127,8 @@ persona binding semantics are deferred.
 
 ## Remaining work
 
-- A2: add WebUI list/create/edit/delete/bind/unbind/switch flows now that
-  A1b is stable.
+- A2b: add WebUI bind/unbind flows (character/session binding management).
+- A2c: add WebUI chat-time persona activation switching (set `persona_id` in
+  `/v1/chat/completions` requests from the UI).
 - Define cross-session binding precedence for scene mode as part of any
   future multi-character persona binding work.

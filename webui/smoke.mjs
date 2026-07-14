@@ -266,6 +266,104 @@ let personaRevision = 0;
   ok(!conflict.ok && conflict.status === 400, 'persona revision 冲突返回 400');
 }
 
+// 判据 5b（A2a）：多 Persona CRUD（plural endpoints）
+const multiPersonaUser = 'smoke-multi-persona';
+{
+  // 初始 list — 至少含 default
+  const listInit = await api('GET', '/v1/users/' + multiPersonaUser + '/personas');
+  ok(listInit.ok, 'plural persona list 200');
+  const idsInit = Array.isArray(listInit.data) ? listInit.data : [];
+  ok(idsInit.includes('default'), 'plural persona list 含 default');
+
+  // 创建 default 应被拒绝
+  const createDefault = await api('POST', '/v1/users/' + multiPersonaUser + '/personas', {
+    persona_id: 'default',
+    name: 'x',
+    description: '',
+    variables: {},
+  });
+  ok(!createDefault.ok && createDefault.status === 400, 'create default 被拒绝 400');
+
+  // 创建一个非 default persona
+  const pid = 'writer';
+  const cleanupExisting = await api('DELETE', '/v1/users/' + multiPersonaUser + '/personas/' + pid);
+  ok(cleanupExisting.ok && cleanupExisting.status === 204, 'pre-clean existing writer persona 204');
+
+  const created = await api('POST', '/v1/users/' + multiPersonaUser + '/personas', {
+    persona_id: pid,
+    name: 'Writer',
+    description: 'concise persona',
+    variables: { tone: 'concise' },
+  });
+  ok(created.ok, 'create non-default persona 200');
+  eq(created.data?.name, 'Writer', 'created persona name 落盘');
+  ok(typeof created.data?.revision === 'number', 'created persona 有 revision');
+
+  // 重复创建同一 persona_id → revision 冲突，不覆盖数据
+  const createDup = await api('POST', '/v1/users/' + multiPersonaUser + '/personas', {
+    persona_id: pid,
+    name: 'overwrite-attempt',
+    description: '',
+    variables: {},
+  });
+  ok(!createDup.ok && createDup.status === 400, 'create duplicate persona_id 被拒绝 400');
+
+  // list 应含 default + writer
+  const listAfterCreate = await api('GET', '/v1/users/' + multiPersonaUser + '/personas');
+  const idsAfterCreate = Array.isArray(listAfterCreate.data) ? listAfterCreate.data : [];
+  ok(idsAfterCreate.includes('default') && idsAfterCreate.includes(pid), 'list 含 default + writer');
+
+  // get 单个
+  const got = await api('GET', '/v1/users/' + multiPersonaUser + '/personas/' + pid);
+  ok(got.ok, 'get non-default persona 200');
+  eq(got.data?.variables?.tone, 'concise', 'get persona variables 正确');
+  eq(got.data?.name, 'Writer', 'duplicate create did not overwrite name');
+
+  // get 不存在的 persona → 404
+  const notFound = await api('GET', '/v1/users/' + multiPersonaUser + '/personas/nonexistent');
+  ok(!notFound.ok && notFound.status === 404, 'get nonexistent persona 404');
+
+  // update
+  const rev = created.data?.revision ?? 0;
+  const updated = await api('PUT', '/v1/users/' + multiPersonaUser + '/personas/' + pid, {
+    expected_revision: rev,
+    name: 'Writer Pro',
+    description: 'updated',
+    variables: { tone: 'precise' },
+  });
+  ok(updated.ok, 'update non-default persona 200');
+  eq(updated.data?.name, 'Writer Pro', 'updated persona name 落盘');
+  eq(updated.data?.variables?.tone, 'precise', 'updated persona variables 落盘');
+
+  // revision conflict
+  const conflictMulti = await api('PUT', '/v1/users/' + multiPersonaUser + '/personas/' + pid, {
+    expected_revision: 999,
+    name: 'stale',
+    description: '',
+    variables: {},
+  });
+  ok(!conflictMulti.ok && conflictMulti.status === 400, 'plural persona revision 冲突 400');
+
+  // delete default 被拒绝
+  const delDefault = await api('DELETE', '/v1/users/' + multiPersonaUser + '/personas/default');
+  ok(!delDefault.ok && delDefault.status === 400, 'delete default 被拒绝 400');
+
+  // delete writer
+  const deleted = await api('DELETE', '/v1/users/' + multiPersonaUser + '/personas/' + pid);
+  ok(deleted.ok, 'delete non-default persona 204');
+  eq(deleted.status, 204, 'delete returns 204');
+
+  // delete 后 list 不再含 writer
+  const listAfterDelete = await api('GET', '/v1/users/' + multiPersonaUser + '/personas');
+  const idsAfterDelete = Array.isArray(listAfterDelete.data) ? listAfterDelete.data : [];
+  ok(!idsAfterDelete.includes(pid), 'delete 后 list 不含 writer');
+  ok(idsAfterDelete.includes('default'), 'delete 后 list 仍含 default');
+
+  // 重复 delete 非 default persona → idempotent 204（合同：删除缺失的非 default 返 204）
+  const reDelete = await api('DELETE', '/v1/users/' + multiPersonaUser + '/personas/' + pid);
+  ok(reDelete.ok, 're-delete non-default persona idempotent 204');
+}
+
 const presetId = 'smoke-preset-' + Date.now();
 {
   const imp = await api('POST', '/v1/presets/import', {

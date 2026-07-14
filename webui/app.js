@@ -63,6 +63,13 @@
   const personaStatus = $('#persona-status');
   const btnLoadPersona = $('#btn-load-persona');
   const btnSavePersona = $('#btn-save-persona');
+  const personaSelect = $('#persona-select');
+  const btnNewPersona = $('#btn-new-persona');
+  const btnDeletePersona = $('#btn-delete-persona');
+  const personaNewIdRow = $('#persona-new-id-row');
+  const personaNewId = $('#persona-new-id');
+  const btnCreatePersona = $('#btn-create-persona');
+  const btnCancelCreatePersona = $('#btn-cancel-create-persona');
   const presetSelect = $('#preset-select');
   const presetImportFile = $('#preset-import-file');
   const presetImportId = $('#preset-import-id');
@@ -76,6 +83,8 @@
   let selectedSess = '';
   let personaRevision = 0;
   let activePersona = { name: 'User', description: '', variables: {} };
+  let selectedPersonaId = 'default';
+  let creatingPersona = false;
   let abortController = null;   // for chat SSE
   let agentAbort = null;        // for agent run SSE — 二次点击先 abort 前一个，防事件交错竞态（issue #43/#44 D）
   const HISTORY_PAGE_SIZE = 50;
@@ -239,7 +248,7 @@
       refreshModels(),
       refreshChars(),
       refreshAgentTools(),
-      refreshPersona(),
+      refreshPersonaList().then(refreshPersona),
       refreshPresets(),
     ]);
     // 初次连接后自动加载当前角色的 chat history（PLAN §9 P1 "交互收口"）。
@@ -431,6 +440,7 @@
       localStorage.setItem('airp_preset_id', presetId);
       localStorage.setItem('airp_character_id', selectedChar || '');
       localStorage.setItem('airp_session_id', selectedSess || '');
+      localStorage.setItem('airp_persona_id', selectedPersonaId || 'default');
     } catch {}
   }
 
@@ -447,11 +457,44 @@
     return value;
   }
 
+  async function refreshPersonaList() {
+    if (!personaSelect) return;
+    const userId = personaUserId.value.trim() || 'default';
+    const r = await api('GET', '/v1/users/' + encodeURIComponent(userId) + '/personas');
+    if (!r.ok) {
+      personaStatus.textContent = 'Persona 列表加载失败: ' + formatError(r.data, r.text);
+      personaSelect.textContent = '';
+      return;
+    }
+    const ids = Array.isArray(r.data) ? r.data.map(String) : [];
+    personaSelect.textContent = '';
+    ids.forEach(id => {
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = id;
+      personaSelect.appendChild(option);
+    });
+    if (ids.includes(selectedPersonaId)) {
+      personaSelect.value = selectedPersonaId;
+    } else if (ids.includes('default')) {
+      selectedPersonaId = 'default';
+      personaSelect.value = 'default';
+    }
+    updateDeleteButtonState();
+  }
+
+  function updateDeleteButtonState() {
+    if (!btnDeletePersona) return;
+    btnDeletePersona.disabled = (selectedPersonaId.toLowerCase() === 'default');
+  }
+
   async function refreshPersona() {
     if (!personaUserId) return;
+    if (creatingPersona) return;
     const userId = personaUserId.value.trim() || 'default';
+    const pid = selectedPersonaId || 'default';
     personaStatus.textContent = '加载中…';
-    const r = await api('GET', '/v1/users/' + encodeURIComponent(userId) + '/persona');
+    const r = await api('GET', '/v1/users/' + encodeURIComponent(userId) + '/personas/' + encodeURIComponent(pid));
     if (!r.ok) {
       personaStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
       return;
@@ -466,13 +509,15 @@
     personaName.value = activePersona.name;
     personaDescription.value = activePersona.description;
     personaVariables.value = JSON.stringify(activePersona.variables, null, 2);
-    personaStatus.textContent = 'revision ' + personaRevision + (persona.updated_at ? ' · ' + persona.updated_at : '');
+    personaStatus.textContent = pid + ' · revision ' + personaRevision + (persona.updated_at ? ' · ' + persona.updated_at : '');
     rememberWorkspace();
   }
 
   async function savePersona(event) {
     event.preventDefault();
+    if (creatingPersona) { await createPersona(); return; }
     const userId = personaUserId.value.trim() || 'default';
+    const pid = selectedPersonaId || 'default';
     let variables;
     try { variables = parsePersonaVariables(); }
     catch (error) { personaStatus.textContent = error.message; return; }
@@ -485,7 +530,7 @@
         description: personaDescription.value.trim(),
         variables,
       };
-      const r = await api('PUT', '/v1/users/' + encodeURIComponent(userId) + '/persona', payload);
+      const r = await api('PUT', '/v1/users/' + encodeURIComponent(userId) + '/personas/' + encodeURIComponent(pid), payload);
       if (!r.ok) {
         personaStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
         return;
@@ -494,6 +539,88 @@
       personaStatus.textContent = '已保存 · ' + personaStatus.textContent;
     } finally {
       if (btnSavePersona) btnSavePersona.disabled = false;
+    }
+  }
+
+  function enterCreateMode() {
+    creatingPersona = true;
+    if (personaNewIdRow) personaNewIdRow.hidden = false;
+    if (btnCreatePersona) btnCreatePersona.hidden = false;
+    if (btnCancelCreatePersona) btnCancelCreatePersona.hidden = false;
+    if (btnSavePersona) btnSavePersona.hidden = true;
+    if (btnLoadPersona) btnLoadPersona.hidden = true;
+    if (personaSelect) personaSelect.disabled = true;
+    if (btnNewPersona) btnNewPersona.disabled = true;
+    if (btnDeletePersona) btnDeletePersona.disabled = true;
+    personaNewId.value = '';
+    personaName.value = '';
+    personaDescription.value = '';
+    personaVariables.value = '{}';
+    personaStatus.textContent = '填写新 Persona ID 和字段后点创建';
+    if (personaNewId) personaNewId.focus();
+  }
+
+  function exitCreateMode() {
+    creatingPersona = false;
+    if (personaNewIdRow) personaNewIdRow.hidden = true;
+    if (btnCreatePersona) btnCreatePersona.hidden = true;
+    if (btnCancelCreatePersona) btnCancelCreatePersona.hidden = true;
+    if (btnSavePersona) btnSavePersona.hidden = false;
+    if (btnLoadPersona) btnLoadPersona.hidden = false;
+    if (personaSelect) personaSelect.disabled = false;
+    if (btnNewPersona) btnNewPersona.disabled = false;
+    updateDeleteButtonState();
+  }
+
+  async function createPersona() {
+    const userId = personaUserId.value.trim() || 'default';
+    const pid = personaNewId.value.trim();
+    if (!pid) { personaStatus.textContent = '请填写 Persona ID'; return; }
+    let variables;
+    try { variables = parsePersonaVariables(); }
+    catch (error) { personaStatus.textContent = error.message; return; }
+    personaStatus.textContent = '创建中…';
+    if (btnCreatePersona) btnCreatePersona.disabled = true;
+    try {
+      const payload = {
+        persona_id: pid,
+        name: personaName.value.trim() || 'User',
+        description: personaDescription.value.trim(),
+        variables,
+      };
+      const r = await api('POST', '/v1/users/' + encodeURIComponent(userId) + '/personas', payload);
+      if (!r.ok) {
+        personaStatus.textContent = '创建失败: ' + formatError(r.data, r.text);
+        return;
+      }
+      selectedPersonaId = pid;
+      exitCreateMode();
+      await refreshPersonaList();
+      await refreshPersona();
+      personaStatus.textContent = '已创建 · ' + personaStatus.textContent;
+    } finally {
+      if (btnCreatePersona) btnCreatePersona.disabled = false;
+    }
+  }
+
+  async function deletePersona() {
+    const userId = personaUserId.value.trim() || 'default';
+    const pid = selectedPersonaId || 'default';
+    if (pid.toLowerCase() === 'default') return;
+    personaStatus.textContent = '删除中…';
+    if (btnDeletePersona) btnDeletePersona.disabled = true;
+    try {
+      const r = await api('DELETE', '/v1/users/' + encodeURIComponent(userId) + '/personas/' + encodeURIComponent(pid));
+      if (!r.ok) {
+        personaStatus.textContent = '删除失败: ' + formatError(r.data, r.text);
+        return;
+      }
+      selectedPersonaId = 'default';
+      await refreshPersonaList();
+      await refreshPersona();
+      personaStatus.textContent = '已删除 · ' + personaStatus.textContent;
+    } finally {
+      updateDeleteButtonState();
     }
   }
 
@@ -553,7 +680,19 @@
   }
 
   if (personaForm) personaForm.addEventListener('submit', savePersona);
-  if (btnLoadPersona) btnLoadPersona.addEventListener('click', refreshPersona);
+  if (btnLoadPersona) btnLoadPersona.addEventListener('click', async () => { await refreshPersonaList(); await refreshPersona(); });
+  if (personaSelect) personaSelect.addEventListener('change', () => {
+    selectedPersonaId = personaSelect.value || 'default';
+    updateDeleteButtonState();
+    refreshPersona();
+  });
+  if (btnNewPersona) btnNewPersona.addEventListener('click', enterCreateMode);
+  if (btnDeletePersona) btnDeletePersona.addEventListener('click', deletePersona);
+  if (btnCreatePersona) btnCreatePersona.addEventListener('click', createPersona);
+  if (btnCancelCreatePersona) btnCancelCreatePersona.addEventListener('click', async () => {
+    exitCreateMode();
+    await refreshPersona();
+  });
   if (presetSelect) presetSelect.addEventListener('change', rememberWorkspace);
   if (btnImportPreset) btnImportPreset.addEventListener('click', importPreset);
 
@@ -2297,6 +2436,7 @@
     if (personaUserId) personaUserId.value = localStorage.getItem('airp_user_id') || 'default';
     selectedChar = localStorage.getItem('airp_character_id') || '';
     selectedSess = localStorage.getItem('airp_session_id') || '';
+    selectedPersonaId = localStorage.getItem('airp_persona_id') || 'default';
   } catch {}
 
   // ── auto-connect on load ─────────────────────────────────────────────────
