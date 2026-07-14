@@ -32,7 +32,7 @@ D:\AIRP-Dev/
 
 ## 当前状态
 
-> 2026-07-13 的权威实现、缺口和下一阶段顺序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。dated audits 只保留历史证据。
+> 2026-07-14 的权威实现、缺口和下一阶段顺序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。文档地图见 [docs/README.md](docs/README.md)，历史材料只保留压缩归档。
 
 - engine 已具备单回合 SSE 对话、OpenAI/Anthropic adapter、角色/会话/状态/场景/基础世界书、卷系统、拆解/analysis 和 settings/models 等 API。PR #100 留有一次 WebUI → engine → 真实 DeepSeek 的成功流式证据。
 - 默认 Agent 工具注册表当前为 19 个工具；`GET /v1/agent/tools` 提供排序后的运行时目录，`/v1/agent/run` 已用 OpenAI/Anthropic 原生 structured tool call 做动态决策，经 engine capability/allowlist/confirm 门执行 typed observation，并只由 finalizer 做最终纯净生成。
@@ -40,9 +40,10 @@ D:\AIRP-Dev/
 - 世界书已有 CRUD、确定性关键词触发与 v1 语义合同；StateService 在写入时强制 schema、revision 与串行边界。SillyTavern 高级世界书语义和稳定跨设备身份仍未完成。
 - WebUI 是当前正式产品交付主面。Tauri/Vue 代码与客户端无关合同继续保留，但桌面 UI 开发、打包验收和性能计划暂时搁置；新能力优先贯通 engine → HTTP/SSE → WebUI → production tests。
 - WebUI 的基础 RP 闭环由 PR #118/#119/#121/#123 完成；PR #124/#125 又交付 durable message ID、cursor history、rollback-by-ID、50 条窗口、增量 DOM 与加载更早。
-- 2026-07-13 最近 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy 和神圣提示词不变式均通过；WebUI engine-truth smoke 为 67/67，production topology gate 覆盖真实 HTTPS/Compose/system-Chrome 链路，具体证据见当前基线。
+- PR #139 将非法 rollback index 的拒绝下沉到 `ChatLog` 持久化边界；外层 service/API 行为不变，旧分支已清理。
+- 2026-07-14 最近 PR gate 的 workspace tests、UI build/tests、Rust fmt、`-D warnings` Clippy、神圣提示词不变式和 production topology 均通过；最近一次独立 WebUI engine-truth smoke 仍是 PR #136 的 67/67，具体证据见当前基线。
 
-当前权威状态和路线排序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。[docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md) 是历史审计；实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)。
+当前权威状态和路线排序见 [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)。实施入口见 [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)，长期原则见 [docs/PLAN.md](docs/PLAN.md)，历史审计统一见 [docs/archive/](docs/archive/)。
 
 ## 本地环境
 
@@ -120,15 +121,15 @@ Fork 后可在 GitHub Actions 里运行 **Manual build** workflow。它会在 Wi
 - [docs/PLAN.md](docs/PLAN.md)：长期设计计划
 - [docs/AGENT-ORCHESTRATION.md](docs/AGENT-ORCHESTRATION.md)：可插拔 Agent 编排、用户 profile 与升级闸门规范草案
 - [docs/CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md)：当前事实、剩余门槛与新 session 入口
-- [docs/WEBUI-MVP-PLAN.md](docs/WEBUI-MVP-PLAN.md)：已完成的 WebUI 基本可用验收合同与历史实施记录
-- [docs/WEBUI-BACKEND-VALIDATION.md](docs/WEBUI-BACKEND-VALIDATION.md)：WebUI 后端验证历史、证据与回归清单
+- [docs/README.md](docs/README.md)：文档权威层级、最短阅读路径与历史归档入口
 - [docs/SOURCE-PROJECT-DECISIONS.md](docs/SOURCE-PROJECT-DECISIONS.md)：四个源项目的资产吸收/北极星降级决策
 - [docs/UI-PROTOCOL-DECISION.md](docs/UI-PROTOCOL-DECISION.md)：UI 协议与 Widget 的采纳/降级决策
 - [docs/PARTS.md](docs/PARTS.md)：旧仓能力拆件清单
 - [docs/MCP-SERVER-ABSORPTION.md](docs/MCP-SERVER-ABSORPTION.md)：MCP-Server 能力融入 engine 路线
 - [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md)：已知风险登记
-- [docs/PROJECT-AUDIT-2026-07-10.md](docs/PROJECT-AUDIT-2026-07-10.md)：2026-07-10 独立审计历史快照
-- [docs/DOC-AUDIT.md](docs/DOC-AUDIT.md)：文档权威层级与维护规则
+- [docs/archive/PROJECT-HISTORY-2026-07.md](docs/archive/PROJECT-HISTORY-2026-07.md)：项目审计与实施历史摘要
+- [docs/archive/WEBUI-HISTORY-2026-07.md](docs/archive/WEBUI-HISTORY-2026-07.md)：已完成 WebUI 计划与验证历史
+- [docs/archive/PR-AUDITS-2026-07.md](docs/archive/PR-AUDITS-2026-07.md)：逐 PR 审计索引
 - [docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md)：项目沿革、第三方设计参考与许可证边界（持续更新）
 
 ## Agent UI 测试面与用户控制

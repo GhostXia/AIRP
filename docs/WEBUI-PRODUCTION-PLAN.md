@@ -2,7 +2,7 @@
 
 > 状态：当前近期执行主入口
 >
-> 基线日期：2026-07-13
+> 基线日期：2026-07-14
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
@@ -96,11 +96,12 @@ Browser
 
 ### Phase P1：RP 正式使用面
 
-1. 完成 #114 的 Persona/Preset 管理、选择、绑定和有效配置摘要；
-2. 完成 #115 中首发需要的 import report、dry-run/revision 与 PromptAssemblyTrace 摘要；
-3. 完成 #126 的 constant worldbook/shared normalization，补齐普通用户可操作的世界书管理；
-4. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
-5. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
+1. 先完成 #137 的 Vite/Vitest 工具链安全升级；该问题不在 production runtime image 内，但开发服务器与测试工具不能长期停留在已知高危/关键告警版本；
+2. 完成 #114 的 Persona/Preset 管理、选择、绑定和有效配置摘要；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
+3. 完成 #115 中首发需要的 import report、dry-run/revision 与 PromptAssemblyTrace 摘要；
+4. 完成 #126 的 constant worldbook/shared normalization，补齐普通用户可操作的世界书管理；
+5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
+6. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
 
 退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。
 
@@ -136,5 +137,5 @@ Browser
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
 2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
-3. 下一项按 #114/#115/#126 完成 RP 使用面，不再先做 #117/#87/#116；
+3. 下一项先处理 #137，再按 #114/#115/#126 完成 RP 使用面；不再先做 #117/#87/#116；
 4. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

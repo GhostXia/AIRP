@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-13. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [DOC-AUDIT.md](DOC-AUDIT.md) defines documentation authority, and dated audits remain historical evidence.
+> Last reviewed: 2026-07-14. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -74,3 +74,11 @@
 - **Risk**: Forwarding the browser's `Authorization` header, exposing the engine bearer to JavaScript, allowing runtime bearer replacement, or publishing the engine port could bypass or desynchronize the intended two-layer boundary.
 - **Current control**: The gateway authenticates the whole site, replaces (never appends) `Authorization` for explicit engine routes, and holds the engine bearer server-side. The engine has no published port; production mode requires a strong key and exact HTTPS origin, rejects local-path import mode, and makes bearer rotation an operator restart action.
 - **Current evidence**: PR #136 production smoke proves anonymous/wrong credentials fail, direct host access to the engine fails, a caller-supplied bearer cannot pass through, short/missing keys prevent listen, `card_path` is rejected, and logs/assets contain no credentials. See [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md).
+
+## RR-010 · Vulnerable frontend development toolchain
+
+- **Status**: Open as #137; high priority before further P1 WebUI feature work.
+- **Surface**: Locked Vite/Vitest/esbuild development and test dependencies under `ui/`.
+- **Risk**: Known audit findings affect development-server or test-UI exposure to untrusted networks. These packages are not copied into the production gateway image, so this is not evidence of a production runtime compromise.
+- **Current control**: Development services remain loopback-only/trusted; production serves independent static assets without `ui/node_modules`.
+- **Required direction**: Upgrade to unaffected stable majors, lock them, then rerun typecheck, Vitest, production browser smoke and Tauri build/sidecar checks. Do not use forced audit upgrades without compatibility evidence.

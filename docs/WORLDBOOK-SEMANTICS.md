@@ -32,4 +32,4 @@ Any semantic change must update, in the same PR:
 1. this contract;
 2. at least one source and normalized fixture;
 3. deterministic trigger and final prompt-placement tests;
-4. the compatibility statement in `docs/PROJECT-AUDIT-2026-07-10.md`.
+4. the compatibility and priority statements in `docs/CURRENT-BASELINE.md` and issue #126.

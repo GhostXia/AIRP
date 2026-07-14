@@ -1,6 +1,6 @@
 # AIRP UI
 
-`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端。它是 engine 的客户端，不再假设独立 Gateway 或 MockBus 作为默认后端。
+`ui/` 是 AIRP 保留的 Tauri + Vue 桌面客户端资产。它是 engine 的客户端，不再假设独立 Gateway 或 MockBus 作为默认后端。自 2026-07-13 起桌面开发、打包验收和性能计划暂停；当前正式产品交付主面是 `webui/`。恢复桌面路线前必须重新校准 [当前基线](../docs/CURRENT-BASELINE.md)，不能直接沿用本文的历史待办。
 
 当前全仓状态与发布门槛见 [`../docs/CURRENT-BASELINE.md`](../docs/CURRENT-BASELINE.md)。
 

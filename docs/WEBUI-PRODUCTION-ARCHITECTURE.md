@@ -4,6 +4,8 @@
 >
 > Decision date: 2026-07-13
 >
+> Last baseline check: 2026-07-14 (`main@6736755`; no topology change after PR #136)
+>
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)
 

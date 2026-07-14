@@ -1,8 +1,8 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-07-13
+> 基线日期：2026-07-14
 >
-> Git 基线：`main` / `6046327`（PR #136 已合并）
+> 实现基线：`main` / `6736755`（PR #139 已合并；本轮文档整理以该实现提交为父基线）
 >
 > 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
 
@@ -11,6 +11,7 @@
 - `engine/` 是唯一 RP/Agent 内核：OpenAI-compatible/Anthropic 流式调用、角色卡、命名会话、state、基础 lorebook、preset、scene、volume、decompose/analysis、HTTP/SSE 与有界 structured tool-call Agent loop。
 - 默认 Agent registry 有 19 个工具；运行时真相由 `GET /v1/agent/tools` 提供，执行受 capability、allowlist 和 destructive confirmation 约束。
 - Chat history 已具备 session-scoped durable message ID、完整 JSONL 保留、`limit`/`before` cursor window、legacy deterministic ID 和 rollback-by-ID；旧 history/rollback 请求仍兼容。
+- `ChatLog::rollback_to` 现在也在底层持久化边界拒绝非法 index，避免未来调用方绕过 service/API 校验；空日志 `index=0` 的 legacy 兼容行为保留。
 - WebUI 已完成 provider 配置、角色导入、单默认 Persona、Preset 选择/JSON 导入、session 生命周期、流式聊天、Agent Run、非敏感恢复，以及 50 条首屏窗口、加载更早、durable-ID DOM 复用和按消息回滚。
 - WebUI 已成为当前正式产品交付主面；近期目标从“基础验证面”升级为“可安全部署、可持续日用、可升级恢复的单实例自托管正式版”。生产边界与 release gates 见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
 - P0 生产拓扑、配置与威胁边界已经在 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 形成实现合同。engine production mode 在读取/创建 config 前 fail-closed 校验 deployment mode、32-byte base64url access key、canonical HTTPS public origin、绝对且已存在可写的数据目录，并拒绝 local-path import；production CORS 只接受 public origin，`POST /v1/settings` 不能单边替换 bearer。
@@ -30,11 +31,11 @@
 
 ## 3. 下一阶段优先顺序
 
-1. RP 正式使用面：完成 #114/#115/#126 的 Persona/Preset/Worldbook 管理、有效配置、迁移报告和 trace 摘要；
-2. 数据可靠性：版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志和运维 runbook；
-3. 发布候选：浏览器兼容、安全负向、升级/恢复、长会话 soak 和发布 artifact 门禁；
-4. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review 后移到 WebUI 正式版主链之后；
-5. 桌面 #98/#29/#122 仅保留追踪，桌面 UI 开发计划暂时搁置，不参与近期排期。
+1. 工具链安全维护：先处理 #137 的 Vite/Vitest 高危与关键 audit 告警，并完整验证 WebUI、production browser smoke 与 Tauri build 配置；
+2. RP 正式使用面：完成 #114/#115/#126 的 Persona/Preset/Worldbook 管理、有效配置、迁移报告和 trace 摘要；#114 原 issue 中以 Tauri 为主的 UI 表述须按“WebUI 当前主面”重新切片，不恢复桌面排期；
+3. 数据可靠性：版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志和运维 runbook；
+4. 发布候选：浏览器兼容、安全负向、升级/恢复、长会话 soak 和发布 artifact 门禁；
+5. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review 后移；桌面 #98/#29/#122 只保留追踪。
 
 ## 4. 当前开放风险/issue 分组
 
@@ -46,6 +47,7 @@
 - Desktop：#29、#98。
 - Process/docs：#69、#70、#99、#104、#113、#128。
 - Security/dependencies：#137（Vite/Vitest 开发工具链 audit 告警；不在 production runtime image 内，但需在 P1 期间升级验证）。
+- Engine audit：#140（no-op rollback 是否应刷新 `updated_at`/持久化的低优先级语义决策；不阻塞当前开发）。
 
 ## 5. 最近验证证据
 
@@ -84,7 +86,14 @@ PR #136（production topology P0）：
 - GitHub run `29249333920`：`Production topology` 3m17s、`Rust workspace` 7m14s、`UI and WebUI` 17s、CodeRabbit 全绿；拓扑内 WebUI smoke 为 64 checks / 0 failures，system-Chrome 与最终 secret/private-path scan 通过。
 - 2026-07-13 独立复杂度审计的初步结论：Caddy 作为可替换的边缘进程有明确职责；可疑的提前复杂度是 P0 主动启用 access logging，继而需要 field filter。当前配置未在本轮文档校准中改动，P2 可观测性阶段应在“删除 access log”与“补全用途/字段/输出/保留合同”之间作显式选择，见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md#41-independent-complexity-audit-2026-07-13)。
 
-数字是 2026-07-13 的证据快照，不是永久质量承诺；修改后必须重新运行相关验证。
+PR #139（rollback storage contract）：
+
+- `cargo test -p airp-core --locked`：engine lib 464 passed、1 ignored；agent/openai-compat/production-startup/SSE integration suites 全绿，包含 `subagent_context_has_no_orchestrator_noise`；
+- `cargo test -p airp-core rollback --locked`：13 passed；非法非空/空日志 index、service/API 与 Agent tool 回滚路径均覆盖；
+- fmt、`cargo clippy -p airp-core --lib --tests --locked -- -D warnings` 与 `git diff --check` 通过；
+- GitHub run `29297782903`：Rust workspace、UI and WebUI、Production topology 全绿；合并后未采纳的 review 建议已进入 #140。
+
+数字是对应日期/PR 的证据快照，不是永久质量承诺；修改后必须重新运行相关验证。
 
 ## 6. 文档阅读顺序
 
@@ -94,7 +103,6 @@ PR #136（production topology P0）：
 4. [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)：当前正式上线目标、release gates 与推进顺序；
 5. [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)：P0 生产拓扑、配置、鉴权和威胁边界；
 6. [LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)：已交付的 durable history 合同与剩余性能边界；
-7. [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)：已完成的基础验收合同；
-8. [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：第一方源仓吸收边界；
-9. [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)：第三方理念参考与独立实现 provenance；
-10. dated audits/plans：只用于历史追溯，不作为当前状态。
+7. [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：第一方源仓吸收边界；
+8. [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)：第三方理念参考与独立实现 provenance；
+9. [README.md](README.md)：完整文档地图与三份历史归档。

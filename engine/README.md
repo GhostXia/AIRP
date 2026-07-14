@@ -11,6 +11,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - `/v1/agent/run` 有 step/token/wall-clock/cancel 闸和 typed SSE 事件；
 - Tavern Card JSON/PNG 导入、canonical/sidecar 落盘和角色 CRUD；
 - 会话创建/列表、history、append、rollback、regen；
+- rollback 在 service/API 与 `ChatLog` 持久化边界都拒绝非法 index；空日志 `index=0` 保留兼容；
 - 基础 lorebook CRUD、OR-key 触发、`enabled`、`priority`；
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
@@ -136,22 +137,16 @@ cargo run -p airp-core -- run --message "hello"
 
 ## 验证
 
-2026-07-10 在仓库根目录执行：
+2026-07-14 在仓库根目录按 D 盘工具链执行：
 
 ```powershell
-cargo test --workspace
-```
-
-结果：engine 386 passed / 1 ignored，engine integration 19 passed，protocol 5 passed，Tauri 9 passed，doc tests passed。`subagent_context_has_no_orchestrator_noise` 与对真实 prepared pipeline 的加强测试均通过。
-
-当前不能写成“全门禁绿”：
-
-```powershell
+cargo test -p airp-core --locked
+cargo test -p airp-core rollback --locked
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p airp-core --lib --tests --locked -- -D warnings
 ```
 
-两者与 workspace tests、UI tests/typecheck 均由 `.github/workflows/pr-gate.yml` 自动执行；2026-07-11 本地严格验证通过。
+PR #139 的本地结果：engine lib 464 passed / 1 ignored，integration suites 全绿；回滚过滤测试 13 passed；`subagent_context_has_no_orchestrator_noise`、fmt 和严格 Clippy 均通过。GitHub run `29297782903` 的 Rust workspace、UI and WebUI、Production topology 全绿。数字是该提交的证据快照，后续修改必须重跑。
 
 ## License
 

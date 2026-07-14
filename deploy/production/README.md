@@ -4,6 +4,10 @@ This directory is the first-party single-instance, self-hosted WebUI bundle. It 
 application services: a Caddy HTTPS gateway and a private AIRP engine. Only Caddy publishes
 host ports. The browser uses the same origin and never receives the engine bearer.
 
+This is an implemented P0 preview topology, not a formal release. Current product status and
+remaining P1-P3 gates are authoritative in `docs/CURRENT-BASELINE.md` and
+`docs/WEBUI-PRODUCTION-PLAN.md`.
+
 ## Prerequisites
 
 - Docker Engine with Docker Compose v2;

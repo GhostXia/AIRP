@@ -1,15 +1,15 @@
 # AIRP 开发文档（交接给实现 Agent）
 
 > **读者**：冷启动、无对话上下文的实现 Agent。本文自包含——照此即可动手，无需追溯任何对话。
-> **配套文档（按顺序）**：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)（当前事实）· [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)（当前执行与上线合同）· [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)（P0 实现与威胁边界）· [PLAN.md](PLAN.md)（长期原则）· [WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md)（历史基础验收）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
+> **配套文档（按顺序）**：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)（当前事实）· [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)（当前执行与上线合同）· [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)（P0 实现与威胁边界）· [PLAN.md](PLAN.md)（长期原则）· [README.md](README.md)（文档地图与历史归档）· [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（源项目边界）· [PARTS.md](PARTS.md)（候选零件，不等于已交付）。
 > **真理顺序**：源码 > 本文 > 设计文档 > 对话。冲突时先改文档再继续。
-> 最后更新：2026-07-13
+> 最后更新：2026-07-14
 
 ## 当前接手入口（覆盖下文旧 Phase 顺序）
 
 1. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 与 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，不要重复 PR #118/#119/#121/#123/#124/#125/#127 已完成的实现与验收；
 2. 当前目标是 WebUI 单实例、自托管、单用户正式上线；每项能力纵向贯通 engine shared service → HTTP/SSE → WebUI → production tests；
-3. 当前顺序为 #114/#115/#126 RP 使用面 → 数据恢复/运维 → release candidate；production P0 的 engine fail-closed、首方 OCI/Compose + Caddy 同源部署与真实 topology smoke 已实现；#117/#87/#116 后移；
+3. 当前顺序为 #137 工具链安全升级 → #114/#115/#126 RP 使用面 → 数据恢复/运维 → release candidate；production P0 的 engine fail-closed、首方 OCI/Compose + Caddy 同源部署与真实 topology smoke 已实现；#117/#87/#116 后移；
 4. 每个 PR 只修其范围内问题并同步文档；审计非阻塞遗留项在合并后写 issue；
 5. 保持 `node webui/smoke.mjs` 的 engine 真相断言与真实浏览器验收，并新增生产拓扑、认证负向、升级/恢复门禁；桌面 #98/#29/#122 保留但开发计划暂停。
 
@@ -249,9 +249,9 @@ data/
 - **实现状态**：`BusRelay` 已移除 `chat_lock`；chat scope 已改为 `{messages, order}`；每个 `chat.send` 用单个 state patch envelope 同时写入 user row、`order` user id、assistant row、`order` assistant id；流式回填只改自己的 `/messages/{assistant_id}/text`。
 - **已验证**：`cargo test -p airp-ui`、`npm run test -- --run`、`npm run typecheck`、`cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` 通过；审计 follow-up 后前端测试 95 个通过。
 
-### 下一步开发接手清单（2026-07-13 校准）
+### 下一步开发接手清单（2026-07-14 校准）
 
-WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#124/#125 完成，PR #127 已建立多 Persona 存储地基。[WEBUI-MVP-PLAN.md](WEBUI-MVP-PLAN.md) 只保留历史验收合同；当前唯一执行入口是 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，目标为单实例、自托管、单用户 WebUI 正式上线。
+WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#124/#125 完成，PR #127 已建立多 Persona 存储地基。旧 MVP/验证计划已合并到 [WebUI 历史归档](archive/WEBUI-HISTORY-2026-07.md)；当前唯一执行入口是 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，目标为单实例、自托管、单用户 WebUI 正式上线。
 
 1. 先设置 D 盘工具链环境：
    ```powershell

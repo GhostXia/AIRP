@@ -1,6 +1,6 @@
 # AIRP WebUI
 
-Browser-based AIRP client for RP use. The current implementation is a basically usable development build; the active target is a production-ready, single-instance self-hosted WebUI. Current baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); production gates: [docs/WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md); accepted P0 architecture and implementation status: [docs/WEBUI-PRODUCTION-ARCHITECTURE.md](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md); completed MVP contract: [docs/WEBUI-MVP-PLAN.md](../docs/WEBUI-MVP-PLAN.md).
+Browser-based AIRP client for RP use. The current implementation is a basically usable development build; the active target is a production-ready, single-instance self-hosted WebUI. Current baseline: [docs/CURRENT-BASELINE.md](../docs/CURRENT-BASELINE.md); production gates: [docs/WEBUI-PRODUCTION-PLAN.md](../docs/WEBUI-PRODUCTION-PLAN.md); accepted P0 architecture and implementation status: [docs/WEBUI-PRODUCTION-ARCHITECTURE.md](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md); completed MVP and validation history: [docs/archive/WEBUI-HISTORY-2026-07.md](../docs/archive/WEBUI-HISTORY-2026-07.md).
 
 > `start.bat`, `serve.js`, `cargo run`, manually entered engine URLs and optional bearer tokens are development paths. The first-party deployment artifact lives in [deploy/production](../deploy/production/README.md) and has a production topology CI gate, but P1-P3 release gates remain open. Do not expose port 8000 or this static development server directly to the public Internet.
 
@@ -83,7 +83,7 @@ Workspace choices (non-secret User ID, selected character/session and Preset) ar
 
 **Diagnostics (P1)**
 -  One-click backend sweep producing a copyable summary: engine URL, bearer status, version, endpoint/model/api_key presence, model count, character count, per-call status + latency.
--  **v1 scope**: covers 4 endpoints (`/version` → `/v1/settings` → `/v1/models` → `/v1/characters`) — backend reachability only. **chat/agent smoke deferred to P2/M2** reliability suite, to avoid consuming provider quota during a routine diagnostic; the 4-endpoint sweep already surfaces backend reachability failures (missing API key, no models, wrong endpoint). See `docs/WEBUI-BACKEND-PLAN.md §9 P1`.
+-  **v1 scope**: covers 4 endpoints (`/version` → `/v1/settings` → `/v1/models` → `/v1/characters`) — backend reachability only. It deliberately avoids consuming provider quota during routine diagnostics; chat/agent behavior is covered by separate smoke and production gates.
 -  Event log (right panel): request path, method, status code, latency, SSE chunk count, agent event labels.
 
 ## Not in scope (deferred)
@@ -106,4 +106,4 @@ Each validation session should record:
 - data directory touched (under `data/`)
 - failure screenshots or saved logs
 
-The one-click diagnostics summary is designed to be pasted directly into `docs/WEBUI-BACKEND-VALIDATION.md`.
+The one-click diagnostics summary is designed for an issue, PR validation note, or operator report. Historical backend evidence is summarized in `docs/archive/WEBUI-HISTORY-2026-07.md`; do not append new evidence to that archive.
