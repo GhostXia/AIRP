@@ -1,8 +1,8 @@
 # 酒馆（SillyTavern）功能对标 + 扩展接口需求
 
-> **需求对标，不是兼容性声明**：表内 ✅/🔧 表示 2026-07-01 源项目资产状态，不证明当前 AIRP-Dev 已交付；“AIRP-Dev 落点/缺口”列必须以当前源码复核。Worldbook 当前为基础 CRUD/关键词触发；单默认 Persona 已有 API/WebUI 与 chat 注入，多 Persona/base+drift 和 plugin/完整扩展 API 尚未完成。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> **需求对标，不是兼容性声明**：表内 ✅/🔧 表示 2026-07-01 源项目资产状态，不证明当前 AIRP-Dev 已交付；“AIRP-Dev 落点/缺口”列必须以当前源码复核。Worldbook 当前已有 CRUD、关键词触发与 v2 `constant` 常驻注入；单默认 Persona 已有 API/WebUI 与 chat 注入，多 Persona/base+drift 和 plugin/完整扩展 API 尚未完成。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 > 目的：(1) 列全酒馆功能，标出候选能力；(2) 落实硬需求——**充分暴露接口，无门槛无缝支持第三方扩展**。来源：docs.sillytavern.app（2026-07 实读）。图例：✅ 源项目已有 ｜ 🔧 源项目部分有需补 ｜ 🆕 源项目皆无，需新加 ｜ ➖ 暂不做/低优先。
-> 最后更新：2026-07-13（同步 durable history/WebUI window 与 RP Profile 下一阶段）
+> 最后更新：2026-07-14（同步 PR #141 worldbook constant 运行时合同）
 
 ---
 
@@ -33,8 +33,8 @@
 ### 3. 世界书 / World Info
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
-| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🆕 | **最大新建件**（见 PARTS.md F）。四仓皆残缺 |
-| 关键词触发扫描 | 🔧 | Core aho-corasick 扫描在，但触发语义（selective/递归）缺 |
+| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🆕 | AIRP 已交付 `constant`；shared normalization 与其余高级语义仍是主要新建件（见 PARTS.md F） |
+| 关键词触发扫描 | 🔧 | AIRP 使用 aho-corasick，并已实现 `enabled && (constant || primary_keyword_match)`；selective/secondary/递归仍缺 |
 | 向量化/RAG 注入 | ➖ | Data Bank，后期 |
 
 ### 4. Prompt / 预设系统

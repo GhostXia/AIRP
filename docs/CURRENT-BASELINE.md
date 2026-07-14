@@ -2,7 +2,7 @@
 
 > 基线日期：2026-07-14
 >
-> 实现基线：`main` / `6736755`（PR #139 已合并；本轮文档整理以该实现提交为父基线）
+> 实现基线：`main` / `65d5bf7`（PR #141 已合并）
 >
 > 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
 
@@ -17,6 +17,7 @@
 - P0 生产拓扑、配置与威胁边界已经在 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 形成实现合同。engine production mode 在读取/创建 config 前 fail-closed 校验 deployment mode、32-byte base64url access key、canonical HTTPS public origin、绝对且已存在可写的数据目录，并拒绝 local-path import；production CORS 只接受 public origin，`POST /v1/settings` 不能单边替换 bearer。
 - `deploy/production/` 已包含 digest-pinned engine/Caddy images、版本化 Compose、仅 gateway 发布端口的私有 engine 网络、Compose secret mounts、三种显式 TLS 模式、安全 headers、同源 WebUI runtime config 和 operator bootstrap。production topology CI 会从一次性 volume 启动真实 HTTPS 栈，执行 perimeter auth、私有 engine、CSP/headers、content-only import、SSE、浏览器注入/取消、重启持久化和 secret scan。浏览器在 production mode 不接收或存储 engine URL/bearer；engine 容器监听非 loopback 必须显式传 `--host 0.0.0.0`。
 - PR #127 已交付 schema v2 多 Persona 存储、revision、角色/会话绑定、legacy/default 协调和路径校验；现有 WebUI/HTTP 仍主要使用单 default Persona，不能宣称多 Persona 产品闭环完成。
+- PR #141 已交付 AIRP worldbook v2 `constant` 运行时语义：`enabled && (constant || primary_keyword_match)`；constant 与关键词条目共用 priority 排序和单一注入块，多 lorebook merge 会保留不同激活条件并在实际触发后按内容去重。WebUI 已可编辑“常驻”字段，v1 无 `constant` 数据保持兼容。
 - Tauri/Vue UI 代码与既有能力继续保留，但自 2026-07-13 起桌面 UI 开发、打包验收和性能 spike 暂停，不属于近期里程碑；恢复时须重新校准基线。
 - Provider redirect 统一 fail-closed；development CORS 保留内建 WebUI/Tauri origins 并追加合法精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
 
@@ -47,7 +48,7 @@
 - Desktop：#29、#98。
 - Process/docs：#69、#70、#99、#104、#113、#128。
 - Security/dependencies：#137（Vite/Vitest 开发工具链 audit 告警；不在 production runtime image 内，但需在 P1 期间升级验证）。
-- Engine audit：#140（no-op rollback 是否应刷新 `updated_at`/持久化的低优先级语义决策；不阻塞当前开发）。
+- Engine audit：#140（no-op rollback 是否应刷新 `updated_at`/持久化）与 #142（第三方 worldbook 字符串布尔值是否进入 shared normalizer）；均为低优先级语义/兼容决策，不阻塞当前开发。
 
 ## 5. 最近验证证据
 
@@ -92,6 +93,13 @@ PR #139（rollback storage contract）：
 - `cargo test -p airp-core rollback --locked`：13 passed；非法非空/空日志 index、service/API 与 Agent tool 回滚路径均覆盖；
 - fmt、`cargo clippy -p airp-core --lib --tests --locked -- -D warnings` 与 `git diff --check` 通过；
 - GitHub run `29297782903`：Rust workspace、UI and WebUI、Production topology 全绿；合并后未采纳的 review 建议已进入 #140。
+
+PR #141（worldbook constant runtime contract v2）：
+
+- `cargo test --workspace --locked`：engine lib 474 passed、1 ignored；agent/openai-compat/production-startup/SSE、protocol 与 UI suites 全绿；
+- 新增 exact-output 与 merge 回归覆盖 constant 无关键词、disabled constant、constant+keyword 单次注入、priority、v1 兼容，以及 disabled-first duplicate 不得吞掉后续 enabled constant；
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` 与神圣不变式精确测试通过；
+- GitHub run `29302270580`：Rust workspace 8m51s、Production topology 3m41s、UI and WebUI 22s、CodeRabbit 全绿；#126 保持开放，未在本切片实现的字符串布尔兼容意见已进入 #142。
 
 数字是对应日期/PR 的证据快照，不是永久质量承诺；修改后必须重新运行相关验证。
 
