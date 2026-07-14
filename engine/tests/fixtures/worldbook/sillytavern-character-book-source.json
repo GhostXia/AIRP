@@ -1,28 +1,76 @@
 {
-  "entries": [
-    {
+  "name": "Test World",
+  "description": "Test character book for SillyTavern compatibility",
+  "scan_depth": 2,
+  "token_budget": 2048,
+  "recursive_scanning": false,
+  "extensions": {
+    "depth": 4,
+    "token_budget": 2048
+  },
+  "entries": {
+    "0": {
       "keys": ["moon gate"],
-      "secondary_keys": ["night"],
+      "keysecondary": ["night", "midnight"],
       "content": "The moon gate opens only at night.",
       "enabled": true,
       "insertion_order": 10,
       "constant": false,
       "selective": true,
-      "position": "before_char"
+      "position": "before_char",
+      "caseSensitive": false,
+      "probability": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group": "",
+      "use_regex": false,
+      "match_whole_words": false,
+      "recursion": false
     },
-    {
+    "1": {
       "keys": [],
       "content": "The kingdom levies a salt tax of three coppers per household.",
       "disable": false,
       "order": 25,
       "constant": true
     },
-    {
+    "2": {
       "keys": ["abandoned shrine"],
       "content": "The abandoned shrine is overgrown with ivy.",
       "disable": true,
       "order": 15,
-      "constant": true
+      "constant": true,
+      "position": "after_char",
+      "depth": 4
+    },
+    "3": {
+      "key": "dragon council, wyrm council",
+      "content": "The dragon council convenes beneath the mountain.",
+      "disable": false,
+      "order": 30,
+      "constant": false,
+      "caseSensitive": true,
+      "probability": 80,
+      "group": "dragon_lore",
+      "use_regex": true,
+      "match_whole_words": true
+    },
+    "4": {
+      "keys": ["ancient compact"],
+      "keysecondary": ["dragons", "mortals"],
+      "content": "An ancient compact between dragons and mortals shapes the world.",
+      "enabled": true,
+      "priority": 20,
+      "constant": false,
+      "comment": "canonical AIRP fields mixed with ST extensions",
+      "selective": true,
+      "position": "before_char",
+      "depth": 2,
+      "sticky": 5,
+      "cooldown": 10,
+      "delay": 2,
+      "recursion": true
     }
-  ]
+  }
 }
