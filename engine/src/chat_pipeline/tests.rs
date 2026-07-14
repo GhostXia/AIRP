@@ -1364,7 +1364,8 @@ mod tests_a1b_pipeline_e2e {
         crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
         let state = make_state(tmp.path().to_path_buf());
 
-        let req = base_chat_request(Some("alice"), Some("ghost"));
+        let mut req = base_chat_request(Some("alice"), Some("ghost"));
+        req.character_id = Some(CharacterId::new("hero").unwrap());
         let result = prepare_pipeline(&req, &state);
         match result {
             Err(crate::error::AirpError::NotFound(_)) => {}
@@ -1373,6 +1374,11 @@ mod tests_a1b_pipeline_e2e {
                 other.map(|_| "Ok(..)")
             ),
         }
+        let effective_root = tmp.path().join("users").join("alice");
+        assert!(
+            !effective_root.join("characters").join("hero").exists(),
+            "rejected Persona selection must not create character chat or timeline state"
+        );
     }
 
     #[test]

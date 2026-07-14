@@ -1,8 +1,7 @@
 # Multi-Persona HTTP API
 
-> Status: A1a delivered by PR #151; A1b in flight (chat_pipeline persona
-> activation). This document records the stable HTTP contract and remaining
-> product boundary; it is not an execution log.
+> Status: A1a and A1b delivered. This document records the stable HTTP contract
+> and remaining product boundary; it is not an execution log.
 
 ## Scope
 

@@ -399,7 +399,8 @@ fn prepare_scene_pipeline(
     // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 single 分支产出一致集合。
     let filters = assemble_regex_filters(payload, &effective_root);
 
-    let runtime_variables = effective_user_variables.clone();
+    let mut runtime_variables = effective_user_variables.clone();
+    runtime_variables.insert("user".to_string(), effective_user_name.clone());
     let fsm = StreamingFsm::new(filters, runtime_variables);
 
     Ok(PreparedPipeline {
@@ -440,6 +441,13 @@ pub fn prepare_pipeline(
     // DX-1: per-user data root isolation
     let effective_root =
         data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;
+
+    // Resolve all Persona inputs before timeline advancement, chat persistence,
+    // or any other request side effect. A rejected explicit Persona must leave
+    // user state untouched.
+    let request_persona = resolve_request_persona(payload, &state.data_root)?;
+    let (effective_user_name, effective_user_variables) =
+        merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
 
     // 1. ID validation：M5.0a — CharacterId / PresetId 在反序列化时已校验，
     //    此处不再需要显式 validate_id_segment 调用。
@@ -577,9 +585,6 @@ pub fn prepare_pipeline(
     //      legacy callers see no behavior change. `state.data_root` (not the
     //      user-scoped effective_root) is passed because PersonaService builds
     //      `users/{uid}/personas/` from the global root.
-    let request_persona = resolve_request_persona(payload, &state.data_root)?;
-    let (effective_user_name, effective_user_variables) =
-        merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
     let mut system_prompt = orchestrator.build_system_prompt_with_preset(
         &effective_root,
         cid_str,

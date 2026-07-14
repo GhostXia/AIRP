@@ -2208,10 +2208,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_ne!(
+        assert_eq!(
             resp.status(),
-            axum::http::StatusCode::NOT_FOUND,
-            "default persona must not 404 on a fresh user, got {}",
+            axum::http::StatusCode::OK,
+            "default persona must reach the streaming response, got {}",
             resp.status()
         );
     }
