@@ -132,21 +132,22 @@ impl Lorebook {
 /// MS-5: Merge multiple lorebooks without discarding distinct activation semantics.
 /// Exact semantic duplicates are removed; output content is deduplicated after trigger evaluation.
 pub fn merge_lorebooks(lorebooks: &[Lorebook]) -> Lorebook {
-    use std::collections::HashSet;
-
-    let mut seen: HashSet<(String, Vec<String>, bool, i32, bool)> = HashSet::new();
     let mut merged: Vec<LorebookEntry> = Vec::new();
 
     for lb in lorebooks {
         for entry in &lb.entries {
-            let semantic_key = (
-                entry.content.clone(),
-                entry.keys.clone(),
-                entry.enabled.unwrap_or(true),
-                entry.priority.unwrap_or(DEFAULT_PRIORITY),
-                entry.constant.unwrap_or(false),
-            );
-            if seen.insert(semantic_key) {
+            if !merged.iter().any(|existing| {
+                existing.content == entry.content
+                    && existing.keys == entry.keys
+                    && existing.enabled.unwrap_or(true) == entry.enabled.unwrap_or(true)
+                    && existing.priority.unwrap_or(DEFAULT_PRIORITY)
+                        == entry.priority.unwrap_or(DEFAULT_PRIORITY)
+                    && existing.constant.unwrap_or(false) == entry.constant.unwrap_or(false)
+                    && existing.comment == entry.comment
+                    && existing.secondary_keys == entry.secondary_keys
+                    && existing.case_sensitive == entry.case_sensitive
+                    && existing.extensions == entry.extensions
+            }) {
                 merged.push(entry.clone());
             }
         }
@@ -529,6 +530,25 @@ The marketplace bustles at dawn.\n"
             },
         ]);
         assert_eq!(merged.entries.len(), 1);
+    }
+
+    #[test]
+    fn merge_lorebooks_preserves_distinct_advisory_metadata() {
+        let first = entry(&["A"], "shared content", Some(10));
+        let mut second = first.clone();
+        second.secondary_keys = vec!["secondary".to_string()];
+
+        let merged = super::merge_lorebooks(&[
+            Lorebook {
+                entries: vec![first],
+            },
+            Lorebook {
+                entries: vec![second],
+            },
+        ]);
+
+        assert_eq!(merged.entries.len(), 2);
+        assert_eq!(merged.trigger("A").matches("shared content").count(), 1);
     }
 
     #[test]

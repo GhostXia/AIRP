@@ -791,7 +791,13 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
     // ── world/lorebook.json ──
     if let Some(ref cb) = card.data.character_book {
         let (lorebook, report) = crate::orchestrator::normalize_worldbook(cb);
-        if lorebook.entries.is_empty() && report.total_input == 0 {
+        if let Some(reason) = report.replacement_error() {
+            tracing::warn!(
+                character_id,
+                reason,
+                "CF-7: character_book 归一化失败，跳过 lorebook 写入"
+            );
+        } else if lorebook.entries.is_empty() && report.total_input == 0 {
             tracing::warn!(
                 character_id,
                 "CF-7: character_book 无 entries，跳过 lorebook 写入"
@@ -1020,6 +1026,9 @@ pub(super) async fn update_character_lorebook(
         )));
     }
     let (lorebook, report) = crate::orchestrator::normalize_worldbook(&body);
+    if let Some(reason) = report.replacement_error() {
+        return Err(AirpError::BadRequest(format!("invalid lorebook: {reason}")));
+    }
     LorebookService::new(&state.data_root).write(&cid, &lorebook)?;
     Ok(Json(serde_json::json!({
         "character_id": cid.as_str(),
@@ -1668,6 +1677,43 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(v["entries"][0]["keys"][0], "hi");
         assert_eq!(v["entries"][0]["content"], "hello");
+    }
+
+    #[tokio::test]
+    async fn lorebook_put_rejects_invalid_replacement_without_overwrite() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, tmp) = make_state_for_http_test();
+        let world_dir = tmp
+            .path()
+            .join("characters")
+            .join("test_char")
+            .join("world");
+        std::fs::create_dir_all(&world_dir).unwrap();
+        let lorebook_path = world_dir.join("lorebook.json");
+        let original = r#"{"entries":[{"keys":["safe"],"content":"keep me"}]}"#;
+        std::fs::write(&lorebook_path, original).unwrap();
+
+        let response = super::super::create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/characters/test_char/lorebook")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "entries": [{"keys": ["bad"], "content": 42}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(std::fs::read_to_string(lorebook_path).unwrap(), original);
     }
 
     // ── #42 F-1 / #40：/v1/models URL 推导与 endpoint 脱敏 ──────────────────

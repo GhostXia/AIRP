@@ -372,6 +372,9 @@ impl Tool for UpdateLorebookTool {
                 .cloned()
                 .ok_or_else(|| AirpError::BadRequest("missing lorebook".to_string()))?;
             let (lorebook, report) = crate::orchestrator::normalize_worldbook(&raw);
+            if let Some(reason) = report.replacement_error() {
+                return Err(AirpError::BadRequest(format!("invalid lorebook: {reason}")));
+            }
             if !confirm {
                 return Ok(ToolResult {
                     output: serde_json::json!({
@@ -1979,6 +1982,50 @@ mod tests {
         let ext = &entries[1]["extensions"];
         assert_eq!(ext["selective"], true);
         assert_eq!(ext["position"], "before_char");
+    }
+
+    #[tokio::test]
+    async fn update_lorebook_rejects_all_invalid_entries_without_overwrite() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let original = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["safe".to_string()],
+                content: "keep me".to_string(),
+                enabled: Some(true),
+                priority: Some(10),
+                constant: None,
+                comment: None,
+                secondary_keys: Vec::new(),
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
+        LorebookService::new(&state.data_root)
+            .write(&character, &original)
+            .unwrap();
+
+        let registry = default_registry(state.clone());
+        let tool = registry.get("update_lorebook").unwrap();
+        let err = tool
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "lorebook": {"entries": [{"keys": ["bad"], "content": 42}]}
+                }),
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::BadRequest(_)));
+
+        let current = LorebookService::new(&state.data_root)
+            .read(&character)
+            .unwrap();
+        assert_eq!(current.entries.len(), 1);
+        assert_eq!(current.entries[0].content, "keep me");
     }
 
     #[tokio::test]

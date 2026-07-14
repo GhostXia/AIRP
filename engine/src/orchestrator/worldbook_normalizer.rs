@@ -57,6 +57,9 @@ const CONSUMED_FIELDS: &[&str] = &[
 /// （例如既用了别名又保留了 advisory metadata）。
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct WorldbookImportReport {
+    /// Source-level shape error. Entry-level errors remain in `invalid`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_error: Option<String>,
     /// 源 JSON 中的 entry 总数。
     pub total_input: usize,
     /// 成功转换为 canonical LorebookEntry 的条目数。
@@ -74,9 +77,9 @@ pub struct WorldbookImportReport {
 }
 
 impl WorldbookImportReport {
-    /// 是否有需要关注的条目（invalid 或 needs_review 非空）。
+    /// 是否有 source / entry 级错误或需要人工复核的条目。
     pub fn has_issues(&self) -> bool {
-        !self.invalid.is_empty() || !self.needs_review.is_empty()
+        self.source_error.is_some() || !self.invalid.is_empty() || !self.needs_review.is_empty()
     }
 
     /// 成功导入的条目数（= converted）。
@@ -87,6 +90,21 @@ impl WorldbookImportReport {
     /// 被跳过的条目数（= invalid 条数）。
     pub fn skipped_count(&self) -> usize {
         self.invalid.len()
+    }
+
+    /// Return the reason why this result must not replace a persisted lorebook.
+    /// Explicit empty containers (`{"entries": []}` / `{"entries": {}}`) are valid clears.
+    pub fn replacement_error(&self) -> Option<String> {
+        if let Some(reason) = &self.source_error {
+            return Some(reason.clone());
+        }
+        if self.total_input > 0 && self.converted == 0 {
+            return Some(format!(
+                "all {} worldbook entries are invalid; refusing to replace existing data",
+                self.total_input
+            ));
+        }
+        None
     }
 }
 
@@ -115,7 +133,20 @@ pub struct EntryDiagnostic {
 ///
 /// invalid 条目被跳过，其余继续处理。`needs_review` 不阻塞。
 pub fn normalize_worldbook(source: &Value) -> (Lorebook, WorldbookImportReport) {
-    let raw_entries = extract_raw_entries(source);
+    let raw_entries = match extract_raw_entries(source) {
+        Ok(entries) => entries,
+        Err(reason) => {
+            return (
+                Lorebook {
+                    entries: Vec::new(),
+                },
+                WorldbookImportReport {
+                    source_error: Some(reason),
+                    ..Default::default()
+                },
+            );
+        }
+    };
     let mut report = WorldbookImportReport {
         total_input: raw_entries.len(),
         ..Default::default()
@@ -164,30 +195,45 @@ pub fn normalize_worldbook(source: &Value) -> (Lorebook, WorldbookImportReport) 
 }
 
 /// 从源 JSON 中提取 raw entry 列表，处理 ST 的多种包装形式。
-fn extract_raw_entries(source: &Value) -> Vec<&Value> {
-    // 形式 1：{ "entries": ... } —— ST character_book 或 lorebook 标准形式
-    let entries_val = source.get("entries").unwrap_or(source);
-
-    // 形式 2：entries 是 object map（ST character_book 常见：{ "0": {...}, "1": {...} }）
-    if let Some(map) = entries_val.as_object() {
-        // 如果 object 本身看起来像一个 entry（有 content/keys 字段），则当作单条 entry。
-        if looks_like_entry(map) {
-            return vec![source];
+fn extract_raw_entries(source: &Value) -> Result<Vec<&Value>, String> {
+    // Wrapped AIRP/ST form. Presence of `entries` is authoritative; a scalar
+    // must not fall through and be mistaken for a single entry.
+    if let Some(entries_val) = source.get("entries") {
+        if let Some(map) = entries_val.as_object() {
+            if looks_like_entry(map) {
+                return Ok(vec![entries_val]);
+            }
+            return Ok(map.values().collect());
         }
-        return map.values().collect();
+        if let Some(arr) = entries_val.as_array() {
+            return Ok(arr.iter().collect());
+        }
+        return Err("'entries' must be an array or object map".to_string());
     }
 
-    // 形式 3：entries 是 array
-    if let Some(arr) = entries_val.as_array() {
-        return arr.iter().collect();
+    if let Some(arr) = source.as_array() {
+        return Ok(arr.iter().collect());
     }
 
-    // 形式 4：source 本身是一个 entry 对象
-    if source.is_object() {
-        return vec![source];
+    if let Some(map) = source.as_object() {
+        if looks_like_entry(map) {
+            return Ok(vec![source]);
+        }
+        // Also accept a bare non-empty uid-keyed entry map, but reject `{}` and
+        // metadata-only objects so malformed replace requests cannot clear data.
+        if !map.is_empty()
+            && map
+                .values()
+                .all(|value| value.as_object().is_some_and(looks_like_entry))
+        {
+            return Ok(map.values().collect());
+        }
     }
 
-    Vec::new()
+    Err(
+        "unsupported worldbook shape; expected an entries container, entry array, or entry object"
+            .to_string(),
+    )
 }
 
 /// 判断一个 JSON object 是否看起来像一个 lorebook entry（有 content 或 keys 字段）。
@@ -208,6 +254,8 @@ fn normalize_entry(v: &Value, _index: usize) -> Result<(LorebookEntry, EntryDiag
     let obj = v
         .as_object()
         .ok_or_else(|| "entry is not a JSON object".to_string())?;
+
+    validate_entry_field_types(obj)?;
 
     // 1. keys：优先 `keys`（array），回退 `key`（string，逗号分隔）
     let (keys, used_key_alias) = extract_keys(obj);
@@ -294,7 +342,7 @@ fn extract_keys(obj: &serde_json::Map<String, Value>) -> (Vec<String>, bool) {
         return (keys, false);
     }
 
-    // ST singular `key`（string）：按逗号分隔
+    // ST `key` is seen as either a comma-separated string or an array.
     if let Some(key_str) = obj.get("key").and_then(|k| k.as_str()) {
         let keys: Vec<String> = key_str
             .split(',')
@@ -303,8 +351,84 @@ fn extract_keys(obj: &serde_json::Map<String, Value>) -> (Vec<String>, bool) {
             .collect();
         return (keys, true);
     }
+    if let Some(arr) = obj.get("key").and_then(|k| k.as_array()) {
+        return (
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_owned))
+                .filter(|s| !s.is_empty())
+                .collect(),
+            true,
+        );
+    }
 
     (Vec::new(), false)
+}
+
+fn validate_entry_field_types(obj: &serde_json::Map<String, Value>) -> Result<(), String> {
+    for name in ["keys", "secondary_keys", "keysecondary"] {
+        if let Some(value) = obj.get(name) {
+            let Some(values) = value.as_array() else {
+                return Err(format!("'{name}' must be an array of strings"));
+            };
+            if values.iter().any(|value| !value.is_string()) {
+                return Err(format!("'{name}' must contain only strings"));
+            }
+        }
+    }
+
+    if let Some(value) = obj.get("key") {
+        let valid = value.is_string()
+            || value
+                .as_array()
+                .is_some_and(|values| values.iter().all(Value::is_string));
+        if !valid {
+            return Err("'key' must be a string or array of strings".to_string());
+        }
+    }
+
+    for name in [
+        "enabled",
+        "disable",
+        "constant",
+        "case_sensitive",
+        "caseSensitive",
+    ] {
+        if obj
+            .get(name)
+            .is_some_and(|value| !value.is_null() && !value.is_boolean())
+        {
+            return Err(format!("'{name}' must be a boolean"));
+        }
+    }
+
+    for name in ["priority", "order", "insertion_order"] {
+        if let Some(value) = obj.get(name) {
+            if value.is_null() {
+                continue;
+            }
+            let Some(number) = value.as_i64() else {
+                return Err(format!("'{name}' must be a 32-bit integer"));
+            };
+            if i32::try_from(number).is_err() {
+                return Err(format!("'{name}' is outside the 32-bit integer range"));
+            }
+        }
+    }
+
+    if obj
+        .get("comment")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Err("'comment' must be a string or null".to_string());
+    }
+    if obj
+        .get("extensions")
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        return Err("'extensions' must be an object or null".to_string());
+    }
+
+    Ok(())
 }
 
 /// 提取 enabled。优先 `enabled`（bool），回退 `disable`（bool，反转）。
@@ -591,6 +715,44 @@ mod tests {
         assert_eq!(report.invalid.len(), 1);
         assert_eq!(report.invalid[0].index, 1);
         assert!(report.invalid[0].reason.contains("content"));
+    }
+
+    #[test]
+    fn test_wrong_field_types_are_invalid_instead_of_defaulted() {
+        let src = serde_json::json!({
+            "entries": [
+                { "keys": "dragon", "content": "wrong keys type" },
+                { "keys": ["dragon"], "content": "wrong enabled type", "enabled": "false" },
+                { "keys": ["dragon"], "content": "priority overflow", "priority": 2147483648_i64 }
+            ]
+        });
+        let (lb, report) = normalize_worldbook(&src);
+        assert!(lb.entries.is_empty());
+        assert_eq!(report.invalid.len(), 3);
+        assert!(report.replacement_error().is_some());
+    }
+
+    #[test]
+    fn test_unsupported_shape_is_fatal_but_explicit_empty_entries_is_valid() {
+        let (_, malformed) = normalize_worldbook(&serde_json::json!({"name": "not entries"}));
+        assert!(malformed.source_error.is_some());
+        assert!(malformed.replacement_error().is_some());
+
+        let (empty, report) = normalize_worldbook(&serde_json::json!({"entries": []}));
+        assert!(empty.entries.is_empty());
+        assert!(report.source_error.is_none());
+        assert!(report.replacement_error().is_none());
+    }
+
+    #[test]
+    fn test_wrapped_single_entry_object_is_supported() {
+        let src = serde_json::json!({
+            "entries": {"keys": ["dragon"], "content": "single wrapped entry"}
+        });
+        let (lb, report) = normalize_worldbook(&src);
+        assert_eq!(lb.entries.len(), 1);
+        assert_eq!(report.converted, 1);
+        assert!(report.replacement_error().is_none());
     }
 
     #[test]

@@ -75,6 +75,8 @@ Activated entries sort by descending `priority`; missing priority defaults to `1
 
 Output is injected once under `[World Info/Lorebook Information]` in the RP system-prompt assembly. Control-plane agent observations are never scanned or injected. Scene merges preserve entries with distinct activation semantics, evaluate activation and priority for each entry, then deduplicate activated entries by identical `content`; the highest-priority activated variant wins and each content value is emitted once.
 
+Scene merges also preserve entries whose runtime fields match but advisory metadata differs. This keeps `secondary_keys`, `case_sensitive`, `extensions`, and annotations available to future retrieval tools while the v2 injection path still emits identical content only once.
+
 ## Shared WorldbookNormalizer (v3)
 
 [`normalize_worldbook`](../engine/src/orchestrator/worldbook_normalizer.rs) is the single normalization entry point shared by three import paths:
@@ -90,7 +92,7 @@ The normalizer maps ST field aliases to AIRP canonical fields:
 | SillyTavern alias | AIRP canonical | Notes |
 |---|---|---|
 | `keys` (array) | `keys` | Direct; empty strings filtered |
-| `key` (string) | `keys` | Comma-separated, trimmed |
+| `key` (string or array) | `keys` | Strings are comma-separated and trimmed; arrays are preserved |
 | `content` (string) | `content` | Required; missing → invalid |
 | `enabled` (bool) | `enabled` | Takes precedence over `disable` |
 | `disable` (bool) | `enabled` | Inverted: `disable=true` → `enabled=false` |
@@ -122,10 +124,11 @@ Passing a canonical AIRP Lorebook JSON through `normalize_worldbook` produces an
 - `converted` — entries successfully converted to canonical form
 - `aliases_normalized` — entries that used ST alias fields
 - `advisory_preserved` — entries with advisory metadata (non-empty `secondary_keys` / `case_sensitive` / `extensions`)
+- `source_error` — unsupported top-level shape, when present
 - `invalid` — entries that couldn't be parsed (skipped, with reason)
 - `needs_review` — entries that parsed but may not behave as expected (e.g., empty keys + non-constant → never triggers)
 
-Invalid entries are skipped; the rest are processed. `needs_review` does not block writes. The report is returned in PUT API responses and Agent tool results.
+Invalid entries are skipped while valid entries continue. Replace operations fail closed when the source shape is unsupported or every input entry is invalid; explicit empty `entries` arrays/objects remain the supported way to clear a lorebook. Recognized fields with the wrong JSON type, including priorities outside the signed 32-bit range, are invalid instead of being silently defaulted or truncated. `needs_review` does not block writes. The report is returned in PUT API responses and Agent tool results.
 
 ## Fixtures
 
