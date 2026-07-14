@@ -32,15 +32,17 @@ use decompose_handlers::{
     get_character_analysis_file, list_character_analysis,
 };
 use handlers::{
-    add_scene_character_endpoint, agent_run, chat_completion, create_scene_endpoint,
-    create_session_endpoint, delete_character_endpoint, delete_session_endpoint,
+    add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion,
+    create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
+    delete_character_endpoint, delete_persona_multi_endpoint, delete_session_endpoint,
     get_character_avatar, get_character_card, get_character_lorebook, get_character_state,
     get_character_state_history, get_character_state_schema, get_chat_history,
-    get_persona_endpoint, get_preset_endpoint, get_scene_endpoint, get_settings, import_character,
-    import_preset_endpoint, list_agent_tools, list_characters, list_models, list_presets_endpoint,
-    list_scenes_endpoint, list_sessions_endpoint, reextract_character_assets, regen_chat,
-    rollback_chat, update_character_card, update_character_lorebook, update_persona_endpoint,
-    update_settings,
+    get_persona_endpoint, get_persona_multi_endpoint, get_preset_endpoint, get_scene_endpoint,
+    get_settings, import_character, import_preset_endpoint, list_agent_tools, list_characters,
+    list_models, list_personas_endpoint, list_presets_endpoint, list_scenes_endpoint,
+    list_sessions_endpoint, reextract_character_assets, regen_chat, rollback_chat,
+    unbind_persona_endpoint, update_character_card, update_character_lorebook,
+    update_persona_endpoint, update_persona_multi_endpoint, update_settings,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -314,6 +316,20 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             get(get_persona_endpoint).put(update_persona_endpoint),
         )
         .route(
+            "/v1/users/:user_id/personas",
+            get(list_personas_endpoint).post(create_persona_endpoint),
+        )
+        .route(
+            "/v1/users/:user_id/personas/:persona_id",
+            get(get_persona_multi_endpoint)
+                .put(update_persona_multi_endpoint)
+                .delete(delete_persona_multi_endpoint),
+        )
+        .route(
+            "/v1/users/:user_id/personas/:persona_id/bindings",
+            post(bind_persona_endpoint).delete(unbind_persona_endpoint),
+        )
+        .route(
             "/v1/sessions/:character_id",
             get(list_sessions_endpoint).post(create_session_endpoint),
         )
@@ -576,6 +592,437 @@ mod tests {
         assert_eq!(updated.name, "New");
         assert_eq!(updated.bindings.len(), 1);
         assert_eq!(updated.bindings[0].character_id, "char-a");
+    }
+
+    #[tokio::test]
+    async fn list_personas_returns_default_only_for_fresh_user() {
+        let state = make_state_with_key(None);
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/users/bob/personas")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let ids: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(ids, vec!["default".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn create_persona_then_get_returns_it() {
+        let state = make_state_with_key(None);
+        let create_body = serde_json::json!({
+            "persona_id": "alice-alt",
+            "name": "Alice Alt",
+            "description": "alt persona",
+            "variables": {"mood": "happy"}
+        })
+        .to_string();
+        let response = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/alice/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let created: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(created.id, "alice-alt");
+        assert_eq!(created.name, "Alice Alt");
+        assert_eq!(created.revision, 1);
+
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/users/alice/personas/alice-alt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let fetched: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(fetched.name, "Alice Alt");
+        assert_eq!(fetched.variables.get("mood").unwrap(), "happy");
+    }
+
+    #[tokio::test]
+    async fn create_persona_rejects_default_id() {
+        let state = make_state_with_key(None);
+        let body =
+            serde_json::json!({"persona_id":"default","name":"D","description":"","variables":{}})
+                .to_string();
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_persona_rejects_duplicate() {
+        let state = make_state_with_key(None);
+        let body =
+            serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
+                .to_string();
+        let first = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let second = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_persona_rejects_path_traversal() {
+        let state = make_state_with_key(None);
+        let body =
+            serde_json::json!({"persona_id":"../etc","name":"X","description":"","variables":{}})
+                .to_string();
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_persona_bumps_revision_and_preserves_bindings() {
+        let state = make_state_with_key(None);
+        let create_body =
+            serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
+                .to_string();
+        let _ = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let bind_body = serde_json::json!({"character_id":"char-a"}).to_string();
+        let response = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas/p1/bindings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(bind_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let after_bind: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(after_bind.bindings.len(), 1);
+        let rev = after_bind.revision;
+
+        let update_body = serde_json::json!({"expected_revision":rev,"name":"P1-renamed","description":"d","variables":{}}).to_string();
+        let response = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/users/u/personas/p1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(update_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let updated: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated.name, "P1-renamed");
+        assert_eq!(updated.revision, rev + 1);
+        assert_eq!(updated.bindings.len(), 1);
+        assert_eq!(updated.bindings[0].character_id, "char-a");
+    }
+
+    #[tokio::test]
+    async fn update_persona_rejects_wrong_expected_revision() {
+        let state = make_state_with_key(None);
+        let create_body =
+            serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
+                .to_string();
+        let _ = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let update_body =
+            serde_json::json!({"expected_revision":99,"name":"X","description":"","variables":{}})
+                .to_string();
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/users/u/personas/p1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(update_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_nonexistent_non_default_returns_404() {
+        let state = make_state_with_key(None);
+        let body =
+            serde_json::json!({"expected_revision":0,"name":"X","description":"","variables":{}})
+                .to_string();
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/users/u/personas/ghost")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_persona_removes_it_and_default_rejected() {
+        let state = make_state_with_key(None);
+        let create_body =
+            serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
+                .to_string();
+        let _ = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/users/u/personas/p1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let response = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/users/u/personas/p1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/users/u/personas/default")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn bind_persona_is_idempotent_and_unbind_removes_it() {
+        let state = make_state_with_key(None);
+        let create_body =
+            serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
+                .to_string();
+        let _ = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let bind_body = serde_json::json!({"character_id":"char-a"}).to_string();
+        let r1 = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas/p1/bindings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(bind_body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r1.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(r1.into_body(), 4096).await.unwrap();
+        let after_first: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(after_first.bindings.len(), 1);
+        let rev_after_first = after_first.revision;
+
+        // 幂等：第二次 bind 同一目标不 bump revision。
+        let r2 = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas/p1/bindings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(bind_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r2.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(r2.into_body(), 4096).await.unwrap();
+        let after_second: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(after_second.bindings.len(), 1);
+        assert_eq!(after_second.revision, rev_after_first);
+
+        let response = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/users/u/personas/p1/bindings?character_id=char-a")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let after_unbind: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(after_unbind.bindings.len(), 0);
+
+        // 幂等：再 unbind 同一目标不报错、不 bump revision。
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/users/u/personas/p1/bindings?character_id=char-a")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bind_rejects_invalid_character_id() {
+        let state = make_state_with_key(None);
+        let create_body =
+            serde_json::json!({"persona_id":"p1","name":"P1","description":"","variables":{}})
+                .to_string();
+        let _ = create_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let bind_body = serde_json::json!({"character_id":"bad/path"}).to_string();
+        let response = create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas/p1/bindings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(bind_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
