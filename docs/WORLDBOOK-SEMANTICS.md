@@ -35,7 +35,7 @@ Activated entries sort by descending `priority`; missing priority defaults to `1
 
 ### Injection
 
-Output is injected once under `[World Info/Lorebook Information]` in the RP system-prompt assembly. Control-plane agent observations are never scanned or injected. Scene merges deduplicate identical `content`, then apply the same ordering and trigger rules.
+Output is injected once under `[World Info/Lorebook Information]` in the RP system-prompt assembly. Control-plane agent observations are never scanned or injected. Scene merges preserve entries with distinct activation semantics, evaluate activation and priority for each entry, then deduplicate activated entries by identical `content`; the highest-priority activated variant wins and each content value is emitted once.
 
 ### Fixtures
 

@@ -1,6 +1,8 @@
 use aho_corasick::{AhoCorasick, MatchKind};
 use serde::{Deserialize, Serialize};
 
+pub(crate) const DEFAULT_PRIORITY: i32 = 10;
+
 /// 世界书（Lorebook）条目。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LorebookEntry {
@@ -86,38 +88,51 @@ impl Lorebook {
             .map(|&index| (index, &self.entries[index]))
             .collect();
         triggered.sort_by_key(|(index, entry)| {
-            (std::cmp::Reverse(entry.priority.unwrap_or(10)), *index)
+            (
+                std::cmp::Reverse(entry.priority.unwrap_or(DEFAULT_PRIORITY)),
+                *index,
+            )
         });
 
         let mut out = String::from("\n[World Info/Lorebook Information]:\n");
+        let mut emitted_content = std::collections::HashSet::new();
         for (_, e) in triggered {
-            out.push_str(&e.content);
-            out.push('\n');
+            if emitted_content.insert(e.content.as_str()) {
+                out.push_str(&e.content);
+                out.push('\n');
+            }
         }
         out
     }
 }
 
-/// MS-5: Merge multiple lorebooks into one, deduplicating by (keys, content) pair.
-/// Entries are sorted by priority descending; duplicates (same content) are removed.
+/// MS-5: Merge multiple lorebooks without discarding distinct activation semantics.
+/// Exact semantic duplicates are removed; output content is deduplicated after trigger evaluation.
 pub fn merge_lorebooks(lorebooks: &[Lorebook]) -> Lorebook {
     use std::collections::HashSet;
 
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<(String, Vec<String>, bool, i32, bool)> = HashSet::new();
     let mut merged: Vec<LorebookEntry> = Vec::new();
 
     for lb in lorebooks {
         for entry in &lb.entries {
-            if seen.insert(entry.content.clone()) {
+            let semantic_key = (
+                entry.content.clone(),
+                entry.keys.clone(),
+                entry.enabled.unwrap_or(true),
+                entry.priority.unwrap_or(DEFAULT_PRIORITY),
+                entry.constant.unwrap_or(false),
+            );
+            if seen.insert(semantic_key) {
                 merged.push(entry.clone());
             }
         }
     }
 
-    // Sort by priority descending (None = 10)
+    // Sort by priority descending (None = DEFAULT_PRIORITY)
     merged.sort_by(|a, b| {
-        let pa = a.priority.unwrap_or(10);
-        let pb = b.priority.unwrap_or(10);
+        let pa = a.priority.unwrap_or(DEFAULT_PRIORITY);
+        let pb = b.priority.unwrap_or(DEFAULT_PRIORITY);
         pb.cmp(&pa)
     });
 
@@ -452,7 +467,7 @@ The marketplace bustles at dawn.\n"
     // MS-5 tests
 
     #[test]
-    fn test_ms5_merge_lorebooks_deduplicates_by_content() {
+    fn test_ms5_merge_lorebooks_preserves_distinct_trigger_semantics() {
         let lb1 = Lorebook {
             entries: vec![entry(&["A"], "shared content", Some(10))],
         };
@@ -460,11 +475,49 @@ The marketplace bustles at dawn.\n"
             entries: vec![entry(&["B"], "shared content", Some(20))],
         };
         let merged = super::merge_lorebooks(&[lb1, lb2]);
-        // Second entry with same content should be dropped
+        assert_eq!(merged.entries.len(), 2);
         assert_eq!(
-            merged.entries.len(),
-            1,
-            "duplicate content should be deduped"
+            merged.trigger("A and B").matches("shared content").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_ms5_merge_lorebooks_deduplicates_exact_semantic_duplicates() {
+        let duplicate = entry(&["A"], "shared content", Some(10));
+        let merged = super::merge_lorebooks(&[
+            Lorebook {
+                entries: vec![duplicate.clone()],
+            },
+            Lorebook {
+                entries: vec![duplicate],
+            },
+        ]);
+        assert_eq!(merged.entries.len(), 1);
+    }
+
+    #[test]
+    fn merged_disabled_keyword_does_not_suppress_enabled_constant() {
+        let mut disabled = entry(&["keyword"], "shared content", Some(20));
+        disabled.enabled = Some(false);
+        let mut constant = entry(&[], "shared content", Some(10));
+        constant.constant = Some(true);
+
+        let merged = super::merge_lorebooks(&[
+            Lorebook {
+                entries: vec![disabled],
+            },
+            Lorebook {
+                entries: vec![constant],
+            },
+        ]);
+
+        assert_eq!(
+            merged
+                .trigger("unrelated text")
+                .matches("shared content")
+                .count(),
+            1
         );
     }
 

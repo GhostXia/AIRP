@@ -23,7 +23,7 @@
 ## 2. 尚不能宣称的能力
 
 - 当前 AIRP-Dev Windows 安装包尚缺真实 artifact 的安装、启动、sidecar ready、简单对话和退出证据；该缺口因桌面计划暂停而不进入近期验收。
-- MCP upstream client、skills/plugin runtime、完整 ChangeInbox、多 Persona 生命周期与绑定、Preset migration report、PromptAssemblyTrace、SillyTavern 高级 worldbook 语义（constant 已交付，selective/secondary_keys/position/depth 仍开放）仍未完成。
+- MCP upstream client、skills/plugin runtime、完整 ChangeInbox、多 Persona 生命周期与绑定、Preset migration report、PromptAssemblyTrace、SillyTavern 高级 worldbook 语义（constant 已交付，仍开放的语义包括但不限于 selective/secondary_keys/position/depth）仍未完成。
 - WebUI 已窗口分页，但不是虚拟列表；Tauri/Vue 的 10k/100k 性能、内存上界和虚拟滚动验收仍未完成，属于暂停桌面计划的保留缺口。
 - #37 的 branch/swipe/edit、per-user isolation 和长期记忆仍开放；durable ID、cursor pagination 与 rollback-by-ID 已交付，不应再列为缺口。
 - 可配置多 Agent 编排尚未交付；[AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md) 是产品原则与待实现规范，不得把示例 profile 写成现有 runtime 能力。
@@ -40,7 +40,7 @@
 ## 4. 当前开放风险/issue 分组
 
 - Production umbrella：#130（P0 已完成，P1-P3 仍开放）。
-- RP Profile/诊断：#114、#115、#116、#117、#126；#114 已有基础 Preset 与多 Persona 存储地基，但多 Persona HTTP/WebUI 生命周期、完整绑定闭环与 worldbook shared normalization（constant 已交付，selective/secondary_keys/position/depth 仍开放）仍未交付。
+- RP Profile/诊断：#114、#115、#116、#117、#126；#114 已有基础 Preset 与多 Persona 存储地基，但多 Persona HTTP/WebUI 生命周期、完整绑定闭环与 worldbook shared normalization（constant 已交付，仍开放的语义包括但不限于 selective/secondary_keys/position/depth）仍未交付。
 - Session/长期使用：#35、#37、#122；durable ID、cursor 与 WebUI window 已完成，剩余是 branch/swipe/edit、per-user/长期记忆和产品 UI 性能。
 - WebUI/design：#105。
 - Agent/extension：#32、#87。
