@@ -533,7 +533,13 @@ impl ChatLog {
     ///
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     pub fn rollback_to(&mut self, data_root: &Path, index: usize) -> Result<(), AirpError> {
-        if index < self.messages.len() {
+        let len = self.messages.len();
+        if (len == 0 && index != 0) || (len > 0 && index >= len) {
+            return Err(AirpError::BadRequest(format!(
+                "rollback index {index} out of range (total messages: {len})"
+            )));
+        }
+        if len > 0 {
             self.messages.truncate(index + 1);
             self.message_ids.truncate(index + 1);
             self.message_timestamps.truncate(index + 1);
@@ -1059,6 +1065,41 @@ mod tests {
         assert_eq!(reloaded.message_timestamps.len(), 2);
         assert_eq!(reloaded.messages[0].content, "msg0");
         assert_eq!(reloaded.messages[1].content, "msg1");
+    }
+
+    #[test]
+    fn rollback_to_rejects_out_of_range_without_mutation() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "rb_range_char");
+
+        let mut log = ChatLog::new("rb_range_char");
+        log.append(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "msg0".into(),
+            },
+        )
+        .unwrap();
+
+        let err = log.rollback_to(root, 1).unwrap_err();
+        assert!(matches!(err, AirpError::BadRequest(_)));
+        assert_eq!(log.messages.len(), 1);
+        let reloaded = ChatLog::load_or_create(root, "rb_range_char").unwrap();
+        assert_eq!(reloaded.messages.len(), 1);
+    }
+
+    #[test]
+    fn rollback_to_preserves_empty_log_compatibility() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "rb_empty_char");
+
+        let mut log = ChatLog::new("rb_empty_char");
+        log.rollback_to(root, 0).unwrap();
+        let err = log.rollback_to(root, 1).unwrap_err();
+        assert!(matches!(err, AirpError::BadRequest(_)));
     }
 
     // ── #37 durable message-id contract 不变式 ──────────────────────────────
