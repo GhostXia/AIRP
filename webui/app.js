@@ -1875,6 +1875,21 @@
     enLbl.appendChild(document.createTextNode('启用'));
     head.appendChild(enLbl);
 
+    // constant（v2 语义：常驻注入，不依赖关键词命中）
+    const constLbl = document.createElement('label');
+    constLbl.className = 'wb-lore-constant';
+    const constCb = document.createElement('input');
+    constCb.type = 'checkbox';
+    constCb.checked = entry.constant === true;
+    constCb.title = '常驻注入：启用后无论关键词是否命中都会注入';
+    constCb.addEventListener('change', () => {
+      entry.constant = constCb.checked;
+      setWbDirty(true);
+    });
+    constLbl.appendChild(constCb);
+    constLbl.appendChild(document.createTextNode('常驻'));
+    head.appendChild(constLbl);
+
     // delete
     const del = document.createElement('button');
     del.className = 'wb-lore-del';
@@ -1932,6 +1947,7 @@
       content: '',
       enabled: true,
       priority: 10,
+      constant: false,
       comment: null,
     });
     setWbDirty(true);

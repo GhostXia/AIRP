@@ -822,7 +822,7 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
 fn convert_character_book_to_lorebook(
     cb: &serde_json::Value,
 ) -> Option<crate::orchestrator::lorebook::Lorebook> {
-    use crate::orchestrator::lorebook::{Lorebook, LorebookEntry};
+    use crate::orchestrator::lorebook::{Lorebook, LorebookEntry, DEFAULT_PRIORITY};
 
     let entries_val = cb.get("entries").unwrap_or(cb);
 
@@ -855,6 +855,7 @@ fn convert_character_book_to_lorebook(
                 .or_else(|| v.get("insertion_order"))
                 .and_then(|p| p.as_i64())
                 .map(|p| p as i32);
+            let constant = v.get("constant").and_then(|c| c.as_bool());
             let comment = v
                 .get("comment")
                 .and_then(|c| c.as_str())
@@ -864,12 +865,15 @@ fn convert_character_book_to_lorebook(
                 content,
                 enabled,
                 priority,
+                constant,
                 comment,
             })
         })
         .collect();
 
-    entries.sort_by_key(|e| e.priority.unwrap_or(100));
+    // 统一使用 trigger 的默认值（10）与排序方向（降序），避免存储顺序与运行时
+    // trigger 输出顺序漂移。trigger 会重新排序，此处排序主要为可读性。
+    entries.sort_by_key(|e| std::cmp::Reverse(e.priority.unwrap_or(DEFAULT_PRIORITY)));
 
     Some(Lorebook { entries })
 }

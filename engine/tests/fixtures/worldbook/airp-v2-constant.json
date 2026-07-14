@@ -1,0 +1,43 @@
+{
+  "entries": [
+    {
+      "keys": [],
+      "content": "The world is shaped by an ancient compact between dragons and mortals.",
+      "enabled": true,
+      "priority": 30,
+      "constant": true,
+      "comment": "constant entry, no keys, always injected"
+    },
+    {
+      "keys": ["moon gate"],
+      "content": "The moon gate opens only at night.",
+      "enabled": true,
+      "priority": 10,
+      "constant": false,
+      "comment": "keyword-triggered entry"
+    },
+    {
+      "keys": ["observatory"],
+      "content": "The observatory predates the city.",
+      "enabled": true,
+      "priority": 20,
+      "comment": "keyword-triggered entry without explicit constant field"
+    },
+    {
+      "keys": ["dragon council"],
+      "content": "This disabled constant must never appear.",
+      "enabled": false,
+      "priority": 100,
+      "constant": true,
+      "comment": "disabled constant entry must be skipped even though constant=true"
+    },
+    {
+      "keys": ["marketplace"],
+      "content": "The marketplace bustles at dawn.",
+      "enabled": true,
+      "priority": 5,
+      "constant": true,
+      "comment": "constant entry that also has keys; must inject exactly once"
+    }
+  ]
+}

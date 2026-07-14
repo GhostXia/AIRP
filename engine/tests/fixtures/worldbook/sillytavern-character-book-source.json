@@ -9,6 +9,20 @@
       "constant": false,
       "selective": true,
       "position": "before_char"
+    },
+    {
+      "keys": [],
+      "content": "The kingdom levies a salt tax of three coppers per household.",
+      "disable": false,
+      "order": 25,
+      "constant": true
+    },
+    {
+      "keys": ["abandoned shrine"],
+      "content": "The abandoned shrine is overgrown with ivy.",
+      "disable": true,
+      "order": 15,
+      "constant": true
     }
   ]
 }
