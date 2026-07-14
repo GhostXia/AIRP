@@ -72,7 +72,7 @@
 | 角色卡 PNG 解析（正确版） | C `png_parser.rs`(262行) | ✅ | tEXt/zTXt/iTXt + ccv3(V3)优先 chara(V2)回退 + v1平铺归一化。**这是正确实现** |
 | 角色卡 TavernCardV2 模型 | C `types.rs:37-62` | ✅ | spec/data 封装 + system_prompt/alternate_greetings/character_book + `normalize_v1_to_v2()` |
 | 角色卡解析（坏版，勿用） | M `character_store.rs:217`+`character.rs:20-32` | 📖 | zTXt-only 读不到真卡 + 摊平 struct 解析失败。**反面教材，用 C 的替换** |
-| 世界书解析+插入引擎 | 皆无 | 🆕 | 酒馆是 uid-keyed object，M 用 Vec(解析失败)、C 也残缺。position/depth/selective/constant/probability/递归**全缺，需新建** |
+| 世界书解析+插入引擎 | AIRP engine + C/M 参考 | 🔧 | PR #141 已交付 AIRP v2 `constant`、关键词触发、merge-safe 激活与 fixture；shared normalizer、uid-keyed object/别名完整归一化、position/depth/selective/secondary/probability/递归仍需增量实现 |
 | 预设正则脚本（正确骨架） | M `preset_regex.rs` `SillyTavernRegexScript` | 🔧 | findRegex/replaceString/placement 映射对，但缺 trimStrings/minDepth/maxDepth/markdownOnly 等字段 |
 | 预设正则（冲突坏版） | M `preset.rs:50-56` `RegexScript` | 📖 | 瞎起名字段，与上面冲突。**杀掉留一个真相源** |
 | 预设分析/热调工具 | M `analyze_preset`/`tune_preset`/`decompose_preset` | 📖 | 提示词工作流：读懂 prompt 块用途、按当前模型热调。对应"预设是建议素材，Agent 适配"哲学 |

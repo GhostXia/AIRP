@@ -12,7 +12,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - Tavern Card JSON/PNG 导入、canonical/sidecar 落盘和角色 CRUD；
 - 会话创建/列表、history、append、rollback、regen；
 - rollback 在 service/API 与 `ChatLog` 持久化边界都拒绝非法 index；空日志 `index=0` 保留兼容；
-- 基础 lorebook CRUD、OR-key 触发、`enabled`、`priority`；
+- lorebook CRUD、OR-key 触发、`enabled`、`priority` 与 v2 `constant` 常驻注入；
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
@@ -40,7 +40,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ### Worldbook 与 state 都是部分实现
 
-- Worldbook 尚无 selective/secondary、constant、probability、sticky/cooldown/delay、group、position/depth/order 的完整 AIRP 合同；
+- Worldbook 已有 v2 `constant` 合同；仍无 selective/secondary、probability、sticky/cooldown/delay、group、position/depth 等高级语义的完整 AIRP 合同；
 - state schema 在写入前强制 required/type/range/additionalProperties，并以 revisioned atomic replace 更新 live/history；
 - Chat/State/Lorebook 的 HTTP、pipeline 与 Agent tools 已复用共享 domain services；更广泛的跨资源事务仍需逐项设计。
 
