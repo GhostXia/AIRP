@@ -275,7 +275,7 @@ pub(super) async fn create_persona_endpoint(
     axum::extract::Path(user_id): axum::extract::Path<String>,
     Json(payload): Json<CreatePersonaRequest>,
 ) -> Result<Json<Persona>, AirpError> {
-    if payload.persona_id == "default" {
+    if payload.persona_id.eq_ignore_ascii_case("default") {
         return Err(AirpError::BadRequest(
             "default persona 不能在此创建；使用 PUT /v1/users/:id/persona".to_string(),
         ));
@@ -363,8 +363,13 @@ pub(super) async fn bind_persona_endpoint(
 pub(super) async fn unbind_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
-    axum::extract::Query(query): axum::extract::Query<UnbindPersonaQuery>,
+    query: Result<
+        axum::extract::Query<UnbindPersonaQuery>,
+        axum::extract::rejection::QueryRejection,
+    >,
 ) -> Result<Json<Persona>, AirpError> {
+    let axum::extract::Query(query) =
+        query.map_err(|error| AirpError::BadRequest(error.to_string()))?;
     let uid = UserId::new(user_id)?;
     let updated = PersonaService::new(&state.data_root).unbind(
         &uid,

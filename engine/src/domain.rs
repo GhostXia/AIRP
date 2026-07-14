@@ -792,7 +792,7 @@ impl PersonaService {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if let Some(stem) = name.strip_suffix(".json") {
                     if data_dir::validate_id_segment(stem).is_ok() {
-                        ids.push(stem.to_string());
+                        ids.push(Self::canonical_persona_id(stem).to_string());
                     }
                 }
             }
@@ -802,6 +802,7 @@ impl PersonaService {
             ids.push("default".to_string());
         }
         ids.sort();
+        ids.dedup();
         Ok(ids)
     }
 
@@ -812,6 +813,7 @@ impl PersonaService {
         persona_id: &str,
         default_name: &str,
     ) -> Result<Persona, AirpError> {
+        let persona_id = Self::canonical_persona_id(persona_id);
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
@@ -844,6 +846,7 @@ impl PersonaService {
         expected_revision: u64,
         mut persona: Persona,
     ) -> Result<Persona, AirpError> {
+        let persona_id = Self::canonical_persona_id(persona_id);
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
         let dir = data_dir::user_personas_dir(&self.data_root, user_id);
@@ -881,6 +884,7 @@ impl PersonaService {
 
     /// 删除指定 id 的 Persona；`default` 不允许删（返 BadRequest）。删除文件不可逆。
     pub fn delete(&self, user_id: &UserId, persona_id: &str) -> Result<(), AirpError> {
+        let persona_id = Self::canonical_persona_id(persona_id);
         if persona_id == "default" {
             return Err(AirpError::BadRequest(
                 "default persona 不可删除；可用 save 重置内容".to_string(),
@@ -984,6 +988,17 @@ impl PersonaService {
     }
 
     // ── 内部────────────────────────────────────────────────────────────────────
+
+    /// `default` is a reserved cross-platform storage name. Canonicalizing at
+    /// the service boundary prevents case variants from addressing the same
+    /// file with different semantics on case-insensitive filesystems.
+    fn canonical_persona_id(persona_id: &str) -> &str {
+        if persona_id.eq_ignore_ascii_case("default") {
+            "default"
+        } else {
+            persona_id
+        }
+    }
 
     fn parse_persona_bytes(&self, bytes: &[u8]) -> Result<Persona, AirpError> {
         let mut persona: Persona = serde_json::from_slice(bytes)?;

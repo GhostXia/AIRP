@@ -682,6 +682,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = serde_json::json!({
+            "persona_id": "Default",
+            "name": "D",
+            "description": "",
+            "variables": {}
+        })
+        .to_string();
+        let response = create_router(make_state_with_key(None))
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/users/u/personas")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -905,6 +925,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = create_router(make_state_with_key(None))
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/users/u/personas/Default")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -990,6 +1022,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unbind_missing_query_uses_airp_error_envelope() {
+        let response = create_router(make_state_with_key(None))
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/users/u/personas/p1/bindings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error["error"]["code"], "bad_request");
     }
 
     #[tokio::test]
