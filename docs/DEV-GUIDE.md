@@ -176,7 +176,7 @@ data/
 | 类型 | 状态 | 做法 |
 |---|---|---|
 | **角色卡（V2/V3）** | ✅ 白捡 | 用 Core `png_parser.rs`（已正确）+ `types.rs` `TavernCardV2`（spec/data 封装 + system_prompt/alternate_greetings/character_book + v1 归一化）。确保导入路径用它，别用 mcp-server 坏版 |
-| **世界书** | 🔧 **主要新建件** | PR #141 已交付关键词触发与 v2 `constant` 常驻注入；shared normalizer、uid-keyed object/字段别名完整归一化和 import diagnostics 仍缺。**重组**：解析全字段进数据层 + 把 position/depth/selective/secondary/probability/递归作为**给 agent 的建议元数据 + 检索 Tool**候选，**不直接照搬机械注入管线**；语义按版本化合同增量补 |
+| **世界书** | 🔧 **主要新建件** | PR #141 已交付关键词触发与 v2 `constant` 常驻注入；shared normalizer、uid-keyed object/字段别名完整归一化和 import diagnostics 仍缺。**重组**：解析全字段进数据层 + 把 position/depth/selective/secondary/probability/递归作为**给 agent 的建议元数据 + 检索 Tool** 候选，**不直接照搬机械注入管线**；语义按版本化合同增量补 |
 | **预设** | 🔧 | 预设是**建议素材非机械回放**：agent 理解意图按当前模型适配（`analyze_preset`/`tune_preset` 思路）。采样参数=adapter 建议值。正则脚本→**消息格式化 Hook**。用 Core/mcp-server 的 `preset_regex.rs`（正确骨架），杀掉 `preset.rs` 里瞎起名的 `RegexScript` 冲突版，补 trimStrings/minDepth/maxDepth 等字段 |
 
 **已知代码修点**（挖对应零件时一并修，详见 PARTS.md §M）：mcp-server 角色卡 zTXt-only（用 core 替换）、世界书 Vec 结构、预设两套 RegexScript 冲突、state 写入不 clamp（模型可写越界值，`persist_live_state` 落盘前按 schema clamp）、list 排序漂移、import_preset 绕沙箱、constant_time_eq 长度侧信道、错误码全归 INTERNAL_ERROR、并发写无文件锁。
