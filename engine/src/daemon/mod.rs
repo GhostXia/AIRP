@@ -1022,6 +1022,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let repeated: crate::domain::Persona = serde_json::from_slice(&body).unwrap();
+        assert_eq!(repeated.revision, after_unbind.revision);
     }
 
     #[tokio::test]

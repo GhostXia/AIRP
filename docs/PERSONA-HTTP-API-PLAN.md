@@ -62,6 +62,9 @@ Binding request:
 - `default` is a case-insensitive reserved storage name. Create rejects every
   case variant; other service operations canonicalize variants to `default` so
   behavior is consistent on case-insensitive filesystems.
+- A historical non-canonical file such as `Default.json` fails closed instead
+  of being hidden or overwritten; an operator must resolve any conflict and
+  rename it to `default.json`.
 - Create uses expected revision `0`; an existing ID therefore produces a
   revision conflict instead of overwriting data.
 - Update preserves bindings. Binding changes only through bind/unbind.

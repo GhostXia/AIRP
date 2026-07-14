@@ -781,6 +781,7 @@ impl PersonaService {
     pub fn list(&self, user_id: &UserId) -> Result<Vec<String>, AirpError> {
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
+        self.reject_case_variant_default_file(user_id)?;
         let dir = data_dir::user_personas_dir(&self.data_root, user_id);
         let mut ids: Vec<String> = Vec::new();
         if dir.is_dir() {
@@ -792,7 +793,7 @@ impl PersonaService {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if let Some(stem) = name.strip_suffix(".json") {
                     if data_dir::validate_id_segment(stem).is_ok() {
-                        ids.push(Self::canonical_persona_id(stem).to_string());
+                        ids.push(stem.to_string());
                     }
                 }
             }
@@ -802,7 +803,6 @@ impl PersonaService {
             ids.push("default".to_string());
         }
         ids.sort();
-        ids.dedup();
         Ok(ids)
     }
 
@@ -816,12 +816,17 @@ impl PersonaService {
         let persona_id = Self::canonical_persona_id(persona_id);
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
+        if persona_id == "default" {
+            self.reject_case_variant_default_file(user_id)?;
+        }
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
         if persona_id == "default" {
             let legacy = data_dir::user_persona_path(&self.data_root, user_id);
-            return Ok(self
+            let mut persona = self
                 .newest_default_copy(&path, &legacy)?
-                .unwrap_or_else(|| Persona::initial(default_name)));
+                .unwrap_or_else(|| Persona::initial(default_name));
+            persona.id = "default".to_string();
+            return Ok(persona);
         }
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
@@ -849,6 +854,9 @@ impl PersonaService {
         let persona_id = Self::canonical_persona_id(persona_id);
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
+        if persona_id == "default" {
+            self.reject_case_variant_default_file(user_id)?;
+        }
         let dir = data_dir::user_personas_dir(&self.data_root, user_id);
         fs::create_dir_all(&dir)?;
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
@@ -998,6 +1006,34 @@ impl PersonaService {
         } else {
             persona_id
         }
+    }
+
+    /// Older callers could create `Default.json` on case-sensitive filesystems.
+    /// Fail closed instead of silently hiding or overwriting that data. Recovery
+    /// requires an explicit operator rename, which also forces conflicts with an
+    /// existing `default.json` to be resolved deliberately.
+    fn reject_case_variant_default_file(&self, user_id: &UserId) -> Result<(), AirpError> {
+        let dir = data_dir::user_personas_dir(&self.data_root, user_id);
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name != "default.json" && name.eq_ignore_ascii_case("default.json") {
+                return Err(AirpError::BadRequest(
+                    "non-canonical default persona file found; rename it to default.json after resolving any conflict"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn parse_persona_bytes(&self, bytes: &[u8]) -> Result<Persona, AirpError> {
@@ -1408,6 +1444,40 @@ mod tests {
         assert!(matches!(
             service.get(&uid, "missing", "User"),
             Err(AirpError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn persona_default_read_normalizes_stored_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let path = crate::data_dir::user_persona_path(tmp.path(), &uid);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut legacy = Persona::initial("Legacy");
+        legacy.id = "Default".to_string();
+        fs::write(path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        assert_eq!(service.get_default(&uid, "User").unwrap().id, "default");
+    }
+
+    #[test]
+    fn persona_case_variant_default_file_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        let dir = crate::data_dir::user_personas_dir(tmp.path(), &uid);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Default.json"), b"{}").unwrap();
+
+        assert!(matches!(service.list(&uid), Err(AirpError::BadRequest(_))));
+        assert!(matches!(
+            service.get_default(&uid, "User"),
+            Err(AirpError::BadRequest(_))
+        ));
+        assert!(matches!(
+            service.save_default(&uid, 0, Persona::initial("Alice")),
+            Err(AirpError::BadRequest(_))
         ));
     }
 
