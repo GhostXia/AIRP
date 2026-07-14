@@ -13,11 +13,11 @@
 //! - `enhance_analysis`：读 analysis MD，调 LLM 增强，返回 diff 预览（readonly）
 //! - `apply_enhanced_analysis`：写入确认的 enhanced_md（destructive，默认 dry-run）
 
+use super::params::required_character_id;
 use super::*;
 use crate::daemon::DaemonState;
 use crate::data_dir;
 use crate::error::AirpError;
-use crate::types::CharacterId;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -151,7 +151,7 @@ impl Tool for EnhanceAnalysisTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
-            let cid_str = params
+            params
                 .get("character_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
@@ -168,7 +168,7 @@ impl Tool for EnhanceAnalysisTool {
                 ));
             }
 
-            let cid = CharacterId::new(cid_str)?;
+            let cid = required_character_id(&params)?;
             let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
             if !path.exists() {
                 return Err(AirpError::NotFound(format!(
@@ -219,7 +219,7 @@ impl Tool for ApplyEnhancedAnalysisTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
-            let cid_str = params
+            params
                 .get("character_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
@@ -240,7 +240,7 @@ impl Tool for ApplyEnhancedAnalysisTool {
                 ));
             }
 
-            let cid = CharacterId::new(cid_str)?;
+            let cid = required_character_id(&params)?;
             let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
             if !path.exists() {
                 return Err(AirpError::NotFound(format!(

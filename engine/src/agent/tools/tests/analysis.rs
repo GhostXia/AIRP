@@ -180,3 +180,40 @@ async fn apply_enhanced_analysis_dry_run_then_confirm() {
         .unwrap_err();
     assert!(matches!(err, AirpError::BadRequest(_)));
 }
+
+#[tokio::test]
+async fn analysis_validation_preserves_existing_error_precedence() {
+    let tmp = tempdir().unwrap();
+    let reg = default_registry(make_state(tmp.path().to_path_buf()));
+
+    // Both tools historically check required field presence before validating
+    // the character id value. Reusing required_character_id must not move that
+    // value validation ahead of family-specific missing-field errors.
+    let enhance_err = reg
+        .get("enhance_analysis")
+        .unwrap()
+        .call(serde_json::json!({"character_id": ".bad"}), false)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        enhance_err,
+        AirpError::BadRequest(ref message) if message == "missing filename"
+    ));
+
+    let apply_err = reg
+        .get("apply_enhanced_analysis")
+        .unwrap()
+        .call(
+            serde_json::json!({
+                "character_id": ".bad",
+                "filename": "personality.md",
+            }),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        apply_err,
+        AirpError::BadRequest(ref message) if message == "missing enhanced_md"
+    ));
+}
