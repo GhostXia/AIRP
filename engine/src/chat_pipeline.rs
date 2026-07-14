@@ -16,12 +16,13 @@ use crate::adapter::{
 use crate::config::VolumeConfig;
 use crate::daemon::{ChatCompletionRequest, DaemonState};
 use crate::data_dir;
-use crate::domain::ChatService;
+use crate::domain::{ChatService, Persona, PersonaService};
 use crate::error::AirpError;
 use crate::fsm::{RegexFilter, StreamingFsm};
 use crate::orchestrator::{
     inject_current_context, inject_volume_context, Orchestrator, TavernPreset,
 };
+use crate::types::UserId;
 use crate::xml_unpacker::{StreamingXmlUnpacker, UnpackedChunk};
 use crate::{volume_manager, volume_store};
 
@@ -94,6 +95,90 @@ fn load_char_card_json(root: &std::path::Path, character_id: &str) -> Option<Str
     } else {
         None
     }
+}
+
+/// A1b：按 precedence contract 解析请求激活的 Persona。
+///
+/// `data_root` 是**全局** data root（`state.data_root`），不是 user-scoped
+/// effective root；`PersonaService` 内部用 `user_dir(root, uid)` 拼
+/// `users/{uid}/personas/` 路径，若传 user-scoped root 会双重嵌套。
+///
+/// 返回 `None` 表示请求未带 `user_id`（保持单用户向后兼容）；否则按以下顺序
+/// 返回 Persona：
+///
+/// 1. **显式 `persona_id`**（请求体指定）：id 不存在时 `find_for_character` /
+///    `get` 已在 `PersonaService` 内返 `NotFound`，与本契约一致。`default`
+///    大小写不敏感（service 内 canonicalize）。
+/// 2. **绑定查找**（仅单角色分支；`scene_id` 缺省且 `character_id` 存在）：
+///    `PersonaService::find_for_character` 先精确匹配 session 绑定，再匹配
+///    该角色下的 generic 绑定。命中后用 `get` 读出 Persona。
+/// 3. **默认 persona**：`get_default` 返回存储的 default；未写盘时返回
+///    `Persona::initial` 内存快照（不触发隐式落盘）。
+///
+/// Scene 模式（`scene_id` 存在）只走 precedence 1 与 3：scene 有多角色，
+/// 没有单一绑定目标，`find_for_character` 跳过；多角色 persona 绑定语义延后。
+fn resolve_request_persona(
+    payload: &ChatCompletionRequest,
+    data_root: &std::path::Path,
+) -> Result<Option<Persona>, AirpError> {
+    let Some(user_id_str) = payload.user_id.as_deref() else {
+        return Ok(None);
+    };
+    let uid = UserId::new(user_id_str)?;
+    let service = PersonaService::new(data_root);
+
+    // precedence 1: 显式 persona_id
+    if let Some(persona_id) = payload.persona_id.as_deref() {
+        data_dir::validate_id_segment(persona_id)?;
+        let persona = service.get(&uid, persona_id, "User")?;
+        return Ok(Some(persona));
+    }
+
+    // precedence 2: find_for_character（仅单角色分支）
+    if payload.scene_id.is_none() {
+        if let Some(ref cid) = payload.character_id {
+            // SessionId 是 newtype(uuid::Uuid)；find_for_character 需要
+            // Option<&str>。在本地构造 String 再借，避免给 SessionId 强加 Deref。
+            let session_id_str = payload.session_id.as_ref().map(|s| s.to_string());
+            if let Some(pid) =
+                service.find_for_character(&uid, cid.as_str(), session_id_str.as_deref())?
+            {
+                let persona = service.get(&uid, &pid, "User")?;
+                return Ok(Some(persona));
+            }
+        }
+    }
+
+    // precedence 3: default persona
+    Ok(Some(service.get_default(&uid, "User")?))
+}
+
+/// A1b：把解析到的 Persona 与请求体 `user_profile` 合并为有效的 (name, variables)。
+///
+/// 合同：
+/// - `name`：请求体 `user_profile.name` 非空时优先；否则用 persona `name`。
+///   这样客户端可以显式传当前用户显示名（覆盖 persona），或者发空串让
+///   persona 的 `{{user}}` 默认值生效（A2 将采用此约定）。
+/// - `variables`：persona `variables` 作为底层 defaults；请求体
+///   `user_profile.variables` 同名键覆盖。这样 persona 提供持久化的 tone 等
+///   persona 级变量，客户端临时 override 不破坏存储。
+///
+/// `persona == None` 时原样返回 `user_profile`（user_id 缺失路径，向后兼容）。
+fn merge_persona_into_user_profile(
+    user_profile: &crate::daemon::types::UserProfile,
+    persona: Option<&Persona>,
+) -> (String, std::collections::HashMap<String, String>) {
+    let Some(persona) = persona else {
+        return (user_profile.name.clone(), user_profile.variables.clone());
+    };
+    let name = if user_profile.name.is_empty() {
+        persona.name.clone()
+    } else {
+        user_profile.name.clone()
+    };
+    let mut merged = persona.variables.clone();
+    merged.extend(user_profile.variables.clone());
+    (name, merged)
 }
 
 /// issue #27：组装流式过滤器集合，single 与 scene 分支复用同一份加载逻辑。
@@ -217,12 +302,24 @@ fn prepare_scene_pipeline(
         .map(|(id, json)| (id.as_str(), json.as_deref()))
         .collect();
 
+    // A1b: scene 模式只走 precedence 1（显式 persona_id）与 3（default）；
+    //      `find_for_character` 跳过，因为 scene 有多角色，没有单一绑定目标。
+    //      与 single 分支一致，传 `state.data_root`（全局 root）。
+    let request_persona = resolve_request_persona(payload, &state.data_root)?;
+    let (effective_user_name, effective_user_variables) =
+        merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
+
     let mut system_prompt = crate::orchestrator::build_multi_char_system_prompt(
         &scene,
         &cards,
         &triggered_lore,
-        &payload.user_profile.name,
+        &effective_user_name,
     );
+    let mut prompt_variables = effective_user_variables.clone();
+    prompt_variables.insert("user".to_string(), effective_user_name.clone());
+    for (key, value) in prompt_variables {
+        system_prompt = system_prompt.replace(&format!("{{{{{key}}}}}"), &value);
+    }
 
     let session_dir_opt: Option<PathBuf> =
         data_dir::scene_memory_dir(&effective_root, &scene_id).ok();
@@ -302,7 +399,8 @@ fn prepare_scene_pipeline(
     // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 single 分支产出一致集合。
     let filters = assemble_regex_filters(payload, &effective_root);
 
-    let runtime_variables = payload.user_profile.variables.clone();
+    let mut runtime_variables = effective_user_variables.clone();
+    runtime_variables.insert("user".to_string(), effective_user_name.clone());
     let fsm = StreamingFsm::new(filters, runtime_variables);
 
     Ok(PreparedPipeline {
@@ -343,6 +441,13 @@ pub fn prepare_pipeline(
     // DX-1: per-user data root isolation
     let effective_root =
         data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;
+
+    // Resolve all Persona inputs before timeline advancement, chat persistence,
+    // or any other request side effect. A rejected explicit Persona must leave
+    // user state untouched.
+    let request_persona = resolve_request_persona(payload, &state.data_root)?;
+    let (effective_user_name, effective_user_variables) =
+        merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
 
     // 1. ID validation：M5.0a — CharacterId / PresetId 在反序列化时已校验，
     //    此处不再需要显式 validate_id_segment 调用。
@@ -475,11 +580,16 @@ pub fn prepare_pipeline(
 
     // 9. Build system prompt
     let cid_str: Option<&str> = payload.character_id.as_ref().map(|c| c.as_str());
+    // A1b: resolve persona (explicit > bound > default) and merge with the
+    //      request user_profile. Request fields override persona defaults so
+    //      legacy callers see no behavior change. `state.data_root` (not the
+    //      user-scoped effective_root) is passed because PersonaService builds
+    //      `users/{uid}/personas/` from the global root.
     let mut system_prompt = orchestrator.build_system_prompt_with_preset(
         &effective_root,
         cid_str,
-        &payload.user_profile.name,
-        &payload.user_profile.variables,
+        &effective_user_name,
+        &effective_user_variables,
         &triggered_lore,
         preset_json.as_deref(),
         payload.enabled_presets.as_ref(),
@@ -561,8 +671,8 @@ pub fn prepare_pipeline(
     // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 scene 分支产出一致集合。
     let filters = assemble_regex_filters(payload, &effective_root);
 
-    let mut runtime_variables = payload.user_profile.variables.clone();
-    runtime_variables.insert("user".to_string(), payload.user_profile.name.clone());
+    let mut runtime_variables = effective_user_variables.clone();
+    runtime_variables.insert("user".to_string(), effective_user_name.clone());
     if let Some(ref card) = orchestrator.card {
         if let Some(ref name) = card.name {
             runtime_variables.insert("char".to_string(), name.clone());

@@ -49,6 +49,14 @@ pub struct ChatCompletionRequest {
     /// DX-1：可选用户 ID；设置后数据根切换为 `data/users/{user_id}/`，实现多租户隔离。
     /// 为 None 时使用全局 `data/`（单用户向后兼容模式）。
     pub user_id: Option<String>,
+    /// A1b：显式指定本次对话激活的 Persona id。
+    ///
+    /// 仅在请求带 `user_id` 时生效；`user_id` 缺失时此字段被忽略（保持单用户
+    /// 向后兼容）。`default` 大小写不敏感；其他 id 不存在时返 `404`，与 plural
+    /// GET 契约一致。缺省时由 `chat_pipeline` 按 precedence contract 自动解析
+    /// （`find_for_character` 绑定 → `default` persona），详见
+    /// [docs/PERSONA-HTTP-API-PLAN.md](../../../docs/PERSONA-HTTP-API-PLAN.md)。
+    pub persona_id: Option<String>,
 }
 
 /// 用户画像：用于 `{{user}}` 等变量替换。

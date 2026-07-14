@@ -2144,6 +2144,77 @@ mod tests {
             "legacy 响应不应包含 scope_session_id 字段"
         );
     }
+
+    // ── A1b: chat_pipeline persona activation ────────────────────────────────
+
+    #[tokio::test]
+    async fn a1b_chat_completions_returns_404_for_nonexistent_persona_id() {
+        // Explicit `persona_id` that does not exist must fail closed with 404
+        // before any upstream LLM call. This mirrors the plural GET contract.
+        let (state, _tmp) = make_state_no_key();
+        let app = create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "user_id": "alice",
+                            "persona_id": "ghost",
+                            "user_profile": { "name": "Alice", "variables": {} },
+                            "message": "hi"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "nonexistent persona_id must return 404, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn a1b_chat_completions_accepts_default_persona_id_for_fresh_user() {
+        // `default` is a virtual profile that always resolves (initial snapshot
+        // when no file exists). The request should reach the streaming stage,
+        // failing only at the upstream LLM call (http://localhost) — not at
+        // persona resolution. We assert the response is NOT a 404.
+        let (state, _tmp) = make_state_no_key();
+        let app = create_router(state);
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "user_id": "alice",
+                            "persona_id": "default",
+                            "user_profile": { "name": "Alice", "variables": {} },
+                            "message": "hi",
+                            "messages_history": []
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::OK,
+            "default persona must reach the streaming response, got {}",
+            resp.status()
+        );
+    }
 }
 
 // ── DX-4 tests: UserOrIpKeyExtractor ─────────────────────────────────────────

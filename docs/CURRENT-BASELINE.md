@@ -16,7 +16,7 @@
 - WebUI 已成为当前正式产品交付主面；近期目标从“基础验证面”升级为“可安全部署、可持续日用、可升级恢复的单实例自托管正式版”。生产边界与 release gates 见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
 - P0 生产拓扑、配置与威胁边界已经在 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 形成实现合同。engine production mode 在读取/创建 config 前 fail-closed 校验 deployment mode、32-byte base64url access key、canonical HTTPS public origin、绝对且已存在可写的数据目录，并拒绝 local-path import；production CORS 只接受 public origin，`POST /v1/settings` 不能单边替换 bearer。
 - `deploy/production/` 已包含 digest-pinned engine/Caddy images、版本化 Compose、仅 gateway 发布端口的私有 engine 网络、Compose secret mounts、三种显式 TLS 模式、安全 headers、同源 WebUI runtime config 和 operator bootstrap。production topology CI 会从一次性 volume 启动真实 HTTPS 栈，执行 perimeter auth、私有 engine、CSP/headers、content-only import、SSE、浏览器注入/取消、重启持久化和 secret scan。浏览器在 production mode 不接收或存储 engine URL/bearer；engine 容器监听非 loopback 必须显式传 `--host 0.0.0.0`。
-- PR #127 已交付 schema v2 多 Persona 存储、revision、角色/会话绑定、legacy/default 协调和路径校验；A1a 已交付多 Persona HTTP API（`GET/POST /v1/users/:id/personas`、`GET/PUT/DELETE /v1/users/:id/personas/:persona_id`、`POST/DELETE .../bindings`，handler 全部委托 `PersonaService`，legacy singular `/persona` 保留）。仍不能宣称多 Persona 产品闭环完成：`chat_pipeline` 按 `persona_id`/`find_for_character` 自动激活（A1b）与 WebUI 多 Persona UI（A2）仍未交付。
+- PR #127 已交付 schema v2 多 Persona 存储、revision、角色/会话绑定、legacy/default 协调和路径校验；A1a 已交付多 Persona HTTP API（`GET/POST /v1/users/:id/personas`、`GET/PUT/DELETE /v1/users/:id/personas/:persona_id`、`POST/DELETE .../bindings`，handler 全部委托 `PersonaService`，legacy singular `/persona` 保留）；A1b 已交付 `chat_pipeline` persona 激活（`POST /v1/chat/completions` 新增可选 `persona_id`，按 precedence contract 解析 explicit → `find_for_character` 绑定 → default，scene 模式跳过 tier 2，merge 合同：request `user_profile.name` 非空覆盖 persona name、persona variables 作 defaults、request variables 同名键 override）。仍不能宣称多 Persona 产品闭环完成：WebUI 多 Persona UI（A2）仍未交付。
 - PR #141 已交付 AIRP worldbook v2 `constant` 运行时语义：`enabled && (constant || primary_keyword_match)`；constant 与关键词条目共用 priority 排序和单一注入块，多 lorebook merge 会保留不同激活条件并在实际触发后按内容去重。WebUI 已可编辑"常驻"字段，v1 无 `constant` 数据保持兼容。
 - worldbook v3 shared normalizer + advisory metadata 已交付：`normalize_worldbook()` 统一 PNG 导入、PUT API 和 Agent tool 三个入口的 SillyTavern→AIRP 归一化；v3 schema 新增 `secondary_keys`/`case_sensitive`/`extensions` 三个 advisory 字段（`#[serde(default)]` 向后兼容，trigger 不消费）；`WorldbookImportReport` 提供 converted/aliases_normalized/advisory_preserved/invalid/needs_review 诊断。ST-only 字段（selective/position/depth/probability/…）原样保留在 `extensions` 中不丢弃，但不进入运行时注入管线。归一化入口会拒绝错误 source shape、全量无效条目、字段错型与越界 priority，避免整体替换静默清空或改变语义。
 - Tauri/Vue UI 代码与既有能力继续保留，但自 2026-07-13 起桌面 UI 开发、打包验收和性能 spike 暂停，不属于近期里程碑；恢复时须重新校准基线。
@@ -25,7 +25,7 @@
 ## 2. 尚不能宣称的能力
 
 - 当前 AIRP-Dev Windows 安装包尚缺真实 artifact 的安装、启动、sidecar ready、简单对话和退出证据；该缺口因桌面计划暂停而不进入近期验收。
-- MCP upstream client、skills/plugin runtime、完整 ChangeInbox、多 Persona 生命周期与绑定、Preset migration report、PromptAssemblyTrace、SillyTavern 高级 worldbook 运行时语义（shared normalizer + advisory metadata 已交付，但 selective/secondary_keys/position/depth 等字段的运行时触发与注入语义仍未实现，当前仅作 advisory 保留）仍未完成。
+- MCP upstream client、skills/plugin runtime、完整 ChangeInbox、多 Persona WebUI 管理面（A2）、Preset migration report、PromptAssemblyTrace、SillyTavern 高级 worldbook 运行时语义（shared normalizer + advisory metadata 已交付，但 selective/secondary_keys/position/depth 等字段的运行时触发与注入语义仍未实现，当前仅作 advisory 保留）仍未完成。多 Persona 存储与 HTTP CRUD+绑定（A1a）及 `chat_pipeline` 自动激活（A1b）已交付，但产品闭环仍待 A2。
 - WebUI 已窗口分页，但不是虚拟列表；Tauri/Vue 的 10k/100k 性能、内存上界和虚拟滚动验收仍未完成，属于暂停桌面计划的保留缺口。
 - #37 的 branch/swipe/edit、per-user isolation 和长期记忆仍开放；durable ID、cursor pagination 与 rollback-by-ID 已交付，不应再列为缺口。
 - 可配置多 Agent 编排尚未交付；[AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md) 是产品原则与待实现规范，不得把示例 profile 写成现有 runtime 能力。
@@ -42,7 +42,7 @@
 ## 4. 当前开放风险/issue 分组
 
 - Production umbrella：#130（P0 已完成，P1-P3 仍开放）。
-- RP Profile/诊断：#114、#115、#116、#117、#126；#114 已有基础 Preset 与多 Persona 存储地基，且多 Persona HTTP CRUD+绑定闭环（A1a）已交付，但 `chat_pipeline` 按 `persona_id`/`find_for_character` 自动激活（A1b）、WebUI 多 Persona UI（A2）、完整绑定闭环与 worldbook shared normalization（constant 已交付，仍开放的语义包括但不限于 selective/secondary_keys/position/depth）仍未交付。
+- RP Profile/诊断：#114、#115、#116、#117、#126；#114 已有基础 Preset 与多 Persona 存储地基，多 Persona HTTP CRUD+绑定闭环（A1a）与 `chat_pipeline` 按 `persona_id`/`find_for_character` 自动激活（A1b）已交付，但 WebUI 多 Persona UI（A2）、完整绑定闭环与 worldbook shared normalization（constant 已交付，仍开放的语义包括但不限于 selective/secondary_keys/position/depth）仍未交付。
 - Session/长期使用：#35、#37、#122；durable ID、cursor 与 WebUI window 已完成，剩余是 branch/swipe/edit、per-user/长期记忆和产品 UI 性能。
 - WebUI/design：#105。
 - Agent/extension：#32、#87。
