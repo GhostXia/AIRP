@@ -3,21 +3,20 @@
 //! 设计纪律（#155 PR 2）：
 //! - 3 个 tool struct 保持私有；对 facade 只暴露 [`register`]。
 //! - 不改任何 `ToolMeta` 文案、side_effect 或入参/出参形状。
-//! - `list/get/delete` 的 character_id 解析沿用原 inline 实现（不重写为
-//!   `super::params::required_character_id`），属于"先移动"原则；统一
-//!   走 params helper 是后续行为统一 PR 的事，不在本 PR 范围。
+//! - `get/delete` 通过 [`super::params::required_character_id`] 复用跨 family
+//!   的 character id 合同，不在 family 内复制解析规则。
 //!
 //! 工具清单：
 //! - `list_characters`：列所有角色 id（readonly）
 //! - `get_character`：读角色 card.json 为 parsed JSON object（readonly）
 //! - `delete_character`：删整个角色目录子树（destructive，默认 dry-run）
 
+use super::params::required_character_id;
 use super::*;
 use crate::daemon::DaemonState;
 use crate::data_dir;
 use crate::domain::ChatService;
 use crate::error::AirpError;
-use crate::types::CharacterId;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -77,11 +76,7 @@ impl Tool for GetCharacterTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
-            let cid_str = params
-                .get("character_id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
-            let cid = CharacterId::new(cid_str)?;
+            let cid = required_character_id(&params)?;
             let card = data_dir::get_character_card(&state.data_root, &cid)?;
             Ok(ToolResult {
                 output: serde_json::json!({ "card": card }),
@@ -114,11 +109,7 @@ impl Tool for DeleteCharacterTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
-            let cid_str = params
-                .get("character_id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
-            let cid = CharacterId::new(cid_str)?;
+            let cid = required_character_id(&params)?;
             if !confirm {
                 let exists = data_dir::list_characters(&state.data_root)?
                     .iter()

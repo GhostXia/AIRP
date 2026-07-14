@@ -13,13 +13,14 @@
 //! - `get_recent_context`：取最近 N 条消息（readonly，N 上限 200）
 //! - `rollback_messages`：回滚到指定索引（destructive，默认 dry-run）
 
-use super::params::{optional_session_id, optional_usize_param, required_usize_param};
+use super::params::{
+    optional_session_id, optional_usize_param, required_character_id, required_usize_param,
+};
 use super::*;
 use crate::adapter::{ChatMessage, MessageRole};
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
 use crate::error::AirpError;
-use crate::types::CharacterId;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -54,11 +55,7 @@ impl Tool for ListSessionsTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
-            let cid_str = params
-                .get("character_id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
-            let cid = CharacterId::new(cid_str)?;
+            let cid = required_character_id(&params)?;
             let sessions = ChatService::new(&state.data_root).list_sessions(&cid)?;
             let out: Vec<Value> = sessions
                 .into_iter()
@@ -98,11 +95,7 @@ impl Tool for StartSessionTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
-            let cid_str = params
-                .get("character_id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| AirpError::BadRequest("missing character_id".into()))?;
-            let cid = CharacterId::new(cid_str)?;
+            let cid = required_character_id(&params)?;
             let sid = ChatService::new(&state.data_root).create_session(&cid)?;
             Ok(ToolResult {
                 output: serde_json::json!({

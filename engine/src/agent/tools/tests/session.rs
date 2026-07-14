@@ -252,3 +252,53 @@ async fn append_rejects_invalid_role() {
         .unwrap_err();
     assert!(matches!(err, AirpError::BadRequest(_)));
 }
+
+#[tokio::test]
+async fn session_validation_preserves_existing_error_precedence() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    let reg = default_registry(state);
+
+    // These tools historically validate the presence of character_id first, then
+    // family-specific parameters, and only then validate the character id value.
+    // Keep that order explicit when consolidating parameter helpers.
+    let append_err = reg
+        .get("append_message")
+        .unwrap()
+        .call(serde_json::json!({"character_id": ".bad"}), false)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        append_err,
+        AirpError::BadRequest(ref message) if message == "missing role"
+    ));
+
+    let recent_err = reg
+        .get("get_recent_context")
+        .unwrap()
+        .call(
+            serde_json::json!({
+                "character_id": ".bad",
+                "n": MAX_RECENT_CONTEXT + 1,
+            }),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        recent_err,
+        AirpError::BadRequest(ref message)
+            if message == &format!("n {} exceeds max {}", MAX_RECENT_CONTEXT + 1, MAX_RECENT_CONTEXT)
+    ));
+
+    let rollback_err = reg
+        .get("rollback_messages")
+        .unwrap()
+        .call(serde_json::json!({"character_id": ".bad"}), false)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        rollback_err,
+        AirpError::BadRequest(ref message) if message == "missing index"
+    ));
+}
