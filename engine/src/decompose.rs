@@ -581,6 +581,7 @@ mod tests {
                     content: "市立图书馆有三层楼".into(),
                     enabled: Some(true),
                     priority: Some(10),
+                    constant: None,
                     comment: Some("图书馆设定".into()),
                 },
                 LorebookEntry {
@@ -588,6 +589,7 @@ mod tests {
                     content: "林晚晴喜欢推理小说".into(),
                     enabled: Some(true),
                     priority: Some(5),
+                    constant: None,
                     comment: None,
                 },
             ],

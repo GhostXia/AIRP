@@ -12,6 +12,10 @@ pub struct LorebookEntry {
     pub enabled: Option<bool>,
     /// 优先级，越大越靠前；为 `None` 默认 10。
     pub priority: Option<i32>,
+    /// 是否常驻注入。`constant=true` 且 `enabled!=false` 时，无论关键词是否命中都会注入。
+    /// 为 `None` 或 `false` 时走关键词触发路径。
+    #[serde(default)]
+    pub constant: Option<bool>,
     /// 自由注释字段。
     pub comment: Option<String>,
 }
@@ -32,11 +36,20 @@ impl Lorebook {
     /// 标记所有命中 entry，复杂度降为 O(build + |text|)。对于含数十
     /// entries × 数十 keys 的真实世界书，加速比一个数量级以上。
     pub fn trigger(&self, text: &str) -> String {
-        // 1. 收集 enabled entries 的 (key, entry_idx) 扁平表
+        // 1. 收集需要参与扫描的 enabled entries 的 (key, entry_idx) 扁平表。
+        //    constant=true 的 entry 不需要关键词命中，跳过 pattern 收集，
+        //    在第 3 步直接加入 triggered 集合。
         let mut patterns: Vec<&str> = Vec::new();
         let mut pattern_to_entry: Vec<usize> = Vec::new();
+        let mut triggered_idx: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
         for (idx, e) in self.entries.iter().enumerate() {
             if !e.enabled.unwrap_or(true) {
+                continue;
+            }
+            // constant=true 且 enabled 的条目直接标记为命中，不依赖关键词扫描。
+            if e.constant.unwrap_or(false) {
+                triggered_idx.insert(idx);
                 continue;
             }
             for k in &e.keys {
@@ -48,28 +61,26 @@ impl Lorebook {
             }
         }
 
-        if patterns.is_empty() {
-            return String::new();
-        }
-
         // 2. 构造 Aho-Corasick 自动机，单次扫描收集命中 entry idx。
-        // 用 `LeftmostLongest` 避免「人物4」抢走「人物42」的命中范围
-        // （Standard 默认 leftmost-shortest，与世界书前缀重叠语义相悖）。
-        // 空 pattern 集已上方守护；build 失败仅在内部不变量违反时发生。
-        let ac = AhoCorasick::builder()
-            .match_kind(MatchKind::LeftmostLongest)
-            .build(&patterns)
-            .expect("AhoCorasick build patterns");
-        let mut triggered_idx: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        for mat in ac.find_iter(text) {
-            triggered_idx.insert(pattern_to_entry[mat.pattern().as_usize()]);
+        //    用 `LeftmostLongest` 避免「人物4」抢走「人物42」的命中范围
+        //    （Standard 默认 leftmost-shortest，与世界书前缀重叠语义相悖）。
+        //    空 pattern 集时跳过 build（constant 条目可能已填充 triggered_idx）。
+        if !patterns.is_empty() {
+            let ac = AhoCorasick::builder()
+                .match_kind(MatchKind::LeftmostLongest)
+                .build(&patterns)
+                .expect("AhoCorasick build patterns");
+            for mat in ac.find_iter(text) {
+                triggered_idx.insert(pattern_to_entry[mat.pattern().as_usize()]);
+            }
         }
 
         if triggered_idx.is_empty() {
             return String::new();
         }
 
-        // 3. 按 priority 从高到低排序，拼接 content
+        // 3. 按 priority 从高到低排序，拼接 content。
+        //    constant 与关键词命中的 entry 共用同一排序规则，去重由 HashSet 保证。
         let mut triggered: Vec<(usize, &LorebookEntry)> = triggered_idx
             .iter()
             .map(|&index| (index, &self.entries[index]))
@@ -123,6 +134,7 @@ mod tests {
             content: content.to_string(),
             enabled: None,
             priority,
+            constant: None,
             comment: None,
         }
     }
@@ -152,6 +164,7 @@ mod tests {
                 content: "should not appear".to_string(),
                 enabled: Some(false),
                 priority: None,
+                constant: None,
                 comment: None,
             }],
         };
@@ -205,6 +218,139 @@ mod tests {
             "\n[World Info/Lorebook Information]:\nThe observatory predates the city.\nThe moon gate opens only at night.\n"
         );
         assert!(!output.contains("This must never be injected."));
+    }
+
+    // ── v2 constant semantic tests ────────────────────────────────────────
+
+    fn entry_with_constant(
+        keys: &[&str],
+        content: &str,
+        priority: Option<i32>,
+        constant: Option<bool>,
+    ) -> LorebookEntry {
+        LorebookEntry {
+            keys: keys.iter().map(|s| s.to_string()).collect(),
+            content: content.to_string(),
+            enabled: None,
+            priority,
+            constant,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn constant_entry_injects_without_keyword_match() {
+        // constant=true 且 enabled 的条目，即使 keys 为空也应注入。
+        let lb = Lorebook {
+            entries: vec![entry_with_constant(&[], "always-on lore", None, Some(true))],
+        };
+        let out = lb.trigger("一段完全无关的文本");
+        assert!(
+            out.contains("always-on lore"),
+            "constant entry must inject without keyword match: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn disabled_constant_entry_is_skipped() {
+        // enabled=false 的 constant 条目不得注入。
+        let lb = Lorebook {
+            entries: vec![LorebookEntry {
+                keys: vec![],
+                content: "must not appear".to_string(),
+                enabled: Some(false),
+                priority: None,
+                constant: Some(true),
+                comment: None,
+            }],
+        };
+        assert_eq!(lb.trigger("任何文本"), "");
+    }
+
+    #[test]
+    fn constant_and_keyword_entries_coexist() {
+        // constant 条目与关键词命中条目共存，各自按 priority 排序。
+        let lb = Lorebook {
+            entries: vec![
+                entry_with_constant(&[], "constant-lore-low", Some(5), Some(true)),
+                entry_with_constant(&["keyword"], "keyword-lore-high", Some(20), None),
+            ],
+        };
+        let out = lb.trigger("含 keyword 的文本");
+        assert!(out.contains("constant-lore-low"));
+        assert!(out.contains("keyword-lore-high"));
+        // priority 20 的 keyword 条目应排在 priority 5 的 constant 条目之前
+        let pos_high = out.find("keyword-lore-high").unwrap();
+        let pos_low = out.find("constant-lore-low").unwrap();
+        assert!(pos_high < pos_low, "priority order: {}", out);
+    }
+
+    #[test]
+    fn constant_entry_with_keys_injects_once() {
+        // constant=true 且有 keys 的条目，即使 keys 命中也只注入一次。
+        let lb = Lorebook {
+            entries: vec![entry_with_constant(
+                &["dragon"],
+                "dragon lore",
+                None,
+                Some(true),
+            )],
+        };
+        let out = lb.trigger("the dragon appears");
+        let count = out.matches("dragon lore").count();
+        assert_eq!(count, 1, "constant entry must inject exactly once: {}", out);
+    }
+
+    #[test]
+    fn constant_false_falls_back_to_keyword_trigger() {
+        // constant=false 的条目必须依赖关键词命中。
+        let lb = Lorebook {
+            entries: vec![entry_with_constant(
+                &["missing-keyword"],
+                "should not appear",
+                None,
+                Some(false),
+            )],
+        };
+        assert_eq!(lb.trigger("无关文本"), "");
+    }
+
+    #[test]
+    fn airp_v2_constant_fixture_has_deterministic_output() {
+        let fixture = include_str!("../../tests/fixtures/worldbook/airp-v2-constant.json");
+        let lorebook: Lorebook = serde_json::from_str(fixture).unwrap();
+        // 扫描文本命中 "moon gate" 和 "observatory"，但不命中 "marketplace"
+        let output = lorebook.trigger("The moon gate opens near the old observatory.");
+        // 期望：2 个 constant 条目（dragon compact + marketplace）+ 2 个关键词命中
+        // 按 priority 降序：dragon compact(30) > observatory(20) > marketplace(5) == moon gate(10)
+        // 优先级：30, 20, 10, 5
+        assert_eq!(
+            output,
+            "\n[World Info/Lorebook Information]:\n\
+The world is shaped by an ancient compact between dragons and mortals.\n\
+The observatory predates the city.\n\
+The moon gate opens only at night.\n\
+The marketplace bustles at dawn.\n"
+        );
+        // disabled constant 条目不得出现
+        assert!(!output.contains("This disabled constant must never appear."));
+    }
+
+    #[test]
+    fn empty_lorebook_returns_empty_string() {
+        // 无任何条目时返回空串
+        let lb = Lorebook { entries: vec![] };
+        assert_eq!(lb.trigger("任何文本"), "");
+    }
+
+    #[test]
+    fn only_constant_entries_inject_on_unrelated_text() {
+        // 只有 constant 条目、文本完全不相关时仍应注入
+        let lb = Lorebook {
+            entries: vec![entry_with_constant(&[], "always-on", None, Some(true))],
+        };
+        assert!(lb.trigger("").contains("always-on"));
     }
 
     /// 6.0p 基准对比：朴素 substring 双层循环 vs Aho-Corasick。
