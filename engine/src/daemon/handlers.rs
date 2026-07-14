@@ -790,8 +790,20 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
 
     // ── world/lorebook.json ──
     if let Some(ref cb) = card.data.character_book {
-        match convert_character_book_to_lorebook(cb) {
-            Some(lorebook) => match serde_json::to_string_pretty(&lorebook) {
+        let (lorebook, report) = crate::orchestrator::normalize_worldbook(cb);
+        if let Some(reason) = report.replacement_error() {
+            tracing::warn!(
+                character_id,
+                reason,
+                "CF-7: character_book 归一化失败，跳过 lorebook 写入"
+            );
+        } else if lorebook.entries.is_empty() && report.total_input == 0 {
+            tracing::warn!(
+                character_id,
+                "CF-7: character_book 无 entries，跳过 lorebook 写入"
+            );
+        } else {
+            match serde_json::to_string_pretty(&lorebook) {
                 Ok(lb_json) => {
                     let lb_path = data_dir::char_world_lorebook_path(data_root, character_id);
                     if let Err(e) = data_dir::char_world_dir(data_root, character_id) {
@@ -804,78 +816,20 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
                         tracing::info!(
                             character_id,
                             entries = lorebook.entries.len(),
-                            "CF-7: world/lorebook.json 已写入"
+                            total_input = report.total_input,
+                            converted = report.converted,
+                            aliases_normalized = report.aliases_normalized,
+                            advisory_preserved = report.advisory_preserved,
+                            invalid = report.invalid.len(),
+                            needs_review = report.needs_review.len(),
+                            "CF-7: world/lorebook.json 已写入（normalizer v3）"
                         );
                     }
                 }
                 Err(e) => tracing::warn!(err = %e, "CF-7: 序列化 Lorebook 失败"),
-            },
-            None => tracing::warn!(
-                character_id,
-                "CF-7: character_book 解析失败，跳过 lorebook 写入"
-            ),
+            }
         }
     }
-}
-
-/// CF-7: 将 TavernV2 character_book Value 转换为 `Lorebook` 结构。
-fn convert_character_book_to_lorebook(
-    cb: &serde_json::Value,
-) -> Option<crate::orchestrator::lorebook::Lorebook> {
-    use crate::orchestrator::lorebook::{Lorebook, LorebookEntry, DEFAULT_PRIORITY};
-
-    let entries_val = cb.get("entries").unwrap_or(cb);
-
-    let raw_entries: Vec<&serde_json::Value> = if let Some(map) = entries_val.as_object() {
-        map.values().collect()
-    } else {
-        entries_val.as_array()?.iter().collect()
-    };
-
-    let mut entries: Vec<LorebookEntry> = raw_entries
-        .into_iter()
-        .filter_map(|v| {
-            let keys: Vec<String> = v
-                .get("keys")
-                .and_then(|k| k.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|s| s.as_str().map(|s| s.to_owned()))
-                        .filter(|s| !s.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let content = v.get("content")?.as_str()?.to_owned();
-            let enabled = v
-                .get("disable")
-                .and_then(|d| d.as_bool())
-                .map(|disable| !disable);
-            let priority = v
-                .get("order")
-                .or_else(|| v.get("insertion_order"))
-                .and_then(|p| p.as_i64())
-                .map(|p| p as i32);
-            let constant = v.get("constant").and_then(|c| c.as_bool());
-            let comment = v
-                .get("comment")
-                .and_then(|c| c.as_str())
-                .map(|s| s.to_owned());
-            Some(LorebookEntry {
-                keys,
-                content,
-                enabled,
-                priority,
-                constant,
-                comment,
-            })
-        })
-        .collect();
-
-    // 统一使用 trigger 的默认值（10）与排序方向（降序），避免存储顺序与运行时
-    // trigger 输出顺序漂移。trigger 会重新排序，此处排序主要为可读性。
-    entries.sort_by_key(|e| std::cmp::Reverse(e.priority.unwrap_or(DEFAULT_PRIORITY)));
-
-    Some(Lorebook { entries })
 }
 
 // ── Character state / avatar handlers ────────────────────────────────────────
@@ -1046,12 +1000,19 @@ pub(super) async fn get_character_lorebook(
 }
 
 /// PUT /v1/characters/:character_id/lorebook — 更新角色级世界书（整体替换）。
-/// body 是 `Lorebook` JSON：`{ entries: [{ keys, content, enabled?, priority?, comment? }] }`。
-/// 角色不存在 → 404；写入前会校验 Lorebook 结构。
+///
+/// body 接受三种形式（由 [`normalize_worldbook`] 统一归一化）：
+/// - AIRP canonical Lorebook JSON（幂等）
+/// - SillyTavern lorebook / character_book entries（含 `disable`/`order`/
+///   `keysecondary`/`caseSensitive` 等别名）
+/// - 裸 entry 数组
+///
+/// 返回写入的 canonical Lorebook 条目数 + 归一化诊断报告。
+/// 角色不存在 → 404。
 pub(super) async fn update_character_lorebook(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
-    Json(body): Json<crate::orchestrator::Lorebook>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
     // 校验角色已存在
@@ -1064,10 +1025,15 @@ pub(super) async fn update_character_lorebook(
             cid
         )));
     }
-    LorebookService::new(&state.data_root).write(&cid, &body)?;
+    let (lorebook, report) = crate::orchestrator::normalize_worldbook(&body);
+    if let Some(reason) = report.replacement_error() {
+        return Err(AirpError::BadRequest(format!("invalid lorebook: {reason}")));
+    }
+    LorebookService::new(&state.data_root).write(&cid, &lorebook)?;
     Ok(Json(serde_json::json!({
         "character_id": cid.as_str(),
-        "entries_count": body.entries.len(),
+        "entries_count": lorebook.entries.len(),
+        "import_report": report,
         "status": "ok"
     })))
 }
@@ -1711,6 +1677,43 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(v["entries"][0]["keys"][0], "hi");
         assert_eq!(v["entries"][0]["content"], "hello");
+    }
+
+    #[tokio::test]
+    async fn lorebook_put_rejects_invalid_replacement_without_overwrite() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, tmp) = make_state_for_http_test();
+        let world_dir = tmp
+            .path()
+            .join("characters")
+            .join("test_char")
+            .join("world");
+        std::fs::create_dir_all(&world_dir).unwrap();
+        let lorebook_path = world_dir.join("lorebook.json");
+        let original = r#"{"entries":[{"keys":["safe"],"content":"keep me"}]}"#;
+        std::fs::write(&lorebook_path, original).unwrap();
+
+        let response = super::super::create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/characters/test_char/lorebook")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "entries": [{"keys": ["bad"], "content": 42}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(std::fs::read_to_string(lorebook_path).unwrap(), original);
     }
 
     // ── #42 F-1 / #40：/v1/models URL 推导与 endpoint 脱敏 ──────────────────

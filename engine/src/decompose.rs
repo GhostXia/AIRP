@@ -583,6 +583,9 @@ mod tests {
                     priority: Some(10),
                     constant: None,
                     comment: Some("图书馆设定".into()),
+                    secondary_keys: Vec::new(),
+                    case_sensitive: None,
+                    extensions: None,
                 },
                 LorebookEntry {
                     keys: vec!["书".into(), "阅读".into()],
@@ -591,6 +594,9 @@ mod tests {
                     priority: Some(5),
                     constant: None,
                     comment: None,
+                    secondary_keys: Vec::new(),
+                    case_sensitive: None,
+                    extensions: None,
                 },
             ],
         }

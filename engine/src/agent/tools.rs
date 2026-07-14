@@ -355,7 +355,7 @@ impl Tool for UpdateLorebookTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "update_lorebook",
-            description: "Replace a character's normalized AIRP v1 lorebook.",
+            description: "Replace a character's lorebook. Accepts AIRP canonical or SillyTavern form; normalizes via shared WorldbookNormalizer.",
             side_effect: ToolSideEffect::Destructive,
         }
     }
@@ -371,13 +371,17 @@ impl Tool for UpdateLorebookTool {
                 .get("lorebook")
                 .cloned()
                 .ok_or_else(|| AirpError::BadRequest("missing lorebook".to_string()))?;
-            let lorebook: crate::orchestrator::Lorebook = serde_json::from_value(raw)?;
+            let (lorebook, report) = crate::orchestrator::normalize_worldbook(&raw);
+            if let Some(reason) = report.replacement_error() {
+                return Err(AirpError::BadRequest(format!("invalid lorebook: {reason}")));
+            }
             if !confirm {
                 return Ok(ToolResult {
                     output: serde_json::json!({
                         "character_id": character.as_str(),
                         "action": "update_lorebook",
                         "entries": lorebook.entries.len(),
+                        "import_report": report,
                         "requires": "confirm=true"
                     }),
                     dry_run: true,
@@ -385,7 +389,11 @@ impl Tool for UpdateLorebookTool {
             }
             LorebookService::new(&daemon.data_root).write(&character, &lorebook)?;
             Ok(ToolResult {
-                output: serde_json::json!({"updated": character.as_str(), "entries": lorebook.entries.len()}),
+                output: serde_json::json!({
+                    "updated": character.as_str(),
+                    "entries": lorebook.entries.len(),
+                    "import_report": report
+                }),
                 dry_run: false,
             })
         })
@@ -1881,6 +1889,145 @@ mod tests {
         assert_eq!(current.output["entries"][0]["content"], "Open runtime");
     }
 
+    /// #126: Verify update_lorebook tool accepts SillyTavern form and normalizes
+    /// via the shared WorldbookNormalizer, preserving ST-only fields in extensions.
+    #[tokio::test]
+    async fn update_lorebook_normalizes_sillytavern_form() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let reg = default_registry(state.clone());
+
+        // ST character_book form: object-map entries with ST aliases
+        let st_lorebook = serde_json::json!({
+            "entries": {
+                "0": {
+                    "keys": ["moon gate"],
+                    "keysecondary": ["night"],
+                    "content": "The moon gate opens at night.",
+                    "disable": false,
+                    "order": 10,
+                    "constant": false,
+                    "selective": true,
+                    "position": "before_char"
+                },
+                "1": {
+                    "keys": [],
+                    "content": "Constant world fact.",
+                    "disable": false,
+                    "order": 30,
+                    "constant": true
+                }
+            }
+        });
+
+        let update_lorebook = reg.get("update_lorebook").unwrap();
+
+        // Preview (dry_run) should show import_report
+        let preview = update_lorebook
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "lorebook": st_lorebook.clone()
+                }),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(preview.dry_run);
+        assert_eq!(preview.output["entries"], 2);
+        assert_eq!(preview.output["import_report"]["total_input"], 2);
+        assert_eq!(preview.output["import_report"]["converted"], 2);
+        assert_eq!(preview.output["import_report"]["aliases_normalized"], 2);
+
+        // Confirm write
+        let written = update_lorebook
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "lorebook": st_lorebook
+                }),
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(!written.dry_run);
+        assert_eq!(written.output["entries"], 2);
+
+        // Read back and verify canonical form
+        let get_lorebook = reg.get("get_lorebook").unwrap();
+        let current = get_lorebook
+            .call(serde_json::json!({"character_id": "alice"}), false)
+            .await
+            .unwrap();
+
+        // After priority sort (descending): constant (30) > moon gate (10)
+        let entries = current.output["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+
+        // entries[0] = constant world fact (priority 30)
+        assert_eq!(entries[0]["content"], "Constant world fact.");
+        assert_eq!(entries[0]["enabled"], true); // disable=false → enabled=true
+        assert_eq!(entries[0]["priority"], 30);
+        assert_eq!(entries[0]["constant"], true);
+
+        // entries[1] = moon gate (priority 10) — ST aliases normalized
+        assert_eq!(entries[1]["content"], "The moon gate opens at night.");
+        assert_eq!(entries[1]["enabled"], true);
+        assert_eq!(entries[1]["priority"], 10);
+        assert_eq!(entries[1]["constant"], false);
+        assert_eq!(entries[1]["secondary_keys"], serde_json::json!(["night"]));
+
+        // ST-only fields preserved in extensions
+        let ext = &entries[1]["extensions"];
+        assert_eq!(ext["selective"], true);
+        assert_eq!(ext["position"], "before_char");
+    }
+
+    #[tokio::test]
+    async fn update_lorebook_rejects_all_invalid_entries_without_overwrite() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let original = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["safe".to_string()],
+                content: "keep me".to_string(),
+                enabled: Some(true),
+                priority: Some(10),
+                constant: None,
+                comment: None,
+                secondary_keys: Vec::new(),
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
+        LorebookService::new(&state.data_root)
+            .write(&character, &original)
+            .unwrap();
+
+        let registry = default_registry(state.clone());
+        let tool = registry.get("update_lorebook").unwrap();
+        let err = tool
+            .call(
+                serde_json::json!({
+                    "character_id": "alice",
+                    "lorebook": {"entries": [{"keys": ["bad"], "content": 42}]}
+                }),
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AirpError::BadRequest(_)));
+
+        let current = LorebookService::new(&state.data_root)
+            .read(&character)
+            .unwrap();
+        assert_eq!(current.entries.len(), 1);
+        assert_eq!(current.entries[0].content, "keep me");
+    }
+
     #[tokio::test]
     async fn lorebook_apply_and_merge_are_readonly() {
         let tmp = tempdir().unwrap();
@@ -1897,6 +2044,9 @@ mod tests {
                     priority: Some(20),
                     constant: None,
                     comment: None,
+                    secondary_keys: Vec::new(),
+                    case_sensitive: None,
+                    extensions: None,
                 }],
             ),
             (
@@ -1909,6 +2059,9 @@ mod tests {
                         priority: Some(20),
                         constant: None,
                         comment: None,
+                        secondary_keys: Vec::new(),
+                        case_sensitive: None,
+                        extensions: None,
                     },
                     crate::orchestrator::LorebookEntry {
                         keys: vec!["gate".to_string()],
@@ -1917,6 +2070,9 @@ mod tests {
                         priority: Some(10),
                         constant: None,
                         comment: None,
+                        secondary_keys: Vec::new(),
+                        case_sensitive: None,
+                        extensions: None,
                     },
                 ],
             ),
@@ -2020,6 +2176,9 @@ mod tests {
                         priority: Some(10),
                         constant: None,
                         comment: None,
+                        secondary_keys: Vec::new(),
+                        case_sensitive: None,
+                        extensions: None,
                     }],
                 },
             )

@@ -1,9 +1,18 @@
 use aho_corasick::{AhoCorasick, MatchKind};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub(crate) const DEFAULT_PRIORITY: i32 = 10;
 
 /// 世界书（Lorebook）条目。
+///
+/// v3 schema 新增 `secondary_keys` / `case_sensitive` / `extensions` 三个
+/// advisory metadata 字段：它们由 [`super::worldbook_normalizer`] 从
+/// SillyTavern 字段（`keysecondary` / `caseSensitive` / `selective` /
+/// `position` / `probability` / …）归一化而来并保留在条目里，但
+/// [`Lorebook::trigger`] 不消费它们——这些字段当前是"建议元数据 + 未来
+/// 检索 Tool 的输入"，不进入运行时注入管线。新增字段全部带 `#[serde(default)]`，
+/// 旧 v1/v2 数据反序列化不破。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LorebookEntry {
     /// 触发关键词列表（OR 关系，任一命中即激活）。
@@ -20,6 +29,20 @@ pub struct LorebookEntry {
     pub constant: Option<bool>,
     /// 自由注释字段。
     pub comment: Option<String>,
+    /// v3：SillyTavern `keysecondary` 归一化结果。当前不参与运行时触发；
+    /// 未来 selective 语义 / 检索 Tool 可消费。`#[serde(default)]` 让旧数据无破。
+    #[serde(default)]
+    pub secondary_keys: Vec<String>,
+    /// v3：SillyTavern `caseSensitive` 归一化结果。当前 trigger 走大小写敏感
+    /// 的 `AhoCorasick::LeftmostLongest` 默认；此字段仅作 advisory metadata。
+    #[serde(default)]
+    pub case_sensitive: Option<bool>,
+    /// v3：未在 canonical schema 内的 SillyTavern 字段（`selective` / `position`
+    /// / `depth` / `probability` / `sticky` / `cooldown` / `delay` / `group`
+    /// / `use_regex` / `match_whole_words` / `recursion` 等）原样保留在此。
+    /// 不得把这里的字段当作已支持语义；新增运行时语义须先扩 schema 并写合同。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 /// 世界书（Lorebook）整体结构。
@@ -109,21 +132,22 @@ impl Lorebook {
 /// MS-5: Merge multiple lorebooks without discarding distinct activation semantics.
 /// Exact semantic duplicates are removed; output content is deduplicated after trigger evaluation.
 pub fn merge_lorebooks(lorebooks: &[Lorebook]) -> Lorebook {
-    use std::collections::HashSet;
-
-    let mut seen: HashSet<(String, Vec<String>, bool, i32, bool)> = HashSet::new();
     let mut merged: Vec<LorebookEntry> = Vec::new();
 
     for lb in lorebooks {
         for entry in &lb.entries {
-            let semantic_key = (
-                entry.content.clone(),
-                entry.keys.clone(),
-                entry.enabled.unwrap_or(true),
-                entry.priority.unwrap_or(DEFAULT_PRIORITY),
-                entry.constant.unwrap_or(false),
-            );
-            if seen.insert(semantic_key) {
+            if !merged.iter().any(|existing| {
+                existing.content == entry.content
+                    && existing.keys == entry.keys
+                    && existing.enabled.unwrap_or(true) == entry.enabled.unwrap_or(true)
+                    && existing.priority.unwrap_or(DEFAULT_PRIORITY)
+                        == entry.priority.unwrap_or(DEFAULT_PRIORITY)
+                    && existing.constant.unwrap_or(false) == entry.constant.unwrap_or(false)
+                    && existing.comment == entry.comment
+                    && existing.secondary_keys == entry.secondary_keys
+                    && existing.case_sensitive == entry.case_sensitive
+                    && existing.extensions == entry.extensions
+            }) {
                 merged.push(entry.clone());
             }
         }
@@ -151,6 +175,9 @@ mod tests {
             priority,
             constant: None,
             comment: None,
+            secondary_keys: Vec::new(),
+            case_sensitive: None,
+            extensions: None,
         }
     }
 
@@ -181,6 +208,9 @@ mod tests {
                 priority: None,
                 constant: None,
                 comment: None,
+                secondary_keys: Vec::new(),
+                case_sensitive: None,
+                extensions: None,
             }],
         };
         assert_eq!(lb.trigger("艾莉娅来了"), "");
@@ -250,6 +280,9 @@ mod tests {
             priority,
             constant,
             comment: None,
+            secondary_keys: Vec::new(),
+            case_sensitive: None,
+            extensions: None,
         }
     }
 
@@ -278,6 +311,9 @@ mod tests {
                 priority: None,
                 constant: Some(true),
                 comment: None,
+                secondary_keys: Vec::new(),
+                case_sensitive: None,
+                extensions: None,
             }],
         };
         assert_eq!(lb.trigger("任何文本"), "");
@@ -494,6 +530,25 @@ The marketplace bustles at dawn.\n"
             },
         ]);
         assert_eq!(merged.entries.len(), 1);
+    }
+
+    #[test]
+    fn merge_lorebooks_preserves_distinct_advisory_metadata() {
+        let first = entry(&["A"], "shared content", Some(10));
+        let mut second = first.clone();
+        second.secondary_keys = vec!["secondary".to_string()];
+
+        let merged = super::merge_lorebooks(&[
+            Lorebook {
+                entries: vec![first],
+            },
+            Lorebook {
+                entries: vec![second],
+            },
+        ]);
+
+        assert_eq!(merged.entries.len(), 2);
+        assert_eq!(merged.trigger("A").matches("shared content").count(), 1);
     }
 
     #[test]
