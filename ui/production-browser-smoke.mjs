@@ -99,6 +99,16 @@ try {
   assert.equal(await page.locator('img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);
 
+  // #126 D-PR2: lorebook-section DOM wiring（主面板迁移后 workbench 不再有 lorebook tab）
+  assert.equal(await page.locator('#lorebook-section').isVisible(), true);
+  assert.equal(await page.locator('#lore-entries').count(), 1);
+  assert.equal(await page.locator('#btn-lore-add').count(), 1);
+  assert.equal(await page.locator('#btn-lore-save').count(), 1);
+  assert.equal(await page.locator('#btn-refresh-lorebook').count(), 1);
+  // workbench lorebook tab 已移除
+  assert.equal(await page.locator('#wb-tab-lorebook').count(), 0);
+  assert.equal(await page.locator('[data-tab="lorebook"]').count(), 0);
+
   // Initial UI hydration and the injection fixture share the engine's burst bucket.
   // Let it refill so this assertion measures stream cancellation rather than rate limiting.
   await page.waitForTimeout(4_000);

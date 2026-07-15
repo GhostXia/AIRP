@@ -95,6 +95,17 @@
         <pre id="state-history-display" class="mono">—</pre>
       </details>
 
+      <details class="panel-section" id="lorebook-section">
+        <summary>世界书 <button id="btn-refresh-lorebook" title="刷新世界书">刷新</button></summary>
+        <div class="hint">编辑角色级世界书条目。selective/secondary_keys 为 v4 运行时字段；其余高级字段只读显示（advisory，不影响运行时）。</div>
+        <div id="lore-entries"></div>
+        <div class="wb-actions">
+          <button id="btn-lore-add" type="button">添加条目</button>
+          <button id="btn-lore-save" type="button" class="btn-primary">保存世界书</button>
+          <span id="lore-status" class="hint">—</span>
+        </div>
+      </details>
+
       <details class="panel-section">
         <summary>连接详情 <button id="btn-refresh-models" title="重新加载模型列表">刷新</button></summary>
         <div class="hint">Engine</div><div id="health-info">—</div>
@@ -179,14 +190,14 @@
   <aside id="workbench-panel" hidden aria-label="工作台">
     <div id="workbench-resizer" title="拖拽调整宽度"></div>
     <div id="workbench-header"><div id="workbench-title"><p class="eyebrow">WORKBENCH</p><h2 id="wb-char-name">—</h2><span id="wb-dirty-dot" hidden title="有未保存修改">●</span></div><button id="btn-wb-close" title="关闭（ESC）">×</button></div>
-    <div id="workbench-tabs"><button class="wb-tab active" data-tab="card">角色卡</button><button class="wb-tab" data-tab="lorebook">世界书</button><button class="wb-tab" data-tab="decompose">拆解</button></div>
+    <div id="workbench-tabs"><button class="wb-tab active" data-tab="card">角色卡</button><button class="wb-tab" data-tab="decompose">拆解</button></div>
     <div id="wb-tab-card" class="wb-tab-content"><p class="hint">通过 API 保存角色卡，不依赖内部文件路径。</p><div class="wb-fields" id="wb-card-fields"></div><div class="wb-actions"><button id="btn-wb-save-card" class="btn-primary">保存角色卡</button><span id="wb-card-status" class="hint">—</span></div></div>
-    <div id="wb-tab-lorebook" class="wb-tab-content" hidden><p class="hint">编辑世界书条目。</p><div id="wb-lore-entries"></div><div class="wb-actions"><button id="btn-wb-add-lore">添加条目</button><button id="btn-wb-save-lore" class="btn-primary">保存世界书</button><span id="wb-lore-status" class="hint">—</span></div></div>
     <div id="wb-tab-decompose" class="wb-tab-content" hidden><p class="hint">拆解角色卡或预设，增强操作会先显示预览。</p><div class="wb-actions"><button id="btn-wb-decompose" class="btn-primary">拆解角色卡</button><label class="inline-label"><input id="wb-decompose-force" type="checkbox" /> 覆盖已有结果</label><button id="btn-wb-list-analysis">刷新文件</button><span id="wb-decompose-status" class="hint">—</span></div><div class="wb-actions wb-preset-decompose-row"><button id="btn-wb-decompose-preset">拆解预设</button><select id="wb-preset-select" class="mono"></select></div><div id="wb-analysis-files" class="wb-analysis-files"></div><div id="wb-analysis-viewer" class="wb-analysis-viewer" hidden><div class="wb-analysis-viewer-header"><span id="wb-analysis-filename" class="mono">—</span><button id="btn-wb-analysis-enhance">Enhance 预览</button><button id="btn-wb-analysis-apply" hidden>写入</button><button id="btn-wb-analysis-close">×</button></div><div class="wb-analysis-diff"><div class="wb-analysis-pane"><div class="wb-analysis-pane-title">原始</div><pre id="wb-analysis-original" class="mono"></pre></div><div class="wb-analysis-pane"><div class="wb-analysis-pane-title">增强后</div><textarea id="wb-analysis-enhanced" rows="14" class="mono"></textarea></div></div></div></div>
   </aside>
 </div>
 <script src="runtime-config.js"></script>
 <script src="persona-utils.js"></script>
+<script src="lorebook-utils.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

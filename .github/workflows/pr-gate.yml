@@ -77,6 +77,7 @@ jobs:
       - name: Check WebUI scripts
         run: |
           node --check webui/persona-utils.js
+          node --check webui/lorebook-utils.js
           node --check webui/app.js
           node --check webui/serve.js
           node --check webui/runtime-config.js
