@@ -24,7 +24,9 @@
 - `session_id`：存档槽位身份；必须是通过格式校验的 UUID。
 - `worldbook_id`：session 内世界书身份；显示名、原始文件名和来源名称只作元数据。
 
-`session_id` 也是该局聊天历史和记忆的唯一规范 UUID。所有创建、读取、更新、复制、导入和导出边界都必须接收并持久化经过校验的 UUID；session 目录名、`meta.json`、`history/`、`memory/` 和 `chat_log_meta.json` 必须共享同一个值。不得接受其他 ID 形式、生成第二个内部“聊天 session ID”，也不得在两个子目录下重复嵌套相同 UUID。
+对命名 session，`session_id` 是该局唯一规范 UUID：`sessions/{session_id}` 的目录段、`meta.json.session_id`、`history/chat_log_meta.json.session_id`，以及任何历史、记忆、状态或导出记录中实际存在的 `session_id` 字段都必须使用同一个经校验的值。`history/` 和 `memory/` 只是该目录下的固定子目录，本身不承载 UUID。所有命名 session 的创建、读取、更新、复制、导入和导出边界都必须接收并持久化该 UUID，不得接受其他 ID 形式或再生成内部聊天 ID。
+
+兼容豁免仅限未提供 `session_id` 的 legacy 角色级调用：它们继续读取 `characters/{character_id}/history/` 和角色级 memory，并可在旧 `chat_log_meta.json` 中保留历史聊天 ID。这类数据不是命名 session，也不能直接作为自包含 session 复制或导出；只有显式迁移分配并验证新 UUID 后，才进入上述一对一合同。已提供 UUID 的命名 session 不适用该豁免。
 
 最小 session 元数据示例：
 
@@ -93,11 +95,20 @@
   "created_at": "<timestamp>",
   "character": {
     "path": "character/",
+    "files": [
+      { "path": "card.json", "sha256": "<content-hash>" },
+      { "path": "provenance.json", "sha256": "<content-hash>" }
+    ],
     "tree_sha256": "<snapshot-tree-hash>"
   },
   "worldbooks": {
     "path": "worldbooks/",
     "manifest_path": "worldbooks/manifest.json",
+    "files": [
+      { "path": "manifest.json", "sha256": "<content-hash>" },
+      { "path": "character/primary.json", "sha256": "<content-hash>" },
+      { "path": "third_party/example.json", "sha256": "<content-hash>" }
+    ],
     "tree_sha256": "<snapshot-tree-hash>"
   }
 }
@@ -109,10 +120,11 @@ manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全
 
 `tree_sha256` 使用统一的 `AIRP-TREE-SHA256-v1` 算法：
 
-1. 只接受目标快照子树内的普通文件；符号链接、junction/reparse point、设备文件和其他特殊节点一律拒绝。子树内不排除任何文件，临时文件和系统元数据不得进入已提交快照。
-2. 每个相对路径必须使用 `/` 分隔、不得含空段、`.`、`..` 或反斜杠，并且必须已经是 Unicode NFC。路径按其 UTF-8 字节序升序排列；任何重复路径都属于错误。
-3. SHA-256 输入先写入 ASCII 域分隔符 `AIRP-TREE-SHA256\0v1\0`，随后为每个文件依次写入 `u64be(path_utf8_length) || path_utf8 || u64be(file_length) || raw_file_bytes`。长度均为无符号 64 位大端整数；文件内容不得做换行、BOM 或文本编码转换。
-4. `sha256` 文件字段是原始文件字节的 SHA-256 小写十六进制值；`tree_sha256` 也是上述完整输入摘要的小写十六进制值。加载、导出、导入校验必须复用同一实现和测试向量，不得按平台另行解释。
+1. revision manifest 中每个 `files` 数组是对应快照子树的唯一批准文件集。构建器必须在空 staging 目录中只物化应用层明确提供的文件，再生成 `files`；不得从工作目录扫描并自动纳入未知文件。加载器必须确认磁盘上的普通文件集合与 `files` 完全相等，缺失或额外文件都属于完整性错误。因此批准集合内不排除任何文件，而临时文件和系统元数据因为未获批准不能进入已提交快照。
+2. 只接受目标快照子树内的普通文件；符号链接、junction/reparse point、设备文件和其他特殊节点一律拒绝。
+3. 每个相对路径必须使用 `/` 分隔、不得含空段、`.`、`..` 或反斜杠，并且必须已经是 Unicode NFC。路径按其 UTF-8 字节序升序排列；任何重复路径都属于错误。
+4. SHA-256 输入先写入 ASCII 域分隔符 `AIRP-TREE-SHA256\0v1\0`，随后为每个批准文件依次写入 `u64be(path_utf8_length) || path_utf8 || u64be(file_length) || raw_file_bytes`。长度均为无符号 64 位大端整数；文件内容不得做换行、BOM 或文本编码转换。
+5. `sha256` 文件字段是原始文件字节的 SHA-256 小写十六进制值；`tree_sha256` 是上述完整输入摘要的小写十六进制值。快照构建器和全部加载、导出、导入校验必须复用同一文件选择与哈希实现及测试向量，不得按平台另行解释。
 
 规范测试向量：空目录的摘要为 `a9682729b0a5609f08a1c9a8b2bf49b68edb9056d9e910fd297f694cc3ee3dbf`；仅含路径 `a.txt`、内容为单字节 ASCII `x` 的目录摘要为 `cfa2887973ce5ecc1f2bc57b00ad0130a39aae4d4bf67adae0431ccd3a3ae189`。
 
@@ -146,6 +158,8 @@ manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全
 
 世界书 manifest 中的 `content_revision` 是统一内容版本在该文件中的冗余完整性字段，必须满足上一节的相等不变量，不能再形成独立的世界书版本身份。`origin` 表示来源，不赋予更高或更低优先级。实际装配顺序由显式 `order` 和 AIRP 世界书运行时合同决定。
 
+组装任何一轮 prompt 前，加载器必须先完成整体验证，不能边验证边部分加载：规范化每个 `books[].path`，确认它是相对于所选 revision 的 `worldbooks/` 根目录且解析后仍被该根目录包含，拒绝绝对路径、父级跳转、符号链接和非普通文件；确认路径存在于统一 revision manifest 的 `worldbooks.files` 批准集合；校验文件原始字节同时匹配 `books[].sha256` 与 `worldbooks.files` 中对应的 `sha256`；最后重新计算并比对整个 `worldbooks.tree_sha256`（包括 `manifest.json`）。任一步失败都必须在装配前拒绝该 revision，禁止回退到可变工作副本或只加载通过的部分条目。
+
 ## 5. 生命周期
 
 ### 5.1 导入第三方世界书
@@ -161,12 +175,12 @@ manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全
 2. 创建独立 history、memory、state、character、worldbooks 和 revisions 目录。
 3. 把角色卡及 greetings/卡图复制为 `character/` 工作副本，并记录来源 provenance。
 4. 把角色默认、用户选择的第三方、场景、Persona 或其他启用世界书复制为 `worldbooks/` 工作副本。
-5. 同时快照角色卡和世界书，写入统一 revision 1；此后本局 prompt 装配只读取 session 工作副本。
+5. 同时快照角色卡和世界书，发布统一 revision 1；工作副本只作为用户编辑面，此后每轮 prompt 装配读取并验证该轮选定的不可变 revision。
 
 ### 5.3 游玩中修改或新增世界书
 
 - 用户可直接编辑 session 工作副本，也可通过 UI/API 引入新世界书。
-- 发送下一条消息前计算角色卡与世界书集合 hash；任一发生变化时生成新的统一 revision。
+- 发送下一条消息前计算角色卡与世界书集合 hash；任一发生变化时生成新的统一 revision。构建器必须先在 `revisions/` 下的同文件系统 staging 目录写完批准文件、两个 manifest 和哈希，逐文件 `sync_data`，同步 staging 目录并完成全量校验；随后以不覆盖既有目标的原子 rename 发布为 `{revision_id}/`，再同步 `revisions/` 父目录。发布成功后通过原子替换更新并同步 `meta.json.current_revision`。只有这些步骤全部成功，才允许追加任何引用该 `content_revision` 的 user 或 assistant 消息；失败只会留下不被引用的 staging/orphan revision，消息绝不能指向缺失或半成品快照。
 - 每条新写入的 `history/chat_log.jsonl` 消息记录都必须包含 `content_revision`；同一轮的 user/assistant 消息使用同一值。该字段与对应消息位于同一个 JSONL 对象中，由一次追加写入共同落盘，不使用可与消息分离提交的旁路索引。发送模型请求前先确定并持久化 user 消息及其 revision；生成结果再以同一 revision 追加 assistant 消息。旧记录缺少该字段时标记为“版本未知”，不得用当前 revision 冒充。这样即使一轮中途失败，历史回放仍能从已落盘消息准确选择当时的角色卡与世界书快照。
 - 更新第三方素材库不得自动覆盖已存在 session；用户必须显式选择刷新、比较或重新物化。
 

@@ -255,9 +255,15 @@ impl ChatLog {
                     // 保留原 created_at / updated_at 和聊天内容。持久化迁移不能阻断
                     // 已存在历史的读取；失败时由下一次写操作再次保存规范 ID。
                     m.session_id = scope_session_id.clone();
-                    let bytes = serde_json::to_vec_pretty(&m)?;
-                    if let Err(error) = crate::data_dir::replace_file(&meta_p, &bytes) {
-                        tracing::warn!(path = ?meta_p, err = %error, "命名 session metadata ID 归一化写入失败，继续读取历史");
+                    match serde_json::to_vec_pretty(&m) {
+                        Ok(bytes) => {
+                            if let Err(error) = crate::data_dir::replace_file(&meta_p, &bytes) {
+                                tracing::warn!(path = ?meta_p, err = %error, "命名 session metadata ID 归一化写入失败，继续读取历史");
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(path = ?meta_p, err = %error, "命名 session metadata 序列化失败，继续读取历史");
+                        }
                     }
                 }
                 let log = Self {
