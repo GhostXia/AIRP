@@ -1,6 +1,6 @@
 # Multi-Persona HTTP API
 
-> Status: A1a (PR #151), A1b (PR #152) and A2a (PR #154) delivered.
+> Status: A1a (PR #151), A1b (PR #152), A2a (PR #154), and the A2b/A2c WebUI closure (PR #180) delivered.
 > This document records the stable HTTP/pipeline contract and the remaining
 > product boundary; it is not an execution log. Last checked: 2026-07-15.
 
@@ -11,9 +11,9 @@ The plural `/v1/users/:user_id/personas` surface exposes the existing
 `/v1/users/:user_id/persona` GET/PUT surface remains supported for the default
 persona.
 
-A2a provides a WebUI management surface for listing, creating, editing and deleting
-multi-Personas through the plural endpoints. Binding/unbinding (A2b) and chat-time
-persona activation switching (A2c) remain deferred.
+A2a provides WebUI CRUD. PR #180 adds automatic/explicit selection, character/session
+bind/unbind controls, an observable effective-persona contract, and chat payload wiring.
+Advanced Persona lifecycle work remains outside this stable HTTP/pipeline slice.
 
 ## Endpoints
 
@@ -26,6 +26,7 @@ persona activation switching (A2c) remain deferred.
 | `DELETE` | `/v1/users/:user_id/personas/:persona_id` | none | `204` |
 | `POST` | `/v1/users/:user_id/personas/:persona_id/bindings` | `BindPersonaRequest` | `200` updated `Persona` |
 | `DELETE` | `/v1/users/:user_id/personas/:persona_id/bindings` | `character_id` and optional `session_id` query | `200` updated `Persona` |
+| `GET` | `/v1/users/:user_id/persona/effective` | `character_id` and optional `session_id` query | `200` effective `persona`, `source`, and `bindings.character_persona_id` / `bindings.session_persona_id` |
 
 Create request:
 
@@ -54,7 +55,7 @@ Binding request:
 ```json
 {
   "character_id": "character-a",
-  "session_id": "session-a"
+  "session_id": "11111111-1111-4111-8111-111111111111"
 }
 ```
 
@@ -71,6 +72,10 @@ Binding request:
   revision conflict instead of overwriting data.
 - Update preserves bindings. Binding changes only through bind/unbind.
 - Binding and unbinding are idempotent and do not bump revision on a no-op.
+- A binding scope has at most one Persona owner. The save boundary checks all
+  owners while holding the per-user lock, so concurrent binds cannot persist an
+  ambiguous state. Effective resolution reads the complete owner set from one
+  per-user snapshot; legacy/corrupt multi-owner data fails closed with `400`.
 - Deleting `default` is rejected. Deleting a missing non-default persona is an
   idempotent `204`.
 - Non-default GET/PUT/bind/unbind targets that do not exist return `404`.
@@ -116,7 +121,21 @@ Rationale: the request body is the most recent client intent and must win
 on explicit fields; the persona provides durable defaults (tone, persona
 variables, etc.) without forcing the client to resend them every turn.
 Clients that want the persona `name` to drive `{{user}}` must send an
-empty `user_profile.name` (A2 will adopt this convention).
+empty `user_profile.name`; the WebUI uses this convention.
+
+### Effective endpoint and WebUI selection
+
+`GET /v1/users/:user_id/persona/effective` resolves binding → default and
+returns `source=session_binding|character_binding|default` plus independent
+`bindings.character_persona_id` and `bindings.session_persona_id` owners. The
+two nested owner fields, not only the winning Persona, drive the corresponding
+bind/unbind controls.
+
+WebUI selection uses an empty internal value for "automatic": it always sends
+the current `user_id` and omits `persona_id`, allowing the pipeline to resolve
+bindings/default. A concrete selection sends `persona_id` explicitly. Automatic
+mode is read-only for Persona save/delete, persists across refresh, and discards
+stale effective responses after character/session changes.
 
 ### Scene-mode scope
 
@@ -127,8 +146,9 @@ persona binding semantics are deferred.
 
 ## Remaining work
 
-- A2b: add WebUI bind/unbind flows (character/session binding management).
-- A2c: add WebUI chat-time persona activation switching (set `persona_id` in
-  `/v1/chat/completions` requests from the UI).
-- Define cross-session binding precedence for scene mode as part of any
-  future multi-character persona binding work.
+- Define cross-session binding precedence for scene mode as part of any future
+  multi-character Persona binding work.
+- Add base lock, drift/history/rollback, avatar metadata, import/export and
+  backup/restore under explicit versioned contracts.
+- Build a unified effective configuration summary spanning Persona, Preset,
+  provider/model and provenance.

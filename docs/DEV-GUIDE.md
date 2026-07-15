@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-15，`main@c54428e`
+> 最后校准：2026-07-15，`main@fb523b8`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 

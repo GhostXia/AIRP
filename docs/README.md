@@ -1,6 +1,6 @@
 # AIRP 文档地图
 
-> 最后校准：2026-07-15，`main@c54428e`
+> 最后校准：2026-07-15，`main@fb523b8`
 >
 > 当前事实入口：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)
 
@@ -23,7 +23,7 @@
 | 产品与发布 | [PLAN.md](PLAN.md)、[WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) | 长期方向与近期 P1–P3 门禁 |
 | 生产架构 | [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)、[SECURITY.md](SECURITY.md)、[RISK-REGISTER.md](RISK-REGISTER.md) | 已接受 P0 边界、安全规则与开放风险 |
 | 会话与历史 | [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md) | 目标存档/revision 合同与已实现 durable history |
-| Persona | [PERSONA-HTTP-API-PLAN.md](PERSONA-HTTP-API-PLAN.md) | 已实现 HTTP/pipeline 合同与剩余 WebUI 闭环 |
+| Persona | [PERSONA-HTTP-API-PLAN.md](PERSONA-HTTP-API-PLAN.md)、[Persona WebUI closure spec](superpowers/specs/2026-07-15-persona-webui-closure-design.md) | 已实现 HTTP/pipeline/effective/WebUI 绑定闭环；高级生命周期仍开放 |
 | Worldbook | [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md) | 当前 canonical schema、normalizer 与 runtime 语义 |
 | 资产策略 | [ASSET-SPEC.md](ASSET-SPEC.md) | 候选版本化资产规格；尚非已发布标准 |
 | Agent/扩展 | [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)、[UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md) | 待实现编排规范与已接受 UI/Widget 边界 |
