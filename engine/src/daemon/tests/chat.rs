@@ -7,6 +7,11 @@
 // `scope_session_id` only for session-scoped reads; A1b asserts the chat
 // pipeline's persona fail-closed (404 for unknown persona_id, OK for the
 // virtual `default`).
+//
+// PR4-A1（#160 审计遗留项）：`pr75_chat_history_returns_message_timestamps`
+// 原为 `handlers.rs` 内联测试，使用其私有的 `make_state_for_http_test`。
+// `make_state_no_key` 与之等价（同一 DaemonState fixture），借此把测试
+// 迁出 handler 模块、回归到 `daemon/tests/chat.rs` 路由级测试位置。
 
 use super::*;
 
@@ -299,4 +304,94 @@ async fn a1b_chat_completions_accepts_default_persona_id_for_fresh_user() {
         "default persona must reach the streaming response, got {}",
         resp.status()
     );
+}
+
+// ── W-01 (#75 PR4-A1 / #160 审计遗留项)：/v1/chat/history 返回 JSON 包含
+//     message_timestamps 字段，且长度等于 messages。 ──────────────────────
+
+#[tokio::test]
+async fn pr75_chat_history_returns_message_timestamps() {
+    let (state, tmp) = make_state_no_key();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("characters").join("ts_http_char")).unwrap();
+
+    // 用 ChatLog API 写入 2 条消息（产生 ts）
+    let mut log = crate::chat_store::ChatLog::new("ts_http_char");
+    log.append(
+        root,
+        crate::adapter::ChatMessage {
+            role: crate::adapter::MessageRole::User,
+            content: "hello".to_string(),
+        },
+    )
+    .unwrap();
+    log.append(
+        root,
+        crate::adapter::ChatMessage {
+            role: crate::adapter::MessageRole::Assistant,
+            content: "hi".to_string(),
+        },
+    )
+    .unwrap();
+
+    let app = create_router(state.clone());
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/history")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "character_id": "ts_http_char" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    // 无分页字段时必须保持 legacy ChatLog 响应形状。
+    assert_eq!(v["character_id"], "ts_http_char");
+    assert!(v["session_id"].is_string());
+    // messages 数组长度 = 2
+    assert_eq!(v["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(v["message_ids"].as_array().unwrap().len(), 2);
+    // message_timestamps 字段存在且长度等于 messages
+    let tss = v["message_timestamps"].as_array().unwrap();
+    assert_eq!(tss.len(), 2, "message_timestamps 长度应等于 messages");
+    // 每条都有 ts（非 null）
+    assert!(tss[0].is_string(), "ts[0] 应为字符串");
+    assert!(tss[1].is_string(), "ts[1] 应为字符串");
+
+    // 显式 limit 才切换到分页窗口响应，并保留完整 total。
+    let app = create_router(state);
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/history")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "character_id": "ts_http_char",
+                        "limit": 1
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(page["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(page["total"], 2);
+    assert_eq!(page["has_more"], true);
 }
