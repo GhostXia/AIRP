@@ -1,14 +1,15 @@
 # 酒馆（SillyTavern）功能对标 + 扩展接口需求
 
-> **需求对标，不是兼容性声明**：表内 ✅/🔧 表示 2026-07-01 源项目资产状态，不证明当前 AIRP-Dev 已交付；“AIRP-Dev 落点/缺口”列必须以当前源码复核。Worldbook 当前已有 CRUD、关键词触发与 v2 `constant` 常驻注入；单默认 Persona 已有 API/WebUI 与 chat 注入，多 Persona/base+drift 和 plugin/完整扩展 API 尚未完成。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> **需求对标，不是兼容性声明**：表内 ✅/🔧 表示来源或候选状态，不证明当前 AIRP 已交付；“AIRP 落点/缺口”必须以当前源码复核。Worldbook 已有 CRUD、关键词/`constant` 触发与 v3 shared normalizer；多 Persona 存储、HTTP、chat 激活和 WebUI CRUD 已交付，但绑定 UI、base+drift、Preset 完整生命周期及 plugin/扩展 runtime 尚未完成。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 > 目的：(1) 列全酒馆功能，标出候选能力；(2) 落实硬需求——**充分暴露接口，无门槛无缝支持第三方扩展**。来源：docs.sillytavern.app（2026-07 实读）。图例：✅ 源项目已有 ｜ 🔧 源项目部分有需补 ｜ 🆕 源项目皆无，需新加 ｜ ➖ 暂不做/低优先。
-> 最后更新：2026-07-14（同步 PR #141 worldbook constant 运行时合同）
+> 最后校准：2026-07-15
 
 ---
 
 ## 第一部分：酒馆功能全集 → 我们的缺口
 
 ### 1. 角色 / 人设
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | 角色卡全字段（desc/personality/scenario/first_mes/mes_example/alt_greetings/creator_notes/system_prompt/post_history_instructions/tags/creator/version/embedded character_book） | ✅ | Core `TavernCardV2` 有全字段 + png_parser 正确解析 |
@@ -20,6 +21,7 @@
 | Expression Images（情绪立绘） | ➖ | 扩展类，后期 |
 
 ### 2. 会话 / 消息
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | Swipes（同一轮多个候选回复，左右切） | 🆕 | RP 招牌功能、粘性高。Core 有 regen 但无 swipe 候选管理 |
@@ -31,16 +33,18 @@
 | Reasoning / thinking 块（思维链显示） | 🔧 | Core `xml_unpacker` 拆 immersive/action/state；reasoning 块显示+折叠需补 |
 
 ### 3. 世界书 / World Info
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
-| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🆕 | AIRP 已交付 `constant`；shared normalization 与其余高级语义仍是主要新建件（见 PARTS.md F） |
-| 关键词触发扫描 | 🔧 | AIRP 使用 aho-corasick，并已实现 `enabled && (constant || primary_keyword_match)`；selective/secondary/递归仍缺 |
+| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🔧 | AIRP 已交付 `constant`、v3 shared normalizer、advisory preservation 与 import diagnostics；其余高级 runtime 语义仍待真实工作流驱动（见 PARTS.md F） |
+| 关键词触发扫描 | 🔧 | AIRP 使用 aho-corasick，并已实现 `enabled && (constant \|\| primary_keyword_match)`；selective/secondary 组合/递归仍缺 |
 | 向量化/RAG 注入 | ➖ | Data Bank，后期 |
 
 ### 4. Prompt / 预设系统
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
-| 采样参数 + 社区预设 | ✅ | 作建议素材，Agent 适配（见 PLAN §3.3） |
+| 采样参数 + 社区预设 | ✅ | 作建议素材，由 Agent/adapter 适配（见 [PLAN.md](PLAN.md) §4.1） |
 | Chat Completion 的 Prompt Manager（可重排 prompt 块） | 🔧 | 我们 orchestrator 有默认序；用户可重排的管理面需做（但按"建议素材"哲学，非机械回放） |
 | Instruct Mode（Alpaca/ChatML/Llama2 指令模板） | 🆕 | 文本补全模型的指令格式包装 |
 | Context Template（上下文模板） | 🆕 | |
@@ -50,12 +54,14 @@
 | Start Reply With / 自定义停止串 / prompt 后处理 | 🔧 | 部分在 adapter |
 
 ### 5. API 连接
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | OpenAI 兼容 / Anthropic | ✅ | Core adapter 双 provider |
 | KoboldAI / Tabby / AI Horde / DreamGen / 本地等多后端 | ➖ | 按需扩 BackendEngine |
 
 ### 6. 内置扩展（酒馆随附，用户高频用）
+
 | 酒馆内置扩展 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | TTS（文字转语音） / STT | 🆕➖ | 后期，走扩展接口 |
@@ -71,6 +77,7 @@
 | Regex（用户可配的输入/输出 find-replace） | 🔧 | Core preset_regex 在，用户级 UI + 全字段需补 |
 
 ### 7. 其他
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | Data Bank / RAG（文档引用检索） | ➖ | 后期 |
@@ -125,18 +132,19 @@
 ## 第四部分：酒馆功能 → agent 框架原语的解耦重组（用户 2026-07-01 硬要求）
 
 > **原则**：酒馆是"固定 prompt 装配管线 + 外挂插件"架构；我们是"agent 自主决策 + 能力以工具/钩子暴露"的 agent 框架。**照搬酒馆机械管线塞不进我们的框架。** 每个酒馆功能必须拆成"底层用户能力"，再用我们的原语（工具 / 记忆 / 技能 / 事件钩子 / prompt 装配规则 / 宏 / 子agent）重新表达。
-> 我们的 agent 框架原语：**Tool（内置+MCP）· Memory（三层，§3.4）· Skill（agentskills.io 兼容）· Event Hook · Prompt-Interceptor · 装配规则（orchestrator）· Macro · Subagent**。
+> AIRP 的候选 Agent 原语：Tool、Memory、Skill、Event Hook、Prompt-Interceptor、装配规则、Macro 与 Subagent。当前交付范围必须以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准。
 
 | 酒馆功能（机械形态） | 底层用户能力 | 重组为我们的 agent 原语 |
 |---|---|---|
 | **World Info**（固定关键词→按位置深度机械注入管线） | "相关背景按需进上下文" | **检索 Tool**（agent 生成中按需调 `lorebook_lookup`）+ 装配规则（触发条进角色平面）。位置/深度/selective 从"机械插入参数"降为"给 agent 的建议元数据"，agent 决定用不用（呼应 §3.2 待议）。**非硬编注入器** |
-| **Author's Note / Character's Note**（固定深度注入文本） | "持久指令/提醒在某位置反复生效" | **Memory 常驻层条目**（§3.4）或**装配规则指令**，不是机械 depth-injector |
-| **预设**（机械回放 prompt 结构） | "文风/参数/后处理打包移植" | **建议素材 + Agent 适配**（§3.3 已定）+ 正则→消息格式化 **Hook** + 采样参数→adapter 建议值 |
+| **Author's Note / Character's Note**（固定深度注入文本） | “持久指令/提醒在某位置反复生效” | 候选 Memory 常驻条目或装配规则，不直接照搬机械 depth-injector |
+| **预设**（机械回放 prompt 结构） | “文风/参数/后处理整体搬运” | **建议素材 + Agent 适配** + 正则→消息格式化 **Hook** + 采样参数→adapter 建议值 |
 | **Quick Replies / STscript**（脚本按钮） | "自动化重复动作/自定义命令" | **Slash 命令注册 + Skill**（可脚本化）——即 agent 的命令/技能面 |
-| **Regex 脚本**（输入输出 find-replace） | "收发文本转换" | **消息格式化 Hook**（多阶段管线，§3.8 扩展面），用户/第三方可插 |
+| **Regex 脚本**（输入输出 find-replace） | “收发文本转换” | 候选消息格式化 Hook；第三方接入须经过 capability、沙箱与审计 |
 | **Macros**（`{{char}}/{{roll}}`） | "模板变量展开" | **Macro 原语**（装配层展开 + 第三方注册自定义宏） |
 | **Swipes / Branches / Checkpoints** | "多候选 + 对话树分叉" | **Session/State 管理**（agent 编排的会话操作 Tool + 存储分叉） |
-| **Summarize / Vectorization**（内置扩展） | "长会话记忆" | **三层记忆 §3.4**（封卷 + session_search FTS5）——归内核记忆，非外挂 |
+| **Summarize / volume sealing**（内置扩展） | “长会话压缩” | Engine 已交付 `seal_volume` 与 volume store；自动摘要与产品工作流仍是部分能力 |
+| **Vectorization / RAG**（内置扩展） | “长会话语义检索” | 归入 [PLAN.md](PLAN.md) §4.3 的后续检索/记忆方向，不是当前能力 |
 | **Expression Images / TTS / Image Gen / Web Search**（内置扩展） | "多模态/联网能力" | **Tool / MCP server / Widget**——走扩展接口，agent 按需调 |
 | **Data Bank / RAG** | "文档引用检索" | **检索 Tool + 记忆外部 provider**（Hermes 式，可选） |
 | **Connection Profiles** | "配置整组切换" | 引擎配置项（adapter 层），非 prompt 管线 |

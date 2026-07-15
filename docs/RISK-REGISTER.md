@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-14. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
+> Last reviewed: 2026-07-15 at `main@1f3e6ed`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -30,9 +30,9 @@
 ## RR-004 · Divergent write paths and non-atomic persistence
 
 - **Status**: Partially mitigated in PR #111 through shared Chat/State/Lorebook services, atomic replacement, revision/schema validation, and shared locks. Cross-resource transactions and lock-cache lifecycle remain tracked separately.
-- **Surface**: HTTP chat/state handlers and Agent tools directly access the same JSON/JSONL files but do not share all locks or transaction semantics.
+- **Surface**: Chat/State/Lorebook use shared services, but cross-resource operations and future session revisions still lack one transaction boundary.
 - **Risk**: Concurrent append/rollback/regen/state updates can lose ordering, overwrite a newer snapshot, or make live state disagree with history.
-- **Current control**: Agent tools have per-character/per-session locks; append-only paths reduce but do not remove the risk.
+- **Current control**: Shared per-character/per-session locks, atomic replacement, revision/schema validation, and append-only history cover current single-resource writes; cross-resource consistency remains incomplete.
 - **Required direction**: One versioned Chat/State service with shared locks, atomic replace, revisions/idempotency, schema validation, and concurrency tests.
 
 ## RR-005 · State schema enforcement at the write boundary
@@ -82,3 +82,11 @@
 - **Risk**: Known audit findings affect development-server or test-UI exposure to untrusted networks. These packages are not copied into the production gateway image, so this is not evidence of a production runtime compromise.
 - **Current control**: Development services remain loopback-only/trusted; production serves independent static assets without `ui/node_modules`.
 - **Required direction**: Upgrade to unaffected stable majors, lock them, then rerun typecheck, Vitest, production browser smoke and Tauri build/sidecar checks. Do not use forced audit upgrades without compatibility evidence.
+
+## RR-011 · Session snapshot and revision completeness
+
+- **Status**: Open; PR #169 delivered identity/layout cleanup and accepted the phased contract, not the full runtime.
+- **Surface**: Named sessions currently isolate history and memory, while state, character-card/worldbook working copies, unified revisions, integrity loading and complete export remain incomplete.
+- **Risk**: A user may assume a session is a self-contained reproducible save, but later edits or external material changes can make an old turn impossible to reconstruct.
+- **Current control**: Canonical UUID identity, durable history, metadata repair, stopped legacy directory creation, and an explicit target contract in [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md).
+- **Required direction**: Implement the contract in phases with atomic publication, approved file sets, cross-platform tree hashes, per-message `content_revision`, crash recovery and restore/export tests. Until then, UI and docs must not call current sessions fully self-contained or reproducible.

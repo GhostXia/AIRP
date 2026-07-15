@@ -50,7 +50,7 @@
 | Skills 经验技能 | ✅ 生态已有 SKILL.md + skills-vs-mcp + Claude-Code 式技能 | RP 技能（"怎么写角色 X""某类场景套路""你偏好的文风"）从经验自建。框架在，接进 loop |
 | Soul 动态人格 | 🔧 角色卡/persona | 卡是**作者写死**的；Hermes soul 会随反馈演化。RP 里→给角色一个**学习式人格 overlay**（类似 state drift 但作用于文风/性格深度），或作用于"agent 的书写风格" |
 | session_search（FTS5+摘要） | 🆕 我们 RAG 暂缓 | **Hermes 证明 FTS5+LLM 摘要是非向量的轻量长程记忆**，正合"先简单检索、RAG 后置"。"回忆三个月前那段剧情"对长 RP 极有用 |
-| frozen snapshot 稳定前缀 | ✅ 我们的载荷按可变性排序/`[[CACHE_BREAK]]`（§3.5） | **同一原理**——记忆当稳定前缀跨轮字节稳定。Hermes 坐实了我们的缓存纪律 |
+| frozen snapshot 稳定前缀 | ✅ AIRP 候选缓存纪律：按可变性排序/`[[CACHE_BREAK]]` | **同一原理**——记忆作为稳定前缀可跨轮保持字节稳定；具体实现仍需独立合同与验证 |
 | 有界+80% 整理 | 🆕 | 我们封卷有阈值信号，但缺"常驻记忆超限自动合并压缩"。要加 |
 
 ---
@@ -70,7 +70,7 @@
 2. **归档卷**（已有）：封卷 volumes，长会话压缩归档。
 3. **历史检索**（新加）：SQLite FTS5 全文 + LLM 摘要的 `session_search`，回忆任意历史片段。非 RAG，轻量。
 
-**技能层**：RP 技能（角色书写 playbook/场景套路/用户文风）从经验自建、反馈更新——接进 agent loop 的工具/技能注册表（与 §3.8 扩展面共用底座）。
+**技能层**：RP 技能（角色书写 playbook/场景套路/用户文风）从经验自建、反馈更新，接入 Agent loop 的工具/技能注册表，并与 [PLAN.md](PLAN.md) §4.4 的扩展面共用底座。
 
 **自进化闭环**：每轮/每会话，agent 抽事实→更新常驻记忆+用户模型+技能；下会话当 frozen 前缀注入。守 §1 干净提示词（记忆进角色平面是 RP 数据，正当；抽取/整理的控制逻辑走控制平面，不脏化角色 prompt）。
 
@@ -94,7 +94,7 @@
 - **subagent + RPC 脚本调工具（零上下文成本，🌟对我们重要）**："派生隔离 subagent 跑并行工作流；写 Python 脚本经 RPC 调工具，把多步管线压成零上下文成本的一轮。" **这正是 Core"loop=纯净 subagent 编排器"的印证与延伸**——多步工具调用不堆进主上下文，压成脚本一次调。合我们干净提示词 + agent 脊柱。
 - **MCP server 接入**："连任意 MCP server 扩能力"——**再次印证我们 MCP-client 当扩展底座**。60+/40+ 内置工具 + `execute_code` 程序化调用。
 - **Headless + 多平台投递（🌟印证架构）**：Hermes 是**无头引擎**，经统一 gateway 投递到 20+ 平台（Telegram/Discord/Slack/WhatsApp/Signal/Email/CLI…）+ 多终端后端（Local/Docker/SSH/Modal/Daytona）。**强印证我们"引擎=独立 service、UI 无关"**——我们的"Tauri 先/web 后"只是最小版，Hermes 展示了天花板（任意前端/平台都是客户端）。
-- **Slash 命令面**：`/personality`（切人格）、`/compress`（压上下文）、`/usage`、`/insights`、`/skills`、`/retry`、`/undo`、`/model`（切模型）、`/new`、`/reset`——对标我们 slash 命令扩展面（§3.8）。
+- **Slash 命令面**：`/personality`、`/compress`、`/usage`、`/insights`、`/skills`、`/retry`、`/undo`、`/model`、`/new`、`/reset` 可作为未来命令扩展面的交互参考，不是当前 AIRP 命令清单。
 - **安全模型**：命令审批（command approval）、DM 配对认证、容器隔离、命令 allowlist——对标我们 capability + 沙箱 + agent 戒律"破坏性工具默认 dry-run"。
 - **RL 训练闭环（超出我们范围，记录）**：trajectory 导出 + Atropos RL 训练下一代工具调用模型——Hermes"变强"的最深层不止记忆，还产训练数据。我们暂不做，但记着"用户交互轨迹可留作将来训练资产"。
 - **OpenClaw 迁移**：一键导入 settings/memories/skills/keys/personas/TTS/workspace——对标我们酒馆导入思路（迁移旧资产）。

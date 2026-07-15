@@ -1,8 +1,8 @@
 # Session 存档与世界书物化设计
 
-> 状态：**产品方向已确认，分阶段实施**
+> 状态：**产品方向已确认；PR #169 已交付目录去歧义与命名 session 身份，后续阶段待实现**
 >
-> 关联：[Issue #168](https://github.com/GhostXia/AIRP/issues/168)
+> 关联：[PR #169](https://github.com/GhostXia/AIRP/pull/169) / [已关闭 Issue #168](https://github.com/GhostXia/AIRP/issues/168)
 >
 > 最后更新：2026-07-15
 
@@ -218,7 +218,7 @@ session 必须同时承担“可自由魔改的工作分支”和“可恢复的
 
 ## 7. 分阶段实施
 
-1. **目录去歧义与设计存档**：停止为新数据根创建根级 `world.md`/`items.md`，停止为新角色创建 legacy `worldbooks/`，记录本文合同。
+1. **目录去歧义与设计存档（PR #169 已交付）**：停止为新数据根创建根级 `world.md`/`items.md`，停止为新角色创建 legacy `worldbooks/`；统一命名 session 的目录、history 响应和 metadata 身份；记录本文合同。
 2. **完整 session 边界**：新增 `meta.json`，把 state、剧情进度和角色卡工作副本隔离到命名 session，并为旧调用保留兼容路径。
 3. **第三方世界书素材库**：实现安全导入、raw/normalized/provenance、稳定 ID 和查询 API。
 4. **session 世界书物化**：创建 manifest、复制全部启用世界书、让 prompt 装配只读 session 副本。

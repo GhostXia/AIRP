@@ -4,7 +4,7 @@
 
 > 对象：https://github.com/notnotype/neuro-book —— 本地 AI 工作台 IDE，长篇小说写作 + AI RP。Nuxt/Vue/Bun/SQLite/Prisma。许可证记录已于 2026-07-11 复核为 AGPL-3.0；此前 PolyForm Noncommercial 的记录已经过时。本文仍仅参考理念，不搬代码。
 > topics 直接含 `airp` / `rp` / `sillytavern` / `harness` / `agent`——与我们**高度同域**，且它**独立收敛出与我们相同的多个核心设计**，佐证方向、并提供可借鉴的具体形态。
-> 性质：学习参考。一切以我们实际需求为准（[[PLAN.md §0]]）。
+> 性质：学习参考。一切以 AIRP 实际需求与 [PLAN.md](PLAN.md) §1 为准。
 > 最后更新：2026-07-11
 
 ---
@@ -20,7 +20,7 @@
   - `DynamicSet` → 本轮临时状态
   - `AppendingSet` → 工作区提醒、激活的技能、用户输入
 - 每个 profile 声明 `key/kind/name/inputSchema/outputSchema/allowedToolKeys/buildPrompt(ctx)` → "一个明确的**运行时合同**"。
-- **对我们的意义（强相关）**：这正是我们 §1 干净提示词 + §3.5 载荷按可变性排序的**一种可落地实现形态**。我们的 orchestrator 现在是字符串装配；可借鉴"把角色平面装配做成**结构化、声明式、带 schema 的组件树**"——稳定/动态/追加三层天然对上我们的"稳定前缀在前、易变在后"（缓存纪律 + Hermes frozen-snapshot）。`allowedToolKeys` 也天然是我们控制平面 + capability 的落点。**建议：Phase 2 立 orchestrator 装配的结构化 profile 抽象时，参考这套分层 + 运行时合同。**
+- **对 AIRP 的意义**：这为 [PLAN.md](PLAN.md) §2 的干净角色平面和按可变性分层提供一种候选实现形态。若未来把字符串装配演进为结构化、声明式、带 schema 的 profile，必须在现有 orchestrator 上小步重构，并独立定义缓存、capability 和运行时合同。
 
 ### 2. 🌟 Per-subject 知识隔离 —— 角色只知道"自己该知道的"，非全知世界书
 - NeuroBook 规定：**Subject-facing Knowledge 不得直接从完整的 Canonical Lorebook Entry 拷贝**，防上下文泄露。角色知识单独存 `simulation/subjects/{id}/knowledge.md`，只含该角色"已知/被告知/观察/推断/误解"的内容。
@@ -50,11 +50,11 @@
 
 ## 与自有项目比对（防重合/冲突 —— 用户 2026-07-02 要求）
 
-> 核对对象：AIRP-MCP-Server（`D:\airp-mcp-server`，我们自己的数据层仓）+ Core/engine 现有设计。目的：NeuroBook 的"学习点"里，凡我们**本来就有**的，标为"已有·仅佐证"，**不当新东西造、更不造平行系统**；只有**净新**的才纳入路线。
+> 核对对象：第一方 AIRP-MCP-Server 与当前 Core/engine 设计。目的：NeuroBook 的“学习点”里，凡 AIRP 本来就有的，标为“已有·仅佐证”，不当新能力重复建设；只有净新增量才进入候选路线。
 
 | # | NeuroBook 点 | 我们现状 | 结论 |
 |---|---|---|---|
-| 1 | TSX Profile 类型化组件树 + 三层 | **分层概念已有**（MCP `prompt-caching.md` 按可变性排序 + 我们 §3.5 稳定前缀）；类型化组件树**形态**没有 | **半新**：只学"形态"，且是 engine orchestrator 的**重构参考**，**不新增平行装配系统**（否则跟 Core orchestrator 冲突） |
+| 1 | TSX Profile 类型化组件树 + 三层 | 分层概念已有候选研究，类型化组件树形态没有 | **半新**：只作 engine orchestrator 的重构参考，不新增平行装配系统 |
 | 2 | Per-subject 知识隔离（角色只知该知道的） | **目标已有**（SKILL.md:75 防"角色知道太多"+ `apply_lorebook` 关键词懒加载）；**持久化 per-角色知识模型没有**（`视角` 仅指多角色主视角标签，非同概念） | **净新·真值得做**：懒加载是"取时过滤"，NeuroBook 是"持久化角色视角知识层"，更进一步 |
 | 3 | 节点 retrieval/inject/refs 语义 | **已有**：MCP lorebook 有 `constant`(常驻注入)/`selective`(条件) + 我们 §5 已决定"位置降为建议元数据+检索工具" | **重合·仅佐证**：NeuroBook 独立走到同一处，不新增 |
 | 4 | Agent Dialogue 内容边界（排工具/思考/harness） | **已有**：Core 两平面 + `subagent_context_has_no_orchestrator_noise` CI 不变式 | **重合·仅佐证** |
@@ -74,7 +74,7 @@
 - License 非商用——只学理念，不复制其代码。
 
 ## 落地建议（**只列净新，去掉与自有重合的**）
-- **Task 1.3 世界书/角色模型**：per-角色视角知识层（点 2·净新）**不做成独立静态隔离，而是并入"角色成长模型"的知识维**（用户 2026-07-02）——角色随剧情成长、非一成不变，知识只是成长的一个维度。**复用已有 User Persona M_UP 的 base+drift 模式套到角色上**（不建平行系统），与 Soul 演化（人格维）、state（关系维）、gating（进度维）统一。详见 [PLAN.md](PLAN.md) §3.4「角色成长模型」。
+- **角色视角知识层**：不建独立静态平行系统；若采用，应并入未来角色成长/记忆模型，并与 Persona、state 和 gating 的版本化边界统一。当前 [PLAN.md](PLAN.md) §4.3 只保留这一方向，不代表 base+drift 已实现。
 - **Phase 2 orchestrator 重构（非新增）**：借鉴 **TSX 三层 + 运行时合同的形态**（点 1·半新）重构 Core orchestrator 装配——**不建平行装配系统**，避免与现有 orchestrator 冲突。
 - **可观测（小）**：SSE 事件包装成用户可读 **walkthrough** + 支持 loop 中途 pause 问人（点 6·半新）。
 - **不做**：三段导入（点 7 已有 `validate_card`/`decompose_character`/`import_card`，Task 1.1 直接复用）、内容边界断言（点 4 已有 CI 不变式）、重建/分层记忆（点 5 已有 + Hermes 已定）、retrieval/inject 语义（点 3 §5 已定）——**这些 NeuroBook 只作外部佐证，不重造。**

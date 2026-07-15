@@ -806,7 +806,8 @@ impl PersonaService {
         Ok(ids)
     }
 
-    /// 读取指定 id 的 Persona；不存在时返回 `Persona::initial(default_name)` 并设 `id`。
+    /// 读取指定 id 的 Persona。虚拟 `default` 不存在时返回
+    /// `Persona::initial(default_name)`；不存在的自定义 id 返回 `NotFound`。
     pub fn get(
         &self,
         user_id: &UserId,
