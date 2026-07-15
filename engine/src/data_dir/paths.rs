@@ -171,6 +171,11 @@ pub fn character_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpErr
     Ok(dir)
 }
 
+/// Resolve an existing character directory without creating any filesystem entries.
+pub fn character_dir_path(root: &Path, character_id: &CharacterId) -> PathBuf {
+    root.join("characters").join(character_id.as_str())
+}
+
 const CHECKPOINTS_TEMPLATE: &str = r#"# 剧情关卡 checkpoints (CP)
 
 ## 当前进度
@@ -447,11 +452,18 @@ pub fn read_character_card_text(
         )));
     }
     let migrated = dir.join("card").join("card.json");
+    let raw = dir.join("card").join("raw.json");
     let legacy = dir.join("card.json");
-    let path = if migrated.exists() { migrated } else { legacy };
+    let path = if migrated.exists() {
+        migrated
+    } else if raw.exists() {
+        raw
+    } else {
+        legacy
+    };
     if !path.exists() {
         return Err(AirpError::NotFound(format!(
-            "character {} has no card.json (neither card/card.json nor card.json exists)",
+            "character {} has no card JSON (card/card.json, card/raw.json, and card.json are all absent)",
             character_id
         )));
     }

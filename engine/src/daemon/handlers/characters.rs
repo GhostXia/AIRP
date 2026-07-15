@@ -152,11 +152,17 @@ pub(crate) fn import_card_to_disk(
     let json_str = crate::orchestrator::card::normalize_v1_to_v2(&json_str);
 
     // 阶段 2.5：确定 character_id。传入则校验；未传则 slugify card.name 派生。
-    let final_id: String = match character_id {
+    let (final_id, reserved_dir) = match character_id {
         Some(id) => {
             // 传入的 id 必须本身合法（UI/调用方负责）；CharacterId 校验。
             CharacterId::new(id)?;
-            id.to_string()
+            let Some(dir) = try_reserve_character_dir(data_root, id)? else {
+                return Err(AirpError::BadRequest(format!(
+                    "character {} already exists; use the character update endpoint instead",
+                    id
+                )));
+            };
+            (id.to_string(), dir)
         }
         None => {
             let name = extract_card_name(&json_str);
@@ -167,6 +173,7 @@ pub(crate) fn import_card_to_disk(
     // 最终 id 再过一次 newtype 校验（slugify 可能产生需复核的串）+ 防 None 路径漏网。
     CharacterId::new(&final_id)?;
     let char_dir = data_dir::character_dir(data_root, &final_id)?;
+    debug_assert_eq!(char_dir, reserved_dir);
 
     // 阶段 3：落盘（仅在校验通过后）。
     if let Some(bytes) = png_bytes {
@@ -259,16 +266,35 @@ fn truncate_utf8_bytes(s: &mut String, max_bytes: usize) {
     s.truncate(end);
 }
 
-/// 目标角色目录已存在时加 `-2`/`-3` 后缀直到空闲，不覆盖既有角色。
-fn resolve_unique_id(data_root: &std::path::Path, base: &str) -> Result<String, AirpError> {
-    let candidate = |id: &str| data_root.join("characters").join(id).exists();
-    if !candidate(base) {
-        return Ok(base.to_string());
+/// Atomically reserve a new character directory. `None` means the ID already exists.
+fn try_reserve_character_dir(
+    data_root: &std::path::Path,
+    id: &str,
+) -> Result<Option<std::path::PathBuf>, AirpError> {
+    let characters_dir = data_root.join("characters");
+    fs::create_dir_all(&characters_dir)?;
+    let dir = characters_dir.join(id);
+    match fs::create_dir(&dir) {
+        Ok(()) => Ok(Some(dir)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(error.into()),
     }
-    for n in 2..u32::MAX {
-        let id = format!("{}-{}", base, n);
-        if !candidate(&id) {
-            return Ok(id);
+}
+
+/// Atomically reserve the first free derived ID, adding `-2`/`-3` suffixes as needed.
+fn resolve_unique_id(
+    data_root: &std::path::Path,
+    base: &str,
+) -> Result<(String, std::path::PathBuf), AirpError> {
+    for n in 1..u32::MAX {
+        let id = if n == 1 {
+            base.to_string()
+        } else {
+            format!("{}-{}", base, n)
+        };
+        CharacterId::new(&id)?;
+        if let Some(dir) = try_reserve_character_dir(data_root, &id)? {
+            return Ok((id, dir));
         }
     }
     Err(AirpError::BadRequest("角色 id 重名后缀耗尽".to_string()))
@@ -300,7 +326,13 @@ pub(in crate::daemon) async fn reextract_character_assets(
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id_str)
         .map_err(|e| AirpError::BadRequest(format!("非法 character_id: {}", e)))?;
-    let char_dir = data_dir::character_dir(&state.data_root, cid.as_str())?;
+    let char_dir = data_dir::character_dir_path(&state.data_root, &cid);
+    if !char_dir.is_dir() {
+        return Err(AirpError::NotFound(format!(
+            "character {} does not exist",
+            cid
+        )));
+    }
 
     let json_str = if char_dir.join("card").join("raw.json").exists() {
         let raw = fs::read_to_string(char_dir.join("card").join("raw.json"))?;
@@ -354,6 +386,19 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
     // ── card/greetings/ ──
     match data_dir::char_greetings_dir(data_root, character_id) {
         Ok(greet_dir) => {
+            match fs::read_dir(&greet_dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            if let Err(e) = fs::remove_file(&path) {
+                                tracing::warn!(err = %e, path = %path.display(), "CF-7: 清理旧 greeting 失败");
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(err = %e, character_id, "CF-7: 读取 greetings/ 目录失败"),
+            }
             if let Some(ref fm) = card.data.first_mes {
                 let path = greet_dir.join("00.md");
                 if let Err(e) = fs::write(&path, fm) {
@@ -371,6 +416,12 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
     }
 
     // ── world/lorebook.json ──
+    let lb_path = data_dir::char_world_lorebook_path(data_root, character_id);
+    if let Err(error) = fs::remove_file(&lb_path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(err = %error, path = %lb_path.display(), "CF-7: 清理旧 lorebook 失败");
+        }
+    }
     if let Some(ref cb) = card.data.character_book {
         let (lorebook, report) = crate::orchestrator::normalize_worldbook(cb);
         if let Some(reason) = report.replacement_error() {
@@ -387,7 +438,6 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
         } else {
             match serde_json::to_string_pretty(&lorebook) {
                 Ok(lb_json) => {
-                    let lb_path = data_dir::char_world_lorebook_path(data_root, character_id);
                     if let Err(e) = data_dir::char_world_dir(data_root, character_id) {
                         tracing::warn!(err = %e, "CF-7: 创建 world/ 目录失败");
                         return;
@@ -793,6 +843,170 @@ mod tests {
             .path()
             .join("characters/alice-test/card/raw.json")
             .exists());
+    }
+
+    #[test]
+    fn explicit_character_id_import_rejects_overwrite() {
+        let data_root = tempfile::tempdir().unwrap();
+        let first = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {"name": "First"}
+        })
+        .to_string();
+        let second = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {"name": "Second"}
+        })
+        .to_string();
+
+        import_card_to_disk(data_root.path(), Some("stable-id"), None, Some(first), None).unwrap();
+        let result = import_card_to_disk(
+            data_root.path(),
+            Some("stable-id"),
+            None,
+            Some(second),
+            None,
+        );
+
+        assert!(
+            matches!(result, Err(AirpError::BadRequest(message)) if message.contains("already exists"))
+        );
+        let stored =
+            fs::read_to_string(data_root.path().join("characters/stable-id/card.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&stored).unwrap()["data"]["name"],
+            "First"
+        );
+    }
+
+    #[test]
+    fn concurrent_derived_imports_reserve_distinct_ids() {
+        let data_root = tempfile::tempdir().unwrap();
+        let root = std::sync::Arc::new(data_root.path().to_path_buf());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {"name": "Concurrent Card"}
+        })
+        .to_string();
+
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let root = std::sync::Arc::clone(&root);
+                let barrier = std::sync::Arc::clone(&barrier);
+                let json = json.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    import_card_to_disk(root.as_path(), None, None, Some(json), None)
+                        .unwrap()
+                        .0
+                })
+            })
+            .collect();
+        let mut ids: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        ids.sort();
+
+        assert_eq!(ids, ["Concurrent_Card", "Concurrent_Card-2"]);
+        for id in ids {
+            assert!(root.join("characters").join(id).join("card.json").exists());
+        }
+    }
+
+    #[test]
+    fn reextract_removes_stale_greetings_and_lorebook() {
+        let data_root = tempfile::tempdir().unwrap();
+        let initial = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {
+                "name": "Assets",
+                "first_mes": "hello",
+                "alternate_greetings": ["alt one", "alt two"],
+                "character_book": {
+                    "entries": [{"keys": ["old"], "content": "old lore"}]
+                }
+            }
+        })
+        .to_string();
+        extract_card_assets(data_root.path(), "assets", &initial);
+        let character_dir = data_root.path().join("characters/assets");
+        assert!(character_dir.join("card/greetings/00.md").exists());
+        assert!(character_dir.join("card/greetings/02.md").exists());
+        assert!(character_dir.join("world/lorebook.json").exists());
+
+        let reduced = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {"name": "Assets"}
+        })
+        .to_string();
+        extract_card_assets(data_root.path(), "assets", &reduced);
+
+        assert_eq!(
+            fs::read_dir(character_dir.join("card/greetings"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(!character_dir.join("world/lorebook.json").exists());
+    }
+
+    #[test]
+    fn png_import_is_readable_through_shared_card_contract() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let data_root = tempfile::tempdir().unwrap();
+        let json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {"name": "PNG Import"}
+        })
+        .to_string();
+        let encoded_card = STANDARD.encode(json.as_bytes());
+        let mut chunk = b"chara\0".to_vec();
+        chunk.extend_from_slice(encoded_card.as_bytes());
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        png.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
+        png.extend_from_slice(b"tEXt");
+        png.extend_from_slice(&chunk);
+        png.extend_from_slice(&[0; 4]);
+        png.extend_from_slice(&0u32.to_be_bytes());
+        png.extend_from_slice(b"IEND");
+        png.extend_from_slice(&[0; 4]);
+
+        import_card_to_disk(
+            data_root.path(),
+            Some("png-import"),
+            None,
+            None,
+            Some(STANDARD.encode(png)),
+        )
+        .unwrap();
+        let character_id = CharacterId::new("png-import").unwrap();
+        let card = data_dir::get_character_card(data_root.path(), &character_id).unwrap();
+        assert_eq!(card["data"]["name"], "PNG Import");
+    }
+
+    #[tokio::test]
+    async fn reextract_missing_character_does_not_create_directories() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+
+        let (state, _tmp) = make_state_for_http_test();
+        let missing_dir = state.data_root.join("characters/missing-reextract");
+        let response = crate::daemon::create_router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/characters/missing-reextract/reextract")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        assert!(!missing_dir.exists());
     }
 
     /// 三参数全 None → BadRequest "必须提供 ... 之一"

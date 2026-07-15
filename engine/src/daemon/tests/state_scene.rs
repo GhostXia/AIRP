@@ -9,6 +9,24 @@ use super::*;
 // M_LS-3 tests
 
 #[tokio::test]
+async fn missing_avatar_does_not_create_character_directories() {
+    let (state, _tmp) = make_state_no_key();
+    let missing_dir = state.data_root.join("characters").join("missing-avatar");
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/missing-avatar/avatar")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(!missing_dir.exists());
+}
+
+#[tokio::test]
 async fn test_mls3_state_404_when_no_live_json() {
     let (state, _tmp) = make_state_no_key();
     let app = create_router(state);

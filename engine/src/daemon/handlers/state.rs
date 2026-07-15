@@ -28,10 +28,7 @@ pub(in crate::daemon) async fn get_character_avatar(
         Ok(id) => id,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
-    let char_dir = match data_dir::character_dir(&state.data_root, char_id.as_str()) {
-        Ok(d) => d,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
+    let char_dir = data_dir::character_dir_path(&state.data_root, &char_id);
     let png_path = char_dir.join("card.png");
     match fs::read(&png_path) {
         Ok(bytes) => ([(header::CONTENT_TYPE, "image/png")], bytes).into_response(),
