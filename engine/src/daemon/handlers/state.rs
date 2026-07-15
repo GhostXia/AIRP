@@ -95,10 +95,8 @@ pub(in crate::daemon) async fn get_character_state_history(
 
     let entries: Vec<serde_json::Value> = text
         .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect::<Vec<_>>()
-        .into_iter()
         .rev()
+        .filter_map(|line| serde_json::from_str(line).ok())
         .take(limit)
         .collect();
 

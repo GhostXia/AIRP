@@ -331,3 +331,41 @@ async fn test_ls5_history_limit_param() {
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0]["state"]["n"], 10);
 }
+
+#[tokio::test]
+async fn test_ls5_history_limit_counts_valid_entries_from_tail() {
+    let (state, _tmp) = make_state_no_key();
+    let state_dir = crate::data_dir::char_state_dir(&state.data_root, "carol");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let history_path = crate::data_dir::char_state_history_path(&state.data_root, "carol");
+    std::fs::write(
+        &history_path,
+        concat!(
+            "{\"state\":{\"n\":1}}\n",
+            "not-json\n",
+            "{\"state\":{\"n\":2}}\n",
+            "also-not-json\n",
+            "{\"state\":{\"n\":3}}\n"
+        ),
+    )
+    .unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/carol/state/history?limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["state"]["n"], 3);
+    assert_eq!(entries[1]["state"]["n"], 2);
+}
