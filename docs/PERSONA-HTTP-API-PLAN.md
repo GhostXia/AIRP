@@ -26,7 +26,7 @@ Advanced Persona lifecycle work remains outside this stable HTTP/pipeline slice.
 | `DELETE` | `/v1/users/:user_id/personas/:persona_id` | none | `204` |
 | `POST` | `/v1/users/:user_id/personas/:persona_id/bindings` | `BindPersonaRequest` | `200` updated `Persona` |
 | `DELETE` | `/v1/users/:user_id/personas/:persona_id/bindings` | `character_id` and optional `session_id` query | `200` updated `Persona` |
-| `GET` | `/v1/users/:user_id/persona/effective` | `character_id` and optional `session_id` query | `200` effective `persona`, `source`, and both scope owners |
+| `GET` | `/v1/users/:user_id/persona/effective` | `character_id` and optional `session_id` query | `200` effective `persona`, `source`, and `bindings.character_persona_id` / `bindings.session_persona_id` |
 
 Create request:
 
@@ -127,8 +127,9 @@ empty `user_profile.name`; the WebUI uses this convention.
 
 `GET /v1/users/:user_id/persona/effective` resolves binding → default and
 returns `source=session_binding|character_binding|default` plus independent
-`character_persona_id` and `session_persona_id` owners. The two owner fields,
-not only the winning Persona, drive the corresponding bind/unbind controls.
+`bindings.character_persona_id` and `bindings.session_persona_id` owners. The
+two nested owner fields, not only the winning Persona, drive the corresponding
+bind/unbind controls.
 
 WebUI selection uses an empty internal value for "automatic": it always sends
 the current `user_id` and omits `persona_id`, allowing the pipeline to resolve

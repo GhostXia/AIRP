@@ -56,9 +56,9 @@ node webui/serve.js
 
 - 角色列表、avatar、JSON/PNG 内容导入；WebUI 永不发送 `card_path`；
 - Preset 选择与 JSON 导入；
-- 多 Persona 列表、创建、编辑、删除，以及「自动（跟随绑定/默认）」和显式选择；
+- 多 Persona 列表、创建、编辑、基础删除，以及「自动（跟随绑定/默认）」和显式选择；
 - effective Persona 来源/双 scope owner 展示、角色/session 绑定与解绑、聊天请求按自动/显式省略或发送 `persona_id`；
-- 完整 Preset 生命周期、统一有效配置摘要和 Persona drift/history 等高级生命周期仍待 P1 完成；
+- 带确认/可恢复语义的生产级删除、完整 Preset 生命周期、统一有效配置摘要和 Persona drift/history 等高级生命周期仍待 P1 完成；
 - state live/history、worldbook 与 decompose 工作台。
 
 ### Session、聊天与 Agent

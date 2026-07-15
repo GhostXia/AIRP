@@ -110,7 +110,7 @@ cargo run -p airp-core -- run --message "hello"
 | GET | `/v1/presets/:preset_id` | 预设详情 |
 | POST | `/v1/presets/import` | 校验并导入预设 |
 | GET/PUT | `/v1/users/:user_id/persona` | legacy 默认 Persona |
-| GET | `/v1/users/:user_id/persona/effective` | binding→default 生效 Persona、来源与双 scope owner |
+| GET | `/v1/users/:user_id/persona/effective` | binding→default 生效 Persona、来源与 `bindings.character_persona_id` / `bindings.session_persona_id` |
 | GET/POST | `/v1/users/:user_id/personas` | 多 Persona 列表/创建 |
 | GET/PUT/DELETE | `/v1/users/:user_id/personas/:persona_id` | 多 Persona CRUD |
 | POST/DELETE | `/v1/users/:user_id/personas/:persona_id/bindings` | 角色/session 绑定 |
@@ -158,7 +158,7 @@ cargo fmt --all -- --check
 cargo clippy -p airp-core --lib --tests --locked -- -D warnings
 ```
 
-`main@fb523b8` 的 GitHub run `29426587813` 中 Rust workspace、UI and WebUI、Production topology、CodeRabbit 全绿。PR #180 的相关本地证据包括 workspace fmt/build/严格 Clippy/tests、Persona/Worldbook 回归、16 个 WebUI 生产工具测试和 2 个 subagent 不变式通过；这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+`main@fb523b8` 的 GitHub run `29426587813` 中 Rust workspace、UI and WebUI、Production topology 全绿，PR #180 的[独立 CodeRabbit 审计](https://github.com/GhostXia/AIRP/pull/180#issuecomment-4980586721)也通过。相关本地证据包括 workspace fmt/build/严格 Clippy/tests、Persona/Worldbook 回归、16 个 WebUI 生产工具测试和 2 个 subagent 不变式通过；这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 

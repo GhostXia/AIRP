@@ -104,7 +104,7 @@ npm run test -- --run
 
 `.github/workflows/pr-gate.yml` 自动执行 Rust workspace、UI/WebUI 和 production topology 门禁。`.github/workflows/manual-build.yml` 负责手动 Windows desktop package。审计 bot 是合并前阻塞门禁：本地全绿只允许开 PR，必须等待审计通过并由人工 review 决定是否合并。
 
-`main@fb523b8` 的 [PR gate run 29426587813](https://github.com/GhostXia/AIRP/actions/runs/29426587813) 中 Rust workspace、UI and WebUI、Production topology、CodeRabbit 均通过。该结果只证明这个 commit，不自动证明后续改动。
+`main@fb523b8` 的 [PR gate run 29426587813](https://github.com/GhostXia/AIRP/actions/runs/29426587813) 中 Rust workspace、UI and WebUI、Production topology 均通过；PR #180 的[独立 CodeRabbit 审计](https://github.com/GhostXia/AIRP/pull/180#issuecomment-4980586721)也通过。该证据只证明这个 commit，不自动证明后续改动。
 
 ## 关键文档
 
