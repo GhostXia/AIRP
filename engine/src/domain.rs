@@ -728,6 +728,29 @@ pub struct PersonaBinding {
     pub session_id: Option<String>,
 }
 
+/// Persona 生效来源（binding→default 解析后的命中 scope）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectivePersonaSource {
+    SessionBinding,
+    CharacterBinding,
+    Default,
+}
+
+/// `PersonaService::resolve_effective_persona` 的结构化结果。
+///
+/// `effective_persona_id` 是最终生效的 Persona id（session scope 优先，回退
+/// character scope，再回退 default——但 default 不在此处填入，由调用方补 `get_default`）。
+/// `session_persona_id` / `character_persona_id` 分别是两个 scope 的 owner，供
+/// HTTP 端点与 UI 按钮分别决策；没有对应绑定时为 `None`。
+#[derive(Debug, Clone)]
+pub struct EffectivePersonaResolution {
+    pub effective_persona_id: Option<String>,
+    pub source: EffectivePersonaSource,
+    pub session_persona_id: Option<String>,
+    pub character_persona_id: Option<String>,
+}
+
 /// Persona 原子写入时的冲突 payload：返回当前服务端 revision，让客户端 merge 后重试。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersonaRevisionConflict {
@@ -961,19 +984,42 @@ impl PersonaService {
     /// 查找该用户下绑定到指定角色/会话的 Persona id。
     /// 优先匹配带 session_id 的精确绑定，再匹配全会话通用绑定；同一优先级
     /// 命中多份 Persona 时 fail closed，避免按文件名字典序静默切换 Persona。
+    ///
+    /// 复用 `resolve_effective_persona` 的结构化解析，保证与 HTTP effective 端点
+    /// 使用同一真相。
     pub fn find_for_character(
         &self,
         user_id: &UserId,
         character_id: &str,
         session_id: Option<&str>,
     ) -> Result<Option<String>, AirpError> {
+        Ok(self
+            .resolve_effective_persona(user_id, character_id, session_id)?
+            .effective_persona_id)
+    }
+
+    /// 结构化解析某角色/会话下的 Persona binding ownership。
+    ///
+    /// 返回 effective owner（session scope 优先，回退 character scope）、
+    /// 命中 scope、以及两个 scope 各自的 owner（供 HTTP 端点与 UI 分别决策按钮）。
+    /// 任一 scope 有多个 owner 时 fail closed，返回 `AirpError::BadRequest`，
+    /// 响应指出冲突 scope 与 Persona IDs；不挑文件名最靠前者，不静默回退 default。
+    ///
+    /// `find_for_character` 与 chat pipeline 的 binding 层都复用本方法，保证
+    /// HTTP 可观察结果与聊天激活使用同一真相。
+    pub fn resolve_effective_persona(
+        &self,
+        user_id: &UserId,
+        character_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<EffectivePersonaResolution, AirpError> {
         CharacterId::new(character_id)?;
         if let Some(session_id) = session_id {
             SessionId::parse(session_id)?;
         }
         let ids = self.list(user_id)?;
-        let mut exact_matches = Vec::new();
-        let mut generic_matches = Vec::new();
+        let mut session_owners: Vec<String> = Vec::new();
+        let mut character_owners: Vec<String> = Vec::new();
         for pid in &ids {
             let persona = match self.get(user_id, pid, "User") {
                 Ok(persona) => persona,
@@ -985,30 +1031,47 @@ impl PersonaService {
                 if b.character_id != character_id {
                     continue;
                 }
-                match (&b.session_id, session_id) {
-                    (Some(b_sid), Some(q_sid)) if b_sid == q_sid => {
-                        exact_matches.push(pid.clone());
+                match &b.session_id {
+                    Some(b_sid) if Some(b_sid.as_str()) == session_id => {
+                        session_owners.push(pid.clone());
                     }
-                    (None, _) => {
-                        generic_matches.push(pid.clone());
+                    None => {
+                        character_owners.push(pid.clone());
                     }
                     _ => {}
                 }
             }
         }
-        let matches = if exact_matches.is_empty() {
-            generic_matches
-        } else {
-            exact_matches
-        };
-        match matches.as_slice() {
-            [] => Ok(None),
-            [persona_id] => Ok(Some(persona_id.clone())),
-            _ => Err(AirpError::BadRequest(format!(
-                "ambiguous persona binding for character {character_id}: {}",
-                matches.join(", ")
-            ))),
+        // 任一 scope 多 owner → fail closed。
+        if session_owners.len() > 1 {
+            return Err(AirpError::BadRequest(format!(
+                "ambiguous session-scoped persona binding for character {character_id} session {}: {}",
+                session_id.unwrap_or(""),
+                session_owners.join(", ")
+            )));
         }
+        if character_owners.len() > 1 {
+            return Err(AirpError::BadRequest(format!(
+                "ambiguous character-scoped persona binding for character {character_id}: {}",
+                character_owners.join(", ")
+            )));
+        }
+        let session_owner = session_owners.into_iter().next();
+        let character_owner = character_owners.into_iter().next();
+        // effective = session scope 优先，回退 character scope。
+        let (effective, source) = match &session_owner {
+            Some(pid) => (Some(pid.clone()), EffectivePersonaSource::SessionBinding),
+            None => match &character_owner {
+                Some(pid) => (Some(pid.clone()), EffectivePersonaSource::CharacterBinding),
+                None => (None, EffectivePersonaSource::Default),
+            },
+        };
+        Ok(EffectivePersonaResolution {
+            effective_persona_id: effective,
+            source,
+            session_persona_id: session_owner,
+            character_persona_id: character_owner,
+        })
     }
 
     // ── 内部────────────────────────────────────────────────────────────────────

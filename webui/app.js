@@ -1,6 +1,84 @@
 // AIRP Engine Console — backend validation harness (M1)
 // Zero-build native JS.  plan: docs/WEBUI-BACKEND-PLAN.md
 
+// ── #114 C-PR1：纯函数（供 Node 测试，不依赖 DOM）──────────────────────────────
+//
+// persona 选择持久化、按钮决策与 payload 装配提取为纯函数，IIFE 内部与
+// webui/tests/*.test.mjs 共用同一真相。
+
+/**
+ * 描述 effective persona hint 文本。
+ * @param {string} selectedPersonaId - '' 表示「自动」
+ * @param {object|null} effectivePersona - effective 端点结果
+ * @returns {string}
+ */
+function describeEffectiveHint(selectedPersonaId, effectivePersona) {
+  if (selectedPersonaId !== '') {
+    return '已选择：' + selectedPersonaId + '（explicit）';
+  }
+  if (!effectivePersona || !effectivePersona.persona) return '—';
+  const name = effectivePersona.persona.name || 'User';
+  switch (effectivePersona.source) {
+    case 'session_binding': return '生效：' + name + '（来自会话绑定）';
+    case 'character_binding': return '生效：' + name + '（来自角色绑定）';
+    case 'default': return '生效：' + name + '（默认）';
+    default: return '—';
+  }
+}
+
+/**
+ * 计算某 scope 的绑定按钮动作。
+ * @param {object} state - { selectedPersonaId, selectedChar, selectedSess, effectivePersona }
+ * @param {'character'|'session'} scope
+ * @returns {{kind:'bind'|'unbind', personaId:string, label:string}|null}
+ *   null = 按钮 disabled。bind = POST 绑定 selected Persona；
+ *   unbind = DELETE owner 的该 scope 绑定（owner=selected 时即解绑自己）。
+ */
+function buildBindAction(state, scope) {
+  const { selectedPersonaId, selectedChar, selectedSess, effectivePersona } = state;
+  // 无 character、下拉为「自动」、或 effective 未查询/冲突 → disabled
+  if (!selectedChar) return null;
+  if (selectedPersonaId === '') return null;
+  if (!effectivePersona) return null;
+  if (scope === 'session' && !selectedSess) return null;
+  const owner = scope === 'character'
+    ? (effectivePersona.bindings && effectivePersona.bindings.character_persona_id)
+    : (effectivePersona.bindings && effectivePersona.bindings.session_persona_id);
+  if (!owner) {
+    // scope 无 owner → 绑定 selected Persona
+    return { kind: 'bind', personaId: selectedPersonaId, label: scope === 'character' ? '绑定到角色' : '绑定到会话' };
+  }
+  if (owner === selectedPersonaId) {
+    // owner = selected → 解绑自己
+    return { kind: 'unbind', personaId: selectedPersonaId, label: scope === 'character' ? '解绑角色' : '解绑会话' };
+  }
+  // owner ≠ selected → 先解绑旧 owner
+  return { kind: 'unbind', personaId: owner, label: '先解绑 ' + owner };
+}
+
+/**
+ * 构造 chat/agent payload 的 persona 字段。
+ * @param {string} userId
+ * @param {string} selectedPersonaId - '' 表示「自动」
+ * @returns {{user_id: string, persona_id?: string}}
+ */
+function buildPersonaPayload(userId, selectedPersonaId) {
+  const payload = { user_id: userId };
+  if (selectedPersonaId) payload.persona_id = selectedPersonaId;
+  return payload;
+}
+
+// 浏览器环境挂 window.AIRP 供复用；Node 环境通过 module.exports 导出供测试。
+if (typeof window !== 'undefined') {
+  window.AIRP = window.AIRP || {};
+  window.AIRP.describeEffectiveHint = describeEffectiveHint;
+  window.AIRP.buildBindAction = buildBindAction;
+  window.AIRP.buildPersonaPayload = buildPersonaPayload;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { describeEffectiveHint, buildBindAction, buildPersonaPayload };
+}
+
 (function () {
   'use strict';
 
@@ -70,6 +148,9 @@
   const personaNewId = $('#persona-new-id');
   const btnCreatePersona = $('#btn-create-persona');
   const btnCancelCreatePersona = $('#btn-cancel-create-persona');
+  const btnBindCharacter = $('#btn-bind-character');
+  const btnBindSession = $('#btn-bind-session');
+  const personaEffectiveHint = $('#persona-effective-hint');
   const presetSelect = $('#preset-select');
   const presetImportFile = $('#preset-import-file');
   const presetImportId = $('#preset-import-id');
@@ -85,6 +166,10 @@
   let activePersona = { name: 'User', description: '', variables: {} };
   let selectedPersonaId = 'default';
   let creatingPersona = false;
+  // #114 C-PR1：缓存最近一次 effective 端点结果，供按钮决策与 hint 展示。
+  // null = 尚未查询或查询失败；effectivePersona.source ∈
+  // 'session_binding' | 'character_binding' | 'default'。
+  let effectivePersona = null;
   let abortController = null;   // for chat SSE
   let agentAbort = null;        // for agent run SSE — 二次点击先 abort 前一个，防事件交错竞态（issue #43/#44 D）
   const HISTORY_PAGE_SIZE = 50;
@@ -440,7 +525,9 @@
       localStorage.setItem('airp_preset_id', presetId);
       localStorage.setItem('airp_character_id', selectedChar || '');
       localStorage.setItem('airp_session_id', selectedSess || '');
-      localStorage.setItem('airp_persona_id', selectedPersonaId || 'default');
+      // #114 C-PR1：「自动」= 空字符串，需与"未设置"区分。明确存空字符串表示
+      // 用户主动选了「自动」；未设置（null）由启动恢复用 getItem(...) === null 判定。
+      localStorage.setItem('airp_persona_id', selectedPersonaId);
     } catch {}
   }
 
@@ -468,13 +555,19 @@
     }
     const ids = Array.isArray(r.data) ? r.data.map(String) : [];
     personaSelect.textContent = '';
+    // #114 C-PR1：顶部插入「自动」option，value="" 表示跟随绑定/默认。
+    const autoOption = document.createElement('option');
+    autoOption.value = '';
+    autoOption.textContent = '自动（跟随绑定/默认）';
+    personaSelect.appendChild(autoOption);
     ids.forEach(id => {
       const option = document.createElement('option');
       option.value = id;
       option.textContent = id;
       personaSelect.appendChild(option);
     });
-    if (ids.includes(selectedPersonaId)) {
+    // selectedPersonaId === '' = 「自动」；必须是 ids 中的合法 id 或空串才保留。
+    if (selectedPersonaId === '' || ids.includes(selectedPersonaId)) {
       personaSelect.value = selectedPersonaId;
     } else if (ids.includes('default')) {
       selectedPersonaId = 'default';
@@ -491,6 +584,11 @@
   async function refreshPersona() {
     if (!personaUserId) return;
     if (creatingPersona) return;
+    // #114 C-PR1：「自动」选中时表单填 effective persona（只读），不直接读某个 pid。
+    if (selectedPersonaId === '') {
+      await refreshEffectivePersona();
+      return;
+    }
     const userId = personaUserId.value.trim() || 'default';
     const pid = selectedPersonaId || 'default';
     personaStatus.textContent = '加载中…';
@@ -509,9 +607,115 @@
     personaName.value = activePersona.name;
     personaDescription.value = activePersona.description;
     personaVariables.value = JSON.stringify(activePersona.variables, null, 2);
+    personaName.readOnly = false;
+    personaDescription.readOnly = false;
+    personaVariables.readOnly = false;
     personaStatus.textContent = pid + ' · revision ' + personaRevision + (persona.updated_at ? ' · ' + persona.updated_at : '');
     rememberWorkspace();
   }
+
+  // ── #114 C-PR1：Effective Persona 查询 + 绑定按钮 ─────────────────────────
+  //
+  // 查询当前角色/会话下生效的 Persona（binding→default 两层，explicit 层由下拉
+  // 本地判定）。结果驱动 hint 展示与绑定/解绑按钮状态。纯函数 describeEffectiveSource
+  // 与 buildBindAction 已提取到模块顶层，供 Node 测试。
+
+  async function refreshEffectivePersona() {
+    if (!personaUserId) return;
+    if (!selectedChar) {
+      effectivePersona = null;
+      if (personaEffectiveHint) personaEffectiveHint.textContent = '请先选择角色';
+      updateBindingButtons();
+      return;
+    }
+    const userId = personaUserId.value.trim() || 'default';
+    let url = '/v1/users/' + encodeURIComponent(userId) + '/persona/effective?character_id=' + encodeURIComponent(selectedChar);
+    if (selectedSess) url += '&session_id=' + encodeURIComponent(selectedSess);
+    const r = await api('GET', url);
+    if (!r.ok) {
+      effectivePersona = null;
+      if (personaEffectiveHint) personaEffectiveHint.textContent = '生效查询失败: ' + formatError(r.data, r.text);
+      updateBindingButtons();
+      return;
+    }
+    effectivePersona = r.data || null;
+    // 「自动」选中时把 effective persona 填入表单（只读）。
+    if (selectedPersonaId === '' && effectivePersona && effectivePersona.persona) {
+      const p = effectivePersona.persona;
+      personaRevision = Number(p.revision) || 0;
+      activePersona = {
+        name: p.name || 'User',
+        description: p.description || '',
+        variables: p.variables && typeof p.variables === 'object' ? p.variables : {},
+      };
+      personaName.value = activePersona.name;
+      personaDescription.value = activePersona.description;
+      personaVariables.value = JSON.stringify(activePersona.variables, null, 2);
+      personaName.readOnly = true;
+      personaDescription.readOnly = true;
+      personaVariables.readOnly = true;
+      personaStatus.textContent = '生效: ' + (p.id || 'default') + ' · revision ' + personaRevision + '（只读，如需编辑请先选择具体 Persona）';
+    }
+    if (personaEffectiveHint) {
+      personaEffectiveHint.textContent = describeEffectiveHint(selectedPersonaId, effectivePersona);
+    }
+    updateBindingButtons();
+  }
+
+  function updateBindingButtons() {
+    const state = {
+      selectedPersonaId,
+      selectedChar,
+      selectedSess,
+      effectivePersona,
+    };
+    const charAction = buildBindAction(state, 'character');
+    const sessAction = buildBindAction(state, 'session');
+    if (btnBindCharacter) {
+      btnBindCharacter.disabled = !charAction;
+      btnBindCharacter.textContent = charAction ? charAction.label : '绑定到角色';
+    }
+    if (btnBindSession) {
+      btnBindSession.disabled = !sessAction;
+      btnBindSession.textContent = sessAction ? sessAction.label : '绑定到会话';
+    }
+  }
+
+  async function performBind(scope) {
+    if (!personaUserId) return;
+    const state = {
+      selectedPersonaId,
+      selectedChar,
+      selectedSess,
+      effectivePersona,
+    };
+    const action = buildBindAction(state, scope);
+    if (!action) return;
+    const userId = personaUserId.value.trim() || 'default';
+    const personaId = action.personaId;
+    if (action.kind === 'bind') {
+      const body = { character_id: selectedChar };
+      if (scope === 'session' && selectedSess) body.session_id = selectedSess;
+      const r = await api('POST', '/v1/users/' + encodeURIComponent(userId) + '/personas/' + encodeURIComponent(personaId) + '/bindings', body);
+      if (!r.ok) {
+        if (personaEffectiveHint) personaEffectiveHint.textContent = '绑定失败: ' + formatError(r.data, r.text);
+        return;
+      }
+    } else {
+      // unbind：DELETE owner 的该 scope 绑定
+      let url = '/v1/users/' + encodeURIComponent(userId) + '/personas/' + encodeURIComponent(personaId) + '/bindings?character_id=' + encodeURIComponent(selectedChar);
+      if (scope === 'session' && selectedSess) url += '&session_id=' + encodeURIComponent(selectedSess);
+      const r = await api('DELETE', url);
+      if (!r.ok) {
+        if (personaEffectiveHint) personaEffectiveHint.textContent = '解绑失败: ' + formatError(r.data, r.text);
+        return;
+      }
+    }
+    await refreshEffectivePersona();
+  }
+
+  if (btnBindCharacter) btnBindCharacter.addEventListener('click', () => performBind('character'));
+  if (btnBindSession) btnBindSession.addEventListener('click', () => performBind('session'));
 
   async function savePersona(event) {
     event.preventDefault();
@@ -682,9 +886,17 @@
   if (personaForm) personaForm.addEventListener('submit', savePersona);
   if (btnLoadPersona) btnLoadPersona.addEventListener('click', async () => { await refreshPersonaList(); await refreshPersona(); });
   if (personaSelect) personaSelect.addEventListener('change', () => {
-    selectedPersonaId = personaSelect.value || 'default';
+    // #114 C-PR1：保留空串 = 「自动」；不再用 || 'default' 抹掉。
+    selectedPersonaId = personaSelect.value;
     updateDeleteButtonState();
-    refreshPersona();
+    if (selectedPersonaId === '') {
+      // 「自动」：表单只读填 effective persona，由 refreshEffectivePersona 驱动。
+      refreshEffectivePersona();
+    } else {
+      refreshPersona();
+    }
+    rememberWorkspace();
+    updateBindingButtons();
   });
   if (btnNewPersona) btnNewPersona.addEventListener('click', enterCreateMode);
   if (btnDeletePersona) btnDeletePersona.addEventListener('click', deletePersona);
@@ -918,12 +1130,16 @@
     // 自动加载 history：切角色后立即拉取该角色已有 chat history，
     // 避免用户每次都需手点 History 按钮（PLAN §9 P1 "交互收口"）。
     loadHistory();
+    // #114 C-PR1：切角色后刷新 effective persona + 绑定按钮。
+    refreshEffectivePersona();
     rememberWorkspace();
   });
   sessSelect.addEventListener('change', () => {
     selectedSess = sessSelect.value;
     clearChatView();
     loadHistory();
+    // #114 C-PR1：切会话后刷新 effective persona + 绑定按钮。
+    refreshEffectivePersona();
     rememberWorkspace();
   });
 
@@ -1158,11 +1374,15 @@
   }
 
   function buildChatPayload(text) {
+    // #114 C-PR1：始终传 user_id；selectedPersonaId 非空才传 persona_id（explicit），
+    // 空串（「自动」）不传 persona_id，让 engine pipeline 按 binding→default 解析。
+    // user_profile 改为非权威 override（空 name/空 variables），避免 WebUI 缓存的
+    // 表单值覆盖 engine 刚解析出的 Persona；未来显式 override 需独立 UI 与合同。
+    const userId = personaUserId.value.trim() || 'default';
     return buildSessionPayload({
-      user_profile: {
-        name: activePersona.name || 'User',
-        variables: activePersona.variables || {},
-      },
+      user_id: userId,
+      ...(selectedPersonaId ? { persona_id: selectedPersonaId } : {}),
+      user_profile: { name: '', variables: {} },
       preset_id: presetSelect.value || undefined,
       message: text,
     });
@@ -2436,7 +2656,10 @@
     if (personaUserId) personaUserId.value = localStorage.getItem('airp_user_id') || 'default';
     selectedChar = localStorage.getItem('airp_character_id') || '';
     selectedSess = localStorage.getItem('airp_session_id') || '';
-    selectedPersonaId = localStorage.getItem('airp_persona_id') || 'default';
+    // #114 C-PR1：null = 从未设置过（首次访问），回退 'default'；
+    // 空字符串 = 用户主动选了「自动」，保留空字符串。
+    const savedPersonaId = localStorage.getItem('airp_persona_id');
+    selectedPersonaId = savedPersonaId === null ? 'default' : savedPersonaId;
   } catch {}
 
   // ── auto-connect on load ─────────────────────────────────────────────────
