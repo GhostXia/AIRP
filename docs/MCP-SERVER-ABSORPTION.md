@@ -1,11 +1,11 @@
 # MCP-Server 能力融入 engine（agent 内化 catalog）
 
-> **路线 catalog，不是交付清单**：38/12/19 是源 AIRP-MCP-Server 的枚举，不是本仓完成度或必须逐项复制的目标。2026-07-15 本仓默认 Agent registry 为 19 个**已注册**工具，并由 `GET /v1/agent/tools` 公开实际目录；文中“约 20 个内部等价”仍只是历史 domain/data 能力估算。新增能力应先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露。当前状态见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，文档层级见 [README.md](README.md)。
+> **路线 catalog，不是交付清单**：38/12/19 是源 AIRP-MCP-Server 的枚举，不是本仓完成度或必须逐项复制的目标。2026-07-15 本仓默认 Agent registry 为 21 个**已注册**工具，并由 `GET /v1/agent/tools` 公开实际目录；文中“约 20 个内部等价”仍只是历史 domain/data 能力估算。新增能力应先进入共享 domain service，再由 HTTP/Agent/MCP adapter 暴露。当前状态见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，文档层级见 [README.md](README.md)。
 > 用户 2026-07-02 定调：**把 AIRP-MCP-Server 的能力融进我们的 agent（engine），不是当外部 MCP 后端连**。MCP-Server 绝大部分内容是我们未来发展的**刚需**。
 > 来源库存：AIRP-MCP-Server 暴露 38 工具、12 工作流提示词、19 资源与一套数据模型；这些数字只描述来源仓能力面，是 AIRP 需求审计的候选输入，不是本仓的数据层或 Agent 工具权威规格。
 > 架构落点：经 AIRP 需求、domain、安全与测试复核后，采纳的自有 RP 能力以内建 shared service/Agent tool 方式进入 engine，而不是把独立 MCP-Server 当外部 runtime 后端。
 > 来源基线：AIRP-MCP-Server 的 `src/mcp/{mod.rs,tools.rs,prompts.rs,resources.rs}`（本 catalog 从源码枚举）。
-> 最后校准：2026-07-15（19-tool registry 不变；工具与 HTTP handler 已按职责拆分，外部合同不变）
+> 最后校准：2026-07-15（21-tool registry；新增 `get_preset`/`update_preset`，其余工具与 HTTP handler 仍按职责拆分）
 
 ---
 
@@ -43,7 +43,7 @@
 | 导出 | `export_context_bundle` | ✅ 已注册；固定安全目录、稳定块在前、live state 在后、UTF-8 安全截断 | 保持 generic Markdown 与隔离 subagent 不变式 |
 | 插件 | `plugin_kv_get/set` `plugin_jsonl_append/read` `plugin_blob_write/read` | 🆕 | 候选需求；须先完成 #163 的扩展身份、配额、沙箱与迁移合同 |
 
-> 汇总（历史 catalog）：约 20 个指底层 domain/data 等价能力的估算，并非当前已注册工具数；当前 registry 的确切数是 19。未注册的 analyze/decompose 族、preset 正则/artifact、plugin 零 schema 仍须按当前源码与真实工作流重新核验后再决定是否暴露。
+> 汇总（历史 catalog）：约 20 个指底层 domain/data 等价能力的估算，并非当前已注册工具数；当前 registry 的确切数是 21。未注册的 analyze/decompose 族、preset 正则/artifact、plugin 零 schema 仍须按当前源码与真实工作流重新核验后再决定是否暴露。
 
 ## 2. 工作流提示词（12）→ engine agent 工作流/技能
 

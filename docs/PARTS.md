@@ -38,7 +38,7 @@
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
 | AgentLoop | C `agent/mod.rs`（M_AGENT-1） | ✅ | 双 provider structured planner + 有界 plan-act-observe + finalizer + SSE 事件 |
-| Tool trait + ToolRegistry | C `agent/tools.rs` | ✅ | 19 个 built-in 工具；capability/allowlist/confirm 门控；HTTP runtime catalog |
+| Tool trait + ToolRegistry | C `agent/tools.rs` | ✅ | 21 个 built-in 工具；含 `get_preset`/`update_preset`；capability/allowlist/confirm 门控；HTTP runtime catalog |
 | loop=纯净 subagent 编排器 | C `AGENT_BACKEND_PLAN.md:130-149` | 📖 | 每步派生全新纯净上下文 subagent，协调器噪声不进 subagent。设计思路 |
 | 四道闸计量基建 | C `quota.rs` + `tokio JoinSet` | ✅ | 预算计量 + 子任务收敛现成 |
 | SSE 多步事件协议 | C `/v1/agent/run`：plan/tool_call/tool_result/delta/done | ✅ | 已定义 |

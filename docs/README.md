@@ -1,6 +1,6 @@
 # AIRP 文档地图
 
-> 最后校准：2026-07-15，`main@1f3e6ed`
+> 最后校准：2026-07-15，`main@c54428e`
 >
 > 当前事实入口：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)
 

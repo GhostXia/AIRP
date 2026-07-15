@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-15 的 `main@1f3e6ed` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-15 的 `main@c54428e` 复核。
 
 ## 当前能力
 
@@ -17,6 +17,8 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
+- preset 规范化导入报告、原始输入 sidecar、版本目录与原子 current 指针；
+- 显式 `PromptAssemblyTrace` 数据模型骨架；调用方负责提供 provenance；
 - settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；development CORS 保留 WebUI/Tauri 精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
 
 ## 必须诚实区分的边界
@@ -25,7 +27,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 当前 planner 使用 OpenAI/Anthropic 原生 structured tool call，在 step/token/wall-clock/cancel 边界内进行 plan-act-observe；工具执行受 capability、allowlist 和 destructive confirm 三层门控。finalizer 只接收整理后的 observation，并保持角色平面不含协调器噪声。它仍不是完整 MCP/skills/plugin runtime。
 
-### 默认 Agent 工具恰为 19 个
+### 默认 Agent 工具恰为 21 个
 
 | 分组 | 工具 |
 |---|---|
@@ -36,8 +38,9 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 | 世界书 | `get_lorebook`、`update_lorebook`、`apply_lorebook`、`merge_lorebooks` |
 | 记忆/导出 | `seal_volume`、`export_context_bundle` |
 | Analysis | `enhance_analysis`、`apply_enhanced_analysis` |
+| Preset | `get_preset`、`update_preset` |
 
-目录由 `GET /v1/agent/tools` 从实际 registry 生成。底层模块或 HTTP route 存在仍不等于 Agent registry 已注册；Persona 已有 domain/HTTP/pipeline，但没有 Persona Agent tool；plugin data、MCP client/server、skills、完整记忆 runtime 也尚未实现。
+目录由 `GET /v1/agent/tools` 从实际 registry 生成。`update_preset` 支持 dry-run，实际写入受 destructive confirmation 门控。底层模块或 HTTP route 存在仍不等于 Agent registry 已注册；Persona 已有 domain/HTTP/pipeline，但没有 Persona Agent tool；plugin data、MCP client/server、skills、完整记忆 runtime 也尚未实现。
 
 ### Worldbook 与 state 都是部分实现
 
@@ -133,7 +136,7 @@ cargo run -p airp-core -- run --message "hello"
 | `src/adapter.rs` | provider 请求与 SSE 解析 |
 | `src/chat_pipeline.rs` | prepare/stream/finalize 单回合管线 |
 | `src/agent/` | loop 骨架、Tool trait/registry、内置工具 |
-| `src/agent/tools/` | 按 session/character、state/lorebook、volume/context、analysis 拆分的工具 family |
+| `src/agent/tools/` | 按 session/character、state/lorebook、volume/context、analysis、preset 拆分的工具 family |
 | `src/daemon/` | axum routes、auth、rate limit 与 adapter facade |
 | `src/daemon/handlers/` | 按资源职责拆分的 HTTP handler family |
 | `src/daemon/tests/` | catalog/chat/settings/persona/security/session/state 等 route 合同测试 |
@@ -154,7 +157,7 @@ cargo fmt --all -- --check
 cargo clippy -p airp-core --lib --tests --locked -- -D warnings
 ```
 
-`main@1f3e6ed` 的 GitHub run `29390516900` 中 Rust workspace、UI and WebUI、Production topology 全绿。PR #169 的 engine lib 快照为 568 passed / 1 ignored；该数字只属于该 commit，后续修改必须重跑并记录新结果。
+`main@c54428e` 的 GitHub run `29408478974` 中 Rust workspace、UI and WebUI、Production topology、CodeRabbit 全绿。PR #177 的相关本地证据包括 fmt、严格 Clippy、3 个 trace 单测和 2 个 subagent 不变式测试通过；这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 

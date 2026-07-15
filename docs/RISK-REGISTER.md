@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-15 at `main@1f3e6ed`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
+> Last reviewed: 2026-07-15 at `main@c54428e`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 

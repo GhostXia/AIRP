@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-12
 >
-> 实现基线：PR #124/#125；2026-07-15 在 `main@1f3e6ed` 复核，合同未被后续 handler/session 身份拆分改变。
+> 实现基线：PR #124/#125；2026-07-15 在 `main@c54428e` 复核，合同未被后续 handler/session 身份拆分或 PR #174–#177 的 Preset/trace 改动改变。
 >
 > 关联 issue：#37（durable message-id contract）、#122（WebUI 窗口化）。
 >

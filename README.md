@@ -7,7 +7,7 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端。产品采用“无头 en
 - **ui**（`airp-ui`）：保留的 Tauri + Vue 桌面客户端，近期开发与打包验收暂停；
 - **protocol**（`airp-state-protocol`）：UI/engine 共用的线协议类型。
 
-当前权威实现基线是 `main@1f3e6ed` / PR #169，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
+当前权威实现基线是 `main@c54428e` / PR #177，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
 
 ## 项目原则
 
@@ -42,8 +42,10 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。旧 `gatewa
 已交付的主要地基包括：
 
 - OpenAI-compatible / Anthropic 流式对话和有界 structured tool-call Agent loop；
-- 默认 19-tool registry、运行时 catalog 和 engine capability 门；
+- 默认 21-tool registry、运行时 catalog 和 engine capability 门；
 - 角色卡、命名 session、durable history、state、基础 worldbook、preset、scene、volume 与 analysis/decompose；
+- Preset 规范化导入报告、原始输入 sidecar、版本目录与原子 current 指针，以及确认门控的 `get_preset` / `update_preset` Agent tools；
+- 显式 `PromptAssemblyTrace` 数据模型骨架；调用方必须提供 provenance，不再从渲染文本反向猜测来源；
 - 多 Persona 存储/HTTP/pipeline 以及 WebUI CRUD；
 - worldbook v2 `constant` 语义与 v3 shared normalizer/导入诊断；
 - WebUI 基础 RP 闭环、history window 与 rollback-by-ID；
@@ -102,7 +104,7 @@ npm run test -- --run
 
 `.github/workflows/pr-gate.yml` 自动执行 Rust workspace、UI/WebUI 和 production topology 门禁。`.github/workflows/manual-build.yml` 负责手动 Windows desktop package。审计 bot 是合并前阻塞门禁：本地全绿只允许开 PR，必须等待审计通过并由人工 review 决定是否合并。
 
-`main@1f3e6ed` 的 [PR gate run 29390516900](https://github.com/GhostXia/AIRP/actions/runs/29390516900) 中 Rust workspace、UI and WebUI、Production topology 均通过。该结果只证明这个 commit，不自动证明后续改动。
+`main@c54428e` 的 [PR gate run 29408478974](https://github.com/GhostXia/AIRP/actions/runs/29408478974) 中 Rust workspace、UI and WebUI、Production topology、CodeRabbit 均通过。该结果只证明这个 commit，不自动证明后续改动。
 
 ## 关键文档
 
