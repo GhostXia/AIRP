@@ -14,13 +14,14 @@
 //! - `DELETE /v1/users/:user_id/personas/:persona_id` — 删除指定 Persona
 //! - `POST   /v1/users/:user_id/personas/:persona_id/bindings` — 添加绑定（幂等）
 //! - `DELETE /v1/users/:user_id/personas/:persona_id/bindings` — 移除绑定（幂等）
+//! - `GET    /v1/users/:user_id/persona/effective` — 解析 binding→default，返回生效 Persona + 来源 + 两 scope owner
 
 use crate::daemon::DaemonState;
 use crate::domain::{Persona, PersonaBinding, PersonaService};
 use crate::error::AirpError;
 use crate::types::UserId;
 use axum::{http::StatusCode, Json};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -262,4 +263,75 @@ pub(in crate::daemon) struct UnbindPersonaQuery {
     /// 可选：要移除绑定的 session ID；省略表示移除该角色的全会话通用绑定。
     #[serde(default)]
     session_id: Option<String>,
+}
+
+// ── Effective Persona（#114 C-PR1，WebUI 闭环支持）──────────────────────────────
+//
+// 解析 binding→default 两层，返回生效 Persona + 来源 + 两个 scope 的 owner。
+// explicit 层由 WebUI 本地根据下拉选择判定，不进端点。复用
+// `PersonaService::resolve_effective_persona`，与 chat_pipeline 的 binding 层
+// 使用同一真相。路径用 singular `/persona/effective`，避免把 `effective` 占作
+// `/personas/:persona_id` 的保留 ID。
+
+/// GET /v1/users/:user_id/persona/effective?character_id=X&session_id=Y —
+/// 返回该角色/会话下生效的 Persona（binding 命中或 default）+ 来源 + 两 scope owner。
+pub(in crate::daemon) async fn get_effective_persona_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    query: Result<
+        axum::extract::Query<EffectivePersonaQuery>,
+        axum::extract::rejection::QueryRejection,
+    >,
+) -> Result<Json<EffectivePersonaResponse>, AirpError> {
+    let axum::extract::Query(query) =
+        query.map_err(|error| AirpError::BadRequest(error.to_string()))?;
+    let uid = UserId::new(user_id)?;
+    let service = PersonaService::new(&state.data_root);
+    let resolution = service.resolve_effective_persona(
+        &uid,
+        &query.character_id,
+        query.session_id.as_deref(),
+    )?;
+    let persona = match &resolution.effective_persona_id {
+        Some(pid) => service.get(&uid, pid, "User")?,
+        None => service.get_default(&uid, "User")?,
+    };
+    Ok(Json(EffectivePersonaResponse {
+        persona,
+        source: resolution.source,
+        bindings: EffectivePersonaBindings {
+            character_persona_id: resolution.character_persona_id,
+            session_persona_id: resolution.session_persona_id,
+        },
+    }))
+}
+
+/// GET .../persona/effective 的 query 参数。
+#[derive(Debug, Deserialize)]
+pub(in crate::daemon) struct EffectivePersonaQuery {
+    /// 必填：角色 ID。
+    character_id: String,
+    /// 可选：会话 ID；省略时只查角色级通用绑定。
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+/// GET .../persona/effective 的响应体。
+#[derive(Debug, Serialize)]
+pub(in crate::daemon) struct EffectivePersonaResponse {
+    /// 生效的 Persona。
+    persona: Persona,
+    /// 来源：`session_binding` / `character_binding` / `default`。
+    source: crate::domain::EffectivePersonaSource,
+    /// 两个 scope 各自的 owner，供 UI 按钮分别决策。
+    bindings: EffectivePersonaBindings,
+}
+
+/// Effective 端点响应中的 binding scope owner 集合。
+#[derive(Debug, Serialize)]
+pub(in crate::daemon) struct EffectivePersonaBindings {
+    /// character scope 的 owner Persona id；无绑定时为 null。
+    character_persona_id: Option<String>,
+    /// session scope 的 owner Persona id；无 session_id 参数或无绑定时为 null。
+    session_persona_id: Option<String>,
 }

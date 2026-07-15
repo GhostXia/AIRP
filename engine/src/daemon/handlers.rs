@@ -31,8 +31,9 @@ pub(super) use lorebook::{get_character_lorebook, update_character_lorebook};
 pub(super) use models::list_models;
 pub(super) use personas::{
     bind_persona_endpoint, create_persona_endpoint, delete_persona_multi_endpoint,
-    get_persona_endpoint, get_persona_multi_endpoint, list_personas_endpoint,
-    unbind_persona_endpoint, update_persona_endpoint, update_persona_multi_endpoint,
+    get_effective_persona_endpoint, get_persona_endpoint, get_persona_multi_endpoint,
+    list_personas_endpoint, unbind_persona_endpoint, update_persona_endpoint,
+    update_persona_multi_endpoint,
 };
 pub(super) use presets::{get_preset_endpoint, import_preset_endpoint, list_presets_endpoint};
 pub(super) use scenes::{

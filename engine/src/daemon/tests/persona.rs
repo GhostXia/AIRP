@@ -554,3 +554,298 @@ async fn bind_rejects_invalid_character_id() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+// ── Effective Persona 端点（#114 C-PR1）──────────────────────────────────────────
+
+/// 辅助：创建一个非 default Persona 并返回其 revision。
+fn create_test_persona(
+    state: &std::sync::Arc<crate::daemon::DaemonState>,
+    uid: &crate::types::UserId,
+    pid: &str,
+    name: &str,
+) -> u64 {
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    let saved = service
+        .save(
+            uid,
+            pid,
+            0,
+            crate::domain::Persona {
+                schema: crate::domain::Persona::SCHEMA,
+                revision: 0,
+                updated_at: String::new(),
+                name: name.to_string(),
+                description: String::new(),
+                variables: std::collections::HashMap::new(),
+                id: pid.to_string(),
+                bindings: Vec::new(),
+            },
+        )
+        .unwrap();
+    saved.revision
+}
+
+#[tokio::test]
+async fn effective_persona_no_binding_returns_default() {
+    let (state, _tmp) = make_state_with_key(None);
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/v1/users/u/persona/effective?character_id=char-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source"], "default");
+    assert_eq!(json["persona"]["id"], "default");
+    assert!(json["bindings"]["character_persona_id"].is_null());
+    assert!(json["bindings"]["session_persona_id"].is_null());
+}
+
+#[tokio::test]
+async fn effective_persona_character_binding_returns_character_source() {
+    let (state, _tmp) = make_state_with_key(None);
+    let uid = crate::types::UserId::new("u").unwrap();
+    create_test_persona(&state, &uid, "writer", "Writer");
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    service
+        .bind(
+            &uid,
+            "writer",
+            crate::domain::PersonaBinding {
+                character_id: "char-a".to_string(),
+                session_id: None,
+            },
+        )
+        .unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/v1/users/u/persona/effective?character_id=char-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source"], "character_binding");
+    assert_eq!(json["persona"]["id"], "writer");
+    assert_eq!(json["bindings"]["character_persona_id"], "writer");
+    assert!(json["bindings"]["session_persona_id"].is_null());
+}
+
+#[tokio::test]
+async fn effective_persona_session_binding_overrides_character_binding() {
+    let (state, _tmp) = make_state_with_key(None);
+    let uid = crate::types::UserId::new("u").unwrap();
+    create_test_persona(&state, &uid, "writer", "Writer");
+    create_test_persona(&state, &uid, "roleplay", "Roleplay");
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    service
+        .bind(
+            &uid,
+            "writer",
+            crate::domain::PersonaBinding {
+                character_id: "char-a".to_string(),
+                session_id: None,
+            },
+        )
+        .unwrap();
+    // SessionId 必须是合法 UUID（见 types::SessionId::parse）
+    let session_uuid = "11111111-1111-4111-8111-111111111111";
+    service
+        .bind(
+            &uid,
+            "roleplay",
+            crate::domain::PersonaBinding {
+                character_id: "char-a".to_string(),
+                session_id: Some(session_uuid.to_string()),
+            },
+        )
+        .unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/users/u/persona/effective?character_id=char-a&session_id={session_uuid}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source"], "session_binding");
+    assert_eq!(json["persona"]["id"], "roleplay");
+    assert_eq!(json["bindings"]["character_persona_id"], "writer");
+    assert_eq!(json["bindings"]["session_persona_id"], "roleplay");
+}
+
+#[tokio::test]
+async fn effective_persona_nonexistent_character_no_binding_returns_default() {
+    let (state, _tmp) = make_state_with_key(None);
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/v1/users/u/persona/effective?character_id=ghost-char")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source"], "default");
+    assert_eq!(json["persona"]["id"], "default");
+}
+
+#[tokio::test]
+async fn effective_persona_no_session_id_returns_character_binding() {
+    let (state, _tmp) = make_state_with_key(None);
+    let uid = crate::types::UserId::new("u").unwrap();
+    create_test_persona(&state, &uid, "writer", "Writer");
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    service
+        .bind(
+            &uid,
+            "writer",
+            crate::domain::PersonaBinding {
+                character_id: "char-a".to_string(),
+                session_id: None,
+            },
+        )
+        .unwrap();
+    // 同时有一个 session-scoped 绑定，但请求不带 session_id 时不应命中
+    let session_uuid = "11111111-1111-4111-8111-111111111111";
+    service
+        .bind(
+            &uid,
+            "writer",
+            crate::domain::PersonaBinding {
+                character_id: "char-a".to_string(),
+                session_id: Some(session_uuid.to_string()),
+            },
+        )
+        .unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/v1/users/u/persona/effective?character_id=char-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source"], "character_binding");
+    assert_eq!(json["bindings"]["character_persona_id"], "writer");
+    assert!(json["bindings"]["session_persona_id"].is_null());
+}
+
+#[tokio::test]
+async fn effective_persona_multiple_character_scope_owners_returns_400() {
+    let (state, _tmp) = make_state_with_key(None);
+    let uid = crate::types::UserId::new("u").unwrap();
+    create_test_persona(&state, &uid, "p1", "Persona 1");
+    create_test_persona(&state, &uid, "p2", "Persona 2");
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    service
+        .bind(
+            &uid,
+            "p1",
+            crate::domain::PersonaBinding {
+                character_id: "char-a".to_string(),
+                session_id: None,
+            },
+        )
+        .unwrap();
+    let mut p2 = service.get(&uid, "p2", "User").unwrap();
+    p2.bindings.push(crate::domain::PersonaBinding {
+        character_id: "char-a".to_string(),
+        session_id: None,
+    });
+    let p2_path = crate::data_dir::user_persona_multi_path(&state.data_root, &uid, "p2").unwrap();
+    std::fs::write(p2_path, serde_json::to_vec_pretty(&p2).unwrap()).unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/v1/users/u/persona/effective?character_id=char-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn effective_persona_multiple_session_scope_owners_returns_400() {
+    let (state, _tmp) = make_state_with_key(None);
+    let uid = crate::types::UserId::new("u").unwrap();
+    create_test_persona(&state, &uid, "p1", "Persona 1");
+    create_test_persona(&state, &uid, "p2", "Persona 2");
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    let session_uuid = "11111111-1111-4111-8111-111111111111";
+    service
+        .bind(
+            &uid,
+            "p1",
+            crate::domain::PersonaBinding {
+                character_id: "char-a".to_string(),
+                session_id: Some(session_uuid.to_string()),
+            },
+        )
+        .unwrap();
+    let mut p2 = service.get(&uid, "p2", "User").unwrap();
+    p2.bindings.push(crate::domain::PersonaBinding {
+        character_id: "char-a".to_string(),
+        session_id: Some(session_uuid.to_string()),
+    });
+    let p2_path = crate::data_dir::user_persona_multi_path(&state.data_root, &uid, "p2").unwrap();
+    std::fs::write(p2_path, serde_json::to_vec_pretty(&p2).unwrap()).unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/users/u/persona/effective?character_id=char-a&session_id={session_uuid}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

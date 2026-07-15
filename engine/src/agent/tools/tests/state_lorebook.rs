@@ -161,9 +161,14 @@ async fn update_lorebook_normalizes_sillytavern_form() {
     assert_eq!(entries[1]["constant"], false);
     assert_eq!(entries[1]["secondary_keys"], serde_json::json!(["night"]));
 
+    // v4: selective 是 canonical 字段（顶层），不再在 extensions
+    assert_eq!(entries[1]["selective"], true);
     // ST-only fields preserved in extensions
     let ext = &entries[1]["extensions"];
-    assert_eq!(ext["selective"], true);
+    assert!(
+        ext.get("selective").is_none(),
+        "selective must not be in extensions after v4 normalization"
+    );
     assert_eq!(ext["position"], "before_char");
 }
 
@@ -182,6 +187,7 @@ async fn update_lorebook_rejects_all_invalid_entries_without_overwrite() {
             constant: None,
             comment: None,
             secondary_keys: Vec::new(),
+            selective: false,
             case_sensitive: None,
             extensions: None,
         }],
@@ -228,6 +234,7 @@ async fn lorebook_apply_and_merge_are_readonly() {
                 constant: None,
                 comment: None,
                 secondary_keys: Vec::new(),
+                selective: false,
                 case_sensitive: None,
                 extensions: None,
             }],
@@ -243,6 +250,7 @@ async fn lorebook_apply_and_merge_are_readonly() {
                     constant: None,
                     comment: None,
                     secondary_keys: Vec::new(),
+                    selective: false,
                     case_sensitive: None,
                     extensions: None,
                 },
@@ -254,6 +262,7 @@ async fn lorebook_apply_and_merge_are_readonly() {
                     constant: None,
                     comment: None,
                     secondary_keys: Vec::new(),
+                    selective: false,
                     case_sensitive: None,
                     extensions: None,
                 },
