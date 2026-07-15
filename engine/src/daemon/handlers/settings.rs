@@ -31,6 +31,8 @@ pub(in crate::daemon) async fn update_settings(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(patch): Json<crate::config::PartialAppConfig>,
 ) -> Result<Json<SettingsView>, AirpError> {
+    // 1) Production access-key 门控：只读锁，不修改任何字段，保证拒绝时不留下
+    //    部分更新（与 #165 SET-01 的原子性边界一致）。
     if patch
         .access_api_key
         .as_deref()
@@ -47,7 +49,18 @@ pub(in crate::daemon) async fn update_settings(
             ));
         }
     }
-    // 1) 合并到内存
+
+    // 2) 任何可失败的 patch 校验都必须在拿写锁前完成。否则无效 patch 会先留下
+    //    provider/endpoint/api_key/model 等字段的内存更新，而 `settings.json`
+    //    因 `?` 提前返回不会落盘，形成内存/磁盘不一致（#165 SET-01）。
+    //    当前唯一可失败的可观察校验是 `volume.validate()`；其它字段在反序列化
+    //    时已完成类型校验，应用阶段是确定性无失败路径。
+    if let Some(v) = patch.volume.as_ref() {
+        v.validate()
+            .map_err(|e| AirpError::BadRequest(format!("VolumeConfig 不合法: {}", e)))?;
+    }
+
+    // 3) 合并到内存：写锁内只做确定性字段替换，不再有 `?` 失败路径。
     let merged = {
         let mut cfg = state
             .config
@@ -65,9 +78,8 @@ pub(in crate::daemon) async fn update_settings(
         if let Some(m) = patch.model.filter(|s| !s.is_empty()) {
             cfg.model = m;
         }
+        // volume 已在步骤 2 校验；此处只做确定性赋值，不再重复 validate。
         if let Some(v) = patch.volume {
-            v.validate()
-                .map_err(|e| AirpError::BadRequest(format!("VolumeConfig 不合法: {}", e)))?;
             cfg.volume_config = v;
         }
         if let Some(k) = patch.access_api_key.filter(|s| !s.is_empty()) {
@@ -82,7 +94,7 @@ pub(in crate::daemon) async fn update_settings(
         cfg.clone()
     };
 
-    // 2) Persist only non-secret settings. Provider and daemon credentials are
+    // 4) Persist only non-secret settings. Provider and daemon credentials are
     // runtime-only and must be supplied through AIRP_* env or this request.
     let on_disk = serde_json::json!({
         "provider": merged.provider,
