@@ -489,23 +489,24 @@ impl PresetService {
         preset_id: &crate::types::PresetId,
         source_json: &str,
     ) -> Result<(TavernPreset, PresetImportReport), AirpError> {
-        let cleaned = crate::data_dir::strip_utf8_bom(source_json).to_owned();
-        let source: Value = serde_json::from_str(&cleaned)
+        let cleaned = crate::data_dir::strip_utf8_bom(source_json);
+        let source: Value = serde_json::from_str(cleaned)
             .map_err(|e| AirpError::BadRequest(format!("preset JSON 无效: {}", e)))?;
         let (canonical, report) = normalize_preset(&source);
         if let Some(reason) = report.replacement_error() {
             return Err(AirpError::BadRequest(format!("preset 无法导入: {reason}")));
         }
         let canonical_bytes = serde_json::to_vec_pretty(&canonical)?;
-        let raw_bytes = serde_json::to_vec_pretty(&source)?;
+        let raw_bytes = cleaned.as_bytes();
 
         let _guard = PRESET_WRITE_LOCK
             .lock()
             .expect("preset write lock poisoned");
         let dir = self.data_root.join("presets").join(preset_id.as_str());
         std::fs::create_dir_all(&dir)?;
+        // canonical preset.json 是发布提交点：raw sidecar 失败时不替换运行时数据。
+        crate::data_dir::replace_file(&dir.join("raw.json"), raw_bytes)?;
         crate::data_dir::replace_file(&dir.join("preset.json"), &canonical_bytes)?;
-        crate::data_dir::replace_file(&dir.join("raw.json"), &raw_bytes)?;
         Ok((canonical, report))
     }
 }

@@ -14,14 +14,7 @@ async fn preset_tools_roundtrip_with_confirmation() {
     crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
     let reg = default_registry(state.clone());
 
-    let preset_json = serde_json::json!({
-        "prompts": [
-            {"identifier": "main", "name": "Main", "role": "system", "content": "hi", "enabled": true}
-        ],
-        "prompt_order": [{"character_id": "main", "order": ["main"]}],
-        "temperature": 0.8
-    })
-    .to_string();
+    let preset_json = "\u{feff}{\n  \"prompts\": [\n    {\"identifier\": \"main\", \"name\": \"Main\", \"role\": \"system\", \"content\": \"hi\", \"enabled\": true}\n  ],\n  \"prompt_order\": [{\"character_id\": \"main\", \"order\": [\"main\"]}],\n  \"temperature\": 0.8,\n  \"note\": \"first\",\n  \"note\": \"second\"\n}";
 
     // dry-run：返回 import_report，不写盘
     let update = reg.get("update_preset").unwrap();
@@ -70,6 +63,10 @@ async fn preset_tools_roundtrip_with_confirmation() {
     let preset_dir = state.data_root.join("presets").join("test-preset");
     assert!(preset_dir.join("preset.json").exists());
     assert!(preset_dir.join("raw.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(preset_dir.join("raw.json")).unwrap(),
+        crate::data_dir::strip_utf8_bom(preset_json)
+    );
 
     // get_preset 能读到 canonical prompts
     let get = reg.get("get_preset").unwrap();

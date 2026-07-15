@@ -94,8 +94,8 @@ impl Tool for UpdatePresetTool {
 
             if !confirm {
                 // dry-run：只做归一化 + 诊断，不写盘。对齐 update_lorebook 的 dry-run 语义。
-                let cleaned = crate::data_dir::strip_utf8_bom(source_json).to_owned();
-                let source: Value = serde_json::from_str(&cleaned)
+                let cleaned = crate::data_dir::strip_utf8_bom(source_json);
+                let source: Value = serde_json::from_str(cleaned)
                     .map_err(|e| AirpError::BadRequest(format!("preset JSON 无效: {}", e)))?;
                 let (_, report) = crate::orchestrator::preset::normalize_preset(&source);
                 if let Some(reason) = report.replacement_error() {
