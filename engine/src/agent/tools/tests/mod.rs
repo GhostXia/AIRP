@@ -25,6 +25,7 @@ mod character;
 mod registry;
 mod session;
 mod state_lorebook;
+mod state_preset;
 mod volume_context;
 
 /// 最小可运行 DaemonState，data_root 指向临时目录（照 chat_pipeline/tests 模板）。
