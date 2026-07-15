@@ -147,14 +147,17 @@
 data/
 ├── settings.json
 ├── characters/{id}/
-│   ├── card/ (card.json + card.png)   greetings/   world/lorebook.json
-│   ├── state/ (live.json + history.jsonl + schema.json)
-│   ├── gating/checkpoints.json        analysis/    memory/(current.md/index.md/volumes/vol_*.md)
-│   └── sessions/{sid}/ (meta.json + chat.jsonl + memory/)
+│   ├── card/ (card.json + card.png + raw.json + greetings/)
+│   ├── world/ (lorebook.json + extra/)
+│   ├── state/   gating/   analysis/   memory/
+│   └── sessions/{sid}/ (history/chat_log.jsonl + chat_log_meta.json + memory/)
 ├── presets/{id}/ (preset.json + preset.md + regex/*.json + analysis/)
 ├── scenes/{id}/ (scene.json + memory/ + world/lorebook.json)
-└── plugins/{name}/ (任意文件树，零 schema)
+├── users/{id}/ (personas + per-user characters/presets/scenes)
+└── exports/context-bundles/{character_id}/
 ```
+
+这里的 `{id}` 是稳定、经过路径校验的标识，不是可变的显示名。角色自带世界书使用结构化的 `world/lorebook.json`；根级 `world.md`/`items.md` 与 legacy `worldbooks/` 不属于新布局。完整归属、兼容和迁移约定以 [`data/README.md`](../data/README.md) 为准。
 
 ---
 
