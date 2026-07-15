@@ -131,6 +131,18 @@
 - “提升为角色默认世界书”“另存为自建素材”都是显式、可审计操作。
 - 导出完整存档必须包含 meta、history、memory、state、worldbooks、revisions 和 provenance，不依赖原机器的素材库。
 
+### 5.5 用户兜底与派生角色卡
+
+session 必须同时承担“可自由魔改的工作分支”和“可恢复的用户兜底”两种职责：
+
+- 创建 session 时写入不可变的初始快照（revision 1），包含当时采用的角色设定和全部世界书；后续编辑只能产生新 revision，不能原地覆盖初始快照。
+- 原始角色卡、角色默认世界书、第三方素材库和 session 初始快照互相独立。用户即使大范围改坏本局设定，也能恢复到开局时的原始版本。
+- revision 必须记录内容 hash；恢复、提升为角色默认、另存为素材和导出均为显式操作，禁止自动回写来源。
+- 用户可从任意 `{session_id}` 直接生成一张新的派生角色卡。导出器以该 session 选定 revision 的角色设定、世界书工作副本及必要 provenance 为输入，不再追踪或读取原机器上的外部世界书。
+- 派生角色卡默认不包含聊天记录、记忆和游玩状态；这些内容属于完整 AIRP session 存档。若用户要备份或复盘整个世界线，应导出包含 meta、history、memory、state、worldbooks、revisions 和 provenance 的 session 存档包。
+
+因此产品语义是：原始角色卡是模板，session 是可恢复、可魔改的工作分支，从 session 导出的派生角色卡则是一张新的独立模板。
+
 ## 6. 兼容与迁移
 
 - 当前命名 session 已隔离 `history/` 与 `memory/`，但角色 state 和默认世界书仍在角色级目录；因此当前实现尚不是完整自包含存档。
@@ -144,6 +156,6 @@
 2. **完整 session 边界**：新增 `meta.json`，把 state 和剧情进度隔离到命名 session，并为旧调用保留兼容路径。
 3. **第三方世界书素材库**：实现安全导入、raw/normalized/provenance、稳定 ID 和查询 API。
 4. **session 世界书物化**：创建 manifest、复制全部启用世界书、让 prompt 装配只读 session 副本。
-5. **revision 与产品操作**：记录每轮 revision，支持复制开局、刷新来源、比较差异、提升默认和完整导出/恢复。
+5. **revision 与产品操作**：保留不可变初始快照并记录每轮 revision，支持恢复原始版本、复制开局、刷新来源、比较差异、提升默认、从 session 导出派生角色卡，以及完整 session 导出/恢复。
 
 后续 PR 不得把本文的目标目录写成当前已交付能力；每完成一阶段，再同步 `CURRENT-BASELINE.md` 和相应验收证据。
