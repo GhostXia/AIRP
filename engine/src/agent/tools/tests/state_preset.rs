@@ -44,6 +44,12 @@ async fn preset_tools_roundtrip_with_confirmation() {
         .join("test-preset")
         .join("preset.json")
         .exists());
+    assert!(!state
+        .data_root
+        .join("presets")
+        .join("test-preset")
+        .join("current")
+        .exists());
 
     // confirm=true：写盘 canonical + raw
     let written = update
@@ -61,10 +67,13 @@ async fn preset_tools_roundtrip_with_confirmation() {
 
     // canonical preset.json + raw.json 都落盘
     let preset_dir = state.data_root.join("presets").join("test-preset");
-    assert!(preset_dir.join("preset.json").exists());
-    assert!(preset_dir.join("raw.json").exists());
+    assert!(preset_dir.join("current").exists());
+    assert!(crate::data_dir::preset_json_path(&state.data_root, "test-preset").exists());
+    let raw_path = crate::data_dir::preset_json_path(&state.data_root, "test-preset")
+        .with_file_name("raw.json");
+    assert!(raw_path.exists());
     assert_eq!(
-        std::fs::read_to_string(preset_dir.join("raw.json")).unwrap(),
+        std::fs::read_to_string(raw_path).unwrap(),
         crate::data_dir::strip_utf8_bom(preset_json)
     );
 
@@ -184,4 +193,8 @@ async fn update_preset_allows_overwrite() {
         .await
         .unwrap();
     assert_eq!(current.output["prompts"][0]["identifier"], "v2");
+    let raw_path =
+        crate::data_dir::preset_json_path(&state.data_root, "overwrite").with_file_name("raw.json");
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(raw_path).unwrap()).unwrap();
+    assert_eq!(raw["prompts"][0]["identifier"], "v2");
 }

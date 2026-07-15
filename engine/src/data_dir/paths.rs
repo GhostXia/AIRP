@@ -318,8 +318,29 @@ pub(crate) fn preset_dir(root: &Path, preset_id: &str) -> Result<PathBuf, AirpEr
     Ok(dir)
 }
 
+fn committed_preset_dir(root: &Path, preset_id: &str) -> Option<PathBuf> {
+    let preset_dir = root.join("presets").join(preset_id);
+    let generation = fs::read_to_string(preset_dir.join("current")).ok()?;
+    let generation = generation.trim();
+    if generation.is_empty()
+        || !generation
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return None;
+    }
+    let version_dir = preset_dir.join("versions").join(generation);
+    if version_dir.join("preset.json").is_file() && version_dir.join("raw.json").is_file() {
+        Some(version_dir)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn preset_json_path(root: &Path, preset_id: &str) -> PathBuf {
-    root.join("presets").join(preset_id).join("preset.json")
+    committed_preset_dir(root, preset_id)
+        .unwrap_or_else(|| root.join("presets").join(preset_id))
+        .join("preset.json")
 }
 
 pub(crate) fn legacy_preset_json_path(root: &Path, preset_id: &str) -> PathBuf {

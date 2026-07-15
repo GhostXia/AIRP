@@ -503,10 +503,18 @@ impl PresetService {
             .lock()
             .expect("preset write lock poisoned");
         let dir = self.data_root.join("presets").join(preset_id.as_str());
-        std::fs::create_dir_all(&dir)?;
-        // canonical preset.json 是发布提交点：raw sidecar 失败时不替换运行时数据。
-        crate::data_dir::replace_file(&dir.join("raw.json"), raw_bytes)?;
-        crate::data_dir::replace_file(&dir.join("preset.json"), &canonical_bytes)?;
+        let generation = format!(
+            "{}-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            report.source_hash
+        );
+        let version_dir = dir.join("versions").join(&generation);
+        std::fs::create_dir_all(&version_dir)?;
+        crate::data_dir::replace_file(&version_dir.join("preset.json"), &canonical_bytes)?;
+        crate::data_dir::replace_file(&version_dir.join("raw.json"), raw_bytes)?;
+        // Both immutable files exist before the single atomic pointer switch. Old versions are
+        // retained so readers that resolved the previous pointer can finish safely.
+        crate::data_dir::replace_file(&dir.join("current"), generation.as_bytes())?;
         Ok((canonical, report))
     }
 }
