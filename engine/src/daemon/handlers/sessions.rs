@@ -8,7 +8,7 @@
 //! - `POST   /v1/sessions/:character_id` — 创建新命名会话，返回 session id
 //! - `DELETE /v1/sessions/:character_id/:session_id` — 删除命名会话目录
 
-use super::DaemonState;
+use crate::daemon::DaemonState;
 use crate::domain::ChatService;
 use crate::error::AirpError;
 use crate::types::{CharacterId, SessionId};

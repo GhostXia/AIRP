@@ -7,7 +7,7 @@
 //! - `GET  /v1/settings` — 返回当前运行时配置（api_key 脱敏）
 //! - `POST /v1/settings` — 用 `PartialAppConfig` 合并 + 落盘 `settings.json`
 
-use super::DaemonState;
+use crate::daemon::DaemonState;
 use crate::daemon::SettingsView;
 use crate::error::AirpError;
 use axum::Json;

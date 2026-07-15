@@ -7,7 +7,7 @@
 //! - `POST /v1/agent/run` — 多步 loop 入口（SSE），quota 与 chat_completion 同路径
 //! - `GET  /v1/agent/tools` — 列出内建工具元数据（19 工具，按名字字典序）
 
-use super::DaemonState;
+use crate::daemon::DaemonState;
 use crate::error::AirpError;
 use axum::{response::Sse, Json};
 use std::convert::Infallible;

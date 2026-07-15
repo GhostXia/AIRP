@@ -15,7 +15,7 @@
 //! - `POST   /v1/users/:user_id/personas/:persona_id/bindings` — 添加绑定（幂等）
 //! - `DELETE /v1/users/:user_id/personas/:persona_id/bindings` — 移除绑定（幂等）
 
-use super::DaemonState;
+use crate::daemon::DaemonState;
 use crate::domain::{Persona, PersonaBinding, PersonaService};
 use crate::error::AirpError;
 use crate::types::UserId;
