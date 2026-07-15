@@ -9,10 +9,10 @@
 //! - `POST /v1/chat/regen` — 删除最后一条 assistant 消息以供重新生成
 //! - `POST /v1/chat/completions` — SSE 流式补全（quota 前置检查）
 
-use super::DaemonState;
 use crate::chat_pipeline;
 use crate::chat_store::ChatLog;
 use crate::daemon::types::{ChatCompletionRequest, HistoryQuery, RegenRequest, RollbackRequest};
+use crate::daemon::DaemonState;
 use crate::domain::ChatService;
 use crate::error::AirpError;
 use axum::{response::Sse, Json};

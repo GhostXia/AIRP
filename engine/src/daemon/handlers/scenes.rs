@@ -9,7 +9,7 @@
 //! - `POST   /v1/scenes` — 创建或替换 scene
 //! - `POST   /v1/scenes/:scene_id/characters` — 向已有 scene 添加角色
 
-use super::DaemonState;
+use crate::daemon::DaemonState;
 use crate::data_dir;
 use axum::{
     http::{header, StatusCode},

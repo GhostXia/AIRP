@@ -11,6 +11,7 @@ pub use paths::{
     char_state_dir,
     char_state_history_path,
     character_dir,
+    character_dir_path,
     delete_character,
     ensure_char_analysis_dir,
     ensure_data_dirs,
@@ -610,6 +611,24 @@ mod tests {
         assert_eq!(
             get_character_card(tmp.path(), &character).unwrap()["name"],
             "Contract"
+        );
+    }
+
+    #[test]
+    fn parsed_character_card_contract_falls_back_to_raw_json() {
+        let tmp = tempdir().unwrap();
+        let character = crate::types::CharacterId::new("png-card").unwrap();
+        let card_dir = tmp.path().join("characters").join("png-card").join("card");
+        fs::create_dir_all(&card_dir).unwrap();
+        fs::write(
+            card_dir.join("raw.json"),
+            r#"{"spec":"chara_card_v2","data":{"name":"PNG Card"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_character_card(tmp.path(), &character).unwrap()["data"]["name"],
+            "PNG Card"
         );
     }
 }

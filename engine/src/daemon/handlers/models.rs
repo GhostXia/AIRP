@@ -6,7 +6,7 @@
 //! 端点：
 //! - `GET /v1/models` — 代理上游 provider 的 /models，带 timeout / redirect / 脱敏
 
-use super::DaemonState;
+use crate::daemon::DaemonState;
 use crate::error::AirpError;
 use axum::{
     http::{header, StatusCode},

@@ -8,7 +8,7 @@
 //! - `GET  /v1/presets/:preset_id` — 返回 preset 的 prompts 数组
 //! - `POST /v1/presets/import` — 校验 + 落盘一份 preset JSON
 
-use super::DaemonState;
+use crate::daemon::DaemonState;
 use crate::data_dir;
 use crate::error::AirpError;
 use crate::types::PresetId;
