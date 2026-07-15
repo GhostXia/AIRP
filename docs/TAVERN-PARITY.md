@@ -9,6 +9,7 @@
 ## 第一部分：酒馆功能全集 → 我们的缺口
 
 ### 1. 角色 / 人设
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | 角色卡全字段（desc/personality/scenario/first_mes/mes_example/alt_greetings/creator_notes/system_prompt/post_history_instructions/tags/creator/version/embedded character_book） | ✅ | Core `TavernCardV2` 有全字段 + png_parser 正确解析 |
@@ -20,6 +21,7 @@
 | Expression Images（情绪立绘） | ➖ | 扩展类，后期 |
 
 ### 2. 会话 / 消息
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | Swipes（同一轮多个候选回复，左右切） | 🆕 | RP 招牌功能、粘性高。Core 有 regen 但无 swipe 候选管理 |
@@ -31,13 +33,15 @@
 | Reasoning / thinking 块（思维链显示） | 🔧 | Core `xml_unpacker` 拆 immersive/action/state；reasoning 块显示+折叠需补 |
 
 ### 3. 世界书 / World Info
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
-| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🆕 | AIRP 已交付 `constant`；shared normalization 与其余高级语义仍是主要新建件（见 PARTS.md F） |
+| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🔧 | AIRP 已交付 `constant`、v3 shared normalizer、advisory preservation 与 import diagnostics；其余高级 runtime 语义仍待真实工作流驱动（见 PARTS.md F） |
 | 关键词触发扫描 | 🔧 | AIRP 使用 aho-corasick，并已实现 `enabled && (constant \|\| primary_keyword_match)`；selective/secondary 组合/递归仍缺 |
 | 向量化/RAG 注入 | ➖ | Data Bank，后期 |
 
 ### 4. Prompt / 预设系统
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | 采样参数 + 社区预设 | ✅ | 作建议素材，由 Agent/adapter 适配（见 [PLAN.md](PLAN.md) §4.1） |
@@ -50,12 +54,14 @@
 | Start Reply With / 自定义停止串 / prompt 后处理 | 🔧 | 部分在 adapter |
 
 ### 5. API 连接
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | OpenAI 兼容 / Anthropic | ✅ | Core adapter 双 provider |
 | KoboldAI / Tabby / AI Horde / DreamGen / 本地等多后端 | ➖ | 按需扩 BackendEngine |
 
 ### 6. 内置扩展（酒馆随附，用户高频用）
+
 | 酒馆内置扩展 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | TTS（文字转语音） / STT | 🆕➖ | 后期，走扩展接口 |
@@ -71,6 +77,7 @@
 | Regex（用户可配的输入/输出 find-replace） | 🔧 | Core preset_regex 在，用户级 UI + 全字段需补 |
 
 ### 7. 其他
+
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
 | Data Bank / RAG（文档引用检索） | ➖ | 后期 |
@@ -136,7 +143,8 @@
 | **Regex 脚本**（输入输出 find-replace） | “收发文本转换” | 候选消息格式化 Hook；第三方接入须经过 capability、沙箱与审计 |
 | **Macros**（`{{char}}/{{roll}}`） | "模板变量展开" | **Macro 原语**（装配层展开 + 第三方注册自定义宏） |
 | **Swipes / Branches / Checkpoints** | "多候选 + 对话树分叉" | **Session/State 管理**（agent 编排的会话操作 Tool + 存储分叉） |
-| **Summarize / Vectorization**（内置扩展） | “长会话记忆” | 归入 [PLAN.md](PLAN.md) §4.3 的长期记忆方向；FTS5/vectorization 均未定为当前实现 |
+| **Summarize / volume sealing**（内置扩展） | “长会话压缩” | Engine 已交付 `seal_volume` 与 volume store；自动摘要与产品工作流仍是部分能力 |
+| **Vectorization / RAG**（内置扩展） | “长会话语义检索” | 归入 [PLAN.md](PLAN.md) §4.3 的后续检索/记忆方向，不是当前能力 |
 | **Expression Images / TTS / Image Gen / Web Search**（内置扩展） | "多模态/联网能力" | **Tool / MCP server / Widget**——走扩展接口，agent 按需调 |
 | **Data Bank / RAG** | "文档引用检索" | **检索 Tool + 记忆外部 provider**（Hermes 式，可选） |
 | **Connection Profiles** | "配置整组切换" | 引擎配置项（adapter 层），非 prompt 管线 |

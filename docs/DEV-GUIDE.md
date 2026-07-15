@@ -137,10 +137,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise --locked -- --nocapture
 
-Set-Location ui
+Push-Location ui
 npm ci
 npm run typecheck
 npm run test -- --run
+Pop-Location
 ```
 
 按范围补充：
