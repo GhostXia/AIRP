@@ -78,8 +78,8 @@ pub(in crate::daemon) async fn import_preset_endpoint(
     // 校验 JSON 形状：先解析为宽松 Value，再交给 normalize_preset 做归一化 + 诊断。
     // serde_json::Value 接受任意 JSON；顶层非对象 / prompts 非数组等形状错误由
     // normalize_preset 的 source_error / replacement_error 报告，避免脏文件残留。
-    let cleaned = data_dir::strip_utf8_bom(&req.preset_json).to_owned();
-    let source: serde_json::Value = serde_json::from_str(&cleaned)
+    let cleaned = data_dir::strip_utf8_bom(&req.preset_json);
+    let source: serde_json::Value = serde_json::from_str(cleaned)
         .map_err(|e| AirpError::BadRequest(format!("preset_json 不是有效 JSON: {}", e)))?;
     let (canonical, report) = crate::orchestrator::normalize_preset(&source);
     if let Some(reason) = report.replacement_error() {
@@ -90,9 +90,8 @@ pub(in crate::daemon) async fn import_preset_endpoint(
     // canonical pretty JSON 写盘（runtime 唯一消费形态）。
     let canonical_bytes = serde_json::to_vec_pretty(&canonical)
         .map_err(|e| AirpError::Internal(format!("preset 序列化失败: {}", e)))?;
-    // raw sidecar：原始 source 的 pretty JSON，保留 ST-only 字段供审计/重导入。
-    let raw_bytes = serde_json::to_vec_pretty(&source)
-        .map_err(|e| AirpError::Internal(format!("preset raw sidecar 序列化失败: {}", e)))?;
+    // raw sidecar：保存去 BOM 后的原始文本，不丢失格式或重复键。
+    let raw_bytes = cleaned.as_bytes();
 
     let _guard = PRESET_IMPORT_LOCK
         .get_or_init(|| Mutex::new(()))
@@ -109,8 +108,9 @@ pub(in crate::daemon) async fn import_preset_endpoint(
         )));
     }
     fs::create_dir_all(&dir)?;
+    // canonical preset.json 是发布提交点：raw sidecar 失败时不安装 canonical。
+    data_dir::replace_file(&raw_path, raw_bytes)?;
     data_dir::replace_file(&final_path, &canonical_bytes)?;
-    data_dir::replace_file(&raw_path, &raw_bytes)?;
 
     Ok(Json(ImportPresetResponse {
         preset_id: preset_id.to_string(),
@@ -463,6 +463,20 @@ mod tests {
         assert_eq!(canon["temperature"], 0.7);
     }
 
+    /// raw sidecar 保留去 BOM 后的原始文本，包括空白和重复键。
+    #[tokio::test]
+    async fn import_preset_preserves_raw_source_text() {
+        let preset_json =
+            "\u{feff}{\n  \"prompts\": [],\n  \"note\": \"first\",\n  \"note\": \"second\"\n}";
+        let (status, _v, data_root, _tmp) = do_import("rawtext", preset_json).await;
+
+        assert_eq!(status, axum::http::StatusCode::OK);
+        let raw =
+            std::fs::read_to_string(data_root.join("presets").join("rawtext").join("raw.json"))
+                .unwrap();
+        assert_eq!(raw, crate::data_dir::strip_utf8_bom(preset_json));
+    }
+
     /// 顶层 SillyTavern 别名 `openai_max_tokens` / `openai_model` 应被 serde alias
     /// 归一化到 canonical `max_tokens` / `model`，并报告 aliases_normalized ≥ 1。
     #[tokio::test]
@@ -606,7 +620,7 @@ mod tests {
         assert_eq!(v["prompts_count"], 0);
         let report = &v["import_report"];
         assert_eq!(report["converted"], 0);
-        assert!(report["replacement_error"].is_null());
+        assert!(report["source_error"].is_null());
         // preset.json + raw.json 都落盘
         assert!(data_root
             .join("presets")
