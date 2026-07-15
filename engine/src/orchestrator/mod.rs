@@ -2,6 +2,7 @@ pub mod card;
 pub mod gating;
 pub mod lorebook;
 pub mod preset;
+pub mod trace;
 pub mod volume_inject;
 pub mod worldbook_normalizer;
 
