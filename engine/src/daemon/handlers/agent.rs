@@ -7,9 +7,11 @@
 //! - `POST /v1/agent/run` — 多步 loop 入口（SSE），quota 与 chat_completion 同路径
 //! - `GET  /v1/agent/tools` — 列出内建工具元数据（19 工具，按名字字典序）
 
-use super::*;
-use axum::response::Sse;
+use super::DaemonState;
+use crate::error::AirpError;
+use axum::{response::Sse, Json};
 use std::convert::Infallible;
+use std::sync::Arc;
 
 /// M_AGENT-1: `POST /v1/agent/run` — 多步 loop 入口（SSE）。
 ///
@@ -17,7 +19,7 @@ use std::convert::Infallible;
 /// 老客户端继续打 `/v1/chat/completions`（单回合）；要 agentic 的显式打此端点。
 ///
 /// 复用 `AgentLoop::run`（协调器）；quota 检查与 chat_completion 同路径。
-pub async fn agent_run(
+pub(in crate::daemon) async fn agent_run(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(payload): Json<crate::agent::AgentRunRequest>,
 ) -> Result<
@@ -43,7 +45,7 @@ pub async fn agent_run(
     Ok(Sse::new(looper.run(payload, cancel)))
 }
 
-pub async fn list_agent_tools(
+pub(in crate::daemon) async fn list_agent_tools(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
 ) -> Json<Vec<crate::agent::tools::ToolMeta>> {
     Json(crate::agent::tools::default_registry(state).list())

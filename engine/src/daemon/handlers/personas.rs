@@ -15,10 +15,14 @@
 //! - `POST   /v1/users/:user_id/personas/:persona_id/bindings` — 添加绑定（幂等）
 //! - `DELETE /v1/users/:user_id/personas/:persona_id/bindings` — 移除绑定（幂等）
 
-use super::*;
+use super::DaemonState;
 use crate::domain::{Persona, PersonaBinding, PersonaService};
+use crate::error::AirpError;
 use crate::types::UserId;
+use axum::{http::StatusCode, Json};
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // ── Persona handlers（#114，每用户一个默认 Persona）────────────────────────────
 //
@@ -27,7 +31,7 @@ use std::collections::HashMap;
 // `user_id` 走路径参数，经 UserId::new 校验（拒绝路径遍历）；`default_name` 走 query string。
 
 /// GET /v1/users/:user_id/persona — 读当前 Persona；不存在返回兜底（revision=0）。
-pub async fn get_persona_endpoint(
+pub(in crate::daemon) async fn get_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<Json<Persona>, AirpError> {
@@ -37,7 +41,7 @@ pub async fn get_persona_endpoint(
 }
 
 /// PUT /v1/users/:user_id/persona — 原子写入 Persona；revision 不匹配返回 400。
-pub async fn update_persona_endpoint(
+pub(in crate::daemon) async fn update_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
     Json(payload): Json<UpdatePersonaRequest>,
@@ -64,17 +68,17 @@ pub async fn update_persona_endpoint(
 /// PUT /v1/users/:user_id/persona 的请求体。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UpdatePersonaRequest {
+pub(in crate::daemon) struct UpdatePersonaRequest {
     /// 客户端持有的当前 revision；不匹配服务端时返回 400 + PersonaRevisionConflict。
-    pub expected_revision: u64,
+    expected_revision: u64,
     /// 用户显示名。
-    pub name: String,
+    name: String,
     /// 自由描述。
     #[serde(default)]
-    pub description: String,
+    description: String,
     /// 自定义变量表。
     #[serde(default)]
-    pub variables: HashMap<String, String>,
+    variables: HashMap<String, String>,
 }
 
 // ── Multi-Persona handlers（#114 A1a，多 Persona CRUD + 绑定）──────────────────
@@ -84,7 +88,7 @@ pub struct UpdatePersonaRequest {
 // find_for_character 自动激活留 A1b（独立 PR，会改 ChatCompletionRequest contract）。
 
 /// GET /v1/users/:user_id/personas — 列出该用户所有 Persona id（含 "default"）。
-pub async fn list_personas_endpoint(
+pub(in crate::daemon) async fn list_personas_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<String>>, AirpError> {
@@ -95,7 +99,7 @@ pub async fn list_personas_endpoint(
 
 /// POST /v1/users/:user_id/personas — 创建新 Persona（非 default）。
 /// "default" 走 legacy PUT /v1/users/:id/persona；重复 id 由 revision 冲突拒绝。
-pub async fn create_persona_endpoint(
+pub(in crate::daemon) async fn create_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
     Json(payload): Json<CreatePersonaRequest>,
@@ -125,7 +129,7 @@ pub async fn create_persona_endpoint(
 
 /// GET /v1/users/:user_id/personas/:persona_id — 读取指定 Persona。
 /// default 不存在时返回 initial（不写盘）；非 default 不存在返回 404。
-pub async fn get_persona_multi_endpoint(
+pub(in crate::daemon) async fn get_persona_multi_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
 ) -> Result<Json<Persona>, AirpError> {
@@ -135,7 +139,7 @@ pub async fn get_persona_multi_endpoint(
 }
 
 /// PUT /v1/users/:user_id/personas/:persona_id — 更新指定 Persona；保留 bindings。
-pub async fn update_persona_multi_endpoint(
+pub(in crate::daemon) async fn update_persona_multi_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
     Json(payload): Json<UpdateMultiPersonaRequest>,
@@ -159,7 +163,7 @@ pub async fn update_persona_multi_endpoint(
 }
 
 /// DELETE /v1/users/:user_id/personas/:persona_id — 删除指定 Persona（default 不可删）。
-pub async fn delete_persona_multi_endpoint(
+pub(in crate::daemon) async fn delete_persona_multi_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
 ) -> Result<StatusCode, AirpError> {
@@ -169,7 +173,7 @@ pub async fn delete_persona_multi_endpoint(
 }
 
 /// POST /v1/users/:user_id/personas/:persona_id/bindings — 添加绑定（幂等）。
-pub async fn bind_persona_endpoint(
+pub(in crate::daemon) async fn bind_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
     Json(payload): Json<BindPersonaRequest>,
@@ -185,7 +189,7 @@ pub async fn bind_persona_endpoint(
 
 /// DELETE /v1/users/:user_id/personas/:persona_id/bindings — 移除绑定（幂等）。
 /// character_id 必填（query），session_id 可选（query）。
-pub async fn unbind_persona_endpoint(
+pub(in crate::daemon) async fn unbind_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
     query: Result<
@@ -208,54 +212,54 @@ pub async fn unbind_persona_endpoint(
 /// POST /v1/users/:user_id/personas 的请求体（创建新 Persona，非 default）。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CreatePersonaRequest {
+pub(in crate::daemon) struct CreatePersonaRequest {
     /// 新 Persona 的 ID；走 `validate_id_segment` 校验，拒路径遍历。
     /// "default" 不允许在此创建（用 legacy PUT /v1/users/:id/persona）。
-    pub persona_id: String,
+    persona_id: String,
     /// 用户显示名。
-    pub name: String,
+    name: String,
     /// 自由描述。
     #[serde(default)]
-    pub description: String,
+    description: String,
     /// 自定义变量表，键名对应 prompt 中 `{{key}}` 占位符。
     #[serde(default)]
-    pub variables: HashMap<String, String>,
+    variables: HashMap<String, String>,
 }
 
 /// PUT /v1/users/:user_id/personas/:persona_id 的请求体（更新指定 Persona）。
 /// 与 legacy `UpdatePersonaRequest` 同形状，但路径带 `:persona_id`。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UpdateMultiPersonaRequest {
+pub(in crate::daemon) struct UpdateMultiPersonaRequest {
     /// 客户端持有的当前 revision；不匹配服务端时返回 400 + PersonaRevisionConflict。
-    pub expected_revision: u64,
+    expected_revision: u64,
     /// 用户显示名。
-    pub name: String,
+    name: String,
     /// 自由描述。
     #[serde(default)]
-    pub description: String,
+    description: String,
     /// 自定义变量表。
     #[serde(default)]
-    pub variables: HashMap<String, String>,
+    variables: HashMap<String, String>,
 }
 
 /// POST /v1/users/:user_id/personas/:persona_id/bindings 的请求体。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BindPersonaRequest {
+pub(in crate::daemon) struct BindPersonaRequest {
     /// 绑定到的角色 ID；走 `CharacterId::new` 校验。
-    pub character_id: String,
+    character_id: String,
     /// 可选 session ID；`None` 表示该角色下所有会话通用。走 `SessionId::parse` 校验。
     #[serde(default)]
-    pub session_id: Option<String>,
+    session_id: Option<String>,
 }
 
 /// DELETE /v1/users/:user_id/personas/:persona_id/bindings 的 query 参数。
 #[derive(Debug, Deserialize)]
-pub struct UnbindPersonaQuery {
+pub(in crate::daemon) struct UnbindPersonaQuery {
     /// 必填：要移除绑定的角色 ID。
-    pub character_id: String,
+    character_id: String,
     /// 可选：要移除绑定的 session ID；省略表示移除该角色的全会话通用绑定。
     #[serde(default)]
-    pub session_id: Option<String>,
+    session_id: Option<String>,
 }

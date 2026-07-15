@@ -13,6 +13,30 @@
 
 use super::*;
 
+async fn assert_error_envelope(
+    response: axum::response::Response,
+    expected_status: StatusCode,
+    expected_code: &str,
+    expected_message_fragment: &str,
+) {
+    assert_eq!(response.status(), expected_status);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/json"
+    );
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["code"], expected_code);
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(expected_message_fragment)),
+        "error message should contain {expected_message_fragment:?}: {error}"
+    );
+}
+
 /// POST /v1/sessions/:character_id 创建 → GET list 能看到该 session。
 #[tokio::test]
 async fn create_session_then_list_shows_it() {
@@ -127,7 +151,7 @@ async fn list_sessions_rejects_path_traversal_character_id() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_error_envelope(resp, StatusCode::BAD_REQUEST, "bad_request", "../etc").await;
 }
 
 /// POST /v1/sessions/:character_id — 非法 character_id → 400。
@@ -146,7 +170,7 @@ async fn create_session_rejects_invalid_character_id() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_error_envelope(resp, StatusCode::BAD_REQUEST, "bad_request", "非法 ID: ..").await;
 }
 
 /// DELETE /v1/sessions/:character_id/:session_id — 非法 session_id（非 UUID）→ 400。
@@ -165,7 +189,13 @@ async fn delete_session_rejects_invalid_session_id() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_error_envelope(
+        resp,
+        StatusCode::BAD_REQUEST,
+        "bad_request",
+        "非法 SessionId",
+    )
+    .await;
 }
 
 /// DELETE /v1/sessions/:character_id/:session_id — 不存在的 session → 404。
@@ -185,5 +215,11 @@ async fn delete_nonexistent_session_returns_404() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_error_envelope(
+        resp,
+        StatusCode::NOT_FOUND,
+        "not_found",
+        &format!("session {valid_uuid} for character alice not found"),
+    )
+    .await;
 }

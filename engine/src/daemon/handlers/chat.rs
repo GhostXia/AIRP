@@ -9,16 +9,18 @@
 //! - `POST /v1/chat/regen` — 删除最后一条 assistant 消息以供重新生成
 //! - `POST /v1/chat/completions` — SSE 流式补全（quota 前置检查）
 
-use super::*;
+use super::DaemonState;
 use crate::chat_pipeline;
 use crate::chat_store::ChatLog;
 use crate::daemon::types::{ChatCompletionRequest, HistoryQuery, RegenRequest, RollbackRequest};
 use crate::domain::ChatService;
-use axum::response::Sse;
+use crate::error::AirpError;
+use axum::{response::Sse, Json};
 use std::convert::Infallible;
+use std::sync::Arc;
 
 /// POST /v1/chat/history — get chat history for a character
-pub async fn get_chat_history(
+pub(in crate::daemon) async fn get_chat_history(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(query): Json<HistoryQuery>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
@@ -39,7 +41,7 @@ pub async fn get_chat_history(
 }
 
 /// POST /v1/chat/rollback — rollback to a specific message index
-pub async fn rollback_chat(
+pub(in crate::daemon) async fn rollback_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RollbackRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
@@ -64,7 +66,7 @@ pub async fn rollback_chat(
 }
 
 /// POST /v1/chat/regen — delete last assistant message for regeneration
-pub async fn regen_chat(
+pub(in crate::daemon) async fn regen_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RegenRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
@@ -73,7 +75,7 @@ pub async fn regen_chat(
     Ok(Json(log))
 }
 
-pub async fn chat_completion(
+pub(in crate::daemon) async fn chat_completion(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(payload): Json<ChatCompletionRequest>,
 ) -> Result<

@@ -8,12 +8,15 @@
 //! - `POST   /v1/sessions/:character_id` — 创建新命名会话，返回 session id
 //! - `DELETE /v1/sessions/:character_id/:session_id` — 删除命名会话目录
 
-use super::*;
+use super::DaemonState;
 use crate::domain::ChatService;
+use crate::error::AirpError;
 use crate::types::{CharacterId, SessionId};
+use axum::Json;
+use std::sync::Arc;
 
 /// GET /v1/sessions/:character_id — list all named sessions for a character.
-pub async fn list_sessions_endpoint(
+pub(in crate::daemon) async fn list_sessions_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<SessionId>>, AirpError> {
@@ -23,7 +26,7 @@ pub async fn list_sessions_endpoint(
 }
 
 /// POST /v1/sessions/:character_id — create a new named session, return its ID.
-pub async fn create_session_endpoint(
+pub(in crate::daemon) async fn create_session_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<SessionId>, AirpError> {
@@ -34,7 +37,7 @@ pub async fn create_session_endpoint(
 
 /// DELETE /v1/sessions/:character_id/:session_id — 删除一个命名会话目录。
 /// #35：destructive，调用方负责确认。返回 `{deleted, status}`。会话不存在 → 404。
-pub async fn delete_session_endpoint(
+pub(in crate::daemon) async fn delete_session_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((character_id, session_id)): axum::extract::Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
