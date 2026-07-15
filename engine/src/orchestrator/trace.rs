@@ -32,8 +32,15 @@ pub struct PromptSegment {
     pub chars: usize,
     pub estimated_tokens: usize,
     pub truncated: bool,
-    /// `stable` or `volatile`.
-    pub stable_or_volatile: String,
+    pub stable_or_volatile: Stability,
+}
+
+/// Whether a segment is stable across turns or volatile session state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stability {
+    Stable,
+    Volatile,
 }
 
 /// Effective configuration and revision snapshot used for assembly.
@@ -119,9 +126,9 @@ mod tests {
             estimated_tokens: tokens,
             truncated: false,
             stable_or_volatile: if kind == "state" {
-                "volatile".to_string()
+                Stability::Volatile
             } else {
-                "stable".to_string()
+                Stability::Stable
             },
         }
     }
@@ -170,6 +177,7 @@ mod tests {
         let value = serde_json::to_value(trace).unwrap();
         assert_eq!(value["segments"][0]["source_id"], "lorebook-source");
         assert_eq!(value["segments"][0]["chars"], 16);
+        assert_eq!(value["segments"][0]["stable_or_volatile"], "stable");
         assert!(value["segments"][0].get("content").is_none());
         assert_eq!(value["diagnostics"][0]["kind"], "lorebook_trigger_miss");
     }
