@@ -183,10 +183,16 @@ pub(super) async fn decompose_preset(
     Query(query): Query<DecomposeQuery>,
 ) -> Result<Json<DecomposeResponse>, AirpError> {
     let pid = PresetId::new(preset_id)?;
-    let preset_path = state
-        .data_root
-        .join("presets")
-        .join(format!("{}.json", pid.as_str()));
+    // 对齐 get_preset_endpoint：优先 normalized 路径 `presets/{id}/preset.json`，
+    // 回退 legacy `presets/{id}.json`。import_preset 写入 normalized 路径，
+    // 旧 bug 只查 legacy 会导致新导入的 preset 无法 decompose。
+    let normalized_path = data_dir::preset_json_path(&state.data_root, pid.as_str());
+    let legacy_path = data_dir::legacy_preset_json_path(&state.data_root, pid.as_str());
+    let preset_path = if normalized_path.exists() {
+        normalized_path
+    } else {
+        legacy_path
+    };
     if !preset_path.exists() {
         return Err(AirpError::NotFound(format!("preset {} not found", pid)));
     }
