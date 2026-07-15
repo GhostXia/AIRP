@@ -2242,7 +2242,10 @@
     // delete：只移除该条目 DOM + 数据，不全量重渲染（A-02 修复）
     // 全量重渲染会丢失其他条目的展开/折叠状态与未保存的 input 值。
     del.addEventListener('click', () => {
-      loreData.entries.splice(index, 1);
+      // A-03 修复：删除前按对象身份重新定位 entry，避免重编序号后闭包 index 过时
+      // 导致连续删除时删错条目。
+      const currentIndex = loreData.entries.indexOf(entry);
+      if (currentIndex >= 0) loreData.entries.splice(currentIndex, 1);
       div.remove();
       // 重编后续条目的序号显示（dataset.index + lbl 文本），保持视觉一致
       loreEntries.querySelectorAll('.wb-lore-entry').forEach((e, i) => {
