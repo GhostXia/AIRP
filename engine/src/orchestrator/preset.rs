@@ -4,7 +4,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
-use super::card::TavernPreset;
+use super::card::{TavernPreset, TavernPrompt};
 
 static SETVAR_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\{\{setvar::([^:]+)::([^}]*)\}\}").expect("SETVAR_RE"));
@@ -127,6 +127,19 @@ pub struct PresetPromptDiagnostic {
     pub reason: String,
 }
 
+fn extract_identifier_name(
+    prompt: &serde_json::Map<String, Value>,
+) -> (Option<String>, Option<String>) {
+    let nonblank_string = |field| {
+        prompt
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+    };
+    (nonblank_string("identifier"), nonblank_string("name"))
+}
+
 // ── Normalization ───────────────────────────────────────────────────────────
 
 /// 把 SillyTavern preset JSON 归一化为 AIRP canonical [`TavernPreset`]，
@@ -175,11 +188,10 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
 
     // 探测格式版本：v2 canonical 有 prompt_order 或 ST 风格的扩展字段；
     // v1 legacy 仅有 prompts 数组；canonical AIRP 是 v1 的子集。
-    let has_prompt_order = obj.contains_key("prompt_order");
     let has_st_extensions = obj
         .keys()
         .any(|k| !PRESET_TOP_LEVEL_CONSUMED.contains(&k.as_str()));
-    report.format_version = if has_prompt_order || has_st_extensions {
+    report.format_version = if has_st_extensions {
         "v2_canonical".to_string()
     } else {
         "v1_legacy".to_string()
@@ -198,19 +210,6 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
     }
     report.top_level_params = top_level_params;
 
-    // 顶层别名归一化计数：使用了 openai_max_tokens / openai_model 任一别名。
-    if obj.contains_key("openai_max_tokens") || obj.contains_key("openai_model") {
-        report.aliases_normalized += 1;
-    }
-
-    // 顶层 advisory 保留计数：存在 PRESET_TOP_LEVEL_CONSUMED 之外的键。
-    let top_advisory = obj
-        .keys()
-        .any(|k| !PRESET_TOP_LEVEL_CONSUMED.contains(&k.as_str()));
-    if top_advisory {
-        report.advisory_preserved += 1;
-    }
-
     // 反序列化为 canonical TavernPreset 前先过滤无效条目。
     //
     // 原实现直接对 source 做 serde 反序列化：任一 prompt 缺 identifier/name
@@ -220,11 +219,22 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
     // 修复（#115 diagnostics 要求）：先用宽松 Value 操作识别无效条目并记录
     // 到 `invalid`，构建只含有效条目的 source 副本交给 serde。这样 serde 不会
     // 因无效条目失败，invalid 分支真正可达；canonical 输出只含有效 prompt。
-    let source_prompts: Vec<&Value> = obj
-        .get("prompts")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().collect())
-        .unwrap_or_default();
+    let source_prompts: Vec<&Value> = match obj.get("prompts") {
+        None => Vec::new(),
+        Some(Value::Array(prompts)) => prompts.iter().collect(),
+        Some(_) => {
+            report.source_error = Some("preset JSON 顶层 `prompts` 字段必须是数组".to_string());
+            return (
+                TavernPreset {
+                    prompts: None,
+                    temperature: None,
+                    max_tokens: None,
+                    model: None,
+                },
+                report,
+            );
+        }
+    };
     report.total_input = source_prompts.len();
 
     let mut valid_prompts: Vec<(usize, &Value)> = Vec::new();
@@ -238,33 +248,38 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
             });
             continue;
         };
-        let identifier = p_obj
-            .get("identifier")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let name = p_obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let (identifier, name) = extract_identifier_name(p_obj);
 
-        // identifier 缺失 → invalid（canonical TavernPrompt 要求 identifier:String）。
+        // identifier 缺失或仅空白 → invalid（canonical 运行时需要稳定的非空 ID）。
         if identifier.is_none() {
             report.invalid.push(PresetPromptDiagnostic {
                 index: idx,
                 identifier: None,
                 name: name.clone(),
-                reason: "prompt 缺少 identifier 字段".to_string(),
+                reason: "prompt 缺少有效的 identifier 字段".to_string(),
             });
             continue;
         }
 
-        // name 缺失 → invalid。
+        // name 缺失或仅空白 → invalid。
         if name.is_none() {
             report.invalid.push(PresetPromptDiagnostic {
                 index: idx,
                 identifier: identifier.clone(),
                 name: None,
-                reason: "prompt 缺少 name 字段".to_string(),
+                reason: "prompt 缺少有效的 name 字段".to_string(),
+            });
+            continue;
+        }
+
+        // 其它 TavernPrompt 字段也必须逐条校验。若留到整个 preset 的 serde
+        // 阶段才失败，一个坏条目会再次拒绝全部合法兄弟条目，使 invalid 诊断失效。
+        if let Err(error) = serde_json::from_value::<TavernPrompt>((*src_prompt).clone()) {
+            report.invalid.push(PresetPromptDiagnostic {
+                index: idx,
+                identifier,
+                name,
+                reason: format!("prompt 不符合 TavernPrompt schema: {error}"),
             });
             continue;
         }
@@ -305,20 +320,13 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
         } else {
             0
         };
-    let mut advisory_count_for_report = if top_advisory { 1 } else { 0 };
+    let mut advisory_count_for_report = if has_st_extensions { 1 } else { 0 };
 
     for (idx, src_prompt) in valid_prompts.iter() {
         let p_obj = src_prompt
             .as_object()
             .expect("valid_prompts only holds object entries; non-objects go to invalid");
-        let identifier = p_obj
-            .get("identifier")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let name = p_obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let (identifier, name) = extract_identifier_name(p_obj);
 
         // 该 prompt 已成功转换（进入 canonical）。
         converted_count += 1;
@@ -543,6 +551,19 @@ mod tests {
     }
 
     #[test]
+    fn normalize_preset_rejects_non_array_prompts_as_source_error() {
+        let source = serde_json::json!({"prompts": null});
+        let (canonical, report) = normalize_preset(&source);
+
+        assert!(report
+            .source_error
+            .as_deref()
+            .is_some_and(|reason| reason.contains("必须是数组")));
+        assert!(report.replacement_error().is_some());
+        assert!(canonical.prompts.is_none());
+    }
+
+    #[test]
     fn normalize_preset_records_missing_identifier_as_invalid() {
         let source = serde_json::json!({
             "prompts": [
@@ -577,6 +598,45 @@ mod tests {
         assert_eq!(report.invalid[0].index, 0);
         assert_eq!(report.invalid[0].identifier.as_deref(), Some("no-name"));
         assert!(report.invalid[0].reason.contains("name"));
+    }
+
+    #[test]
+    fn normalize_preset_records_blank_identifier_and_name_as_invalid() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"identifier": "   ", "name": "BlankId", "content": "x"},
+                {"identifier": "blank-name", "name": "\t", "content": "y"}
+            ]
+        });
+        let (canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.total_input, 2);
+        assert_eq!(report.converted, 0);
+        assert_eq!(report.invalid.len(), 2);
+        assert!(report.invalid[0].reason.contains("identifier"));
+        assert!(report.invalid[1].reason.contains("name"));
+        assert!(canonical.prompts.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn normalize_preset_skips_prompt_with_invalid_field_type() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"identifier": "bad", "name": "Bad", "enabled": "yes", "content": "x"},
+                {"identifier": "ok", "name": "Ok", "enabled": true, "content": "y"}
+            ]
+        });
+        let (canonical, report) = normalize_preset(&source);
+
+        assert!(report.source_error.is_none());
+        assert_eq!(report.total_input, 2);
+        assert_eq!(report.converted, 1);
+        assert_eq!(report.invalid.len(), 1);
+        assert_eq!(report.invalid[0].identifier.as_deref(), Some("bad"));
+        assert!(report.invalid[0].reason.contains("schema"));
+        let prompts = canonical.prompts.as_ref().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].identifier, "ok");
     }
 
     #[test]
