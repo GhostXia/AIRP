@@ -1,23 +1,41 @@
 //! HTTP handler functions for the daemon API.
-use super::types::{ChatCompletionRequest, HistoryQuery, RegenRequest, RollbackRequest};
+//!
+//! #155 PR 4 之后：本文件是 handler facade。sessions / personas / chat / agent
+//! 四个 family 已拆入 `handlers/` 子模块，facade 经 `pub(super) use` re-export
+//! 保持 `daemon/mod.rs` 的 `use handlers::{...}` 调用路径不变。其余 handler
+//! （settings / characters / presets / scenes / models / state / lorebook）仍留在本文件。
 use super::{DaemonState, SettingsView};
-use crate::chat_store::ChatLog;
-use crate::domain::{ChatService, LorebookService, Persona, PersonaBinding, PersonaService};
+use crate::data_dir;
+use crate::domain::{ChatService, LorebookService};
 use crate::error::AirpError;
-use crate::types::{CharacterId, PresetId, SessionId, UserId};
-use crate::{chat_pipeline, data_dir};
+use crate::types::{CharacterId, PresetId};
 use axum::{
     http::{header, StatusCode},
-    response::{sse::Sse, IntoResponse, Response},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::convert::Infallible;
 use std::fs;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use unicode_normalization::UnicodeNormalization;
+
+mod agent;
+mod chat;
+mod personas;
+mod sessions;
+
+// #155 PR 4：re-export moved handlers 保持 `daemon/mod.rs` 的 `use handlers::{...}` 不变。
+pub(super) use agent::{agent_run, list_agent_tools};
+pub(super) use chat::{chat_completion, get_chat_history, regen_chat, rollback_chat};
+pub(super) use personas::{
+    bind_persona_endpoint, create_persona_endpoint, delete_persona_multi_endpoint,
+    get_persona_endpoint, get_persona_multi_endpoint, list_personas_endpoint,
+    unbind_persona_endpoint, update_persona_endpoint, update_persona_multi_endpoint,
+};
+pub(super) use sessions::{
+    create_session_endpoint, delete_session_endpoint, list_sessions_endpoint,
+};
 
 const MAX_DERIVED_CHARACTER_ID_BYTES: usize = 120;
 const MODELS_PROXY_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);
@@ -157,284 +175,6 @@ pub(super) async fn update_settings(
     Ok(Json(SettingsView::from_config(&merged, &state.data_root)))
 }
 
-// ── Session handlers ──────────────────────────────────────────────────────────
-
-/// GET /v1/sessions/:character_id — list all named sessions for a character.
-pub(super) async fn list_sessions_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path(character_id): axum::extract::Path<String>,
-) -> Result<Json<Vec<SessionId>>, AirpError> {
-    let cid = CharacterId::new(character_id)?;
-    let sessions = ChatService::new(&state.data_root).list_sessions(&cid)?;
-    Ok(Json(sessions))
-}
-
-/// POST /v1/sessions/:character_id — create a new named session, return its ID.
-pub(super) async fn create_session_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path(character_id): axum::extract::Path<String>,
-) -> Result<Json<SessionId>, AirpError> {
-    let cid = CharacterId::new(character_id)?;
-    let sid = ChatService::new(&state.data_root).create_session(&cid)?;
-    Ok(Json(sid))
-}
-
-/// DELETE /v1/sessions/:character_id/:session_id — 删除一个命名会话目录。
-/// #35：destructive，调用方负责确认。返回 `{deleted, status}`。会话不存在 → 404。
-pub(super) async fn delete_session_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path((character_id, session_id)): axum::extract::Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, AirpError> {
-    let cid = CharacterId::new(character_id)?;
-    let sid = SessionId::parse(&session_id)?;
-    ChatService::new(&state.data_root).delete_session(&cid, &sid)?;
-    Ok(Json(serde_json::json!({
-        "deleted": sid.to_string(),
-        "character_id": cid.as_str(),
-        "status": "ok"
-    })))
-}
-
-// ── Persona handlers（#114，每用户一个默认 Persona）────────────────────────────
-//
-// WEBUI-MVP-PLAN §3.1：GET 读当前 Persona（不存在返回兜底，不写盘）；
-// PUT 原子写并 revision bump；expected_revision 不匹配返回 400 + PersonaRevisionConflict JSON。
-// `user_id` 走路径参数，经 UserId::new 校验（拒绝路径遍历）；`default_name` 走 query string。
-
-/// GET /v1/users/:user_id/persona — 读当前 Persona；不存在返回兜底（revision=0）。
-pub(super) async fn get_persona_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
-) -> Result<Json<Persona>, AirpError> {
-    let uid = UserId::new(user_id)?;
-    let persona = PersonaService::new(&state.data_root).get_default(&uid, "User")?;
-    Ok(Json(persona))
-}
-
-/// PUT /v1/users/:user_id/persona — 原子写入 Persona；revision 不匹配返回 400。
-pub(super) async fn update_persona_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
-    Json(payload): Json<UpdatePersonaRequest>,
-) -> Result<Json<Persona>, AirpError> {
-    let uid = UserId::new(user_id)?;
-    let service = PersonaService::new(&state.data_root);
-    let current = service.get_default(&uid, "User")?;
-    let persona = Persona {
-        schema: Persona::SCHEMA,
-        revision: 0, // save 内会 bump；payload 的 revision 不信，用 expected_revision 校验
-        updated_at: String::new(),
-        name: payload.name,
-        description: payload.description,
-        variables: payload.variables,
-        id: current.id,
-        // The legacy endpoint does not own schema-v2 binding fields. Preserve
-        // them so editing a name or description cannot silently unbind chats.
-        bindings: current.bindings,
-    };
-    let saved = service.save_default(&uid, payload.expected_revision, persona)?;
-    Ok(Json(saved))
-}
-
-/// PUT /v1/users/:user_id/persona 的请求体。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct UpdatePersonaRequest {
-    /// 客户端持有的当前 revision；不匹配服务端时返回 400 + PersonaRevisionConflict。
-    pub expected_revision: u64,
-    /// 用户显示名。
-    pub name: String,
-    /// 自由描述。
-    #[serde(default)]
-    pub description: String,
-    /// 自定义变量表。
-    #[serde(default)]
-    pub variables: HashMap<String, String>,
-}
-
-// ── Multi-Persona handlers（#114 A1a，多 Persona CRUD + 绑定）──────────────────
-//
-// PersonaService（PR #127）已交付 list/get/save/delete/bind/unbind/find_for_character；
-// 本组 handler 把多 Persona 闭环暴露到 HTTP plural 路径。chat_pipeline 消费
-// find_for_character 自动激活留 A1b（独立 PR，会改 ChatCompletionRequest contract）。
-
-/// GET /v1/users/:user_id/personas — 列出该用户所有 Persona id（含 "default"）。
-pub(super) async fn list_personas_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
-) -> Result<Json<Vec<String>>, AirpError> {
-    let uid = UserId::new(user_id)?;
-    let ids = PersonaService::new(&state.data_root).list(&uid)?;
-    Ok(Json(ids))
-}
-
-/// POST /v1/users/:user_id/personas — 创建新 Persona（非 default）。
-/// "default" 走 legacy PUT /v1/users/:id/persona；重复 id 由 revision 冲突拒绝。
-pub(super) async fn create_persona_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
-    Json(payload): Json<CreatePersonaRequest>,
-) -> Result<Json<Persona>, AirpError> {
-    if payload.persona_id.eq_ignore_ascii_case("default") {
-        return Err(AirpError::BadRequest(
-            "default persona 不能在此创建；使用 PUT /v1/users/:id/persona".to_string(),
-        ));
-    }
-    let uid = UserId::new(user_id)?;
-    let persona = Persona {
-        schema: Persona::SCHEMA,
-        revision: 0, // save 内 bump；payload 的 revision 不信
-        updated_at: String::new(),
-        name: payload.name,
-        description: payload.description,
-        variables: payload.variables,
-        id: payload.persona_id.clone(),
-        bindings: Vec::new(),
-    };
-    // expected_revision=0：不存在的文件 current_revision_at=0 匹配 → 创建；
-    // 已存在则 current_revision≥1，0≠current → BadRequest(PersonaRevisionConflict)。
-    let saved =
-        PersonaService::new(&state.data_root).save(&uid, &payload.persona_id, 0, persona)?;
-    Ok(Json(saved))
-}
-
-/// GET /v1/users/:user_id/personas/:persona_id — 读取指定 Persona。
-/// default 不存在时返回 initial（不写盘）；非 default 不存在返回 404。
-pub(super) async fn get_persona_multi_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
-) -> Result<Json<Persona>, AirpError> {
-    let uid = UserId::new(user_id)?;
-    let persona = PersonaService::new(&state.data_root).get(&uid, &persona_id, "User")?;
-    Ok(Json(persona))
-}
-
-/// PUT /v1/users/:user_id/personas/:persona_id — 更新指定 Persona；保留 bindings。
-pub(super) async fn update_persona_multi_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
-    Json(payload): Json<UpdateMultiPersonaRequest>,
-) -> Result<Json<Persona>, AirpError> {
-    let uid = UserId::new(user_id)?;
-    let service = PersonaService::new(&state.data_root);
-    let current = service.get(&uid, &persona_id, "User")?;
-    let persona = Persona {
-        schema: Persona::SCHEMA,
-        revision: 0, // save 内 bump
-        updated_at: String::new(),
-        name: payload.name,
-        description: payload.description,
-        variables: payload.variables,
-        id: current.id,
-        // 编辑 name/description/variables 不能静默解绑；bindings 由 bind/unbind 专门管理。
-        bindings: current.bindings,
-    };
-    let saved = service.save(&uid, &persona_id, payload.expected_revision, persona)?;
-    Ok(Json(saved))
-}
-
-/// DELETE /v1/users/:user_id/personas/:persona_id — 删除指定 Persona（default 不可删）。
-pub(super) async fn delete_persona_multi_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
-) -> Result<StatusCode, AirpError> {
-    let uid = UserId::new(user_id)?;
-    PersonaService::new(&state.data_root).delete(&uid, &persona_id)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// POST /v1/users/:user_id/personas/:persona_id/bindings — 添加绑定（幂等）。
-pub(super) async fn bind_persona_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
-    Json(payload): Json<BindPersonaRequest>,
-) -> Result<Json<Persona>, AirpError> {
-    let uid = UserId::new(user_id)?;
-    let binding = PersonaBinding {
-        character_id: payload.character_id,
-        session_id: payload.session_id,
-    };
-    let updated = PersonaService::new(&state.data_root).bind(&uid, &persona_id, binding)?;
-    Ok(Json(updated))
-}
-
-/// DELETE /v1/users/:user_id/personas/:persona_id/bindings — 移除绑定（幂等）。
-/// character_id 必填（query），session_id 可选（query）。
-pub(super) async fn unbind_persona_endpoint(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
-    query: Result<
-        axum::extract::Query<UnbindPersonaQuery>,
-        axum::extract::rejection::QueryRejection,
-    >,
-) -> Result<Json<Persona>, AirpError> {
-    let axum::extract::Query(query) =
-        query.map_err(|error| AirpError::BadRequest(error.to_string()))?;
-    let uid = UserId::new(user_id)?;
-    let updated = PersonaService::new(&state.data_root).unbind(
-        &uid,
-        &persona_id,
-        &query.character_id,
-        query.session_id.as_deref(),
-    )?;
-    Ok(Json(updated))
-}
-
-/// POST /v1/users/:user_id/personas 的请求体（创建新 Persona，非 default）。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct CreatePersonaRequest {
-    /// 新 Persona 的 ID；走 `validate_id_segment` 校验，拒路径遍历。
-    /// "default" 不允许在此创建（用 legacy PUT /v1/users/:id/persona）。
-    pub persona_id: String,
-    /// 用户显示名。
-    pub name: String,
-    /// 自由描述。
-    #[serde(default)]
-    pub description: String,
-    /// 自定义变量表，键名对应 prompt 中 `{{key}}` 占位符。
-    #[serde(default)]
-    pub variables: HashMap<String, String>,
-}
-
-/// PUT /v1/users/:user_id/personas/:persona_id 的请求体（更新指定 Persona）。
-/// 与 legacy `UpdatePersonaRequest` 同形状，但路径带 `:persona_id`。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct UpdateMultiPersonaRequest {
-    /// 客户端持有的当前 revision；不匹配服务端时返回 400 + PersonaRevisionConflict。
-    pub expected_revision: u64,
-    /// 用户显示名。
-    pub name: String,
-    /// 自由描述。
-    #[serde(default)]
-    pub description: String,
-    /// 自定义变量表。
-    #[serde(default)]
-    pub variables: HashMap<String, String>,
-}
-
-/// POST /v1/users/:user_id/personas/:persona_id/bindings 的请求体。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct BindPersonaRequest {
-    /// 绑定到的角色 ID；走 `CharacterId::new` 校验。
-    pub character_id: String,
-    /// 可选 session ID；`None` 表示该角色下所有会话通用。走 `SessionId::parse` 校验。
-    #[serde(default)]
-    pub session_id: Option<String>,
-}
-
-/// DELETE /v1/users/:user_id/personas/:persona_id/bindings 的 query 参数。
-#[derive(Debug, Deserialize)]
-pub(super) struct UnbindPersonaQuery {
-    /// 必填：要移除绑定的角色 ID。
-    pub character_id: String,
-    /// 可选：要移除绑定的 session ID；省略表示移除该角色的全会话通用绑定。
-    #[serde(default)]
-    pub session_id: Option<String>,
-}
-
 // ── Character handlers ────────────────────────────────────────────────────────
 
 /// GET /v1/characters — list all available character folder names
@@ -541,123 +281,6 @@ pub(super) struct ImportPresetRequest {
 pub(super) struct ImportPresetResponse {
     pub preset_id: String,
     pub prompts_count: usize,
-}
-
-// ── Chat handlers ─────────────────────────────────────────────────────────────
-
-/// POST /v1/chat/history — get chat history for a character
-pub(super) async fn get_chat_history(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    Json(query): Json<HistoryQuery>,
-) -> Result<Json<serde_json::Value>, AirpError> {
-    // #37 cursor 分页：传 limit/before 走窗口；不传 → 全量（向后兼容旧客户端）。
-    if query.limit.is_some() || query.before.is_some() {
-        let window = ChatService::new(&state.data_root).history_window(
-            &query.character_id,
-            query.session_id.as_ref(),
-            query.limit,
-            query.before.as_deref(),
-        )?;
-        return Ok(Json(serde_json::to_value(window)?));
-    }
-    // legacy 全量返回必须保留 ChatLog 的既有响应形状。
-    let log = ChatService::new(&state.data_root)
-        .history(&query.character_id, query.session_id.as_ref())?;
-    Ok(Json(serde_json::to_value(log)?))
-}
-
-/// POST /v1/chat/rollback — rollback to a specific message index
-pub(super) async fn rollback_chat(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    Json(req): Json<RollbackRequest>,
-) -> Result<Json<ChatLog>, AirpError> {
-    // #37：message_id / message_index 二选一校验。
-    if let Err(msg) = req.validate_rollback_target() {
-        return Err(AirpError::BadRequest(msg));
-    }
-    let service = ChatService::new(&state.data_root);
-    let (log, _) = match (req.message_index, req.message_id.as_deref()) {
-        (Some(idx), None) => service.rollback(&req.character_id, req.session_id.as_ref(), idx)?,
-        (None, Some(id)) => {
-            service.rollback_to_id(&req.character_id, req.session_id.as_ref(), id)?
-        }
-        // validate_rollback_target 已挡住二义与都空，这里不可达。
-        _ => {
-            return Err(AirpError::BadRequest(
-                "rollback target invariant violated".into(),
-            ))
-        }
-    };
-    Ok(Json(log))
-}
-
-/// POST /v1/chat/regen — delete last assistant message for regeneration
-pub(super) async fn regen_chat(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    Json(req): Json<RegenRequest>,
-) -> Result<Json<ChatLog>, AirpError> {
-    let log =
-        ChatService::new(&state.data_root).regen(&req.character_id, req.session_id.as_ref())?;
-    Ok(Json(log))
-}
-
-pub(super) async fn chat_completion(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    Json(payload): Json<ChatCompletionRequest>,
-) -> Result<
-    Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, Infallible>>>,
-    AirpError,
-> {
-    // DX-3: quota check (before any expensive work; resolves same effective_root as pipeline)
-    let (quota_config, effective_root) = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
-        let quota = cfg.quota.clone();
-        let root =
-            crate::data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;
-        (quota, root)
-    };
-    crate::quota::check_and_increment(&effective_root, &quota_config)?;
-
-    let pipeline = chat_pipeline::prepare_pipeline(&payload, &state)?;
-    Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
-}
-
-/// M_AGENT-1: `POST /v1/agent/run` — 多步 loop 入口（SSE）。
-///
-/// 计划书 §4.3：`/v1/chat/completions` ≡ `max_steps=1` 的 `/v1/agent/run`。
-/// 老客户端继续打 `/v1/chat/completions`（单回合）；要 agentic 的显式打此端点。
-///
-/// 复用 `AgentLoop::run`（协调器）；quota 检查与 chat_completion 同路径。
-pub(super) async fn agent_run(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-    Json(payload): Json<crate::agent::AgentRunRequest>,
-) -> Result<
-    Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, Infallible>>>,
-    AirpError,
-> {
-    // DX-3: quota check（与 chat_completion 同路径）
-    let (quota_config, effective_root) = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
-        let quota = cfg.quota.clone();
-        let root = crate::data_dir::resolve_effective_root(
-            &state.data_root,
-            payload.base.user_id.as_deref(),
-        )?;
-        (quota, root)
-    };
-    crate::quota::check_and_increment(&effective_root, &quota_config)?;
-
-    let cancel = tokio_util::sync::CancellationToken::new();
-    // 客户端断连 → drop SSE 流 → 我们不显式取消（M_AGENT-1 骨架）；
-    // M_AGENT-5 会接 SSE 连接生命周期到 cancel token。
-    let looper = crate::agent::AgentLoop::new(state);
-    Ok(Sse::new(looper.run(payload, cancel)))
-}
-
-pub(super) async fn list_agent_tools(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-) -> Json<Vec<crate::agent::tools::ToolMeta>> {
-    Json(crate::agent::tools::default_registry(state).list())
 }
 
 // ── Character card import ─────────────────────────────────────────────────────

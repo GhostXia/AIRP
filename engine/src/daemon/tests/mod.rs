@@ -20,6 +20,7 @@ mod chat;
 mod health_settings;
 mod persona;
 mod security;
+mod sessions;
 mod state_scene;
 
 /// Build a `DaemonState` rooted at a fresh tempdir, optionally with an
