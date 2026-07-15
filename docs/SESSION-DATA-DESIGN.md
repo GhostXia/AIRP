@@ -21,17 +21,17 @@
 目录只使用经过路径校验的稳定 ID：
 
 - `character_id`：角色身份；不使用可能重名、变化或含危险字符的显示名。
-- `session_id`：存档槽位身份；建议保持当前 UUID 合同。
+- `session_id`：存档槽位身份；必须是通过格式校验的 UUID。
 - `worldbook_id`：session 内世界书身份；显示名、原始文件名和来源名称只作元数据。
 
-`session_id` 也是该局聊天历史和记忆的唯一规范 UUID。`history/`、`memory/` 是其直接子目录，`chat_log_meta.json` 必须记录同一个 ID；不得再生成第二个内部“聊天 session ID”，也不得在两个子目录下重复嵌套相同 UUID。
+`session_id` 也是该局聊天历史和记忆的唯一规范 UUID。所有创建、读取、更新、复制、导入和导出边界都必须接收并持久化经过校验的 UUID；session 目录名、`meta.json`、`history/`、`memory/` 和 `chat_log_meta.json` 必须共享同一个值。不得接受其他 ID 形式、生成第二个内部“聊天 session ID”，也不得在两个子目录下重复嵌套相同 UUID。
 
 最小 session 元数据示例：
 
 ```json
 {
   "schema": 1,
-  "session_id": "<stable-id>",
+  "session_id": "<uuid>",
   "character_id": "<stable-id>",
   "title": "开局 1",
   "created_at": "<timestamp>",
@@ -89,7 +89,7 @@
 ```json
 {
   "schema": 1,
-  "revision": 3,
+  "content_revision": 3,
   "created_at": "<timestamp>",
   "character": {
     "path": "character/",
@@ -105,7 +105,16 @@
 
 manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全部文件，包括 greetings、卡图、provenance 和世界书 manifest。revision 目录内的 `character/` 和 `worldbooks/` 是不可变快照；session 根下同名目录是当前工作副本。实现可以使用内容寻址去重，但完整 session 导出后仍须在无外部缓存时还原每个 revision。
 
-统一 revision manifest 的 `revision` 是唯一权威的内容版本标识。加载器和导出器必须校验 `revisions/{revision_id}/manifest.json.revision == meta.json.current_revision`（读取当前版本时），并校验该 revision 内 `worldbooks/manifest.json.content_revision == manifest.json.revision`；目录名 `{revision_id}` 也必须是同一标识的规范字符串。任一值不一致都属于完整性错误，禁止猜测、静默选择较新值或回退到工作副本。
+所有位置统一使用字段名 `content_revision`，不存在第二个 `revision` 身份。加载器和导出器必须校验 `revisions/{revision_id}/manifest.json.content_revision == worldbooks/manifest.json.content_revision`；读取当前版本时还必须等于 `meta.json.current_revision`。目录名 `{revision_id}` 是同一非负整数的无前导零十进制字符串。任一值不一致都属于完整性错误，禁止猜测、静默选择较新值或回退到工作副本。
+
+`tree_sha256` 使用统一的 `AIRP-TREE-SHA256-v1` 算法：
+
+1. 只接受目标快照子树内的普通文件；符号链接、junction/reparse point、设备文件和其他特殊节点一律拒绝。子树内不排除任何文件，临时文件和系统元数据不得进入已提交快照。
+2. 每个相对路径必须使用 `/` 分隔、不得含空段、`.`、`..` 或反斜杠，并且必须已经是 Unicode NFC。路径按其 UTF-8 字节序升序排列；任何重复路径都属于错误。
+3. SHA-256 输入先写入 ASCII 域分隔符 `AIRP-TREE-SHA256\0v1\0`，随后为每个文件依次写入 `u64be(path_utf8_length) || path_utf8 || u64be(file_length) || raw_file_bytes`。长度均为无符号 64 位大端整数；文件内容不得做换行、BOM 或文本编码转换。
+4. `sha256` 文件字段是原始文件字节的 SHA-256 小写十六进制值；`tree_sha256` 也是上述完整输入摘要的小写十六进制值。加载、导出、导入校验必须复用同一实现和测试向量，不得按平台另行解释。
+
+规范测试向量：空目录的摘要为 `a9682729b0a5609f08a1c9a8b2bf49b68edb9056d9e910fd297f694cc3ee3dbf`；仅含路径 `a.txt`、内容为单字节 ASCII `x` 的目录摘要为 `cfa2887973ce5ecc1f2bc57b00ad0130a39aae4d4bf67adae0431ccd3a3ae189`。
 
 运行时只读取 `worldbooks/manifest.json` 列出的文件，不能靠递归扫描或文件名猜测加载顺序。建议的最小记录为：
 
@@ -135,7 +144,7 @@ manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全
 }
 ```
 
-`content_revision` 是权威 `revision` 在世界书 manifest 中的冗余完整性字段，必须满足上一节的相等不变量，不能再形成独立的世界书版本身份。`origin` 表示来源，不赋予更高或更低优先级。实际装配顺序由显式 `order` 和 AIRP 世界书运行时合同决定。
+世界书 manifest 中的 `content_revision` 是统一内容版本在该文件中的冗余完整性字段，必须满足上一节的相等不变量，不能再形成独立的世界书版本身份。`origin` 表示来源，不赋予更高或更低优先级。实际装配顺序由显式 `order` 和 AIRP 世界书运行时合同决定。
 
 ## 5. 生命周期
 
@@ -160,6 +169,13 @@ manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全
 - 发送下一条消息前计算角色卡与世界书集合 hash；任一发生变化时生成新的统一 revision。
 - 每条新写入的 `history/chat_log.jsonl` 消息记录都必须包含 `content_revision`；同一轮的 user/assistant 消息使用同一值。该字段与对应消息位于同一个 JSONL 对象中，由一次追加写入共同落盘，不使用可与消息分离提交的旁路索引。发送模型请求前先确定并持久化 user 消息及其 revision；生成结果再以同一 revision 追加 assistant 消息。旧记录缺少该字段时标记为“版本未知”，不得用当前 revision 冒充。这样即使一轮中途失败，历史回放仍能从已落盘消息准确选择当时的角色卡与世界书快照。
 - 更新第三方素材库不得自动覆盖已存在 session；用户必须显式选择刷新、比较或重新物化。
+
+JSONL 的目标崩溃恢复合同如下；当前运行时尚未实现这些同步与恢复语义，必须在第 7 节 revision 阶段一并落地后才可宣称逐轮可复现：
+
+- 在 session 写锁内把一条完整 JSON 对象及结尾 `\n` 组装为单个字节缓冲区，`write_all` 后执行 `sync_data`；只有同步成功才能确认该消息已持久化。user 与 assistant 各自形成独立同步边界，因此生成中断时可以只存在已确认的 user 消息。
+- 加载器按字节偏移扫描。文件末尾唯一一个没有 `\n` 的片段一律视为 torn tail，不参与回放，也不标记为“版本未知”；必须报告偏移、长度和 SHA-256，并保留原始字节供显式修复。
+- 已由 `\n` 终止但无法解析的记录属于中段损坏。加载器记录恢复诊断并继续扫描后续完整记录，使后续消息仍可回放；不得静默删除、改写损坏行或用当前 `content_revision` 填充。
+- 修复操作必须先把原始 JSONL 和诊断复制到 `history/recovery/`，再通过原子替换写入仅含可验证记录的新文件。普通读取不得截断或改写历史。
 
 ### 5.4 复制、提升与导出
 
@@ -192,6 +208,6 @@ session 必须同时承担“可自由魔改的工作分支”和“可恢复的
 2. **完整 session 边界**：新增 `meta.json`，把 state、剧情进度和角色卡工作副本隔离到命名 session，并为旧调用保留兼容路径。
 3. **第三方世界书素材库**：实现安全导入、raw/normalized/provenance、稳定 ID 和查询 API。
 4. **session 世界书物化**：创建 manifest、复制全部启用世界书、让 prompt 装配只读 session 副本。
-5. **revision 与产品操作**：用统一 manifest 同时固定角色卡和世界书，保留不可变初始快照并记录每轮 `content_revision`，支持恢复原始版本、复制开局、刷新来源、比较差异、提升默认、从 session 导出派生角色卡，以及完整 session 导出/恢复。
+5. **revision 与产品操作**：用统一 manifest 同时固定角色卡和世界书，落地规范 tree hash、JSONL 同步/崩溃恢复并记录每轮 `content_revision`，支持恢复原始版本、复制开局、刷新来源、比较差异、提升默认、从 session 导出派生角色卡，以及完整 session 导出/恢复。
 
 后续 PR 不得把本文的目标目录写成当前已交付能力；每完成一阶段，再同步 `CURRENT-BASELINE.md` 和相应验收证据。
