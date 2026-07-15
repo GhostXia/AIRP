@@ -34,11 +34,21 @@ data/
 │       │       │   ├── chat_log.jsonl
 │       │       │   └── chat_log_meta.json
 │       │       ├── memory/
-│       │           ├── current.md
-│       │           ├── index.md
-│       │           └── volumes/
+│       │       │   ├── current.md
+│       │       │   ├── index.md
+│       │       │   └── volumes/
 │       │       ├── state/
-│       │       └── worldbooks/
+│       │       ├── character/
+│       │       │   ├── card.json
+│       │       │   ├── card.png
+│       │       │   ├── greetings/
+│       │       │   └── provenance.json
+│       │       ├── worldbooks/
+│       │       └── revisions/
+│       │           └── {revision_id}/
+│       │               ├── manifest.json
+│       │               ├── character/
+│       │               └── worldbooks/
 │       ├── state/
 │       ├── gating/
 │       ├── analysis/
@@ -55,7 +65,7 @@ data/
     └── context-bundles/{character_id}/
 ```
 
-这是目标归属模型，目录按需创建。当前代码已经隔离命名 session 的 history 与 memory，但 `meta.json`、session state、第三方素材库和世界书物化/revision 尚待分阶段实现，不能把本树全部视为已交付能力。
+这是目标归属模型，目录按需创建。当前代码已经隔离命名 session 的 history 与 memory，但 `meta.json`、session state、角色卡快照、第三方素材库、世界书物化和统一 revision 尚待分阶段实现，不能把本树全部视为已交付能力。
 
 ### 角色目录名
 
@@ -63,7 +73,7 @@ data/
 
 ### 会话
 
-新建的命名会话使用 UUID `{session_id}`，路径固定为 `characters/{character_id}/sessions/{session_id}/`。它可以简单理解为一个独立“开局”或“存档槽位”：对话历史写入 `history/`，该会话的封卷记忆写入 `memory/`；目标状态还包括独立 state、世界书快照和 revision。用户可修改的“开局 1”“二周目”等标题保存在未来的 `meta.json`，不进入目录名。
+新建的命名会话使用 UUID `{session_id}`，路径固定为 `characters/{character_id}/sessions/{session_id}/`。它可以简单理解为一个独立“开局”或“存档槽位”：对话历史写入 `history/`，该会话的封卷记忆写入 `memory/`；目标状态还包括独立 state、角色卡与世界书工作副本，以及覆盖二者的统一 revision。用户可修改的“开局 1”“二周目”等标题保存在未来的 `meta.json`，不进入目录名。
 
 外层 `{session_id}` 同时是该开局、聊天历史和 `chat_log_meta.json` 的唯一规范 UUID。`history/` 与 `memory/` 已位于这个 UUID 目录内，不再嵌套或生成第二个对话 UUID。
 

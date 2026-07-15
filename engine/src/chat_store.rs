@@ -240,9 +240,13 @@ impl ChatLog {
                 };
                 if !meta_existed || m.session_id != scope_session_id {
                     // 旧版本为 ChatLog 额外生成内部 UUID。加载时只归一化身份字段，
-                    // 保留原 created_at / updated_at 和聊天内容。
+                    // 保留原 created_at / updated_at 和聊天内容。持久化迁移不能阻断
+                    // 已存在历史的读取；失败时由下一次写操作再次保存规范 ID。
                     m.session_id = scope_session_id.clone();
-                    fs::write(&meta_p, serde_json::to_string_pretty(&m)?)?;
+                    let bytes = serde_json::to_vec_pretty(&m)?;
+                    if let Err(error) = crate::data_dir::replace_file(&meta_p, &bytes) {
+                        tracing::warn!(path = ?meta_p, err = %error, "命名 session metadata ID 归一化写入失败，继续读取历史");
+                    }
                 }
                 let log = Self {
                     session_id: scope_session_id.clone(),
@@ -801,6 +805,53 @@ mod tests {
         .unwrap();
         assert_eq!(meta.session_id, sid.to_string());
         assert_eq!(meta.created_at, "2025-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn named_session_read_survives_metadata_repair_failure() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let sid = SessionId::parse("550e8400-e29b-41d4-a716-446655440002").unwrap();
+        let history_dir = root
+            .join("characters")
+            .join("alice")
+            .join("sessions")
+            .join(sid.to_string())
+            .join("history");
+        fs::create_dir_all(&history_dir).unwrap();
+        fs::write(
+            history_dir.join("chat_log.jsonl"),
+            "{\"role\":\"user\",\"content\":\"recoverable\"}\n",
+        )
+        .unwrap();
+
+        let meta_path = history_dir.join("chat_log_meta.json");
+        fs::write(
+            &meta_path,
+            serde_json::to_string_pretty(&ChatLogMeta {
+                session_id: "legacy-internal-id".to_string(),
+                character_id: "alice".to_string(),
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                updated_at: "2025-01-02T00:00:00Z".to_string(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let temporary = meta_path.with_extension("json.tmp");
+        fs::create_dir(&temporary).unwrap();
+
+        let meta_permissions = fs::metadata(&meta_path).unwrap().permissions();
+        let mut readonly_meta_permissions = meta_permissions.clone();
+        readonly_meta_permissions.set_readonly(true);
+        fs::set_permissions(&meta_path, readonly_meta_permissions).unwrap();
+
+        let result = ChatLog::load_or_create_for_session(root, "alice", Some(&sid));
+
+        fs::set_permissions(&meta_path, meta_permissions).unwrap();
+
+        let log = result.expect("metadata repair failure must not block history reads");
+        assert_eq!(log.session_id, sid.to_string());
+        assert_eq!(log.messages[0].content, "recoverable");
     }
 
     #[test]
