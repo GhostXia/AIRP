@@ -572,6 +572,13 @@
       || userId !== (personaUserId.value.trim() || 'default')) return;
     if (!r.ok) {
       effectivePersona = null;
+      if (r.status === 404) {
+        await refreshPersonaList();
+        if (requestId !== effectivePersonaRequestId
+          || characterId !== selectedChar
+          || sessionId !== selectedSess
+          || userId !== (personaUserId.value.trim() || 'default')) return;
+      }
       if (personaEffectiveHint) personaEffectiveHint.textContent = '生效查询失败: ' + formatError(r.data, r.text);
       updateBindingButtons();
       return;

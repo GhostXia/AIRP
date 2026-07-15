@@ -1065,16 +1065,9 @@ impl PersonaService {
         if let Some(session_id) = session_id {
             SessionId::parse(session_id)?;
         }
-        let ids = self.list(user_id)?;
         let mut session_owners: Vec<String> = Vec::new();
         let mut character_owners: Vec<String> = Vec::new();
-        for pid in &ids {
-            let persona = match self.get(user_id, pid, "User") {
-                Ok(persona) => persona,
-                // A concurrent delete may remove a profile after `list`.
-                Err(AirpError::NotFound(_)) => continue,
-                Err(error) => return Err(error),
-            };
+        for (pid, persona) in self.persona_snapshot(user_id)? {
             for b in &persona.bindings {
                 if b.character_id != character_id {
                     continue;
@@ -1161,6 +1154,54 @@ impl PersonaService {
             }
         }
         Ok(())
+    }
+
+    /// Read all Persona files while holding the per-user lock so binding
+    /// resolution observes one committed ownership snapshot.
+    fn persona_snapshot(&self, user_id: &UserId) -> Result<Vec<(String, Persona)>, AirpError> {
+        let lock = persona_lock(user_id.as_str());
+        let _guard = lock.lock().expect("persona lock poisoned");
+        self.reject_case_variant_default_file(user_id)?;
+
+        let dir = data_dir::user_personas_dir(&self.data_root, user_id);
+        let mut ids = Vec::new();
+        if dir.is_dir() {
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if let Some(id) = name.strip_suffix(".json") {
+                    if data_dir::validate_id_segment(id).is_ok() {
+                        ids.push(id.to_string());
+                    }
+                }
+            }
+        }
+        if !ids.iter().any(|id| id == "default") {
+            ids.push("default".to_string());
+        }
+        ids.sort();
+
+        let mut snapshot = Vec::with_capacity(ids.len());
+        for id in ids {
+            let mut persona = if id == "default" {
+                let canonical =
+                    data_dir::user_persona_multi_path(&self.data_root, user_id, "default")?;
+                let legacy = data_dir::user_persona_path(&self.data_root, user_id);
+                self.newest_default_copy(&canonical, &legacy)?
+                    .unwrap_or_else(|| Persona::initial("User"))
+            } else {
+                let path =
+                    data_dir::user_persona_multi_path(&self.data_root, user_id, id.as_str())?;
+                self.parse_persona_bytes(&fs::read(path)?)?
+            };
+            persona.id = id.clone();
+            snapshot.push((id, persona));
+        }
+        Ok(snapshot)
     }
 
     fn parse_persona_bytes(&self, bytes: &[u8]) -> Result<Persona, AirpError> {
@@ -1845,6 +1886,36 @@ mod tests {
             .unwrap()
             .bindings
             .is_empty());
+    }
+
+    #[test]
+    fn resolved_persona_deleted_before_read_returns_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        service
+            .save(&uid, "writer", 0, Persona::initial("Writer"))
+            .unwrap();
+        service
+            .bind(
+                &uid,
+                "writer",
+                PersonaBinding {
+                    character_id: "char-a".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+
+        let resolution = service
+            .resolve_effective_persona(&uid, "char-a", None)
+            .unwrap();
+        let resolved_id = resolution.effective_persona_id.unwrap();
+        service.delete(&uid, &resolved_id).unwrap();
+        assert!(matches!(
+            service.get(&uid, &resolved_id, "User"),
+            Err(AirpError::NotFound(_))
+        ));
     }
 
     #[test]

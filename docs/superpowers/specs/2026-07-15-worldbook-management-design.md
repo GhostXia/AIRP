@@ -159,6 +159,10 @@ secondary，避免两套限制漂移。
 - `selective` checkbox（标注「选择性」）
 - `secondary_keys` input（逗号分隔，当 `selective=true` 时启用，否则 disabled）
 
+`secondary_keys` 保存前按逗号拆分，每个 token 去除首尾空白并移除空 token；保留首次
+出现的输入顺序，重复 token 只保留第一次。例：`writer, roleplay, writer` 序列化为
+`["writer", "roleplay"]`，不得把前导空格写入触发 key。
+
 **body 区**：
 - advisory 字段只读展示区（当 entry 含 advisory metadata 时显示）：
   - top-level `entry.case_sensitive`
