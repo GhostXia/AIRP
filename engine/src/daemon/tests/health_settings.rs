@@ -254,12 +254,10 @@ async fn production_settings_rejects_access_key_replacement_without_partial_upda
     assert!(!state.data_root.join("settings.json").exists());
 }
 
-// #165 SET-01：同一 patch 同时携带有效 endpoint/model 和无效 volume（soft >= hard）
-// 时，必须在拿写锁前拒绝整笔请求，不得留下部分内存更新或落盘。
-#[tokio::test]
-async fn settings_update_rejects_invalid_volume_without_partial_live_config_mutation() {
-    let (state, _tmp) = make_state_no_key();
-    let response = create_router(state.clone())
+async fn submit_settings_patch_with_invalid_volume(
+    state: Arc<DaemonState>,
+) -> axum::response::Response {
+    create_router(state)
         .oneshot(
             axum::http::Request::builder()
                 .method("POST")
@@ -281,7 +279,15 @@ async fn settings_update_rejects_invalid_volume_without_partial_live_config_muta
                 .unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+}
+
+// #165 SET-01：同一 patch 同时携带有效 endpoint/model 和无效 volume（soft >= hard）
+// 时，必须在拿写锁前拒绝整笔请求，不得留下部分内存更新或落盘。
+#[tokio::test]
+async fn settings_update_rejects_invalid_volume_without_partial_live_config_mutation() {
+    let (state, _tmp) = make_state_no_key();
+    let response = submit_settings_patch_with_invalid_volume(state.clone()).await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
@@ -300,6 +306,20 @@ async fn settings_update_rejects_invalid_volume_without_partial_live_config_muta
 
     // 失败后 settings.json 不得被创建或修改。
     assert!(!state.data_root.join("settings.json").exists());
+}
+
+#[tokio::test]
+async fn settings_update_rejects_invalid_volume_without_modifying_existing_settings_file() {
+    let (state, _tmp) = make_state_no_key();
+    let path = state.data_root.join("settings.json");
+    let original =
+        b"{\n  \"endpoint\": \"https://existing.example\",\n  \"model\": \"persisted\"\n}\n";
+    std::fs::write(&path, original).unwrap();
+
+    let response = submit_settings_patch_with_invalid_volume(state).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(std::fs::read(path).unwrap(), original);
 }
 
 // #165 SET-01 回归保护：valid volume 与 endpoint/model 同 patch 时仍能成功更新，
