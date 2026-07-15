@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-15 的 `main@c54428e` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-15 的 `main@fb523b8` 复核。
 
 ## 当前能力
 
@@ -13,7 +13,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - 会话创建/列表、history、append、rollback、regen；
 - rollback 在 service/API 与 `ChatLog` 持久化边界都拒绝非法 index；空日志 `index=0` 保留兼容；
 - 多 Persona 存储、revision、HTTP CRUD/绑定，以及 chat pipeline 的显式/绑定/default 激活；
-- lorebook CRUD、OR-key 触发、`enabled`、`priority`、v2 `constant` 常驻注入与 v3 shared normalizer/导入诊断；
+- lorebook CRUD、OR-key 触发、`enabled`、`priority`、`constant` 常驻注入、v4 `selective`/`secondary_keys` gate 与 shared normalizer/导入诊断；
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
@@ -44,7 +44,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ### Worldbook 与 state 都是部分实现
 
-- Worldbook 已有 v2 `constant` 合同；仍无 selective/secondary、probability、sticky/cooldown/delay、group、position/depth 等高级语义的完整 AIRP 合同；
+- Worldbook 已有 v4 `constant` + `selective`/`secondary_keys` 合同；probability、sticky/cooldown/delay、group、position/depth、递归等仍只是 advisory/unsupported runtime；
 - state schema 在写入前强制 required/type/range/additionalProperties，并以 revisioned atomic replace 更新 live/history；
 - Chat/State/Lorebook 的 HTTP、pipeline 与 Agent tools 已复用共享 domain services；更广泛的跨资源事务仍需逐项设计。
 
@@ -110,6 +110,7 @@ cargo run -p airp-core -- run --message "hello"
 | GET | `/v1/presets/:preset_id` | 预设详情 |
 | POST | `/v1/presets/import` | 校验并导入预设 |
 | GET/PUT | `/v1/users/:user_id/persona` | legacy 默认 Persona |
+| GET | `/v1/users/:user_id/persona/effective` | binding→default 生效 Persona、来源与双 scope owner |
 | GET/POST | `/v1/users/:user_id/personas` | 多 Persona 列表/创建 |
 | GET/PUT/DELETE | `/v1/users/:user_id/personas/:persona_id` | 多 Persona CRUD |
 | POST/DELETE | `/v1/users/:user_id/personas/:persona_id/bindings` | 角色/session 绑定 |
@@ -157,7 +158,7 @@ cargo fmt --all -- --check
 cargo clippy -p airp-core --lib --tests --locked -- -D warnings
 ```
 
-`main@c54428e` 的 GitHub run `29408478974` 中 Rust workspace、UI and WebUI、Production topology、CodeRabbit 全绿。PR #177 的相关本地证据包括 fmt、严格 Clippy、3 个 trace 单测和 2 个 subagent 不变式测试通过；这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+`main@fb523b8` 的 GitHub run `29426587813` 中 Rust workspace、UI and WebUI、Production topology、CodeRabbit 全绿。PR #180 的相关本地证据包括 workspace fmt/build/严格 Clippy/tests、Persona/Worldbook 回归、16 个 WebUI 生产工具测试和 2 个 subagent 不变式通过；这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 
