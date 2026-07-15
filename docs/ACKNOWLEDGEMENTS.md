@@ -25,7 +25,7 @@
 
 | 项目 | AIRP 研究或吸收的经验 | 当前关系 | 审查基线（固定版本/日期） | 许可证核验 | AIRP 记录 |
 |---|---|---|---|---|---|
-| [SillyTavern](https://github.com/SillyTavern/SillyTavern) | RP 功能清单、角色卡/世界书兼容面、Preset 与 Persona 交互、扩展生态 | 功能与互操作性参考；AIRP 按自身架构独立实现 | `8172dcd0ee` | AGPL-3.0 | [TAVERN-PARITY.md](TAVERN-PARITY.md)、[#114](https://github.com/GhostXia/AIRP/issues/114) |
+| [SillyTavern](https://github.com/SillyTavern/SillyTavern) | RP 功能清单、角色卡/世界书兼容面、Preset 与 Persona 交互、扩展生态，以及角色/聊天/全局/Persona 多来源世界书绑定与用户数据隔离经验 | 功能、公开行为与互操作性参考；AIRP 采用稳定 ID、session 自包含快照和 provenance 独立实现，不复用其代码或文件名耦合 | `380e31e8c58d196969b6a0da74f431ba999c7e0a` / 2026-07-12 checkout，2026-07-15 核验 | AGPL-3.0 | [TAVERN-PARITY.md](TAVERN-PARITY.md)、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[#168](https://github.com/GhostXia/AIRP/issues/168) |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 有界长期记忆、frozen snapshot、skills、用户建模、headless Agent 形态、credential redirect 边界 | 重要架构理念参考 | `3b2ef789df` | MIT | [HERMES-MEMORY.md](HERMES-MEMORY.md)、[#117](https://github.com/GhostXia/AIRP/issues/117) |
 | [NeuroBook](https://github.com/notnotype/neuro-book) | 结构化 prompt 装配、长篇记忆、角色知识视角、Agent change inbox 与 authoring workflow | 研究参考；未作为当前 capability 事实 | `138e16d216` | AGPL-3.0 | [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md)、[#117](https://github.com/GhostXia/AIRP/issues/117) |
 | [pi-forge](https://github.com/MacroSony/pi-forge) | Preset 导入报告、prompt assembly trace、一次性 payload inspector、history integrity | 规划参考，尚待 issue 实施 | `161f434ba5` | MIT | [#115](https://github.com/GhostXia/AIRP/issues/115) |

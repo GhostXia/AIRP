@@ -47,6 +47,8 @@ data/quota.json
 # 引擎运行时会在这两个目录下读写用户导入的卡/预设；测试用合成 fixture 另置，勿放个人数据。
 data/characters/
 data/presets/
+data/third_party/
+data/users/*/third_party/
 
 # 遗留根级 RP 文件：新数据根不再生成，但继续忽略已有用户文件
 data/items.md

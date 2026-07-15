@@ -1,6 +1,6 @@
 # `data/` 持久化目录规范
 
-`data/` 是引擎的数据根，不是一个可以随意堆放资源的共享目录。角色相关资产和运行状态应聚合在同一个稳定的角色目录下；命名会话再聚合在该角色的 `sessions/` 下。
+`data/` 是引擎的数据根，不是一个可以随意堆放资源的共享目录。角色相关资产按稳定角色 ID 聚合；每个命名 session 是一个独立开局/存档槽位。完整的目标合同见 [`docs/SESSION-DATA-DESIGN.md`](../docs/SESSION-DATA-DESIGN.md)。
 
 实际根目录由 `engine/src/data_dir/paths.rs` 的 `resolve_data_root()` 决定，优先级如下：
 
@@ -29,13 +29,16 @@ data/
 │       │   └── extra/
 │       ├── sessions/
 │       │   └── {session_id}/
+│       │       ├── meta.json
 │       │       ├── history/
 │       │       │   ├── chat_log.jsonl
 │       │       │   └── chat_log_meta.json
-│       │       └── memory/
+│       │       ├── memory/
 │       │           ├── current.md
 │       │           ├── index.md
 │       │           └── volumes/
+│       │       ├── state/
+│       │       └── worldbooks/
 │       ├── state/
 │       ├── gating/
 │       ├── analysis/
@@ -46,11 +49,13 @@ data/
 │   └── {scene_id}/
 ├── users/
 │   └── {user_id}/
+├── third_party/
+│   └── worldbooks/
 └── exports/
     └── context-bundles/{character_id}/
 ```
 
-目录按需创建，因此一个实际角色目录不一定包含树中的每一项。
+这是目标归属模型，目录按需创建。当前代码已经隔离命名 session 的 history 与 memory，但 `meta.json`、session state、第三方素材库和世界书物化/revision 尚待分阶段实现，不能把本树全部视为已交付能力。
 
 ### 角色目录名
 
@@ -58,13 +63,13 @@ data/
 
 ### 会话
 
-新建的命名会话使用 UUID `{session_id}`，路径固定为 `characters/{character_id}/sessions/{session_id}/`。对话历史写入 `history/`，该会话的封卷记忆写入 `memory/`。
+新建的命名会话使用 UUID `{session_id}`，路径固定为 `characters/{character_id}/sessions/{session_id}/`。它可以简单理解为一个独立“开局”或“存档槽位”：对话历史写入 `history/`，该会话的封卷记忆写入 `memory/`；目标状态还包括独立 state、世界书快照和 revision。用户可修改的“开局 1”“二周目”等标题保存在未来的 `meta.json`，不进入目录名。
 
 未提供 `session_id` 的旧调用仍使用角色级 `history/` 和 `memory/`，这是向后兼容范围，不是新客户端优先采用的布局。不要自行用会话标题作为文件夹名。
 
 ### 角色自带世界书
 
-角色自带世界书的规范路径是 `characters/{character_id}/world/lorebook.json`。它必须保留关键词、优先级、`constant` 和扩展元数据等结构化语义，因此不使用 `world.md` 代替。
+角色默认世界书当前位于 `characters/{character_id}/world/lorebook.json`。它必须保留关键词、优先级、`constant` 和扩展元数据等结构化语义，因此不使用 `world.md` 代替。目标实现会在创建开局时把它物化为 session 工作副本；运行中的 session 不再把角色级文件当作动态唯一真值。
 
 `world/extra/` 可存放额外导入的世界书 sidecar。旧版 `characters/{character_id}/worldbooks/` 仅保留扫描兼容；引擎不再为新角色创建该目录。
 
@@ -76,7 +81,7 @@ data/
 - `exports/`：引擎生成的上下文导出，不是输入资产源。
 - `quota.json`：单用户模式的运行计数；多用户模式位于对应用户根。
 
-`third_party/` 或 `third-party/` 当前没有运行时合同，不能仅凭目录名获得加载、隔离或许可证处理语义。未来若实现第三方资产管理，应先定义 schema、安全边界和 provenance，再统一采用一个名称。
+第三方世界书统一使用 `third_party/worldbooks/{source_id}/{package_id}/{version}/`，并区分原始文件、AIRP 归一化素材和 provenance。该目录是素材库，不是活跃 session 的动态依赖；采用时必须复制到 session 的 `worldbooks/` 并由 manifest 明确启用、顺序、来源和 hash。此合同已经确定，但运行时尚未实现。
 
 ## 遗留兼容与迁移
 
