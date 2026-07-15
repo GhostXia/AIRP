@@ -253,3 +253,120 @@ async fn production_settings_rejects_access_key_replacement_without_partial_upda
     assert_ne!(runtime.model, "must-not-change");
     assert!(!state.data_root.join("settings.json").exists());
 }
+
+async fn submit_settings_patch_with_invalid_volume(
+    state: Arc<DaemonState>,
+) -> axum::response::Response {
+    create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "endpoint": "https://api.openai.com",
+                        "model": "gpt-4o-mini",
+                        "volume": {
+                            "soft_threshold_tokens": 4000,
+                            "hard_threshold_tokens": 3500,
+                            "seal_temperature": 0.3,
+                            "maintenance_interval": 20
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+// #165 SET-01：同一 patch 同时携带有效 endpoint/model 和无效 volume（soft >= hard）
+// 时，必须在拿写锁前拒绝整笔请求，不得留下部分内存更新或落盘。
+#[tokio::test]
+async fn settings_update_rejects_invalid_volume_without_partial_live_config_mutation() {
+    let (state, _tmp) = make_state_no_key();
+    let response = submit_settings_patch_with_invalid_volume(state.clone()).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // 失败后 live config 的所有字段必须与请求前一致（make_state_no_key 初值：
+    // endpoint="http://localhost"、model="gpt-4o"、volume=VolumeConfig::default()）。
+    // VolumeConfig 未派生 PartialEq，用字段级断言精确比较。
+    let after = state.config.read().unwrap();
+    assert_eq!(after.endpoint, "http://localhost");
+    assert_eq!(after.model, "gpt-4o");
+    assert_eq!(after.volume_config.soft_threshold_tokens, 2500);
+    assert_eq!(after.volume_config.hard_threshold_tokens, 3500);
+    assert_eq!(after.volume_config.seal_temperature, 0.3);
+    assert!(after.volume_config.seal_model.is_none());
+    assert_eq!(after.volume_config.maintenance_interval, 20);
+    drop(after);
+
+    // 失败后 settings.json 不得被创建或修改。
+    assert!(!state.data_root.join("settings.json").exists());
+}
+
+#[tokio::test]
+async fn settings_update_rejects_invalid_volume_without_modifying_existing_settings_file() {
+    let (state, _tmp) = make_state_no_key();
+    let path = state.data_root.join("settings.json");
+    let original =
+        b"{\n  \"endpoint\": \"https://existing.example\",\n  \"model\": \"persisted\"\n}\n";
+    std::fs::write(&path, original).unwrap();
+
+    let response = submit_settings_patch_with_invalid_volume(state).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
+// #165 SET-01 回归保护：valid volume 与 endpoint/model 同 patch 时仍能成功更新，
+// 证明把 validate 提到写锁外没有破坏 volume 成功路径。
+#[tokio::test]
+async fn settings_update_applies_valid_volume_alongside_endpoint_and_model() {
+    let (state, _tmp) = make_state_no_key();
+    let response = create_router(state.clone())
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "endpoint": "https://api.openai.com",
+                        "model": "gpt-4o-mini",
+                        "volume": {
+                            "soft_threshold_tokens": 2000,
+                            "hard_threshold_tokens": 3000,
+                            "seal_temperature": 0.2,
+                            "maintenance_interval": 15
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let after = state.config.read().unwrap();
+    assert_eq!(after.endpoint, "https://api.openai.com");
+    assert_eq!(after.model, "gpt-4o-mini");
+    assert_eq!(after.volume_config.soft_threshold_tokens, 2000);
+    assert_eq!(after.volume_config.hard_threshold_tokens, 3000);
+    assert_eq!(after.volume_config.seal_temperature, 0.2);
+    assert_eq!(after.volume_config.maintenance_interval, 15);
+    drop(after);
+
+    // 成功路径必须落盘，且 volume 字段同步写入。
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(state.data_root.join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(persisted["endpoint"], "https://api.openai.com");
+    assert_eq!(persisted["model"], "gpt-4o-mini");
+    assert_eq!(persisted["volume"]["soft_threshold_tokens"], 2000);
+    assert_eq!(persisted["volume"]["hard_threshold_tokens"], 3000);
+}
