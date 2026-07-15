@@ -130,8 +130,10 @@ owner；现有 `find_for_character` 和 [chat pipeline](../../../engine/src/chat
 - 解绑角色：`DELETE /v1/users/:user_id/personas/:persona_id/bindings?character_id=X`
 - 解绑会话：`DELETE /v1/users/:user_id/personas/:persona_id/bindings?character_id=X&session_id=Y`
 
-现有 POST 不会替换其他 Persona 对同 scope 的绑定，直接 POST 会制造 ambiguity；因此
-owner 不同时必须先显式解绑、刷新，再允许绑定。每次操作后刷新 effective 端点。
+POST 不替换其他 Persona 对同 scope 的绑定；owner 不同时仍须先显式解绑、刷新，再允许
+绑定。服务端在持有 per-user Persona 保存锁时检查所有 binding scope owner：若刷新后有
+其他客户端抢先绑定同一 scope，POST 返回 typed `400 bad_request`，不得持久化多 owner
+状态。每次操作后刷新 effective 端点。
 
 ### 4.4 有效 Persona 展示
 

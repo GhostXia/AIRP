@@ -54,6 +54,12 @@ try {
   assert.equal(await page.locator('#engine-url').isVisible(), false);
   assert.equal(await page.locator('#bearer-token').isVisible(), false);
   assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), []);
+  await page.waitForFunction(() => document.querySelector('#persona-select option[value=""]'));
+  assert.equal(await page.locator('#persona-effective-hint').getAttribute('role'), 'status');
+  assert.equal(await page.locator('#persona-effective-hint').getAttribute('aria-live'), 'polite');
+  await page.locator('#persona-select').selectOption('');
+  assert.equal(await page.locator('#btn-save-persona').isDisabled(), true);
+  assert.equal(await page.locator('#btn-delete-persona').isDisabled(), true);
 
   const injectionName = '<img src=x onerror="window.__airpXss=1">';
   const importStatus = await page.evaluate(async ({ injectionName }) => {
@@ -88,6 +94,7 @@ try {
   assert.equal(importStatus, 200);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('#conn-text')?.textContent?.startsWith('已连接'), null, { timeout: 15_000 });
+  assert.equal(await page.locator('#persona-select').inputValue(), '');
   await page.waitForFunction(name => document.body.textContent.includes(name), injectionName);
   assert.equal(await page.locator('img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);

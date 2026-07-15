@@ -439,7 +439,9 @@ impl LorebookService {
                 "lorebook for character {character_id} not found"
             )));
         }
-        Ok(serde_json::from_slice(&fs::read(path)?)?)
+        let mut value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+        migrate_lorebook_v3_selective(&mut value)?;
+        Ok(serde_json::from_value(value)?)
     }
 
     pub fn write(
@@ -455,6 +457,51 @@ impl LorebookService {
         let path = data_dir::char_world_lorebook_path(&self.data_root, character_id.as_str());
         data_dir::replace_file(&path, &serde_json::to_vec_pretty(lorebook)?)
     }
+}
+
+/// v3 persisted `selective` under `extensions`. Preserve field presence before
+/// deserializing v4's defaulted bool so extension-only `true` is not lost.
+fn migrate_lorebook_v3_selective(value: &mut serde_json::Value) -> Result<(), AirpError> {
+    let Some(entries) = value
+        .get_mut("entries")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    for entry in entries {
+        let Some(entry) = entry.as_object_mut() else {
+            continue;
+        };
+        let extension_selective = entry
+            .get("extensions")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|extensions| extensions.get("selective"))
+            .cloned();
+        if extension_selective
+            .as_ref()
+            .is_some_and(|selective| !selective.is_boolean())
+        {
+            return Err(AirpError::Internal(
+                "lorebook extensions.selective must be a boolean".to_string(),
+            ));
+        }
+        if !entry.contains_key("selective") {
+            if let Some(selective) = extension_selective.as_ref() {
+                entry.insert("selective".to_string(), selective.clone());
+            }
+        }
+        let extensions_empty = entry
+            .get_mut("extensions")
+            .and_then(serde_json::Value::as_object_mut)
+            .is_some_and(|extensions| {
+                extensions.remove("selective");
+                extensions.is_empty()
+            });
+        if extensions_empty {
+            entry.remove("extensions");
+        }
+    }
+    Ok(())
 }
 
 impl StateService {
@@ -900,6 +947,7 @@ impl PersonaService {
         }
 
         Self::validate_bindings(&persona.bindings)?;
+        self.validate_binding_ownership(user_id, persona_id, &persona.bindings)?;
         persona.schema = Persona::SCHEMA;
         persona.id = persona_id.to_string();
         persona.revision = current_revision + 1;
@@ -1188,6 +1236,71 @@ impl PersonaService {
         Ok(())
     }
 
+    /// Enforce one owner per character/session scope while the per-user save
+    /// lock is held. Concurrent bind requests can race before `save`, but only
+    /// one can pass this check and persist.
+    fn validate_binding_ownership(
+        &self,
+        user_id: &UserId,
+        persona_id: &str,
+        bindings: &[PersonaBinding],
+    ) -> Result<(), AirpError> {
+        self.reject_case_variant_default_file(user_id)?;
+
+        let check_owner = |owner_id: &str, owner: &Persona| -> Result<(), AirpError> {
+            for binding in bindings {
+                if owner.bindings.iter().any(|existing| {
+                    existing.character_id == binding.character_id
+                        && existing.session_id == binding.session_id
+                }) {
+                    let scope = binding.session_id.as_deref().map_or_else(
+                        || format!("character {}", binding.character_id),
+                        |session_id| {
+                            format!("character {} session {session_id}", binding.character_id)
+                        },
+                    );
+                    return Err(AirpError::BadRequest(format!(
+                        "persona binding scope {scope} is already owned by {owner_id}"
+                    )));
+                }
+            }
+            Ok(())
+        };
+
+        let dir = data_dir::user_personas_dir(&self.data_root, user_id);
+        if dir.is_dir() {
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let Some(owner_id) = name.strip_suffix(".json") else {
+                    continue;
+                };
+                if data_dir::validate_id_segment(owner_id).is_err()
+                    || owner_id == persona_id
+                    || owner_id == "default"
+                {
+                    continue;
+                }
+                let owner = self.parse_persona_bytes(&fs::read(entry.path())?)?;
+                check_owner(owner_id, &owner)?;
+            }
+        }
+
+        if persona_id != "default" {
+            let canonical = data_dir::user_persona_multi_path(&self.data_root, user_id, "default")?;
+            let legacy = data_dir::user_persona_path(&self.data_root, user_id);
+            if let Some(owner) = self.newest_default_copy(&canonical, &legacy)? {
+                check_owner("default", &owner)?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn replace_default_pair(
         &self,
         canonical: &Path,
@@ -1220,6 +1333,43 @@ impl PersonaService {
 mod tests {
     use super::*;
     use crate::adapter::MessageRole;
+
+    #[test]
+    fn lorebook_read_migrates_v3_selective_without_losing_explicit_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("lore-v3").unwrap();
+        let world_dir = data_dir::char_world_dir(tmp.path(), character.as_str()).unwrap();
+        let path = world_dir.join("lorebook.json");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "entries": [
+                    {"keys": ["a"], "content": "absent"},
+                    {"keys": ["b"], "content": "legacy", "extensions": {"selective": true, "position": "before_char"}},
+                    {"keys": ["c"], "content": "explicit", "selective": false, "extensions": {"selective": true}}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let lorebook = LorebookService::new(tmp.path()).read(&character).unwrap();
+        assert!(!lorebook.entries[0].selective);
+        assert!(lorebook.entries[1].selective);
+        assert!(!lorebook.entries[2].selective);
+        assert!(lorebook.entries[2].extensions.is_none());
+        assert_eq!(
+            lorebook.entries[1]
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.get("position")),
+            Some(&serde_json::json!("before_char"))
+        );
+        assert!(lorebook.entries.iter().all(|entry| entry
+            .extensions
+            .as_ref()
+            .is_none_or(|extensions| !extensions.contains_key("selective"))));
+    }
 
     #[test]
     fn append_and_rollback_share_one_session_boundary() {
@@ -1671,6 +1821,33 @@ mod tests {
     }
 
     #[test]
+    fn persona_binding_scope_has_one_atomic_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("alice").unwrap();
+        for id in ["one", "two"] {
+            service.save(&uid, id, 0, Persona::initial(id)).unwrap();
+        }
+        let binding = PersonaBinding {
+            character_id: "char-a".to_string(),
+            session_id: None,
+        };
+        service.bind(&uid, "one", binding.clone()).unwrap();
+
+        let error = service.bind(&uid, "two", binding).unwrap_err();
+        assert!(matches!(
+            error,
+            AirpError::BadRequest(message)
+                if message.contains("already owned by one")
+        ));
+        assert!(service
+            .get(&uid, "two", "User")
+            .unwrap()
+            .bindings
+            .is_empty());
+    }
+
+    #[test]
     fn persona_binding_ambiguity_fails_closed_at_each_precedence_tier() {
         let tmp = tempfile::tempdir().unwrap();
         let service = PersonaService::new(tmp.path());
@@ -1678,27 +1855,43 @@ mod tests {
         let session = SessionId::new().to_string();
         for id in ["one", "two"] {
             service.save(&uid, id, 0, Persona::initial(id)).unwrap();
-            service
-                .bind(
-                    &uid,
-                    id,
-                    PersonaBinding {
-                        character_id: "generic-char".to_string(),
-                        session_id: None,
-                    },
-                )
-                .unwrap();
-            service
-                .bind(
-                    &uid,
-                    id,
-                    PersonaBinding {
-                        character_id: "session-char".to_string(),
-                        session_id: Some(session.clone()),
-                    },
-                )
-                .unwrap();
         }
+        service
+            .bind(
+                &uid,
+                "one",
+                PersonaBinding {
+                    character_id: "generic-char".to_string(),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        service
+            .bind(
+                &uid,
+                "one",
+                PersonaBinding {
+                    character_id: "session-char".to_string(),
+                    session_id: Some(session.clone()),
+                },
+            )
+            .unwrap();
+
+        // Seed legacy/corrupt persisted ambiguity directly. New saves reject
+        // this state, while the resolver must still fail closed when reading it.
+        let mut two = service.get(&uid, "two", "User").unwrap();
+        two.bindings = vec![
+            PersonaBinding {
+                character_id: "generic-char".to_string(),
+                session_id: None,
+            },
+            PersonaBinding {
+                character_id: "session-char".to_string(),
+                session_id: Some(session.clone()),
+            },
+        ];
+        let two_path = data_dir::user_persona_multi_path(tmp.path(), &uid, "two").unwrap();
+        fs::write(two_path, serde_json::to_vec_pretty(&two).unwrap()).unwrap();
 
         assert!(matches!(
             service.find_for_character(&uid, "generic-char", None),

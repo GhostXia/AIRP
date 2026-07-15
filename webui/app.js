@@ -1,86 +1,10 @@
 // AIRP Engine Console — backend validation harness (M1)
 // Zero-build native JS.  plan: docs/WEBUI-BACKEND-PLAN.md
 
-// ── #114 C-PR1：纯函数（供 Node 测试，不依赖 DOM）──────────────────────────────
-//
-// persona 选择持久化、按钮决策与 payload 装配提取为纯函数，IIFE 内部与
-// webui/tests/*.test.mjs 共用同一真相。
-
-/**
- * 描述 effective persona hint 文本。
- * @param {string} selectedPersonaId - '' 表示「自动」
- * @param {object|null} effectivePersona - effective 端点结果
- * @returns {string}
- */
-function describeEffectiveHint(selectedPersonaId, effectivePersona) {
-  if (selectedPersonaId !== '') {
-    return '已选择：' + selectedPersonaId + '（explicit）';
-  }
-  if (!effectivePersona || !effectivePersona.persona) return '—';
-  const name = effectivePersona.persona.name || 'User';
-  switch (effectivePersona.source) {
-    case 'session_binding': return '生效：' + name + '（来自会话绑定）';
-    case 'character_binding': return '生效：' + name + '（来自角色绑定）';
-    case 'default': return '生效：' + name + '（默认）';
-    default: return '—';
-  }
-}
-
-/**
- * 计算某 scope 的绑定按钮动作。
- * @param {object} state - { selectedPersonaId, selectedChar, selectedSess, effectivePersona }
- * @param {'character'|'session'} scope
- * @returns {{kind:'bind'|'unbind', personaId:string, label:string}|null}
- *   null = 按钮 disabled。bind = POST 绑定 selected Persona；
- *   unbind = DELETE owner 的该 scope 绑定（owner=selected 时即解绑自己）。
- */
-function buildBindAction(state, scope) {
-  const { selectedPersonaId, selectedChar, selectedSess, effectivePersona } = state;
-  // 无 character、下拉为「自动」、或 effective 未查询/冲突 → disabled
-  if (!selectedChar) return null;
-  if (selectedPersonaId === '') return null;
-  if (!effectivePersona) return null;
-  if (scope === 'session' && !selectedSess) return null;
-  const owner = scope === 'character'
-    ? (effectivePersona.bindings && effectivePersona.bindings.character_persona_id)
-    : (effectivePersona.bindings && effectivePersona.bindings.session_persona_id);
-  if (!owner) {
-    // scope 无 owner → 绑定 selected Persona
-    return { kind: 'bind', personaId: selectedPersonaId, label: scope === 'character' ? '绑定到角色' : '绑定到会话' };
-  }
-  if (owner === selectedPersonaId) {
-    // owner = selected → 解绑自己
-    return { kind: 'unbind', personaId: selectedPersonaId, label: scope === 'character' ? '解绑角色' : '解绑会话' };
-  }
-  // owner ≠ selected → 先解绑旧 owner
-  return { kind: 'unbind', personaId: owner, label: '先解绑 ' + owner };
-}
-
-/**
- * 构造 chat/agent payload 的 persona 字段。
- * @param {string} userId
- * @param {string} selectedPersonaId - '' 表示「自动」
- * @returns {{user_id: string, persona_id?: string}}
- */
-function buildPersonaPayload(userId, selectedPersonaId) {
-  const payload = { user_id: userId };
-  if (selectedPersonaId) payload.persona_id = selectedPersonaId;
-  return payload;
-}
-
-// 浏览器环境挂 window.AIRP 供复用；Node 环境通过 module.exports 导出供测试。
-if (typeof window !== 'undefined') {
-  window.AIRP = window.AIRP || {};
-  window.AIRP.describeEffectiveHint = describeEffectiveHint;
-  window.AIRP.buildBindAction = buildBindAction;
-  window.AIRP.buildPersonaPayload = buildPersonaPayload;
-}
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { describeEffectiveHint, buildBindAction, buildPersonaPayload };
-}
-
 (function () {
   'use strict';
+
+  const { describeEffectiveHint, buildBindAction, buildPersonaPayload } = window.AIRPPersonaUtils;
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
   const $ = (s) => document.querySelector(s);
@@ -170,6 +94,7 @@ if (typeof module !== 'undefined' && module.exports) {
   // null = 尚未查询或查询失败；effectivePersona.source ∈
   // 'session_binding' | 'character_binding' | 'default'。
   let effectivePersona = null;
+  let effectivePersonaRequestId = 0;
   let abortController = null;   // for chat SSE
   let agentAbort = null;        // for agent run SSE — 二次点击先 abort 前一个，防事件交错竞态（issue #43/#44 D）
   const HISTORY_PAGE_SIZE = 50;
@@ -577,8 +502,11 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   function updateDeleteButtonState() {
-    if (!btnDeletePersona) return;
-    btnDeletePersona.disabled = (selectedPersonaId.toLowerCase() === 'default');
+    const auto = selectedPersonaId === '';
+    if (btnDeletePersona) {
+      btnDeletePersona.disabled = auto || selectedPersonaId.toLowerCase() === 'default';
+    }
+    if (btnSavePersona) btnSavePersona.disabled = auto;
   }
 
   async function refreshPersona() {
@@ -622,6 +550,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   async function refreshEffectivePersona() {
     if (!personaUserId) return;
+    const requestId = ++effectivePersonaRequestId;
     if (!selectedChar) {
       effectivePersona = null;
       if (personaEffectiveHint) personaEffectiveHint.textContent = '请先选择角色';
@@ -629,9 +558,18 @@ if (typeof module !== 'undefined' && module.exports) {
       return;
     }
     const userId = personaUserId.value.trim() || 'default';
+    const characterId = selectedChar;
+    const sessionId = selectedSess;
+    effectivePersona = null;
+    updateBindingButtons();
+    if (personaEffectiveHint) personaEffectiveHint.textContent = '生效查询中…';
     let url = '/v1/users/' + encodeURIComponent(userId) + '/persona/effective?character_id=' + encodeURIComponent(selectedChar);
     if (selectedSess) url += '&session_id=' + encodeURIComponent(selectedSess);
     const r = await api('GET', url);
+    if (requestId !== effectivePersonaRequestId
+      || characterId !== selectedChar
+      || sessionId !== selectedSess
+      || userId !== (personaUserId.value.trim() || 'default')) return;
     if (!r.ok) {
       effectivePersona = null;
       if (personaEffectiveHint) personaEffectiveHint.textContent = '生效查询失败: ' + formatError(r.data, r.text);
@@ -660,6 +598,7 @@ if (typeof module !== 'undefined' && module.exports) {
       personaEffectiveHint.textContent = describeEffectiveHint(selectedPersonaId, effectivePersona);
     }
     updateBindingButtons();
+    updateDeleteButtonState();
   }
 
   function updateBindingButtons() {
@@ -720,6 +659,11 @@ if (typeof module !== 'undefined' && module.exports) {
   async function savePersona(event) {
     event.preventDefault();
     if (creatingPersona) { await createPersona(); return; }
+    if (selectedPersonaId === '') {
+      personaStatus.textContent = '自动模式只读；请选择具体 Persona 后再保存';
+      updateDeleteButtonState();
+      return;
+    }
     const userId = personaUserId.value.trim() || 'default';
     const pid = selectedPersonaId || 'default';
     let variables;
@@ -742,7 +686,7 @@ if (typeof module !== 'undefined' && module.exports) {
       await refreshPersona();
       personaStatus.textContent = '已保存 · ' + personaStatus.textContent;
     } finally {
-      if (btnSavePersona) btnSavePersona.disabled = false;
+      updateDeleteButtonState();
     }
   }
 
@@ -808,6 +752,11 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function deletePersona() {
+    if (selectedPersonaId === '') {
+      personaStatus.textContent = '自动模式不能删除 Persona';
+      updateDeleteButtonState();
+      return;
+    }
     const userId = personaUserId.value.trim() || 'default';
     const pid = selectedPersonaId || 'default';
     if (pid.toLowerCase() === 'default') return;
@@ -1380,8 +1329,7 @@ if (typeof module !== 'undefined' && module.exports) {
     // 表单值覆盖 engine 刚解析出的 Persona；未来显式 override 需独立 UI 与合同。
     const userId = personaUserId.value.trim() || 'default';
     return buildSessionPayload({
-      user_id: userId,
-      ...(selectedPersonaId ? { persona_id: selectedPersonaId } : {}),
+      ...buildPersonaPayload(userId, selectedPersonaId),
       user_profile: { name: '', variables: {} },
       preset_id: presetSelect.value || undefined,
       message: text,

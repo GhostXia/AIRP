@@ -76,9 +76,11 @@ jobs:
 
       - name: Check WebUI scripts
         run: |
+          node --check webui/persona-utils.js
           node --check webui/app.js
           node --check webui/serve.js
           node --check webui/runtime-config.js
+          node --test webui/tests/*.test.mjs
           node deploy/production/verify-config.mjs
 
   production-images:

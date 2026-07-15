@@ -312,12 +312,27 @@ fn normalize_entry(v: &Value, _index: usize) -> Result<(LorebookEntry, EntryDiag
     let advisory_preserved =
         !secondary_keys.is_empty() || case_sensitive.is_some() || extensions.is_some();
 
-    // needs_review：keys 为空且非 constant —— 此 entry 永远不会触发
-    let needs_review_reason = if keys.is_empty() && !constant.unwrap_or(false) {
-        Some("entry has no keys and is not constant — it will never trigger".to_string())
-    } else {
-        None
-    };
+    let mut review_reasons = Vec::new();
+    if keys.is_empty() && !constant.unwrap_or(false) {
+        review_reasons.push("entry has no keys and is not constant — it will never trigger");
+    }
+    if selective && secondary_keys.is_empty() && !constant.unwrap_or(false) {
+        review_reasons.push(
+            "selective entry has no effective secondary keys — it falls back to primary-only",
+        );
+    }
+    let extension_selective = obj
+        .get("extensions")
+        .and_then(Value::as_object)
+        .and_then(|extensions| extensions.get("selective"))
+        .and_then(Value::as_bool);
+    if obj.get("selective").and_then(Value::as_bool).is_some()
+        && extension_selective.is_some_and(|legacy| legacy != selective)
+    {
+        review_reasons
+            .push("top-level selective conflicts with extensions.selective — top-level value won");
+    }
+    let needs_review_reason = (!review_reasons.is_empty()).then(|| review_reasons.join("; "));
 
     let entry = LorebookEntry {
         keys,
@@ -439,6 +454,14 @@ fn validate_entry_field_types(obj: &serde_json::Map<String, Value>) -> Result<()
         .is_some_and(|value| !value.is_null() && !value.is_object())
     {
         return Err("'extensions' must be an object or null".to_string());
+    }
+    if obj
+        .get("extensions")
+        .and_then(Value::as_object)
+        .and_then(|extensions| extensions.get("selective"))
+        .is_some_and(|value| !value.is_null() && !value.is_boolean())
+    {
+        return Err("'extensions.selective' must be a boolean".to_string());
     }
 
     Ok(())
@@ -1171,8 +1194,10 @@ mod tests {
                 "selective": true
             }
         });
-        let (lb, _) = normalize_worldbook(&src);
+        let (lb, report) = normalize_worldbook(&src);
         assert!(!lb.entries[0].selective, "top-level selective must win");
+        assert_eq!(report.needs_review.len(), 1);
+        assert!(report.needs_review[0].reason.contains("conflicts"));
         assert!(
             lb.entries[0]
                 .extensions
@@ -1225,6 +1250,33 @@ mod tests {
     }
 
     #[test]
+    fn test_extensions_selective_invalid_type_rejected() {
+        let src = serde_json::json!({
+            "keys": ["dragon"],
+            "content": "dragon lore",
+            "extensions": {"selective": "yes"}
+        });
+        let (_, report) = normalize_worldbook(&src);
+        assert_eq!(report.invalid.len(), 1);
+        assert!(report.invalid[0].reason.contains("extensions.selective"));
+    }
+
+    #[test]
+    fn test_selective_without_secondary_is_reported_for_review() {
+        let src = serde_json::json!({
+            "keys": ["dragon"],
+            "content": "dragon lore",
+            "selective": true,
+            "secondary_keys": [""]
+        });
+        let (lorebook, report) = normalize_worldbook(&src);
+        assert!(lorebook.entries[0].selective);
+        assert!(lorebook.entries[0].secondary_keys.is_empty());
+        assert_eq!(report.needs_review.len(), 1);
+        assert!(report.needs_review[0].reason.contains("primary-only"));
+    }
+
+    #[test]
     fn test_v4_selective_fixture_normalizes_correctly() {
         let fixture = include_str!("../../tests/fixtures/worldbook/airp-v4-selective.json");
         let src: Value = serde_json::from_str(fixture).unwrap();
@@ -1235,12 +1287,12 @@ mod tests {
         // selective 字段正确归一化
         // 排序后顺序（按 priority 降序）：dragon(30) > constant compact(25)
         // > moon gate(20) > observatory(10) > marketplace(5)
+        // selective 不得残留在 extensions。
         assert!(lb.entries[0].selective); // dragon
         assert!(lb.entries[1].selective); // constant compact
         assert!(lb.entries[2].selective); // moon gate
         assert!(!lb.entries[3].selective); // observatory
         assert!(lb.entries[4].selective); // marketplace
-        // selective 不在 extensions
         for e in &lb.entries {
             assert!(
                 e.extensions

@@ -788,16 +788,13 @@ async fn effective_persona_multiple_character_scope_owners_returns_400() {
             },
         )
         .unwrap();
-    service
-        .bind(
-            &uid,
-            "p2",
-            crate::domain::PersonaBinding {
-                character_id: "char-a".to_string(),
-                session_id: None,
-            },
-        )
-        .unwrap();
+    let mut p2 = service.get(&uid, "p2", "User").unwrap();
+    p2.bindings.push(crate::domain::PersonaBinding {
+        character_id: "char-a".to_string(),
+        session_id: None,
+    });
+    let p2_path = crate::data_dir::user_persona_multi_path(&state.data_root, &uid, "p2").unwrap();
+    std::fs::write(p2_path, serde_json::to_vec_pretty(&p2).unwrap()).unwrap();
 
     let response = create_router(state)
         .oneshot(
@@ -830,16 +827,13 @@ async fn effective_persona_multiple_session_scope_owners_returns_400() {
             },
         )
         .unwrap();
-    service
-        .bind(
-            &uid,
-            "p2",
-            crate::domain::PersonaBinding {
-                character_id: "char-a".to_string(),
-                session_id: Some(session_uuid.to_string()),
-            },
-        )
-        .unwrap();
+    let mut p2 = service.get(&uid, "p2", "User").unwrap();
+    p2.bindings.push(crate::domain::PersonaBinding {
+        character_id: "char-a".to_string(),
+        session_id: Some(session_uuid.to_string()),
+    });
+    let p2_path = crate::data_dir::user_persona_multi_path(&state.data_root, &uid, "p2").unwrap();
+    std::fs::write(p2_path, serde_json::to_vec_pretty(&p2).unwrap()).unwrap();
 
     let response = create_router(state)
         .oneshot(

@@ -40,9 +40,12 @@ The canonical persisted document is `characters/{character_id}/world/lorebook.js
 - `enabled` — enable flag (defaults `true`)
 - `priority` — sort weight (defaults `10`, descending)
 - `constant` — always-inject flag (defaults `false`)
-- `comment` — free-form annotation
 - `secondary_keys` — v3 advisory, **v4 runtime when `selective=true`**: secondary trigger keywords (OR semantics). See [v4 trigger rule](#version-4-runtime-contract-selective).
 - `selective` — **v4 runtime** (defaults `false`): when `true`, primary key match alone is insufficient; at least one `secondary_keys` entry must also match the scan text.
+
+### Preserved annotation
+
+- `comment` — free-form annotation; preserved and used for diagnostics, but not consumed by `trigger()`.
 
 ### Advisory metadata fields (v3, NOT consumed by `trigger()`)
 
@@ -51,7 +54,7 @@ These fields are populated by the shared normalizer from SillyTavern aliases and
 - `case_sensitive` — from ST `caseSensitive`. Current trigger uses case-sensitive `AhoCorasick::LeftmostLongest` by default; this field is advisory only.
 - `extensions` — `BTreeMap<String, Value>` collecting all ST-only fields not in the canonical schema (`position`, `depth`, `probability`, `sticky`, `cooldown`, `delay`, `group`, `use_regex`, `match_whole_words`, `recursion`, and any unknown fields). Serialized as `null` when empty to keep canonical output clean. **v4: `selective` is no longer in `extensions`** — it is a canonical field.
 
-All v3/v4 fields use `#[serde(default)]` for backward compatibility: v1/v2/v3 data deserializes without breakage.
+All v3/v4 fields use `#[serde(default)]` for backward compatibility. `LorebookService::read` inspects raw JSON before deserialization so extension-only v3 `selective=true` is promoted without being confused with an absent top-level field; an explicit top-level `false` retains precedence.
 
 ## Version 4 runtime contract (selective)
 
@@ -60,7 +63,7 @@ All v3/v4 fields use `#[serde(default)]` for backward compatibility: v1/v2/v3 da
 The v4 activation contract extends v2 with a secondary-match gate:
 
 ```text
-enabled && (constant || (primary_keyword_match && (!selective || secondary_keyword_match)))
+enabled && (constant || (primary_keyword_match && (!selective || no_valid_secondary_keys || secondary_keyword_match)))
 ```
 
 - `selective` defaults to `false`. When `false`, behavior is identical to v3 (primary match alone activates).

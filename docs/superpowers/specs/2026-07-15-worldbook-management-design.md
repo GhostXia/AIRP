@@ -86,6 +86,8 @@ enabled && (
 - `secondary_keys: Vec<String>` 已是 v3 canonical 字段，不变；v4 起 trigger() 消费它
 - scene merge 的 semantic equality 加入 `selective`；仅该字段不同的条目不得提前去重
 - `extensions` 不再包含 `selective`（normalizer 映射到 canonical）
+- `LorebookService::read` 在反序列化默认值前检查 raw JSON 的字段 presence：仅当
+  top-level `selective` 缺席时提升 `extensions.selective`；显式 top-level `false` 优先
 
 #### trigger() 改动
 
@@ -108,9 +110,10 @@ v4 流程：
 5. 按 priority 降序拼接
 
 实现细节：v4 secondary 匹配使用 case-sensitive 语义，与当前 primary runtime 的实际
-行为一致；top-level `case_sensitive` 仍是 advisory，不能据其值切换匹配模式。若选线性
-`scan_text.contains(key)`，必须先过滤空 key，并对有效 key 数量/总字节设置与导入上限
-一致的界限；若超过界限应在 normalizer 拒绝或诊断，不把无界扫描带进 prompt path。
+行为一致；top-level `case_sensitive` 仍是 advisory，不能据其值切换匹配模式。当前实现
+选用线性 `scan_text.contains(key)` 并先过滤空 key；v4 不新增独立数量上限，资源上限与
+整个 worldbook 文档及请求体共用，后续若建立统一 lorebook quota 再同时约束 primary 与
+secondary，避免两套限制漂移。
 
 #### normalizer 改动
 
@@ -194,6 +197,7 @@ D-PR2:
 | `selective=true` 但 `secondary_keys` 为空 | 退化为 primary-only 匹配；不报错 |
 | `selective=false` | primary-only 匹配（v3 行为） |
 | 旧 v3 数据无 `selective` 字段 | `#[serde(default)]` → `false`，行为不变 |
+| 旧 v3 数据仅有 `extensions.selective` | read/normalizer 在默认反序列化前按 presence 提升；显式 top-level 值优先 |
 | 导入 ST card 含 `selective` | normalizer 映射到 canonical，不进 extensions |
 | 导入 ST card 含 `position`/`depth` | 仍进 extensions（advisory），UI 只读显示 |
 | 导入 ST card 含 `probability` | 仍进 extensions（advisory），UI 只读显示 |

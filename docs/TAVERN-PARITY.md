@@ -136,7 +136,7 @@
 
 | 酒馆功能（机械形态） | 底层用户能力 | 重组为我们的 agent 原语 |
 |---|---|---|
-| **World Info**（固定关键词→按位置深度机械注入管线） | "相关背景按需进上下文" | **检索 Tool**（agent 生成中按需调 `lorebook_lookup`）+ 装配规则（触发条进角色平面）。位置/深度/selective 从"机械插入参数"降为"给 agent 的建议元数据"，agent 决定用不用（呼应 §3.2 待议）。**非硬编注入器** |
+| **World Info**（固定关键词→按位置深度机械注入管线） | "相关背景按需进上下文" | **检索 Tool**（agent 生成中按需调 `lorebook_lookup`）+ v4 装配规则（`selective` 通过 primary/secondary gate 约束触发条进入角色平面）。位置/深度仍是建议元数据；递归检索等能力保持待议。 |
 | **Author's Note / Character's Note**（固定深度注入文本） | “持久指令/提醒在某位置反复生效” | 候选 Memory 常驻条目或装配规则，不直接照搬机械 depth-injector |
 | **预设**（机械回放 prompt 结构） | “文风/参数/后处理整体搬运” | **建议素材 + Agent 适配** + 正则→消息格式化 **Hook** + 采样参数→adapter 建议值 |
 | **Quick Replies / STscript**（脚本按钮） | "自动化重复动作/自定义命令" | **Slash 命令注册 + Skill**（可脚本化）——即 agent 的命令/技能面 |
