@@ -2,9 +2,9 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use super::card::{TavernPreset, TavernPrompt};
+use super::card::TavernPreset;
 
 static SETVAR_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\{\{setvar::([^:]+)::([^}]*)\}\}").expect("SETVAR_RE"));
@@ -162,12 +162,15 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
     let Some(obj) = source.as_object() else {
         report.source_error = Some("preset JSON 顶层必须是对象".to_string());
         report.format_version = "unknown".to_string();
-        return (TavernPreset {
-            prompts: None,
-            temperature: None,
-            max_tokens: None,
-            model: None,
-        }, report);
+        return (
+            TavernPreset {
+                prompts: None,
+                temperature: None,
+                max_tokens: None,
+                model: None,
+            },
+            report,
+        );
     };
 
     // 探测格式版本：v2 canonical 有 prompt_order 或 ST 风格的扩展字段；
@@ -208,25 +211,15 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
         report.advisory_preserved += 1;
     }
 
-    // 反序列化为 canonical TavernPreset。serde 已通过 #[serde(alias = ...)]
-    // 消费 ST 别名（openai_max_tokens / openai_model）。
-    let canonical: TavernPreset = match serde_json::from_value(source.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            report.source_error = Some(format!("preset JSON 不符合 TavernPreset schema: {e}"));
-            return (
-                TavernPreset {
-                    prompts: None,
-                    temperature: None,
-                    max_tokens: None,
-                    model: None,
-                },
-                report,
-            );
-        }
-    };
-
-    // 对每条 prompt 做诊断。
+    // 反序列化为 canonical TavernPreset 前先过滤无效条目。
+    //
+    // 原实现直接对 source 做 serde 反序列化：任一 prompt 缺 identifier/name
+    // 会让 serde 拒绝整个 preset，导致下方 per-prompt 的 invalid 诊断分支永远
+    // 不可达，`PresetImportReport.invalid` 恒为空，diagnostics 形同虚设。
+    //
+    // 修复（#115 diagnostics 要求）：先用宽松 Value 操作识别无效条目并记录
+    // 到 `invalid`，构建只含有效条目的 source 副本交给 serde。这样 serde 不会
+    // 因无效条目失败，invalid 分支真正可达；canonical 输出只含有效 prompt。
     let source_prompts: Vec<&Value> = obj
         .get("prompts")
         .and_then(|v| v.as_array())
@@ -234,18 +227,7 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
         .unwrap_or_default();
     report.total_input = source_prompts.len();
 
-    // 同时检查 canonical prompts 与 source prompts 的对应关系。
-    let canonical_prompts = canonical.prompts.clone().unwrap_or_default();
-    let mut converted_count = 0usize;
-    let mut aliases_count_for_report = if obj.contains_key("openai_max_tokens")
-        || obj.contains_key("openai_model")
-    {
-        1
-    } else {
-        0
-    };
-    let mut advisory_count_for_report = if top_advisory { 1 } else { 0 };
-
+    let mut valid_prompts: Vec<(usize, &Value)> = Vec::new();
     for (idx, src_prompt) in source_prompts.iter().enumerate() {
         let Some(p_obj) = src_prompt.as_object() else {
             report.invalid.push(PresetPromptDiagnostic {
@@ -256,7 +238,6 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
             });
             continue;
         };
-
         let identifier = p_obj
             .get("identifier")
             .and_then(|v| v.as_str())
@@ -288,6 +269,57 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
             continue;
         }
 
+        valid_prompts.push((idx, src_prompt));
+    }
+
+    // 构建过滤后的 source 供 serde 反序列化：保留顶层字段（temperature/model 等），
+    // 只替换 prompts 数组为有效条目。serde 已通过 #[serde(alias = ...)] 消费 ST
+    // 别名（openai_max_tokens / openai_model）。
+    let mut filtered = source.clone();
+    if let Some(filtered_obj) = filtered.as_object_mut() {
+        let valid_values: Vec<Value> = valid_prompts.iter().map(|(_, v)| (*v).clone()).collect();
+        filtered_obj.insert("prompts".to_string(), Value::Array(valid_values));
+    }
+    let canonical: TavernPreset = match serde_json::from_value(filtered) {
+        Ok(p) => p,
+        Err(e) => {
+            report.source_error = Some(format!("preset JSON 不符合 TavernPreset schema: {e}"));
+            return (
+                TavernPreset {
+                    prompts: None,
+                    temperature: None,
+                    max_tokens: None,
+                    model: None,
+                },
+                report,
+            );
+        }
+    };
+
+    // 对每条有效 prompt 做 needs_review / aliases / advisory 诊断。
+    let canonical_prompts = canonical.prompts.clone().unwrap_or_default();
+    let mut converted_count = 0usize;
+    let mut aliases_count_for_report =
+        if obj.contains_key("openai_max_tokens") || obj.contains_key("openai_model") {
+            1
+        } else {
+            0
+        };
+    let mut advisory_count_for_report = if top_advisory { 1 } else { 0 };
+
+    for (idx, src_prompt) in valid_prompts.iter() {
+        let p_obj = src_prompt
+            .as_object()
+            .expect("valid_prompts only holds object entries; non-objects go to invalid");
+        let identifier = p_obj
+            .get("identifier")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let name = p_obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         // 该 prompt 已成功转换（进入 canonical）。
         converted_count += 1;
 
@@ -297,29 +329,24 @@ pub fn normalize_preset(source: &Value) -> (TavernPreset, PresetImportReport) {
         }
 
         // advisory_preserved：prompt 含 PROMPT_CONSUMED 之外的键。
-        let prompt_has_advisory = p_obj
-            .keys()
-            .any(|k| !PROMPT_CONSUMED.contains(&k.as_str()));
+        let prompt_has_advisory = p_obj.keys().any(|k| !PROMPT_CONSUMED.contains(&k.as_str()));
         if prompt_has_advisory {
             advisory_count_for_report += 1;
         }
 
         // needs_review：enabled=false 或 content 缺失/空。
         let enabled_val = p_obj.get("enabled").and_then(|v| v.as_bool());
-        let content_val = p_obj
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let content_val = p_obj.get("content").and_then(|v| v.as_str()).unwrap_or("");
         if matches!(enabled_val, Some(false)) {
             report.needs_review.push(PresetPromptDiagnostic {
-                index: idx,
+                index: *idx,
                 identifier: identifier.clone(),
                 name: name.clone(),
                 reason: "prompt enabled=false，运行时不会被装配".to_string(),
             });
         } else if content_val.trim().is_empty() {
             report.needs_review.push(PresetPromptDiagnostic {
-                index: idx,
+                index: *idx,
                 identifier: identifier.clone(),
                 name: name.clone(),
                 reason: "prompt content 为空或仅空白，运行时不会注入文本".to_string(),
@@ -445,5 +472,257 @@ mod tests {
         assert!(result.contains("写作风格是日轻"));
         assert!(result.contains("最后一句话是: 你好啊"));
         assert!(!result.contains("这里是禁用的条目"));
+    }
+
+    // ── normalize_preset diagnostics（#115 P1） ──────────────────────────────
+
+    fn valid_v1_preset_source() -> serde_json::Value {
+        serde_json::json!({
+            "prompts": [
+                {
+                    "identifier": "main",
+                    "name": "Main",
+                    "role": "system",
+                    "content": "hello"
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn normalize_preset_detects_v1_legacy_format() {
+        let source = valid_v1_preset_source();
+        let (canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.format_version, "v1_legacy");
+        assert!(report.source_error.is_none());
+        assert_eq!(report.total_input, 1);
+        assert_eq!(report.converted, 1);
+        assert!(report.invalid.is_empty());
+        assert!(report.needs_review.is_empty());
+        assert_eq!(canonical.prompts.as_ref().unwrap().len(), 1);
+        // source_hash 是 12 位 hex 前缀
+        assert_eq!(report.source_hash.len(), 12);
+        assert!(report.source_hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(report.converter_version, PRESET_CONVERTER_VERSION);
+    }
+
+    #[test]
+    fn normalize_preset_detects_v2_canonical_format_with_prompt_order() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"identifier": "p1", "name": "P1", "role": "system", "content": "a"}
+            ],
+            "prompt_order": [{"character_id": "main", "order": ["p1"]}],
+            "temperature": 0.7
+        });
+        let (canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.format_version, "v2_canonical");
+        assert_eq!(report.top_level_params, vec!["temperature".to_string()]);
+        assert!(report.source_error.is_none());
+        assert_eq!(report.converted, 1);
+        // prompt_order 是 ST-only 顶层字段 → advisory_preserved +1（顶层）
+        assert_eq!(report.advisory_preserved, 1);
+        assert_eq!(canonical.temperature, Some(0.7));
+    }
+
+    #[test]
+    fn normalize_preset_rejects_non_object_top_level() {
+        let source = serde_json::json!(["not", "an", "object"]);
+        let (canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.format_version, "unknown");
+        assert!(report.source_error.is_some());
+        assert!(report
+            .source_error
+            .as_ref()
+            .unwrap()
+            .contains("顶层必须是对象"));
+        assert!(canonical.prompts.is_none());
+    }
+
+    #[test]
+    fn normalize_preset_records_missing_identifier_as_invalid() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"name": "NoId", "role": "system", "content": "x"},
+                {"identifier": "ok", "name": "Ok", "role": "system", "content": "y"}
+            ]
+        });
+        let (canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.total_input, 2);
+        assert_eq!(report.converted, 1);
+        assert_eq!(report.invalid.len(), 1);
+        assert_eq!(report.invalid[0].index, 0);
+        assert_eq!(report.invalid[0].name.as_deref(), Some("NoId"));
+        assert!(report.invalid[0].reason.contains("identifier"));
+        // invalid 条目不进入 canonical
+        let canonical_prompts = canonical.prompts.as_ref().unwrap();
+        assert_eq!(canonical_prompts.len(), 1);
+        assert_eq!(canonical_prompts[0].identifier, "ok");
+    }
+
+    #[test]
+    fn normalize_preset_records_missing_name_as_invalid() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"identifier": "no-name", "role": "system", "content": "x"}
+            ]
+        });
+        let (_canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.invalid.len(), 1);
+        assert_eq!(report.invalid[0].index, 0);
+        assert_eq!(report.invalid[0].identifier.as_deref(), Some("no-name"));
+        assert!(report.invalid[0].reason.contains("name"));
+    }
+
+    #[test]
+    fn normalize_preset_records_non_object_prompt_as_invalid() {
+        let source = serde_json::json!({
+            "prompts": [
+                "not-an-object",
+                {"identifier": "ok", "name": "Ok", "role": "system", "content": "y"}
+            ]
+        });
+        let (_canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.invalid.len(), 1);
+        assert_eq!(report.invalid[0].index, 0);
+        assert!(report.invalid[0].reason.contains("对象"));
+        assert_eq!(report.converted, 1);
+    }
+
+    #[test]
+    fn normalize_preset_flags_disabled_prompt_as_needs_review() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"identifier": "disabled", "name": "Disabled", "enabled": false, "role": "system", "content": "x"}
+            ]
+        });
+        let (_canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.converted, 1);
+        assert_eq!(report.needs_review.len(), 1);
+        assert_eq!(
+            report.needs_review[0].identifier.as_deref(),
+            Some("disabled")
+        );
+        assert!(report.needs_review[0].reason.contains("enabled=false"));
+    }
+
+    #[test]
+    fn normalize_preset_flags_empty_content_as_needs_review() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"identifier": "empty", "name": "Empty", "enabled": true, "role": "system", "content": "   "}
+            ]
+        });
+        let (_canonical, report) = normalize_preset(&source);
+
+        assert_eq!(report.needs_review.len(), 1);
+        assert!(report.needs_review[0].reason.contains("content"));
+    }
+
+    #[test]
+    fn normalize_preset_counts_missing_enabled_as_alias_normalized() {
+        let source = serde_json::json!({
+            "prompts": [
+                {"identifier": "no-enabled", "name": "NoEnabled", "role": "system", "content": "x"},
+                {"identifier": "has-enabled", "name": "HasEnabled", "enabled": true, "role": "system", "content": "y"}
+            ]
+        });
+        let (_canonical, report) = normalize_preset(&source);
+
+        // 只有第一条缺 enabled → aliases_normalized += 1
+        assert_eq!(report.aliases_normalized, 1);
+    }
+
+    #[test]
+    fn normalize_preset_counts_top_level_alias_normalization() {
+        let source = serde_json::json!({
+            "prompts": [
+                // prompt 显式带 enabled，隔离顶层 alias 计数
+                {"identifier": "p1", "name": "P1", "enabled": true, "role": "system", "content": "x"}
+            ],
+            "openai_max_tokens": 4096,
+            "openai_model": "gpt-4o"
+        });
+        let (canonical, report) = normalize_preset(&source);
+
+        // 顶层使用了任一 ST 别名 → aliases_normalized +1（顶层；prompt 带了 enabled 不再加）
+        assert_eq!(report.aliases_normalized, 1);
+        assert_eq!(report.top_level_params, vec!["max_tokens", "model"]);
+        // serde alias 把 openai_max_tokens/openai_model 归一化到 canonical 字段
+        assert_eq!(canonical.max_tokens, Some(4096));
+        assert_eq!(canonical.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn normalize_preset_counts_advisory_preserved_for_st_only_prompt_fields() {
+        let source = serde_json::json!({
+            "prompts": [
+                {
+                    "identifier": "p1",
+                    "name": "P1",
+                    "role": "system",
+                    "content": "x",
+                    "injection_position": 0,
+                    "probability": 100
+                }
+            ]
+        });
+        let (_canonical, report) = normalize_preset(&source);
+
+        // prompt 含 PROMPT_CONSUMED 之外的字段 → advisory_preserved += 1
+        assert_eq!(report.advisory_preserved, 1);
+    }
+
+    #[test]
+    fn normalize_preset_source_hash_is_stable_for_identical_input() {
+        let source = valid_v1_preset_source();
+        let (_, r1) = normalize_preset(&source);
+        let (_, r2) = normalize_preset(&source);
+
+        assert_eq!(r1.source_hash, r2.source_hash);
+    }
+
+    #[test]
+    fn normalize_preset_replacement_error_only_on_source_error() {
+        // 合法空 prompts 数组：视为显式清空，不拒绝写入
+        let source = serde_json::json!({"prompts": []});
+        let (canonical, report) = normalize_preset(&source);
+
+        assert!(report.replacement_error().is_none());
+        assert_eq!(report.converted, 0);
+        assert!(canonical.prompts.as_ref().unwrap().is_empty());
+
+        // source_error 存在时才拒绝
+        let (_, bad_report) = normalize_preset(&serde_json::json!(42));
+        assert!(bad_report.replacement_error().is_some());
+    }
+
+    #[test]
+    fn normalize_preset_has_issues_reflects_invalid_and_needs_review() {
+        // 干净 preset：无 issues
+        let clean = valid_v1_preset_source();
+        let (_, clean_report) = normalize_preset(&clean);
+        assert!(!clean_report.has_issues());
+
+        // 有 invalid：has_issues = true
+        let with_invalid = serde_json::json!({
+            "prompts": [{"name": "NoId", "role": "system", "content": "x"}]
+        });
+        let (_, invalid_report) = normalize_preset(&with_invalid);
+        assert!(invalid_report.has_issues());
+
+        // 有 needs_review：has_issues = true
+        let with_review = serde_json::json!({
+            "prompts": [{"identifier": "x", "name": "X", "enabled": false, "role": "system", "content": "y"}]
+        });
+        let (_, review_report) = normalize_preset(&with_review);
+        assert!(review_report.has_issues());
     }
 }
