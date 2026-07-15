@@ -36,8 +36,8 @@
 
 | 酒馆功能 | 源项目资产状态 | AIRP-Dev 落点/缺口 |
 |---|---|---|
-| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🔧 | AIRP 已交付 `constant`、v3 shared normalizer、advisory preservation 与 import diagnostics；其余高级 runtime 语义仍待真实工作流驱动（见 PARTS.md F） |
-| 关键词触发扫描 | 🔧 | AIRP 使用 aho-corasick，并已实现 `enabled && (constant \|\| primary_keyword_match)`；selective/secondary 组合/递归仍缺 |
+| 全字段 + 插入引擎（position/depth/order/probability/selective/secondary_keys/constant/sticky/cooldown/delay/递归/group） | 🔧 | AIRP 已交付 `constant`、`selective`+`secondary_keys`（v4 runtime）、v3 shared normalizer、advisory preservation 与 import diagnostics；position/depth/probability/sticky/cooldown/delay/递归/group 仍待真实工作流驱动（见 PARTS.md F） |
+| 关键词触发扫描 | 🔧 | AIRP 使用 aho-corasick，并已实现 `enabled && (constant \|\| (primary_match && (!selective \|\| secondary_match)))`（v4）；递归仍缺 |
 | 向量化/RAG 注入 | ➖ | Data Bank，后期 |
 
 ### 4. Prompt / 预设系统

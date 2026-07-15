@@ -6,13 +6,18 @@ pub(crate) const DEFAULT_PRIORITY: i32 = 10;
 
 /// 世界书（Lorebook）条目。
 ///
+/// v4 schema：`selective` 从 ST-only extensions 提升为 canonical bool 字段。
+/// `selective=true` 时，primary key 命中后还需 `secondary_keys` 任一命中
+/// 扫描文本才最终激活（[`Lorebook::trigger`] 消费）。`selective=false`（默认）
+/// 保持旧行为：primary key 命中即激活。
+///
 /// v3 schema 新增 `secondary_keys` / `case_sensitive` / `extensions` 三个
 /// advisory metadata 字段：它们由 [`super::worldbook_normalizer`] 从
-/// SillyTavern 字段（`keysecondary` / `caseSensitive` / `selective` /
-/// `position` / `probability` / …）归一化而来并保留在条目里，但
-/// [`Lorebook::trigger`] 不消费它们——这些字段当前是"建议元数据 + 未来
-/// 检索 Tool 的输入"，不进入运行时注入管线。新增字段全部带 `#[serde(default)]`，
-/// 旧 v1/v2 数据反序列化不破。
+/// SillyTavern 字段（`keysecondary` / `caseSensitive` /
+/// `position` / `probability` / …）归一化而来并保留在条目里。
+/// v4 后 `secondary_keys` 在 `selective=true` 时进入运行时注入管线；
+/// `case_sensitive` 与 `extensions` 仍为 advisory metadata。新增字段全部带
+/// `#[serde(default)]`，旧 v1/v2/v3 数据反序列化不破。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LorebookEntry {
     /// 触发关键词列表（OR 关系，任一命中即激活）。
@@ -29,17 +34,23 @@ pub struct LorebookEntry {
     pub constant: Option<bool>,
     /// 自由注释字段。
     pub comment: Option<String>,
-    /// v3：SillyTavern `keysecondary` 归一化结果。当前不参与运行时触发；
-    /// 未来 selective 语义 / 检索 Tool 可消费。`#[serde(default)]` 让旧数据无破。
+    /// v3：SillyTavern `keysecondary` 归一化结果。v4：`selective=true` 时
+    /// 参与 trigger 二次匹配（任一命中扫描文本才激活）。
     #[serde(default)]
     pub secondary_keys: Vec<String>,
+    /// v4：SillyTavern `selective` 归一化结果。`true` 时 primary key 命中后
+    /// 还需 `secondary_keys` 任一命中扫描文本才激活。`false`（默认）= primary
+    /// 命中即激活，与 v3 行为一致。
+    #[serde(default)]
+    pub selective: bool,
     /// v3：SillyTavern `caseSensitive` 归一化结果。当前 trigger 走大小写敏感
     /// 的 `AhoCorasick::LeftmostLongest` 默认；此字段仅作 advisory metadata。
     #[serde(default)]
     pub case_sensitive: Option<bool>,
-    /// v3：未在 canonical schema 内的 SillyTavern 字段（`selective` / `position`
+    /// v3：未在 canonical schema 内的 SillyTavern 字段（`position`
     /// / `depth` / `probability` / `sticky` / `cooldown` / `delay` / `group`
     /// / `use_regex` / `match_whole_words` / `recursion` 等）原样保留在此。
+    /// v4 后 `selective` 已提升为 canonical，不再出现在 extensions。
     /// 不得把这里的字段当作已支持语义；新增运行时语义须先扩 schema 并写合同。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extensions: Option<BTreeMap<String, serde_json::Value>>,
@@ -100,6 +111,28 @@ impl Lorebook {
             }
         }
 
+        // v4：selective 二次匹配。primary key 命中且 `selective=true` 的 entry
+        // 还需 `secondary_keys` 任一命中扫描文本才最终激活。constant entry 不受
+        // selective 影响（常驻注入不依赖关键词，也不依赖 secondary）。
+        // secondary 匹配用 case-sensitive `text.contains`，与 primary DFA 的
+        // 实际运行时行为一致；空 secondary key 先过滤。
+        triggered_idx.retain(|&idx| {
+            let e = &self.entries[idx];
+            if !e.selective || e.constant.unwrap_or(false) {
+                return true;
+            }
+            let has_effective_secondary = e.secondary_keys.iter().any(|k| !k.is_empty());
+            if !has_effective_secondary {
+                // selective=true 但无有效 secondary key：保持 primary 命中
+                // （与 ST 行为一致：selective 但 keysecondary 为空 = primary 命中即激活）。
+                return true;
+            }
+            e.secondary_keys
+                .iter()
+                .filter(|k| !k.is_empty())
+                .any(|k| text.contains(k.as_str()))
+        });
+
         if triggered_idx.is_empty() {
             return String::new();
         }
@@ -145,6 +178,7 @@ pub fn merge_lorebooks(lorebooks: &[Lorebook]) -> Lorebook {
                     && existing.constant.unwrap_or(false) == entry.constant.unwrap_or(false)
                     && existing.comment == entry.comment
                     && existing.secondary_keys == entry.secondary_keys
+                    && existing.selective == entry.selective
                     && existing.case_sensitive == entry.case_sensitive
                     && existing.extensions == entry.extensions
             }) {
@@ -176,6 +210,7 @@ mod tests {
             constant: None,
             comment: None,
             secondary_keys: Vec::new(),
+            selective: false,
             case_sensitive: None,
             extensions: None,
         }
@@ -209,6 +244,7 @@ mod tests {
                 constant: None,
                 comment: None,
                 secondary_keys: Vec::new(),
+                selective: false,
                 case_sensitive: None,
                 extensions: None,
             }],
@@ -281,6 +317,7 @@ mod tests {
             constant,
             comment: None,
             secondary_keys: Vec::new(),
+            selective: false,
             case_sensitive: None,
             extensions: None,
         }
@@ -312,6 +349,7 @@ mod tests {
                 constant: Some(true),
                 comment: None,
                 secondary_keys: Vec::new(),
+                selective: false,
                 case_sensitive: None,
                 extensions: None,
             }],
@@ -595,5 +633,189 @@ The marketplace bustles at dawn.\n"
     fn test_ms5_merge_lorebooks_empty() {
         let merged = super::merge_lorebooks(&[]);
         assert!(merged.entries.is_empty());
+    }
+
+    // ── v4 selective semantic tests ─────────────────────────────────────
+
+    fn entry_selective(
+        keys: &[&str],
+        content: &str,
+        priority: Option<i32>,
+        secondary_keys: &[&str],
+        selective: bool,
+    ) -> LorebookEntry {
+        LorebookEntry {
+            keys: keys.iter().map(|s| s.to_string()).collect(),
+            content: content.to_string(),
+            enabled: None,
+            priority,
+            constant: None,
+            comment: None,
+            secondary_keys: secondary_keys.iter().map(|s| s.to_string()).collect(),
+            selective,
+            case_sensitive: None,
+            extensions: None,
+        }
+    }
+
+    #[test]
+    fn selective_entry_activates_when_secondary_matches() {
+        let lb = Lorebook {
+            entries: vec![entry_selective(
+                &["dragon"],
+                "dragon lore",
+                None,
+                &["wyrm", "scaled"],
+                true,
+            )],
+        };
+        // primary + secondary 都命中 → 激活
+        assert!(lb
+            .trigger("the dragon is a scaled wyrm")
+            .contains("dragon lore"));
+    }
+
+    #[test]
+    fn selective_entry_suppressed_when_secondary_not_matching() {
+        let lb = Lorebook {
+            entries: vec![entry_selective(
+                &["dragon"],
+                "dragon lore",
+                None,
+                &["wyrm"],
+                true,
+            )],
+        };
+        // primary 命中但 secondary 未命中 → 抑制
+        assert_eq!(lb.trigger("the dragon flies away"), "");
+    }
+
+    #[test]
+    fn selective_entry_with_empty_secondary_activates_on_primary() {
+        // selective=true 但 secondary_keys 为空（或全空串）→ 保持 primary 命中
+        let lb = Lorebook {
+            entries: vec![entry_selective(
+                &["moon gate"],
+                "moon gate lore",
+                None,
+                &[],
+                true,
+            )],
+        };
+        assert!(lb.trigger("the moon gate opens").contains("moon gate lore"));
+    }
+
+    #[test]
+    fn selective_entry_with_all_empty_secondary_keys_activates_on_primary() {
+        // secondary_keys 全是空串 → 等效于无有效 secondary → 保持 primary 命中
+        let lb = Lorebook {
+            entries: vec![entry_selective(
+                &["moon gate"],
+                "moon gate lore",
+                None,
+                &["", ""],
+                true,
+            )],
+        };
+        assert!(lb.trigger("the moon gate opens").contains("moon gate lore"));
+    }
+
+    #[test]
+    fn non_selective_entry_ignores_secondary_keys() {
+        // selective=false → secondary_keys 不参与匹配，primary 命中即激活
+        let lb = Lorebook {
+            entries: vec![entry_selective(
+                &["observatory"],
+                "observatory lore",
+                None,
+                &["never_matches"],
+                false,
+            )],
+        };
+        assert!(lb
+            .trigger("the observatory stands tall")
+            .contains("observatory lore"));
+    }
+
+    #[test]
+    fn constant_entry_ignores_selective() {
+        // constant=true + selective=true → 常驻注入，selective 不影响
+        let lb = Lorebook {
+            entries: vec![LorebookEntry {
+                keys: vec![],
+                content: "always-on lore".to_string(),
+                enabled: None,
+                priority: None,
+                constant: Some(true),
+                comment: None,
+                secondary_keys: vec!["never_matches".to_string()],
+                selective: true,
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
+        assert!(lb.trigger("unrelated text").contains("always-on lore"));
+    }
+
+    #[test]
+    fn selective_secondary_matches_any_key_or_semantic() {
+        // 多个 secondary key，任一命中即激活（OR 关系）
+        let lb = Lorebook {
+            entries: vec![entry_selective(
+                &["dragon"],
+                "dragon lore",
+                None,
+                &["wyrm", "scaled", "ancient"],
+                true,
+            )],
+        };
+        assert!(lb.trigger("an ancient dragon").contains("dragon lore"));
+        assert!(lb.trigger("a scaled dragon").contains("dragon lore"));
+        assert!(lb.trigger("a wyrm dragon").contains("dragon lore"));
+        // primary 命中但无任一 secondary → 抑制
+        assert_eq!(lb.trigger("a dragon flies"), "");
+    }
+
+    #[test]
+    fn airp_v4_selective_fixture_has_deterministic_output() {
+        let fixture = include_str!("../../tests/fixtures/worldbook/airp-v4-selective.json");
+        let lorebook: Lorebook = serde_json::from_str(fixture).unwrap();
+        // 扫描文本命中 "dragon"（primary）+ "scaled"（secondary）→ selective 激活
+        // 命中 "moon gate"（primary，selective 但无 secondary）→ 激活
+        // 命中 "observatory"（primary，non-selective）→ 激活
+        // 命中 "marketplace"（primary，selective 但 secondary "midnight" 未命中）→ 抑制
+        // constant 条目（dragons compact, selective=true）→ 常驻激活
+        let output = lorebook.trigger("The dragon is a scaled beast near the moon gate and observatory, plus the marketplace.");
+        // priority 降序：dragon(30) > compact(25) > moon gate(20) > observatory(10)
+        // marketplace(5) 被抑制
+        assert_eq!(
+            output,
+            "\n[World Info/Lorebook Information]:\n\
+Dragons are ancient beings of fire.\n\
+The world is shaped by an ancient compact between dragons and mortals.\n\
+The moon gate opens only at night.\n\
+The observatory predates the city.\n"
+        );
+        // marketplace 被抑制
+        assert!(!output.contains("The marketplace bustles at dawn."));
+    }
+
+    #[test]
+    fn merge_lorebooks_preserves_distinct_selective() {
+        let first = entry(&["A"], "shared content", Some(10));
+        let mut second = first.clone();
+        second.selective = true;
+
+        let merged = super::merge_lorebooks(&[
+            Lorebook {
+                entries: vec![first],
+            },
+            Lorebook {
+                entries: vec![second],
+            },
+        ]);
+
+        // selective 不同 → 不去重，保留两条
+        assert_eq!(merged.entries.len(), 2);
     }
 }

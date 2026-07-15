@@ -1,0 +1,59 @@
+{
+  "entries": [
+    {
+      "keys": ["dragon"],
+      "content": "Dragons are ancient beings of fire.",
+      "enabled": true,
+      "priority": 30,
+      "constant": false,
+      "comment": "selective with secondary match",
+      "secondary_keys": ["wyrm", "scaled"],
+      "selective": true,
+      "case_sensitive": null
+    },
+    {
+      "keys": ["moon gate"],
+      "content": "The moon gate opens only at night.",
+      "enabled": true,
+      "priority": 20,
+      "constant": false,
+      "comment": "selective but secondary missing - primary hit activates",
+      "secondary_keys": [],
+      "selective": true,
+      "case_sensitive": null
+    },
+    {
+      "keys": ["observatory"],
+      "content": "The observatory predates the city.",
+      "enabled": true,
+      "priority": 10,
+      "constant": false,
+      "comment": "non-selective, primary hit activates",
+      "secondary_keys": ["unused"],
+      "selective": false,
+      "case_sensitive": null
+    },
+    {
+      "keys": ["marketplace"],
+      "content": "The marketplace bustles at dawn.",
+      "enabled": true,
+      "priority": 5,
+      "constant": false,
+      "comment": "selective with secondary NOT matching - suppressed",
+      "secondary_keys": ["midnight"],
+      "selective": true,
+      "case_sensitive": null
+    },
+    {
+      "keys": [],
+      "content": "The world is shaped by an ancient compact between dragons and mortals.",
+      "enabled": true,
+      "priority": 25,
+      "constant": true,
+      "comment": "constant entry - selective does not apply",
+      "secondary_keys": [],
+      "selective": true,
+      "case_sensitive": null
+    }
+  ]
+}

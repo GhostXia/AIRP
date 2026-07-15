@@ -50,6 +50,7 @@ async fn export_context_bundle_output_directs_isolated_subagent() {
                     constant: None,
                     comment: None,
                     secondary_keys: Vec::new(),
+                    selective: false,
                     case_sensitive: None,
                     extensions: None,
                 }],

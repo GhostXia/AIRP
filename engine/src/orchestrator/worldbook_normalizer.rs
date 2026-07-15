@@ -12,16 +12,21 @@
 //! 设计原则：
 //! - **幂等**：传入 canonical AIRP Lorebook JSON，输出等价 Lorebook，
 //!   `extensions` 不产生冗余字段。
-//! - **保留**：ST-only 字段（`selective`/`position`/`probability`/…）不丢弃，
+//! - **保留**：ST-only 字段（`position`/`probability`/…）不丢弃，
 //!   原样进入 `extensions`，供未来检索 Tool 或人工审阅使用。
 //! - **诊断**：每条 entry 的归一化结果有明确状态（converted / advisory_preserved
 //!   / aliases_normalized / invalid / needs_review）。
 //! - **不阻塞**：invalid 条目被跳过，其余继续处理；`needs_review` 不阻塞写入。
 //!
+//! v4 变更：`selective` 从 ST-only extensions 提升为 canonical bool 字段。
+//! ST top-level `selective` 和 v3 `extensions.selective` 都归一化到 canonical
+//! `selective`；两者都有时 top-level 优先（ST 原生）。`selective` 不再出现在
+//! `extensions`。
+//!
 //! 不变式守护：
 //! - 不变式①：normalizer 只做数据归一化，不注入 agent 脚手架。
-//! - trigger() 不消费 advisory metadata（`secondary_keys`/`case_sensitive`/
-//!   `extensions`）；这些字段当前是"建议元数据 + 未来检索 Tool 的输入"。
+//! - trigger() v4 消费 `selective` + `secondary_keys`（selective=true 时二次匹配）；
+//!   `case_sensitive` 与 `extensions` 仍为 advisory metadata。
 
 use crate::orchestrator::lorebook::{Lorebook, LorebookEntry, DEFAULT_PRIORITY};
 use serde_json::Value;
@@ -38,6 +43,7 @@ const CONSUMED_FIELDS: &[&str] = &[
     "constant",
     "comment",
     "secondary_keys",
+    "selective",
     "case_sensitive",
     "extensions",
     // SillyTavern aliases（已被 normalizer 消费）
@@ -288,7 +294,12 @@ fn normalize_entry(v: &Value, _index: usize) -> Result<(LorebookEntry, EntryDiag
     // 8. case_sensitive：优先 `case_sensitive`（AIRP canonical），回退 `caseSensitive`（ST）
     let (case_sensitive, used_casesensitive_alias) = extract_case_sensitive(obj);
 
-    // 9. extensions：保留已有 AIRP extensions + 收集所有未消费字段
+    // 9. selective：v4 提升为 canonical。优先 ST top-level `selective`，
+    //    回退 v3 `extensions.selective`。无则默认 false。
+    let selective = extract_selective(obj);
+
+    // 10. extensions：保留已有 AIRP extensions + 收集所有未消费字段
+    //     （`selective` 已被 CONSUMED_FIELDS 消费，不会重复进入 extensions）
     let extensions = collect_extensions(obj);
 
     // 诊断
@@ -316,6 +327,7 @@ fn normalize_entry(v: &Value, _index: usize) -> Result<(LorebookEntry, EntryDiag
         constant,
         comment,
         secondary_keys,
+        selective,
         case_sensitive,
         extensions,
     };
@@ -390,6 +402,7 @@ fn validate_entry_field_types(obj: &serde_json::Map<String, Value>) -> Result<()
         "enabled",
         "disable",
         "constant",
+        "selective",
         "case_sensitive",
         "caseSensitive",
     ] {
@@ -501,17 +514,46 @@ fn extract_case_sensitive(obj: &serde_json::Map<String, Value>) -> (Option<bool>
     (None, false)
 }
 
+/// 提取 selective（v4 canonical）。
+///
+/// 优先级：
+/// 1. ST top-level `selective`（bool）— ST 原生字段，权威来源
+/// 2. v3 `extensions.selective`（bool）— 旧 AIRP canonical 数据经 v3 normalizer
+///    后 selective 落入 extensions，v4 需迁移回 canonical
+/// 3. 无 → 默认 `false`
+///
+/// `selective` 已被 `CONSUMED_FIELDS` 消费，不会重复进入 extensions。
+fn extract_selective(obj: &serde_json::Map<String, Value>) -> bool {
+    if let Some(s) = obj.get("selective").and_then(|v| v.as_bool()) {
+        return s;
+    }
+    // 回退：v3 extensions.selective（迁移路径）
+    if let Some(ext) = obj.get("extensions").and_then(|e| e.as_object()) {
+        if let Some(s) = ext.get("selective").and_then(|v| v.as_bool()) {
+            return s;
+        }
+    }
+    false
+}
+
 /// 收集所有未消费字段到 extensions BTreeMap。
 ///
 /// 如果输入已有 AIRP canonical `extensions`（object），先保留其内容，
 /// 再把未消费的 ST-only / 未知字段合并进去。BTreeMap 保证序列化顺序稳定。
 /// 返回 None 如果没有任何 extension 字段（保持 canonical 输出干净）。
+///
+/// v4：`selective` 已提升为 canonical 字段（见 [`extract_selective`]），
+/// 即使它出现在输入的 `extensions` 里（v3 旧数据），也必须从 `extensions`
+/// 中剔除，避免 canonical 与 advisory 重复存储。
 fn collect_extensions(obj: &serde_json::Map<String, Value>) -> Option<BTreeMap<String, Value>> {
     let mut ext: BTreeMap<String, Value> = BTreeMap::new();
 
-    // 保留已有 AIRP extensions
+    // 保留已有 AIRP extensions，但跳过已被 canonical 消费的字段（v4: selective）
     if let Some(existing) = obj.get("extensions").and_then(|e| e.as_object()) {
         for (k, v) in existing {
+            if k == "selective" {
+                continue;
+            }
             ext.insert(k.clone(), v.clone());
         }
     }
@@ -815,11 +857,16 @@ mod tests {
         });
         let (lb, report) = normalize_worldbook(&src);
         assert_eq!(lb.entries.len(), 1);
+        // v4: selective 提升为 canonical，不再出现在 extensions
+        assert!(lb.entries[0].selective);
         let ext = lb.entries[0]
             .extensions
             .as_ref()
             .expect("extensions should be populated");
-        assert_eq!(ext.get("selective"), Some(&serde_json::json!(true)));
+        assert!(
+            ext.get("selective").is_none(),
+            "selective must not be in extensions"
+        );
         assert_eq!(ext.get("position"), Some(&serde_json::json!("before_char")));
         assert_eq!(ext.get("depth"), Some(&serde_json::json!(4)));
         assert_eq!(ext.get("probability"), Some(&serde_json::json!(80)));
@@ -930,6 +977,7 @@ mod tests {
         assert_eq!(lb2.entries[0].priority, lb1.entries[0].priority);
         assert_eq!(lb2.entries[0].constant, lb1.entries[0].constant);
         assert_eq!(lb2.entries[0].secondary_keys, lb1.entries[0].secondary_keys);
+        assert_eq!(lb2.entries[0].selective, lb1.entries[0].selective);
         assert_eq!(lb2.entries[0].case_sensitive, lb1.entries[0].case_sensitive);
         assert_eq!(lb2.entries[0].extensions, lb1.entries[0].extensions);
         // Second pass: no aliases (all already canonical), advisory still preserved
@@ -1039,8 +1087,168 @@ mod tests {
         assert_eq!(lb.entries[2].secondary_keys, vec!["night"]);
         assert_eq!(lb.entries[2].enabled, Some(true));
         assert_eq!(lb.entries[2].constant, Some(false));
+        // v4: selective 提升为 canonical
+        assert!(lb.entries[2].selective);
         let ext = lb.entries[2].extensions.as_ref().unwrap();
-        assert_eq!(ext.get("selective"), Some(&serde_json::json!(true)));
+        assert!(
+            ext.get("selective").is_none(),
+            "selective must not be in extensions"
+        );
         assert_eq!(ext.get("position"), Some(&serde_json::json!("before_char")));
+    }
+
+    // ── v4 selective canonical migration tests ──────────────────────────
+
+    #[test]
+    fn test_st_top_level_selective_promoted_to_canonical() {
+        // ST top-level `selective: true` → canonical `selective`，不进 extensions
+        let src = serde_json::json!({
+            "keys": ["dragon"],
+            "content": "dragon lore",
+            "selective": true,
+            "keysecondary": ["wyrm"]
+        });
+        let (lb, report) = normalize_worldbook(&src);
+        assert!(lb.entries[0].selective);
+        assert_eq!(lb.entries[0].secondary_keys, vec!["wyrm"]);
+        // selective 不在 extensions
+        assert!(lb.entries[0]
+            .extensions
+            .as_ref()
+            .is_none_or(|e| !e.contains_key("selective")));
+        // keysecondary 是 alias，不进 extensions
+        assert_eq!(report.aliases_normalized, 1);
+    }
+
+    #[test]
+    fn test_st_top_level_selective_false_is_canonical_false() {
+        let src = serde_json::json!({
+            "keys": ["dragon"],
+            "content": "dragon lore",
+            "selective": false
+        });
+        let (lb, _) = normalize_worldbook(&src);
+        assert!(!lb.entries[0].selective);
+        // 无 ST-only 字段 → extensions 为 None
+        assert!(lb.entries[0].extensions.is_none());
+    }
+
+    #[test]
+    fn test_v3_extensions_selective_migrated_to_canonical() {
+        // v3 canonical 数据：selective 在 extensions 里（旧 normalizer 输出）
+        // v4 normalizer 应迁移到 canonical selective，并从 extensions 移除
+        let src = serde_json::json!({
+            "keys": ["dragon"],
+            "content": "dragon lore",
+            "secondary_keys": ["wyrm"],
+            "extensions": {
+                "selective": true,
+                "position": "before_char"
+            }
+        });
+        let (lb, _) = normalize_worldbook(&src);
+        assert!(
+            lb.entries[0].selective,
+            "selective must be migrated from extensions"
+        );
+        let ext = lb.entries[0].extensions.as_ref().unwrap();
+        assert!(
+            !ext.contains_key("selective"),
+            "selective must be removed from extensions after migration"
+        );
+        // 其他 extensions 字段保留
+        assert_eq!(ext.get("position"), Some(&serde_json::json!("before_char")));
+    }
+
+    #[test]
+    fn test_top_level_selective_takes_precedence_over_extensions() {
+        // 两者都有时，top-level 优先（ST 原生）
+        let src = serde_json::json!({
+            "keys": ["dragon"],
+            "content": "dragon lore",
+            "selective": false,
+            "extensions": {
+                "selective": true
+            }
+        });
+        let (lb, _) = normalize_worldbook(&src);
+        assert!(!lb.entries[0].selective, "top-level selective must win");
+        assert!(
+            lb.entries[0]
+                .extensions
+                .as_ref()
+                .is_none_or(|e| !e.contains_key("selective")),
+            "selective must not remain in extensions"
+        );
+    }
+
+    #[test]
+    fn test_selective_round_trip_stable() {
+        // ST form → normalize → serialize → re-normalize → selective 稳定
+        let st_form = serde_json::json!({
+            "entries": [
+                {
+                    "keys": ["dragon"],
+                    "keysecondary": ["wyrm"],
+                    "content": "Dragons are ancient.",
+                    "selective": true,
+                    "position": "after_char"
+                }
+            ]
+        });
+        let (lb1, _) = normalize_worldbook(&st_form);
+        assert!(lb1.entries[0].selective);
+
+        let serialized = serde_json::to_value(&lb1).unwrap();
+        let (lb2, _) = normalize_worldbook(&serialized);
+        assert!(lb2.entries[0].selective);
+        // 第二次 normalize 后 selective 仍在 canonical，不在 extensions
+        assert!(
+            lb2.entries[0]
+                .extensions
+                .as_ref()
+                .is_none_or(|e| !e.contains_key("selective")),
+            "selective must not leak back into extensions on round-trip"
+        );
+    }
+
+    #[test]
+    fn test_selective_invalid_type_rejected() {
+        let src = serde_json::json!({
+            "keys": ["dragon"],
+            "content": "dragon lore",
+            "selective": "yes"
+        });
+        let (_, report) = normalize_worldbook(&src);
+        assert_eq!(report.invalid.len(), 1);
+        assert!(report.invalid[0].reason.contains("selective"));
+    }
+
+    #[test]
+    fn test_v4_selective_fixture_normalizes_correctly() {
+        let fixture = include_str!("../../tests/fixtures/worldbook/airp-v4-selective.json");
+        let src: Value = serde_json::from_str(fixture).unwrap();
+        let (lb, report) = normalize_worldbook(&src);
+        assert_eq!(lb.entries.len(), 5);
+        assert_eq!(report.converted, 5);
+        assert_eq!(report.invalid.len(), 0);
+        // selective 字段正确归一化
+        // 排序后顺序（按 priority 降序）：dragon(30) > constant compact(25)
+        // > moon gate(20) > observatory(10) > marketplace(5)
+        assert!(lb.entries[0].selective); // dragon
+        assert!(lb.entries[1].selective); // constant compact
+        assert!(lb.entries[2].selective); // moon gate
+        assert!(!lb.entries[3].selective); // observatory
+        assert!(lb.entries[4].selective); // marketplace
+        // selective 不在 extensions
+        for e in &lb.entries {
+            assert!(
+                e.extensions
+                    .as_ref()
+                    .is_none_or(|ext| !ext.contains_key("selective")),
+                "selective must not be in extensions for entry {:?}",
+                e.comment
+            );
+        }
     }
 }
