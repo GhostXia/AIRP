@@ -2,8 +2,9 @@
 
 ## Local Build Environment
 
-- This Windows workspace keeps build tooling on `D:`. Do not install Rust, Cargo, Node, npm globals, MSYS2, caches, or generated build dependencies under `C:`.
-- Confirmed local toolchain roots:
+- The AIRP project does **not** require contributors to install their toolchains on `D:`. Contributors may use the standard locations or any paths appropriate for their own environment.
+- The paths below are a maintainer-specific override for this checkout only: the maintainer's `C:` drive is full, so the local Rust, Node.js, MSYS2, cache, and generated-build ecosystem has been moved to `D:`. Agents running on this maintainer machine must preserve that setup and must not treat it as a project-wide convention.
+- Confirmed toolchain roots on this maintainer machine:
   - `RUSTUP_HOME=D:\.rustup`
   - `CARGO_HOME=D:\.cargo`
   - Rust shims: `D:\.cargo\bin`
@@ -11,7 +12,7 @@
   - Node.js: `D:\nodejs`
   - npm global prefix: `D:\npm-global`
   - npm cache must be forced to `D:\npm-global\npm-cache` because the default may point to `C:\Users\<user>\AppData\Local\npm-cache`
-- Before local Rust builds/tests in PowerShell, set:
+- Before Rust builds/tests in this maintainer's PowerShell environment, set:
   ```powershell
   $env:RUSTUP_HOME = "D:\.rustup"
   $env:CARGO_HOME = "D:\.cargo"
@@ -19,8 +20,8 @@
   $env:npm_config_cache = "D:\npm-global\npm-cache"
   $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
   ```
-- Use the default repo target directory `D:\AIRP-Dev\target` unless a task explicitly requires otherwise.
-- If a command tries to populate `C:\Users\<user>\.cargo`, `C:\Users\<user>\.rustup`, or npm cache/global data under `C:`, stop and redirect it to the D-drive locations above.
+- In this checkout, use the repo-local target directory `D:\AIRP-Dev\target` unless a task explicitly requires otherwise. Other checkouts should use their own repo-local target directory.
+- On this maintainer machine, if a command tries to populate `C:\Users\<user>\.cargo`, `C:\Users\<user>\.rustup`, or npm cache/global data under `C:`, stop and redirect it to the D-drive locations above. Do not apply this restriction to other contributors' machines.
 
 ## Audit Agent Charter（审计 agent 守则，2026-07-03 用户立）
 

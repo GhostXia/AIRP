@@ -1,16 +1,9 @@
 @echo off
 REM AIRP WebUI 一键启动脚本（同时起 engine + webui 静态 server）
-REM 按_AGENTS.md Windows 工具链规则设环境变量，所有构建产物落在 D: 盘。
+REM 使用调用者已配置的 Rust/Node 工具链；请确保 cargo 和 node 可从 PATH 找到。
 REM 双击即可；关闭两个弹出的窗口即停止服务。
 
 setlocal
-
-REM ── 工具链环境（AGENTS.md）─────────────────────────────────────────────
-set RUSTUP_HOME=D:\.rustup
-set CARGO_HOME=D:\.cargo
-set npm_config_prefix=D:\npm-global
-set npm_config_cache=D:\npm-global\npm-cache
-set PATH=D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;%PATH%
 
 REM ── 业务配置（按需改）─────────────────────────────────────────────────
 REM 默认启用零密钥 mock provider（PR B 验收用；要换真 provider 改这里）
@@ -18,7 +11,7 @@ set AIRP_ENDPOINT=http://127.0.0.1:8889/v1/chat/completions
 set AIRP_MODEL=airp-mock-1
 set AIRP_API_KEY=mock-key-not-checked
 REM 验收用临时 data root，避免污染个人 data/，且让"全新 data root 上完成闭环"判据可复现
-set AIRP_DATA_DIR=d:\AIRP-Dev\target\webui-smoke-data
+set "AIRP_DATA_DIR=%~dp0..\target\webui-smoke-data"
 if exist "%AIRP_DATA_DIR%" rmdir /S /Q "%AIRP_DATA_DIR%"
 REM set AIRP_ACCESS_KEY=
 

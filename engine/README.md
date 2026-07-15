@@ -50,15 +50,13 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ## 快速开始
 
-Windows 本地工具链必须使用 D 盘：
+AIRP 不限制 Windows 工具链的安装盘符。确保 `cargo` 可从当前 shell 的 `PATH` 找到后运行：
 
 ```powershell
-$env:RUSTUP_HOME = "D:\.rustup"
-$env:CARGO_HOME = "D:\.cargo"
-$env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
-
 cargo run -p airp-core -- daemon --port 8000
 ```
+
+维护者本机因 `C:` 盘空间不足使用 `D:` 盘工具链；这是 [AGENTS.md](../AGENTS.md) 记录的本地覆盖，不是项目要求。
 
 默认配置由程序默认值、`data/settings.json`、环境变量按顺序合并。运行时也可通过 `POST /v1/settings` 更新。provider/access secrets 仅在进程内或环境变量中存在，序列化会跳过它们并忽略旧明文字段。
 
@@ -137,7 +135,7 @@ cargo run -p airp-core -- run --message "hello"
 
 ## 验证
 
-2026-07-14 在仓库根目录按 D 盘工具链执行：
+2026-07-14 在仓库根目录使用维护者本机工具链执行：
 
 ```powershell
 cargo test -p airp-core --locked

@@ -46,17 +46,17 @@
 - 当前阻塞项（动手前先核对，别重做）：
   - `data/settings.json` 的死链 model 已修；但真实运行仍需要有效 `endpoint`/`api_key`/`model`。不要把示例空 key 当作已完成运行时验收。
   - WebUI 尚缺首方 OCI/Compose + Caddy 产物、production smoke、正式 RP 使用面、备份恢复与 release gates。
-- 暂停的桌面历史项：`ui/build-tauri.ps1` 修复、D 盘 bundler 缓存、artifact 启动、GUI 角色导入、大卡与 Perf Spike 只作为恢复桌面计划时的背景，不是当前阻塞或执行指令。
+- 暂停的桌面历史项：`ui/build-tauri.ps1` 修复、维护者本机 bundler 缓存、artifact 启动、GUI 角色导入、大卡与 Perf Spike 只作为恢复桌面计划时的背景，不是当前阻塞或执行指令。
 - 与"更开放/透明/易修正/易迭代"取向一致：可运行 = 最朴素的透明（用户能自己验证它动不动）；不可运行 = 最深的封闭。
 
 ---
 
 ## 1. 现状（起点）
 
-工作区 `D:\AIRP-Dev` 已被 PR #1（目录对齐）收成"两盒"结构——workspace 只剩 engine+protocol+ui（gateway/mcp-server 已从工作区移除，退回原始独立仓当零件库）：
+本仓库已被 PR #1（目录对齐）收成"两盒"结构——workspace 只剩 engine+protocol+ui（gateway/mcp-server 已从工作区移除，退回原始独立仓当零件库）：
 
 ```
-D:\AIRP-Dev/
+<repo>/
 ├── Cargo.toml    workspace（members：engine, protocol, ui/src-tauri）
 ├── engine/       ← 引擎（crate airp-core，源自 AIRPCLI）。自带 LLM adapter + agent loop 骨架 + orchestrator + 数据层 + 正确 png_parser + 完整 /v1/* HTTP+SSE
 ├── protocol/     ← 线协议契约（crate airp-state-protocol）：Envelope/Blueprint/widget/capability + Rust 绑定（TS 侧手镜像在 ui/src/protocol/types.ts）
@@ -253,14 +253,7 @@ data/
 
 WebUI 基础里程碑及 durable history 接线已由 PR #118/#119/#121/#123/#124/#125 完成，PR #127 已建立多 Persona 存储地基。旧 MVP/验证计划已合并到 [WebUI 历史归档](archive/WEBUI-HISTORY-2026-07.md)；当前唯一执行入口是 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)，目标为单实例、自托管、单用户 WebUI 正式上线。
 
-1. 先设置 D 盘工具链环境：
-   ```powershell
-   $env:RUSTUP_HOME = "D:\.rustup"
-   $env:CARGO_HOME = "D:\.cargo"
-   $env:npm_config_prefix = "D:\npm-global"
-   $env:npm_config_cache = "D:\npm-global\npm-cache"
-   $env:PATH = "D:\.cargo\bin;D:\msys64\mingw64\bin;D:\nodejs;" + $env:PATH
-   ```
+1. 先确保 Rust、Cargo、Node 与 npm 已按本机环境安装，且 `cargo`、`node`、`npm` 可从当前 shell 的 `PATH` 找到。项目不限制工具链盘符；维护者本机因 `C:` 盘空间不足使用 [AGENTS.md](../AGENTS.md) 中的 `D:` 盘覆盖。
 2. 先实施 production P0：同源 HTTPS 入口、私有 engine、强制生产 access key、remote import policy、首方部署产物与 production smoke。不得把 `serve.js`/`start.bat`/`cargo run` 宣称为生产部署。
 3. 再按 #114/#115/#126 闭合 RP 正式使用面：shared PresetService、raw sidecar、migration report、dry-run/revision、多 Persona API/UI/绑定、PromptAssemblyTrace 摘要和 constant worldbook 语义。
 4. 补版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志和运维 runbook；升级失败必须保留可恢复数据。
@@ -323,7 +316,7 @@ window.__AIRP_AGENT_TEST__.getSnapshot()
 
 GitHub 手动构建：`.github/workflows/manual-build.yml` 提供 `workflow_dispatch`。fork 用户可在 Actions 页手动运行 **Manual build**，下载 `airp-ui-windows` artifact，内含 `target/release/airp-ui.exe` 与 NSIS setup。当前只承诺 Windows；其他平台要先补对应 sidecar builder 与 Tauri bundle target。
 
-- **默认工具链 `stable-x86_64-pc-windows-gnu`**（本机无 MSVC linker，用 GNU）。**三个 env 必须都指 D 盘**，漏 `CARGO_HOME` 会让 cargo 落到 `C:\Users\<user>\.cargo` 用错工具链、build script 报 SxS `os error 14001`：
+- **项目不限制工具链安装盘符**。贡献者可使用标准安装位置或自定义 `RUSTUP_HOME`、`CARGO_HOME`、npm prefix/cache 与 `CARGO_TARGET_DIR`；只需确保 `cargo`、`node`、`npm` 可从当前 shell 找到。下面是维护者机器的已验证覆盖：该机因 `C:` 盘空间不足，把 `stable-x86_64-pc-windows-gnu`、MSYS2、Node 与缓存迁到 `D:`；这些路径不是项目默认值：
   ```powershell
   $env:RUSTUP_HOME = "D:\.rustup"
   $env:CARGO_HOME  = "D:\.cargo"          # ← 关键，别漏（漏了就 SxS 14001）
@@ -335,8 +328,8 @@ GitHub 手动构建：`.github/workflows/manual-build.yml` 提供 `workflow_disp
   cargo test  -p airp-ui                                               # 已验证 5 passed
   cargo test  -p airp-core subagent_context_has_no_orchestrator_noise  # 神圣不变式，已验证 ok
   ```
-  用**默认 target dir**（`D:\AIRP-Dev\target`）即可，本轮无 os error 5、无需重定向 `CARGO_TARGET_DIR`。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
-- **本机工具链自检（2026-07-03）**：`D:\.cargo`、`D:\.rustup`、`D:\msys64`、`D:\nodejs`、`D:\npm-global` 均存在；当前 shell 的 `cargo/rustc/rustup` 指向 `D:\.cargo\bin`，`node/npm` 指向 `D:\nodejs`。实测 npm 全局 prefix 为 `D:\npm-global`，但默认 cache 仍可能指向 `C:\Users\<user>\AppData\Local\npm-cache`，所以 npm 命令必须显式设置 `npm_config_cache=D:\npm-global\npm-cache`。**不要把 Rust/Node/npm 全局依赖、缓存或构建工具塞回 C 盘**；若命令试图写 `C:\Users\<user>\.cargo`、`.rustup` 或 npm 全局/cache，先停下来改 env/prefix。
+  该维护者 checkout 使用 repo-local target dir（`D:\AIRP-Dev\target`）；其他 checkout 默认使用各自的 `<repo>/target`，也可自行设置 `CARGO_TARGET_DIR`。Linux CI 用 `CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu`。
+- **维护者本机工具链自检（2026-07-03）**：`D:\.cargo`、`D:\.rustup`、`D:\msys64`、`D:\nodejs`、`D:\npm-global` 均存在；该机 shell 的 `cargo/rustc/rustup` 指向 `D:\.cargo\bin`，`node/npm` 指向 `D:\nodejs`。该机必须显式设置 `npm_config_cache=D:\npm-global\npm-cache`，避免重新占用已满的 `C:` 盘；此限制仅适用于维护者机器。
 - **本地 check + test 都能跑**（上面实测全绿）——不必只靠 CI。审计 bot 已于 2026-07-14 恢复并重新成为合并前阻塞门禁；本地全绿只代表可以开 PR，不代表可以合并。必须等待审计完成、修复全部阻塞意见并取得通过状态，再由人工 review 决定是否合并；开发者自审和审计 bot 均遵守 `AGENTS.md` 的 Audit Agent Charter 三原则（独立 / 可提己见 / 可质疑历史并查证）。
 - 引擎启动：`cargo run -p airp-core -- daemon --port 8000`。配置三层合并 default→`data/settings.json`→env→request，env 有 `AIRP_ENDPOINT`/`AIRP_API_KEY`/`AIRP_MODEL`/`AIRP_ACCESS_KEY`。UI 侧 `BusRelay` 默认连 `http://127.0.0.1:8000`，`AIRP_ENGINE_URL` 可覆盖。
 

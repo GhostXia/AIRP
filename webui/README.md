@@ -10,7 +10,7 @@ Browser-based AIRP client for RP use. The current implementation is a basically 
 
 双击 `webui/start.bat` 即可。脚本会：
 
-1. 按 `AGENTS.md` 设好 Rust/Node/MSYS2 工具链环境（产物落 D: 盘）
+1. 使用当前 shell 已配置的 Rust/Node 工具链（`cargo` 与 `node` 需在 `PATH` 中；安装盘符不限）
 2. 清理可丢弃的 `target/webui-smoke-data`，在新窗口起零密钥 mock provider
 3. 在新窗口起 engine：`cargo run -p airp-core -- daemon --port 8000`
 4. 在新窗口起 WebUI 静态 server：`node webui/serve.js`（零依赖纯 node，无需 npx/python）

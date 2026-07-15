@@ -3,7 +3,7 @@
 **/*.rs.bk
 *.pdb
 
-# 防御：rustup/cargo 在 worktree 内误生成元数据目录时忽略（与 AGENTS.md D: 工具链方针互补）
+# 防御：忽略 rustup/cargo 误生成在 worktree 内的本机元数据目录
 .rustup/
 .cargo/
 

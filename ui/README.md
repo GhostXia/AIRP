@@ -38,13 +38,7 @@ The canonical Rust protocol crate lives in `../protocol`. The TypeScript types i
 
 ## Local Commands
 
-Use D-drive npm cache/prefix in this workspace:
-
-```powershell
-$env:PATH = "D:\nodejs;" + $env:PATH
-$env:npm_config_prefix = "D:\npm-global"
-$env:npm_config_cache = "D:\npm-global\npm-cache"
-```
+AIRP does not require a particular drive for Node.js, npm, Rust, or their caches. Ensure `npm` and `cargo` are available on `PATH`; if you customize their homes or caches, use paths appropriate for your machine. The maintainer-only D-drive override is documented in [`AGENTS.md`](../AGENTS.md).
 
 ```powershell
 npm run dev

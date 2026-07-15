@@ -11,7 +11,7 @@
 // 启动：node webui/mock-provider.js   默认监听 127.0.0.1:8889
 // 可用 env：MOCK_PROVIDER_PORT / MOCK_PROVIDER_HOST / MOCK_PROVIDER_MODEL
 //
-// 故意不依赖任何外部包：验收环境零安装、可复现，且不污染 D 盘工具链。
+// 故意不依赖任何外部包：验收环境零安装、可复现，且不污染调用者的本地工具链。
 
 const http = require('http');
 const https = require('https');
