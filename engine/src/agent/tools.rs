@@ -12,6 +12,7 @@
 //! - `tools/session.rs`：session family 5 工具，`pub(super) fn register` 集中注册。
 //! - `tools/character.rs`：character family 3 工具，`pub(super) fn register` 集中注册。
 //! - `tools/state_lorebook.rs`：state + lorebook family 6 工具，含 `read_lorebook_or_empty`。
+//! - `tools/state_preset.rs`：preset family 2 工具（get + update），#115 P1 第二阶段。
 //! - `tools/volume_context.rs`：volume seal + context bundle export family 2 工具。
 //! - `tools/analysis.rs`：analysis enhance/apply family 2 工具 + 共享 LLM helper。
 //! - `tools/tests/`：按 family 分组的测试子模块。
@@ -37,6 +38,7 @@ mod character;
 mod params;
 mod session;
 mod state_lorebook;
+mod state_preset;
 #[cfg(test)]
 mod tests;
 mod volume_context;
@@ -193,6 +195,8 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     character::register(&mut reg, state.clone());
     // #155 PR 3：state + lorebook family 6 工具。
     state_lorebook::register(&mut reg, state.clone());
+    // #115 P1 第二阶段：preset family 2 工具（get + update）。
+    state_preset::register(&mut reg, state.clone());
     // #155 PR 3：volume seal + context bundle export family 2 工具。
     volume_context::register(&mut reg, state.clone());
     // #155 PR 3：analysis enhance/apply family 2 工具。

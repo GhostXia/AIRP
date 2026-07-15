@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 use super::card::{TavernPreset, TavernPrompt};
+use crate::error::AirpError;
 
 static SETVAR_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\{\{setvar::([^:]+)::([^}]*)\}\}").expect("SETVAR_RE"));
@@ -440,6 +441,82 @@ pub fn render_macros(text: &str, char_name: &str, user_name: &str, last_message:
         .to_string();
 
     rendered
+}
+
+// ── PresetService（#115 P1 第二阶段：agent tool 共享数据访问层）──────────────
+//
+// 与 `LorebookService` 对齐：封装 normalize + canonical/raw 落盘 + 读取，
+// 供 daemon handler 和 agent tool 共享调用。本 PR 只在 agent tool 侧接入；
+// handler 侧接入留 #174 合并后的去重 PR。
+
+static PRESET_WRITE_LOCK: Lazy<std::sync::Mutex<()>> = Lazy::new(|| std::sync::Mutex::new(()));
+
+/// Preset 数据访问层。封装归一化、canonical/raw 落盘与读取。
+pub struct PresetService {
+    data_root: std::path::PathBuf,
+}
+
+impl PresetService {
+    pub fn new(data_root: impl AsRef<std::path::Path>) -> Self {
+        Self {
+            data_root: data_root.as_ref().to_path_buf(),
+        }
+    }
+
+    /// 读 canonical preset.json（优先 normalized 路径，回退 legacy）。
+    pub fn read(&self, preset_id: &crate::types::PresetId) -> Result<TavernPreset, AirpError> {
+        let normalized = crate::data_dir::preset_json_path(&self.data_root, preset_id.as_str());
+        let legacy = crate::data_dir::legacy_preset_json_path(&self.data_root, preset_id.as_str());
+        let path = if normalized.exists() {
+            normalized
+        } else {
+            legacy
+        };
+        if !path.exists() {
+            return Err(AirpError::NotFound(format!(
+                "preset {} not found",
+                preset_id
+            )));
+        }
+        let json_str = std::fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&json_str)?)
+    }
+
+    /// 写 canonical preset.json + raw.json sidecar。
+    /// 允许覆盖（destructive update 语义，与 import_preset 的拒绝覆盖不同）。
+    pub fn write(
+        &self,
+        preset_id: &crate::types::PresetId,
+        source_json: &str,
+    ) -> Result<(TavernPreset, PresetImportReport), AirpError> {
+        let cleaned = crate::data_dir::strip_utf8_bom(source_json);
+        let source: Value = serde_json::from_str(cleaned)
+            .map_err(|e| AirpError::BadRequest(format!("preset JSON 无效: {}", e)))?;
+        let (canonical, report) = normalize_preset(&source);
+        if let Some(reason) = report.replacement_error() {
+            return Err(AirpError::BadRequest(format!("preset 无法导入: {reason}")));
+        }
+        let canonical_bytes = serde_json::to_vec_pretty(&canonical)?;
+        let raw_bytes = cleaned.as_bytes();
+
+        let _guard = PRESET_WRITE_LOCK
+            .lock()
+            .expect("preset write lock poisoned");
+        let dir = self.data_root.join("presets").join(preset_id.as_str());
+        let generation = format!(
+            "{}-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            report.source_hash
+        );
+        let version_dir = dir.join("versions").join(&generation);
+        std::fs::create_dir_all(&version_dir)?;
+        crate::data_dir::replace_file(&version_dir.join("preset.json"), &canonical_bytes)?;
+        crate::data_dir::replace_file(&version_dir.join("raw.json"), raw_bytes)?;
+        // Both immutable files exist before the single atomic pointer switch. Old versions are
+        // retained so readers that resolved the previous pointer can finish safely.
+        crate::data_dir::replace_file(&dir.join("current"), generation.as_bytes())?;
+        Ok((canonical, report))
+    }
 }
 
 #[cfg(test)]
