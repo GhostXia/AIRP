@@ -8,7 +8,7 @@
 // pipeline's persona fail-closed (404 for unknown persona_id, OK for the
 // virtual `default`).
 //
-// PR4-A1（#160 审计遗留项）：`pr75_chat_history_returns_message_timestamps`
+// PR4-A1（#155 审计遗留项）：`pr75_chat_history_returns_message_timestamps`
 // 原为 `handlers.rs` 内联测试，使用其私有的 `make_state_for_http_test`。
 // `make_state_no_key` 与之等价（同一 DaemonState fixture），借此把测试
 // 迁出 handler 模块、回归到 `daemon/tests/chat.rs` 路由级测试位置。
@@ -306,7 +306,7 @@ async fn a1b_chat_completions_accepts_default_persona_id_for_fresh_user() {
     );
 }
 
-// ── W-01 (#75 PR4-A1 / #160 审计遗留项)：/v1/chat/history 返回 JSON 包含
+// ── W-01 (#75 PR4-A1 / #155 审计遗留项)：/v1/chat/history 返回 JSON 包含
 //     message_timestamps 字段，且长度等于 messages。 ──────────────────────
 
 #[tokio::test]

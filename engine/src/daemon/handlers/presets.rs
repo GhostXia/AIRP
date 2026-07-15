@@ -108,16 +108,16 @@ pub(in crate::daemon) async fn import_preset_endpoint(
 #[serde(deny_unknown_fields)]
 pub(in crate::daemon) struct ImportPresetRequest {
     /// 目标 preset ID；走 PresetId::new 校验，拒路径遍历。
-    pub preset_id: String,
+    preset_id: String,
     /// TavernPreset 规范的 JSON 文本（原样 sidecar，不解释）。
-    pub preset_json: String,
+    preset_json: String,
 }
 
 /// POST /v1/presets/import 的响应体。
 #[derive(Debug, Serialize)]
 pub(in crate::daemon) struct ImportPresetResponse {
-    pub preset_id: String,
-    pub prompts_count: usize,
+    preset_id: String,
+    prompts_count: usize,
 }
 
 #[cfg(test)]
