@@ -334,19 +334,18 @@ pub(in crate::daemon) async fn reextract_character_assets(
         )));
     }
 
-    let json_str = if char_dir.join("card").join("raw.json").exists() {
-        let raw = fs::read_to_string(char_dir.join("card").join("raw.json"))?;
-        data_dir::strip_utf8_bom(&raw).to_owned()
-    } else if char_dir.join("card.json").exists() {
-        let raw = fs::read_to_string(char_dir.join("card.json"))?;
-        data_dir::strip_utf8_bom(&raw).to_owned()
-    } else if char_dir.join("card.png").exists() {
-        crate::png_parser::parse_png_character_card(char_dir.join("card.png"))?
-    } else {
-        return Err(AirpError::NotFound(format!(
-            "角色 {} 无可用卡片文件（card.json / card.png）",
-            cid.as_str()
-        )));
+    let json_str = match data_dir::read_character_card_text(&state.data_root, &cid) {
+        Ok(raw) => data_dir::strip_utf8_bom(&raw).to_owned(),
+        Err(AirpError::NotFound(_)) if char_dir.join("card.png").exists() => {
+            crate::png_parser::parse_png_character_card(char_dir.join("card.png"))?
+        }
+        Err(AirpError::NotFound(_)) => {
+            return Err(AirpError::NotFound(format!(
+                "角色 {} 无可用卡片文件（card/card.json / card/raw.json / card.json / card.png）",
+                cid.as_str()
+            )));
+        }
+        Err(error) => return Err(error),
     };
 
     extract_card_assets(&state.data_root, cid.as_str(), &json_str);
@@ -1007,6 +1006,64 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
         assert!(!missing_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn reextract_reads_migrated_card_json_only() {
+        let (state, _tmp) = make_state_for_http_test();
+        let card_dir = state.data_root.join("characters/migrated/card");
+        fs::create_dir_all(&card_dir).unwrap();
+        fs::write(
+            card_dir.join("card.json"),
+            serde_json::json!({
+                "spec": "chara_card_v2",
+                "data": {"name": "Migrated", "first_mes": "from migrated"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let _ = reextract_character_assets(
+            axum::extract::State(state.clone()),
+            axum::extract::Path("migrated".to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(card_dir.join("greetings/00.md")).unwrap(),
+            "from migrated"
+        );
+    }
+
+    #[tokio::test]
+    async fn reextract_uses_shared_json_source_precedence() {
+        let (state, _tmp) = make_state_for_http_test();
+        let character_dir = state.data_root.join("characters/conflicting");
+        let card_dir = character_dir.join("card");
+        fs::create_dir_all(&card_dir).unwrap();
+        let card = |message: &str| {
+            serde_json::json!({
+                "spec": "chara_card_v2",
+                "data": {"name": "Conflicting", "first_mes": message}
+            })
+            .to_string()
+        };
+        fs::write(card_dir.join("card.json"), card("from migrated")).unwrap();
+        fs::write(card_dir.join("raw.json"), card("from raw")).unwrap();
+        fs::write(character_dir.join("card.json"), card("from legacy")).unwrap();
+
+        let _ = reextract_character_assets(
+            axum::extract::State(state.clone()),
+            axum::extract::Path("conflicting".to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(card_dir.join("greetings/00.md")).unwrap(),
+            "from migrated"
+        );
     }
 
     /// 三参数全 None → BadRequest "必须提供 ... 之一"
