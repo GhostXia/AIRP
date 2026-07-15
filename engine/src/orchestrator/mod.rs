@@ -9,6 +9,9 @@ pub mod worldbook_normalizer;
 // Re-exports so callers keep `crate::orchestrator::Foo` paths unchanged.
 pub use card::{CharacterData, TavernCardV2, TavernPreset, TavernPrompt};
 pub use lorebook::{merge_lorebooks, Lorebook, LorebookEntry};
+pub use preset::{
+    normalize_preset, PresetImportReport, PresetPromptDiagnostic, PRESET_CONVERTER_VERSION,
+};
 pub use volume_inject::{inject_current_context, inject_volume_context};
 pub use worldbook_normalizer::{normalize_worldbook, WorldbookImportReport};
 

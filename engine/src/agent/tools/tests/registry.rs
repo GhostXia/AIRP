@@ -1,6 +1,6 @@
 // Registry contract tests for `agent::tools`.
 //
-// 本文件固定 `default_registry` 的 19 工具契约：名称、排序、description、
+// 本文件固定 `default_registry` 的 21 工具契约：名称、排序、description、
 // side_effect 精确快照。任何工具的新增/删除/改名/metadata 变更都会立刻
 // 被快照测试捕获，迫使开发者 conscious 更新而非静默漂移。
 
@@ -43,6 +43,8 @@ fn default_registry_includes_expected_tool_names() {
         "update_lorebook",
         "apply_lorebook",
         "merge_lorebooks",
+        "get_preset",
+        "update_preset",
         "seal_volume",
         "export_context_bundle",
         "enhance_analysis",
@@ -80,7 +82,7 @@ fn register_rejects_duplicate_tool_name() {
     assert!(reg.get("echo").is_some());
 }
 
-/// #155 PR 2 强化：对 `default_registry` 的 19 个内建工具做精确快照，
+/// #155 PR 2 强化：对 `default_registry` 的 21 个内建工具做精确快照，
 /// 固定每个工具的 name / description / side_effect。
 ///
 /// 任何 metadata 文案改动（哪怕一个字符）都会被此测试捕获，迫使开发者
@@ -88,7 +90,7 @@ fn register_rejects_duplicate_tool_name() {
 ///
 /// 快照按 name 字典序排列，与 `ToolRegistry::list` 的排序一致。
 #[test]
-fn default_registry_exposes_sorted_19_tool_snapshot_with_descriptions_and_side_effects() {
+fn default_registry_exposes_sorted_21_tool_snapshot_with_descriptions_and_side_effects() {
     let tmp = tempdir().unwrap();
     let reg = default_registry(make_state(tmp.path().to_path_buf()));
     let tools = reg.list();
@@ -96,8 +98,8 @@ fn default_registry_exposes_sorted_19_tool_snapshot_with_descriptions_and_side_e
     // ── 数量 ────────────────────────────────────────────────────────────
     assert_eq!(
         tools.len(),
-        19,
-        "default_registry must expose exactly 19 built-in tools"
+        21,
+        "default_registry must expose exactly 21 built-in tools"
     );
 
     // ── 排序 ────────────────────────────────────────────────────────────
@@ -161,6 +163,11 @@ fn default_registry_exposes_sorted_19_tool_snapshot_with_descriptions_and_side_e
             ToolSideEffect::Readonly,
         ),
         (
+            "get_preset",
+            "Read a preset's canonical prompts array by preset_id. Returns AIRP v1 normalized prompts.",
+            ToolSideEffect::Readonly,
+        ),
+        (
             "get_recent_context",
             "Get the most recent N messages of a character's chat log (default N=20).",
             ToolSideEffect::Readonly,
@@ -205,12 +212,17 @@ fn default_registry_exposes_sorted_19_tool_snapshot_with_descriptions_and_side_e
             "Replace a character's lorebook. Accepts AIRP canonical or SillyTavern form; normalizes via shared WorldbookNormalizer.",
             ToolSideEffect::Destructive,
         ),
+        (
+            "update_preset",
+            "Replace a preset. Accepts SillyTavern or AIRP canonical form; normalizes via shared normalizer. Destructive: requires confirm=true.",
+            ToolSideEffect::Destructive,
+        ),
     ];
 
     assert_eq!(
         expected.len(),
-        19,
-        "expected snapshot must also have 19 entries"
+        21,
+        "expected snapshot must also have 21 entries"
     );
 
     for (actual, (name, description, side_effect)) in tools.iter().zip(expected) {
