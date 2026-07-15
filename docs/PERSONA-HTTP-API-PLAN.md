@@ -1,8 +1,8 @@
 # Multi-Persona HTTP API
 
-> Status: A1a (PR #151) and A1b (PR #152) delivered. A2a (WebUI multi-Persona
-> CRUD) in flight. This document records the stable HTTP contract and remaining
-> product boundary; it is not an execution log.
+> Status: A1a (PR #151), A1b (PR #152) and A2a (PR #154) delivered.
+> This document records the stable HTTP/pipeline contract and the remaining
+> product boundary; it is not an execution log. Last checked: 2026-07-15.
 
 ## Scope
 
@@ -11,8 +11,8 @@ The plural `/v1/users/:user_id/personas` surface exposes the existing
 `/v1/users/:user_id/persona` GET/PUT surface remains supported for the default
 persona.
 
-A2a adds a WebUI management surface for listing, creating, editing and deleting
-multi-Personas (plural endpoints). Binding/unbinding (A2b) and chat-time
+A2a provides a WebUI management surface for listing, creating, editing and deleting
+multi-Personas through the plural endpoints. Binding/unbinding (A2b) and chat-time
 persona activation switching (A2c) remain deferred.
 
 ## Endpoints

@@ -2,8 +2,8 @@
 
 > 目的：把四个原仓库拆成**功能零件**，脱离原仓库的模块边界，供"当新项目重组"时按需取用。
 > 状态图例：✅ 可原样复用 ｜ 🔧 有基础但需修/补 ｜ 🆕 四仓皆无，需新建 ｜ 📖 仅作参考/思路（代码不直接搬）
-> 来源仓库：C=AIRP-Core(D:\AIRPCLI) · M=AIRP-MCP-Server(D:\airp-mcp-server) · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指原仓库路径。
-> 最后更新：2026-07-11
+> 来源仓库：C=AIRP-Core/AIRPCLI · M=AIRP-MCP-Server · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指来源仓库相对路径。
+> 最后校准：2026-07-15
 
 > **使用限制（2026-07-12 校准）**：本文是源项目候选零件目录，不是当前 AIRP capability inventory。✅/🔧 表示源资产可参考或可吸收，不代表本仓已存在 HTTP route、Agent tool 或产品 UI。当前实现状态见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
@@ -72,7 +72,7 @@
 | 角色卡 PNG 解析（正确版） | C `png_parser.rs`(262行) | ✅ | tEXt/zTXt/iTXt + ccv3(V3)优先 chara(V2)回退 + v1平铺归一化。**这是正确实现** |
 | 角色卡 TavernCardV2 模型 | C `types.rs:37-62` | ✅ | spec/data 封装 + system_prompt/alternate_greetings/character_book + `normalize_v1_to_v2()` |
 | 角色卡解析（坏版，勿用） | M `character_store.rs:217`+`character.rs:20-32` | 📖 | zTXt-only 读不到真卡 + 摊平 struct 解析失败。**反面教材，用 C 的替换** |
-| 世界书解析+插入引擎 | AIRP engine + C/M 参考 | 🔧 | PR #141 已交付 AIRP v2 `constant`、关键词触发、merge-safe 激活与 fixture；shared normalizer、uid-keyed object/别名完整归一化、position/depth/selective/secondary/probability/递归仍需增量实现 |
+| 世界书解析+插入引擎 | AIRP engine + C/M 参考 | 🔧 | v2 `constant`、关键词触发、merge-safe 激活与 v3 shared normalizer/导入诊断已交付；position/depth/selective/secondary 组合/probability/递归仍需增量实现 |
 | 预设正则脚本（正确骨架） | M `preset_regex.rs` `SillyTavernRegexScript` | 🔧 | findRegex/replaceString/placement 映射对，但缺 trimStrings/minDepth/maxDepth/markdownOnly 等字段 |
 | 预设正则（冲突坏版） | M `preset.rs:50-56` `RegexScript` | 📖 | 瞎起名字段，与上面冲突。**杀掉留一个真相源** |
 | 预设分析/热调工具 | M `analyze_preset`/`tune_preset`/`decompose_preset` | 📖 | 提示词工作流：读懂 prompt 块用途、按当前模型热调。对应"预设是建议素材，Agent 适配"哲学 |

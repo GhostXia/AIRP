@@ -145,7 +145,7 @@ Any semantic change must update, in the same PR:
 3. deterministic trigger and final prompt-placement tests;
 4. the compatibility and priority statements in `docs/CURRENT-BASELINE.md` and issue #126.
 
-**v3 note:** The v3 advisory metadata fields do not change runtime trigger or injection behavior. The existing v2 trigger tests remain the deterministic trigger proof. The normalizer unit tests (`test_idempotent_on_canonical_lorebook`, `test_idempotent_round_trip`) prove that v3 fields do not alter the runtime path.
+**v3 note:** The v3 advisory metadata fields are not consumed by the runtime trigger or injection implementation. The existing v2 trigger and final prompt-placement tests remain the deterministic runtime proof. The normalizer unit tests (`test_idempotent_on_canonical_lorebook`, `test_idempotent_round_trip`) prove only canonical normalization stability and round-trip compatibility.
 
 ## Version history
 

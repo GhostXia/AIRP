@@ -4,15 +4,15 @@
 
 > 用户 2026-07-02 提问：导入的预设/卡/世界书有很多参数对我们无用，应内部自动剔除；要不要建一个"开源的、未来可增删参数的、我们自己的规格标准"？
 > **决策：建——但它本质是 engine 数据层模型的正式化/版本化/文档化形态（非另起炉灶），且守两条硬规则。**
-> 关联：[MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)（数据模型=engine 规格）· [PLAN.md §5](PLAN.md)（导入解耦重组）· [DEV-GUIDE.md §5](DEV-GUIDE.md) · `protocol/`（UI 线协议，与本"数据/资产规格"互补、非同一物）。
-> 最后更新：2026-07-02
+> 关联：[MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)（来源 catalog）· [PLAN.md](PLAN.md)（产品原则）· [DEV-GUIDE.md](DEV-GUIDE.md)（工程边界）· `protocol/`（UI 线协议，与本“数据/资产规格”互补、非同一物）。
+> 最后校准：2026-07-15
 
 ---
 
 ## 定位
 **AIRP 资产规格 = 我们 engine 数据层的 canonical 模型，正式化 + 版本化 + 文档化 + 开源。** 我们本就在通过融入 MCP-Server 的域模型建这个数据层——把它命名、定版本、写文档、开源，就成了"我们自己的规格"。**不是发明新格式，是把已在建的内部模型立为标准。**
 
-价值：① engine 数据层 + agent 工具的稳定契约；② 第三方扩展/工具/widget 读写的目标 schema（§3.8 扩展生态 + agentskills.io）；③ 版本化可增删字段，生态可成长；④ 对标 Character Card V2/V3 那样的开放社区规格。
+价值：① engine 数据层与 Agent 工具的稳定契约；② 第三方扩展/工具/Widget 的候选目标 schema（见 [PLAN.md](PLAN.md) §4.4）；③ 版本化演进；④ 提供类似 Character Card V2/V3 的开放互操作入口。
 
 ## 两条硬规则（不可破）
 
@@ -20,7 +20,7 @@
 - **建在 Character Card V3 之上**（V3 本就开放 + 可扩展：`extensions` / `assets` / `creator_notes_multilingual` / spec 版本），+ ST World Info + 预设格式。
 - 导入 = **归一化（normalize）到 canonical 模型**，不是翻译成不兼容新格式。
 - **保持可导出 / round-trip**——用户能把资产导回酒馆生态，不被我们困死。
-- 理由：最大化兼容 = 最大化用户资产可迁入 + 不锁定 = 符合"无缝支持第三方"（§3.8）。
+- 理由：最大化兼容可以提高用户资产可迁入性并减少锁定，符合受控扩展方向。
 
 ### 规则2 · "剔除" ≠ "销毁"（分两层，最易踩的坑）
 - **存储层：全部保留。** canonical 字段 + **原始 raw** + **未知/extension 字段 → passthrough sidecar**。依据 = MCP-Server 自有规矩（`SKILL.md §16/§15.5`：未知捆绑内容原样旁路 sidecar、不解析不删——"可能是第三方工具标记语法"；`[UNKNOWN_ORIGIN]` 标记待查不删）+ V3 extensions 哲学。**永不丢数据**，保 re-export + 第三方扩展数据存活。
@@ -39,7 +39,7 @@
 ```
 - **"重组成规格文件"= 代码，不是 Agent**：本质是确定性字段映射（V3→canonical，未知进 sidecar）。代码干=快/无损/可复现/免费。**若让 Agent 做 = 把整张卡/整本世界书灌进模型 = 违反不变式6（烧 token）+ 慢 + 不确定 + 可能改坏数据。**
 - **Agent 分析 = 可选语义增强层**：按需、非必经（不分析也能用）；跑在**已解析的结构化数据**上，校验未知宏只喂**可疑片段**、不喂整文件；产物旁路进 `analysis/` sidecar。
-- **预设特殊（§3.3）**：预设是运行时给 Agent 的**建议素材**——导入只**存**，Agent 在**使用时**按当前模型适配，**不在导入时分析**。
+- **Preset 特殊**：Preset 是运行时给 Agent 的建议素材；导入负责保存与诊断，使用时再按当前模型适配，不在导入时静默重写语义。见 [PLAN.md](PLAN.md) §4.1。
 - 一句话：**导入=代码确定性归一化成规格文件(+sidecar 留全)；Agent 分析是可选/按需/旁路的语义层，不在导入主干、不看原始大 blob。**
 
 ## 模板与 schema（必须交付物 —— 规格的具体形态）
@@ -48,7 +48,7 @@
 2. **填充示例**（一个真实 canonical 实例，给人看懂）。
 3. **空骨架 blank skeleton**（authoring 用）。
 
-**模板身兼多职**：① 导入的**归一化目标**（代码把 ST 文件重组成这个形状）；② **从零创作**模板（用户不导入、直接按模板新建）；③ **第三方契约**（扩展/工具按 schema 读写，§3.8）。
+**模板身兼多职**：① 导入的归一化目标；② 从零创作模板；③ 未来第三方扩展/工具可读写的版本化契约候选。
 
 **关键区分（承角色成长模型 §PLAN 3.4）**：
 - **authoring 模板 = 只含 base 字段**（作者写死的：name/description/personality/scenario/first_mes/mes_example/alternate_greetings/system_prompt/post_history_instructions/character_book/tags/creator/character_version/extensions）。

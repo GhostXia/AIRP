@@ -1,117 +1,90 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-07-14
+> 基线日期：2026-07-15
 >
-> 实现基线：`main` / PR #151
+> 实现基线：`main@1f3e6ed` / PR #169
 >
-> 用途：新开发 session 的第一事实入口。若与旧计划、dated audit 或聊天记录冲突，以源码、测试和本文为准。
+> 用途：新开发 session 的第一事实入口。源码、manifest、测试和可重复运行证据高于本文；GitHub issues 是未完成工作的实时追踪面。
 
-## 1. 当前可用能力
+## 1. 产品与仓库边界
 
-- `engine/` 是唯一 RP/Agent 内核：OpenAI-compatible/Anthropic 流式调用、角色卡、命名会话、state、基础 lorebook、preset、scene、volume、decompose/analysis、HTTP/SSE 与有界 structured tool-call Agent loop。
-- 默认 Agent registry 有 19 个工具；运行时真相由 `GET /v1/agent/tools` 提供，执行受 capability、allowlist 和 destructive confirmation 约束。
-- Chat history 已具备 session-scoped durable message ID、完整 JSONL 保留、`limit`/`before` cursor window、legacy deterministic ID 和 rollback-by-ID；旧 history/rollback 请求仍兼容。
-- `ChatLog::rollback_to` 现在也在底层持久化边界拒绝非法 index，避免未来调用方绕过 service/API 校验；空日志 `index=0` 的 legacy 兼容行为保留。
-- WebUI 已完成 provider 配置、角色导入、单默认 Persona、Preset 选择/JSON 导入、session 生命周期、流式聊天、Agent Run、非敏感恢复，以及 50 条首屏窗口、加载更早、durable-ID DOM 复用和按消息回滚。
-- WebUI 已成为当前正式产品交付主面；近期目标从“基础验证面”升级为“可安全部署、可持续日用、可升级恢复的单实例自托管正式版”。生产边界与 release gates 见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
-- P0 生产拓扑、配置与威胁边界已经在 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md) 形成实现合同。engine production mode 在读取/创建 config 前 fail-closed 校验 deployment mode、32-byte base64url access key、canonical HTTPS public origin、绝对且已存在可写的数据目录，并拒绝 local-path import；production CORS 只接受 public origin，`POST /v1/settings` 不能单边替换 bearer。
-- `deploy/production/` 已包含 digest-pinned engine/Caddy images、版本化 Compose、仅 gateway 发布端口的私有 engine 网络、Compose secret mounts、三种显式 TLS 模式、安全 headers、同源 WebUI runtime config 和 operator bootstrap。production topology CI 会从一次性 volume 启动真实 HTTPS 栈，执行 perimeter auth、私有 engine、CSP/headers、content-only import、SSE、浏览器注入/取消、重启持久化和 secret scan。浏览器在 production mode 不接收或存储 engine URL/bearer；engine 容器监听非 loopback 必须显式传 `--host 0.0.0.0`。
-- PR #127 已交付 schema v2 多 Persona 存储、revision、角色/会话绑定、legacy/default 协调和路径校验；A1a 已交付多 Persona HTTP API（`GET/POST /v1/users/:id/personas`、`GET/PUT/DELETE /v1/users/:id/personas/:persona_id`、`POST/DELETE .../bindings`，handler 全部委托 `PersonaService`，legacy singular `/persona` 保留）；A1b 已交付 `chat_pipeline` persona 激活（`POST /v1/chat/completions` 新增可选 `persona_id`，按 precedence contract 解析 explicit → `find_for_character` 绑定 → default，scene 模式跳过 tier 2，merge 合同：request `user_profile.name` 非空覆盖 persona name、persona variables 作 defaults、request variables 同名键 override）；A2a 已交付 WebUI 多 Persona CRUD UI（persona 列表 select、新建/创建/编辑/删除，全部走 plural endpoints，`default` 删除禁用，create-mode 切换，localStorage 持久化 selectedPersonaId）。仍不能宣称多 Persona 产品闭环完成：WebUI 绑定/解绑（A2b）与聊天时 persona 激活切换（A2c）仍未交付。
-- PR #141 已交付 AIRP worldbook v2 `constant` 运行时语义：`enabled && (constant || primary_keyword_match)`；constant 与关键词条目共用 priority 排序和单一注入块，多 lorebook merge 会保留不同激活条件并在实际触发后按内容去重。WebUI 已可编辑"常驻"字段，v1 无 `constant` 数据保持兼容。
-- worldbook v3 shared normalizer + advisory metadata 已交付：`normalize_worldbook()` 统一 PNG 导入、PUT API 和 Agent tool 三个入口的 SillyTavern→AIRP 归一化；v3 schema 新增 `secondary_keys`/`case_sensitive`/`extensions` 三个 advisory 字段（`#[serde(default)]` 向后兼容，trigger 不消费）；`WorldbookImportReport` 提供 converted/aliases_normalized/advisory_preserved/invalid/needs_review 诊断。ST-only 字段（selective/position/depth/probability/…）原样保留在 `extensions` 中不丢弃，但不进入运行时注入管线。归一化入口会拒绝错误 source shape、全量无效条目、字段错型与越界 priority，避免整体替换静默清空或改变语义。
-- Tauri/Vue UI 代码与既有能力继续保留，但自 2026-07-13 起桌面 UI 开发、打包验收和性能 spike 暂停，不属于近期里程碑；恢复时须重新校准基线。
-- Provider redirect 统一 fail-closed；development CORS 保留内建 WebUI/Tauri origins 并追加合法精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
+AIRP 是专精 Role Play 的 AI Agent 客户端，当前采用“无头 engine + 可换 UI”结构：
 
-## 2. 尚不能宣称的能力
+- `engine/`（`airp-core`）：唯一 RP/Agent 内核，负责数据、prompt 装配、LLM adapter、Agent loop 与 HTTP/SSE；
+- `webui/`：当前正式产品交付主面；
+- `ui/` + `ui/src-tauri/`（`airp-ui`）：保留的 Tauri/Vue 桌面客户端，近期开发与打包验收暂停；
+- `protocol/`（`airp-state-protocol`）：UI/engine 共用线协议类型；
+- `deploy/production/`：单实例、自托管、单用户 WebUI 的 P0 preview 拓扑；
+- `data/`：运行时数据根规范与仓库内安全样例，不是共享素材目录。
 
-- 当前 AIRP-Dev Windows 安装包尚缺真实 artifact 的安装、启动、sidecar ready、简单对话和退出证据；该缺口因桌面计划暂停而不进入近期验收。
-- MCP upstream client、skills/plugin runtime、完整 ChangeInbox、多 Persona WebUI 管理面（A2）、Preset migration report、PromptAssemblyTrace、SillyTavern 高级 worldbook 运行时语义（shared normalizer + advisory metadata 已交付，但 selective/secondary_keys/position/depth 等字段的运行时触发与注入语义仍未实现，当前仅作 advisory 保留）仍未完成。多 Persona 存储与 HTTP CRUD+绑定（A1a）及 `chat_pipeline` 自动激活（A1b）已交付，但产品闭环仍待 A2。
-- WebUI 已窗口分页，但不是虚拟列表；Tauri/Vue 的 10k/100k 性能、内存上界和虚拟滚动验收仍未完成，属于暂停桌面计划的保留缺口。
-- #37 的 branch/swipe/edit、per-user isolation 和长期记忆仍开放；durable ID、cursor pagination 与 rollback-by-ID 已交付，不应再列为缺口。
-- 可配置多 Agent 编排尚未交付；[AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md) 是产品原则与待实现规范，不得把示例 profile 写成现有 runtime 能力。
-- 当前已有 engine 生产鉴权/配置强制校验、首方 OCI/Compose/Caddy artifact 与真实 production topology CI；仍没有完成 RP 正式使用面、备份/恢复、升级回滚和 P3 发布门禁，因此仍不能称正式发布。`webui/start.bat`、`serve.js` 和 `cargo run` 只属于开发启动路径。
+AIRPCLI、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 原仓库是作者自己的第一方前序项目。统一按“吸收资产，不继承产品北极星”处理，不是当前 runtime 依赖或必须逐项复刻的清单。
 
-## 3. 下一阶段优先顺序
+## 2. 当前已交付能力
 
-1. 工具链安全维护：先处理 #137 的 Vite/Vitest 高危与关键 audit 告警，并完整验证 WebUI、production browser smoke 与 Tauri build 配置；
-2. RP 正式使用面：完成 #114/#115/#126 的 Persona/Preset/Worldbook 管理、有效配置、迁移报告和 trace 摘要；#114 原 issue 中以 Tauri 为主的 UI 表述须按“WebUI 当前主面”重新切片，不恢复桌面排期；
-3. 数据可靠性：版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志和运维 runbook；
-4. 发布候选：浏览器兼容、安全负向、升级/恢复、长会话 soak 和发布 artifact 门禁；
-5. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review 后移；桌面 #98/#29/#122 只保留追踪。
+### Engine 与 Agent
 
-## 4. 当前开放风险/issue 分组
+- OpenAI-compatible / Anthropic 流式 adapter，`/v1/chat/completions` SSE，以及有 step/token/wall-clock/cancel 边界的 `/v1/agent/run`。
+- 默认 Agent registry 有 19 个工具；运行时目录由 `GET /v1/agent/tools` 提供，执行受 capability、allowlist 与 destructive confirmation 约束。
+- Agent tool 已按 session/character、state/lorebook、volume/context、analysis 等职责拆分；daemon handler 已按 settings、presets、scenes、models、sessions、personas、chat、agent、characters、state、lorebook 拆分。此次拆分不改变 HTTP 或工具合同。
+- daemon HTTP 合同测试已按 catalog、chat、health/settings、persona、security、sessions、state/scene 分组，覆盖主要 route、校验和安全边界。
+- 干净提示词不变式 `subagent_context_has_no_orchestrator_noise` 仍是阻塞门禁：Agent 编排脚手架不得进入 RP 角色平面。
 
-- Production umbrella：#130（P0 已完成，P1-P3 仍开放）。
-- RP Profile/诊断：#114、#115、#116、#117、#126；#114 已有基础 Preset 与多 Persona 存储地基，多 Persona HTTP CRUD+绑定闭环（A1a）、`chat_pipeline` 按 `persona_id`/`find_for_character` 自动激活（A1b）与 WebUI 多 Persona CRUD UI（A2a）已交付，但 WebUI 绑定/解绑（A2b）、聊天时 persona 激活切换（A2c）、完整绑定闭环与 worldbook shared normalization（constant 已交付，仍开放的语义包括但不限于 selective/secondary_keys/position/depth）仍未交付。
-- Session/长期使用：#35、#37、#122；durable ID、cursor 与 WebUI window 已完成，剩余是 branch/swipe/edit、per-user/长期记忆和产品 UI 性能。
-- WebUI/design：#105。
-- Agent/extension：#32、#87。
-- Desktop：#29、#98。
-- Process/docs：#69、#70、#99、#104、#113、#128。
-- Security/dependencies：#137（Vite/Vitest 开发工具链 audit 告警；不在 production runtime image 内，但需在 P1 期间升级验证）。
-- Engine audit：#140（no-op rollback 是否应刷新 `updated_at`/持久化）与 #142（第三方 worldbook 字符串布尔值是否进入 shared normalizer）；均为低优先级语义/兼容决策，不阻塞当前开发。
+### RP 数据与会话
+
+- 角色卡 JSON/PNG 导入、角色 CRUD、preset、scene、state、volume、decompose/analysis 和基础 worldbook 已有共享服务或 HTTP 能力。
+- 命名 session 使用外层目录 UUID 作为 session 目录、history 响应和 `chat_log_meta.json` 的唯一规范身份；旧双 UUID metadata 会 best-effort 原子修复，损坏 metadata 不阻塞仍可读取的历史。
+- Chat history 已有 session-scoped durable message ID、完整 JSONL 保留、`limit`/`before` cursor、legacy deterministic ID 与 rollback-by-ID。非法 rollback index 在 service/API 和 `ChatLog` 持久化边界均被拒绝。
+- 新数据根不再创建根级 `world.md`/`items.md`；新角色不再创建 legacy `worldbooks/`。角色默认世界书的规范位置是 `characters/{character_id}/world/lorebook.json`。
+- 自包含 session、角色卡/世界书工作副本、统一 `content_revision`、`AIRP-TREE-SHA256-v1`、JSONL 崩溃恢复与完整导出已经形成接受合同，但除命名 session 身份和 history/memory 隔离外仍需分阶段实现。详见 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)。
+
+### Persona、Worldbook 与 WebUI
+
+- 多 Persona 存储、revision、默认/角色/session 绑定、plural HTTP CRUD、legacy singular API 兼容，以及 chat pipeline 的 explicit → binding → default 激活顺序已交付。
+- WebUI 已有多 Persona 列表、创建、编辑、删除与本地选择状态；绑定/解绑和聊天请求显式 persona 切换仍未形成完整产品闭环。
+- Worldbook v2 已实现 `enabled && (constant || primary_keyword_match)`；v3 shared normalizer 统一 PNG、PUT API、Agent tool 三入口，保留 `secondary_keys`、`case_sensitive` 与其他 ST advisory metadata，并输出导入诊断。
+- `selective`、secondary-key 组合、position/depth、probability、递归等 SillyTavern 高级运行时语义尚未实现；保留字段不等于执行兼容。
+- WebUI 已有 provider 配置、角色导入、Preset 选择/JSON 导入、session 生命周期、流式聊天、Agent Run、非敏感恢复、50 条首屏窗口、加载更早、durable-ID DOM 复用与按消息回滚。
+
+### Production P0
+
+- engine production mode 在读写配置和监听前 fail-closed 校验 deployment mode、32-byte base64url access key、canonical HTTPS public origin、绝对且已存在可写的数据目录，并禁止 local-path import。
+- `deploy/production/` 已提供 digest-pinned engine/Caddy images、版本化 Compose、私有 engine 网络、secret mounts、显式 TLS 模式、安全 headers、同源 WebUI runtime config 与 operator bootstrap。
+- production topology CI 会启动真实 HTTPS 栈，覆盖 perimeter auth、私有 engine、CSP/headers、content-only import、SSE、浏览器注入/取消、重启持久化和 secret scan。
+- 这是已实现的 P0 preview，不是正式发布；P1–P3 仍由 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) 管理。
+
+## 3. 尚不能宣称
+
+- WebUI 尚未达到“正式发布”：完整 RP 资产管理、有效配置可见性、版本化 migration、备份/恢复、可恢复删除、升级回滚、运维 runbook、浏览器矩阵与长会话 soak 仍不完整。
+- 多 Persona 的 WebUI 绑定/解绑、聊天时激活切换、完整 Preset 生命周期、PromptAssemblyTrace 与迁移报告仍未闭合。
+- session 当前还不是完整自包含、逐轮可复现的存档；revision manifest、工作副本、完整性加载、派生角色卡导出和完整 session archive 仍是合同而非 runtime 能力。
+- MCP upstream client、skills/plugin runtime、完整 ChangeInbox、可配置多 Agent 编排和长期自进化记忆尚未交付。
+- WebUI 的 50 条窗口不是虚拟列表；Tauri/Vue 的 10k/100k 性能、内存上界和真实 Windows artifact 验收仍暂停。
+- `card_path` 只适用于可信本地桌面调用；远端/Web 调用必须使用受控 content upload，不能把服务端任意路径读取暴露给不可信调用方。
+
+## 4. 当前执行顺序
+
+1. 处理 #137 的 Vite/Vitest 安全升级，并重跑 UI/WebUI、production browser smoke 与 Tauri 配置验证；
+2. 完成 #114/#115/#126 的剩余 P1 闭环：Persona/Preset/Worldbook 管理、绑定、有效配置、迁移/诊断与 trace；已交付子项不得重复实现；
+3. 按 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 分阶段实现 session 自包含边界、revision 与恢复导出，并补版本化 migration、备份/恢复、可恢复删除、readiness、日志和 runbook；
+4. 建立 P3 发布候选门禁：浏览器兼容、安全负向、旧数据升级、备份恢复、长会话 soak、artifact 与回滚演练；
+5. #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review、#163 受控扩展设计后移；桌面 #29/#98/#122 仅保留追踪。
+
+开放 issue 还包括审计/流程/文档遗留项；不要在本文复制完整 issue 列表。开始工作前使用 `gh issue list --state open` 获取实时状态。
 
 ## 5. 最近验证证据
 
-PR #124（backend long-history contract）：
+`main@1f3e6ed` 的 push run [29390516900](https://github.com/GhostXia/AIRP/actions/runs/29390516900) 全绿：
 
-- `cargo test -p airp-core --lib`：447 passed，1 ignored；
-- `cargo clippy -p airp-core --lib --tests -- -D warnings`、fmt 与神圣不变式通过；
-- GitHub `Rust workspace`、`UI and WebUI`、CodeRabbit 全绿。
+- `Rust workspace`：通过；
+- `UI and WebUI`：通过；
+- `Production topology`：通过。
 
-PR #125（WebUI history window）：
+PR #169 的最终本地证据包括 `cargo test -p airp-core --lib` 568 passed / 1 ignored、workspace suites 通过、严格 Clippy、fmt、相对链接检查与 `git diff --check`；PR gate 的 Rust/UI/production topology 和审计状态均通过。该数字只对应 PR #169 快照，后续变更不得沿用为新结果。
 
-- `node webui/smoke.mjs`：64 checks / 0 failures，新增 durable IDs、cursor pages 与 rollback-by-ID 断言；
-- 真实浏览器：首屏 50/54，加载更早后 54/54，prepend 后视口保持；键盘 Enter 可选择 durable rollback target；
-- GitHub `Rust workspace`（含 workspace tests、Clippy、神圣不变式）与 `UI and WebUI` 全绿。
+## 6. 最短阅读顺序
 
-PR #127（multi Persona storage）：
-
-- 本地最终验证：454 passed，1 ignored；fmt、Clippy 与神圣不变式通过；
-- GitHub `Rust workspace`、`UI and WebUI`、CodeRabbit 全绿；
-- 审计修复覆盖 nested lock 死锁、bindings 丢失、路径遍历、损坏 JSON fail-closed、canonical/legacy 部分提交回滚和降级编辑协调。
-
-PR #132（production-mode fail-closed）：
-
-- `cargo test --workspace`：engine lib 461 passed、1 ignored；其余 integration/protocol/UI suites 全绿，其中 3 个二进制启动测试证明缺失密钥、缺失 data root 或启用 local-path import 时非零退出且不进入 serving 状态；
-- `cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 通过；
-- `agent::tests::subagent_context_has_no_orchestrator_noise` 单独精确运行：1 passed。
-
-PR #136（production topology P0）：
-
-- `deploy/production/verify-config.mjs`：通过，断言 engine 无 host port、私有 backend、secret file mounts、固定 image digest、Caddy auth/header replacement/body cap/CSP/log redaction；
-- Caddy v2.11.4 本地官方二进制：`public`、`internal` 配置 `validate` 通过，`files` 配置 `adapt` 通过（本机未配置真实 PEM，故未做证书加载）；
-- `cargo test --workspace --locked`：engine lib 462 passed、1 ignored，workspace/integration/protocol/UI suites 全绿；production startup 5 passed（含失败前 config 不落盘与 development 非 loopback 拒绝），production cache policy 普通响应/SSE 分支均通过；
-- `cargo clippy --workspace --all-targets --locked -- -D warnings` 与 fmt 通过；神圣不变式 `agent::tests::subagent_context_has_no_orchestrator_noise` 精确运行 1 passed；
-- `node webui/smoke.mjs`：67 checks / 0 failures，除三轮 SSE、持久化、history/cursor、rollback/regen 与 session 隔离外，新增三轮响应均经多个 read batch 增量到达的断言；
-- `npm run typecheck` 与 `npm run test -- --run`：13 files / 98 tests passed；deployment/browser JS、POSIX shell 静态/语法检查通过；
-- GitHub run `29249333920`：`Production topology` 3m17s、`Rust workspace` 7m14s、`UI and WebUI` 17s、CodeRabbit 全绿；拓扑内 WebUI smoke 为 64 checks / 0 failures，system-Chrome 与最终 secret/private-path scan 通过。
-- 2026-07-13 独立复杂度审计的初步结论：Caddy 作为可替换的边缘进程有明确职责；可疑的提前复杂度是 P0 主动启用 access logging，继而需要 field filter。当前配置未在本轮文档校准中改动，P2 可观测性阶段应在“删除 access log”与“补全用途/字段/输出/保留合同”之间作显式选择，见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md#41-independent-complexity-audit-2026-07-13)。
-
-PR #139（rollback storage contract）：
-
-- `cargo test -p airp-core --locked`：engine lib 464 passed、1 ignored；agent/openai-compat/production-startup/SSE integration suites 全绿，包含 `subagent_context_has_no_orchestrator_noise`；
-- `cargo test -p airp-core rollback --locked`：13 passed；非法非空/空日志 index、service/API 与 Agent tool 回滚路径均覆盖；
-- fmt、`cargo clippy -p airp-core --lib --tests --locked -- -D warnings` 与 `git diff --check` 通过；
-- GitHub run `29297782903`：Rust workspace、UI and WebUI、Production topology 全绿；合并后未采纳的 review 建议已进入 #140。
-
-PR #141（worldbook constant runtime contract v2）：
-
-- `cargo test --workspace --locked`：engine lib 474 passed、1 ignored；agent/openai-compat/production-startup/SSE、protocol 与 UI suites 全绿；
-- 新增 exact-output 与 merge 回归覆盖 constant 无关键词、disabled constant、constant+keyword 单次注入、priority、v1 兼容，以及 disabled-first duplicate 不得吞掉后续 enabled constant；
-- `cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` 与神圣不变式精确测试通过；
-- GitHub run `29302270580`：Rust workspace 8m51s、Production topology 3m41s、UI and WebUI 22s、CodeRabbit 全绿；#126 保持开放，未在本切片实现的字符串布尔兼容意见已进入 #142。
-
-数字是对应日期/PR 的证据快照，不是永久质量承诺；修改后必须重新运行相关验证。
-
-## 6. 文档阅读顺序
-
-1. 本文：当前事实、缺口、下一步；
-2. [DEV-GUIDE.md](DEV-GUIDE.md)：实现不变式、工具链和开发流程；
-3. [PLAN.md](PLAN.md)：长期产品原则与当前执行方向；
-4. [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)：当前正式上线目标、release gates 与推进顺序；
-5. [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)：P0 生产拓扑、配置、鉴权和威胁边界；
-6. [LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)：已交付的 durable history 合同与剩余性能边界；
-7. [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)：第一方源仓吸收边界；
-8. [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)：第三方理念参考与独立实现 provenance；
-9. [README.md](README.md)：完整文档地图与三份历史归档。
+1. 本文：当前能力、缺口、顺序与证据；
+2. [DEV-GUIDE.md](DEV-GUIDE.md)：工程不变式、目录边界、验证和交付流程；
+3. [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)：近期 release gates；
+4. 与任务直接相关的合同：例如 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)；
+5. [PLAN.md](PLAN.md)：长期产品原则，不用于证明能力已交付。

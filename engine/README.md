@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；2026-07-10 全项目独立审计仅作历史证据。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-15 的 `main@1f3e6ed` 复核。
 
 ## 当前能力
 
@@ -12,7 +12,8 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - Tavern Card JSON/PNG 导入、canonical/sidecar 落盘和角色 CRUD；
 - 会话创建/列表、history、append、rollback、regen；
 - rollback 在 service/API 与 `ChatLog` 持久化边界都拒绝非法 index；空日志 `index=0` 保留兼容；
-- lorebook CRUD、OR-key 触发、`enabled`、`priority` 与 v2 `constant` 常驻注入；
+- 多 Persona 存储、revision、HTTP CRUD/绑定，以及 chat pipeline 的显式/绑定/default 激活；
+- lorebook CRUD、OR-key 触发、`enabled`、`priority`、v2 `constant` 常驻注入与 v3 shared normalizer/导入诊断；
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
@@ -36,7 +37,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 | 记忆/导出 | `seal_volume`、`export_context_bundle` |
 | Analysis | `enhance_analysis`、`apply_enhanced_analysis` |
 
-目录由 `GET /v1/agent/tools` 从实际 registry 生成。底层模块或 HTTP route 存在仍不等于 Agent registry 已注册；persona、plugin data、MCP client/server、skills、完整记忆 runtime 均尚未实现。
+目录由 `GET /v1/agent/tools` 从实际 registry 生成。底层模块或 HTTP route 存在仍不等于 Agent registry 已注册；Persona 已有 domain/HTTP/pipeline，但没有 Persona Agent tool；plugin data、MCP client/server、skills、完整记忆 runtime 也尚未实现。
 
 ### Worldbook 与 state 都是部分实现
 
@@ -44,7 +45,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - state schema 在写入前强制 required/type/range/additionalProperties，并以 revisioned atomic replace 更新 live/history；
 - Chat/State/Lorebook 的 HTTP、pipeline 与 Agent tools 已复用共享 domain services；更广泛的跨资源事务仍需逐项设计。
 
-### 部署安全边界尚未产品化
+### Production P0 已实现，正式发布仍未完成
 
 默认 daemon 绑定 loopback；只有隔离容器网络中的首方部署才显式传 `daemon --host 0.0.0.0`，且 Compose 不发布 engine 端口。development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用；`deploy/production/` 已提供 OCI/Compose + Caddy artifact，并由真实 HTTPS topology CI 验证。P1-P3 发布门禁仍未完成，且无论何种部署都不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
 
@@ -98,11 +99,17 @@ cargo run -p airp-core -- run --message "hello"
 | Method | Path | 说明 |
 |---|---|---|
 | GET/POST | `/v1/sessions/:character_id` | 列表/新建会话 |
+| DELETE | `/v1/sessions/:character_id/:session_id` | 删除命名会话 |
 | GET/POST | `/v1/scenes` | 列表/创建场景 |
 | GET | `/v1/scenes/:scene_id` | 场景详情 |
 | POST | `/v1/scenes/:scene_id/characters` | 加入场景角色 |
 | GET | `/v1/presets` | 预设列表 |
 | GET | `/v1/presets/:preset_id` | 预设详情 |
+| POST | `/v1/presets/import` | 校验并导入预设 |
+| GET/PUT | `/v1/users/:user_id/persona` | legacy 默认 Persona |
+| GET/POST | `/v1/users/:user_id/personas` | 多 Persona 列表/创建 |
+| GET/PUT/DELETE | `/v1/users/:user_id/personas/:persona_id` | 多 Persona CRUD |
+| POST/DELETE | `/v1/users/:user_id/personas/:persona_id/bindings` | 角色/session 绑定 |
 | GET | `/v1/models` | 上游模型代理 |
 | GET/POST | `/v1/settings` | 读取/更新配置 |
 | GET | `/version` | 无鉴权版本信息 |
@@ -126,7 +133,10 @@ cargo run -p airp-core -- run --message "hello"
 | `src/adapter.rs` | provider 请求与 SSE 解析 |
 | `src/chat_pipeline.rs` | prepare/stream/finalize 单回合管线 |
 | `src/agent/` | loop 骨架、Tool trait/registry、内置工具 |
-| `src/daemon/` | axum routes、handlers、auth、rate limit |
+| `src/agent/tools/` | 按 session/character、state/lorebook、volume/context、analysis 拆分的工具 family |
+| `src/daemon/` | axum routes、auth、rate limit 与 adapter facade |
+| `src/daemon/handlers/` | 按资源职责拆分的 HTTP handler family |
+| `src/daemon/tests/` | catalog/chat/settings/persona/security/session/state 等 route 合同测试 |
 | `src/orchestrator/` | card/lorebook/state/preset 上下文装配 |
 | `src/chat_store.rs` | JSONL 会话持久化 |
 | `src/data_dir/` | 路径、迁移、沙箱与 session 布局 |
@@ -135,16 +145,16 @@ cargo run -p airp-core -- run --message "hello"
 
 ## 验证
 
-2026-07-14 在仓库根目录使用维护者本机工具链执行：
+从仓库根目录执行：
 
 ```powershell
 cargo test -p airp-core --locked
-cargo test -p airp-core rollback --locked
+cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise --locked -- --nocapture
 cargo fmt --all -- --check
 cargo clippy -p airp-core --lib --tests --locked -- -D warnings
 ```
 
-PR #139 的本地结果：engine lib 464 passed / 1 ignored，integration suites 全绿；回滚过滤测试 13 passed；`subagent_context_has_no_orchestrator_noise`、fmt 和严格 Clippy 均通过。GitHub run `29297782903` 的 Rust workspace、UI and WebUI、Production topology 全绿。数字是该提交的证据快照，后续修改必须重跑。
+`main@1f3e6ed` 的 GitHub run `29390516900` 中 Rust workspace、UI and WebUI、Production topology 全绿。PR #169 的 engine lib 快照为 568 passed / 1 ignored；该数字只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 

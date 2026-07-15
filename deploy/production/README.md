@@ -5,8 +5,9 @@ application services: a Caddy HTTPS gateway and a private AIRP engine. Only Cadd
 host ports. The browser uses the same origin and never receives the engine bearer.
 
 This is an implemented P0 preview topology, not a formal release. Current product status and
-remaining P1-P3 gates are authoritative in `docs/CURRENT-BASELINE.md` and
-`docs/WEBUI-PRODUCTION-PLAN.md`.
+remaining P1-P3 gates are authoritative in
+[`docs/CURRENT-BASELINE.md`](../../docs/CURRENT-BASELINE.md) and
+[`docs/WEBUI-PRODUCTION-PLAN.md`](../../docs/WEBUI-PRODUCTION-PLAN.md).
 
 ## Prerequisites
 
