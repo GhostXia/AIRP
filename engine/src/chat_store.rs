@@ -232,13 +232,25 @@ impl ChatLog {
                 let salt = Self::legacy_scope_salt(character_id, Some(&scope_session_id));
                 let parsed = Self::read_messages_jsonl(&jsonl, &salt)?;
                 let meta_existed = meta_p.exists();
+                let mut needs_repair = !meta_existed;
                 let mut m: ChatLogMeta = if meta_existed {
-                    serde_json::from_str(&fs::read_to_string(&meta_p)?)?
+                    match fs::read_to_string(&meta_p)
+                        .map_err(|error| error.to_string())
+                        .and_then(|content| {
+                            serde_json::from_str(&content).map_err(|error| error.to_string())
+                        }) {
+                        Ok(meta) => meta,
+                        Err(error) => {
+                            tracing::warn!(path = ?meta_p, err = %error, "命名 session metadata 无法读取或解析，从 history 恢复");
+                            needs_repair = true;
+                            Self::derive_meta(character_id, Some(&scope_session_id), &jsonl)
+                        }
+                    }
                 } else {
                     // 命名 session 的规范 ID 就是目录 UUID；meta 丢失时从 scope 恢复。
                     Self::derive_meta(character_id, Some(&scope_session_id), &jsonl)
                 };
-                if !meta_existed || m.session_id != scope_session_id {
+                if needs_repair || m.session_id != scope_session_id {
                     // 旧版本为 ChatLog 额外生成内部 UUID。加载时只归一化身份字段，
                     // 保留原 created_at / updated_at 和聊天内容。持久化迁移不能阻断
                     // 已存在历史的读取；失败时由下一次写操作再次保存规范 ID。
@@ -852,6 +864,37 @@ mod tests {
         let log = result.expect("metadata repair failure must not block history reads");
         assert_eq!(log.session_id, sid.to_string());
         assert_eq!(log.messages[0].content, "recoverable");
+    }
+
+    #[test]
+    fn named_session_read_recovers_from_corrupt_metadata() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let sid = SessionId::parse("550e8400-e29b-41d4-a716-446655440003").unwrap();
+        let history_dir = root
+            .join("characters")
+            .join("alice")
+            .join("sessions")
+            .join(sid.to_string())
+            .join("history");
+        fs::create_dir_all(&history_dir).unwrap();
+        fs::write(
+            history_dir.join("chat_log.jsonl"),
+            "{\"role\":\"user\",\"content\":\"still readable\"}\n",
+        )
+        .unwrap();
+        fs::write(history_dir.join("chat_log_meta.json"), "{not-json").unwrap();
+
+        let log = ChatLog::load_or_create_for_session(root, "alice", Some(&sid))
+            .expect("corrupt metadata must not block readable history");
+
+        assert_eq!(log.session_id, sid.to_string());
+        assert_eq!(log.messages[0].content, "still readable");
+        let repaired: ChatLogMeta = serde_json::from_str(
+            &fs::read_to_string(history_dir.join("chat_log_meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repaired.session_id, sid.to_string());
     }
 
     #[test]

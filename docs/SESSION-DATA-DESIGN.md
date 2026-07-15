@@ -105,6 +105,8 @@
 
 manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全部文件，包括 greetings、卡图、provenance 和世界书 manifest。revision 目录内的 `character/` 和 `worldbooks/` 是不可变快照；session 根下同名目录是当前工作副本。实现可以使用内容寻址去重，但完整 session 导出后仍须在无外部缓存时还原每个 revision。
 
+统一 revision manifest 的 `revision` 是唯一权威的内容版本标识。加载器和导出器必须校验 `revisions/{revision_id}/manifest.json.revision == meta.json.current_revision`（读取当前版本时），并校验该 revision 内 `worldbooks/manifest.json.content_revision == manifest.json.revision`；目录名 `{revision_id}` 也必须是同一标识的规范字符串。任一值不一致都属于完整性错误，禁止猜测、静默选择较新值或回退到工作副本。
+
 运行时只读取 `worldbooks/manifest.json` 列出的文件，不能靠递归扫描或文件名猜测加载顺序。建议的最小记录为：
 
 ```json
@@ -133,7 +135,7 @@ manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全
 }
 ```
 
-`content_revision` 必须等于当前统一 revision，不能再形成独立的世界书版本身份。`origin` 表示来源，不赋予更高或更低优先级。实际装配顺序由显式 `order` 和 AIRP 世界书运行时合同决定。
+`content_revision` 是权威 `revision` 在世界书 manifest 中的冗余完整性字段，必须满足上一节的相等不变量，不能再形成独立的世界书版本身份。`origin` 表示来源，不赋予更高或更低优先级。实际装配顺序由显式 `order` 和 AIRP 世界书运行时合同决定。
 
 ## 5. 生命周期
 
@@ -156,7 +158,7 @@ manifest 中的路径相对于该 revision 目录；tree hash 覆盖目录内全
 
 - 用户可直接编辑 session 工作副本，也可通过 UI/API 引入新世界书。
 - 发送下一条消息前计算角色卡与世界书集合 hash；任一发生变化时生成新的统一 revision。
-- 每轮持久化其使用的 `content_revision`，使历史回放知道当时采用哪一版角色设定与世界书。
+- 每条新写入的 `history/chat_log.jsonl` 消息记录都必须包含 `content_revision`；同一轮的 user/assistant 消息使用同一值。该字段与对应消息位于同一个 JSONL 对象中，由一次追加写入共同落盘，不使用可与消息分离提交的旁路索引。发送模型请求前先确定并持久化 user 消息及其 revision；生成结果再以同一 revision 追加 assistant 消息。旧记录缺少该字段时标记为“版本未知”，不得用当前 revision 冒充。这样即使一轮中途失败，历史回放仍能从已落盘消息准确选择当时的角色卡与世界书快照。
 - 更新第三方素材库不得自动覆盖已存在 session；用户必须显式选择刷新、比较或重新物化。
 
 ### 5.4 复制、提升与导出
