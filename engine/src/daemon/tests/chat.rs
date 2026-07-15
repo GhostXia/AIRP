@@ -207,6 +207,11 @@ async fn test_o1_session_scoped_history_exposes_scope_session_id() {
         Some(scope_id),
         "session-scoped 响应必须暴露 scope_session_id 且与传入值一致"
     );
+    assert_eq!(
+        v["session_id"].as_str(),
+        Some(scope_id),
+        "命名 session 不得再暴露第二个内部聊天 UUID"
+    );
 }
 
 #[tokio::test]

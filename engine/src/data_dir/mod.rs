@@ -135,6 +135,15 @@ mod tests {
     }
 
     #[test]
+    fn ensure_data_dirs_does_not_create_legacy_root_rp_files() {
+        let tmp = tempdir().unwrap();
+        ensure_data_dirs(tmp.path()).unwrap();
+
+        assert!(!tmp.path().join("world.md").exists());
+        assert!(!tmp.path().join("items.md").exists());
+    }
+
+    #[test]
     fn test_resolve_session_dir_default_memory_path_when_none() {
         let tmp = tempdir().unwrap();
         let root = tmp.path();
@@ -318,6 +327,16 @@ mod tests {
         assert!(dir.ends_with("card"));
         assert!(dir.exists());
         assert!(dir.parent().unwrap().ends_with("alice"));
+    }
+
+    #[test]
+    fn character_dir_does_not_create_legacy_worldbooks_dir() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let dir = character_dir(root, "alice").unwrap();
+
+        assert!(!dir.join("worldbooks").exists());
+        assert!(dir.join("memory").exists());
     }
 
     #[test]

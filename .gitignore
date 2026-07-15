@@ -47,8 +47,10 @@ data/quota.json
 # 引擎运行时会在这两个目录下读写用户导入的卡/预设；测试用合成 fixture 另置，勿放个人数据。
 data/characters/
 data/presets/
+data/third_party/
+data/users/*/third_party/
 
-# 会话产物：玩家物品清单/世界状态/NPC 关系是 RP 运行时生成，非引擎默认
+# 遗留根级 RP 文件：新数据根不再生成，但继续忽略已有用户文件
 data/items.md
 data/world.md
 # 封卷记忆 / gating 决策 / session 命名空间 / state 衍生，均 per-user 运行时

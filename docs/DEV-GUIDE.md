@@ -147,14 +147,18 @@
 data/
 ├── settings.json
 ├── characters/{id}/
-│   ├── card/ (card.json + card.png)   greetings/   world/lorebook.json
-│   ├── state/ (live.json + history.jsonl + schema.json)
-│   ├── gating/checkpoints.json        analysis/    memory/(current.md/index.md/volumes/vol_*.md)
-│   └── sessions/{sid}/ (meta.json + chat.jsonl + memory/)
+│   ├── card/ (card.json + card.png + raw.json + greetings/)
+│   ├── world/ (lorebook.json + extra/)
+│   ├── state/   gating/   analysis/   memory/
+│   └── sessions/{sid}/ (meta + history + memory + target state/character/worldbook snapshots + revisions)
 ├── presets/{id}/ (preset.json + preset.md + regex/*.json + analysis/)
 ├── scenes/{id}/ (scene.json + memory/ + world/lorebook.json)
-└── plugins/{name}/ (任意文件树，零 schema)
+├── users/{id}/ (personas + per-user characters/presets/scenes)
+├── third_party/worldbooks/ (raw + normalized + provenance；目标合同)
+└── exports/context-bundles/{character_id}/
 ```
+
+这里的 `{id}` 是稳定、经过路径校验的标识，不是可变的显示名。一个 `{sid}` 表示一个独立开局/存档槽位；目标是把本局角色卡和全部世界书物化到 session，并以统一 revision 同时固定二者，第三方目录只作素材库。根级 `world.md`/`items.md` 与 legacy `worldbooks/` 不属于新布局。当前/目标边界见 [`data/README.md`](../data/README.md)，完整生命周期与 revision 合同见 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)。
 
 ---
 

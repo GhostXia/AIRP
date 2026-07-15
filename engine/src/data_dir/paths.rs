@@ -110,35 +110,6 @@ Warm, immersive, literary fiction tone with balanced pacing.
         fs::write(&default_style, style_content)?;
     }
 
-    let world_path = root.join("world.md");
-    if !world_path.exists() {
-        let content = r#"# 世界观与场景状态 world
-
-## 区域与场景
-| 区域名称 | 当前状态 | 描述 | 在场NPC |
-| :--- | :--- | :--- | :--- |
-| 起始基地 | 安全 | 弥漫着微雾的钢铁甲板 | Emily, Companion |
-| 码头 | 锁闭 | 停靠着老旧巡逻艇的栈桥 | 无 |
-
-## 势力关系
-- 玩家 - 基地防卫队: 友善 (50/100)
-- 玩家 - 神秘组织: 敌对 (0/100)
-"#;
-        fs::write(&world_path, content)?;
-    }
-
-    let items_path = root.join("items.md");
-    if !items_path.exists() {
-        let content = r#"# 物品追踪清单 items
-
-| 物品名称 | 持有者 | 状态/位置 | 详细描述 |
-| :--- | :--- | :--- | :--- |
-| 神秘钥匙 | 基地保险箱 | 起始基地办公室 | 一把沾满锈迹、刻有古老花纹的黄铜钥匙 |
-| 战术手电 | 玩家 | 随身携带 | 强光军用手电，电量充足 |
-"#;
-        fs::write(&items_path, content)?;
-    }
-
     if let Err(e) = super::migrations::migrate_legacy_presets(root) {
         tracing::warn!(err = %e, "M_PR: 预设迁移部分失败");
     }
@@ -158,7 +129,9 @@ pub fn character_dir(root: &Path, character_id: &str) -> Result<PathBuf, AirpErr
         fs::create_dir_all(&dir)?;
     }
 
-    let sub_dirs = ["worldbooks", "memory"];
+    // `worldbooks/` is a legacy import location. The converter still scans an
+    // existing directory, but new characters use `world/lorebook.json`.
+    let sub_dirs = ["memory"];
     for sub in &sub_dirs {
         let sub_path = dir.join(sub);
         if !sub_path.exists() {

@@ -1,42 +1,110 @@
-# `data/` 目录说明
+# `data/` 持久化目录规范
 
-引擎数据根。`resolve_data_root()` 三层 fallback 决定真落点（见 `engine/src/data_dir/paths.rs`）：
+`data/` 是引擎的数据根，不是一个可以随意堆放资源的共享目录。角色相关资产按稳定角色 ID 聚合；每个命名 session 是一个独立开局/存档槽位。完整的目标合同见 [`docs/SESSION-DATA-DESIGN.md`](../docs/SESSION-DATA-DESIGN.md)。
 
-1. `AIRP_DATA_DIR` 环境变量（最高优先）
-2. `cwd/data`（开发模式：cwd 含 `Cargo.toml`）
-3. `dirs::data_dir().join("airp")`（打包 .exe 双击：OS per-user 位）
+实际根目录由 `engine/src/data_dir/paths.rs` 的 `resolve_data_root()` 决定，优先级如下：
 
-Agent context exports 只写入 `exports/context-bundles/<character_id>/`。每次导出包含 `context.md` 和可用的 preset/extension 原始 sidecar；稳定材料位于易变 live state 之前，模型可见文本受 `AIRP_MAX_READ_BYTES`（默认 32 KiB）限制且不会截断 UTF-8 code point。
+1. `AIRP_DATA_DIR` 环境变量；
+2. 开发模式下的 `cwd/data`；
+3. 打包程序使用的 OS per-user data 目录下的 `airp/`。
 
-本目录入仓的仅引擎默认配置与示例风格，**不含任何玩家会话产物**。
+仓库只提交本文件、默认 `settings.json` 和示例叙事风格，不提交任何玩家角色卡、世界书或会话数据。
 
-## 入仓文件（引擎默认配置）
+## 核心归属模型
 
-| 文件 | 用途 | 性质 |
-|---|---|---|
-| `settings.json` | provider/endpoint/model/volume 默认配置；`api_key` 留空（用户自填或设 `AIRP_API_KEY` env） | 模板 |
-| `styles/profiles/default.md` | 默认叙事风格（语气/句式/感官细节），引擎启动时读 | 默认配置 |
+```text
+data/
+├── settings.json
+├── styles/
+│   └── profiles/default.md
+├── characters/
+│   └── {character_id}/
+│       ├── card/
+│       │   ├── card.json
+│       │   ├── card.png
+│       │   ├── raw.json
+│       │   └── greetings/
+│       ├── world/
+│       │   ├── lorebook.json
+│       │   └── extra/
+│       ├── sessions/
+│       │   └── {session_id}/
+│       │       ├── meta.json
+│       │       ├── history/
+│       │       │   ├── chat_log.jsonl
+│       │       │   └── chat_log_meta.json
+│       │       ├── memory/
+│       │       │   ├── current.md
+│       │       │   ├── index.md
+│       │       │   └── volumes/
+│       │       ├── state/
+│       │       ├── character/
+│       │       │   ├── card.json
+│       │       │   ├── card.png
+│       │       │   ├── greetings/
+│       │       │   └── provenance.json
+│       │       ├── worldbooks/
+│       │       └── revisions/
+│       │           └── {revision_id}/
+│       │               ├── manifest.json
+│       │               ├── character/
+│       │               └── worldbooks/
+│       ├── state/
+│       ├── gating/
+│       ├── analysis/
+│       └── memory/
+├── presets/
+│   └── {preset_id}/
+├── scenes/
+│   └── {scene_id}/
+├── users/
+│   └── {user_id}/
+├── third_party/
+│   └── worldbooks/
+└── exports/
+    └── context-bundles/{character_id}/
+```
 
-## 运行产物（不入仓，`.gitignore` 已排除）
+这是目标归属模型，目录按需创建。当前代码已经隔离命名 session 的 history 与 memory，但 `meta.json`、session state、角色卡快照、第三方素材库、世界书物化和统一 revision 尚待分阶段实现，不能把本树全部视为已交付能力。
 
-| 路径 pattern | 用途 |
-|---|---|
-| `data/characters/` | 用户导入的角色卡 + history + sessions + state + memory |
-| `data/presets/` | 用户导入的预设 |
-| `data/items.md` | 玩家物品追踪清单（RP 运行时生成） |
-| `data/world.md` | 世界观/场景/NPC 关系状态（RP 运行时生成） |
-| `data/quota.json` | 封卷 quota 计数器 |
-| `config.json` | daemon 启动自动写的运行配置 |
-| `data/**/history/` | chat 历史 jsonl |
-| `data/**/sessions/` | named session 命名空间 |
-| `data/**/memory/` | 封卷记忆 |
-| `data/**/gating/` | gating 决策记录 |
-| `data/**/state/` | session 衍生状态 |
-| `data/**/turn_counter*` | 会话计数器 |
-| `data/**/*.lock` | 迁移/进程锁 |
+### 角色目录名
 
-## 验收
+`{character_id}` 是经过路径校验的稳定标识，不是角色卡的显示名。显示名可能重复、被修改或含有不适合作为路径的字符；它保存在角色卡内容中。重命名角色不应隐式移动持久化目录。
 
-- `git ls-files data/` 仅含 `README.md` + `settings.json` + `styles/profiles/default.md`
-- 新生成的 `data/characters/*/history/chat_log.jsonl` 等运行产物不被 `git add` 跟踪（`.gitignore` 通配生效）
-- 仓库中无玩家个人 RP 内容（角色卡/历史/记忆/物品/世界状态）
+### 会话
+
+新建的命名会话使用 UUID `{session_id}`，路径固定为 `characters/{character_id}/sessions/{session_id}/`。它可以简单理解为一个独立“开局”或“存档槽位”：对话历史写入 `history/`，该会话的封卷记忆写入 `memory/`；目标状态还包括独立 state、角色卡与世界书工作副本，以及覆盖二者的统一 revision。用户可修改的“开局 1”“二周目”等标题保存在未来的 `meta.json`，不进入目录名。
+
+外层 `{session_id}` 同时是该开局、聊天历史和 `chat_log_meta.json` 的唯一规范 UUID。`history/` 与 `memory/` 已位于这个 UUID 目录内，不再嵌套或生成第二个对话 UUID。
+
+未提供 `session_id` 的旧调用仍使用角色级 `history/` 和 `memory/`，这是向后兼容范围，不是新客户端优先采用的布局。不要自行用会话标题作为文件夹名。
+
+### 角色自带世界书
+
+角色默认世界书当前位于 `characters/{character_id}/world/lorebook.json`。它必须保留关键词、优先级、`constant` 和扩展元数据等结构化语义，因此不使用 `world.md` 代替。目标实现会在创建开局时把它物化为 session 工作副本；运行中的 session 不再把角色级文件当作动态唯一真值。
+
+`world/extra/` 可存放额外导入的世界书 sidecar。旧版 `characters/{character_id}/worldbooks/` 仅保留扫描兼容；引擎不再为新角色创建该目录。
+
+### 其他顶层目录
+
+- `presets/`：用户导入的预设，按稳定 `preset_id` 分目录。
+- `scenes/`：多角色场景；场景自身的共享世界书位于 `{scene_id}/world/lorebook.json`。
+- `users/`：多用户隔离根；请求带 `user_id` 时，其下可再出现同样的 `characters/`、`presets/` 和 `scenes/`。
+- `exports/`：引擎生成的上下文导出，不是输入资产源。
+- `quota.json`：单用户模式的运行计数；多用户模式位于对应用户根。
+
+第三方世界书统一使用 `third_party/worldbooks/{source_id}/{package_id}/{version}/`，并区分原始文件、AIRP 归一化素材和 provenance。该目录是素材库，不是活跃 session 的动态依赖；采用时必须复制到 session 的 `worldbooks/` 并由 manifest 明确启用、顺序、来源和 hash。此合同已经确定，但运行时尚未实现。
+
+## 遗留兼容与迁移
+
+- 根级 `world.md`、`items.md` 不属于角色自带世界书，也不再由新数据根自动生成。
+- 升级不会删除用户已有的根级 `world.md`、`items.md` 或旧 `worldbooks/`；备份确认后再由用户清理。
+- 迁移必须遵守“不覆盖新位置已有内容”的原则。发生新旧位置冲突时保留两者并报告，不能静默覆盖。
+- 不要直接手工移动活跃会话目录；应通过受测试的迁移流程处理历史、记忆、状态和删除标记。
+
+## 入仓与验收
+
+- `git ls-files data/` 只应包含 `README.md`、`settings.json` 和 `styles/profiles/default.md`。
+- `data/characters/`、`data/presets/` 及所有会话、状态、记忆、导出和迁移锁均由 `.gitignore` 排除。
+- 仓库不得包含真实玩家的角色卡、历史、记忆、物品或世界状态。
+- 新建数据根不应产生根级 `world.md`、`items.md`；新建角色不应产生 legacy `worldbooks/`。
