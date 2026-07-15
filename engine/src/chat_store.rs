@@ -29,7 +29,9 @@ pub const MAX_MESSAGES: usize = 1000;
 /// `load_or_create` 自动处理全部迁移步骤。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatLog {
-    /// Unique session identifier
+    /// Canonical session identifier. Named sessions use the UUID from
+    /// `characters/{id}/sessions/{session_id}/`; legacy per-character logs keep
+    /// their historical chat-log UUID.
     pub session_id: String,
     /// Character folder name
     pub character_id: String,
@@ -59,7 +61,8 @@ pub struct ChatLog {
     /// 返回的 UUID）。`None` 表示 legacy per-character log。
     ///
     /// HTTP 响应时序列化（`Some` 才出现，`None` skip），让前端能把它与 session 列表
-    /// 中的 id 关联——`ChatLog.session_id` 是内部 UUID，与 scope session_id 不同。
+    /// 中的 id 关联。命名 session 中该值与 `ChatLog.session_id` 相同；保留此字段是为了
+    /// 兼容既有响应形状并区分不带命名 session 的 legacy per-character log。
     /// 持久化时不写入（jsonl 用 `StoredMessage`，meta 用 `ChatLogMeta`，均不含此字段）；
     /// 反序列化时 `#[serde(default)]` 给 `None`，legacy JSON 迁移安全。
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -115,7 +118,9 @@ impl ChatLog {
     /// Creates a new empty chat log for a named session scope.
     fn new_for_session(character_id: &str, session_id: &SessionId) -> Self {
         let mut log = Self::new(character_id);
-        log.scope_session_id = Some(session_id.to_string());
+        let session_id = session_id.to_string();
+        log.session_id = session_id.clone();
+        log.scope_session_id = Some(session_id);
         log
     }
 
@@ -226,15 +231,21 @@ impl ChatLog {
             if jsonl.exists() {
                 let salt = Self::legacy_scope_salt(character_id, Some(&scope_session_id));
                 let parsed = Self::read_messages_jsonl(&jsonl, &salt)?;
-                let m: ChatLogMeta = if meta_p.exists() {
+                let meta_existed = meta_p.exists();
+                let mut m: ChatLogMeta = if meta_existed {
                     serde_json::from_str(&fs::read_to_string(&meta_p)?)?
                 } else {
-                    // meta 丢失 → 确定性派生 session_id（不再随机 UUID），
-                    // 保证同一 fixture 多次加载产生同一 session_id。
+                    // 命名 session 的规范 ID 就是目录 UUID；meta 丢失时从 scope 恢复。
                     Self::derive_meta(character_id, Some(&scope_session_id), &jsonl)
                 };
+                if !meta_existed || m.session_id != scope_session_id {
+                    // 旧版本为 ChatLog 额外生成内部 UUID。加载时只归一化身份字段，
+                    // 保留原 created_at / updated_at 和聊天内容。
+                    m.session_id = scope_session_id.clone();
+                    fs::write(&meta_p, serde_json::to_string_pretty(&m)?)?;
+                }
                 let log = Self {
-                    session_id: m.session_id,
+                    session_id: scope_session_id.clone(),
                     character_id: m.character_id,
                     messages: parsed.messages,
                     message_ids: parsed.message_ids,
@@ -727,6 +738,69 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("\"role\":\"user\""));
         assert!(lines[1].contains("\"role\":\"assistant\""));
+    }
+
+    #[test]
+    fn named_session_uses_one_canonical_session_id() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let sid = SessionId::parse("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
+        let log = ChatLog::load_or_create_for_session(root, "alice", Some(&sid)).unwrap();
+
+        assert_eq!(log.session_id, sid.to_string());
+        assert_eq!(log.scope_session_id(), Some(sid.to_string().as_str()));
+
+        let meta_path = root
+            .join("characters")
+            .join("alice")
+            .join("sessions")
+            .join(sid.to_string())
+            .join("history")
+            .join("chat_log_meta.json");
+        let meta: ChatLogMeta =
+            serde_json::from_str(&fs::read_to_string(meta_path).unwrap()).unwrap();
+        assert_eq!(meta.session_id, sid.to_string());
+    }
+
+    #[test]
+    fn named_session_normalizes_legacy_internal_id() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let sid = SessionId::parse("550e8400-e29b-41d4-a716-446655440001").unwrap();
+        let history_dir = root
+            .join("characters")
+            .join("alice")
+            .join("sessions")
+            .join(sid.to_string())
+            .join("history");
+        fs::create_dir_all(&history_dir).unwrap();
+        fs::write(
+            history_dir.join("chat_log.jsonl"),
+            "{\"role\":\"user\",\"content\":\"hello\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            history_dir.join("chat_log_meta.json"),
+            serde_json::to_string_pretty(&ChatLogMeta {
+                session_id: "legacy-internal-id".to_string(),
+                character_id: "alice".to_string(),
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                updated_at: "2025-01-02T00:00:00Z".to_string(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let log = ChatLog::load_or_create_for_session(root, "alice", Some(&sid)).unwrap();
+        assert_eq!(log.session_id, sid.to_string());
+
+        let meta: ChatLogMeta = serde_json::from_str(
+            &fs::read_to_string(history_dir.join("chat_log_meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta.session_id, sid.to_string());
+        assert_eq!(meta.created_at, "2025-01-01T00:00:00Z");
     }
 
     #[test]

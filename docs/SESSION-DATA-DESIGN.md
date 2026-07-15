@@ -24,6 +24,8 @@
 - `session_id`：存档槽位身份；建议保持当前 UUID 合同。
 - `worldbook_id`：session 内世界书身份；显示名、原始文件名和来源名称只作元数据。
 
+`session_id` 也是该局聊天历史和记忆的唯一规范 UUID。`history/`、`memory/` 是其直接子目录，`chat_log_meta.json` 必须记录同一个 ID；不得再生成第二个内部“聊天 session ID”，也不得在两个子目录下重复嵌套相同 UUID。
+
 最小 session 元数据示例：
 
 ```json

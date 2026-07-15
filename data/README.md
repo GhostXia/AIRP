@@ -65,6 +65,8 @@ data/
 
 新建的命名会话使用 UUID `{session_id}`，路径固定为 `characters/{character_id}/sessions/{session_id}/`。它可以简单理解为一个独立“开局”或“存档槽位”：对话历史写入 `history/`，该会话的封卷记忆写入 `memory/`；目标状态还包括独立 state、世界书快照和 revision。用户可修改的“开局 1”“二周目”等标题保存在未来的 `meta.json`，不进入目录名。
 
+外层 `{session_id}` 同时是该开局、聊天历史和 `chat_log_meta.json` 的唯一规范 UUID。`history/` 与 `memory/` 已位于这个 UUID 目录内，不再嵌套或生成第二个对话 UUID。
+
 未提供 `session_id` 的旧调用仍使用角色级 `history/` 和 `memory/`，这是向后兼容范围，不是新客户端优先采用的布局。不要自行用会话标题作为文件夹名。
 
 ### 角色自带世界书
