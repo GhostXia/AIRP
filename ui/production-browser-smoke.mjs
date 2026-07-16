@@ -176,6 +176,9 @@ try {
     throw err;
   }
   // S1: selective=false 时 secondary_keys input disabled
+  // #lorebook-section 是 <details>，默认 closed → 内部 #lore-entries display:none。
+  // 展开后才能对内部控件做可见性敏感的操作（.check()/.click()）。
+  await page.locator('#lorebook-section > summary').click();
   const secDisabledBefore = await page.locator('#lore-entries .wb-lore-secondary').first().isDisabled();
   assert.equal(secDisabledBefore, true);
   // S1: 勾选 selective 后 secondary_keys input 启用
