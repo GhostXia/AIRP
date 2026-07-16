@@ -1076,8 +1076,12 @@
   if (stateHistoryLimit) stateHistoryLimit.addEventListener('change', refreshStateHistory);
 
   charSelect.addEventListener('change', async () => {
+    // CR#2: 切角色前若有未保存 lorebook 修改则提示
+    if (!confirmDiscardLoreIfDirty('切换角色')) return;
     selectedChar = charSelect.value;
     selectedSess = '';
+    // 切角色时清零 loreDirty（旧角色的修改已被丢弃或保存）
+    setLoreDirty(false);
     renderCharacterCards(Array.from(charSelect.options, option => option.value));
     clearChatView();
     await refreshSessions();
@@ -1986,6 +1990,10 @@
 
   // lorebook 主面板缓存（character-scoped，随角色切换自动加载）
   let loreData = null;
+  // CR#2: stale-response 防护 — 每次发起 loadLorebook 自增，response 回来时若已过期则丢弃
+  let loreRequestId = 0;
+  // CR#2: lorebook 未保存修改跟踪，切角色/刷新时提示
+  let loreDirty = false;
 
   // 角色卡可编辑字段（TavernCardV2 data 层）
   const CARD_FIELDS = [
@@ -2107,7 +2115,12 @@
 
   async function loadLorebook() {
     if (!selectedChar) return;
+    // CR#2: 自增 requestId 并在 response 回来时校验，避免快速切角色时旧响应覆盖新数据
+    const requestId = ++loreRequestId;
+    const characterId = selectedChar;
     const r = await api('GET', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook');
+    // 过期响应直接丢弃：切角色或重新发起 load 后，旧 response 不再适用
+    if (requestId !== loreRequestId || characterId !== selectedChar) return;
     if (r.status === 404) {
       loreData = { entries: [] };
       renderLoreEntries();
@@ -2120,6 +2133,17 @@
     } else {
       loreStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
     }
+  }
+
+  // CR#2: lorebook 修改时标记 dirty；保存成功或主动 reload 后清零
+  function setLoreDirty(dirty) {
+    loreDirty = dirty;
+  }
+
+  // CR#2: 切角色/手动刷新前若 loreDirty 则提示用户确认丢弃未保存修改
+  function confirmDiscardLoreIfDirty(action) {
+    if (!loreDirty) return true;
+    return confirm('世界书有未保存修改，' + action + '后修改将丢失。确定继续？');
   }
 
   function renderLoreEntries() {
@@ -2143,9 +2167,14 @@
     toggle.className = 'wb-lore-toggle';
     toggle.textContent = '▸';
     toggle.title = '展开/折叠';
+    // S5: aria-expanded 同步折叠状态，屏幕阅读器可感知
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-label', '展开/折叠条目 #' + (index + 1));
     toggle.addEventListener('click', () => {
       div.classList.toggle('collapsed');
-      toggle.textContent = div.classList.contains('collapsed') ? '▸' : '▾';
+      const collapsed = div.classList.contains('collapsed');
+      toggle.textContent = collapsed ? '▸' : '▾';
+      toggle.setAttribute('aria-expanded', String(!collapsed));
     });
     head.appendChild(toggle);
 
@@ -2162,6 +2191,7 @@
     keysInput.placeholder = '关键词（逗号分隔）';
     keysInput.addEventListener('input', (e) => {
       entry.keys = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+      setLoreDirty(true);
     });
     head.appendChild(keysInput);
 
@@ -2176,6 +2206,7 @@
     priInput.addEventListener('input', (e) => {
       const v = parseInt(e.target.value, 10);
       entry.priority = isNaN(v) ? 10 : v;
+      setLoreDirty(true);
     });
     head.appendChild(priInput);
 
@@ -2187,6 +2218,7 @@
     enCb.checked = entry.enabled !== false;
     enCb.addEventListener('change', () => {
       entry.enabled = enCb.checked;
+      setLoreDirty(true);
     });
     enLbl.appendChild(enCb);
     enLbl.appendChild(document.createTextNode('启用'));
@@ -2201,6 +2233,7 @@
     constCb.title = '常驻注入：启用后无论关键词是否命中都会注入';
     constCb.addEventListener('change', () => {
       entry.constant = constCb.checked;
+      setLoreDirty(true);
     });
     constLbl.appendChild(constCb);
     constLbl.appendChild(document.createTextNode('常驻'));
@@ -2216,6 +2249,7 @@
     selCb.addEventListener('change', () => {
       entry.selective = selCb.checked;
       secInput.disabled = !selCb.checked;
+      setLoreDirty(true);
     });
     selLbl.appendChild(selCb);
     selLbl.appendChild(document.createTextNode('选择性'));
@@ -2231,6 +2265,7 @@
     secInput.title = 'selective=true 时，primary 命中后还需任一 secondary key 命中才注入';
     secInput.addEventListener('input', (e) => {
       entry.secondary_keys = AIRPLorebookUtils.parseSecondaryKeys(e.target.value);
+      setLoreDirty(true);
     });
     head.appendChild(secInput);
 
@@ -2239,6 +2274,7 @@
     del.className = 'wb-lore-del';
     del.textContent = '✕';
     del.title = '删除此条目';
+    del.setAttribute('aria-label', '删除条目 #' + (index + 1));
     // delete：只移除该条目 DOM + 数据，不全量重渲染（A-02 修复）
     // 全量重渲染会丢失其他条目的展开/折叠状态与未保存的 input 值。
     del.addEventListener('click', () => {
@@ -2253,6 +2289,7 @@
         const lbl = e.querySelector('.wb-lore-index');
         if (lbl) lbl.textContent = '条目 #' + (i + 1);
       });
+      setLoreDirty(true);
     });
     head.appendChild(del);
 
@@ -2267,6 +2304,7 @@
     contentTa.value = entry.content || '';
     contentTa.addEventListener('input', (e) => {
       entry.content = e.target.value;
+      setLoreDirty(true);
     });
     body.appendChild(contentTa);
 
@@ -2277,6 +2315,7 @@
     cmtInput.value = entry.comment || '';
     cmtInput.addEventListener('input', (e) => {
       entry.comment = e.target.value || null;
+      setLoreDirty(true);
     });
     body.appendChild(cmtInput);
 
@@ -2312,17 +2351,20 @@
 
   function addLoreEntry() {
     if (!loreData) loreData = { entries: [] };
-    loreData.entries.push(AIRPLorebookUtils.buildLoreEntryDefault());
-    renderLoreEntries();
-    // 自动滚动到新条目并展开
-    const entries = loreEntries.querySelectorAll('.wb-lore-entry');
-    const last = entries[entries.length - 1];
-    if (last) {
-      last.classList.remove('collapsed');
-      const toggle = last.querySelector('.wb-lore-toggle');
-      if (toggle) toggle.textContent = '▾';
-      last.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const newEntry = AIRPLorebookUtils.buildLoreEntryDefault();
+    loreData.entries.push(newEntry);
+    // S6: 仅 append 新条目 DOM，不全量重绘，避免已有条目展开状态丢失
+    const newIndex = loreData.entries.length - 1;
+    const newDiv = renderLoreEntry(newEntry, newIndex);
+    newDiv.classList.remove('collapsed');
+    const newToggle = newDiv.querySelector('.wb-lore-toggle');
+    if (newToggle) {
+      newToggle.textContent = '▾';
+      newToggle.setAttribute('aria-expanded', 'true');
     }
+    loreEntries.appendChild(newDiv);
+    newDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    setLoreDirty(true);
   }
 
   async function saveLorebook() {
@@ -2333,6 +2375,7 @@
     btnLoreSave.disabled = false;
     if (r.ok) {
       loreStatus.textContent = '已保存 ✓（' + (r.data?.entries_count ?? '?') + ' 条）';
+      setLoreDirty(false);
     } else {
       loreStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
     }
@@ -2546,7 +2589,12 @@
   // #126 D-PR2：lorebook 按钮迁移到主面板 lorebook-section
   if (btnLoreAdd) btnLoreAdd.addEventListener('click', addLoreEntry);
   if (btnLoreSave) btnLoreSave.addEventListener('click', saveLorebook);
-  if (btnLoreRefresh) btnLoreRefresh.addEventListener('click', loadLorebook);
+  // CR#2: 手动刷新前若 loreDirty 则提示
+  if (btnLoreRefresh) btnLoreRefresh.addEventListener('click', () => {
+    if (!confirmDiscardLoreIfDirty('刷新')) return;
+    setLoreDirty(false);
+    loadLorebook();
+  });
   // Decompose tab
   if (btnWbDecompose) btnWbDecompose.addEventListener('click', decomposeCharacter);
   if (btnWbListAnalysis) btnWbListAnalysis.addEventListener('click', loadAnalysisFileList);
@@ -2609,6 +2657,8 @@
     const r = await api('POST', '/v1/characters/' + encodeURIComponent(selectedChar) + '/reextract');
     if (r.ok) {
       alert('重新解包完成');
+      // CR#2: reextract 会覆盖 lorebook，重置 dirty 后重载
+      setLoreDirty(false);
       loadLorebook();
     } else {
       alert('重新解包失败: ' + formatError(r.data, r.text));
@@ -2628,6 +2678,7 @@
     wbCardData = null;
     loreData = null;
     setWbDirty(false);
+    setLoreDirty(false); // CR#2: 删除角色时一并清零 loreDirty
     selectedChar = '';
     selectedSess = '';
     chatLog.textContent = '';
