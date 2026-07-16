@@ -241,11 +241,7 @@ pub(crate) fn merge_sourced_lorebooks(lorebooks: &[SourcedLorebook]) -> MergedLo
         }
     }
 
-    merged.sort_by(|a, b| {
-        let pa = a.0.priority.unwrap_or(DEFAULT_PRIORITY);
-        let pb = b.0.priority.unwrap_or(DEFAULT_PRIORITY);
-        pb.cmp(&pa)
-    });
+    merged.sort_by_key(|(entry, _)| std::cmp::Reverse(entry.priority.unwrap_or(DEFAULT_PRIORITY)));
 
     let (entries, provenance) = merged.into_iter().unzip();
     MergedLorebook {
