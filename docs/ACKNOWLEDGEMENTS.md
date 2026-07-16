@@ -58,7 +58,7 @@
 | [Playwright Core](https://github.com/microsoft/playwright) | `1.61.1` / 2026-07-13 | 仅作为 CI dev dependency 驱动 runner 预装的 system Chrome，验证 production WebUI CSP、文本注入安全与 SSE 取消 | npm lockfile 固定 tarball integrity；上游许可证 Apache-2.0；未下载或分发 Playwright browser bundle | 已进入 `ui/package-lock.json` 与 production topology smoke；不进入 AIRP runtime images，不复用上游测试或实现代码 |
 | [Vite](https://github.com/vitejs/vite) / [Vue plugin](https://github.com/vitejs/vite-plugin-vue) / [Vitest](https://github.com/vitest-dev/vitest) | `8.1.4` / `6.0.8` / `4.1.10`，2026-07-16 核验 | `ui/` 的 Vue 构建、开发服务器与测试工具链 | 三个上游均为 MIT；manifest 使用不跨主版本的有界兼容范围，npm lockfile 固定实际版本、来源与 tarball integrity | 仅为开发/测试依赖，不进入 production WebUI gateway 或 engine runtime image；升级由 #137 / PR #191 审计 |
 
-AIRP 只配置并分发普通上游组件，不复制、翻译或改写其源码/文档。上表记录 P0 artifact 已采用的精确镜像；它不把 preview artifact 写成正式发布能力。正式 tag 前仍必须补构建 provenance、机器可读 notices 与完整 SBOM。
+AIRP 只配置并分发普通上游组件，不复制、翻译或改写其源码/文档。上表分别记录 P0 artifact 的精确镜像和开发/测试依赖的锁定版本；它不把 preview artifact 写成正式发布能力。正式 tag 前仍必须补构建 provenance、机器可读 notices 与完整 SBOM。
 
 ## 4. 维护待办
 
