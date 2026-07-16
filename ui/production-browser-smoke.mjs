@@ -118,7 +118,11 @@ try {
       }),
     });
   });
-  await page.evaluate(() => document.querySelector('#btn-refresh-assembly')?.click());
+  await page.locator('[data-view="session"]').first().click();
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/v1/chat/preview') && response.request().method() === 'POST'),
+    page.locator('#btn-refresh-assembly').click(),
+  ]);
   await page.waitForFunction(name => document.querySelector('#assembly-summary')?.textContent?.includes(name), injectionName);
   assert.equal(await page.locator('#assembly-summary img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);

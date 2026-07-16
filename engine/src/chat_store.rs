@@ -684,17 +684,31 @@ impl ChatLog {
         let mut file = fs::File::open(path)?;
         let mut position = file.metadata()?.len();
         let mut tail = Vec::new();
-        let mut newline_count = 0usize;
 
-        while position > 0 && newline_count <= limit {
+        while position > 0 {
             let read_len = usize::try_from(position.min(CHUNK_SIZE as u64)).unwrap_or(CHUNK_SIZE);
             position -= read_len as u64;
             file.seek(SeekFrom::Start(position))?;
             let mut chunk = vec![0u8; read_len];
             file.read_exact(&mut chunk)?;
-            newline_count += chunk.iter().filter(|byte| **byte == b'\n').count();
             chunk.extend_from_slice(&tail);
             tail = chunk;
+
+            let complete_tail = if position > 0 {
+                tail.iter()
+                    .position(|byte| *byte == b'\n')
+                    .map(|newline| &tail[newline + 1..])
+                    .unwrap_or_default()
+            } else {
+                tail.as_slice()
+            };
+            let records = complete_tail
+                .split(|byte| *byte == b'\n')
+                .filter(|line| line.iter().any(|byte| !byte.is_ascii_whitespace()))
+                .count();
+            if records >= limit {
+                break;
+            }
         }
 
         // A backwards chunk may begin inside an older UTF-8 line. When the file prefix was not
@@ -756,6 +770,7 @@ mod tests {
             );
             content.push('\n');
         }
+        content.push_str(&"\n".repeat(20_000));
         fs::write(&path, content).unwrap();
 
         let recent = ChatLog::read_recent_messages_jsonl(&path, 3).unwrap();

@@ -661,7 +661,10 @@ mod tests_ms6 {
         };
         scene.save(tmp.path()).unwrap();
 
-        let req = scene_request("forest_scene");
+        let mut req = scene_request("forest_scene");
+        // Scene mode ignores a simultaneously supplied character_id; the trace must not report
+        // that ignored identity as effective configuration.
+        req.character_id = Some(crate::types::CharacterId::new("ignored-character").unwrap());
         let pipeline = prepare_pipeline(&req, &state).unwrap();
 
         assert!(
@@ -678,6 +681,12 @@ mod tests_ms6 {
             "hello scene",
             "current user message should be last"
         );
+        assert!(pipeline.prompt_trace.effective.character_id.is_none());
+        assert!(!pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == "character_revision_unavailable"));
     }
 
     #[test]

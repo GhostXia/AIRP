@@ -564,7 +564,9 @@ pub(crate) fn build_multi_char_system_prompt_assembly(
         lorebook.push_str("\n\n");
         parts.push(SystemPromptPart {
             source_kind: "lorebook",
-            source_id: Some(scene.scene_id.to_string()),
+            // The merged block may contain both character and scene lore. Do not invent a
+            // single owner until merge_lorebooks retains per-entry provenance.
+            source_id: None,
             display_name: "世界书命中",
             content: lorebook,
         });

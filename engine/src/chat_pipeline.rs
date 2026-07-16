@@ -214,7 +214,7 @@ fn build_prompt_trace(
     }
 
     let mut diagnostics = Vec::new();
-    if payload.character_id.is_some() {
+    if payload.scene_id.is_none() && payload.character_id.is_some() {
         diagnostics.push(PromptDiagnostic {
             kind: "character_revision_unavailable".to_string(),
             message: "角色卡尚未提供统一 revision；本摘要不会用文件时间冒充版本。".to_string(),
@@ -229,7 +229,11 @@ fn build_prompt_trace(
 
     PromptAssemblyTrace::new(
         EffectiveIds {
-            character_id: payload.character_id.as_ref().map(ToString::to_string),
+            character_id: payload
+                .scene_id
+                .is_none()
+                .then(|| payload.character_id.as_ref().map(ToString::to_string))
+                .flatten(),
             persona_id: persona.map(|value| value.id.clone()),
             persona_revision: persona.map(|value| value.revision),
             preset_id: payload.preset_id.as_ref().map(ToString::to_string),
