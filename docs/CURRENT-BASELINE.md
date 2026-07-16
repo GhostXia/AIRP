@@ -2,7 +2,7 @@
 
 > 基线日期：2026-07-16
 >
-> 实现基线：`main@6a93975` / PR #193，加上当前 #115 纵向切片（合并后以 merge commit 为准）
+> 实现基线：PR #194 head（合并后以 merge commit 为准）
 >
 > 用途：新开发 session 的第一事实入口。源码、manifest、测试和可重复运行证据高于本文；GitHub issues 是未完成工作的实时追踪面。
 
