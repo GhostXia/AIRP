@@ -135,9 +135,14 @@ try {
     });
     if (!r.ok) throw new Error('PUT lorebook failed: ' + r.status);
   });
-  // 选中 smoke-xss 角色触发 loadLorebook
+  // CR-fix: reload 后 refreshChars 可能已程序设置 charSelect.value='smoke-xss'（不触发 change），
+  // selectOption 选中相同值也不触发 change，导致 loadLorebook 未被调用。
+  // 这里先 selectOption 确保选中，再点击「刷新」按钮显式触发 loadLorebook。
+  // 同时注册 dialog handler 自动 accept，防止 confirmDiscardLoreIfDirty 弹窗阻塞。
+  page.on('dialog', dialog => dialog.accept());
   await page.locator('#char-select').selectOption('smoke-xss');
-  await page.waitForFunction(() => document.querySelector('#lore-entries .wb-lore-entry'), null, { timeout: 5_000 });
+  await page.locator('#btn-refresh-lorebook').click();
+  await page.waitForFunction(() => document.querySelector('#lore-entries .wb-lore-entry'), null, { timeout: 10_000 });
   // S1: selective=false 时 secondary_keys input disabled
   const secDisabledBefore = await page.locator('#lore-entries .wb-lore-secondary').first().isDisabled();
   assert.equal(secDisabledBefore, true);

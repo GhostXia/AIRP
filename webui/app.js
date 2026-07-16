@@ -2369,10 +2369,15 @@
 
   async function saveLorebook() {
     if (!loreData || !selectedChar) return;
+    // CodeRabbit 阻塞修复：记录发起 save 时的 characterId，response 回来后若已切角色则
+    // 不清 dirty、不覆盖 loreStatus（避免旧 save 清掉新角色的未保存修改状态）。
+    const savedChar = selectedChar;
     loreStatus.textContent = '保存中…';
     btnLoreSave.disabled = true;
     const r = await api('PUT', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook', loreData);
     btnLoreSave.disabled = false;
+    // 若 save 期间已切角色，丢弃此 response 的副作用（不清 dirty、不覆盖 status）
+    if (savedChar !== selectedChar) return;
     if (r.ok) {
       loreStatus.textContent = '已保存 ✓（' + (r.data?.entries_count ?? '?') + ' 条）';
       setLoreDirty(false);
