@@ -205,7 +205,7 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. #115 已有 trace 模型之上的 pipeline/HTTP/WebUI 用户可读摘要纵向闭环；
+1. 在 #115 已交付的 pipeline/HTTP/WebUI 用户可读摘要闭环上补齐统一 revision/provenance；
 2. #114 已交付 Persona effective/绑定能力之上的 Persona/Preset P1 产品闭环；#126 已关闭，Worldbook 只按新需求继续演进；
 3. [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 的完整 session/revision/恢复分期；
 4. P2 运维与恢复；

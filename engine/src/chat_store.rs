@@ -396,6 +396,42 @@ impl ChatLog {
         Ok(log)
     }
 
+    /// Read recent messages without creating directories, migrating files, or repairing metadata.
+    /// Used by request previews where observational reads must remain side-effect free.
+    pub fn recent_existing_for_session(
+        data_root: &Path,
+        character_id: &str,
+        session_id: Option<&SessionId>,
+        limit: usize,
+    ) -> Result<Vec<ChatMessage>, AirpError> {
+        let scope = session_id.map(ToString::to_string);
+        let canonical = Self::scoped_jsonl_path(data_root, character_id, scope.as_deref());
+        if canonical.is_file() {
+            let salt = Self::legacy_scope_salt(character_id, scope.as_deref());
+            let messages = Self::read_messages_jsonl(&canonical, &salt)?.messages;
+            let start = messages.len().saturating_sub(limit);
+            return Ok(messages[start..].to_vec());
+        }
+        if session_id.is_some() {
+            return Ok(Vec::new());
+        }
+
+        let pre_cf2 = Self::pre_cf2_jsonl_path(data_root, character_id);
+        if pre_cf2.is_file() {
+            let salt = Self::legacy_scope_salt(character_id, None);
+            let messages = Self::read_messages_jsonl(&pre_cf2, &salt)?.messages;
+            let start = messages.len().saturating_sub(limit);
+            return Ok(messages[start..].to_vec());
+        }
+
+        let legacy = Self::legacy_path(data_root, character_id);
+        if legacy.is_file() {
+            let log: ChatLog = serde_json::from_str(&fs::read_to_string(legacy)?)?;
+            return Ok(log.recent(limit));
+        }
+        Ok(Vec::new())
+    }
+
     /// 确定性派生 `ChatLogMeta`（用于 meta 丢失重建）。
     ///
     /// `session_id` 用 `character_id` + scope 的稳定 hash 派生（不再随机 UUID），

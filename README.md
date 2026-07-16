@@ -45,7 +45,7 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。旧 `gatewa
 - 默认 21-tool registry、运行时 catalog 和 engine capability 门；
 - 角色卡、命名 session、durable history、state、基础 worldbook、preset、scene、volume 与 analysis/decompose；
 - Preset 规范化导入报告、原始输入 sidecar、版本目录与原子 current 指针，以及确认门控的 `get_preset` / `update_preset` Agent tools；
-- 显式 `PromptAssemblyTrace` 数据模型骨架；调用方必须提供 provenance，不再从渲染文本反向猜测来源；
+- 真实 chat 装配驱动的 `PromptAssemblyTrace`、无写副作用脱敏 preview，以及 WebUI 本轮有效配置与有序装配摘要；
 - 多 Persona 存储/HTTP/pipeline、WebUI CRUD、自动/显式选择、effective source 与角色/session 绑定闭环；
 - worldbook v4 `constant` + `selective`/`secondary_keys` 运行时语义、presence-aware v3 迁移、shared normalizer/导入诊断、普通用户主面板编辑与 PNG/JSON 到最终 prompt 的端到端回归；
 - WebUI 基础 RP 闭环、history window 与 rollback-by-ID；

@@ -58,6 +58,8 @@ try {
   // 根因曾是 Dockerfile.gateway 漏 COPY → Caddy try_files fallback 到 index.html
   // → MIME text/html → 浏览器拒绝执行 → AIRPLorebookUtils undefined。
   assert.equal(await page.evaluate(() => typeof window.AIRPLorebookUtils), 'object');
+  assert.equal(await page.evaluate(() => typeof window.AIRPAssemblyUtils), 'object');
+  assert.equal(await page.locator('#assembly-summary').count(), 1);
   await page.waitForFunction(() => document.querySelector('#persona-select option[value=""]'));
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('role'), 'status');
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('aria-live'), 'polite');

@@ -74,7 +74,7 @@ Browser
 - 多 Persona 存储、plural HTTP CRUD、chat pipeline 激活、effective endpoint、WebUI 自动/显式选择和角色/session 绑定/解绑已交付；Persona 高级生命周期、统一有效配置摘要和完整 Preset 生命周期仍未闭合。
 - Worldbook v4 `selective`/`secondary_keys` runtime、v3 presence-aware migration/诊断、普通用户主面板管理、advisory 只读可见性和 PNG/JSON 到最终 prompt 的回归已交付。
 - Preset 规范化导入报告、原始输入 sidecar、Agent `get_preset`/`update_preset`（含 dry-run 与确认门控）、不可变版本目录和原子 current 指针已交付；HTTP/UI 受控 dry-run、完整 revision/provenance/collision 合同仍未闭合。
-- `PromptAssemblyTrace` 显式数据模型骨架已交付，但尚未接入 chat pipeline，也没有实际 revision 收集、HTTP/UI preview 或用户摘要。
+- `PromptAssemblyTrace` 已接入真实 chat pipeline，并交付无写副作用的脱敏 HTTP preview 与 WebUI 本轮配置/有序装配摘要；Persona revision 已可见，其余资产统一 revision/provenance 仍待补齐。
 - 命名 session 已统一目录 UUID、history 响应与 metadata 身份；自包含 state/角色卡/worldbook 工作副本、统一 revision、恢复导出仍是分阶段合同。
 
 ### 尚缺的上线能力
@@ -101,7 +101,7 @@ Browser
 ### Phase P1：RP 正式使用面
 
 1. #137 的 Vite/Vitest 工具链安全升级已由 PR #191 完成，当前 `npm audit` 为 0 项；
-2. 在已交付 Preset import report、Agent dry-run/原子版本切换和 trace 模型之上，先完成 #115 的产品纵向闭环：真实 pipeline instrumentation、revision/provenance 收集、有界脱敏 HTTP preview，以及 WebUI 用户可读的当前有效配置与装配摘要；
+2. 在 #115 已交付的真实 pipeline instrumentation、有界脱敏 HTTP preview 和 WebUI 用户摘要之上，继续补齐角色卡/Preset/Worldbook/state/memory 的统一 revision/provenance；
 3. 在已交付 Persona effective/绑定/聊天切换闭环和上述 trace 可观察性之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期和统一有效配置摘要；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
 4. 在已交付 Worldbook v4、shared normalizer、普通用户主面板和端到端导入回归之上，只继续实现首发确需的受控大对象上传与资产生命周期，不把 advisory 字段误宣称为 runtime 兼容；
 5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
@@ -141,5 +141,5 @@ Browser
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
 2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
-3. 下一项先完成 #115 的 pipeline → HTTP → WebUI 用户摘要纵向切片，再按 #114 的**剩余子项**完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
+3. 下一项在 #115 可观察闭环上补齐统一 revision/provenance，再按 #114 的**剩余子项**完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
 4. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

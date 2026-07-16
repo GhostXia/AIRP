@@ -119,6 +119,51 @@ mod tests {
     }
 
     #[test]
+    fn preview_pipeline_is_write_free_and_traces_actual_payload() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let mut req = base_request();
+        req.character_id = Some(CharacterId::new("alice").unwrap());
+        req.character_card_id = Some(
+            r#"{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Alice","description":"A careful archivist","personality":"observant","scenario":"A quiet library","first_mes":"","mes_example":"","creator_notes":"","system_prompt":"","post_history_instructions":"","tags":[],"creator":"","character_version":"","alternate_greetings":[],"extensions":{}}}"#.to_string(),
+        );
+        req.endpoint = Some("https://example.test/v1/chat/completions?token=secret".to_string());
+        req.api_key = Some("never-serialize-me".to_string());
+        req.messages_history = Some(vec![ChatMessage {
+            role: crate::adapter::MessageRole::Assistant,
+            content: "Earlier reply".to_string(),
+        }]);
+
+        let pipeline = preview_pipeline(&req, &state).unwrap();
+
+        assert!(
+            !tmp.path().join("characters/alice").exists(),
+            "preview must not advance timeline or create chat history"
+        );
+        let kinds: Vec<_> = pipeline
+            .prompt_trace
+            .segments
+            .iter()
+            .map(|segment| segment.source_kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["card", "history", "user"]);
+        let payload_chars = pipeline.system_prompt.chars().count()
+            + pipeline
+                .messages
+                .iter()
+                .map(|message| message.content.chars().count())
+                .sum::<usize>();
+        assert_eq!(pipeline.prompt_trace.total_chars, payload_chars);
+        assert_eq!(pipeline.prompt_trace.effective.model, "test-model");
+        assert_eq!(pipeline.prompt_trace.effective.endpoint, "configured");
+
+        let json = serde_json::to_string(&pipeline.prompt_trace).unwrap();
+        assert!(!json.contains("never-serialize-me"));
+        assert!(!json.contains("token=secret"));
+        assert!(!json.contains("A careful archivist"));
+    }
+
+    #[test]
     fn prepare_rejects_traversal_in_character_card_id() {
         // character_card_id 是裸路径，必须拒绝 `..` 跨出 data_root。
         // 构造一个真实存在的"外部"文件，让 canonicalize 能成功 → 触发

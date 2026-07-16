@@ -243,6 +243,72 @@ async fn test_o1_legacy_history_omits_scope_session_id() {
 // ── A1b: chat_pipeline persona activation ────────────────────────────────
 
 #[tokio::test]
+async fn chat_preview_returns_redacted_trace_without_writes() {
+    let (state, tmp) = make_state_no_key();
+    let app = create_router(state);
+    let card = serde_json::json!({
+        "spec": "chara_card_v2",
+        "spec_version": "2.0",
+        "data": {
+            "name": "Alice",
+            "description": "private card text",
+            "personality": "observant",
+            "scenario": "library",
+            "first_mes": "",
+            "mes_example": "",
+            "creator_notes": "",
+            "system_prompt": "",
+            "post_history_instructions": "",
+            "tags": [],
+            "creator": "",
+            "character_version": "",
+            "alternate_greetings": [],
+            "extensions": {}
+        }
+    })
+    .to_string();
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/preview")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "character_id": "alice",
+                        "character_card_id": card,
+                        "user_profile": { "name": "User", "variables": {} },
+                        "user_id": "default",
+                        "message": "hello",
+                        "endpoint": "https://example.test/v1/chat/completions?token=secret",
+                        "api_key": "never-serialize-me",
+                        "messages_history": []
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["effective"]["character_id"], "alice");
+    assert_eq!(value["effective"]["endpoint"], "configured");
+    assert_eq!(value["segments"][0]["source_kind"], "card");
+    assert_eq!(value["segments"][1]["source_kind"], "user");
+    let serialized = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!serialized.contains("never-serialize-me"));
+    assert!(!serialized.contains("token=secret"));
+    assert!(!serialized.contains("private card text"));
+    assert!(!tmp.path().join("characters/alice").exists());
+    assert!(!tmp.path().join("users/default").exists());
+}
+
+#[tokio::test]
 async fn a1b_chat_completions_returns_404_for_nonexistent_persona_id() {
     // Explicit `persona_id` that does not exist must fail closed with 404
     // before any upstream LLM call. This mirrors the plural GET contract.

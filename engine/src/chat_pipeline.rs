@@ -19,8 +19,11 @@ use crate::data_dir;
 use crate::domain::{ChatService, Persona, PersonaService};
 use crate::error::AirpError;
 use crate::fsm::{RegexFilter, StreamingFsm};
+use crate::orchestrator::trace::{
+    EffectiveIds, PromptAssemblyTrace, PromptDiagnostic, PromptSegment, Stability,
+};
 use crate::orchestrator::{
-    inject_current_context, inject_volume_context, Orchestrator, TavernPreset,
+    inject_current_context, inject_volume_context, Orchestrator, SystemPromptPart, TavernPreset,
 };
 use crate::types::UserId;
 use crate::xml_unpacker::{StreamingXmlUnpacker, UnpackedChunk};
@@ -39,6 +42,8 @@ pub struct PreparedPipeline {
     pub gen_params: GenerationParams,
     /// 完整组装好的 system prompt。
     pub system_prompt: String,
+    /// 与实际 provider payload 同源的有界、无正文装配轨迹。
+    pub prompt_trace: PromptAssemblyTrace,
     /// 历史消息 + 当前用户消息列表。
     pub messages: Vec<ChatMessage>,
     /// 流过滤 FSM 实例。
@@ -71,6 +76,173 @@ pub struct FinalizerCtx {
     pub volume_config: VolumeConfig,
     /// M0 F-01：封卷任务需要再次发起 HTTP 调用，仍复用同一连接池。
     pub http_client: reqwest::Client,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrepareMode {
+    Chat,
+    Preview,
+}
+
+fn effective_root_for_mode(
+    root: &std::path::Path,
+    user_id: Option<&str>,
+    mode: PrepareMode,
+) -> Result<PathBuf, AirpError> {
+    if mode == PrepareMode::Chat {
+        return data_dir::resolve_effective_root(root, user_id);
+    }
+    match user_id {
+        None | Some("") => Ok(root.to_path_buf()),
+        Some(user_id) => {
+            data_dir::validate_id_segment(user_id)?;
+            Ok(root.join("users").join(user_id))
+        }
+    }
+}
+
+fn read_only_session_dir(
+    root: &std::path::Path,
+    character_id: &str,
+    session_id: Option<&crate::types::SessionId>,
+) -> PathBuf {
+    let character = root.join("characters").join(character_id);
+    match session_id {
+        Some(session_id) => {
+            let session = character.join("sessions").join(session_id.to_string());
+            let memory = session.join("memory");
+            if memory.is_dir() {
+                memory
+            } else {
+                session
+            }
+        }
+        None => {
+            let memory = character.join("memory");
+            if memory.is_dir() {
+                memory
+            } else {
+                character.join("session")
+            }
+        }
+    }
+}
+
+fn provider_label(provider: &crate::adapter::Provider) -> String {
+    match provider {
+        crate::adapter::Provider::OpenAI => "openai_compatible".to_string(),
+    }
+}
+
+fn trace_source_id(source_kind: &str, payload: &ChatCompletionRequest) -> Option<String> {
+    match source_kind {
+        "card" | "lorebook" | "state" => payload.character_id.as_ref().map(ToString::to_string),
+        "scene" => payload.scene_id.clone(),
+        "preset" => payload.preset_id.as_ref().map(ToString::to_string),
+        "memory" | "history" | "user" => payload.session_id.as_ref().map(ToString::to_string),
+        _ => None,
+    }
+}
+
+fn build_prompt_trace(
+    payload: &ChatCompletionRequest,
+    persona: Option<&Persona>,
+    provider_config: &ProviderConfig,
+    gen_params: &GenerationParams,
+    prompt_parts: &[SystemPromptPart],
+    messages: &[ChatMessage],
+) -> PromptAssemblyTrace {
+    let mut position = 0usize;
+    let mut segments = Vec::new();
+
+    for part in prompt_parts {
+        let chars = part.content.chars().count();
+        segments.push(PromptSegment {
+            source_kind: part.source_kind.to_string(),
+            source_id: trace_source_id(part.source_kind, payload),
+            item_id: None,
+            display_name: Some(part.display_name.to_string()),
+            role: Some("system".to_string()),
+            position,
+            enabled_reason: Some("进入本轮 system prompt".to_string()),
+            chars,
+            estimated_tokens: crate::volume_store::estimate_tokens(&part.content),
+            truncated: false,
+            stable_or_volatile: match part.source_kind {
+                "state" | "memory" => Stability::Volatile,
+                _ => Stability::Stable,
+            },
+        });
+        position += part.content.len();
+    }
+
+    for (index, message) in messages.iter().enumerate() {
+        let is_current_user = index + 1 == messages.len();
+        let source_kind = if is_current_user { "user" } else { "history" };
+        let role = match message.role {
+            crate::adapter::MessageRole::User => "user",
+            crate::adapter::MessageRole::Assistant => "assistant",
+            crate::adapter::MessageRole::System => "system",
+        };
+        segments.push(PromptSegment {
+            source_kind: source_kind.to_string(),
+            source_id: trace_source_id(source_kind, payload),
+            item_id: None,
+            display_name: Some(if is_current_user {
+                "当前消息".to_string()
+            } else {
+                "会话历史".to_string()
+            }),
+            role: Some(role.to_string()),
+            position,
+            enabled_reason: Some(if is_current_user {
+                "本轮用户输入".to_string()
+            } else {
+                "纳入本轮上下文窗口".to_string()
+            }),
+            chars: message.content.chars().count(),
+            estimated_tokens: crate::volume_store::estimate_tokens(&message.content),
+            truncated: false,
+            stable_or_volatile: Stability::Volatile,
+        });
+        position += message.content.len();
+    }
+
+    let mut diagnostics = Vec::new();
+    if payload.character_id.is_some() {
+        diagnostics.push(PromptDiagnostic {
+            kind: "character_revision_unavailable".to_string(),
+            message: "角色卡尚未提供统一 revision；本摘要不会用文件时间冒充版本。".to_string(),
+        });
+    }
+    if payload.preset_id.is_some() {
+        diagnostics.push(PromptDiagnostic {
+            kind: "preset_revision_unavailable".to_string(),
+            message: "Preset 当前使用不可变 generation，但尚未映射为数值 revision。".to_string(),
+        });
+    }
+
+    PromptAssemblyTrace::new(
+        EffectiveIds {
+            character_id: payload.character_id.as_ref().map(ToString::to_string),
+            persona_id: persona.map(|value| value.id.clone()),
+            persona_revision: persona.map(|value| value.revision),
+            preset_id: payload.preset_id.as_ref().map(ToString::to_string),
+            scene_id: payload.scene_id.clone(),
+            provider: provider_label(&provider_config.provider),
+            // Endpoint paths can contain deployment details or query credentials. The product
+            // summary only needs to disclose whether an endpoint is configured.
+            endpoint: if provider_config.endpoint.is_empty() {
+                "not_configured".to_string()
+            } else {
+                "configured".to_string()
+            },
+            model: gen_params.model.clone(),
+            ..EffectiveIds::default()
+        },
+        segments,
+        diagnostics,
+    )
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -237,13 +409,14 @@ fn prepare_scene_pipeline(
     payload: &ChatCompletionRequest,
     state: &Arc<DaemonState>,
     scene_id: &str,
+    mode: PrepareMode,
 ) -> Result<PreparedPipeline, AirpError> {
     let scene_id = crate::types::SceneId::new(scene_id)
         .map_err(|e| AirpError::BadRequest(format!("非法 scene_id: {}", e)))?;
 
     // DX-1: per-user data root isolation
     let effective_root =
-        data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;
+        effective_root_for_mode(&state.data_root, payload.user_id.as_deref(), mode)?;
 
     let scene = crate::scene::SceneConfig::load(&effective_root, &scene_id)?;
 
@@ -309,7 +482,7 @@ fn prepare_scene_pipeline(
     let (effective_user_name, effective_user_variables) =
         merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
 
-    let mut system_prompt = crate::orchestrator::build_multi_char_system_prompt(
+    let mut assembly = crate::orchestrator::build_multi_char_system_prompt_assembly(
         &scene,
         &cards,
         &triggered_lore,
@@ -317,12 +490,27 @@ fn prepare_scene_pipeline(
     );
     let mut prompt_variables = effective_user_variables.clone();
     prompt_variables.insert("user".to_string(), effective_user_name.clone());
-    for (key, value) in prompt_variables {
-        system_prompt = system_prompt.replace(&format!("{{{{{key}}}}}"), &value);
+    for part in &mut assembly.parts {
+        for (key, value) in &prompt_variables {
+            part.content = part.content.replace(&format!("{{{{{key}}}}}"), value);
+        }
     }
+    let mut system_prompt: String = assembly
+        .parts
+        .iter()
+        .map(|part| part.content.as_str())
+        .collect();
+    let mut prompt_parts = assembly.parts;
 
-    let session_dir_opt: Option<PathBuf> =
-        data_dir::scene_memory_dir(&effective_root, &scene_id).ok();
+    let session_dir_opt: Option<PathBuf> = if mode == PrepareMode::Preview {
+        let path = effective_root
+            .join("scenes")
+            .join(scene_id.as_str())
+            .join("memory");
+        path.is_dir().then_some(path)
+    } else {
+        data_dir::scene_memory_dir(&effective_root, &scene_id).ok()
+    };
 
     let snapshot = {
         let cfg = state
@@ -333,14 +521,37 @@ fn prepare_scene_pipeline(
     };
 
     if let Some(ref sd) = session_dir_opt {
-        inject_current_context(sd, &mut system_prompt);
-        inject_volume_context(sd, &payload.message, &mut system_prompt);
+        let mut recent_context = String::new();
+        inject_current_context(sd, &mut recent_context);
+        if !recent_context.is_empty() {
+            system_prompt.push_str(&recent_context);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                display_name: "近期上下文",
+                content: recent_context,
+            });
+        }
+        let mut related_history = String::new();
+        inject_volume_context(sd, &payload.message, &mut related_history);
+        if !related_history.is_empty() {
+            system_prompt.push_str(&related_history);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                display_name: "相关历史卷",
+                content: related_history,
+            });
+        }
         if let Some(hint) = volume_manager::soft_pressure_hint(
             sd,
             snapshot.volume_config.soft_threshold_tokens,
             snapshot.volume_config.hard_threshold_tokens,
         ) {
             system_prompt.push_str(&hint);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                display_name: "上下文压力提示",
+                content: hint,
+            });
         }
     }
 
@@ -395,6 +606,14 @@ fn prepare_scene_pipeline(
         });
         list
     };
+    let prompt_trace = build_prompt_trace(
+        payload,
+        request_persona.as_ref(),
+        provider_config.as_ref(),
+        &gen_params,
+        &prompt_parts,
+        &messages,
+    );
 
     // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 single 分支产出一致集合。
     let filters = assemble_regex_filters(payload, &effective_root);
@@ -407,6 +626,7 @@ fn prepare_scene_pipeline(
         provider_config: provider_config.clone(),
         gen_params: gen_params.clone(),
         system_prompt,
+        prompt_trace,
         messages,
         fsm,
         unpacker: StreamingXmlUnpacker::new(),
@@ -433,14 +653,30 @@ pub fn prepare_pipeline(
     payload: &ChatCompletionRequest,
     state: &Arc<DaemonState>,
 ) -> Result<PreparedPipeline, AirpError> {
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Chat)
+}
+
+/// Build the same provider-ready pipeline without advancing timeline state or writing history.
+pub fn preview_pipeline(
+    payload: &ChatCompletionRequest,
+    state: &Arc<DaemonState>,
+) -> Result<PreparedPipeline, AirpError> {
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Preview)
+}
+
+fn prepare_pipeline_with_mode(
+    payload: &ChatCompletionRequest,
+    state: &Arc<DaemonState>,
+    mode: PrepareMode,
+) -> Result<PreparedPipeline, AirpError> {
     // MS-6: scene branch — scene_id takes precedence over character_id
     if let Some(ref sid) = payload.scene_id {
-        return prepare_scene_pipeline(payload, state, sid);
+        return prepare_scene_pipeline(payload, state, sid, mode);
     }
 
     // DX-1: per-user data root isolation
     let effective_root =
-        data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;
+        effective_root_for_mode(&state.data_root, payload.user_id.as_deref(), mode)?;
 
     // Resolve all Persona inputs before timeline advancement, chat persistence,
     // or any other request side effect. A rejected explicit Persona must leave
@@ -513,8 +749,10 @@ pub fn prepare_pipeline(
     let orchestrator = Orchestrator::new(card_json.as_deref(), lore_json.as_deref())?;
 
     // 5. Advance timeline (side-effect, best-effort)
-    if let Some(ref cid) = payload.character_id {
-        Orchestrator::advance_timeline_and_checkpoint(&effective_root, cid.as_str());
+    if mode == PrepareMode::Chat {
+        if let Some(ref cid) = payload.character_id {
+            Orchestrator::advance_timeline_and_checkpoint(&effective_root, cid.as_str());
+        }
     }
 
     // R-04: Pre-load chat history when client omits messages_history.
@@ -522,9 +760,13 @@ pub fn prepare_pipeline(
     // step 12 appends it explicitly. Reused for both lorebook scan and context.
     let auto_history: Option<Vec<ChatMessage>> = if payload.messages_history.is_none() {
         payload.character_id.as_ref().and_then(|cid| {
-            ChatService::new(&effective_root)
-                .recent(cid, payload.session_id.as_ref(), 50)
-                .ok()
+            let service = ChatService::new(&effective_root);
+            let history = if mode == PrepareMode::Preview {
+                service.recent_read_only(cid, payload.session_id.as_ref(), 50)
+            } else {
+                service.recent(cid, payload.session_id.as_ref(), 50)
+            };
+            history.ok()
         })
     } else {
         None
@@ -542,16 +784,18 @@ pub fn prepare_pipeline(
     let triggered_lore = orchestrator.trigger_lorebook(&scan_text);
 
     // 7. Persist user message (early-write; survives stream failures)
-    if let Some(ref cid) = payload.character_id {
-        if let Err(e) = ChatService::new(&effective_root).append(
-            cid,
-            payload.session_id.as_ref(),
-            ChatMessage {
-                role: crate::adapter::MessageRole::User,
-                content: payload.message.clone(),
-            },
-        ) {
-            tracing::warn!(err = %e, "无法持久化 user 消息");
+    if mode == PrepareMode::Chat {
+        if let Some(ref cid) = payload.character_id {
+            if let Err(e) = ChatService::new(&effective_root).append(
+                cid,
+                payload.session_id.as_ref(),
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: payload.message.clone(),
+                },
+            ) {
+                tracing::warn!(err = %e, "无法持久化 user 消息");
+            }
         }
     }
 
@@ -585,7 +829,7 @@ pub fn prepare_pipeline(
     //      legacy callers see no behavior change. `state.data_root` (not the
     //      user-scoped effective_root) is passed because PersonaService builds
     //      `users/{uid}/personas/` from the global root.
-    let mut system_prompt = orchestrator.build_system_prompt_with_preset(
+    let assembly = orchestrator.build_system_prompt_assembly_with_preset(
         &effective_root,
         cid_str,
         &effective_user_name,
@@ -595,12 +839,20 @@ pub fn prepare_pipeline(
         payload.enabled_presets.as_ref(),
         &payload.message,
     );
+    let mut system_prompt = assembly.prompt;
+    let mut prompt_parts = assembly.parts;
 
     // 10. Volume context injection
     // M5.1：若客户端指定 session_id 走 sessions/{uuid}/ 路径，否则保持 legacy session/。
     let session_dir_opt: Option<PathBuf> = payload.character_id.as_ref().and_then(|id| {
-        data_dir::resolve_session_dir(&effective_root, id.as_str(), payload.session_id.as_ref())
-            .ok()
+        if mode == PrepareMode::Preview {
+            let path =
+                read_only_session_dir(&effective_root, id.as_str(), payload.session_id.as_ref());
+            path.is_dir().then_some(path)
+        } else {
+            data_dir::resolve_session_dir(&effective_root, id.as_str(), payload.session_id.as_ref())
+                .ok()
+        }
     });
 
     // M4.4：一次性快照 daemon 当前热重载配置，后续读取本地变量；
@@ -614,14 +866,37 @@ pub fn prepare_pipeline(
     };
 
     if let Some(ref sd) = session_dir_opt {
-        inject_current_context(sd, &mut system_prompt);
-        inject_volume_context(sd, &payload.message, &mut system_prompt);
+        let mut recent_context = String::new();
+        inject_current_context(sd, &mut recent_context);
+        if !recent_context.is_empty() {
+            system_prompt.push_str(&recent_context);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                display_name: "近期上下文",
+                content: recent_context,
+            });
+        }
+        let mut related_history = String::new();
+        inject_volume_context(sd, &payload.message, &mut related_history);
+        if !related_history.is_empty() {
+            system_prompt.push_str(&related_history);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                display_name: "相关历史卷",
+                content: related_history,
+            });
+        }
         if let Some(hint) = volume_manager::soft_pressure_hint(
             sd,
             snapshot.volume_config.soft_threshold_tokens,
             snapshot.volume_config.hard_threshold_tokens,
         ) {
             system_prompt.push_str(&hint);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                display_name: "上下文压力提示",
+                content: hint,
+            });
         }
     }
 
@@ -666,6 +941,14 @@ pub fn prepare_pipeline(
         });
         list
     };
+    let prompt_trace = build_prompt_trace(
+        payload,
+        request_persona.as_ref(),
+        provider_config.as_ref(),
+        &gen_params,
+        &prompt_parts,
+        &messages,
+    );
 
     // 13. Build FSM
     // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 scene 分支产出一致集合。
@@ -684,6 +967,7 @@ pub fn prepare_pipeline(
         provider_config: provider_config.clone(),
         gen_params: gen_params.clone(),
         system_prompt,
+        prompt_trace,
         messages,
         fsm,
         unpacker: StreamingXmlUnpacker::new(),
@@ -721,6 +1005,7 @@ pub fn build_sse_stream(
         provider_config,
         gen_params,
         system_prompt,
+        prompt_trace: _,
         messages,
         fsm,
         unpacker,
@@ -948,6 +1233,7 @@ pub async fn run_pipeline_to_stdout(pipeline: PreparedPipeline) -> Result<(), Ai
         provider_config,
         gen_params,
         system_prompt,
+        prompt_trace: _,
         messages,
         mut fsm,
         mut unpacker,
@@ -1135,6 +1421,7 @@ pub async fn run_generation_step(pipeline: PreparedPipeline) -> GenerationStepRe
         provider_config,
         gen_params,
         system_prompt,
+        prompt_trace: _,
         messages,
         mut fsm,
         mut unpacker,

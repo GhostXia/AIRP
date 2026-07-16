@@ -26,7 +26,9 @@ pub(super) use characters::{
     delete_character_endpoint, get_character_card, import_character, list_characters,
     reextract_character_assets, update_character_card,
 };
-pub(super) use chat::{chat_completion, get_chat_history, regen_chat, rollback_chat};
+pub(super) use chat::{
+    chat_completion, get_chat_history, preview_chat_assembly, regen_chat, rollback_chat,
+};
 pub(super) use lorebook::{get_character_lorebook, update_character_lorebook};
 pub(super) use models::list_models;
 pub(super) use personas::{

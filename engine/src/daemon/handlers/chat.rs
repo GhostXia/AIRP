@@ -95,3 +95,12 @@ pub(in crate::daemon) async fn chat_completion(
     let pipeline = chat_pipeline::prepare_pipeline(&payload, &state)?;
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
 }
+
+/// POST /v1/chat/preview — assemble the exact bounded trace without provider calls or writes.
+pub(in crate::daemon) async fn preview_chat_assembly(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(payload): Json<ChatCompletionRequest>,
+) -> Result<Json<crate::orchestrator::trace::PromptAssemblyTrace>, AirpError> {
+    let pipeline = chat_pipeline::preview_pipeline(&payload, &state)?;
+    Ok(Json(pipeline.prompt_trace))
+}

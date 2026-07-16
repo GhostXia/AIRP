@@ -271,6 +271,23 @@ impl ChatService {
             .map(|log| log.recent(limit))
     }
 
+    /// Read existing history without lazy creation, migration, or metadata repair.
+    pub fn recent_read_only(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        limit: usize,
+    ) -> Result<Vec<ChatMessage>, AirpError> {
+        self.with_session(character_id, session_id, || {
+            ChatLog::recent_existing_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+                limit,
+            )
+        })
+    }
+
     pub fn append(
         &self,
         character_id: &CharacterId,
