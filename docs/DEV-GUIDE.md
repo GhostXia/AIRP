@@ -134,6 +134,9 @@ Set-Location D:\AIRP-Dev
 ```powershell
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
+$env:RUSTDOCFLAGS = "-D warnings"
+cargo doc --workspace --no-deps --locked
+Remove-Item Env:RUSTDOCFLAGS
 cargo test --workspace --locked
 cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise --locked -- --nocapture
 
@@ -143,6 +146,16 @@ npm run typecheck
 npm run test -- --run
 Pop-Location
 ```
+
+Rustdoc 采用“合同正确性优先”策略：CI 要求公共文档能够生成，且不存在坏链接、
+无效 HTML 或其他 rustdoc 警告。只有能解释公共 API 合同、错误语义、副作用、
+并发或安全边界的注释才应补充；不按第三方工具的私有百分比给显而易见的字段和
+私有 helper 批量填充注释。
+
+需要盘点公共项缺失文档时，使用可复现的稳定工具链命令
+`RUSTDOCFLAGS="-W missing-docs" cargo doc --workspace --no-deps --locked`。
+该结果是维护清单，不是 CI 门禁；若未来启用 `missing_docs` 门禁，必须先明确稳定的
+公共扩展面并一次性记录基线，不能让既有缺口阻止无关修复。
 
 按范围补充：
 
