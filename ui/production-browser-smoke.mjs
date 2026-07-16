@@ -135,14 +135,28 @@ try {
     });
     if (!r.ok) throw new Error('PUT lorebook failed: ' + r.status);
   });
-  // CR-fix: reload 后 refreshChars 可能已程序设置 charSelect.value='smoke-xss'（不触发 change），
-  // selectOption 选中相同值也不触发 change，导致 loadLorebook 未被调用。
-  // 这里先 selectOption 确保选中，再点击「刷新」按钮显式触发 loadLorebook。
-  // 同时注册 dialog handler 自动 accept，防止 confirmDiscardLoreIfDirty 弹窗阻塞。
+  // 第三方审计反馈：Playwright selectOption 无条件 dispatch change，"相同值不触发 change"
+  // 根因假设不成立。更可能是 change handler 中 await refreshSessions() 等步骤抛异常导致
+  // loadLorebook() 永不执行。先 selectOption 触发 change，再用 try/catch 加诊断输出
+  // 捕获真实失败原因（pageErrors / lore-entries innerHTML / lore-status text）。
+  // 按钮已从 <summary> 挪到 <details> 内部（方案 C，可访问性改进），避免 summary toggle 拦截。
   page.on('dialog', dialog => dialog.accept());
   await page.locator('#char-select').selectOption('smoke-xss');
-  await page.locator('#btn-refresh-lorebook').click();
-  await page.waitForFunction(() => document.querySelector('#lore-entries .wb-lore-entry'), null, { timeout: 10_000 });
+  try {
+    await page.waitForFunction(() => document.querySelector('#lore-entries .wb-lore-entry'), null, { timeout: 10_000 });
+  } catch (err) {
+    // 诊断输出：超时时打印 pageErrors、lore-entries 内容、lore-status 文本，
+    // 便于在 CI 日志中直接看到真实失败原因，而非反复猜测事件是否触发。
+    const diagPageErrors = await page.evaluate(() => window.__airpCspViolations);
+    const diagLoreEntriesHtml = await page.locator('#lore-entries').innerHTML().catch(() => '<unavailable>');
+    const diagLoreStatus = await page.locator('#lore-status').textContent().catch(() => '<unavailable>');
+    const diagSelectedChar = await page.locator('#char-select').inputValue().catch(() => '<unavailable>');
+    console.error('DIAG pageErrors(csp):', JSON.stringify(diagPageErrors));
+    console.error('DIAG lore-entries innerHTML:', diagLoreEntriesHtml);
+    console.error('DIAG lore-status text:', diagLoreStatus);
+    console.error('DIAG char-select value:', diagSelectedChar);
+    throw err;
+  }
   // S1: selective=false 时 secondary_keys input disabled
   const secDisabledBefore = await page.locator('#lore-entries .wb-lore-secondary').first().isDisabled();
   assert.equal(secDisabledBefore, true);
