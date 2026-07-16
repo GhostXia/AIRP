@@ -2114,25 +2114,13 @@
   }
 
   async function loadLorebook() {
-    // PR#182 CI 诊断（临时，根因定位后随 smoke DIAG 一并移除）：记录 loadLorebook 各分支，
-    // 配合 production-browser-smoke.mjs 的 page.on('console') 捕获，区分「未调用 / early-return /
-    // fetch 挂起 / guard 静默丢弃 / 正常返回」五种情况。
-    console.warn('[lore-diag] loadLorebook entry', { selectedChar, loreRequestId });
-    if (!selectedChar) {
-      console.warn('[lore-diag] loadLorebook early-return: selectedChar empty');
-      return;
-    }
+    if (!selectedChar) return;
     // CR#2: 自增 requestId 并在 response 回来时校验，避免快速切角色时旧响应覆盖新数据
     const requestId = ++loreRequestId;
     const characterId = selectedChar;
-    console.warn('[lore-diag] loadLorebook before api', { requestId, loreRequestId, characterId });
     const r = await api('GET', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook');
-    console.warn('[lore-diag] loadLorebook api resolved', { requestId, loreRequestId, characterId, selectedChar, status: r.status, ok: r.ok });
     // 过期响应直接丢弃：切角色或重新发起 load 后，旧 response 不再适用
-    if (requestId !== loreRequestId || characterId !== selectedChar) {
-      console.warn('[lore-diag] loadLorebook guard silent-return', { requestId, loreRequestId, characterId, selectedChar });
-      return;
-    }
+    if (requestId !== loreRequestId || characterId !== selectedChar) return;
     if (r.status === 404) {
       loreData = { entries: [] };
       renderLoreEntries();

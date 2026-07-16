@@ -29,24 +29,6 @@ try {
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
-  // PR#182 CI 诊断（临时）：捕获浏览器 console / 网络层失败 / lorebook 请求-响应时序，
-  // 用于定位 selectOption 后 #lore-status 卡在占位符 — 的真实根因。根因定位后随 app.js
-  // 内 [lore-diag] console.warn 一并移除。
-  const consoleMessages = [];
-  page.on('console', msg => consoleMessages.push({ type: msg.type(), text: msg.text() }));
-  const requestFailures = [];
-  page.on('requestfailed', req => requestFailures.push({ url: req.url(), failure: req.failure()?.errorText }));
-  const lorebookReqEvents = [];
-  page.on('request', req => {
-    if (req.method() === 'GET' && req.url().includes('/lorebook')) {
-      lorebookReqEvents.push({ phase: 'request', url: req.url(), at: Date.now() });
-    }
-  });
-  page.on('response', res => {
-    if (res.request().method() === 'GET' && res.url().includes('/lorebook')) {
-      lorebookReqEvents.push({ phase: 'response', url: res.url(), status: res.status(), at: Date.now() });
-    }
-  });
   await page.addInitScript(() => {
     window.__airpCspViolations = [];
     window.__airpXss = 0;
@@ -72,6 +54,10 @@ try {
   assert.equal(await page.locator('#engine-url').isVisible(), false);
   assert.equal(await page.locator('#bearer-token').isVisible(), false);
   assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), []);
+  // #182 防回归：确保 production 容器 serve 了 lorebook-utils.js。
+  // 根因曾是 Dockerfile.gateway 漏 COPY → Caddy try_files fallback 到 index.html
+  // → MIME text/html → 浏览器拒绝执行 → AIRPLorebookUtils undefined。
+  assert.equal(await page.evaluate(() => typeof window.AIRPLorebookUtils), 'object');
   await page.waitForFunction(() => document.querySelector('#persona-select option[value=""]'));
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('role'), 'status');
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('aria-live'), 'polite');
@@ -170,28 +156,20 @@ try {
       throw new Error('PUT lorebook failed: ' + r.status);
     }
   });
-  // 第三方审计反馈：Playwright selectOption 无条件 dispatch change，"相同值不触发 change"
-  // 根因假设不成立。更可能是 change handler 中 await refreshSessions() 等步骤抛异常导致
-  // loadLorebook() 永不执行。先 selectOption 触发 change，再用 try/catch 加诊断输出
-  // 捕获真实失败原因（pageErrors / lore-entries innerHTML / lore-status text）。
-  // 按钮已从 <summary> 挪到 <details> 内部（方案 C，可访问性改进），避免 summary toggle 拦截。
+  // selectOption 触发 change → loadLorebook()。try/catch 在超时时打印 pageErrors / DOM 状态，
+  // 便于 CI 日志直接看到真实失败原因。#182 根因曾是 Dockerfile.gateway 漏 COPY lorebook-utils.js，
+  // 导致 AIRPLorebookUtils undefined → renderLoreEntry 抛 ReferenceError。
   page.on('dialog', dialog => dialog.accept());
   await page.locator('#char-select').selectOption('smoke-xss');
   try {
     await page.waitForFunction(() => document.querySelector('#lore-entries .wb-lore-entry'), null, { timeout: 10_000 });
   } catch (err) {
-    // 诊断输出：超时时打印真实未捕获 JS 异常（pageErrors 是 Node 端闭包，非 CSP 列表）、
-    // 浏览器 console、网络层失败、lorebook 请求-响应时序，以及 DOM 状态。
-    // 之前版本误把 window.__airpCspViolations 当作 pageErrors 打印，导致真实异常被掩盖。
     const diagCspViolations = await page.evaluate(() => window.__airpCspViolations);
     const diagLoreEntriesHtml = await page.locator('#lore-entries').innerHTML().catch(() => '<unavailable>');
     const diagLoreStatus = await page.locator('#lore-status').textContent().catch(() => '<unavailable>');
     const diagSelectedChar = await page.locator('#char-select').inputValue().catch(() => '<unavailable>');
     console.error('DIAG pageErrors (uncaught JS exceptions):', JSON.stringify(pageErrors));
     console.error('DIAG cspViolations:', JSON.stringify(diagCspViolations));
-    console.error('DIAG consoleMessages:', JSON.stringify(consoleMessages));
-    console.error('DIAG requestFailures:', JSON.stringify(requestFailures));
-    console.error('DIAG lorebook request/response events:', JSON.stringify(lorebookReqEvents));
     console.error('DIAG lore-entries innerHTML:', diagLoreEntriesHtml);
     console.error('DIAG lore-status text:', diagLoreStatus);
     console.error('DIAG char-select value:', diagSelectedChar);
