@@ -111,6 +111,9 @@ try {
 
   // S1/S2: 通过 API 注入带 advisory 字段的 lorebook entry，验证 selective toggle
   // 启用/禁用 secondary_keys input，以及 advisory 区域只读（span 非 input）。
+  // engine 有全局限流（tower_governor: 10 req/s, burst 20 per IP），smoke 前面已发了
+  // 大量请求（import/3 轮 chat SSE/history/rollback/regen），PUT lorebook 时 token bucket
+  // 可能耗尽返回 429。这里加重试：429 时退避 1s 重试，最多 5 次。
   await page.evaluate(async () => {
     const payload = {
       entries: [
@@ -128,12 +131,21 @@ try {
         },
       ],
     };
-    const r = await fetch('/v1/characters/smoke-xss/lorebook', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) throw new Error('PUT lorebook failed: ' + r.status);
+    const body = JSON.stringify(payload);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const r = await fetch('/v1/characters/smoke-xss/lorebook', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (r.ok) return;
+      if (r.status === 429 && attempt < 4) {
+        // 退避 1s 让 token bucket 恢复（10 req/s → 1s 恢复 10 tokens）
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+      throw new Error('PUT lorebook failed: ' + r.status);
+    }
   });
   // 第三方审计反馈：Playwright selectOption 无条件 dispatch change，"相同值不触发 change"
   // 根因假设不成立。更可能是 change handler 中 await refreshSessions() 等步骤抛异常导致
