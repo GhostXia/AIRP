@@ -532,6 +532,75 @@ mod tests {
     use crate::types::CharacterId;
     static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    /// PNG CRC-32（polynomial 0xEDB88320，初始 0xFFFFFFFF，XOR out 0xFFFFFFFF）。
+    /// 用于构造 standards-valid PNG fixture。
+    fn png_crc32(data: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFFFFFF;
+        for &byte in data {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                if crc & 1 != 0 {
+                    crc = (crc >> 1) ^ 0xEDB88320;
+                } else {
+                    crc >>= 1;
+                }
+            }
+        }
+        !crc
+    }
+
+    /// 写一个 PNG chunk：length(4) + type(4) + data + CRC(4, 覆盖 type+data)。
+    fn write_png_chunk(buf: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        buf.extend_from_slice(chunk_type);
+        buf.extend_from_slice(data);
+        let mut crc_input = Vec::with_capacity(4 + data.len());
+        crc_input.extend_from_slice(chunk_type);
+        crc_input.extend_from_slice(data);
+        buf.extend_from_slice(&png_crc32(&crc_input).to_be_bytes());
+    }
+
+    /// 构造 standards-valid 1×1 RGB PNG，在 IDAT 与 IEND 之间插入携带
+    /// `ccv3` tEXt chunk 的 base64 编码 card JSON。IHDR/IDAT/IEND 数据真实，
+    /// CRC 正确，符合 PNG 规范，模拟真实 V3 角色卡 PNG 文件。
+    fn build_valid_png_with_ccv3(card_json: &str) -> Vec<u8> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10]; // PNG signature
+
+        // IHDR: width=1, height=1, bit_depth=8, color_type=2(RGB), compression=0, filter=0, interlace=0
+        let ihdr_data = [
+            0, 0, 0, 1, // width
+            0, 0, 0, 1, // height
+            8, // bit depth
+            2, // color type (RGB)
+            0, // compression
+            0, // filter
+            0, // interlace
+        ];
+        write_png_chunk(&mut png, b"IHDR", &ihdr_data);
+
+        // IDAT: zlib stream of one row = filter_byte(0) + R G B (3 bytes)
+        let raw_pixel: [u8; 4] = [0, 255, 0, 0];
+        let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&raw_pixel).unwrap();
+        let compressed = encoder.finish().unwrap();
+        write_png_chunk(&mut png, b"IDAT", &compressed);
+
+        // ccv3 tEXt chunk: keyword\0 + base64(json)
+        let encoded = STANDARD.encode(card_json.as_bytes());
+        let mut text_data = b"ccv3\0".to_vec();
+        text_data.extend_from_slice(encoded.as_bytes());
+        write_png_chunk(&mut png, b"tEXt", &text_data);
+
+        // IEND
+        write_png_chunk(&mut png, b"IEND", &[]);
+
+        png
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         original: Option<std::ffi::OsString>,
@@ -1084,11 +1153,12 @@ mod tests {
         assert!(system_prompt.contains("You are going to roleplay as Constant E2E"));
     }
 
-    /// #126 D-PR3: V3 PNG 入口端到端 — 用 `ccv3` tEXt chunk 构造 V3 角色卡 PNG，
-    /// 经 `card_png_base64` 入口导入 → `parse_png_character_card_bytes` 提取
-    /// → `extract_card_assets` 调 `normalize_worldbook` 落盘 → 读盘 lorebook
-    /// → `Orchestrator::trigger_lorebook` → `build_system_prompt`，验证 constant
-    /// 条目在 V3 PNG 入口下同样注入到最终 system prompt。
+    /// #126 D-PR3: V3 PNG 入口端到端 — 用 standards-valid 1×1 PNG 携带 `ccv3`
+    /// tEXt chunk 构造 V3 角色卡，经 `card_png_base64` 入口导入 →
+    /// `parse_png_character_card_bytes` 提取 → `extract_card_assets` 调
+    /// `normalize_worldbook` 落盘 → 读盘 lorebook → `Orchestrator::trigger_lorebook`
+    /// → `build_system_prompt`，验证 constant 条目在 V3 PNG 入口下同样注入到
+    /// 最终 system prompt。
     ///
     /// ccv3 chunk 数据为 base64 编码的 V3 card JSON；parse_png_character_card_bytes
     /// 优先取 ccv3（见 png_parser.rs:95-104）。本测试字面满足 #126 验收清单
@@ -1117,18 +1187,8 @@ mod tests {
             }
         })
         .to_string();
-        // 构造 PNG：签名 + ccv3 tEXt chunk（keyword\0 + base64(json)） + IEND
-        let encoded_card = STANDARD.encode(card_json.as_bytes());
-        let mut chunk = b"ccv3\0".to_vec();
-        chunk.extend_from_slice(encoded_card.as_bytes());
-        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
-        png.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
-        png.extend_from_slice(b"tEXt");
-        png.extend_from_slice(&chunk);
-        png.extend_from_slice(&[0u8; 4]); // CRC（解析器跳过）
-        png.extend_from_slice(&0u32.to_be_bytes());
-        png.extend_from_slice(b"IEND");
-        png.extend_from_slice(&[0u8; 4]);
+        // 构造 standards-valid 1×1 PNG（含 IHDR/IDAT/正确 CRC）+ ccv3 tEXt chunk
+        let png = build_valid_png_with_ccv3(&card_json);
 
         import_card_to_disk(
             data_root.path(),
