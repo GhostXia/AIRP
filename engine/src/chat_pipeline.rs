@@ -226,6 +226,38 @@ fn build_prompt_trace(
             message: "Preset 当前使用不可变 generation，但尚未映射为数值 revision。".to_string(),
         });
     }
+    // #115 Phase 2h：补全 lorebook/state/memory/persona revision 缺口诊断。
+    // 这些 asset 尚未升级到统一 revision 合同（Phase 2d/2e/2f/2g 跟进）；
+    // 禁止静默留空，必须显式声明缺口，避免审计者无法区分"未填充"与"故意省略"。
+    if payload.scene_id.is_none() && payload.character_id.is_some() {
+        diagnostics.push(PromptDiagnostic {
+            kind: "lorebook_revision_unavailable".to_string(),
+            message: "Worldbook 尚未升级到统一 revision 合同；本摘要不会用文件时间冒充版本。"
+                .to_string(),
+        });
+    }
+    if payload.scene_id.is_none() && payload.character_id.is_some() {
+        diagnostics.push(PromptDiagnostic {
+            kind: "state_revision_unavailable".to_string(),
+            message: "State 尚未升级到统一 revision 合同；本摘要不会用 history.jsonl revision 冒充内容版本。"
+                .to_string(),
+        });
+    }
+    if payload.scene_id.is_none() && payload.character_id.is_some() {
+        diagnostics.push(PromptDiagnostic {
+            kind: "memory_revision_unavailable".to_string(),
+            message: "Memory 尚未升级到统一 revision 合同；本摘要不会用卷编号冒充内容版本。"
+                .to_string(),
+        });
+    }
+    if persona.is_none() && payload.scene_id.is_none() && payload.character_id.is_some() {
+        // persona 在本会话未激活时，persona_revision 一定为 None。
+        // 仅在用户/角色上下文应该有 persona 但未激活时声明缺口；scene 模式下 persona 由场景决定，跳过。
+        diagnostics.push(PromptDiagnostic {
+            kind: "persona_revision_unavailable".to_string(),
+            message: "本轮未激活 persona；persona_revision 不可用。".to_string(),
+        });
+    }
 
     PromptAssemblyTrace::new(
         EffectiveIds {

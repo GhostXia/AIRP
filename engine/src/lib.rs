@@ -45,6 +45,11 @@ pub(crate) mod auto_converter;
 pub(crate) mod fsm;
 pub(crate) mod index_parser;
 pub(crate) mod preset_regex;
+// #115 Phase 2a：统一 revision/provenance 底层模块。
+// pub(crate)：实现细节，不对外保证 API 稳定；Phase 2b 起被各 asset service 引用。
+// 暂未接入 asset service，dead_code 在 Phase 2b 接入后移除 allow。
+#[allow(dead_code)]
+pub(crate) mod revision;
 pub(crate) mod volume_manager;
 pub(crate) mod volume_store;
 pub(crate) mod xml_unpacker;
