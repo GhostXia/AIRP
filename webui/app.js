@@ -1076,8 +1076,12 @@
   if (stateHistoryLimit) stateHistoryLimit.addEventListener('change', refreshStateHistory);
 
   charSelect.addEventListener('change', async () => {
+    // CR#2: 切角色前若有未保存 lorebook 修改则提示
+    if (!confirmDiscardLoreIfDirty('切换角色')) return;
     selectedChar = charSelect.value;
     selectedSess = '';
+    // 切角色时清零 loreDirty（旧角色的修改已被丢弃或保存）
+    setLoreDirty(false);
     renderCharacterCards(Array.from(charSelect.options, option => option.value));
     clearChatView();
     await refreshSessions();
@@ -1088,6 +1092,8 @@
     loadHistory();
     // #114 C-PR1：切角色后刷新 effective persona + 绑定按钮。
     refreshEffectivePersona();
+    // #126 D-PR2：切角色后加载主面板 lorebook-section。
+    loadLorebook();
     rememberWorkspace();
   });
   sessSelect.addEventListener('change', () => {
@@ -1957,27 +1963,37 @@
     }
   });
 
-  // ── Workbench（角色卡 + 世界书编辑，PR F）─────────────────────────────────
-  // 用户需求：导入角色卡后，点击「工作台」进入编辑视图，可改角色卡和世界书，
+  // ── Workbench（角色卡编辑，PR F）─────────────────────────────────────────
+  // 用户需求：导入角色卡后，点击「工作台」进入编辑视图，可改角色卡，
   // 然后在右侧 session 区新建对话。工作台是 overlay 面板，不挡 chat。
+  // #126 D-PR2：lorebook 编辑器已迁移到主面板 lorebook-section，workbench 只保留角色卡 + 拆解。
   const workbenchPanel = $('#workbench-panel');
   const wbCharName = $('#wb-char-name');
   const wbCardFields = $('#wb-card-fields');
-  const wbLoreEntries = $('#wb-lore-entries');
   const wbCardStatus = $('#wb-card-status');
-  const wbLoreStatus = $('#wb-lore-status');
   const btnWorkbench = $('#btn-workbench');
   const btnReextract = $('#btn-reextract');
   const btnWbClose = $('#btn-wb-close');
   const btnWbSaveCard = $('#btn-wb-save-card');
-  const btnWbSaveLore = $('#btn-wb-save-lore');
-  const btnWbAddLore = $('#btn-wb-add-lore');
   const wbDirtyDot = $('#wb-dirty-dot');
 
-  // 当前工作台缓存的角色卡 / 世界书数据
+  // ── Lorebook 主面板 section（#126 D-PR2：从 workbench 迁移到 character-scoped 主面板）─
+  const loreEntries = $('#lore-entries');
+  const loreStatus = $('#lore-status');
+  const btnLoreAdd = $('#btn-lore-add');
+  const btnLoreSave = $('#btn-lore-save');
+  const btnLoreRefresh = $('#btn-refresh-lorebook');
+
+  // 当前工作台缓存的角色卡数据
   let wbCardData = null;
-  let wbLoreData = null;
   let wbDirty = false;
+
+  // lorebook 主面板缓存（character-scoped，随角色切换自动加载）
+  let loreData = null;
+  // CR#2: stale-response 防护 — 每次发起 loadLorebook 自增，response 回来时若已过期则丢弃
+  let loreRequestId = 0;
+  // CR#2: lorebook 未保存修改跟踪，切角色/刷新时提示
+  let loreDirty = false;
 
   // 角色卡可编辑字段（TavernCardV2 data 层）
   const CARD_FIELDS = [
@@ -1998,10 +2014,8 @@
     workbenchPanel.hidden = false;
     wbCharName.textContent = selectedChar;
     wbCardStatus.textContent = '加载中…';
-    wbLoreStatus.textContent = '加载中…';
     setWbDirty(false);  // 切角色打开时清 dirty，避免上次残留
     loadWorkbenchCard();
-    loadWorkbenchLorebook();
   }
 
   function setWbDirty(dirty) {
@@ -2015,7 +2029,6 @@
     }
     workbenchPanel.hidden = true;
     wbCardData = null;
-    wbLoreData = null;
     setWbDirty(false);
   }
 
@@ -2100,27 +2113,44 @@
     }
   }
 
-  async function loadWorkbenchLorebook() {
+  async function loadLorebook() {
+    if (!selectedChar) return;
+    // CR#2: 自增 requestId 并在 response 回来时校验，避免快速切角色时旧响应覆盖新数据
+    const requestId = ++loreRequestId;
+    const characterId = selectedChar;
     const r = await api('GET', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook');
+    // 过期响应直接丢弃：切角色或重新发起 load 后，旧 response 不再适用
+    if (requestId !== loreRequestId || characterId !== selectedChar) return;
     if (r.status === 404) {
-      wbLoreData = { entries: [] };
+      loreData = { entries: [] };
       renderLoreEntries();
-      wbLoreStatus.textContent = '该角色尚无世界书（可新建条目后保存）';
+      loreStatus.textContent = '该角色尚无世界书（可新建条目后保存）';
     } else if (r.ok) {
-      wbLoreData = r.data;
-      if (!wbLoreData.entries) wbLoreData.entries = [];
+      loreData = r.data;
+      if (!loreData.entries) loreData.entries = [];
       renderLoreEntries();
-      wbLoreStatus.textContent = '已加载 ' + wbLoreData.entries.length + ' 条条目';
+      loreStatus.textContent = '已加载 ' + loreData.entries.length + ' 条条目';
     } else {
-      wbLoreStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
+      loreStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
     }
   }
 
+  // CR#2: lorebook 修改时标记 dirty；保存成功或主动 reload 后清零
+  function setLoreDirty(dirty) {
+    loreDirty = dirty;
+  }
+
+  // CR#2: 切角色/手动刷新前若 loreDirty 则提示用户确认丢弃未保存修改
+  function confirmDiscardLoreIfDirty(action) {
+    if (!loreDirty) return true;
+    return confirm('世界书有未保存修改，' + action + '后修改将丢失。确定继续？');
+  }
+
   function renderLoreEntries() {
-    if (!wbLoreData) return;
-    wbLoreEntries.innerHTML = '';
-    wbLoreData.entries.forEach((entry, i) => {
-      wbLoreEntries.appendChild(renderLoreEntry(entry, i));
+    if (!loreData) return;
+    loreEntries.innerHTML = '';
+    loreData.entries.forEach((entry, i) => {
+      loreEntries.appendChild(renderLoreEntry(entry, i));
     });
   }
 
@@ -2137,9 +2167,14 @@
     toggle.className = 'wb-lore-toggle';
     toggle.textContent = '▸';
     toggle.title = '展开/折叠';
+    // S5: aria-expanded 同步折叠状态，屏幕阅读器可感知
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-label', '展开/折叠条目 #' + (index + 1));
     toggle.addEventListener('click', () => {
       div.classList.toggle('collapsed');
-      toggle.textContent = div.classList.contains('collapsed') ? '▸' : '▾';
+      const collapsed = div.classList.contains('collapsed');
+      toggle.textContent = collapsed ? '▸' : '▾';
+      toggle.setAttribute('aria-expanded', String(!collapsed));
     });
     head.appendChild(toggle);
 
@@ -2156,7 +2191,7 @@
     keysInput.placeholder = '关键词（逗号分隔）';
     keysInput.addEventListener('input', (e) => {
       entry.keys = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
-      setWbDirty(true);
+      setLoreDirty(true);
     });
     head.appendChild(keysInput);
 
@@ -2171,7 +2206,7 @@
     priInput.addEventListener('input', (e) => {
       const v = parseInt(e.target.value, 10);
       entry.priority = isNaN(v) ? 10 : v;
-      setWbDirty(true);
+      setLoreDirty(true);
     });
     head.appendChild(priInput);
 
@@ -2183,7 +2218,7 @@
     enCb.checked = entry.enabled !== false;
     enCb.addEventListener('change', () => {
       entry.enabled = enCb.checked;
-      setWbDirty(true);
+      setLoreDirty(true);
     });
     enLbl.appendChild(enCb);
     enLbl.appendChild(document.createTextNode('启用'));
@@ -2198,29 +2233,63 @@
     constCb.title = '常驻注入：启用后无论关键词是否命中都会注入';
     constCb.addEventListener('change', () => {
       entry.constant = constCb.checked;
-      setWbDirty(true);
+      setLoreDirty(true);
     });
     constLbl.appendChild(constCb);
     constLbl.appendChild(document.createTextNode('常驻'));
     head.appendChild(constLbl);
+
+    // #126 D-PR2: selective（v4 运行时字段）— primary 命中后还需 secondary_keys 任一命中
+    const selLbl = document.createElement('label');
+    selLbl.className = 'wb-lore-selective';
+    const selCb = document.createElement('input');
+    selCb.type = 'checkbox';
+    selCb.checked = entry.selective === true;
+    selCb.title = '选择性：启用后 primary key 命中还需 secondary key 任一命中才注入';
+    selCb.addEventListener('change', () => {
+      entry.selective = selCb.checked;
+      secInput.disabled = !selCb.checked;
+      setLoreDirty(true);
+    });
+    selLbl.appendChild(selCb);
+    selLbl.appendChild(document.createTextNode('选择性'));
+    head.appendChild(selLbl);
+
+    // #126 D-PR2: secondary_keys（v4 运行时字段，逗号分隔；selective=false 时 disabled）
+    const secInput = document.createElement('input');
+    secInput.className = 'wb-lore-secondary';
+    secInput.type = 'text';
+    secInput.value = (entry.secondary_keys || []).join(', ');
+    secInput.placeholder = 'secondary keys（逗号分隔）';
+    secInput.disabled = !selCb.checked;
+    secInput.title = 'selective=true 时，primary 命中后还需任一 secondary key 命中才注入';
+    secInput.addEventListener('input', (e) => {
+      entry.secondary_keys = AIRPLorebookUtils.parseSecondaryKeys(e.target.value);
+      setLoreDirty(true);
+    });
+    head.appendChild(secInput);
 
     // delete
     const del = document.createElement('button');
     del.className = 'wb-lore-del';
     del.textContent = '✕';
     del.title = '删除此条目';
+    del.setAttribute('aria-label', '删除条目 #' + (index + 1));
     // delete：只移除该条目 DOM + 数据，不全量重渲染（A-02 修复）
     // 全量重渲染会丢失其他条目的展开/折叠状态与未保存的 input 值。
     del.addEventListener('click', () => {
-      wbLoreData.entries.splice(index, 1);
+      // A-03 修复：删除前按对象身份重新定位 entry，避免重编序号后闭包 index 过时
+      // 导致连续删除时删错条目。
+      const currentIndex = loreData.entries.indexOf(entry);
+      if (currentIndex >= 0) loreData.entries.splice(currentIndex, 1);
       div.remove();
       // 重编后续条目的序号显示（dataset.index + lbl 文本），保持视觉一致
-      wbLoreEntries.querySelectorAll('.wb-lore-entry').forEach((e, i) => {
+      loreEntries.querySelectorAll('.wb-lore-entry').forEach((e, i) => {
         e.dataset.index = String(i);
         const lbl = e.querySelector('.wb-lore-index');
         if (lbl) lbl.textContent = '条目 #' + (i + 1);
       });
-      setWbDirty(true);
+      setLoreDirty(true);
     });
     head.appendChild(del);
 
@@ -2235,7 +2304,7 @@
     contentTa.value = entry.content || '';
     contentTa.addEventListener('input', (e) => {
       entry.content = e.target.value;
-      setWbDirty(true);
+      setLoreDirty(true);
     });
     body.appendChild(contentTa);
 
@@ -2246,48 +2315,76 @@
     cmtInput.value = entry.comment || '';
     cmtInput.addEventListener('input', (e) => {
       entry.comment = e.target.value || null;
-      setWbDirty(true);
+      setLoreDirty(true);
     });
     body.appendChild(cmtInput);
+
+    // #126 D-PR2: advisory 字段只读展示区（case_sensitive 从 top-level 读，
+    // 其余从 extensions 读；selective 已提升为 canonical，跳过）
+    const advisory = AIRPLorebookUtils.collectAdvisoryFields(entry);
+    if (advisory.length > 0) {
+      const advWrap = document.createElement('div');
+      advWrap.className = 'wb-lore-advisory';
+      const advTitle = document.createElement('div');
+      advTitle.className = 'wb-lore-advisory-title';
+      advTitle.textContent = 'advisory（不影响运行时）';
+      advWrap.appendChild(advTitle);
+      for (const f of advisory) {
+        const row = document.createElement('div');
+        row.className = 'wb-lore-advisory-row';
+        const lblEl = document.createElement('span');
+        lblEl.className = 'wb-lore-advisory-label';
+        lblEl.textContent = f.label + ':';
+        const valEl = document.createElement('span');
+        valEl.className = 'wb-lore-advisory-value';
+        valEl.textContent = f.value;
+        row.appendChild(lblEl);
+        row.appendChild(valEl);
+        advWrap.appendChild(row);
+      }
+      body.appendChild(advWrap);
+    }
 
     div.appendChild(body);
     return div;
   }
 
   function addLoreEntry() {
-    if (!wbLoreData) wbLoreData = { entries: [] };
-    wbLoreData.entries.push({
-      keys: [],
-      content: '',
-      enabled: true,
-      priority: 10,
-      constant: false,
-      comment: null,
-    });
-    setWbDirty(true);
-    renderLoreEntries();
-    // 自动滚动到新条目并展开
-    const entries = wbLoreEntries.querySelectorAll('.wb-lore-entry');
-    const last = entries[entries.length - 1];
-    if (last) {
-      last.classList.remove('collapsed');
-      const toggle = last.querySelector('.wb-lore-toggle');
-      if (toggle) toggle.textContent = '▾';
-      last.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (!loreData) loreData = { entries: [] };
+    const newEntry = AIRPLorebookUtils.buildLoreEntryDefault();
+    loreData.entries.push(newEntry);
+    // S6: 仅 append 新条目 DOM，不全量重绘，避免已有条目展开状态丢失
+    const newIndex = loreData.entries.length - 1;
+    const newDiv = renderLoreEntry(newEntry, newIndex);
+    newDiv.classList.remove('collapsed');
+    const newToggle = newDiv.querySelector('.wb-lore-toggle');
+    if (newToggle) {
+      newToggle.textContent = '▾';
+      newToggle.setAttribute('aria-expanded', 'true');
     }
+    loreEntries.appendChild(newDiv);
+    newDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    setLoreDirty(true);
   }
 
-  async function saveWorkbenchLore() {
-    if (!wbLoreData || !selectedChar) return;
-    wbLoreStatus.textContent = '保存中…';
-    btnWbSaveLore.disabled = true;
-    const r = await api('PUT', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook', wbLoreData);
-    btnWbSaveLore.disabled = false;
+  async function saveLorebook() {
+    if (!loreData || !selectedChar) return;
+    // CodeRabbit 阻塞修复：记录发起 save 时的 characterId，response 回来后若已切角色则
+    // 不清 dirty、不覆盖 loreStatus（避免旧 save 清掉新角色的未保存修改状态）。
+    const savedChar = selectedChar;
+    loreStatus.textContent = '保存中…';
+    btnLoreSave.disabled = true;
+    const r = await api('PUT', '/v1/characters/' + encodeURIComponent(selectedChar) + '/lorebook', loreData);
+    btnLoreSave.disabled = false;
+    // 若 save 期间已切角色，丢弃此 response 的副作用（不清 dirty、不覆盖 status）
+    if (savedChar !== selectedChar) return;
     if (r.ok) {
-      wbLoreStatus.textContent = '已保存 ✓（' + (r.data?.entries_count ?? '?') + ' 条）';
-      setWbDirty(false);
+      loreStatus.textContent = '已保存 ✓（' + (r.data?.entries_count ?? '?') + ' 条）';
+      setLoreDirty(false);
     } else {
-      wbLoreStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+      loreStatus.textContent = r.status === 429
+        ? '保存失败: 请求过于频繁，请稍等几秒后重试'
+        : '保存失败: ' + formatError(r.data, r.text);
     }
   }
 
@@ -2483,7 +2580,6 @@
       tab.classList.add('active');
       const target = tab.dataset.tab;
       $('#wb-tab-card').hidden = target !== 'card';
-      $('#wb-tab-lorebook').hidden = target !== 'lorebook';
       $('#wb-tab-decompose').hidden = target !== 'decompose';
       if (target === 'decompose') {
         loadAnalysisFileList();
@@ -2497,8 +2593,15 @@
   if (btnDeleteChar) btnDeleteChar.addEventListener('click', deleteCurrentChar);
   if (btnWbClose) btnWbClose.addEventListener('click', closeWorkbench);
   if (btnWbSaveCard) btnWbSaveCard.addEventListener('click', saveWorkbenchCard);
-  if (btnWbSaveLore) btnWbSaveLore.addEventListener('click', saveWorkbenchLore);
-  if (btnWbAddLore) btnWbAddLore.addEventListener('click', addLoreEntry);
+  // #126 D-PR2：lorebook 按钮迁移到主面板 lorebook-section
+  if (btnLoreAdd) btnLoreAdd.addEventListener('click', addLoreEntry);
+  if (btnLoreSave) btnLoreSave.addEventListener('click', saveLorebook);
+  // CR#2: 手动刷新前若 loreDirty 则提示
+  if (btnLoreRefresh) btnLoreRefresh.addEventListener('click', () => {
+    if (!confirmDiscardLoreIfDirty('刷新')) return;
+    setLoreDirty(false);
+    loadLorebook();
+  });
   // Decompose tab
   if (btnWbDecompose) btnWbDecompose.addEventListener('click', decomposeCharacter);
   if (btnWbListAnalysis) btnWbListAnalysis.addEventListener('click', loadAnalysisFileList);
@@ -2561,7 +2664,9 @@
     const r = await api('POST', '/v1/characters/' + encodeURIComponent(selectedChar) + '/reextract');
     if (r.ok) {
       alert('重新解包完成');
-      loadWorkbenchLorebook();
+      // CR#2: reextract 会覆盖 lorebook，重置 dirty 后重载
+      setLoreDirty(false);
+      loadLorebook();
     } else {
       alert('重新解包失败: ' + formatError(r.data, r.text));
     }
@@ -2578,8 +2683,9 @@
     }
     if (workbenchPanel) workbenchPanel.hidden = true;
     wbCardData = null;
-    wbLoreData = null;
+    loreData = null;
     setWbDirty(false);
+    setLoreDirty(false); // CR#2: 删除角色时一并清零 loreDirty
     selectedChar = '';
     selectedSess = '';
     chatLog.textContent = '';

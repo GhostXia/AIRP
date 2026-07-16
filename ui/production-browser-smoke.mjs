@@ -54,6 +54,10 @@ try {
   assert.equal(await page.locator('#engine-url').isVisible(), false);
   assert.equal(await page.locator('#bearer-token').isVisible(), false);
   assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), []);
+  // #182 防回归：确保 production 容器 serve 了 lorebook-utils.js。
+  // 根因曾是 Dockerfile.gateway 漏 COPY → Caddy try_files fallback 到 index.html
+  // → MIME text/html → 浏览器拒绝执行 → AIRPLorebookUtils undefined。
+  assert.equal(await page.evaluate(() => typeof window.AIRPLorebookUtils), 'object');
   await page.waitForFunction(() => document.querySelector('#persona-select option[value=""]'));
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('role'), 'status');
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('aria-live'), 'polite');
@@ -98,6 +102,104 @@ try {
   await page.waitForFunction(name => document.body.textContent.includes(name), injectionName);
   assert.equal(await page.locator('img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);
+
+  // #126 D-PR2: lorebook-section DOM wiring（主面板迁移后 workbench 不再有 lorebook tab）
+  assert.equal(await page.locator('#lorebook-section').isVisible(), true);
+  assert.equal(await page.locator('#lore-entries').count(), 1);
+  assert.equal(await page.locator('#btn-lore-add').count(), 1);
+  assert.equal(await page.locator('#btn-lore-save').count(), 1);
+  assert.equal(await page.locator('#btn-refresh-lorebook').count(), 1);
+  // workbench lorebook tab 已移除
+  assert.equal(await page.locator('#wb-tab-lorebook').count(), 0);
+  assert.equal(await page.locator('[data-tab="lorebook"]').count(), 0);
+
+  // S1/S2: 通过 API 注入带 advisory 字段的 lorebook entry，验证 selective toggle
+  // 启用/禁用 secondary_keys input，以及 advisory 区域只读（span 非 input）。
+  //
+  // 限流策略（CodeRabbit 审计 + CI 诊断双重确认）：
+  // engine 全局 tower_governor 限流 10 req/s, burst 20 per IP。smoke 前面已发大量请求
+  // (import/3 轮 chat SSE/history/rollback/regen)，token bucket 已耗尽。若直接 PUT 会 429；
+  // PUT 重试会消耗更多 token，导致后续 GET loadLorebook 也 429（CI run 29463696091 实测）。
+  // 正确做法：先等待 bucket 完全恢复（burst 20 / 10 req/s = 2s 即可恢复满），再发 PUT +
+  // 后续 GET。保留 PUT 429 重试作为兜底，应对 CI 环境时序抖动。
+  await page.waitForTimeout(3_000);
+  await page.evaluate(async () => {
+    const payload = {
+      entries: [
+        {
+          keys: ['dragon'],
+          content: 'dragons are cool',
+          enabled: true,
+          priority: 10,
+          constant: false,
+          comment: null,
+          selective: false,
+          secondary_keys: [],
+          case_sensitive: true,
+          extensions: { position: 'before_char', depth: 4, probability: 80, selective: false },
+        },
+      ],
+    };
+    const body = JSON.stringify(payload);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const r = await fetch('/v1/characters/smoke-xss/lorebook', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (r.ok) return;
+      if (r.status === 429 && attempt < 4) {
+        // 退避 1s 让 token bucket 恢复（10 req/s → 1s 恢复 10 tokens）
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+      throw new Error('PUT lorebook failed: ' + r.status);
+    }
+  });
+  // selectOption 触发 change → loadLorebook()。try/catch 在超时时打印 pageErrors / DOM 状态，
+  // 便于 CI 日志直接看到真实失败原因。#182 根因曾是 Dockerfile.gateway 漏 COPY lorebook-utils.js，
+  // 导致 AIRPLorebookUtils undefined → renderLoreEntry 抛 ReferenceError。
+  page.on('dialog', dialog => dialog.accept());
+  await page.locator('#char-select').selectOption('smoke-xss');
+  try {
+    await page.waitForFunction(() => document.querySelector('#lore-entries .wb-lore-entry'), null, { timeout: 10_000 });
+  } catch (err) {
+    const diagCspViolations = await page.evaluate(() => window.__airpCspViolations);
+    const diagLoreEntriesHtml = await page.locator('#lore-entries').innerHTML().catch(() => '<unavailable>');
+    const diagLoreStatus = await page.locator('#lore-status').textContent().catch(() => '<unavailable>');
+    const diagSelectedChar = await page.locator('#char-select').inputValue().catch(() => '<unavailable>');
+    console.error('DIAG pageErrors (uncaught JS exceptions):', JSON.stringify(pageErrors));
+    console.error('DIAG cspViolations:', JSON.stringify(diagCspViolations));
+    console.error('DIAG lore-entries innerHTML:', diagLoreEntriesHtml);
+    console.error('DIAG lore-status text:', diagLoreStatus);
+    console.error('DIAG char-select value:', diagSelectedChar);
+    throw err;
+  }
+  // S1: selective=false 时 secondary_keys input disabled
+  // #lorebook-section 是 <details>，默认 closed → 内部 #lore-entries display:none。
+  // 展开后才能对内部控件做可见性敏感的操作（.check()/.click()）。
+  await page.locator('#lorebook-section > summary').click();
+  const secDisabledBefore = await page.locator('#lore-entries .wb-lore-secondary').first().isDisabled();
+  assert.equal(secDisabledBefore, true);
+  // S1: 勾选 selective 后 secondary_keys input 启用
+  await page.locator('#lore-entries .wb-lore-selective input').first().check();
+  const secDisabledAfter = await page.locator('#lore-entries .wb-lore-secondary').first().isDisabled();
+  assert.equal(secDisabledAfter, false);
+  // S5: aria-expanded 在展开后为 true
+  await page.locator('#lore-entries .wb-lore-toggle').first().click();
+  const ariaExpanded = await page.locator('#lore-entries .wb-lore-toggle').first().getAttribute('aria-expanded');
+  assert.equal(ariaExpanded, 'true');
+  // S2: advisory 区域用 span 渲染，不存在可输入元素（input/textarea）
+  const advInputCount = await page.locator('#lore-entries .wb-lore-advisory input, #lore-entries .wb-lore-advisory textarea').count();
+  assert.equal(advInputCount, 0);
+  const advSpanCount = await page.locator('#lore-entries .wb-lore-advisory-value').count();
+  assert.ok(advSpanCount > 0, 'advisory 区域应有 span 渲染的值');
+  // S2/CR-nitpick: top-level case_sensitive 与 extensions.position 都展示，selective 跳过
+  const advText = await page.locator('#lore-entries .wb-lore-advisory').first().textContent();
+  assert.ok(advText.includes('case_sensitive'), 'advisory 应含 case_sensitive');
+  assert.ok(advText.includes('position'), 'advisory 应含 position');
+  assert.ok(advText.includes('depth'), 'advisory 应含 depth');
+  assert.ok(!advText.includes('selective'), 'advisory 不应含 selective');
 
   // Initial UI hydration and the injection fixture share the engine's burst bucket.
   // Let it refill so this assertion measures stream cancellation rather than rate limiting.

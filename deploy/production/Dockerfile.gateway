@@ -1,5 +1,5 @@
 FROM caddy:2.11.4@sha256:af5fdcd76f2db5e4e974ee92f96ee8c0fc3edb55bd4ba5032547cbf3f65e486d
-COPY webui/index.html webui/app.js webui/persona-utils.js webui/style.css /srv/
+COPY webui/index.html webui/app.js webui/persona-utils.js webui/lorebook-utils.js webui/style.css /srv/
 COPY deploy/production/runtime-config.js /srv/runtime-config.js
 COPY deploy/production/Caddyfile.common /etc/caddy/Caddyfile.common
 COPY deploy/production/Caddyfile.public /etc/caddy/Caddyfile.public
