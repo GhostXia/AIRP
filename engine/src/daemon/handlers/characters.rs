@@ -529,6 +529,7 @@ pub(in crate::daemon) async fn update_character_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::tests::make_state_no_key as make_state_for_http_test;
     use crate::types::CharacterId;
     static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -646,28 +647,6 @@ mod tests {
     // 守 RR-001：Web/browser 永远不能用 card_path 让 engine 读任意本地路径，
     // 即使持 bearer token、即使请求 body 形式合法。env 门控不可伪造
     // （进程启动时定，非请求头）。复用 ENV_LOCK 与 unit test 串行，避免 env race。
-    fn make_state_for_http_test() -> (Arc<crate::daemon::DaemonState>, tempfile::TempDir) {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = Arc::new(crate::daemon::DaemonState {
-            data_root: tmp.path().to_path_buf(),
-            http_client: reqwest::Client::new(),
-            settings_update: Default::default(),
-            config: std::sync::RwLock::new(crate::daemon::MutableConfig {
-                provider: crate::adapter::Provider::OpenAI,
-                endpoint: "http://localhost".to_string(),
-                api_key: None,
-                model: "gpt-4o".to_string(),
-                volume_config: crate::config::VolumeConfig::default(),
-                access_api_key: None,
-                engine: crate::adapter::BackendEngine::default(),
-                quota: crate::quota::QuotaConfig::default(),
-                deployment_mode: Default::default(),
-                public_origin: None,
-            }),
-        });
-        (state, tmp)
-    }
-
     #[tokio::test]
     async fn m3_import_card_path_rejected_at_http_level() {
         use axum::body::Body;

@@ -70,35 +70,13 @@ pub(in crate::daemon) async fn update_character_lorebook(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::daemon::tests::make_state_no_key as make_state_for_http_test;
 
     // ── PR #74 W-01: get_character_lorebook HTTP-level 回归测试 ─────────────
     //
     // 守 #67 #5 修复：handler 改为 `Result<Json<Value>, AirpError>` 后，错误响应
     // 必须是 JSON envelope（`{"error":{"code","message"}}`），不能是裸 StatusCode。
     // 复用 make_state_for_http_test，3 个 case 覆盖主要分支。
-
-    fn make_state_for_http_test() -> (Arc<crate::daemon::DaemonState>, tempfile::TempDir) {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = Arc::new(crate::daemon::DaemonState {
-            data_root: tmp.path().to_path_buf(),
-            http_client: reqwest::Client::new(),
-            settings_update: Default::default(),
-            config: std::sync::RwLock::new(crate::daemon::MutableConfig {
-                provider: crate::adapter::Provider::OpenAI,
-                endpoint: "http://localhost".to_string(),
-                api_key: None,
-                model: "gpt-4o".to_string(),
-                volume_config: crate::config::VolumeConfig::default(),
-                access_api_key: None,
-                engine: crate::adapter::BackendEngine::default(),
-                quota: crate::quota::QuotaConfig::default(),
-                deployment_mode: Default::default(),
-                public_origin: None,
-            }),
-        });
-        (state, tmp)
-    }
 
     #[tokio::test]
     async fn pr74_lorebook_not_found_returns_json_envelope() {
