@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-16，`main@f6ee120`
+> 最后校准：2026-07-16，`main@c47585b`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -205,8 +205,8 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. #137 工具链安全升级；
-2. #114/#115 已交付子项之上的 Persona/Preset P1 闭环；#126 已关闭，Worldbook 只按新需求继续演进；
+1. #115 已有 trace 模型之上的 pipeline/HTTP/WebUI 用户可读摘要纵向闭环；
+2. #114 已交付 Persona effective/绑定能力之上的 Persona/Preset P1 产品闭环；#126 已关闭，Worldbook 只按新需求继续演进；
 3. [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 的完整 session/revision/恢复分期；
 4. P2 运维与恢复；
 5. P3 release candidate。

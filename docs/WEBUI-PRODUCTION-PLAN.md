@@ -2,7 +2,7 @@
 
 > 状态：当前近期执行主入口
 >
-> 基线日期：2026-07-16，`main@f6ee120`
+> 基线日期：2026-07-16，`main@c47585b`
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
@@ -100,9 +100,9 @@ Browser
 
 ### Phase P1：RP 正式使用面
 
-1. 先完成 #137 的 Vite/Vitest 工具链安全升级；该问题不在 production runtime image 内，但开发服务器与测试工具不能长期停留在已知高危/关键告警版本；
-2. 在已交付 Persona effective/绑定/聊天切换闭环之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期和统一有效配置摘要；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
-3. 在已交付 Preset import report、Agent dry-run/原子版本切换和 trace 模型之上，完成 #115 的 HTTP/UI 受控 dry-run、revision/provenance/collision 合同，并把 PromptAssemblyTrace 接入 pipeline、HTTP preview 与用户摘要；复用已交付的 worldbook import diagnostics 语言；
+1. #137 的 Vite/Vitest 工具链安全升级已由 PR #191 完成，当前 `npm audit` 为 0 项；
+2. 在已交付 Preset import report、Agent dry-run/原子版本切换和 trace 模型之上，先完成 #115 的产品纵向闭环：真实 pipeline instrumentation、revision/provenance 收集、有界脱敏 HTTP preview，以及 WebUI 用户可读的当前有效配置与装配摘要；
+3. 在已交付 Persona effective/绑定/聊天切换闭环和上述 trace 可观察性之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期和统一有效配置摘要；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
 4. 在已交付 Worldbook v4、shared normalizer、普通用户主面板和端到端导入回归之上，只继续实现首发确需的受控大对象上传与资产生命周期，不把 advisory 字段误宣称为 runtime 兼容；
 5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
 6. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
@@ -141,5 +141,5 @@ Browser
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
 2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
-3. 下一项先处理 #137，再按 #114/#115 的**剩余子项**完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
+3. 下一项先完成 #115 的 pipeline → HTTP → WebUI 用户摘要纵向切片，再按 #114 的**剩余子项**完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
 4. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。
