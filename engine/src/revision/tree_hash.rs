@@ -47,7 +47,7 @@ pub(crate) enum TreeHashError {
 /// - 必须是相对路径
 /// - 以 `/` 分隔
 /// - 无空段、无 `.`、无 `..`、无反斜杠
-/// - Unicode NFC（实现层面：输入已是 `&str`，调用方负责 NFC；本函数只做结构性校验）
+/// - Unicode NFC（本函数强制校验：非 NFC 路径拒绝，确保 canonically 等价路径 hash 一致）
 pub(crate) fn validate_approved_path(path: &str) -> Result<(), TreeHashError> {
     if path.is_empty() {
         return Err(TreeHashError::InvalidPath {
@@ -65,6 +65,15 @@ pub(crate) fn validate_approved_path(path: &str) -> Result<(), TreeHashError> {
         return Err(TreeHashError::InvalidPath {
             path: path.to_string(),
             reason: "路径不得包含反斜杠",
+        });
+    }
+    // Unicode NFC 强制：非 NFC 路径拒绝，确保 canonically 等价路径 hash 一致。
+    // 参考 SESSION-DATA-DESIGN.md §4 第 5 条 "Unicode NFC"。
+    let nfc = unicode_normalization::UnicodeNormalization::nfc(path).collect::<String>();
+    if nfc != path {
+        return Err(TreeHashError::InvalidPath {
+            path: path.to_string(),
+            reason: "路径必须是 Unicode NFC 规范形式",
         });
     }
     for segment in path.split('/') {
@@ -182,7 +191,11 @@ fn collect_approved_files(
                         root.display()
                     ))
                 })?
-                .to_string_lossy()
+                .to_str()
+                .ok_or_else(|| TreeHashError::InvalidPath {
+                    path: path.to_string_lossy().to_string(),
+                    reason: "路径含非 UTF-8 字节",
+                })?
                 .replace('\\', "/");
             out.push((relative, path));
         } else {
@@ -312,5 +325,32 @@ mod tests {
         assert!(validate_approved_path("a.txt").is_ok());
         assert!(validate_approved_path("sub/a.txt").is_ok());
         assert!(validate_approved_path("sub/deep/a.txt").is_ok());
+    }
+
+    #[test]
+    fn validate_path_rejects_non_nfc() {
+        // U+00E9 (é, NFC) vs U+0065 U+0301 (e + combining acute, NFD)
+        // NFD 形式应被拒绝
+        let nfd = "e\u{0301}.txt";
+        assert!(
+            validate_approved_path(nfd).is_err(),
+            "NFD 路径应被拒绝，要求 NFC"
+        );
+    }
+
+    #[test]
+    fn validate_path_accepts_nfc() {
+        // U+00E9 (é, NFC) 应被接受
+        let nfc = "\u{00E9}.txt";
+        assert!(validate_approved_path(nfc).is_ok(), "NFC 路径应被接受");
+    }
+
+    #[test]
+    fn validate_path_nfc_and_nfd_produce_different_results() {
+        // NFC 和 NFD 不应都通过校验；只有 NFC 通过
+        let nfc = "\u{00E9}.txt";
+        let nfd = "e\u{0301}.txt";
+        assert!(validate_approved_path(nfc).is_ok());
+        assert!(validate_approved_path(nfd).is_err());
     }
 }

@@ -157,11 +157,8 @@ impl RevisionManifest {
             ));
         }
         // asset_kind 已通过 serde 反序列化校验枚举合法性
-        if manifest.asset_id.is_empty() {
-            return Err(RevisionManifestError::InvalidAssetId(
-                manifest.asset_id.clone(),
-            ));
-        }
+        // asset_id 用于构造文件系统路径，必须通过路径校验（拒绝空 / `..` / 绝对路径 / 反斜杠等）
+        validate_asset_id(&manifest.asset_id)?;
         // 校验所有批准文件路径形式
         for file in &manifest.files {
             validate_approved_path(&file.path).map_err(|e| match e {
@@ -336,10 +333,42 @@ fn collect_disk_files(
                     path: path.to_string_lossy().to_string(),
                     reason: "strip_prefix 失败",
                 })?
-                .to_string_lossy()
+                .to_str()
+                .ok_or_else(|| RevisionManifestError::InvalidFilePath {
+                    path: path.to_string_lossy().to_string(),
+                    reason: "路径含非 UTF-8 字节",
+                })?
                 .replace('\\', "/");
             out.insert(relative);
+        } else {
+            // 拒绝设备文件、FIFO、socket 等特殊入口
+            return Err(RevisionManifestError::InvalidFilePath {
+                path: path.to_string_lossy().to_string(),
+                reason: "非普通文件或目录的特殊入口不允许",
+            });
         }
+    }
+    Ok(())
+}
+
+/// 校验 `asset_id` 是否可作为路径段。
+///
+/// `asset_id` 用于构造文件系统路径（如 `characters/{asset_id}/revisions/`），
+/// 必须通过路径校验防止 traversal / 绝对路径 / 反斜杠等注入。
+/// 单段 id 不允许含 `/`（与批准文件路径的多段规则不同）。
+fn validate_asset_id(asset_id: &str) -> Result<(), RevisionManifestError> {
+    if asset_id.is_empty() {
+        return Err(RevisionManifestError::InvalidAssetId(asset_id.to_string()));
+    }
+    if asset_id.contains('/') || asset_id.contains('\\') {
+        return Err(RevisionManifestError::InvalidAssetId(asset_id.to_string()));
+    }
+    if asset_id == "." || asset_id == ".." {
+        return Err(RevisionManifestError::InvalidAssetId(asset_id.to_string()));
+    }
+    // 拒绝绝对路径前缀（Windows 盘符或 Unix /）
+    if asset_id.starts_with('/') || asset_id.contains(':') {
+        return Err(RevisionManifestError::InvalidAssetId(asset_id.to_string()));
     }
     Ok(())
 }
@@ -415,6 +444,54 @@ mod tests {
     fn rejects_empty_asset_id() {
         let mut manifest = sample_manifest();
         manifest.asset_id = "".to_string();
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let result = RevisionManifest::from_json_bytes(&bytes);
+        assert!(matches!(
+            result,
+            Err(RevisionManifestError::InvalidAssetId(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_asset_id_with_traversal() {
+        let mut manifest = sample_manifest();
+        manifest.asset_id = "../other".to_string();
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let result = RevisionManifest::from_json_bytes(&bytes);
+        assert!(matches!(
+            result,
+            Err(RevisionManifestError::InvalidAssetId(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_asset_id_absolute_path() {
+        let mut manifest = sample_manifest();
+        manifest.asset_id = "/etc/passwd".to_string();
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let result = RevisionManifest::from_json_bytes(&bytes);
+        assert!(matches!(
+            result,
+            Err(RevisionManifestError::InvalidAssetId(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_asset_id_with_backslash() {
+        let mut manifest = sample_manifest();
+        manifest.asset_id = "foo\\bar".to_string();
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let result = RevisionManifest::from_json_bytes(&bytes);
+        assert!(matches!(
+            result,
+            Err(RevisionManifestError::InvalidAssetId(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_asset_id_dot_segment() {
+        let mut manifest = sample_manifest();
+        manifest.asset_id = ".".to_string();
         let bytes = serde_json::to_vec(&manifest).unwrap();
         let result = RevisionManifest::from_json_bytes(&bytes);
         assert!(matches!(

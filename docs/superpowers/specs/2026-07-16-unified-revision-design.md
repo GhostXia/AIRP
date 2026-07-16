@@ -2,7 +2,13 @@
 
 > 日期：2026-07-16
 >
-> 状态：**设计 spec，未实现**。本文为 #115 Phase 2 的独立设计；任何能力交付以源码、测试和 `CURRENT-BASELINE.md` 为准。
+> 状态：**设计 spec，部分实现**。本文为 #115 Phase 2 的独立设计。
+>
+> - **Phase 2a 已实现**（PR #201）：`engine/src/revision/` 底层模块（tree_hash + manifest + atomic）+ Phase 2h 部分（4 个 `*_revision_unavailable` 诊断）。
+> - **Phase 2b-2g 未实现**：各 asset service（Preset / Character / Worldbook / State / Memory / Persona）尚未接入 revision 模块。
+> - **Phase 2h 部分实现**：诊断已补全，但 `EffectiveIds` 的 5 个 `*_revision` 字段仍留空（待 Phase 2b-2g 接入后填充）。
+>
+> 任何能力交付以源码、测试和 `CURRENT-BASELINE.md` 为准。
 >
 > 设计基线：`main@c38e7ec`（PR #196 / #197）
 >
@@ -262,8 +268,8 @@ presets/{preset_id}/
 ├── revisions/                         # 新增
 │   └── {content_revision}/
 │       ├── manifest.json
-│       ├── preset.json -> ../../../versions/{generation}/preset.json  # 或复制
-│       └── raw.json -> ../../../versions/{generation}/raw.json
+│       ├── preset.json                # 复制（禁止 symlink：tree hash 拒绝符号链接）
+│       └── raw.json                   # 复制（禁止 symlink：tree hash 拒绝符号链接）
 └── current_revision                   # 新增，内容为 content_revision u64
 
 users/{user_id}/personas/{persona_id}.json   # 保留（覆写式）
@@ -296,7 +302,7 @@ characters/{character_id}/memory/
 
 **说明**：
 
-- Preset 保留 `versions/{generation}/` 作为历史格式，新增 `revisions/{content_revision}/` 通过软链接或复制指向对应 generation 目录；`current`（generation）和 `current_revision`（u64）并存，前者为兼容回退，后者为统一合同。
+- Preset 保留 `versions/{generation}/` 作为历史格式，新增 `revisions/{content_revision}/` 通过**复制**（禁止 symlink，因 tree hash 拒绝符号链接）指向对应 generation 目录；`current`（generation）和 `current_revision`（u64）并存，前者为兼容回退，后者为统一合同。
 - State 复用 `history.jsonl` 的 `revision` 字段作为 `content_revision`；`revisions/{content_revision}/state.json` 是该行 state 字段的物化快照，用于 tree hash 校验。
 - gating 目录（`timeline.md` / `checkpoints.md` / `known.md` / `disclosure.json`）是否纳入 state revision 见 §6.5 裁定。
 
@@ -509,7 +515,7 @@ SESSION-DATA-DESIGN.md §4 定义 session-scoped `revisions/{revision_id}/manife
 }
 ```
 
-**说明**：session manifest 不再自存角色卡/世界书内容，只引用 per-asset revision 的 `tree_sha256`；完整性校验时按引用去 per-asset revision 目录验证。session manifest 自身仍有 `tree_sha256` 覆盖 manifest.json 本身。
+**说明**：session manifest 不再自存角色卡/世界书内容，只引用 per-asset revision 的 `tree_sha256`；完整性校验时按引用去 per-asset revision 目录验证。session manifest 自身的完整性通过**排除 `tree_sha256` 字段的 canonical manifest hash** 校验（与 Phase 2a 的 per-asset manifest 一致：`manifest.json` 作为元数据 sidecar 不纳入自身 tree hash，避免自引用问题）。
 
 ### 7.3 实施顺序
 
@@ -691,21 +697,21 @@ SESSION-DATA-DESIGN.md §4 定义 session-scoped `revisions/{revision_id}/manife
 - [ ] 神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过
 - [ ] 不用 mtime、文件名时间戳或单调递增计数器冒充内容版本
 
-## 11. 与 #199 的关系
+## 11. 与 issue #199 的关系
 
-[#199](https://github.com/GhostXia/AIRP/issues/199) 是 PR #194 审计遗留：决定 orchestrator card field 是否拆分为独立 `SystemPromptPart`。
+issue [#199](https://github.com/GhostXia/AIRP/issues/199) 是 PR #194 审计遗留：决定 orchestrator card field 是否拆分为独立 `SystemPromptPart`。
 
-本设计 §6.4 裁定：**revision 粒度跟随 asset 粒度，不跟随 segment 粒度**。即使 #199 决定拆分角色卡字段为多个 segment，它们仍共享同一 `character_revision`。
+本设计 §6.4 裁定：**revision 粒度跟随 asset 粒度，不跟随 segment 粒度**。即使 issue #199 决定拆分角色卡字段为多个 segment，它们仍共享同一 `character_revision`。
 
-#199 的决策可在本设计交付后独立推进；本设计不依赖 #199 的决策结果。
+issue #199 的决策可在本设计交付后独立推进；本设计不依赖 issue #199 的决策结果。
 
-## 12. 与 #114 的关系
+## 12. 与 issue #114 的关系
 
-[#114](https://github.com/GhostXia/AIRP/issues/114) 是 Persona / Preset 高级生命周期：base lock / drift / rollback / 头像 / 导入导出 / Preset revision/collision/overwrite/provenance 合同。
+issue [#114](https://github.com/GhostXia/AIRP/issues/114) 是 Persona / Preset 高级生命周期：base lock / drift / rollback / 头像 / 导入导出 / Preset revision/collision/overwrite/provenance 合同。
 
 本设计 §6.6 只升级 Persona revision 存储格式（补不可变历史 + content hash），不实现 base lock / drift / rollback / 头像 / 导入导出。
 
-#114 的 Persona 高级生命周期可在本设计 Phase 2g 交付后，基于 `personas/{id}/revisions/` 基础设施推进；drift overlay 可作为 `personas/{id}/drift/` 独立目录，与 revision 目录解耦。
+issue #114 的 Persona 高级生命周期可在本设计 Phase 2g 交付后，基于 `personas/{id}/revisions/` 基础设施推进；drift overlay 可作为 `personas/{id}/drift/` 独立目录，与 revision 目录解耦。
 
 ## 13. 不在范围
 
