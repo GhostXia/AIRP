@@ -185,6 +185,35 @@ try {
   await page.locator('#lore-entries .wb-lore-selective input').first().check();
   const secDisabledAfter = await page.locator('#lore-entries .wb-lore-secondary').first().isDisabled();
   assert.equal(secDisabledAfter, false);
+  // #186 W-01: dirty 状态下取消切换角色时，select 必须恢复为内部 selectedChar。
+  const selectedBeforeCancelledSwitch = await page.locator('#char-select').inputValue();
+  await page.evaluate(() => {
+    const select = document.querySelector('#char-select');
+    const option = document.createElement('option');
+    option.value = 'cancelled-switch-target';
+    option.textContent = 'cancelled-switch-target';
+    select.appendChild(option);
+    const originalConfirm = window.confirm;
+    window.confirm = () => false;
+    select.value = option.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    window.confirm = originalConfirm;
+    option.remove();
+  });
+  assert.equal(await page.locator('#char-select').inputValue(), selectedBeforeCancelledSwitch);
+
+  // #186 W-02: 200 + non-JSON 响应不得触发 unhandled rejection，应在 UI 边界报格式错误。
+  const pageErrorCountBeforeMalformedLorebook = pageErrors.length;
+  await page.route('**/v1/characters/smoke-xss/lorebook', route => route.fulfill({
+    status: 200,
+    contentType: 'text/plain',
+    body: 'not-json',
+  }));
+  await page.locator('#btn-refresh-lorebook').click();
+  await page.waitForFunction(() => document.querySelector('#lore-status')?.textContent === '加载失败: 响应格式异常');
+  await page.waitForTimeout(50);
+  assert.equal(pageErrors.length, pageErrorCountBeforeMalformedLorebook);
+  await page.unroute('**/v1/characters/smoke-xss/lorebook');
   // S5: aria-expanded 在展开后为 true
   await page.locator('#lore-entries .wb-lore-toggle').first().click();
   const ariaExpanded = await page.locator('#lore-entries .wb-lore-toggle').first().getAttribute('aria-expanded');

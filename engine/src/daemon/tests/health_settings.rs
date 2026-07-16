@@ -370,3 +370,74 @@ async fn settings_update_applies_valid_volume_alongside_endpoint_and_model() {
     assert_eq!(persisted["volume"]["soft_threshold_tokens"], 2000);
     assert_eq!(persisted["volume"]["hard_threshold_tokens"], 3000);
 }
+
+// #187：写盘失败时请求返回 500，但 live config 必须保持请求前真值。
+#[tokio::test]
+async fn settings_update_write_failure_does_not_commit_live_config() {
+    let (state, _tmp) = make_state_no_key();
+    std::fs::create_dir(state.data_root.join("settings.json.tmp")).unwrap();
+
+    let response = create_router(state.clone())
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "endpoint": "https://must-not-commit.example",
+                        "model": "must-not-commit"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let runtime = state.config.read().unwrap();
+    assert_eq!(runtime.endpoint, "http://localhost");
+    assert_eq!(runtime.model, "gpt-4o");
+    drop(runtime);
+    assert!(!state.data_root.join("settings.json").exists());
+}
+
+// #187：并发提交结束后，live config 与 settings.json 必须来自同一个提交。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_settings_updates_leave_runtime_and_disk_on_same_commit() {
+    let (state, _tmp) = make_state_no_key();
+    let mut tasks = Vec::new();
+    for index in 0..16 {
+        let state = state.clone();
+        tasks.push(tokio::spawn(async move {
+            create_router(state)
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri("/v1/settings")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "endpoint": format!("https://commit-{index}.example"),
+                                "model": format!("commit-{index}")
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }));
+    }
+    for task in tasks {
+        assert_eq!(task.await.unwrap().status(), StatusCode::OK);
+    }
+
+    let runtime = state.config.read().unwrap().clone();
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(state.data_root.join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(persisted["endpoint"], runtime.endpoint);
+    assert_eq!(persisted["model"], runtime.model);
+}
