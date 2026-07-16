@@ -714,6 +714,72 @@ mod tests_ms6 {
     }
 
     #[test]
+    fn scene_lorebook_trace_preserves_character_and_scene_entry_provenance() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        let scene_id = SceneId::new("forest_scene").unwrap();
+        SceneConfig {
+            scene_id: scene_id.clone(),
+            description: "A forest".to_string(),
+            characters: vec![CharacterEntry {
+                character_id: "alice".to_string(),
+                role: CharacterRole::Primary,
+                intro: String::new(),
+            }],
+            narrator_style: String::new(),
+            lorebook_merge: LorebookMerge::Union,
+            format_hint: String::new(),
+        }
+        .save(tmp.path())
+        .unwrap();
+
+        let character_lorebook = crate::data_dir::char_world_lorebook_path(tmp.path(), "alice");
+        std::fs::create_dir_all(character_lorebook.parent().unwrap()).unwrap();
+        std::fs::write(
+            &character_lorebook,
+            r#"{"entries":[{"keys":["hello"],"content":"Alice lore","enabled":true,"priority":20}]}"#,
+        )
+        .unwrap();
+
+        let scene_lorebook = crate::data_dir::scene_world_lorebook_path(tmp.path(), &scene_id);
+        std::fs::create_dir_all(scene_lorebook.parent().unwrap()).unwrap();
+        std::fs::write(
+            &scene_lorebook,
+            r#"{"entries":[{"keys":["scene"],"content":"Scene lore","enabled":true,"priority":10}]}"#,
+        )
+        .unwrap();
+
+        let pipeline = prepare_pipeline(&scene_request("forest_scene"), &state).unwrap();
+        let lorebook_segments: Vec<_> = pipeline
+            .prompt_trace
+            .segments
+            .iter()
+            .filter(|segment| segment.source_kind == "lorebook")
+            .collect();
+
+        assert_eq!(lorebook_segments.len(), 2);
+        assert_eq!(
+            lorebook_segments[0].source_id.as_deref(),
+            Some("character:alice")
+        );
+        assert_eq!(lorebook_segments[0].item_id.as_deref(), Some("0"));
+        assert_eq!(
+            lorebook_segments[1].source_id.as_deref(),
+            Some("scene:forest_scene")
+        );
+        assert_eq!(lorebook_segments[1].item_id.as_deref(), Some("0"));
+        assert!(lorebook_segments[0].position < lorebook_segments[1].position);
+
+        let expected_lore =
+            "[世界书信息]\n\n[World Info/Lorebook Information]:\nAlice lore\nScene lore\n\n\n";
+        assert!(pipeline.system_prompt.contains(expected_lore));
+        let trace_json = serde_json::to_string(&pipeline.prompt_trace).unwrap();
+        assert!(!trace_json.contains(&tmp.path().display().to_string()));
+    }
+
+    #[test]
     fn test_ms6_invalid_scene_id_rejected() {
         let tmp = tempdir().unwrap();
         let state = make_state(tmp.path().to_path_buf());

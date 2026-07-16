@@ -72,94 +72,199 @@ impl Lorebook {
     /// 标记所有命中 entry，复杂度降为 O(build + |text|)。对于含数十
     /// entries × 数十 keys 的真实世界书，加速比一个数量级以上。
     pub fn trigger(&self, text: &str) -> String {
-        // 1. 收集需要参与扫描的 enabled entries 的 (key, entry_idx) 扁平表。
-        //    constant=true 的 entry 不需要关键词命中，跳过 pattern 收集，
-        //    在第 3 步直接加入 triggered 集合。
-        let mut patterns: Vec<&str> = Vec::new();
-        let mut pattern_to_entry: Vec<usize> = Vec::new();
-        let mut triggered_idx: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-        for (idx, e) in self.entries.iter().enumerate() {
-            if !e.enabled.unwrap_or(true) {
-                continue;
-            }
-            // constant=true 且 enabled 的条目直接标记为命中，不依赖关键词扫描。
-            if e.constant.unwrap_or(false) {
-                triggered_idx.insert(idx);
-                continue;
-            }
-            for k in &e.keys {
-                if k.is_empty() {
-                    continue;
-                }
-                patterns.push(k.as_str());
-                pattern_to_entry.push(idx);
-            }
-        }
-
-        // 2. 构造 Aho-Corasick 自动机，单次扫描收集命中 entry idx。
-        //    用 `LeftmostLongest` 避免「人物4」抢走「人物42」的命中范围
-        //    （Standard 默认 leftmost-shortest，与世界书前缀重叠语义相悖）。
-        //    空 pattern 集时跳过 build（constant 条目可能已填充 triggered_idx）。
-        if !patterns.is_empty() {
-            let ac = AhoCorasick::builder()
-                .match_kind(MatchKind::LeftmostLongest)
-                .build(&patterns)
-                .expect("AhoCorasick build patterns");
-            for mat in ac.find_iter(text) {
-                triggered_idx.insert(pattern_to_entry[mat.pattern().as_usize()]);
-            }
-        }
-
-        // v4：selective 二次匹配。primary key 命中且 `selective=true` 的 entry
-        // 还需 `secondary_keys` 任一命中扫描文本才最终激活。constant entry 不受
-        // selective 影响（常驻注入不依赖关键词，也不依赖 secondary）。
-        // secondary 匹配用 case-sensitive `text.contains`，与 primary DFA 的
-        // 实际运行时行为一致；空 secondary key 先过滤。
-        triggered_idx.retain(|&idx| {
-            let e = &self.entries[idx];
-            if !e.selective || e.constant.unwrap_or(false) {
-                return true;
-            }
-            let has_effective_secondary = e.secondary_keys.iter().any(|k| !k.is_empty());
-            if !has_effective_secondary {
-                // selective=true 但无有效 secondary key：保持 primary 命中
-                // （与 ST 行为一致：selective 但 keysecondary 为空 = primary 命中即激活）。
-                return true;
-            }
-            e.secondary_keys
-                .iter()
-                .filter(|k| !k.is_empty())
-                .any(|k| text.contains(k.as_str()))
-        });
-
-        if triggered_idx.is_empty() {
+        let triggered = triggered_entry_indices(&self.entries, text);
+        if triggered.is_empty() {
             return String::new();
         }
 
-        // 3. 按 priority 从高到低排序，拼接 content。
-        //    constant 与关键词命中的 entry 共用同一排序规则，去重由 HashSet 保证。
-        let mut triggered: Vec<(usize, &LorebookEntry)> = triggered_idx
-            .iter()
-            .map(|&index| (index, &self.entries[index]))
-            .collect();
-        triggered.sort_by_key(|(index, entry)| {
-            (
-                std::cmp::Reverse(entry.priority.unwrap_or(DEFAULT_PRIORITY)),
-                *index,
-            )
-        });
-
         let mut out = String::from("\n[World Info/Lorebook Information]:\n");
-        let mut emitted_content = std::collections::HashSet::new();
-        for (_, e) in triggered {
-            if emitted_content.insert(e.content.as_str()) {
-                out.push_str(&e.content);
-                out.push('\n');
-            }
+        for index in triggered {
+            out.push_str(&self.entries[index].content);
+            out.push('\n');
         }
         out
     }
+}
+
+fn triggered_entry_indices(entries: &[LorebookEntry], text: &str) -> Vec<usize> {
+    // 1. 收集需要参与扫描的 enabled entries 的 (key, entry_idx) 扁平表。
+    //    constant=true 的 entry 不需要关键词命中，跳过 pattern 收集，
+    //    在第 3 步直接加入 triggered 集合。
+    let mut patterns: Vec<&str> = Vec::new();
+    let mut pattern_to_entry: Vec<usize> = Vec::new();
+    let mut triggered_idx: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for (idx, e) in entries.iter().enumerate() {
+        if !e.enabled.unwrap_or(true) {
+            continue;
+        }
+        // constant=true 且 enabled 的条目直接标记为命中，不依赖关键词扫描。
+        if e.constant.unwrap_or(false) {
+            triggered_idx.insert(idx);
+            continue;
+        }
+        for k in &e.keys {
+            if k.is_empty() {
+                continue;
+            }
+            patterns.push(k.as_str());
+            pattern_to_entry.push(idx);
+        }
+    }
+
+    // 2. 构造 Aho-Corasick 自动机，单次扫描收集命中 entry idx。
+    //    用 `LeftmostLongest` 避免「人物4」抢走「人物42」的命中范围
+    //    （Standard 默认 leftmost-shortest，与世界书前缀重叠语义相悖）。
+    //    空 pattern 集时跳过 build（constant 条目可能已填充 triggered_idx）。
+    if !patterns.is_empty() {
+        let ac = AhoCorasick::builder()
+            .match_kind(MatchKind::LeftmostLongest)
+            .build(&patterns)
+            .expect("AhoCorasick build patterns");
+        for mat in ac.find_iter(text) {
+            triggered_idx.insert(pattern_to_entry[mat.pattern().as_usize()]);
+        }
+    }
+
+    // v4：selective 二次匹配。primary key 命中且 `selective=true` 的 entry
+    // 还需 `secondary_keys` 任一命中扫描文本才最终激活。constant entry 不受
+    // selective 影响（常驻注入不依赖关键词，也不依赖 secondary）。
+    // secondary 匹配用 case-sensitive `text.contains`，与 primary DFA 的
+    // 实际运行时行为一致；空 secondary key 先过滤。
+    triggered_idx.retain(|&idx| {
+        let e = &entries[idx];
+        if !e.selective || e.constant.unwrap_or(false) {
+            return true;
+        }
+        let has_effective_secondary = e.secondary_keys.iter().any(|k| !k.is_empty());
+        if !has_effective_secondary {
+            // selective=true 但无有效 secondary key：保持 primary 命中
+            // （与 ST 行为一致：selective 但 keysecondary 为空 = primary 命中即激活）。
+            return true;
+        }
+        e.secondary_keys
+            .iter()
+            .filter(|k| !k.is_empty())
+            .any(|k| text.contains(k.as_str()))
+    });
+
+    if triggered_idx.is_empty() {
+        return Vec::new();
+    }
+
+    // 3. 按 priority 从高到低排序，拼接 content。
+    //    constant 与关键词命中的 entry 共用同一排序规则，去重由 HashSet 保证。
+    let mut triggered: Vec<(usize, &LorebookEntry)> = triggered_idx
+        .iter()
+        .map(|&index| (index, &entries[index]))
+        .collect();
+    triggered.sort_by_key(|(index, entry)| {
+        (
+            std::cmp::Reverse(entry.priority.unwrap_or(DEFAULT_PRIORITY)),
+            *index,
+        )
+    });
+
+    let mut emitted_content = std::collections::HashSet::new();
+    triggered
+        .into_iter()
+        .filter_map(|(index, entry)| {
+            emitted_content
+                .insert(entry.content.as_str())
+                .then_some(index)
+        })
+        .collect()
+}
+
+/// One lorebook plus the logical identity of the asset that supplied its entries.
+#[derive(Debug, Clone)]
+pub(crate) struct SourcedLorebook {
+    pub(crate) source_id: String,
+    pub(crate) lorebook: Lorebook,
+}
+
+/// One activated entry after merge, priority ordering, and content deduplication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TriggeredLorebookEntry {
+    pub(crate) source_id: String,
+    pub(crate) item_id: String,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Clone)]
+struct LorebookEntryProvenance {
+    source_id: String,
+    item_id: String,
+}
+
+/// A merged runtime lorebook that retains the first exact duplicate's provenance.
+#[derive(Debug, Clone)]
+pub(crate) struct MergedLorebook {
+    lorebook: Lorebook,
+    provenance: Vec<LorebookEntryProvenance>,
+}
+
+impl MergedLorebook {
+    pub(crate) fn trigger(&self, text: &str) -> Vec<TriggeredLorebookEntry> {
+        triggered_entry_indices(&self.lorebook.entries, text)
+            .into_iter()
+            .map(|index| {
+                let provenance = &self.provenance[index];
+                TriggeredLorebookEntry {
+                    source_id: provenance.source_id.clone(),
+                    item_id: provenance.item_id.clone(),
+                    content: self.lorebook.entries[index].content.clone(),
+                }
+            })
+            .collect()
+    }
+}
+
+/// Merge lorebooks while retaining the logical source and original entry index.
+pub(crate) fn merge_sourced_lorebooks(lorebooks: &[SourcedLorebook]) -> MergedLorebook {
+    let mut merged: Vec<(LorebookEntry, LorebookEntryProvenance)> = Vec::new();
+
+    for sourced in lorebooks {
+        for (index, entry) in sourced.lorebook.entries.iter().enumerate() {
+            if !merged
+                .iter()
+                .any(|(existing, _)| entries_are_semantic_duplicates(existing, entry))
+            {
+                merged.push((
+                    entry.clone(),
+                    LorebookEntryProvenance {
+                        source_id: sourced.source_id.clone(),
+                        item_id: index.to_string(),
+                    },
+                ));
+            }
+        }
+    }
+
+    merged.sort_by(|a, b| {
+        let pa = a.0.priority.unwrap_or(DEFAULT_PRIORITY);
+        let pb = b.0.priority.unwrap_or(DEFAULT_PRIORITY);
+        pb.cmp(&pa)
+    });
+
+    let (entries, provenance) = merged.into_iter().unzip();
+    MergedLorebook {
+        lorebook: Lorebook { entries },
+        provenance,
+    }
+}
+
+fn entries_are_semantic_duplicates(a: &LorebookEntry, b: &LorebookEntry) -> bool {
+    a.content == b.content
+        && a.keys == b.keys
+        && a.enabled.unwrap_or(true) == b.enabled.unwrap_or(true)
+        && a.priority.unwrap_or(DEFAULT_PRIORITY) == b.priority.unwrap_or(DEFAULT_PRIORITY)
+        && a.constant.unwrap_or(false) == b.constant.unwrap_or(false)
+        && a.comment == b.comment
+        && a.secondary_keys == b.secondary_keys
+        && a.selective == b.selective
+        && a.case_sensitive == b.case_sensitive
+        && a.extensions == b.extensions
 }
 
 /// MS-5: Merge multiple lorebooks without discarding distinct activation semantics.
@@ -169,19 +274,10 @@ pub fn merge_lorebooks(lorebooks: &[Lorebook]) -> Lorebook {
 
     for lb in lorebooks {
         for entry in &lb.entries {
-            if !merged.iter().any(|existing| {
-                existing.content == entry.content
-                    && existing.keys == entry.keys
-                    && existing.enabled.unwrap_or(true) == entry.enabled.unwrap_or(true)
-                    && existing.priority.unwrap_or(DEFAULT_PRIORITY)
-                        == entry.priority.unwrap_or(DEFAULT_PRIORITY)
-                    && existing.constant.unwrap_or(false) == entry.constant.unwrap_or(false)
-                    && existing.comment == entry.comment
-                    && existing.secondary_keys == entry.secondary_keys
-                    && existing.selective == entry.selective
-                    && existing.case_sensitive == entry.case_sensitive
-                    && existing.extensions == entry.extensions
-            }) {
+            if !merged
+                .iter()
+                .any(|existing| entries_are_semantic_duplicates(existing, entry))
+            {
                 merged.push(entry.clone());
             }
         }
@@ -817,5 +913,72 @@ The observatory predates the city.\n"
 
         // selective 不同 → 不去重，保留两条
         assert_eq!(merged.entries.len(), 2);
+    }
+
+    #[test]
+    fn sourced_merge_preserves_origin_and_original_entry_index() {
+        let merged = merge_sourced_lorebooks(&[
+            SourcedLorebook {
+                source_id: "character:alice".to_string(),
+                lorebook: Lorebook {
+                    entries: vec![
+                        entry(&["low"], "alice low", Some(1)),
+                        entry(&["high"], "alice high", Some(30)),
+                    ],
+                },
+            },
+            SourcedLorebook {
+                source_id: "scene:forest".to_string(),
+                lorebook: Lorebook {
+                    entries: vec![entry(&["scene"], "scene middle", Some(20))],
+                },
+            },
+        ]);
+
+        let triggered = merged.trigger("low high scene");
+        assert_eq!(
+            triggered,
+            vec![
+                TriggeredLorebookEntry {
+                    source_id: "character:alice".to_string(),
+                    item_id: "1".to_string(),
+                    content: "alice high".to_string(),
+                },
+                TriggeredLorebookEntry {
+                    source_id: "scene:forest".to_string(),
+                    item_id: "0".to_string(),
+                    content: "scene middle".to_string(),
+                },
+                TriggeredLorebookEntry {
+                    source_id: "character:alice".to_string(),
+                    item_id: "0".to_string(),
+                    content: "alice low".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sourced_merge_assigns_exact_duplicate_to_first_source() {
+        let duplicate = entry(&["shared"], "same", Some(10));
+        let merged = merge_sourced_lorebooks(&[
+            SourcedLorebook {
+                source_id: "character:alice".to_string(),
+                lorebook: Lorebook {
+                    entries: vec![duplicate.clone()],
+                },
+            },
+            SourcedLorebook {
+                source_id: "scene:forest".to_string(),
+                lorebook: Lorebook {
+                    entries: vec![duplicate],
+                },
+            },
+        ]);
+
+        let triggered = merged.trigger("shared");
+        assert_eq!(triggered.len(), 1);
+        assert_eq!(triggered[0].source_id, "character:alice");
+        assert_eq!(triggered[0].item_id, "0");
     }
 }

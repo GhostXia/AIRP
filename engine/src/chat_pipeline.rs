@@ -165,7 +165,7 @@ fn build_prompt_trace(
                 .source_id
                 .clone()
                 .or_else(|| trace_source_id(part.source_kind, payload)),
-            item_id: None,
+            item_id: part.item_id.clone(),
             display_name: Some(part.display_name.to_string()),
             role: Some("system".to_string()),
             position,
@@ -431,7 +431,7 @@ fn prepare_scene_pipeline(
 
     // Load card JSONs + per-character lorebooks
     let mut card_jsons: Vec<(String, Option<String>)> = Vec::new();
-    let mut lorebooks: Vec<crate::orchestrator::Lorebook> = Vec::new();
+    let mut lorebooks: Vec<crate::orchestrator::lorebook::SourcedLorebook> = Vec::new();
 
     for entry in &scene.characters {
         let card_json = load_char_card_json(&effective_root, &entry.character_id);
@@ -449,7 +449,10 @@ fn prepare_scene_pipeline(
                 if let Ok(raw) = fs::read_to_string(&lb_path) {
                     let cleaned = data_dir::strip_utf8_bom(&raw);
                     if let Ok(lb) = serde_json::from_str::<crate::orchestrator::Lorebook>(cleaned) {
-                        lorebooks.push(lb);
+                        lorebooks.push(crate::orchestrator::lorebook::SourcedLorebook {
+                            source_id: format!("character:{}", entry.character_id),
+                            lorebook: lb,
+                        });
                     }
                 }
             }
@@ -462,12 +465,15 @@ fn prepare_scene_pipeline(
         if let Ok(raw) = fs::read_to_string(&scene_lb_path) {
             let cleaned = data_dir::strip_utf8_bom(&raw);
             if let Ok(lb) = serde_json::from_str::<crate::orchestrator::Lorebook>(cleaned) {
-                lorebooks.push(lb);
+                lorebooks.push(crate::orchestrator::lorebook::SourcedLorebook {
+                    source_id: format!("scene:{scene_id}"),
+                    lorebook: lb,
+                });
             }
         }
     }
 
-    let merged_lb = crate::orchestrator::merge_lorebooks(&lorebooks);
+    let merged_lb = crate::orchestrator::lorebook::merge_sourced_lorebooks(&lorebooks);
 
     // Scan message + history for lorebook triggers
     let mut scan_text = payload.message.clone();
@@ -477,7 +483,7 @@ fn prepare_scene_pipeline(
             scan_text.push_str(&h.content);
         }
     }
-    let triggered_lore = merged_lb.trigger(&scan_text);
+    let triggered_lore_entries = merged_lb.trigger(&scan_text);
 
     let cards: Vec<(&str, Option<&str>)> = card_jsons
         .iter()
@@ -491,10 +497,10 @@ fn prepare_scene_pipeline(
     let (effective_user_name, effective_user_variables) =
         merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
 
-    let mut assembly = crate::orchestrator::build_multi_char_system_prompt_assembly(
+    let mut assembly = crate::orchestrator::build_multi_char_system_prompt_assembly_sourced(
         &scene,
         &cards,
-        &triggered_lore,
+        &triggered_lore_entries,
         &effective_user_name,
     );
     let mut prompt_variables = effective_user_variables.clone();
@@ -537,6 +543,7 @@ fn prepare_scene_pipeline(
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
                 source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
                 display_name: "近期上下文",
                 content: recent_context,
             });
@@ -548,6 +555,7 @@ fn prepare_scene_pipeline(
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
                 source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
                 display_name: "相关历史卷",
                 content: related_history,
             });
@@ -561,6 +569,7 @@ fn prepare_scene_pipeline(
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
                 source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
                 display_name: "上下文压力提示",
                 content: hint,
             });
@@ -891,6 +900,7 @@ fn prepare_pipeline_with_mode(
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
                 source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
                 display_name: "近期上下文",
                 content: recent_context,
             });
@@ -902,6 +912,7 @@ fn prepare_pipeline_with_mode(
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
                 source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
                 display_name: "相关历史卷",
                 content: related_history,
             });
@@ -915,6 +926,7 @@ fn prepare_pipeline_with_mode(
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
                 source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
                 display_name: "上下文压力提示",
                 content: hint,
             });

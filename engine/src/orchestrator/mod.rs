@@ -33,6 +33,7 @@ pub struct Orchestrator {
 pub(crate) struct SystemPromptPart {
     pub(crate) source_kind: &'static str,
     pub(crate) source_id: Option<String>,
+    pub(crate) item_id: Option<String>,
     pub(crate) display_name: &'static str,
     pub(crate) content: String,
 }
@@ -234,6 +235,7 @@ impl Orchestrator {
         parts.push(SystemPromptPart {
             source_kind: "card",
             source_id: character_id.map(str::to_string),
+            item_id: None,
             display_name: "角色卡",
             content: card_intro,
         });
@@ -248,6 +250,7 @@ impl Orchestrator {
                 parts.push(SystemPromptPart {
                     source_kind: "known",
                     source_id: Some(char_id.to_string()),
+                    item_id: None,
                     display_name: "关卡已知信息",
                     content: format!(
                         "\n[{}'s Known Information & Clues (Current CP: {})]:\n{}\n\n",
@@ -277,6 +280,7 @@ impl Orchestrator {
             parts.push(SystemPromptPart {
                 source_kind: "card",
                 source_id: character_id.map(str::to_string),
+                item_id: None,
                 display_name: "角色卡详情",
                 content: card_details,
             });
@@ -288,6 +292,7 @@ impl Orchestrator {
             parts.push(SystemPromptPart {
                 source_kind: "lorebook",
                 source_id: character_id.map(str::to_string),
+                item_id: None,
                 display_name: "世界书命中",
                 content: lorebook_part,
             });
@@ -301,6 +306,7 @@ impl Orchestrator {
                 parts.push(SystemPromptPart {
                     source_kind: "state",
                     source_id: Some(char_id.to_string()),
+                    item_id: None,
                     display_name: "角色状态",
                     content: state_part,
                 });
@@ -322,6 +328,7 @@ impl Orchestrator {
                 parts.push(SystemPromptPart {
                     source_kind: "preset",
                     source_id: None,
+                    item_id: None,
                     display_name: "预设提示",
                     content: preset_part,
                 });
@@ -474,6 +481,39 @@ pub(crate) fn build_multi_char_system_prompt_assembly(
     triggered_lore: &str,
     user_name: &str,
 ) -> SystemPromptAssembly {
+    build_multi_char_system_prompt_assembly_inner(
+        scene,
+        cards,
+        SceneLorebookPrompt::Rendered(triggered_lore),
+        user_name,
+    )
+}
+
+pub(crate) fn build_multi_char_system_prompt_assembly_sourced(
+    scene: &crate::scene::SceneConfig,
+    cards: &[(&str, Option<&str>)],
+    triggered_lore_entries: &[lorebook::TriggeredLorebookEntry],
+    user_name: &str,
+) -> SystemPromptAssembly {
+    build_multi_char_system_prompt_assembly_inner(
+        scene,
+        cards,
+        SceneLorebookPrompt::Sourced(triggered_lore_entries),
+        user_name,
+    )
+}
+
+enum SceneLorebookPrompt<'a> {
+    Rendered(&'a str),
+    Sourced(&'a [lorebook::TriggeredLorebookEntry]),
+}
+
+fn build_multi_char_system_prompt_assembly_inner(
+    scene: &crate::scene::SceneConfig,
+    cards: &[(&str, Option<&str>)],
+    triggered_lore: SceneLorebookPrompt<'_>,
+    user_name: &str,
+) -> SystemPromptAssembly {
     let mut scene_header = String::new();
 
     if !scene.description.is_empty() {
@@ -486,6 +526,7 @@ pub(crate) fn build_multi_char_system_prompt_assembly(
     let mut parts = vec![SystemPromptPart {
         source_kind: "scene",
         source_id: Some(scene.scene_id.to_string()),
+        item_id: None,
         display_name: "场景设定",
         content: scene_header,
     }];
@@ -521,6 +562,7 @@ pub(crate) fn build_multi_char_system_prompt_assembly(
         parts.push(SystemPromptPart {
             source_kind: "scene",
             source_id: Some(scene.scene_id.to_string()),
+            item_id: None,
             display_name: "在场角色",
             content: scene_character,
         });
@@ -544,6 +586,7 @@ pub(crate) fn build_multi_char_system_prompt_assembly(
                     parts.push(SystemPromptPart {
                         source_kind: "card",
                         source_id: Some(entry.character_id.clone()),
+                        item_id: None,
                         display_name: "场景角色卡",
                         content: card_fields,
                     });
@@ -553,23 +596,46 @@ pub(crate) fn build_multi_char_system_prompt_assembly(
         parts.push(SystemPromptPart {
             source_kind: "scene",
             source_id: Some(scene.scene_id.to_string()),
+            item_id: None,
             display_name: "角色分隔",
             content: "\n".to_string(),
         });
     }
 
-    if !triggered_lore.is_empty() {
-        let mut lorebook = String::from("[世界书信息]\n");
-        lorebook.push_str(triggered_lore);
-        lorebook.push_str("\n\n");
-        parts.push(SystemPromptPart {
-            source_kind: "lorebook",
-            // The merged block may contain both character and scene lore. Do not invent a
-            // single owner until merge_lorebooks retains per-entry provenance.
-            source_id: None,
-            display_name: "世界书命中",
-            content: lorebook,
-        });
+    match triggered_lore {
+        SceneLorebookPrompt::Sourced(entries) if !entries.is_empty() => {
+            for (index, entry) in entries.iter().enumerate() {
+                let mut content = String::new();
+                if index == 0 {
+                    content.push_str("[世界书信息]\n\n[World Info/Lorebook Information]:\n");
+                }
+                content.push_str(&entry.content);
+                content.push('\n');
+                if index + 1 == entries.len() {
+                    content.push_str("\n\n");
+                }
+                parts.push(SystemPromptPart {
+                    source_kind: "lorebook",
+                    source_id: Some(entry.source_id.clone()),
+                    item_id: Some(entry.item_id.clone()),
+                    display_name: "世界书命中",
+                    content,
+                });
+            }
+        }
+        SceneLorebookPrompt::Rendered(triggered_lore) if !triggered_lore.is_empty() => {
+            let mut lorebook = String::from("[世界书信息]\n");
+            lorebook.push_str(triggered_lore);
+            lorebook.push_str("\n\n");
+            parts.push(SystemPromptPart {
+                source_kind: "lorebook",
+                source_id: None,
+                item_id: None,
+                display_name: "世界书命中",
+                content: lorebook,
+            });
+        }
+        SceneLorebookPrompt::Rendered(_) | SceneLorebookPrompt::Sourced(_) => {}
     }
 
     let mut scene_rules = String::new();
@@ -582,6 +648,7 @@ pub(crate) fn build_multi_char_system_prompt_assembly(
     parts.push(SystemPromptPart {
         source_kind: "scene",
         source_id: Some(scene.scene_id.to_string()),
+        item_id: None,
         display_name: "场景规则",
         content: scene_rules,
     });

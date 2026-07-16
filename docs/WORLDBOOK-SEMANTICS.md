@@ -100,6 +100,8 @@ Output is injected once under `[World Info/Lorebook Information]` in the RP syst
 
 Scene merges also preserve entries whose runtime fields match but advisory metadata differs. This keeps `case_sensitive`, `extensions`, and annotations available to future retrieval tools while the v4 injection path still emits identical content only once.
 
+Scene prompt traces retain per-entry provenance through merge, activation, priority ordering, and content deduplication. Character-owned books use the path-independent logical `source_id` `character:<character_id>`; the scene-owned book uses `scene:<scene_id>`. `item_id` is the zero-based index of the entry in that source document before merge. Exact semantic duplicates retain the first source in scene merge order. These identifiers explain the current source document and entry; they are not immutable content revisions, and no filesystem path is exposed.
+
 ## Shared WorldbookNormalizer (v4)
 
 [`normalize_worldbook`](../engine/src/orchestrator/worldbook_normalizer.rs) is the single normalization entry point shared by three import paths:
