@@ -20,6 +20,20 @@ use crate::revision::tree_hash::compute_tree_sha256;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// 全局 commit 串行化锁。
+///
+/// `commit_revision` 的 read-current → staging → publish 流程不是无锁原子的：
+/// 两个并发 commit 都可能通过 initial read，之后较低 revision 的 rename
+/// 可能覆盖较高 revision 的指针（TOCTOU）。Rust std 没有 CAS rename，
+/// 因此用进程内全局 Mutex 串行化所有 asset 的 commit。
+///
+/// 跨进程安全是调用方责任：AIRP daemon 是单进程前台运行（AGENTS.md），
+/// 无跨进程 writer；各 asset service 已有 per-asset Mutex 串行化。
+///
+/// 全局粒度是 Phase 2a 的保守选择；per-asset 锁是后续优化，不影响正确性。
+static COMMIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// 已准备的 revision 内容：批准文件 + manifest 元数据。
 ///
@@ -82,6 +96,12 @@ pub(crate) fn commit_revision(
     staged: &StagedRevision,
     options: &CommitOptions,
 ) -> Result<PathBuf, AirpError> {
+    // 进程内串行化：防止并发 commit 的 TOCTOU 导致指针回退。
+    // 跨进程安全由调用方负责（AIRP daemon 单进程，无跨进程 writer）。
+    let _commit_guard = COMMIT_LOCK
+        .lock()
+        .map_err(|e| AirpError::Internal(format!("COMMIT_LOCK poisoned: {e}")))?;
+
     if staged.content_revision < 1 {
         return Err(AirpError::BadRequest(format!(
             "content_revision 必须 >= 1, 实际 {}",
@@ -190,8 +210,13 @@ pub(crate) fn commit_revision(
     // 8. 原子替换 current_revision 文件。
     //    Rust std::fs::rename 在 Windows 上对文件用 MoveFileExW(MOVEFILE_REPLACE_EXISTING)，
     //    在 Unix 上是原子 rename(2)，均可原子替换已存在的目标文件，无需先 remove_file。
+    //
+    //    使用 per-revision unique temp 文件名（current_revision.{revision_id}.tmp），
+    //    防御性设计：即使将来移除全局锁，并发 commit 也不会互相覆盖 temp 文件。
     let current_revision_path = options.current_revision_path();
-    let current_tmp = current_revision_path.with_extension("tmp");
+    let current_tmp = options
+        .asset_dir
+        .join(format!("current_revision.{}.tmp", staged.content_revision));
     {
         let mut file = fs::File::create(&current_tmp)?;
         file.write_all(staged.content_revision.to_string().as_bytes())?;
@@ -439,6 +464,10 @@ mod tests {
 
         commit_revision(&staged(3), &options).unwrap();
 
+        // 删除 revision_dir 3，确保第二次 commit 的失败来自 current_revision equality guard，
+        // 而非 existing-directory rejection（否则测试即使移除 equality guard 仍会 green）
+        fs::remove_dir_all(options.revision_dir(3)).unwrap();
+
         // 尝试 commit revision 3（等于 current 3），应拒绝
         // 注意：这与 commit_rejects_existing_revision 不同——后者因 revision_dir 已存在拒绝，
         // 此测试因 current_revision 回退保护拒绝（即使 revision_dir 不存在）
@@ -461,9 +490,11 @@ mod tests {
         let result = commit_revision(&staged, &options);
         assert!(result.is_err(), "应拒绝 path traversal 路径");
 
-        // 确保没有文件被写到 staging 外
+        // 确保没有文件被写到 staging 外。
+        // `../escape.json` 从 staging 目录（revisions/.staging-1/）出发，
+        // 解析为 revisions/escape.json，而非 tempdir 的 parent。
         assert!(
-            !dir.path().parent().unwrap().join("escape.json").exists(),
+            !options.revisions_dir().join("escape.json").exists(),
             "path traversal 不应写入 staging 外"
         );
     }
@@ -555,5 +586,63 @@ mod tests {
         let revision_dir = commit_revision(&staged, &options).unwrap();
         assert!(revision_dir.join("lorebook.json").is_file());
         assert!(revision_dir.join("sub").join("extra.json").is_file());
+    }
+
+    #[test]
+    fn concurrent_commits_never_roll_back_pointer() {
+        // 并发 commit 回归测试（CodeRabbit #1 critical）：
+        // 多线程并发 commit 不同 revision，验证 publish 前重新校验（optimistic concurrency control）
+        // 防止指针回退。最终指针必须 == 成功 publish 中的最大 revision。
+        //
+        // 注意：本测试不验证跨进程安全（AIRP daemon 单进程，无跨进程 writer）。
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        let options = Arc::new(CommitOptions::new(dir_path.clone()));
+
+        // 10 个线程并发 commit revision 1-10
+        let mut handles = Vec::new();
+        for revision in 1..=10u64 {
+            let opts = Arc::clone(&options);
+            handles.push(thread::spawn(move || {
+                commit_revision(&staged(revision), &opts)
+            }));
+        }
+
+        let mut successes: Vec<u64> = Vec::new();
+        for handle in handles {
+            if let Ok(revision_dir) = handle.join().unwrap() {
+                let rev: u64 = revision_dir
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                successes.push(rev);
+            }
+        }
+
+        assert!(!successes.is_empty(), "至少应有一个 commit 成功");
+
+        let max_success = *successes.iter().max().unwrap();
+        let current = read_current_revision(&dir_path).unwrap();
+
+        // 指针应等于成功 publish 中的最大 revision（不回退）
+        assert_eq!(
+            current,
+            Some(max_success),
+            "指针 {:?} 应等于最大成功 revision {}，不允许回退",
+            current,
+            max_success
+        );
+
+        // 指针指向的 revision_dir 应存在（不可变快照）
+        assert!(
+            options.revision_dir(max_success).is_dir(),
+            "指针指向的 revision_dir 应存在"
+        );
     }
 }
