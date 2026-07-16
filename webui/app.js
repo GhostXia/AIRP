@@ -1291,9 +1291,8 @@
       await refreshSessions();
     }
 
-    // 发送前用同一请求体生成一次只读预览，确保用户看到的是这一轮真正采用的配置。
-    // 预览失败不阻断聊天本身。
-    await refreshAssemblyPreview(text);
+    // 发送前用同一请求体启动只读预览，但不让预览网络往返阻塞聊天首 token。
+    refreshAssemblyPreview(text);
 
     // abort prior stream
     if (abortController) abortController.abort();
@@ -1429,6 +1428,7 @@
     if (!assemblyStatus) return;
     const requestId = ++assemblyRequestId;
     if (!selectedChar) {
+      if (btnRefreshAssembly) btnRefreshAssembly.disabled = false;
       clearAssemblyPreview('选择角色后查看本轮实际配置。');
       return;
     }

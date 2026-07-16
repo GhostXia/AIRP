@@ -136,7 +136,9 @@ fn provider_label(provider: &crate::adapter::Provider) -> String {
 
 fn trace_source_id(source_kind: &str, payload: &ChatCompletionRequest) -> Option<String> {
     match source_kind {
-        "card" | "lorebook" | "state" => payload.character_id.as_ref().map(ToString::to_string),
+        "card" | "known" | "lorebook" | "state" => {
+            payload.character_id.as_ref().map(ToString::to_string)
+        }
         "scene" => payload.scene_id.clone(),
         "preset" => payload.preset_id.as_ref().map(ToString::to_string),
         "memory" | "history" | "user" => payload.session_id.as_ref().map(ToString::to_string),
@@ -159,7 +161,10 @@ fn build_prompt_trace(
         let chars = part.content.chars().count();
         segments.push(PromptSegment {
             source_kind: part.source_kind.to_string(),
-            source_id: trace_source_id(part.source_kind, payload),
+            source_id: part
+                .source_id
+                .clone()
+                .or_else(|| trace_source_id(part.source_kind, payload)),
             item_id: None,
             display_name: Some(part.display_name.to_string()),
             role: Some("system".to_string()),
@@ -169,7 +174,7 @@ fn build_prompt_trace(
             estimated_tokens: crate::volume_store::estimate_tokens(&part.content),
             truncated: false,
             stable_or_volatile: match part.source_kind {
-                "state" | "memory" => Stability::Volatile,
+                "known" | "state" | "memory" => Stability::Volatile,
                 _ => Stability::Stable,
             },
         });
@@ -527,6 +532,7 @@ fn prepare_scene_pipeline(
             system_prompt.push_str(&recent_context);
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
                 display_name: "近期上下文",
                 content: recent_context,
             });
@@ -537,6 +543,7 @@ fn prepare_scene_pipeline(
             system_prompt.push_str(&related_history);
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
                 display_name: "相关历史卷",
                 content: related_history,
             });
@@ -549,6 +556,7 @@ fn prepare_scene_pipeline(
             system_prompt.push_str(&hint);
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
                 display_name: "上下文压力提示",
                 content: hint,
             });
@@ -748,7 +756,12 @@ fn prepare_pipeline_with_mode(
     // 4. Build orchestrator
     let orchestrator = Orchestrator::new(card_json.as_deref(), lore_json.as_deref())?;
 
-    // 5. Advance timeline (side-effect, best-effort)
+    // 5. Resolve the checkpoint for this turn before assembly. Preview computes the same
+    // next checkpoint read-only; Chat additionally persists the timeline advancement.
+    let next_checkpoint = payload
+        .character_id
+        .as_ref()
+        .map(|cid| crate::orchestrator::gating::get_next_checkpoint(&effective_root, cid.as_str()));
     if mode == PrepareMode::Chat {
         if let Some(ref cid) = payload.character_id {
             Orchestrator::advance_timeline_and_checkpoint(&effective_root, cid.as_str());
@@ -838,6 +851,7 @@ fn prepare_pipeline_with_mode(
         preset_json.as_deref(),
         payload.enabled_presets.as_ref(),
         &payload.message,
+        next_checkpoint.as_deref(),
     );
     let mut system_prompt = assembly.prompt;
     let mut prompt_parts = assembly.parts;
@@ -872,6 +886,7 @@ fn prepare_pipeline_with_mode(
             system_prompt.push_str(&recent_context);
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
                 display_name: "近期上下文",
                 content: recent_context,
             });
@@ -882,6 +897,7 @@ fn prepare_pipeline_with_mode(
             system_prompt.push_str(&related_history);
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
                 display_name: "相关历史卷",
                 content: related_history,
             });
@@ -894,6 +910,7 @@ fn prepare_pipeline_with_mode(
             system_prompt.push_str(&hint);
             prompt_parts.push(SystemPromptPart {
                 source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
                 display_name: "上下文压力提示",
                 content: hint,
             });

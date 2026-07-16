@@ -105,6 +105,25 @@ try {
   assert.equal(await page.locator('img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);
 
+  // #194: hostile trace metadata must flow through the real renderer as text only.
+  await page.route('**/v1/chat/preview', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        effective: { character_id: 'smoke-xss', model: injectionName, provider: 'test' },
+        total_estimated_tokens: 1,
+        segments: [{ source_kind: 'card', source_id: injectionName, chars: 1, estimated_tokens: 1, stable_or_volatile: 'stable' }],
+        diagnostics: [{ kind: 'fixture', message: injectionName }],
+      }),
+    });
+  });
+  await page.evaluate(() => document.querySelector('#btn-refresh-assembly')?.click());
+  await page.waitForFunction(name => document.querySelector('#assembly-summary')?.textContent?.includes(name), injectionName);
+  assert.equal(await page.locator('#assembly-summary img[src="x"]').count(), 0);
+  assert.equal(await page.evaluate(() => window.__airpXss), 0);
+  await page.unroute('**/v1/chat/preview');
+
   // #126 D-PR2: lorebook-section DOM wiring（主面板迁移后 workbench 不再有 lorebook tab）
   assert.equal(await page.locator('#lorebook-section').isVisible(), true);
   assert.equal(await page.locator('#lore-entries').count(), 1);

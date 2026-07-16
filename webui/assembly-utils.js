@@ -7,6 +7,7 @@
 
   const KIND_LABELS = {
     card: '角色卡',
+    known: '关卡已知信息',
     persona: '用户身份',
     lorebook: '世界书',
     state: '角色状态',

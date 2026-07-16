@@ -7,7 +7,7 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端。产品采用“无头 en
 - **ui**（`airp-ui`）：保留的 Tauri + Vue 桌面客户端，近期开发与打包验收暂停；
 - **protocol**（`airp-state-protocol`）：UI/engine 共用的线协议类型。
 
-当前权威实现基线是 `main@c47585b` / PR #191，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
+当前权威实现基线是 PR #194 head（合并后以 merge commit 为准），详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
 
 ## 项目原则
 

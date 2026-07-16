@@ -66,7 +66,8 @@ mod tests {
     use crate::config::VolumeConfig;
     use crate::daemon::{MutableConfig, UserProfile};
     use crate::types::CharacterId;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
+    use std::time::SystemTime;
     use tempfile::tempdir;
 
     /// 构造一份最小可用的 `DaemonState`，data_root 指向临时目录。
@@ -118,10 +119,67 @@ mod tests {
         }
     }
 
+    fn snapshot_tree(root: &std::path::Path) -> BTreeMap<String, (Vec<u8>, SystemTime)> {
+        fn visit(
+            root: &std::path::Path,
+            dir: &std::path::Path,
+            out: &mut BTreeMap<String, (Vec<u8>, SystemTime)>,
+        ) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    out.insert(
+                        format!("{relative}/"),
+                        (Vec::new(), std::time::SystemTime::UNIX_EPOCH),
+                    );
+                    visit(root, &path, out);
+                } else {
+                    out.insert(
+                        relative,
+                        (std::fs::read(&path).unwrap(), metadata.modified().unwrap()),
+                    );
+                }
+            }
+        }
+        let mut snapshot = BTreeMap::new();
+        visit(root, root, &mut snapshot);
+        snapshot
+    }
+
     #[test]
     fn preview_pipeline_is_write_free_and_traces_actual_payload() {
         let tmp = tempdir().unwrap();
         let state = make_state(tmp.path().to_path_buf());
+        let character = tmp.path().join("characters/alice");
+        std::fs::create_dir_all(character.join("history")).unwrap();
+        std::fs::create_dir_all(character.join("gating")).unwrap();
+        std::fs::create_dir_all(character.join("memory")).unwrap();
+        std::fs::write(
+            character.join("history/chat_log.jsonl"),
+            "{\"role\":\"assistant\",\"content\":\"Earlier reply\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            character.join("history/chat_log_meta.json"),
+            "{\"sentinel\":true}",
+        )
+        .unwrap();
+        std::fs::write(character.join("gating/timeline.md"), "- 累计消耗时槽: 4\n").unwrap();
+        std::fs::write(
+            character.join("gating/checkpoints.md"),
+            "- 当前关卡: CP-1\n- 进度百分比: 40%\n",
+        )
+        .unwrap();
+        std::fs::write(character.join("known.md"), "threshold clue").unwrap();
+        std::fs::write(character.join("memory/current.md"), "existing context").unwrap();
+        let before = snapshot_tree(tmp.path());
         let mut req = base_request();
         req.character_id = Some(CharacterId::new("alice").unwrap());
         req.character_card_id = Some(
@@ -129,16 +187,14 @@ mod tests {
         );
         req.endpoint = Some("https://example.test/v1/chat/completions?token=secret".to_string());
         req.api_key = Some("never-serialize-me".to_string());
-        req.messages_history = Some(vec![ChatMessage {
-            role: crate::adapter::MessageRole::Assistant,
-            content: "Earlier reply".to_string(),
-        }]);
 
         let pipeline = preview_pipeline(&req, &state).unwrap();
 
-        assert!(
-            !tmp.path().join("characters/alice").exists(),
-            "preview must not advance timeline or create chat history"
+        assert!(character.exists());
+        assert_eq!(
+            snapshot_tree(tmp.path()),
+            before,
+            "preview changed persisted state"
         );
         let kinds: Vec<_> = pipeline
             .prompt_trace
@@ -146,7 +202,11 @@ mod tests {
             .iter()
             .map(|segment| segment.source_kind.as_str())
             .collect();
-        assert_eq!(kinds, ["card", "history", "user"]);
+        assert_eq!(
+            kinds,
+            ["card", "known", "card", "memory", "history", "user"]
+        );
+        assert!(pipeline.system_prompt.contains("Current CP: CP-2"));
         let payload_chars = pipeline.system_prompt.chars().count()
             + pipeline
                 .messages

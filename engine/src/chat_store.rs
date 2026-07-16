@@ -1,7 +1,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::adapter::ChatMessage;
@@ -407,10 +407,7 @@ impl ChatLog {
         let scope = session_id.map(ToString::to_string);
         let canonical = Self::scoped_jsonl_path(data_root, character_id, scope.as_deref());
         if canonical.is_file() {
-            let salt = Self::legacy_scope_salt(character_id, scope.as_deref());
-            let messages = Self::read_messages_jsonl(&canonical, &salt)?.messages;
-            let start = messages.len().saturating_sub(limit);
-            return Ok(messages[start..].to_vec());
+            return Self::read_recent_messages_jsonl(&canonical, limit);
         }
         if session_id.is_some() {
             return Ok(Vec::new());
@@ -418,10 +415,7 @@ impl ChatLog {
 
         let pre_cf2 = Self::pre_cf2_jsonl_path(data_root, character_id);
         if pre_cf2.is_file() {
-            let salt = Self::legacy_scope_salt(character_id, None);
-            let messages = Self::read_messages_jsonl(&pre_cf2, &salt)?.messages;
-            let start = messages.len().saturating_sub(limit);
-            return Ok(messages[start..].to_vec());
+            return Self::read_recent_messages_jsonl(&pre_cf2, limit);
         }
 
         let legacy = Self::legacy_path(data_root, character_id);
@@ -675,6 +669,61 @@ impl ChatLog {
             message_timestamps: tss,
         })
     }
+
+    /// Read only enough bytes from the end of an append-only JSONL log to decode `limit`
+    /// messages. Preview does not need durable IDs or timestamps, so it avoids loading the
+    /// intentionally unbounded history into memory.
+    fn read_recent_messages_jsonl(
+        path: &Path,
+        limit: usize,
+    ) -> Result<Vec<ChatMessage>, AirpError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        const CHUNK_SIZE: usize = 16 * 1024;
+        let mut file = fs::File::open(path)?;
+        let mut position = file.metadata()?.len();
+        let mut tail = Vec::new();
+        let mut newline_count = 0usize;
+
+        while position > 0 && newline_count <= limit {
+            let read_len = usize::try_from(position.min(CHUNK_SIZE as u64)).unwrap_or(CHUNK_SIZE);
+            position -= read_len as u64;
+            file.seek(SeekFrom::Start(position))?;
+            let mut chunk = vec![0u8; read_len];
+            file.read_exact(&mut chunk)?;
+            newline_count += chunk.iter().filter(|byte| **byte == b'\n').count();
+            chunk.extend_from_slice(&tail);
+            tail = chunk;
+        }
+
+        // A backwards chunk may begin inside an older UTF-8 line. When the file prefix was not
+        // read, discard that partial line before decoding; the loop guarantees enough later
+        // complete lines remain for the requested tail.
+        if position > 0 {
+            if let Some(first_newline) = tail.iter().position(|byte| *byte == b'\n') {
+                tail.drain(..=first_newline);
+            }
+        }
+
+        let text = String::from_utf8(tail)
+            .map_err(|error| AirpError::Internal(format!("chat_log.jsonl UTF-8 无效: {error}")))?;
+        let lines: Vec<_> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        let start = lines.len().saturating_sub(limit);
+        lines[start..]
+            .iter()
+            .map(|line| {
+                serde_json::from_str::<StoredMessage>(line.trim())
+                    .map(|stored| stored.msg)
+                    .map_err(|error| {
+                        AirpError::Internal(format!("chat_log.jsonl 尾部解析失败: {error}"))
+                    })
+            })
+            .collect()
+    }
 }
 
 /// `read_messages_jsonl` 的返回聚合（避免 clippy::type_complexity 巨元 tuple）。
@@ -689,6 +738,31 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn read_recent_messages_jsonl_reads_bounded_unicode_tail() {
+        let tmp = tempdir().unwrap();
+        let history = tmp.path().join("characters/alice/history");
+        fs::create_dir_all(&history).unwrap();
+        let path = history.join("chat_log.jsonl");
+        let mut content = String::new();
+        for index in 0..200 {
+            content.push_str(
+                &serde_json::json!({
+                    "role": "user",
+                    "content": format!("第{index}条-{}", "界".repeat(120)),
+                })
+                .to_string(),
+            );
+            content.push('\n');
+        }
+        fs::write(&path, content).unwrap();
+
+        let recent = ChatLog::read_recent_messages_jsonl(&path, 3).unwrap();
+        assert_eq!(recent.len(), 3);
+        assert!(recent[0].content.starts_with("第197条-"));
+        assert!(recent[2].content.starts_with("第199条-"));
+    }
 
     #[test]
     fn test_chat_log_crud() {
