@@ -80,7 +80,7 @@
 - **Status**: Mitigated by PR #191; #137 closed. Continue routine dependency discovery under #192.
 - **Surface**: Locked Vite/Vitest/esbuild development and test dependencies under `ui/`.
 - **Risk**: Known audit findings affect development-server or test-UI exposure to untrusted networks. These packages are not copied into the production gateway image, so this is not evidence of a production runtime compromise.
-- **Current control**: Vite 8.1.4, Vitest 4.1.10 and Vue plugin 6.0.8 use bounded manifest ranges and an exact npm lockfile; Node support starts at 20.19.0, `npm audit` reports zero findings, and development services remain loopback-only/trusted. Production serves independent static assets without `ui/node_modules`.
+- **Current control**: Vite 8.1.4, Vitest 4.1.10 and `@vitejs/plugin-vue` 6.0.8 use bounded manifest ranges and an exact npm lockfile; Node support starts at 20.19.0, `npm audit` reports zero findings, and development services remain loopback-only/trusted. Production serves independent static assets without `ui/node_modules`.
 - **Current evidence**: PR #191 passed UI typecheck, 98 Vitest cases, WebUI tests, Tauri config discovery and the real production HTTPS/Chrome topology gate. Future version discovery and audit routing are tracked by #192.
 
 ## RR-011 · Session snapshot and revision completeness
