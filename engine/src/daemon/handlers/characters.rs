@@ -986,6 +986,98 @@ mod tests {
         assert_eq!(card["data"]["name"], "PNG Import");
     }
 
+    /// #126 D-PR3: 验收清单第 5 项 — V3 character_book 含 `constant: true` 条目经
+    /// 导入 → `normalize_worldbook` 落盘 → 读取 → `Orchestrator::trigger_lorebook`
+    /// → `build_system_prompt` 完整链路后，constant 条目在真实 prompt assembly 中生效。
+    ///
+    /// card_json 入口与 PNG 入口（`card_png_base64`）共享 `extract_card_assets`
+    /// 路径（见 `import_card_to_disk` 末尾调用），character_book 处理与导入入口无关。
+    #[test]
+    fn character_book_constant_entry_injects_in_prompt_assembly() {
+        let data_root = tempfile::tempdir().unwrap();
+        // V2 card 内嵌 character_book：1 个 constant:true 条目 + 1 个 keyword 条目
+        let card_json = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {
+                "name": "Constant E2E",
+                "description": "test character",
+                "character_book": {
+                    "entries": [
+                        {
+                            "keys": [],
+                            "content": "The kingdom levies a salt tax.",
+                            "constant": true,
+                            "enabled": true,
+                            "priority": 30
+                        },
+                        {
+                            "keys": ["moon gate"],
+                            "content": "The moon gate opens at night.",
+                            "constant": false,
+                            "priority": 10
+                        }
+                    ]
+                }
+            }
+        })
+        .to_string();
+
+        import_card_to_disk(
+            data_root.path(),
+            Some("e2e-constant"),
+            None,
+            Some(card_json.clone()),
+            None,
+        )
+        .unwrap();
+
+        // 1. 落盘的 world/lorebook.json 应存在且保留 constant 字段
+        let lb_path = data_root
+            .path()
+            .join("characters/e2e-constant/world/lorebook.json");
+        assert!(lb_path.exists(), "world/lorebook.json should be written");
+        let lorebook_json_str = fs::read_to_string(&lb_path).unwrap();
+        let lorebook: serde_json::Value = serde_json::from_str(&lorebook_json_str).unwrap();
+        let entries = lorebook["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        let constant_entry = entries
+            .iter()
+            .find(|e| e["constant"].as_bool() == Some(true))
+            .expect("constant entry should be preserved in lorebook.json");
+        assert_eq!(
+            constant_entry["content"].as_str(),
+            Some("The kingdom levies a salt tax.")
+        );
+
+        // 2. 端到端 prompt assembly：读取落盘 lorebook → Orchestrator trigger
+        let orchestrator =
+            crate::orchestrator::Orchestrator::new(Some(&card_json), Some(&lorebook_json_str))
+                .unwrap();
+
+        // 扫描文本不含任何关键词 → 只有 constant 条目应注入
+        let triggered = orchestrator.trigger_lorebook("一段完全无关的对话文本。");
+        assert!(
+            triggered.contains("The kingdom levies a salt tax."),
+            "constant entry must inject without keyword match: {}",
+            triggered
+        );
+        assert!(
+            !triggered.contains("The moon gate opens at night."),
+            "non-constant entry without keyword match must not inject: {}",
+            triggered
+        );
+
+        // 3. 最终 system prompt 应包含 constant lore
+        let vars = std::collections::HashMap::new();
+        let system_prompt = orchestrator.build_system_prompt("user", &vars, &triggered);
+        assert!(
+            system_prompt.contains("The kingdom levies a salt tax."),
+            "constant lore must appear in final system prompt: {}",
+            system_prompt
+        );
+        assert!(system_prompt.contains("You are going to roleplay as Constant E2E"));
+    }
+
     #[tokio::test]
     async fn reextract_missing_character_does_not_create_directories() {
         use axum::body::Body;
