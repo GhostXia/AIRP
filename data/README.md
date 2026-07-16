@@ -1,5 +1,7 @@
 # `data/` 持久化目录规范
 
+> 当前/目标边界最后在 2026-07-16 的 `main@13d07d7` 复核。
+
 `data/` 是引擎的数据根，不是一个可以随意堆放资源的共享目录。角色相关资产按稳定角色 ID 聚合；每个命名 session 是一个独立开局/存档槽位。完整的目标合同见 [`docs/SESSION-DATA-DESIGN.md`](../docs/SESSION-DATA-DESIGN.md)。
 
 实际根目录由 `engine/src/data_dir/paths.rs` 的 `resolve_data_root()` 决定，优先级如下：

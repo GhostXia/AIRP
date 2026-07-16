@@ -2,13 +2,13 @@
 
 > 日期：2026-07-15
 >
-> 交付状态：C-PR1 已由 PR #180 合并并在 `main@f6ee120` 复核；本文之外的 C-PR2（Preset 生命周期 + revision 合同）仍未交付
+> 交付状态：C-PR1 已由 PR #180 合并并在 `main@13d07d7` 复核；本文之外的 C-PR2（Preset 生命周期 + revision 合同）仍未交付。原计划后移的 B（PromptAssemblyTrace）已由 PR #194 独立交付，不再受 C-PR2 排序约束
 >
 > 方向：#114 Persona/Preset WebUI 闭环（拆分为 C-PR1 + C-PR2，本文仅 C-PR1）
 >
 > 基线：`main@db4fc12`（PR #179）
 >
-> 并行策略：C-PR1 与 D（#126 Worldbook）并行；C-PR2（Preset 生命周期 + revision 合同）随后；B（#115 PromptAssemblyTrace 接线）后移至 C-PR2 合并后
+> 原并行策略（历史）：C-PR1 与 D（#126 Worldbook）并行，C-PR2 随后，再做 B（#115 PromptAssemblyTrace）。实际交付中 B 已由 PR #194 先完成，C-PR2 仍开放；本行不再用于当前排序
 
 ## 1. 目标
 

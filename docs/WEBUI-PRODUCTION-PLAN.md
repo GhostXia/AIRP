@@ -2,7 +2,7 @@
 
 > 状态：当前近期执行主入口
 >
-> 基线日期：2026-07-16，PR #194 head（合并后以 merge commit 为准）
+> 基线日期：2026-07-16，`main@13d07d7` / PR #194
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
@@ -71,7 +71,7 @@ Browser
 - durable message ID、cursor history、50 条窗口、增量 DOM、rollback-by-ID 已交付。
 - engine 已有 loopback 默认、精确 CORS、可选 bearer、限流、统一 outbound redirect policy、typed error 和 `/health`/`/version`。
 - `deploy/production/` 已有 digest-pinned OCI build、Compose/Caddy 同源 HTTPS 拓扑、私有 engine 网络、secret bootstrap 和 production WebUI runtime config；CI 会 build 镜像并启动一次性真实拓扑，验证 perimeter auth、私有 engine、CSP/headers、content-only import、三轮增量 SSE、重启持久化、浏览器注入/取消和 secret scan。
-- 多 Persona 存储、plural HTTP CRUD、chat pipeline 激活、effective endpoint、WebUI 自动/显式选择和角色/session 绑定/解绑已交付；Persona 高级生命周期、统一有效配置摘要和完整 Preset 生命周期仍未闭合。
+- 多 Persona 存储、plural HTTP CRUD、chat pipeline 激活、effective endpoint、WebUI 自动/显式选择和角色/session 绑定/解绑已交付；Persona 高级生命周期、跨资产完整 revision/provenance 的统一有效配置合同和完整 Preset 生命周期仍未闭合。
 - Worldbook v4 `selective`/`secondary_keys` runtime、v3 presence-aware migration/诊断、普通用户主面板管理、advisory 只读可见性和 PNG/JSON 到最终 prompt 的回归已交付。
 - Preset 规范化导入报告、原始输入 sidecar、Agent `get_preset`/`update_preset`（含 dry-run 与确认门控）、不可变版本目录和原子 current 指针已交付；HTTP/UI 受控 dry-run、完整 revision/provenance/collision 合同仍未闭合。
 - `PromptAssemblyTrace` 已接入真实 chat pipeline，并交付无写副作用的脱敏 HTTP preview 与 WebUI 本轮配置/有序装配摘要；Persona revision 已可见，其余资产统一 revision/provenance 仍待补齐。

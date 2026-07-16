@@ -1,5 +1,7 @@
 # AIRP production deployment
 
+> Baseline checked: 2026-07-16 at `main@13d07d7`.
+
 This directory is the first-party single-instance, self-hosted WebUI bundle. It runs two
 application services: a Caddy HTTPS gateway and a private AIRP engine. Only Caddy publishes
 host ports. The browser uses the same origin and never receives the engine bearer.
@@ -71,7 +73,7 @@ them with `latest`.
 commands. They create unique disposable data/Caddy volumes and a synthetic HTTPS provider, then
 prove HTTPS perimeter auth, host-inaccessible engine, headers/CSP/body limits, content-only card
 import, three incremental SSE turns, restart persistence, exact ephemeral-certificate SPKI trust,
-system-Chrome injection/stream-cancel
+system-Chrome injection/stream-cancel/prompt-preview
 behavior and absence of synthetic secrets/private runner paths in logs, image metadata and WebUI
 assets. Cleanup deletes only the uniquely named smoke volumes.
 

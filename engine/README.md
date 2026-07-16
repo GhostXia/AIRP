@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-16 的 `main@f6ee120` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-16 的 `main@13d07d7` 复核。
 
 ## 当前能力
 
@@ -18,7 +18,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - scene、多角色 prompt、preset、regex、volume sealing；
 - character/preset deterministic decompose、analysis preview/apply；
 - preset 规范化导入报告、原始输入 sidecar、版本目录与原子 current 指针；
-- 显式 `PromptAssemblyTrace` 数据模型骨架；调用方负责提供 provenance；
+- `PromptAssemblyTrace` 已接入真实 single/scene chat 装配路径，按 provider payload 顺序记录材料 provenance；`POST /v1/chat/preview` 复用该路径，且不创建会话、不推进 history/memory/state 或修复 metadata；
 - settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；development CORS 保留 WebUI/Tauri 精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
 - settings 更新在专用异步事务边界内完成校验、原子持久化和 live commit；失败不产生部分更新，并发提交保持运行态与磁盘一致。
 
@@ -78,6 +78,7 @@ cargo run -p airp-core -- run --message "hello"
 | Method | Path | 说明 |
 |---|---|---|
 | POST | `/v1/chat/completions` | 单回合 RP SSE |
+| POST | `/v1/chat/preview` | 无写副作用的脱敏 prompt 装配摘要；不返回 prompt 正文、API key 或 endpoint |
 | GET | `/v1/agent/tools` | 排序后的实际工具目录与副作用等级 |
 | POST | `/v1/agent/run` | 动态 structured tool-call Agent loop SSE |
 | POST | `/v1/chat/history` | 读取历史 |
@@ -162,7 +163,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-`main@f6ee120` 的 GitHub run `29476132711` 中 Rust workspace（含 warning-free rustdoc）、UI and WebUI、Production topology 全绿，并覆盖 V3 PNG/JSON character_book constant 到最终 prompt 的回归。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+`main@13d07d7` 的 [GitHub run `29488668196`](https://github.com/GhostXia/AIRP/actions/runs/29488668196) 中 Rust workspace（含 warning-free rustdoc 与神圣提示词不变式）、UI and WebUI、Production topology 全绿，并覆盖真实 prompt preview 的 engine、HTTP、WebUI 与生产浏览器路径。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 

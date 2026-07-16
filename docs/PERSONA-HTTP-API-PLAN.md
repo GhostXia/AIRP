@@ -2,7 +2,7 @@
 
 > Status: A1a (PR #151), A1b (PR #152), A2a (PR #154), and the A2b/A2c WebUI closure (PR #180) delivered.
 > This document records the stable HTTP/pipeline contract and the remaining
-> product boundary; it is not an execution log. Last checked: 2026-07-16 at `main@f6ee120`.
+> product boundary; it is not an execution log. Last checked: 2026-07-16 at `main@13d07d7`.
 
 ## Scope
 

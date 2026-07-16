@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-16 at `main@c47585b`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
+> Last reviewed: 2026-07-16 at `main@13d07d7`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -90,3 +90,11 @@
 - **Risk**: A user may assume a session is a self-contained reproducible save, but later edits or external material changes can make an old turn impossible to reconstruct.
 - **Current control**: Canonical UUID identity, durable history, metadata repair, stopped legacy directory creation, and an explicit target contract in [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md).
 - **Required direction**: Implement the contract in phases with atomic publication, approved file sets, cross-platform tree hashes, per-message `content_revision`, crash recovery and restore/export tests. Until then, UI and docs must not call current sessions fully self-contained or reproducible.
+
+## RR-012 · Prompt diagnostics leak private configuration or mutate chat state
+
+- **Status**: Mitigated for the PR #194 single-user preview boundary; broader multi-user authorization remains outside the current product topology.
+- **Surface**: `POST /v1/chat/preview` and the WebUI prompt-assembly summary.
+- **Risk**: A diagnostic endpoint could accidentally return prompt text, provider secrets/endpoints, or advance history/session state; even a redacted response can disclose selected asset IDs, provider/model names and prompt composition metadata.
+- **Current control**: The endpoint uses the real assembly path but returns bounded metadata only, omits prompt content/API keys/endpoints, uses the common `/v1/*` bearer middleware (mandatory in production), and has regression tests proving it does not create sessions, append history, advance memory/state, or repair metadata. Production browser smoke covers the same-origin UI path.
+- **Required direction**: Keep response fields allowlisted and regression-tested; redact this metadata from logs/support bundles, and add per-user authorization before any multi-user topology.
