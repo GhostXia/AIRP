@@ -15,6 +15,42 @@
 
 use super::*;
 
+fn snapshot_tree(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> {
+    fn visit(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)>,
+    ) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let metadata = entry.metadata().unwrap();
+            if metadata.is_dir() {
+                out.insert(
+                    format!("{relative}/"),
+                    (Vec::new(), std::time::SystemTime::UNIX_EPOCH),
+                );
+                visit(root, &path, out);
+            } else {
+                out.insert(
+                    relative,
+                    (std::fs::read(&path).unwrap(), metadata.modified().unwrap()),
+                );
+            }
+        }
+    }
+    let mut snapshot = std::collections::BTreeMap::new();
+    visit(root, root, &mut snapshot);
+    snapshot
+}
+
 // ── A6: chat/history 支持 session_id 字段 ──────────────────────────────
 
 #[tokio::test]
@@ -241,6 +277,97 @@ async fn test_o1_legacy_history_omits_scope_session_id() {
 }
 
 // ── A1b: chat_pipeline persona activation ────────────────────────────────
+
+#[tokio::test]
+async fn chat_preview_returns_redacted_trace_without_writes() {
+    let (state, tmp) = make_state_no_key();
+    let character = tmp.path().join("users/default/characters/alice");
+    std::fs::create_dir_all(character.join("history")).unwrap();
+    std::fs::create_dir_all(character.join("gating")).unwrap();
+    std::fs::write(
+        character.join("history/chat_log.jsonl"),
+        "{\"role\":\"assistant\",\"content\":\"existing history\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        character.join("history/chat_log_meta.json"),
+        "{\"sentinel\":true}",
+    )
+    .unwrap();
+    std::fs::write(character.join("gating/timeline.md"), "- 累计消耗时槽: 4\n").unwrap();
+    std::fs::write(
+        character.join("gating/checkpoints.md"),
+        "- 当前关卡: CP-1\n- 进度百分比: 40%\n",
+    )
+    .unwrap();
+    let before = snapshot_tree(tmp.path());
+    let app = create_router(state);
+    let card = serde_json::json!({
+        "spec": "chara_card_v2",
+        "spec_version": "2.0",
+        "data": {
+            "name": "Alice",
+            "description": "private card text",
+            "personality": "observant",
+            "scenario": "library",
+            "first_mes": "",
+            "mes_example": "",
+            "creator_notes": "",
+            "system_prompt": "",
+            "post_history_instructions": "",
+            "tags": [],
+            "creator": "",
+            "character_version": "",
+            "alternate_greetings": [],
+            "extensions": {}
+        }
+    })
+    .to_string();
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/preview")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "character_id": "alice",
+                        "character_card_id": card,
+                        "user_profile": { "name": "User", "variables": {} },
+                        "user_id": "default",
+                        "message": "hello",
+                        "endpoint": "https://example.test/v1/chat/completions?token=secret",
+                        "api_key": "never-serialize-me"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["effective"]["character_id"], "alice");
+    assert_eq!(value["effective"]["endpoint"], "configured");
+    assert_eq!(value["segments"][0]["source_kind"], "card");
+    assert_eq!(
+        value["segments"].as_array().unwrap().last().unwrap()["source_kind"],
+        "user"
+    );
+    let serialized = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!serialized.contains("never-serialize-me"));
+    assert!(!serialized.contains("token=secret"));
+    assert!(!serialized.contains("private card text"));
+    assert_eq!(
+        snapshot_tree(tmp.path()),
+        before,
+        "preview changed persisted state"
+    );
+}
 
 #[tokio::test]
 async fn a1b_chat_completions_returns_404_for_nonexistent_persona_id() {

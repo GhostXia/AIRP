@@ -5,6 +5,7 @@
   'use strict';
 
   const { describeEffectiveHint, buildBindAction, buildPersonaPayload } = window.AIRPPersonaUtils;
+  const { buildAssemblyViewModel } = window.AIRPAssemblyUtils;
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
   const $ = (s) => document.querySelector(s);
@@ -80,6 +81,12 @@
   const presetImportId = $('#preset-import-id');
   const btnImportPreset = $('#btn-import-preset');
   const presetStatus = $('#preset-status');
+  const assemblyStatus = $('#assembly-status');
+  const assemblyEffective = $('#assembly-effective');
+  const assemblyTrack = $('#assembly-track');
+  const assemblyMetrics = $('#assembly-metrics');
+  const assemblyDiagnostics = $('#assembly-diagnostics');
+  const btnRefreshAssembly = $('#btn-refresh-assembly');
 
   // ── state ────────────────────────────────────────────────────────────────
   let base = productionMode ? window.location.origin : engineUrl.value.replace(/\/+$/, '');
@@ -95,6 +102,7 @@
   // 'session_binding' | 'character_binding' | 'default'。
   let effectivePersona = null;
   let effectivePersonaRequestId = 0;
+  let assemblyRequestId = 0;
   let abortController = null;   // for chat SSE
   let agentAbort = null;        // for agent run SSE — 二次点击先 abort 前一个，防事件交错竞态（issue #43/#44 D）
   const HISTORY_PAGE_SIZE = 50;
@@ -263,7 +271,10 @@
     ]);
     // 初次连接后自动加载当前角色的 chat history（PLAN §9 P1 "交互收口"）。
     // refreshChars 内部已设置 selectedChar；此处 await 完成后即可拉 history。
-    if (selectedChar) loadHistory();
+    if (selectedChar) {
+      loadHistory();
+      refreshAssemblyPreview();
+    }
   }
 
   async function refreshHealth() {
@@ -853,6 +864,7 @@
     }
     rememberWorkspace();
     updateBindingButtons();
+    refreshAssemblyPreview();
   });
   if (btnNewPersona) btnNewPersona.addEventListener('click', enterCreateMode);
   if (btnDeletePersona) btnDeletePersona.addEventListener('click', deletePersona);
@@ -861,7 +873,10 @@
     exitCreateMode();
     await refreshPersona();
   });
-  if (presetSelect) presetSelect.addEventListener('change', rememberWorkspace);
+  if (presetSelect) presetSelect.addEventListener('change', () => {
+    rememberWorkspace();
+    refreshAssemblyPreview();
+  });
   if (btnImportPreset) btnImportPreset.addEventListener('click', importPreset);
 
   // The V2 character page is a view over the same selected character state as
@@ -1100,6 +1115,7 @@
     // #126 D-PR2：切角色后加载主面板 lorebook-section。
     loadLorebook();
     rememberWorkspace();
+    refreshAssemblyPreview();
   });
   sessSelect.addEventListener('change', () => {
     selectedSess = sessSelect.value;
@@ -1108,6 +1124,7 @@
     // #114 C-PR1：切会话后刷新 effective persona + 绑定按钮。
     refreshEffectivePersona();
     rememberWorkspace();
+    refreshAssemblyPreview();
   });
 
   btnNewSession.addEventListener('click', async () => {
@@ -1120,6 +1137,7 @@
       clearChatView();
       await refreshSessions();
       rememberWorkspace();
+      refreshAssemblyPreview();
     }
   });
 
@@ -1273,6 +1291,9 @@
       await refreshSessions();
     }
 
+    // 发送前用同一请求体启动只读预览，但不让预览网络往返阻塞聊天首 token。
+    refreshAssemblyPreview(text);
+
     // abort prior stream
     if (abortController) abortController.abort();
     // 用局部引用 ac：finally 清理时只清「仍是当前实例」的情况，避免旧请求 finally
@@ -1359,6 +1380,75 @@
     if (selectedSess) payload.session_id = selectedSess;
     return payload;
   }
+
+  function clearAssemblyPreview(message) {
+    assemblyStatus.textContent = message;
+    assemblyEffective.replaceChildren();
+    assemblyTrack.replaceChildren();
+    assemblyDiagnostics.replaceChildren();
+    assemblyMetrics.textContent = '';
+  }
+
+  function renderAssemblyPreview(trace) {
+    const view = buildAssemblyViewModel(trace);
+    if (!view) {
+      clearAssemblyPreview('预览数据不可用。');
+      return;
+    }
+    assemblyStatus.textContent = '已按当前消息与会话计算；敏感正文不会在此显示。';
+    assemblyEffective.replaceChildren();
+    for (const chip of view.chips) {
+      const item = document.createElement('div');
+      item.className = 'assembly-chip';
+      appendInline(item, 'span', 'assembly-chip-label', chip.label);
+      appendInline(item, 'strong', 'assembly-chip-value', chip.value);
+      assemblyEffective.appendChild(item);
+    }
+    assemblyMetrics.textContent = view.metrics;
+    assemblyTrack.replaceChildren();
+    for (const segment of view.segments) {
+      const item = document.createElement('li');
+      item.className = 'assembly-segment ' + segment.stabilityClass;
+      const copy = document.createElement('div');
+      copy.className = 'assembly-segment-copy';
+      appendInline(copy, 'strong', 'assembly-segment-name', segment.order + '. ' + segment.label);
+      if (segment.identity) appendInline(copy, 'span', 'assembly-segment-id mono', segment.identity);
+      const meta = document.createElement('div');
+      meta.className = 'assembly-segment-meta';
+      appendInline(meta, 'span', 'assembly-stability', segment.stability);
+      appendInline(meta, 'span', '', segment.size + (segment.truncated ? ' · 已截断' : ''));
+      item.append(copy, meta);
+      assemblyTrack.appendChild(item);
+    }
+    assemblyDiagnostics.replaceChildren();
+    for (const message of view.diagnostics) appendInline(assemblyDiagnostics, 'li', '', message);
+  }
+
+  async function refreshAssemblyPreview(messageOverride) {
+    if (!assemblyStatus) return;
+    const requestId = ++assemblyRequestId;
+    if (!selectedChar) {
+      if (btnRefreshAssembly) btnRefreshAssembly.disabled = false;
+      clearAssemblyPreview('选择角色后查看本轮实际配置。');
+      return;
+    }
+    assemblyStatus.textContent = '正在计算本轮配置…';
+    if (btnRefreshAssembly) btnRefreshAssembly.disabled = true;
+    const message = messageOverride === undefined ? chatInput.value.trim() : messageOverride;
+    const response = await api('POST', '/v1/chat/preview', buildChatPayload(message));
+    if (requestId !== assemblyRequestId) return;
+    if (btnRefreshAssembly) btnRefreshAssembly.disabled = false;
+    if (!response.ok) {
+      clearAssemblyPreview('预览失败：' + formatError(response.data, response.text));
+      return;
+    }
+    renderAssemblyPreview(response.data);
+  }
+
+  if (btnRefreshAssembly) btnRefreshAssembly.addEventListener('click', () => refreshAssemblyPreview());
+  if (chatInput) chatInput.addEventListener('input', () => {
+    if (assemblyStatus && selectedChar) assemblyStatus.textContent = '消息已变化；刷新预览可重新计算装配材料。';
+  });
 
   async function streamSse(res, onChunk) {
     const reader = res.body.getReader();

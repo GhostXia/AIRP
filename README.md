@@ -7,7 +7,7 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端。产品采用“无头 en
 - **ui**（`airp-ui`）：保留的 Tauri + Vue 桌面客户端，近期开发与打包验收暂停；
 - **protocol**（`airp-state-protocol`）：UI/engine 共用的线协议类型。
 
-当前权威实现基线是 `main@c47585b` / PR #191，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
+当前权威实现基线是 PR #194 head（合并后以 merge commit 为准），详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
 
 ## 项目原则
 
@@ -45,7 +45,7 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。旧 `gatewa
 - 默认 21-tool registry、运行时 catalog 和 engine capability 门；
 - 角色卡、命名 session、durable history、state、基础 worldbook、preset、scene、volume 与 analysis/decompose；
 - Preset 规范化导入报告、原始输入 sidecar、版本目录与原子 current 指针，以及确认门控的 `get_preset` / `update_preset` Agent tools；
-- 显式 `PromptAssemblyTrace` 数据模型骨架；调用方必须提供 provenance，不再从渲染文本反向猜测来源；
+- 真实 chat 装配驱动的 `PromptAssemblyTrace`、无写副作用脱敏 preview，以及 WebUI 本轮有效配置与有序装配摘要；
 - 多 Persona 存储/HTTP/pipeline、WebUI CRUD、自动/显式选择、effective source 与角色/session 绑定闭环；
 - worldbook v4 `constant` + `selective`/`secondary_keys` 运行时语义、presence-aware v3 迁移、shared normalizer/导入诊断、普通用户主面板编辑与 PNG/JSON 到最终 prompt 的端到端回归；
 - WebUI 基础 RP 闭环、history window 与 rollback-by-ID；

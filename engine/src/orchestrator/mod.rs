@@ -25,6 +25,25 @@ pub struct Orchestrator {
     pub lorebook: Option<Lorebook>,
 }
 
+/// One explicitly assembled system-prompt contribution.
+///
+/// The chat pipeline consumes these parts directly when building
+/// `PromptAssemblyTrace`; provenance is never inferred from rendered marker text.
+#[derive(Debug, Clone)]
+pub(crate) struct SystemPromptPart {
+    pub(crate) source_kind: &'static str,
+    pub(crate) source_id: Option<String>,
+    pub(crate) display_name: &'static str,
+    pub(crate) content: String,
+}
+
+/// Final system prompt plus the exact ordered contributions used to build it.
+#[derive(Debug, Clone)]
+pub(crate) struct SystemPromptAssembly {
+    pub(crate) prompt: String,
+    pub(crate) parts: Vec<SystemPromptPart>,
+}
+
 impl Orchestrator {
     pub fn new(card_json: Option<&str>, lorebook_json: Option<&str>) -> Result<Self, AirpError> {
         let card = if let Some(json) = card_json {
@@ -169,55 +188,123 @@ impl Orchestrator {
         enabled_override_ids: Option<&Vec<String>>,
         last_message: &str,
     ) -> String {
-        let mut prompt = String::new();
+        self.build_system_prompt_assembly_with_preset(
+            data_root,
+            character_id,
+            user_name,
+            variables,
+            triggered_lore,
+            preset_json,
+            enabled_override_ids,
+            last_message,
+            None,
+        )
+        .prompt
+    }
+
+    /// Assemble the system prompt while retaining exact ordered provenance.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_system_prompt_assembly_with_preset(
+        &self,
+        data_root: &Path,
+        character_id: Option<&str>,
+        user_name: &str,
+        variables: &HashMap<String, String>,
+        triggered_lore: &str,
+        preset_json: Option<&str>,
+        enabled_override_ids: Option<&Vec<String>>,
+        last_message: &str,
+        checkpoint_override: Option<&str>,
+    ) -> SystemPromptAssembly {
+        let mut parts = Vec::new();
+        let mut card_intro = String::new();
 
         let fields = self.extract_card_fields();
 
         if let Some(ov) = fields.system_override {
-            prompt.push_str(ov);
-            prompt.push('\n');
+            card_intro.push_str(ov);
+            card_intro.push('\n');
         } else {
-            prompt.push_str(&format!(
+            card_intro.push_str(&format!(
                 "You are going to roleplay as {}. Always stay in character and act naturally.\n",
                 fields.char_name
             ));
         }
 
-        // CP-gated known.md
+        parts.push(SystemPromptPart {
+            source_kind: "card",
+            source_id: character_id.map(str::to_string),
+            display_name: "角色卡",
+            content: card_intro,
+        });
+
+        // CP-gated known.md is turn-dependent and must not be labeled as stable card data.
         if let Some(char_id) = character_id {
-            let current_cp = gating::get_current_checkpoint(data_root, char_id);
+            let current_cp = checkpoint_override
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| gating::get_current_checkpoint(data_root, char_id));
             let filtered_known = gating::load_filtered_known(data_root, char_id, &current_cp);
             if !filtered_known.is_empty() {
-                prompt.push_str(&format!(
-                    "\n[{}'s Known Information & Clues (Current CP: {})]:\n{}\n\n",
-                    fields.char_name, current_cp, filtered_known
-                ));
+                parts.push(SystemPromptPart {
+                    source_kind: "known",
+                    source_id: Some(char_id.to_string()),
+                    display_name: "关卡已知信息",
+                    content: format!(
+                        "\n[{}'s Known Information & Clues (Current CP: {})]:\n{}\n\n",
+                        fields.char_name, current_cp, filtered_known
+                    ),
+                });
             }
         }
 
+        let mut card_details = String::new();
         if !fields.personality.is_empty() {
-            prompt.push_str(&format!(
+            card_details.push_str(&format!(
                 "[{}'s Personality]:\n{}\n\n",
                 fields.char_name, fields.personality
             ));
         }
         if !fields.description.is_empty() {
-            prompt.push_str(&format!(
+            card_details.push_str(&format!(
                 "[{}'s Appearance & Description]:\n{}\n\n",
                 fields.char_name, fields.description
             ));
         }
         if !fields.scenario.is_empty() {
-            prompt.push_str(&format!("[Scenario]:\n{}\n\n", fields.scenario));
+            card_details.push_str(&format!("[Scenario]:\n{}\n\n", fields.scenario));
         }
+        if !card_details.is_empty() {
+            parts.push(SystemPromptPart {
+                source_kind: "card",
+                source_id: character_id.map(str::to_string),
+                display_name: "角色卡详情",
+                content: card_details,
+            });
+        }
+
         if !triggered_lore.is_empty() {
-            prompt.push_str(triggered_lore);
-            prompt.push('\n');
+            let mut lorebook_part = triggered_lore.to_string();
+            lorebook_part.push('\n');
+            parts.push(SystemPromptPart {
+                source_kind: "lorebook",
+                source_id: character_id.map(str::to_string),
+                display_name: "世界书命中",
+                content: lorebook_part,
+            });
         }
 
         // M_LS LS-4: inject live state so LLM sees current values and knows to update them
         if let Some(char_id) = character_id {
-            inject_live_state(data_root, char_id, &mut prompt);
+            let mut state_part = String::new();
+            inject_live_state(data_root, char_id, &mut state_part);
+            if !state_part.is_empty() {
+                parts.push(SystemPromptPart {
+                    source_kind: "state",
+                    source_id: Some(char_id.to_string()),
+                    display_name: "角色状态",
+                    content: state_part,
+                });
+            }
         }
 
         // Preset prompts
@@ -230,20 +317,30 @@ impl Orchestrator {
                 last_message,
             );
             if !pp.is_empty() {
-                prompt.push_str(&pp);
-                prompt.push('\n');
+                let mut preset_part = pp;
+                preset_part.push('\n');
+                parts.push(SystemPromptPart {
+                    source_kind: "preset",
+                    source_id: None,
+                    display_name: "预设提示",
+                    content: preset_part,
+                });
             }
         }
 
-        // Macro substitution
+        // Macro substitution is applied per contribution before joining. Macro tokens cannot
+        // span contribution boundaries, so this preserves the exact legacy prompt output.
         let mut final_vars = variables.clone();
         final_vars.insert("char".to_string(), fields.char_name.into_owned());
         final_vars.insert("user".to_string(), user_name.to_string());
-        for (key, val) in final_vars {
-            prompt = prompt.replace(&format!("{{{{{}}}}}", key), &val);
+        for part in &mut parts {
+            for (key, val) in &final_vars {
+                part.content = part.content.replace(&format!("{{{{{}}}}}", key), val);
+            }
         }
 
-        prompt
+        let prompt = parts.iter().map(|part| part.content.as_str()).collect();
+        SystemPromptAssembly { prompt, parts }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -367,15 +464,31 @@ pub fn build_multi_char_system_prompt(
     triggered_lore: &str,
     user_name: &str,
 ) -> String {
-    let mut prompt = String::new();
+    build_multi_char_system_prompt_assembly(scene, cards, triggered_lore, user_name).prompt
+}
+
+/// Multi-character prompt assembly with explicit scene/lorebook provenance.
+pub(crate) fn build_multi_char_system_prompt_assembly(
+    scene: &crate::scene::SceneConfig,
+    cards: &[(&str, Option<&str>)],
+    triggered_lore: &str,
+    user_name: &str,
+) -> SystemPromptAssembly {
+    let mut scene_header = String::new();
 
     if !scene.description.is_empty() {
-        prompt.push_str("[场景设定]\n");
-        prompt.push_str(&scene.description);
-        prompt.push_str("\n\n");
+        scene_header.push_str("[场景设定]\n");
+        scene_header.push_str(&scene.description);
+        scene_header.push_str("\n\n");
     }
 
-    prompt.push_str("[在场角色]\n");
+    scene_header.push_str("[在场角色]\n");
+    let mut parts = vec![SystemPromptPart {
+        source_kind: "scene",
+        source_id: Some(scene.scene_id.to_string()),
+        display_name: "场景设定",
+        content: scene_header,
+    }];
 
     for entry in &scene.characters {
         let card_json = cards
@@ -399,46 +512,82 @@ pub fn build_multi_char_system_prompt(
             })
             .unwrap_or_else(|| entry.character_id.clone());
 
-        prompt.push_str(&format!("## {}{}\n", char_name, role_label));
+        let mut scene_character = format!("## {}{}\n", char_name, role_label);
 
         if !entry.intro.is_empty() {
-            prompt.push_str(&entry.intro);
-            prompt.push('\n');
+            scene_character.push_str(&entry.intro);
+            scene_character.push('\n');
         }
+        parts.push(SystemPromptPart {
+            source_kind: "scene",
+            source_id: Some(scene.scene_id.to_string()),
+            display_name: "在场角色",
+            content: scene_character,
+        });
 
         if let Some(json) = card_json {
             // Inline-load card fields for the prompt
             let orch = Orchestrator::new(Some(json), None);
             if let Ok(o) = orch {
                 let fields = o.extract_card_fields_pub();
+                let mut card_fields = String::new();
                 if !fields.personality.is_empty() {
-                    prompt.push_str(&format!("[性格]: {}\n", fields.personality));
+                    card_fields.push_str(&format!("[性格]: {}\n", fields.personality));
                 }
                 if !fields.description.is_empty() {
-                    prompt.push_str(&format!("[描述]: {}\n", fields.description));
+                    card_fields.push_str(&format!("[描述]: {}\n", fields.description));
                 }
                 if !fields.scenario.is_empty() {
-                    prompt.push_str(&format!("[场景设定]: {}\n", fields.scenario));
+                    card_fields.push_str(&format!("[场景设定]: {}\n", fields.scenario));
+                }
+                if !card_fields.is_empty() {
+                    parts.push(SystemPromptPart {
+                        source_kind: "card",
+                        source_id: Some(entry.character_id.clone()),
+                        display_name: "场景角色卡",
+                        content: card_fields,
+                    });
                 }
             }
         }
-        prompt.push('\n');
+        parts.push(SystemPromptPart {
+            source_kind: "scene",
+            source_id: Some(scene.scene_id.to_string()),
+            display_name: "角色分隔",
+            content: "\n".to_string(),
+        });
     }
 
     if !triggered_lore.is_empty() {
-        prompt.push_str("[世界书信息]\n");
-        prompt.push_str(triggered_lore);
-        prompt.push_str("\n\n");
+        let mut lorebook = String::from("[世界书信息]\n");
+        lorebook.push_str(triggered_lore);
+        lorebook.push_str("\n\n");
+        parts.push(SystemPromptPart {
+            source_kind: "lorebook",
+            // The merged block may contain both character and scene lore. Do not invent a
+            // single owner until merge_lorebooks retains per-entry provenance.
+            source_id: None,
+            display_name: "世界书命中",
+            content: lorebook,
+        });
     }
 
+    let mut scene_rules = String::new();
     if !scene.format_hint.is_empty() {
-        prompt.push_str("[格式规则]\n");
-        prompt.push_str(&scene.format_hint);
-        prompt.push('\n');
+        scene_rules.push_str("[格式规则]\n");
+        scene_rules.push_str(&scene.format_hint);
+        scene_rules.push('\n');
     }
-    prompt.push_str(&format!("用户扮演 {}，AI 不代写用户台词。\n", user_name));
+    scene_rules.push_str(&format!("用户扮演 {}，AI 不代写用户台词。\n", user_name));
+    parts.push(SystemPromptPart {
+        source_kind: "scene",
+        source_id: Some(scene.scene_id.to_string()),
+        display_name: "场景规则",
+        content: scene_rules,
+    });
 
-    prompt
+    let prompt = parts.iter().map(|part| part.content.as_str()).collect();
+    SystemPromptAssembly { prompt, parts }
 }
 
 /// M_LS LS-9: test-only shim so cross-module tests can call the private `inject_live_state`.
@@ -628,9 +777,22 @@ mod tests {
         };
 
         let lore = "这里是传说中的禁地";
-        let prompt = super::build_multi_char_system_prompt(&scene, &[], lore, "user");
+        let card = r#"{"spec":"chara_card_v2","data":{"name":"X","personality":"谨慎"}}"#;
+        let cards = [("x", Some(card))];
+        let prompt = super::build_multi_char_system_prompt(&scene, &cards, lore, "user");
         assert!(prompt.contains("[世界书信息]"), "should have lore section");
         assert!(prompt.contains("禁地"), "should include lore content");
+
+        let assembly = super::build_multi_char_system_prompt_assembly(&scene, &cards, lore, "user");
+        assert_eq!(
+            assembly.prompt, prompt,
+            "trace assembly must preserve prompt bytes"
+        );
+        let kinds: Vec<_> = assembly.parts.iter().map(|part| part.source_kind).collect();
+        assert_eq!(
+            kinds,
+            ["scene", "scene", "card", "scene", "lorebook", "scene"]
+        );
     }
 
     #[test]

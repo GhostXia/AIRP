@@ -148,6 +148,22 @@
           <div><p class="eyebrow">SESSION</p><h1 id="session-title">对话空间</h1><p>选择左侧角色和会话后开始对话。</p></div>
           <div class="view-actions"><button id="btn-history">刷新历史</button><button id="btn-regen">重新生成</button><button id="btn-rollback">回滚</button></div>
         </div>
+        <section id="assembly-summary" class="assembly-summary" aria-labelledby="assembly-title">
+          <div class="assembly-head">
+            <div>
+              <p class="eyebrow">THIS TURN</p>
+              <h2 id="assembly-title">本轮配置</h2>
+            </div>
+            <button id="btn-refresh-assembly" type="button">刷新预览</button>
+          </div>
+          <p id="assembly-status" class="assembly-status" aria-live="polite">选择角色后查看本轮实际配置。</p>
+          <div id="assembly-effective" class="assembly-effective" aria-label="本轮有效配置"></div>
+          <details id="assembly-details">
+            <summary>查看装配材料 <span id="assembly-metrics" class="assembly-metrics"></span></summary>
+            <ol id="assembly-track" class="assembly-track"></ol>
+            <ul id="assembly-diagnostics" class="assembly-diagnostics"></ul>
+          </details>
+        </section>
         <div id="history-toolbar" hidden>
           <button id="btn-load-earlier" type="button">加载更早</button>
           <span id="history-status" class="hint" aria-live="polite"></span>
@@ -199,6 +215,7 @@
 <script src="runtime-config.js"></script>
 <script src="persona-utils.js"></script>
 <script src="lorebook-utils.js"></script>
+<script src="assembly-utils.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -17,6 +17,45 @@ static PROGRESS_RE: Lazy<Regex> =
 static CP_LINE_M_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?m)^\s*-\s*当前关卡:\s*(\S+)").expect("CP_LINE_M_RE"));
 
+fn checkpoint_for_slot(slot: u32) -> &'static str {
+    if slot >= SLOTS_PER_CP_3 {
+        "CP-3"
+    } else if slot >= SLOTS_PER_CP_2 {
+        "CP-2"
+    } else {
+        "CP-1"
+    }
+}
+
+/// Compute the checkpoint that the next chat turn will use without mutating gating files.
+pub fn get_next_checkpoint(data_root: &Path, character_id: &str) -> String {
+    if character_id.is_empty() {
+        return "CP-1".to_string();
+    }
+    let character = data_root.join("characters").join(character_id);
+    let gating = character.join("gating");
+    let checkpoints_exist =
+        gating.join("checkpoints.md").is_file() || character.join("checkpoints.md").is_file();
+    if !checkpoints_exist {
+        return "CP-1".to_string();
+    }
+    let timeline = if gating.join("timeline.md").is_file() {
+        gating.join("timeline.md")
+    } else {
+        character.join("timeline.md")
+    };
+    let current_slot = fs::read_to_string(timeline)
+        .ok()
+        .and_then(|content| {
+            SLOT_RE
+                .captures(&content)
+                .and_then(|captures| captures.get(1))
+                .and_then(|value| value.as_str().parse::<u32>().ok())
+        })
+        .unwrap_or(0);
+    checkpoint_for_slot(current_slot.saturating_add(1)).to_string()
+}
+
 /// 推进时槽并自动触发剧情流转判定。
 ///
 /// **M1.3 角色隔离**：timeline.md / checkpoints.md 现落在
@@ -95,13 +134,7 @@ pub fn advance_timeline_and_checkpoint(data_root: &Path, character_id: &str) {
 
     if checkpoints_path.exists() {
         if let Ok(mut cp_content) = fs::read_to_string(&checkpoints_path) {
-            let current_cp = if current_slot >= SLOTS_PER_CP_3 {
-                "CP-3"
-            } else if current_slot >= SLOTS_PER_CP_2 {
-                "CP-2"
-            } else {
-                "CP-1"
-            };
+            let current_cp = checkpoint_for_slot(current_slot);
 
             let progress_percent = if current_slot >= SLOTS_PER_CP_3 {
                 "100%".to_string()

@@ -40,7 +40,7 @@ use handlers::{
     get_effective_persona_endpoint, get_persona_endpoint, get_persona_multi_endpoint,
     get_preset_endpoint, get_scene_endpoint, get_settings, import_character,
     import_preset_endpoint, list_agent_tools, list_characters, list_models, list_personas_endpoint,
-    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
+    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
     reextract_character_assets, regen_chat, rollback_chat, unbind_persona_endpoint,
     update_character_card, update_character_lorebook, update_persona_endpoint,
     update_persona_multi_endpoint, update_settings,
@@ -301,6 +301,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
 
     let v1_routes = Router::new()
         .route("/v1/chat/completions", post(chat_completion))
+        .route("/v1/chat/preview", post(preview_chat_assembly))
         .route("/v1/agent/run", post(agent_run))
         .route("/v1/agent/tools", get(list_agent_tools))
         .route("/v1/chat/history", post(get_chat_history))

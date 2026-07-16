@@ -58,6 +58,8 @@ try {
   // 根因曾是 Dockerfile.gateway 漏 COPY → Caddy try_files fallback 到 index.html
   // → MIME text/html → 浏览器拒绝执行 → AIRPLorebookUtils undefined。
   assert.equal(await page.evaluate(() => typeof window.AIRPLorebookUtils), 'object');
+  assert.equal(await page.evaluate(() => typeof window.AIRPAssemblyUtils), 'object');
+  assert.equal(await page.locator('#assembly-summary').count(), 1);
   await page.waitForFunction(() => document.querySelector('#persona-select option[value=""]'));
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('role'), 'status');
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('aria-live'), 'polite');
@@ -102,6 +104,29 @@ try {
   await page.waitForFunction(name => document.body.textContent.includes(name), injectionName);
   assert.equal(await page.locator('img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);
+
+  // #194: hostile trace metadata must flow through the real renderer as text only.
+  await page.route('**/v1/chat/preview', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        effective: { character_id: 'smoke-xss', model: injectionName, provider: 'test' },
+        total_estimated_tokens: 1,
+        segments: [{ source_kind: 'card', source_id: injectionName, chars: 1, estimated_tokens: 1, stable_or_volatile: 'stable' }],
+        diagnostics: [{ kind: 'fixture', message: injectionName }],
+      }),
+    });
+  });
+  await page.locator('[data-view="session"]').first().click();
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/v1/chat/preview') && response.request().method() === 'POST'),
+    page.locator('#btn-refresh-assembly').click(),
+  ]);
+  await page.waitForFunction(name => document.querySelector('#assembly-summary')?.textContent?.includes(name), injectionName);
+  assert.equal(await page.locator('#assembly-summary img[src="x"]').count(), 0);
+  assert.equal(await page.evaluate(() => window.__airpXss), 0);
+  await page.unroute('**/v1/chat/preview');
 
   // #126 D-PR2: lorebook-section DOM wiring（主面板迁移后 workbench 不再有 lorebook tab）
   assert.equal(await page.locator('#lorebook-section').isVisible(), true);
