@@ -111,9 +111,14 @@ try {
 
   // S1/S2: 通过 API 注入带 advisory 字段的 lorebook entry，验证 selective toggle
   // 启用/禁用 secondary_keys input，以及 advisory 区域只读（span 非 input）。
-  // engine 有全局限流（tower_governor: 10 req/s, burst 20 per IP），smoke 前面已发了
-  // 大量请求（import/3 轮 chat SSE/history/rollback/regen），PUT lorebook 时 token bucket
-  // 可能耗尽返回 429。这里加重试：429 时退避 1s 重试，最多 5 次。
+  //
+  // 限流策略（CodeRabbit 审计 + CI 诊断双重确认）：
+  // engine 全局 tower_governor 限流 10 req/s, burst 20 per IP。smoke 前面已发大量请求
+  // (import/3 轮 chat SSE/history/rollback/regen)，token bucket 已耗尽。若直接 PUT 会 429；
+  // PUT 重试会消耗更多 token，导致后续 GET loadLorebook 也 429（CI run 29463696091 实测）。
+  // 正确做法：先等待 bucket 完全恢复（burst 20 / 10 req/s = 2s 即可恢复满），再发 PUT +
+  // 后续 GET。保留 PUT 429 重试作为兜底，应对 CI 环境时序抖动。
+  await page.waitForTimeout(3_000);
   await page.evaluate(async () => {
     const payload = {
       entries: [
