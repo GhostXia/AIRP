@@ -1,4 +1,8 @@
 use crate::error::AirpError;
+use crate::revision::atomic::{
+    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+};
+use crate::revision::manifest::{AssetKind, AssetSource};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -65,6 +69,68 @@ pub fn ensure_session_dirs(session_dir: &Path) -> Result<(), AirpError> {
     Ok(())
 }
 
+/// #115 Phase 2f：Memory 接入统一 revision 合同。
+///
+/// 在 `session_dir/` 下新增 `revisions/{content_revision}/` + `current_revision`，
+/// 批准文件为 `current.md` + `index.md`（封卷时额外含 `volumes/vol_NNN.md`）。
+///
+/// - lazy migration：首次 commit 时 `current_revision` 不存在则 `content_revision=1`
+/// - provenance：source_hash = 所有批准文件拼接的 SHA-256
+fn commit_memory_revision(
+    session_dir: &Path,
+    extra_files: Vec<(String, Vec<u8>)>,
+    source_kind: &str,
+) -> Result<u64, AirpError> {
+    use sha2::{Digest, Sha256};
+    let content_revision = match read_current_revision(session_dir)? {
+        Some(existing) => existing + 1,
+        None => 1,
+    };
+    let current_bytes = fs::read(current_path(session_dir)).unwrap_or_default();
+    let index_bytes = fs::read(index_path(session_dir)).unwrap_or_default();
+    let mut files = vec![
+        ("current.md".to_string(), current_bytes.clone()),
+        ("index.md".to_string(), index_bytes.clone()),
+    ];
+    files.extend(extra_files);
+    let source_hash_hex = {
+        let mut hasher = Sha256::new();
+        hasher.update(&current_bytes);
+        hasher.update(&index_bytes);
+        for (_, content) in &files[2..] {
+            hasher.update(content);
+        }
+        format!("{:x}", hasher.finalize())
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let staged = StagedRevision {
+        content_revision,
+        asset_kind: AssetKind::Memory,
+        asset_id: session_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("memory")
+            .to_string(),
+        created_at: now.clone(),
+        source: AssetSource {
+            source_kind: source_kind.to_string(),
+            source_hash: Some(source_hash_hex),
+            source_filename: None,
+            converter_version: None,
+            imported_at: Some(now),
+            parent_revision: if content_revision > 1 {
+                Some(content_revision - 1)
+            } else {
+                None
+            },
+        },
+        files,
+    };
+    let commit_opts = CommitOptions::new(session_dir);
+    commit_revision(&staged, &commit_opts)?;
+    Ok(content_revision)
+}
+
 /// 追加文本到 current.md。
 ///
 /// M5.5：使用 `OpenOptions::append` 进行 O(1) 追加，避免 read-all-write-all
@@ -85,6 +151,9 @@ pub fn append_to_current(session_dir: &Path, text: &str) -> Result<(), AirpError
     if !text.ends_with('\n') {
         f.write_all(b"\n")?;
     }
+    drop(f);
+    // #115 Phase 2f：追加后 commit memory revision。
+    commit_memory_revision(session_dir, Vec::new(), "derived")?;
     Ok(())
 }
 
@@ -149,7 +218,15 @@ pub fn next_volume_number(session_dir: &Path) -> u32 {
 pub fn write_volume(session_dir: &Path, number: u32, content: &str) -> Result<(), AirpError> {
     ensure_session_dirs(session_dir)?;
     let vp = volume_path(session_dir, number);
-    Ok(fs::write(&vp, content)?)
+    fs::write(&vp, content)?;
+    // #115 Phase 2f：封卷后 commit memory revision（含新卷文件）。
+    let vol_relative = format!("volumes/vol_{:03}.md", number);
+    commit_memory_revision(
+        session_dir,
+        vec![(vol_relative, content.as_bytes().to_vec())],
+        "derived",
+    )?;
+    Ok(())
 }
 
 /// 读取某卷的完整内容。
@@ -352,5 +429,64 @@ mod tests {
         write_index(&session_dir, custom_index).unwrap();
         let result = read_index(&session_dir).unwrap();
         assert_eq!(result, custom_index);
+    }
+
+    #[test]
+    fn append_to_current_creates_and_bumps_memory_revision() {
+        // Phase 2f：append_to_current 后应创建 revision 目录 + current_revision 指针
+        let tmp = tempdir().unwrap();
+        let session_dir = tmp.path().join("mem-rev");
+        ensure_session_dirs(&session_dir).unwrap();
+
+        append_to_current(&session_dir, "第一段").unwrap();
+        assert_eq!(
+            read_current_revision(&session_dir).unwrap(),
+            Some(1),
+            "首次 append 应创建 revision 1"
+        );
+        assert!(session_dir.join("revisions").join("1").is_dir());
+        assert!(session_dir
+            .join("revisions")
+            .join("1")
+            .join("current.md")
+            .is_file());
+        assert!(session_dir
+            .join("revisions")
+            .join("1")
+            .join("index.md")
+            .is_file());
+
+        append_to_current(&session_dir, "第二段").unwrap();
+        assert_eq!(
+            read_current_revision(&session_dir).unwrap(),
+            Some(2),
+            "第二次 append 应 bump 到 revision 2"
+        );
+        assert!(session_dir.join("revisions").join("2").is_dir());
+        // 旧 revision 保留不可变
+        assert!(session_dir.join("revisions").join("1").is_dir());
+    }
+
+    #[test]
+    fn write_volume_creates_revision_with_volume_file() {
+        // Phase 2f：封卷后 revision 应包含 volumes/vol_NNN.md
+        let tmp = tempdir().unwrap();
+        let session_dir = tmp.path().join("mem-vol");
+        ensure_session_dirs(&session_dir).unwrap();
+
+        write_volume(&session_dir, 1, "# 卷1\n内容").unwrap();
+        assert_eq!(
+            read_current_revision(&session_dir).unwrap(),
+            Some(1),
+            "封卷应创建 revision 1"
+        );
+        let rev_dir = session_dir.join("revisions").join("1");
+        assert!(rev_dir.is_dir());
+        assert!(rev_dir.join("current.md").is_file());
+        assert!(rev_dir.join("index.md").is_file());
+        assert!(
+            rev_dir.join("volumes").join("vol_001.md").is_file(),
+            "revision 应包含封卷文件"
+        );
     }
 }

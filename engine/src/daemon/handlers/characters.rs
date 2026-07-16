@@ -16,6 +16,10 @@ use crate::daemon::DaemonState;
 use crate::data_dir;
 use crate::domain::ChatService;
 use crate::error::AirpError;
+use crate::revision::atomic::{
+    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+};
+use crate::revision::manifest::{AssetKind, AssetSource};
 use crate::types::CharacterId;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -26,6 +30,61 @@ use unicode_normalization::UnicodeNormalization;
 const MAX_DERIVED_CHARACTER_ID_BYTES: usize = 120;
 
 // ── Private request/response types (handler-local) ────────────────────────────
+
+/// #115 Phase 2c：Character card 接入统一 revision 合同。
+///
+/// 在 `characters/{character_id}/` 下新增 `revisions/{content_revision}/` +
+/// `current_revision`，批准文件为 `card.json` + `raw.json`。
+///
+/// - lazy migration：首次 write 时 `current_revision` 不存在则 `content_revision=1`
+/// - 工作副本（`card/card.json` + `card/raw.json`）由调用方负责写入
+/// - provenance：source_kind = "controlled_upload"，source_hash = card.json 的完整 SHA-256
+fn commit_character_revision(
+    data_root: &std::path::Path,
+    character_id: &str,
+    card_json: &str,
+    raw_json: &str,
+) -> Result<u64, AirpError> {
+    use sha2::{Digest, Sha256};
+    let char_dir = data_dir::character_dir(data_root, character_id)?;
+    let content_revision = match read_current_revision(&char_dir)? {
+        Some(existing) => existing + 1,
+        None => 1,
+    };
+    let card_bytes = card_json.as_bytes();
+    let raw_bytes = raw_json.as_bytes();
+    let source_hash_hex = {
+        let mut hasher = Sha256::new();
+        hasher.update(card_bytes);
+        format!("{:x}", hasher.finalize())
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let staged = StagedRevision {
+        content_revision,
+        asset_kind: AssetKind::Character,
+        asset_id: character_id.to_string(),
+        created_at: now.clone(),
+        source: AssetSource {
+            source_kind: "controlled_upload".to_string(),
+            source_hash: Some(source_hash_hex),
+            source_filename: None,
+            converter_version: None,
+            imported_at: Some(now),
+            parent_revision: if content_revision > 1 {
+                Some(content_revision - 1)
+            } else {
+                None
+            },
+        },
+        files: vec![
+            ("card.json".to_string(), card_bytes.to_vec()),
+            ("raw.json".to_string(), raw_bytes.to_vec()),
+        ],
+    };
+    let commit_opts = CommitOptions::new(&char_dir);
+    commit_revision(&staged, &commit_opts)?;
+    Ok(content_revision)
+}
 
 /// R-01: Import a character card. Path-first (守不变式6)：优先 `card_path`
 /// 让引擎读盘；`card_json`/`card_png_base64` 为 fallback（无真实路径时）。
@@ -186,6 +245,15 @@ pub(crate) fn import_card_to_disk(
 
     // CF-7: 解包资产（非阻塞；失败仅 warn）
     extract_card_assets(data_root, &final_id, &json_str);
+
+    // #115 Phase 2c：接入统一 revision 合同。
+    // 工作副本（card/card.json + card/raw.json）已由 extract_card_assets 写入；
+    // 这里 commit 不可变 revision 快照。失败视为导入失败（调用方应清理）。
+    let raw_json = json_str.clone();
+    if let Err(e) = commit_character_revision(data_root, &final_id, &json_str, &raw_json) {
+        tracing::error!(err = %e, character_id = %final_id, "Phase 2c: commit character revision 失败");
+        return Err(e);
+    }
 
     Ok((final_id, card_format, json_str))
 }
@@ -518,8 +586,12 @@ pub(in crate::daemon) async fn update_character_card(
     let char_dir = data_dir::character_dir(&state.data_root, cid.as_str())?;
     let card_dir = char_dir.join("card");
     fs::create_dir_all(&card_dir)?;
-    fs::write(card_dir.join("card.json"), &json_str)?;
-    fs::write(card_dir.join("raw.json"), &json_str)?;
+    // #115 Phase 2c：工作副本用 replace_file 原子写入，再 commit revision。
+    // card.json 和 raw.json 内容相同（PUT 端点视为新的规范化版本）。
+    let json_bytes = json_str.as_bytes();
+    data_dir::replace_file(&card_dir.join("card.json"), json_bytes)?;
+    data_dir::replace_file(&card_dir.join("raw.json"), json_bytes)?;
+    commit_character_revision(&state.data_root, cid.as_str(), &json_str, &json_str)?;
     Ok(Json(serde_json::json!({
         "character_id": cid.as_str(),
         "status": "ok"
