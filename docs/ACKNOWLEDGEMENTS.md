@@ -48,7 +48,7 @@
 
 因此，模块化深度干预不违背“便于维护和未来移植”；不可替换、边界不透明、把第三方内部模型扩散到全项目才违背该准则。
 
-### 已批准并进入 P0 preview artifact 的普通依赖
+### 已单独核验的普通依赖与基础设施
 
 | 组件 | 固定版本/核验日期 | 计划用途 | 许可证与 provenance | 当前状态 |
 |---|---|---|---|---|
@@ -56,6 +56,7 @@
 | [Debian](https://www.debian.org/) Docker Official Image | `bookworm-slim` / 2026-07-13 | `airp-core` runtime base 与 CA trust store | 官方 multi-platform image 固定为 `sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df`；各 Debian package 许可证须由最终 SBOM/notices 枚举 | 已进入 `deploy/production/Dockerfile.engine` runtime stage；正式发布 provenance 仍开放 |
 | [Rust](https://www.rust-lang.org/) Docker Official Image | `1.96.0-bookworm` / 2026-07-13 | 仅用于可重复构建 `airp-core` 的 builder stage，不进入 runtime image | 官方 multi-platform image 固定为 `sha256:5e2214abe154fe26e39f64488952e5c991eeed1d6d6da7cc8381ae83927f0cfc`；Rust toolchain 为 Apache-2.0 OR MIT | 已进入 `deploy/production/Dockerfile.engine` builder stage；不随 runtime 分发 |
 | [Playwright Core](https://github.com/microsoft/playwright) | `1.61.1` / 2026-07-13 | 仅作为 CI dev dependency 驱动 runner 预装的 system Chrome，验证 production WebUI CSP、文本注入安全与 SSE 取消 | npm lockfile 固定 tarball integrity；上游许可证 Apache-2.0；未下载或分发 Playwright browser bundle | 已进入 `ui/package-lock.json` 与 production topology smoke；不进入 AIRP runtime images，不复用上游测试或实现代码 |
+| [Vite](https://github.com/vitejs/vite) / [Vue plugin](https://github.com/vitejs/vite-plugin-vue) / [Vitest](https://github.com/vitest-dev/vitest) | `8.1.4` / `6.0.8` / `4.1.10`，2026-07-16 核验 | `ui/` 的 Vue 构建、开发服务器与测试工具链 | 三个上游均为 MIT；manifest 使用不跨主版本的有界兼容范围，npm lockfile 固定实际版本、来源与 tarball integrity | 仅为开发/测试依赖，不进入 production WebUI gateway 或 engine runtime image；升级由 #137 / PR #191 审计 |
 
 AIRP 只配置并分发普通上游组件，不复制、翻译或改写其源码/文档。上表记录 P0 artifact 已采用的精确镜像；它不把 preview artifact 写成正式发布能力。正式 tag 前仍必须补构建 provenance、机器可读 notices 与完整 SBOM。
 
