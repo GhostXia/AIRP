@@ -39,7 +39,7 @@ pub fn inject_current_context(session_dir: &Path, prompt: &mut String) {
 }
 
 /// 根据 user_message 中出现的关键词，扫描全局 index 找到相关卷，
-/// 注入对应卷的 \[卷索引\] 头部到 System Prompt 的 [Related History] 段。
+/// 注入对应卷的 \[卷索引\] 头部到 System Prompt 的 \[Related History\] 段。
 ///
 /// **M5.3 关键词匹配增强**：
 ///   - 关键词按字符长度倒序匹配，避免 "艾" 抢走 "艾莉娅" 的命中范围。

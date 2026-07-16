@@ -152,8 +152,14 @@ Rustdoc 采用“合同正确性优先”策略：CI 要求公共文档能够生
 并发或安全边界的注释才应补充；不按第三方工具的私有百分比给显而易见的字段和
 私有 helper 批量填充注释。
 
-需要盘点公共项缺失文档时，使用可复现的稳定工具链命令
-`RUSTDOCFLAGS="-W missing-docs" cargo doc --workspace --no-deps --locked`。
+需要盘点公共项缺失文档时，使用可复现的稳定工具链命令：
+
+```powershell
+$env:RUSTDOCFLAGS = "-W missing-docs"
+cargo doc --workspace --no-deps --locked
+Remove-Item Env:RUSTDOCFLAGS
+```
+
 该结果是维护清单，不是 CI 门禁；若未来启用 `missing_docs` 门禁，必须先明确稳定的
 公共扩展面并一次性记录基线，不能让既有缺口阻止无关修复。
 
