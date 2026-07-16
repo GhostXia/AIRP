@@ -1,6 +1,6 @@
 # Security and deployment boundary
 
-> Baseline reviewed: 2026-07-16 at `main@c47585b`. Current implementation status and release gates are in [CURRENT-BASELINE.md](CURRENT-BASELINE.md).
+> Baseline reviewed: 2026-07-16 at `main@13d07d7`. Current implementation status and release gates are in [CURRENT-BASELINE.md](CURRENT-BASELINE.md).
 
 AIRP defaults to a single-user local topology. The daemon binds to loopback; the bundled desktop UI owns its sidecar process and stops it when the UI exits.
 
@@ -30,6 +30,8 @@ The first supported WebUI deployment is specified by [WEBUI-PRODUCTION-ARCHITECT
 - The private engine keeps its own bearer, validation, body limits, path guards and outbound redirect policy. Gateway controls do not replace engine controls.
 
 The engine fail-closed slice and `deploy/production/` OCI/Compose + Caddy artifact are implemented. The bundle pins base images by digest, mounts runtime secrets from gitignored files, publishes only Caddy, uses a private engine network, and makes the production WebUI same-origin without browser-visible engine credentials. The `Production topology` CI gate exercises real internal TLS, negative perimeter authentication, private-engine reachability, CSP/headers/body limits, content-only import, incremental SSE, restart persistence, system-Chrome injection/cancellation and runtime-secret scans. P1-P3 release gates remain open; never expose `webui/serve.js` or port 8000 as a remote deployment.
+
+`POST /v1/chat/preview` uses the same `/v1/*` bearer middleware (mandatory in production) and returns a bounded assembly summary rather than prompt text. It omits API keys and provider endpoints and performs no timeline/session write or metadata repair. The response still exposes non-secret configuration metadata such as selected IDs, provider/model names and ordered material kinds; treat it as user-private diagnostic data and do not place it in public logs or support bundles without redaction.
 
 PR #191 upgraded the `ui/` toolchain to Vite 8.1.4, Vitest 4.1.10 and `@vitejs/plugin-vue` 6.0.8; its locked dependency tree reports zero `npm audit` findings and passed UI/WebUI plus production-browser gates. These remain development dependencies and are not copied into production runtime images. Development servers and test UIs must still remain loopback-only or otherwise restricted to trusted networks.
 

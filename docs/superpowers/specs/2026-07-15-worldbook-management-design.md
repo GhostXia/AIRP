@@ -2,11 +2,11 @@
 
 > 日期：2026-07-15
 >
-> 交付状态：已完成。D-PR1（engine v4）由 PR #180 交付，D-PR2（主面板管理）由 PR #182 交付并经 PR #188 加固，D-PR3（PNG/JSON constant 端到端回归）由 PR #185 交付；在 `main@f6ee120` 复核
+> 交付状态：已完成。D-PR1（engine v4）由 PR #180 交付，D-PR2（主面板管理）由 PR #182 交付并经 PR #188 加固，D-PR3（PNG/JSON constant 端到端回归）由 PR #185 交付；在 `main@13d07d7` 复核
 >
 > 方向：#126 Worldbook 管理 + 高级字段裁定
 >
-> 设计基线：`main@db4fc12`（PR #179）；实现复核：`main@f6ee120`
+> 设计基线：`main@db4fc12`（PR #179）；实现复核：`main@13d07d7`
 >
 > 历史拆分：D-PR1 engine v4 → D-PR2 WebUI 主面板 → D-PR3 导入/装配端到端回归；本段仅解释已完成的交付切片，不再作为排期
 

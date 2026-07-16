@@ -7,7 +7,7 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端。产品采用“无头 en
 - **ui**（`airp-ui`）：保留的 Tauri + Vue 桌面客户端，近期开发与打包验收暂停；
 - **protocol**（`airp-state-protocol`）：UI/engine 共用的线协议类型。
 
-当前权威实现基线是 PR #194 head（合并后以 merge commit 为准），详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
+当前权威实现基线是 `main@13d07d7` / PR #194，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
 
 ## 项目原则
 
@@ -107,7 +107,7 @@ npm run test -- --run
 
 `.github/workflows/pr-gate.yml` 自动执行 Rust workspace、UI/WebUI 和 production topology 门禁。`.github/workflows/manual-build.yml` 负责手动 Windows desktop package。审计 bot 是合并前阻塞门禁：本地全绿只允许开 PR，必须等待审计通过并由人工 review 决定是否合并。
 
-合入 `main@c47585b` 的 PR #191 head tree 已由 [PR gate run 29478836944](https://github.com/GhostXia/AIRP/actions/runs/29478836944) 验证：Rust workspace（含 warning-free rustdoc 与神圣提示词不变式）、UI and WebUI、Production topology 均通过，CodeRabbit 审计通过。证据只证明该合入树，不自动证明后续改动。
+`main@13d07d7` 的 [push gate run 29488668196](https://github.com/GhostXia/AIRP/actions/runs/29488668196) 已通过 Rust workspace（含 warning-free rustdoc 与神圣提示词不变式）、UI and WebUI、Production topology；PR #194 的 [PR gate run 29488032908](https://github.com/GhostXia/AIRP/actions/runs/29488032908) 与 CodeRabbit 也通过。证据只证明该 commit/PR head，不自动证明后续改动。
 
 ## 关键文档
 

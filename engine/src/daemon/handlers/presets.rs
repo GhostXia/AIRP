@@ -66,8 +66,9 @@ pub(in crate::daemon) async fn get_preset_endpoint(
 // `presets/{id}/preset.json`（canonical）与 `presets/{id}/raw.json`（原始 sidecar，
 // 无损保留 ST-only 字段如 `prompt_order` / `injection_position` / `probability`）。
 // 拒绝脚本执行和路径输入（preset_id 走 PresetId::new 校验，preset_json 走 serde
-// 反序列化 serde_json::Value + normalize_preset 守门）。rename/duplicate/export、
-// PromptAssemblyTrace 留 #115 后续子项。
+// 反序列化 serde_json::Value + normalize_preset 守门）。rename/duplicate/export 与
+// 跨资产完整 revision/provenance 仍属后续；PromptAssemblyTrace/preview 已由 chat
+// pipeline 统一提供，不在本 handler 重复实现。
 
 /// POST /v1/presets/import — 校验 + 落盘一份 preset JSON。
 pub(in crate::daemon) async fn import_preset_endpoint(
