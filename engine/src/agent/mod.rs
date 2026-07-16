@@ -10,7 +10,7 @@
 //! - **控制平面**：协调器自己的多步状态（已调工具 / 轮次 / observe 结果）
 //!   活在协调器局部变量，**不注入** subagent 的 system prompt 或 messages。
 //!
-//! 这条不变式由 [`tests::subagent_context_has_no_orchestrator_noise`] 守护。
+//! 这条不变式由 `subagent_context_has_no_orchestrator_noise` 测试守护。
 //!
 //! ## 有界（戒律#1，§2.1）
 //! - step 上限 + token 预算 + 墙钟超时，任一触顶即停。

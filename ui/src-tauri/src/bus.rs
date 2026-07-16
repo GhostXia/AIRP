@@ -828,7 +828,7 @@ async fn fetch_chat_history(
 }
 
 /// POST `/v1/settings` to update engine settings (hot reload).
-/// `params` is forwarded as-is (Partial<MutableConfig>).
+/// `params` is forwarded as-is (`Partial<MutableConfig>`).
 /// Returns the updated settings JSON (api_key 脱敏).
 async fn update_settings(
     http: &reqwest::Client,

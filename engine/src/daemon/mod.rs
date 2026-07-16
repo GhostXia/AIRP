@@ -50,7 +50,7 @@ use handlers::{
 pub struct DaemonState {
     /// 用户数据根目录（默认 `./data/`，可由 `AIRP_DATA_DIR` 覆盖）。
     pub data_root: PathBuf,
-    /// M0 F-01：共享 HTTP 客户端（内部 Arc<ConnectionPool>，clone 廉价）。
+    /// M0 F-01：共享 HTTP 客户端（内部 `Arc<ConnectionPool>`，clone 廉价）。
     pub http_client: reqwest::Client,
     /// M4.4：热重载窗口。`GET /v1/settings` 读、`POST /v1/settings` 写。
     pub config: std::sync::RwLock<MutableConfig>,

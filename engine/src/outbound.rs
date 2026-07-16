@@ -6,15 +6,15 @@
 //!
 //! # 设计
 //!
-//! reqwest 默认 [`Policy::default()`] 跟随最多 10 次 redirect，并在 cross-host redirect
+//! reqwest 默认 `Policy::default()` 跟随最多 10 次 redirect，并在 cross-host redirect
 //! 时剥除一个 sensitive header 白名单（`Authorization` / `Cookie` 等）。但该白名单
 //! **不覆盖 `x-api-key`、`anthropic-version` 或自定义 secret header**，且同 host
 //! scheme/port 变化（如 https → http downgrade）时 sensitive header 也不会被剥除。
 //!
 //! 对 RP 引擎这是真实风险：provider endpoint 配错或被劫持时，bearer/x-api-key 可
-//! 能被 redirect 带到第三方。本模块用 [`Policy::none`] 拒绝所有 redirect ——reqwest
+//! 能被 redirect 带到第三方。本模块用 `Policy::none` 拒绝所有 redirect ——reqwest
 //! 在该 policy 下**不跟随** 3xx，把响应原样返回给调用方。调用方再用
-//! [`classify_redirect_response`] 把 3xx 升级成 typed [`AirpError::Upstream`]，
+//! `classify_redirect_response` 把 3xx 升级成 typed [`AirpError::Upstream`]，
 //! 给出可行动脱敏文案而不是裸 reqwest 内部文本。未来若需支持有限 redirect，
 //! 再在此处扩一个 `safe_redirect` policy，**绝不**退回 reqwest 默认。
 //!
