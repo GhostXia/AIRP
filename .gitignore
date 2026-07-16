@@ -65,3 +65,10 @@ data/**/*.lock
 # AI agent 旁路产物（AtomCode/Claude 等会话元数据），不属本仓
 .claude/
 .atomcode/
+.codex/
+.test-data/
+.uploads/
+
+# 本地审计/烟测原始输出只作临时诊断；可重复证据由 CI run 与历史归档索引保存
+docs/audits/
+docs/smoke-evidence/

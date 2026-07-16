@@ -39,7 +39,8 @@ node webui/serve.js
 
 - **角色列表**：选择和导入角色；
 - **对话空间**：session、历史、流式聊天、Agent Run 和诊断；
-- **工作台**：角色卡、worldbook 与 decompose 工具，不销毁当前会话上下文。
+- **世界书主面板**：按当前角色编辑 v4 运行时字段，只读查看 advisory 字段，并独立保存/刷新；
+- **工作台**：角色卡与 decompose 工具，不销毁当前会话上下文。
 
 `airp-engine-console/` 是设计来源，不是运行中的 WebUI。
 
@@ -59,7 +60,8 @@ node webui/serve.js
 - 多 Persona 列表、创建、编辑、基础删除，以及「自动（跟随绑定/默认）」和显式选择；
 - effective Persona 来源/双 scope owner 展示、角色/session 绑定与解绑、聊天请求按自动/显式省略或发送 `persona_id`；
 - 带确认/可恢复语义的生产级删除、完整 Preset 生命周期、统一有效配置摘要和 Persona drift/history 等高级生命周期仍待 P1 完成；
-- state live/history、worldbook 与 decompose 工作台。
+- state live/history、character-scoped worldbook 主面板与 decompose 工作台；
+- worldbook 支持 `constant`、`selective`/`secondary_keys` 编辑、advisory 只读展示、未保存修改确认和异步切换防串角色。
 
 ### Session、聊天与 Agent
 
@@ -72,7 +74,7 @@ node webui/serve.js
 
 ## 明确未完成
 
-- P1 的 Persona 高级生命周期、Preset 完整产品管理、Worldbook 主面板管理和统一有效配置；
+- P1 的 Persona 高级生命周期、Preset 完整产品管理、Worldbook 完整资产生命周期和统一有效配置；
 - 自包含 session revision、migration、备份/恢复、可恢复删除与运维 runbook；
 - branch/swipe/edit 的首发取舍；
 - 浏览器矩阵、移动端收口、长会话 soak、SBOM/notices、升级和回滚演练；
@@ -102,6 +104,6 @@ npm run typecheck
 npm run test -- --run
 ```
 
-真实浏览器另行验证连接、恢复、交互、渲染、注入安全、SSE 取消和窗口 prepend/滚动。production topology gate 还验证真实 HTTPS、auth、私有 engine、CSP/headers、重启持久化和 secret scan。
+真实浏览器另行验证连接、恢复、交互、渲染、注入安全、SSE 取消和窗口 prepend/滚动。production topology gate 还验证真实 HTTPS、auth、私有 engine、CSP/headers、Worldbook 静态资产与主面板字段、重启持久化和 secret scan。
 
 每次验证记录 commit、启动命令、URL、provider/model（密钥脱敏）、请求边界、状态/延迟、SSE 事件、数据根和失败证据。历史结果只保留在 [WebUI 历史归档](../docs/archive/WEBUI-HISTORY-2026-07.md)，不要把旧数字当成当前证明。

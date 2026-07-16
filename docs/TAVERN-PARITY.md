@@ -1,8 +1,8 @@
 # 酒馆（SillyTavern）功能对标 + 扩展接口需求
 
-> **需求对标，不是兼容性声明**：表内 ✅/🔧 表示来源或候选状态，不证明当前 AIRP 已交付；“AIRP 落点/缺口”必须以当前源码复核。Worldbook 已有 CRUD、v4 `constant` + `selective`/`secondary_keys` 触发与 shared normalizer；多 Persona 存储、HTTP、chat 激活、WebUI CRUD/effective/绑定已交付，但 base+drift、Preset 完整生命周期及 plugin/扩展 runtime 尚未完成。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> **需求对标，不是兼容性声明**：表内 ✅/🔧 表示来源或候选状态，不证明当前 AIRP 已交付；“AIRP 落点/缺口”必须以当前源码复核。Worldbook 已有 CRUD、v4 `constant` + `selective`/`secondary_keys` 触发、shared normalizer 和 WebUI 主面板管理；多 Persona 存储、HTTP、chat 激活、WebUI CRUD/effective/绑定已交付，但 base+drift、Preset 完整生命周期及 plugin/扩展 runtime 尚未完成。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 > 目的：(1) 列全酒馆功能，标出候选能力；(2) 落实硬需求——**充分暴露接口，无门槛无缝支持第三方扩展**。来源：docs.sillytavern.app（2026-07 实读）。图例：✅ 源项目已有 ｜ 🔧 源项目部分有需补 ｜ 🆕 源项目皆无，需新加 ｜ ➖ 暂不做/低优先。
-> 最后校准：2026-07-15
+> 最后校准：2026-07-16
 
 ---
 

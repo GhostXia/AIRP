@@ -2,7 +2,7 @@
 
 > 日期：2026-07-15
 >
-> 交付状态：C-PR1 已由 PR #180 合并到 `main@fb523b8`；C-PR2 仍未交付
+> 交付状态：C-PR1 已由 PR #180 合并并在 `main@f6ee120` 复核；本文之外的 C-PR2（Preset 生命周期 + revision 合同）仍未交付
 >
 > 方向：#114 Persona/Preset WebUI 闭环（拆分为 C-PR1 + C-PR2，本文仅 C-PR1）
 >

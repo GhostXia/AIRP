@@ -4,7 +4,7 @@
 >
 > 关联：[PR #169](https://github.com/GhostXia/AIRP/pull/169) / [已关闭 Issue #168](https://github.com/GhostXia/AIRP/issues/168)
 >
-> 最后更新：2026-07-15
+> 最后更新：2026-07-16（在 `main@f6ee120` 复核合同与实现边界）
 
 本文定义 AIRP 的 session、第三方世界书和可复现游玩存档边界。它是 AIRP 根据自身需求形成的独立设计；SillyTavern 仅作为公开行为与互操作性参考，不复用其实现代码、规则、测试或资产。
 

@@ -4,7 +4,7 @@
 > 用户 2026-07-02：**四个源仓库里凡有"好能力"的，都应融入 agent 客户端**（不止 MCP-Server）。
 > 原则：客户端 = engine（agent 内核 + 数据层 + 工具/工作流）+ UI（Tauri+Vue）两盒。四仓库的好能力**拆解重组进这两盒当原生能力**，而非当外部服务连、也非保留其"独立分发"的自我约束。
 > 参见：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（四源项目资产吸收/北极星降级）· [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)（MCP 详细 catalog）· [PARTS.md](PARTS.md)（候选零件）· [PLAN.md](PLAN.md) · [DEV-GUIDE.md](DEV-GUIDE.md)。
-> 最后校准：2026-07-15；能力交付状态只看 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)
+> 最后校准：2026-07-16；能力交付状态只看 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)
 
 ---
 

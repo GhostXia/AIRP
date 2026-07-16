@@ -2,13 +2,13 @@
 
 > 日期：2026-07-15
 >
-> 交付状态：D-PR1（engine v4）已由 PR #180 合并到 `main@fb523b8`；D-PR2（主面板管理）仍未交付
+> 交付状态：已完成。D-PR1（engine v4）由 PR #180 交付，D-PR2（主面板管理）由 PR #182 交付并经 PR #188 加固，D-PR3（PNG/JSON constant 端到端回归）由 PR #185 交付；在 `main@f6ee120` 复核
 >
 > 方向：#126 Worldbook 管理 + 高级字段裁定
 >
-> 基线：`main@db4fc12`（PR #179）
+> 设计基线：`main@db4fc12`（PR #179）；实现复核：`main@f6ee120`
 >
-> 并行策略：D-PR1（engine v4）与 C-PR1/C-PR2 零文件冲突，可完全并行；D-PR2（WebUI 迁移）与 C-PR1 改不同区域，git 可自动合并
+> 历史拆分：D-PR1 engine v4 → D-PR2 WebUI 主面板 → D-PR3 导入/装配端到端回归；本段仅解释已完成的交付切片，不再作为排期
 
 ## 1. 目标
 

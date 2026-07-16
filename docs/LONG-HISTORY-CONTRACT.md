@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-12
 >
-> 实现基线：PR #124/#125；2026-07-15 在 `main@fb523b8` 复核，合同未被后续 handler/session 身份拆分、Preset/trace 或 PR #180 的 Persona/Worldbook 改动改变。
+> 实现基线：PR #124/#125；2026-07-16 在 `main@f6ee120` 复核，合同未被后续 handler/session 身份拆分、Preset/trace、Persona/Worldbook、settings 一致性或 rustdoc 门禁改动改变。
 >
 > 关联 issue：#37（durable message-id contract）、#122（WebUI 窗口化）。
 >

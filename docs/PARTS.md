@@ -3,7 +3,7 @@
 > 目的：把四个原仓库拆成**功能零件**，脱离原仓库的模块边界，供"当新项目重组"时按需取用。
 > 状态图例：✅ 可原样复用 ｜ 🔧 有基础但需修/补 ｜ 🆕 四仓皆无，需新建 ｜ 📖 仅作参考/思路（代码不直接搬）
 > 来源仓库：C=AIRP-Core/AIRPCLI · M=AIRP-MCP-Server · S=AIRP-State-Protocol · G=AIRP-Gateway。行内 file:line 指来源仓库相对路径。
-> 最后校准：2026-07-15
+> 最后校准：2026-07-16
 
 > **使用限制（2026-07-12 校准）**：本文是源项目候选零件目录，不是当前 AIRP capability inventory。✅/🔧 表示源资产可参考或可吸收，不代表本仓已存在 HTTP route、Agent tool 或产品 UI。当前实现状态见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 

@@ -4,7 +4,7 @@
 >
 > Decision date: 2026-07-13
 >
-> Last baseline check: 2026-07-15 (`main@fb523b8`; PR #180 only added the shared Persona utility asset and extended the existing topology smoke)
+> Last baseline check: 2026-07-16 (`main@f6ee120`; PR #182/#188 extended the existing topology smoke and gateway asset set for the Worldbook main panel without changing this boundary)
 >
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)

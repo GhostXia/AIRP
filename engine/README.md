@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-15 的 `main@fb523b8` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-16 的 `main@f6ee120` 复核。
 
 ## 当前能力
 
@@ -20,6 +20,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - preset 规范化导入报告、原始输入 sidecar、版本目录与原子 current 指针；
 - 显式 `PromptAssemblyTrace` 数据模型骨架；调用方负责提供 provenance；
 - settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；development CORS 保留 WebUI/Tauri 精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
+- settings 更新在专用异步事务边界内完成校验、原子持久化和 live commit；失败不产生部分更新，并发提交保持运行态与磁盘一致。
 
 ## 必须诚实区分的边界
 
@@ -156,9 +157,12 @@ cargo test -p airp-core --locked
 cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise --locked -- --nocapture
 cargo fmt --all -- --check
 cargo clippy -p airp-core --lib --tests --locked -- -D warnings
+$env:RUSTDOCFLAGS = "-D warnings"
+cargo doc --workspace --no-deps --locked
+Remove-Item Env:RUSTDOCFLAGS
 ```
 
-`main@fb523b8` 的 GitHub run `29426587813` 中 Rust workspace、UI and WebUI、Production topology 全绿，PR #180 的[独立 CodeRabbit 审计](https://github.com/GhostXia/AIRP/pull/180#issuecomment-4980586721)也通过。相关本地证据包括 workspace fmt/build/严格 Clippy/tests、Persona/Worldbook 回归、16 个 WebUI 生产工具测试和 2 个 subagent 不变式通过；这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+`main@f6ee120` 的 GitHub run `29476132711` 中 Rust workspace（含 warning-free rustdoc）、UI and WebUI、Production topology 全绿，并覆盖 V3 PNG/JSON character_book constant 到最终 prompt 的回归。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 

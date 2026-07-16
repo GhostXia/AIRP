@@ -2,7 +2,7 @@
 
 > 状态：当前近期执行主入口
 >
-> 基线日期：2026-07-15，`main@fb523b8`
+> 基线日期：2026-07-16，`main@f6ee120`
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
@@ -72,7 +72,7 @@ Browser
 - engine 已有 loopback 默认、精确 CORS、可选 bearer、限流、统一 outbound redirect policy、typed error 和 `/health`/`/version`。
 - `deploy/production/` 已有 digest-pinned OCI build、Compose/Caddy 同源 HTTPS 拓扑、私有 engine 网络、secret bootstrap 和 production WebUI runtime config；CI 会 build 镜像并启动一次性真实拓扑，验证 perimeter auth、私有 engine、CSP/headers、content-only import、三轮增量 SSE、重启持久化、浏览器注入/取消和 secret scan。
 - 多 Persona 存储、plural HTTP CRUD、chat pipeline 激活、effective endpoint、WebUI 自动/显式选择和角色/session 绑定/解绑已交付；Persona 高级生命周期、统一有效配置摘要和完整 Preset 生命周期仍未闭合。
-- Worldbook v4 `selective`/`secondary_keys` runtime、v3 presence-aware migration 与诊断已交付；普通用户主面板管理和 advisory 字段可见性仍未闭合。
+- Worldbook v4 `selective`/`secondary_keys` runtime、v3 presence-aware migration/诊断、普通用户主面板管理、advisory 只读可见性和 PNG/JSON 到最终 prompt 的回归已交付。
 - Preset 规范化导入报告、原始输入 sidecar、Agent `get_preset`/`update_preset`（含 dry-run 与确认门控）、不可变版本目录和原子 current 指针已交付；HTTP/UI 受控 dry-run、完整 revision/provenance/collision 合同仍未闭合。
 - `PromptAssemblyTrace` 显式数据模型骨架已交付，但尚未接入 chat pipeline，也没有实际 revision 收集、HTTP/UI preview 或用户摘要。
 - 命名 session 已统一目录 UUID、history 响应与 metadata 身份；自包含 state/角色卡/worldbook 工作副本、统一 revision、恢复导出仍是分阶段合同。
@@ -82,7 +82,7 @@ Browser
 - P0 首方部署 artifact 与真实 topology smoke 已落地；正式升级/回滚流程、SBOM/notices、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
-- Persona/Preset/Worldbook 管理与有效配置合同仍有缺口；#114/#115/#126 的剩余子项仍是 RP 首发主链，但 Persona effective/绑定闭环、Worldbook v4、Preset import report/Agent dry-run/原子版本切换和 trace 模型已交付，不得重复实现。
+- Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#114/#115 是 RP 首发主链，#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
 - 缺备份/恢复、数据迁移发布纪律、soft-delete/回收站、完整 production observability contract 和运行手册；当前 Caddy access log/filter 只是 P0 局部实现，仍需在 P2 决定是否保留及其用途、字段、输出和保留策略。
 - engine-truth smoke 与 production system-Chrome smoke 已并行进入 CI；浏览器兼容矩阵、升级恢复与完整发布安全门禁仍不足。
 
@@ -103,7 +103,7 @@ Browser
 1. 先完成 #137 的 Vite/Vitest 工具链安全升级；该问题不在 production runtime image 内，但开发服务器与测试工具不能长期停留在已知高危/关键告警版本；
 2. 在已交付 Persona effective/绑定/聊天切换闭环之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期和统一有效配置摘要；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
 3. 在已交付 Preset import report、Agent dry-run/原子版本切换和 trace 模型之上，完成 #115 的 HTTP/UI 受控 dry-run、revision/provenance/collision 合同，并把 PromptAssemblyTrace 接入 pipeline、HTTP preview 与用户摘要；复用已交付的 worldbook import diagnostics 语言；
-4. 在已交付 Worldbook v4 `constant` + `selective`/`secondary_keys` 和 shared normalizer 之上，按 #126 把 worldbook 管理迁到普通用户主面板，并只读展示仍为 advisory/unsupported runtime 的高级字段；
+4. 在已交付 Worldbook v4、shared normalizer、普通用户主面板和端到端导入回归之上，只继续实现首发确需的受控大对象上传与资产生命周期，不把 advisory 字段误宣称为 runtime 兼容；
 5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
 6. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
 
@@ -141,5 +141,5 @@ Browser
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
 2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
-3. 下一项先处理 #137，再按 #114/#115/#126 的**剩余子项**完成 RP 使用面；不再先做 #117/#87/#116；
+3. 下一项先处理 #137，再按 #114/#115 的**剩余子项**完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
 4. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。
