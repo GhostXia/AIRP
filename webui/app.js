@@ -2382,7 +2382,9 @@
       loreStatus.textContent = '已保存 ✓（' + (r.data?.entries_count ?? '?') + ' 条）';
       setLoreDirty(false);
     } else {
-      loreStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+      loreStatus.textContent = r.status === 429
+        ? '保存失败: 请求过于频繁，请稍等几秒后重试'
+        : '保存失败: ' + formatError(r.data, r.text);
     }
   }
 
