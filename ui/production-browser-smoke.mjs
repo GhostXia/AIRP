@@ -29,6 +29,24 @@ try {
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
+  // PR#182 CI 诊断（临时）：捕获浏览器 console / 网络层失败 / lorebook 请求-响应时序，
+  // 用于定位 selectOption 后 #lore-status 卡在占位符 — 的真实根因。根因定位后随 app.js
+  // 内 [lore-diag] console.warn 一并移除。
+  const consoleMessages = [];
+  page.on('console', msg => consoleMessages.push({ type: msg.type(), text: msg.text() }));
+  const requestFailures = [];
+  page.on('requestfailed', req => requestFailures.push({ url: req.url(), failure: req.failure()?.errorText }));
+  const lorebookReqEvents = [];
+  page.on('request', req => {
+    if (req.method() === 'GET' && req.url().includes('/lorebook')) {
+      lorebookReqEvents.push({ phase: 'request', url: req.url(), at: Date.now() });
+    }
+  });
+  page.on('response', res => {
+    if (res.request().method() === 'GET' && res.url().includes('/lorebook')) {
+      lorebookReqEvents.push({ phase: 'response', url: res.url(), status: res.status(), at: Date.now() });
+    }
+  });
   await page.addInitScript(() => {
     window.__airpCspViolations = [];
     window.__airpXss = 0;
@@ -162,13 +180,18 @@ try {
   try {
     await page.waitForFunction(() => document.querySelector('#lore-entries .wb-lore-entry'), null, { timeout: 10_000 });
   } catch (err) {
-    // 诊断输出：超时时打印 pageErrors、lore-entries 内容、lore-status 文本，
-    // 便于在 CI 日志中直接看到真实失败原因，而非反复猜测事件是否触发。
-    const diagPageErrors = await page.evaluate(() => window.__airpCspViolations);
+    // 诊断输出：超时时打印真实未捕获 JS 异常（pageErrors 是 Node 端闭包，非 CSP 列表）、
+    // 浏览器 console、网络层失败、lorebook 请求-响应时序，以及 DOM 状态。
+    // 之前版本误把 window.__airpCspViolations 当作 pageErrors 打印，导致真实异常被掩盖。
+    const diagCspViolations = await page.evaluate(() => window.__airpCspViolations);
     const diagLoreEntriesHtml = await page.locator('#lore-entries').innerHTML().catch(() => '<unavailable>');
     const diagLoreStatus = await page.locator('#lore-status').textContent().catch(() => '<unavailable>');
     const diagSelectedChar = await page.locator('#char-select').inputValue().catch(() => '<unavailable>');
-    console.error('DIAG pageErrors(csp):', JSON.stringify(diagPageErrors));
+    console.error('DIAG pageErrors (uncaught JS exceptions):', JSON.stringify(pageErrors));
+    console.error('DIAG cspViolations:', JSON.stringify(diagCspViolations));
+    console.error('DIAG consoleMessages:', JSON.stringify(consoleMessages));
+    console.error('DIAG requestFailures:', JSON.stringify(requestFailures));
+    console.error('DIAG lorebook request/response events:', JSON.stringify(lorebookReqEvents));
     console.error('DIAG lore-entries innerHTML:', diagLoreEntriesHtml);
     console.error('DIAG lore-status text:', diagLoreStatus);
     console.error('DIAG char-select value:', diagSelectedChar);
