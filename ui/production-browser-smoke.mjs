@@ -202,18 +202,6 @@ try {
   });
   assert.equal(await page.locator('#char-select').inputValue(), selectedBeforeCancelledSwitch);
 
-  // #186 W-02: 200 + non-JSON 响应不得触发 unhandled rejection，应在 UI 边界报格式错误。
-  const pageErrorCountBeforeMalformedLorebook = pageErrors.length;
-  await page.route('**/v1/characters/smoke-xss/lorebook', route => route.fulfill({
-    status: 200,
-    contentType: 'text/plain',
-    body: 'not-json',
-  }));
-  await page.locator('#btn-refresh-lorebook').click();
-  await page.waitForFunction(() => document.querySelector('#lore-status')?.textContent === '加载失败: 响应格式异常');
-  await page.waitForTimeout(50);
-  assert.equal(pageErrors.length, pageErrorCountBeforeMalformedLorebook);
-  await page.unroute('**/v1/characters/smoke-xss/lorebook');
   // S5: aria-expanded 在展开后为 true
   await page.locator('#lore-entries .wb-lore-toggle').first().click();
   const ariaExpanded = await page.locator('#lore-entries .wb-lore-toggle').first().getAttribute('aria-expanded');
@@ -229,6 +217,30 @@ try {
   assert.ok(advText.includes('position'), 'advisory 应含 position');
   assert.ok(advText.includes('depth'), 'advisory 应含 depth');
   assert.ok(!advText.includes('selective'), 'advisory 不应含 selective');
+
+  // #186 W-02: 200 + non-JSON 响应不得触发 unhandled rejection，且必须清掉旧角色条目。
+  const pageErrorCountBeforeMalformedLorebook = pageErrors.length;
+  await page.route('**/v1/characters/smoke-xss/lorebook', route => route.fulfill({
+    status: 200,
+    contentType: 'text/plain',
+    body: 'not-json',
+  }));
+  await page.locator('#btn-refresh-lorebook').click();
+  await page.waitForFunction(() => document.querySelector('#lore-status')?.textContent === '加载失败: 响应格式异常');
+  assert.equal(await page.locator('#lore-entries .wb-lore-entry').count(), 0);
+  await page.waitForTimeout(50);
+  assert.equal(pageErrors.length, pageErrorCountBeforeMalformedLorebook);
+  await page.unroute('**/v1/characters/smoke-xss/lorebook');
+
+  // 旧响应可省略 entries；缺失字段保持向后兼容并视为空世界书。
+  await page.route('**/v1/characters/smoke-xss/lorebook', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: '{}',
+  }));
+  await page.locator('#btn-refresh-lorebook').click();
+  await page.waitForFunction(() => document.querySelector('#lore-status')?.textContent === '已加载 0 条条目');
+  await page.unroute('**/v1/characters/smoke-xss/lorebook');
 
   // Initial UI hydration and the injection fixture share the engine's burst bucket.
   // Let it refill so this assertion measures stream cancellation rather than rate limiting.

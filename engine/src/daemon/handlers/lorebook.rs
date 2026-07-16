@@ -83,6 +83,7 @@ mod tests {
         let state = Arc::new(crate::daemon::DaemonState {
             data_root: tmp.path().to_path_buf(),
             http_client: reqwest::Client::new(),
+            settings_update: Default::default(),
             config: std::sync::RwLock::new(crate::daemon::MutableConfig {
                 provider: crate::adapter::Provider::OpenAI,
                 endpoint: "http://localhost".to_string(),

@@ -86,6 +86,7 @@ async fn setup_with_quota(
     let state = Arc::new(DaemonState {
         data_root,
         http_client: reqwest::Client::new(),
+        settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -118,6 +119,7 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
     let state = Arc::new(DaemonState {
         data_root,
         http_client: reqwest::Client::new(),
+        settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -145,6 +147,7 @@ async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::T
     let state = Arc::new(DaemonState {
         data_root,
         http_client: reqwest::Client::new(),
+        settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,

@@ -54,6 +54,7 @@ async fn test_health_endpoint_returns_status() {
     let state = Arc::new(DaemonState {
         data_root: tmp.path().to_path_buf(),
         http_client: reqwest::Client::new(),
+        settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),
@@ -109,6 +110,7 @@ async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
     let state = Arc::new(DaemonState {
         data_root: tmp.path().to_path_buf(),
         http_client: reqwest::Client::new(),
+        settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "https://api.openai.com".to_string(),
@@ -403,14 +405,69 @@ async fn settings_update_write_failure_does_not_commit_live_config() {
     assert!(!state.data_root.join("settings.json").exists());
 }
 
-// #187：并发提交结束后，live config 与 settings.json 必须来自同一个提交。
+// #187：主文件已提交后，即使旧备份清理失败，也必须提交相同的 live config。
+#[tokio::test]
+async fn settings_update_commits_live_config_when_backup_cleanup_fails() {
+    let (state, _tmp) = make_state_no_key();
+    let path = state.data_root.join("settings.json");
+    std::fs::write(&path, br#"{"model":"before-cleanup-failure"}"#).unwrap();
+    state
+        .settings_update
+        .set_persistence_override(Some(Arc::new(|path, bytes| {
+            crate::data_dir::replace_file_with_backup_cleanup_for_test(path, bytes, |_| {
+                Err(std::io::Error::other("injected backup cleanup failure"))
+            })
+        })));
+
+    let response = create_router(state.clone())
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "model": "after-cleanup-failure" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    state.settings_update.set_persistence_override(None);
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(state.config.read().unwrap().model, "after-cleanup-failure");
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(persisted["model"], "after-cleanup-failure");
+    assert!(path.with_extension("json.bak").exists());
+}
+
+// #187：并发提交结束后，live config 与 settings.json 必须来自同一个提交；
+// 首个写盘暂停期间，普通 config reader 仍可立即读取旧快照。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_settings_updates_leave_runtime_and_disk_on_same_commit() {
     let (state, _tmp) = make_state_no_key();
-    let mut tasks = Vec::new();
-    for index in 0..16 {
-        let state = state.clone();
-        tasks.push(tokio::spawn(async move {
+    let first_entered = Arc::new(std::sync::Barrier::new(2));
+    let release_first = Arc::new(std::sync::Barrier::new(2));
+    let persistence_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    state
+        .settings_update
+        .set_persistence_override(Some(Arc::new({
+            let first_entered = first_entered.clone();
+            let release_first = release_first.clone();
+            let persistence_calls = persistence_calls.clone();
+            move |path, bytes| {
+                let call = persistence_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if call == 0 {
+                    first_entered.wait();
+                    release_first.wait();
+                }
+                crate::data_dir::replace_file(path, bytes)
+            }
+        })));
+
+    let submit = |state: Arc<DaemonState>, endpoint: &'static str, model: &'static str| {
+        tokio::spawn(async move {
             create_router(state)
                 .oneshot(
                     axum::http::Request::builder()
@@ -418,21 +475,45 @@ async fn concurrent_settings_updates_leave_runtime_and_disk_on_same_commit() {
                         .uri("/v1/settings")
                         .header(header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
-                            serde_json::json!({
-                                "endpoint": format!("https://commit-{index}.example"),
-                                "model": format!("commit-{index}")
-                            })
-                            .to_string(),
+                            serde_json::json!({ "endpoint": endpoint, "model": model }).to_string(),
                         ))
                         .unwrap(),
                 )
                 .await
                 .unwrap()
-        }));
-    }
-    for task in tasks {
-        assert_eq!(task.await.unwrap().status(), StatusCode::OK);
-    }
+        })
+    };
+
+    let first = submit(
+        state.clone(),
+        "https://commit-first.example",
+        "commit-first",
+    );
+    let entered = first_entered.clone();
+    tokio::task::spawn_blocking(move || entered.wait())
+        .await
+        .unwrap();
+    assert_eq!(state.config.read().unwrap().model, "gpt-4o");
+
+    let second = submit(
+        state.clone(),
+        "https://commit-second.example",
+        "commit-second",
+    );
+    tokio::task::yield_now().await;
+    assert_eq!(
+        persistence_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the second update must not persist while the first transaction is paused"
+    );
+
+    let release = release_first.clone();
+    tokio::task::spawn_blocking(move || release.wait())
+        .await
+        .unwrap();
+    assert_eq!(first.await.unwrap().status(), StatusCode::OK);
+    assert_eq!(second.await.unwrap().status(), StatusCode::OK);
+    state.settings_update.set_persistence_override(None);
 
     let runtime = state.config.read().unwrap().clone();
     let persisted: serde_json::Value =
@@ -440,4 +521,6 @@ async fn concurrent_settings_updates_leave_runtime_and_disk_on_same_commit() {
             .unwrap();
     assert_eq!(persisted["endpoint"], runtime.endpoint);
     assert_eq!(persisted["model"], runtime.model);
+    assert_eq!(runtime.endpoint, "https://commit-second.example");
+    assert_eq!(runtime.model, "commit-second");
 }

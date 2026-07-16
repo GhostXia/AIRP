@@ -40,17 +40,19 @@ pub(in crate::daemon) async fn update_settings(
             .map_err(|e| AirpError::BadRequest(format!("VolumeConfig 不合法: {}", e)))?;
     }
 
-    // 2) config 写锁是 settings update 的单进程事务边界。所有并发更新在此串行；
-    //    candidate 只在原子写盘成功后才提交到 live config（#187）。
-    let mut cfg = state
+    // 2) 专用异步锁是 settings update 的单进程事务边界。它串行 candidate
+    //    构造、持久化和 live commit，同时不在磁盘 I/O 期间阻塞其他 config readers。
+    let _transaction = state.settings_update.transaction.lock().await;
+    let mut candidate = state
         .config
-        .write()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+        .read()
+        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
+        .clone();
     if patch
         .access_api_key
         .as_deref()
         .is_some_and(|key| !key.is_empty())
-        && cfg.deployment_mode == crate::config::DeploymentMode::Production
+        && candidate.deployment_mode == crate::config::DeploymentMode::Production
     {
         return Err(AirpError::BadRequest(
             "AIRP_ACCESS_KEY cannot be changed through /v1/settings in production; rotate the gateway and engine secret together, then restart"
@@ -58,7 +60,6 @@ pub(in crate::daemon) async fn update_settings(
         ));
     }
 
-    let mut candidate = cfg.clone();
     if let Some(p) = patch.provider {
         candidate.provider = p;
     }
@@ -96,8 +97,25 @@ pub(in crate::daemon) async fn update_settings(
     });
     let path = state.data_root.join("settings.json");
     let bytes = serde_json::to_vec_pretty(&on_disk)?;
-    crate::data_dir::replace_file(&path, &bytes)?;
+    #[cfg(test)]
+    let persist_state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if let Some(result) = persist_state
+            .settings_update
+            .run_persistence_override(&path, &bytes)
+        {
+            return result;
+        }
+        crate::data_dir::replace_file(&path, &bytes)
+    })
+    .await
+    .map_err(|error| AirpError::Internal(format!("settings persistence task failed: {error}")))??;
 
+    let mut cfg = state
+        .config
+        .write()
+        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
     *cfg = candidate;
     Ok(Json(SettingsView::from_config(&cfg, &state.data_root)))
 }

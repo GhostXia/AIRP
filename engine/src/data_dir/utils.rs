@@ -11,6 +11,17 @@ pub(crate) fn strip_utf8_bom(s: &str) -> &str {
 /// Replace a JSON file without exposing a partially written value.
 /// Callers must serialize concurrent writes to the same path.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), AirpError> {
+    replace_file_with_backup_cleanup(path, bytes, |backup| fs::remove_file(backup))
+}
+
+fn replace_file_with_backup_cleanup<F>(
+    path: &Path,
+    bytes: &[u8],
+    cleanup_backup: F,
+) -> Result<(), AirpError>
+where
+    F: FnOnce(&Path) -> std::io::Result<()>,
+{
     let temporary = path.with_extension("json.tmp");
     let backup = path.with_extension("json.bak");
     {
@@ -29,9 +40,27 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), AirpError> {
         return Err(error.into());
     }
     if backup.exists() {
-        fs::remove_file(backup)?;
+        if let Err(error) = cleanup_backup(&backup) {
+            tracing::warn!(
+                path = %backup.display(),
+                %error,
+                "replacement committed but stale backup cleanup failed"
+            );
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn replace_file_with_backup_cleanup_for_test<F>(
+    path: &Path,
+    bytes: &[u8],
+    cleanup_backup: F,
+) -> Result<(), AirpError>
+where
+    F: FnOnce(&Path) -> std::io::Result<()>,
+{
+    replace_file_with_backup_cleanup(path, bytes, cleanup_backup)
 }
 
 pub(crate) fn move_path(src: &Path, dst: &Path) -> Result<(), AirpError> {

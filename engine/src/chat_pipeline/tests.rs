@@ -74,6 +74,7 @@ mod tests {
         Arc::new(DaemonState {
             data_root,
             http_client: reqwest::Client::new(),
+            settings_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -485,6 +486,7 @@ mod tests_ms6 {
         Arc::new(DaemonState {
             data_root,
             http_client: reqwest::Client::new(),
+            settings_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -630,6 +632,7 @@ mod tests_issue27 {
         Arc::new(DaemonState {
             data_root,
             http_client: reqwest::Client::new(),
+            settings_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -782,6 +785,7 @@ mod tests_dx1 {
         Arc::new(DaemonState {
             data_root,
             http_client: reqwest::Client::new(),
+            settings_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1234,6 +1238,7 @@ mod tests_a1b_pipeline_e2e {
         Arc::new(DaemonState {
             data_root,
             http_client: reqwest::Client::new(),
+            settings_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),

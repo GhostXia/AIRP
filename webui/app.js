@@ -2131,11 +2131,21 @@
       renderLoreEntries();
       loreStatus.textContent = '该角色尚无世界书（可新建条目后保存）';
     } else if (r.ok) {
-      if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data) || !Array.isArray(r.data.entries)) {
+      if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data)) {
         loreStatus.textContent = '加载失败: 响应格式异常';
+        loreData = { entries: [] };
+        renderLoreEntries();
         return;
       }
       loreData = r.data;
+      if (loreData.entries === undefined) {
+        loreData.entries = [];
+      } else if (!Array.isArray(loreData.entries)) {
+        loreStatus.textContent = '加载失败: 响应格式异常';
+        loreData = { entries: [] };
+        renderLoreEntries();
+        return;
+      }
       renderLoreEntries();
       loreStatus.textContent = '已加载 ' + loreData.entries.length + ' 条条目';
     } else {
