@@ -153,6 +153,7 @@ fn build_prompt_trace(
     gen_params: &GenerationParams,
     prompt_parts: &[SystemPromptPart],
     messages: &[ChatMessage],
+    effective_root: &std::path::Path,
 ) -> PromptAssemblyTrace {
     let mut position = 0usize;
     let mut segments = Vec::new();
@@ -239,12 +240,29 @@ fn build_prompt_trace(
                 .to_string(),
         });
     }
-    if payload.preset_id.is_some() {
-        diagnostics.push(PromptDiagnostic {
-            kind: "preset_revision_unavailable".to_string(),
-            message: "Preset 当前使用不可变 generation，但尚未映射为数值 revision。".to_string(),
-        });
-    }
+    // #115 Phase 2b：尝试读取 preset current_revision，可读则填充 preset_revision，
+    // 不可读（旧数据未升级或文件损坏）则推送 preset_revision_unavailable 诊断。
+    let preset_revision = payload.preset_id.as_ref().and_then(|pid| {
+        let preset_dir = effective_root.join("presets").join(pid.as_str());
+        match crate::revision::atomic::read_current_revision(&preset_dir) {
+            Ok(Some(rev)) => Some(rev),
+            Ok(None) => {
+                diagnostics.push(PromptDiagnostic {
+                    kind: "preset_revision_unavailable".to_string(),
+                    message: "Preset 尚未升级到统一 revision 合同（无 current_revision）。"
+                        .to_string(),
+                });
+                None
+            }
+            Err(e) => {
+                diagnostics.push(PromptDiagnostic {
+                    kind: "preset_revision_unavailable".to_string(),
+                    message: format!("Preset current_revision 读取失败: {e}"),
+                });
+                None
+            }
+        }
+    });
     if persona.is_none() && is_character_context {
         // persona 在本会话未激活时，persona_revision 一定为 None。
         // 仅在用户/角色上下文应该有 persona 但未激活时声明缺口；scene 模式下 persona 由场景决定，跳过。
@@ -264,6 +282,7 @@ fn build_prompt_trace(
             persona_id: persona.map(|value| value.id.clone()),
             persona_revision: persona.map(|value| value.revision),
             preset_id: payload.preset_id.as_ref().map(ToString::to_string),
+            preset_revision,
             scene_id: payload.scene_id.clone(),
             provider: provider_label(&provider_config.provider),
             // Endpoint paths can contain deployment details or query credentials. The product
@@ -661,6 +680,7 @@ fn prepare_scene_pipeline(
         &gen_params,
         &prompt_parts,
         &messages,
+        &effective_root,
     );
 
     // issue #27：复用共享过滤器组装（含 PR-4 预设正则），与 single 分支产出一致集合。
@@ -1008,6 +1028,7 @@ fn prepare_pipeline_with_mode(
         &gen_params,
         &prompt_parts,
         &messages,
+        &effective_root,
     );
 
     // 13. Build FSM

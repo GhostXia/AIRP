@@ -6,6 +6,10 @@ use std::collections::HashMap;
 
 use super::card::{TavernPreset, TavernPrompt};
 use crate::error::AirpError;
+use crate::revision::atomic::{
+    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+};
+use crate::revision::manifest::{AssetKind, AssetSource};
 
 static SETVAR_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\{\{setvar::([^:]+)::([^}]*)\}\}").expect("SETVAR_RE"));
@@ -482,8 +486,15 @@ impl PresetService {
         Ok(serde_json::from_str(&json_str)?)
     }
 
-    /// 写 canonical preset.json + raw.json sidecar。
+    /// 写 canonical preset.json + raw.json sidecar，并产生不可变 revision 快照。
     /// 允许覆盖（destructive update 语义，与 import_preset 的拒绝覆盖不同）。
+    ///
+    /// #115 Phase 2b：在现有 `versions/{generation}/` + `current` 基础上，
+    /// 新增 `revisions/{content_revision}/` + `current_revision`（统一 revision 合同）。
+    /// - lazy migration：首次 write 时，若 `current_revision` 不存在，从 `current` 指针
+    ///   推导起始 content_revision（旧数据无 current 则从 1 起）
+    /// - 批准文件：`preset.json` + `raw.json` + `import_report.json`
+    /// - provenance：source_kind = "controlled_upload"，source_hash = report.source_hash（完整 hex）
     pub fn write(
         &self,
         preset_id: &crate::types::PresetId,
@@ -498,6 +509,7 @@ impl PresetService {
         }
         let canonical_bytes = serde_json::to_vec_pretty(&canonical)?;
         let raw_bytes = cleaned.as_bytes();
+        let report_bytes = serde_json::to_vec_pretty(&report)?;
 
         let _guard = PRESET_WRITE_LOCK
             .lock()
@@ -515,6 +527,45 @@ impl PresetService {
         // Both immutable files exist before the single atomic pointer switch. Old versions are
         // retained so readers that resolved the previous pointer can finish safely.
         crate::data_dir::replace_file(&dir.join("current"), generation.as_bytes())?;
+
+        // 统一 revision 合同：lazy migration + atomic commit。
+        // 从现有 current_revision 读取（lazy migration：不存在则视为首次升级，content_revision=1）。
+        let content_revision = match read_current_revision(&dir)? {
+            Some(existing) => existing + 1,
+            None => 1,
+        };
+        let source_hash_full = {
+            let mut hasher = Sha256::new();
+            hasher.update(raw_bytes);
+            hasher.finalize()
+        };
+        let source_hash_hex = format!("{:x}", source_hash_full);
+        let staged = StagedRevision {
+            content_revision,
+            asset_kind: AssetKind::Preset,
+            asset_id: preset_id.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            source: AssetSource {
+                source_kind: "controlled_upload".to_string(),
+                source_hash: Some(source_hash_hex),
+                source_filename: None,
+                converter_version: Some(PRESET_CONVERTER_VERSION.to_string()),
+                imported_at: Some(chrono::Utc::now().to_rfc3339()),
+                parent_revision: if content_revision > 1 {
+                    Some(content_revision - 1)
+                } else {
+                    None
+                },
+            },
+            files: vec![
+                ("preset.json".to_string(), canonical_bytes),
+                ("raw.json".to_string(), raw_bytes.to_vec()),
+                ("import_report.json".to_string(), report_bytes),
+            ],
+        };
+        let commit_opts = CommitOptions::new(&dir);
+        commit_revision(&staged, &commit_opts)?;
+
         Ok((canonical, report))
     }
 }
@@ -861,5 +912,114 @@ mod tests {
         });
         let (_, review_report) = normalize_preset(&with_review);
         assert!(review_report.has_issues());
+    }
+
+    // ── Phase 2b: Preset revision atomic commit ─────────────────────────────
+
+    fn write_preset_once(service: &PresetService, id: &str) -> std::path::PathBuf {
+        let source = r#"{"prompts":[{"identifier":"main","name":"Main","role":"system","content":"hello"}]}"#;
+        let pid = crate::types::PresetId::new(id).unwrap();
+        service.write(&pid, source).unwrap();
+        service.data_root.join("presets").join(id)
+    }
+
+    #[test]
+    fn write_produces_revision_dir_and_current_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = PresetService::new(dir.path());
+        let preset_dir = write_preset_once(&service, "test-preset");
+
+        // revisions/1/ 应存在并含 manifest.json + preset.json + raw.json + import_report.json
+        let revision_dir = preset_dir.join("revisions").join("1");
+        assert!(revision_dir.is_dir(), "revision 1 目录应存在");
+        assert!(revision_dir.join("manifest.json").is_file());
+        assert!(revision_dir.join("preset.json").is_file());
+        assert!(revision_dir.join("raw.json").is_file());
+        assert!(revision_dir.join("import_report.json").is_file());
+
+        // current_revision 文件内容应为 "1"
+        let current = std::fs::read_to_string(preset_dir.join("current_revision")).unwrap();
+        assert_eq!(current.trim(), "1");
+    }
+
+    #[test]
+    fn write_multiple_times_advances_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = PresetService::new(dir.path());
+        let id = "multi-rev";
+        let preset_dir = write_preset_once(&service, id);
+        assert_eq!(
+            std::fs::read_to_string(preset_dir.join("current_revision"))
+                .unwrap()
+                .trim(),
+            "1"
+        );
+
+        // 第二次 write：content 不同，产生 revision 2
+        let source2 = r#"{"prompts":[{"identifier":"main","name":"Main","role":"system","content":"updated"}]}"#;
+        let pid = crate::types::PresetId::new(id).unwrap();
+        service.write(&pid, source2).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(preset_dir.join("current_revision"))
+                .unwrap()
+                .trim(),
+            "2"
+        );
+
+        // 旧 revision 1 应保留（不可变）
+        assert!(preset_dir.join("revisions").join("1").is_dir());
+        assert!(preset_dir.join("revisions").join("2").is_dir());
+    }
+
+    #[test]
+    fn write_lazy_migrates_legacy_preset_without_current_revision() {
+        // 模拟旧数据：只有 versions/{generation}/ + current，无 revisions/ + current_revision
+        let dir = tempfile::tempdir().unwrap();
+        let preset_dir = dir.path().join("presets").join("legacy");
+        let version_dir = preset_dir.join("versions").join("old-gen");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("preset.json"), r#"{"prompts":[]}"#).unwrap();
+        std::fs::write(version_dir.join("raw.json"), "raw").unwrap();
+        std::fs::write(preset_dir.join("current"), "old-gen").unwrap();
+
+        // 首次 write 应 lazy migration：current_revision 不存在 → content_revision=1
+        let service = PresetService::new(dir.path());
+        let source = r#"{"prompts":[{"identifier":"main","name":"Main","role":"system","content":"hello"}]}"#;
+        let pid = crate::types::PresetId::new("legacy").unwrap();
+        service.write(&pid, source).unwrap();
+
+        // revisions/1/ 应被创建
+        assert!(preset_dir.join("revisions").join("1").is_dir());
+        let current = std::fs::read_to_string(preset_dir.join("current_revision")).unwrap();
+        assert_eq!(current.trim(), "1");
+
+        // 旧 versions/old-gen/ 应保留（不破坏旧格式）
+        assert!(preset_dir.join("versions").join("old-gen").is_dir());
+    }
+
+    #[test]
+    fn write_revision_manifest_has_correct_asset_kind_and_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = PresetService::new(dir.path());
+        let preset_dir = write_preset_once(&service, "manifest-check");
+
+        let manifest_bytes =
+            std::fs::read(preset_dir.join("revisions").join("1").join("manifest.json")).unwrap();
+        let manifest: crate::revision::manifest::RevisionManifest =
+            serde_json::from_slice(&manifest_bytes).unwrap();
+        assert_eq!(manifest.content_revision, 1);
+        assert_eq!(
+            manifest.asset_kind,
+            crate::revision::manifest::AssetKind::Preset
+        );
+        assert_eq!(manifest.asset_id, "manifest-check");
+        assert_eq!(manifest.files.len(), 3); // preset.json + raw.json + import_report.json
+
+        // provenance 应含 source_hash 和 converter_version
+        assert!(manifest.source.source_hash.is_some());
+        assert_eq!(
+            manifest.source.converter_version.as_deref(),
+            Some(PRESET_CONVERTER_VERSION)
+        );
     }
 }
