@@ -141,31 +141,9 @@ pub(in crate::daemon) struct ImportPresetResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::daemon::tests::make_state_no_key as make_state_for_http_test;
 
     // #155 PR5：从 handlers.rs inline tests 原样迁移，测试名和断言不变。
-    // helper 在本模块私有复制，不提升为 crate/test 公共 abstraction。
-    fn make_state_for_http_test() -> (Arc<crate::daemon::DaemonState>, tempfile::TempDir) {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = Arc::new(crate::daemon::DaemonState {
-            data_root: tmp.path().to_path_buf(),
-            http_client: reqwest::Client::new(),
-            config: std::sync::RwLock::new(crate::daemon::MutableConfig {
-                provider: crate::adapter::Provider::OpenAI,
-                endpoint: "http://localhost".to_string(),
-                api_key: None,
-                model: "gpt-4o".to_string(),
-                volume_config: crate::config::VolumeConfig::default(),
-                access_api_key: None,
-                engine: crate::adapter::BackendEngine::default(),
-                quota: crate::quota::QuotaConfig::default(),
-                deployment_mode: Default::default(),
-                public_origin: None,
-            }),
-        });
-        (state, tmp)
-    }
-
     /// #114：合法 TavernPreset 导入应写盘到 presets/{id}/preset.json，且 prompts_count 正确。
     #[tokio::test]
     async fn import_preset_writes_preset_json_and_returns_count() {

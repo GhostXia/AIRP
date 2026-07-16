@@ -11,7 +11,6 @@ use crate::daemon::DaemonState;
 use crate::daemon::SettingsView;
 use crate::error::AirpError;
 use axum::Json;
-use std::fs;
 use std::sync::Arc;
 
 /// GET /v1/settings — 返回当前 daemon 运行时配置（api_key 脱敏）。
@@ -31,26 +30,7 @@ pub(in crate::daemon) async fn update_settings(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(patch): Json<crate::config::PartialAppConfig>,
 ) -> Result<Json<SettingsView>, AirpError> {
-    // 1) Production access-key 门控：只读锁，不修改任何字段，保证拒绝时不留下
-    //    部分更新（与 #165 SET-01 的原子性边界一致）。
-    if patch
-        .access_api_key
-        .as_deref()
-        .is_some_and(|key| !key.is_empty())
-    {
-        let cfg = state
-            .config
-            .read()
-            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
-        if cfg.deployment_mode == crate::config::DeploymentMode::Production {
-            return Err(AirpError::BadRequest(
-                "AIRP_ACCESS_KEY cannot be changed through /v1/settings in production; rotate the gateway and engine secret together, then restart"
-                    .to_string(),
-            ));
-        }
-    }
-
-    // 2) 任何可失败的 patch 校验都必须在拿写锁前完成。否则无效 patch 会先留下
+    // 1) 任何可失败的 patch 校验都必须在拿写锁前完成。否则无效 patch 会先留下
     //    provider/endpoint/api_key/model 等字段的内存更新，而 `settings.json`
     //    因 `?` 提前返回不会落盘，形成内存/磁盘不一致（#165 SET-01）。
     //    当前唯一可失败的可观察校验是 `volume.validate()`；其它字段在反序列化
@@ -60,52 +40,82 @@ pub(in crate::daemon) async fn update_settings(
             .map_err(|e| AirpError::BadRequest(format!("VolumeConfig 不合法: {}", e)))?;
     }
 
-    // 3) 合并到内存：写锁内只做确定性字段替换，不再有 `?` 失败路径。
-    let merged = {
-        let mut cfg = state
-            .config
-            .write()
-            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
-        if let Some(p) = patch.provider {
-            cfg.provider = p;
-        }
-        if let Some(e) = patch.endpoint.filter(|s| !s.is_empty()) {
-            cfg.endpoint = e;
-        }
-        if let Some(k) = patch.api_key.filter(|s| !s.is_empty()) {
-            cfg.api_key = Some(k);
-        }
-        if let Some(m) = patch.model.filter(|s| !s.is_empty()) {
-            cfg.model = m;
-        }
-        // volume 已在步骤 2 校验；此处只做确定性赋值，不再重复 validate。
-        if let Some(v) = patch.volume {
-            cfg.volume_config = v;
-        }
-        if let Some(k) = patch.access_api_key.filter(|s| !s.is_empty()) {
-            cfg.access_api_key = Some(k);
-        }
-        if let Some(e) = patch.engine {
-            cfg.engine = e;
-        }
-        if let Some(q) = patch.quota {
-            cfg.quota = q;
-        }
-        cfg.clone()
-    };
+    // 2) 专用异步锁是 settings update 的单进程事务边界。它串行 candidate
+    //    构造、持久化和 live commit，同时不在磁盘 I/O 期间阻塞其他 config readers。
+    let _transaction = state.settings_update.transaction.lock().await;
+    let mut candidate = state
+        .config
+        .read()
+        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
+        .clone();
+    if patch
+        .access_api_key
+        .as_deref()
+        .is_some_and(|key| !key.is_empty())
+        && candidate.deployment_mode == crate::config::DeploymentMode::Production
+    {
+        return Err(AirpError::BadRequest(
+            "AIRP_ACCESS_KEY cannot be changed through /v1/settings in production; rotate the gateway and engine secret together, then restart"
+                .to_string(),
+        ));
+    }
 
-    // 4) Persist only non-secret settings. Provider and daemon credentials are
+    if let Some(p) = patch.provider {
+        candidate.provider = p;
+    }
+    if let Some(e) = patch.endpoint.filter(|s| !s.is_empty()) {
+        candidate.endpoint = e;
+    }
+    if let Some(k) = patch.api_key.filter(|s| !s.is_empty()) {
+        candidate.api_key = Some(k);
+    }
+    if let Some(m) = patch.model.filter(|s| !s.is_empty()) {
+        candidate.model = m;
+    }
+    if let Some(v) = patch.volume {
+        candidate.volume_config = v;
+    }
+    if let Some(k) = patch.access_api_key.filter(|s| !s.is_empty()) {
+        candidate.access_api_key = Some(k);
+    }
+    if let Some(e) = patch.engine {
+        candidate.engine = e;
+    }
+    if let Some(q) = patch.quota {
+        candidate.quota = q;
+    }
+
+    // 3) Persist only non-secret settings. Provider and daemon credentials are
     // runtime-only and must be supplied through AIRP_* env or this request.
     let on_disk = serde_json::json!({
-        "provider": merged.provider,
-        "endpoint": merged.endpoint,
-        "model": merged.model,
-        "volume": merged.volume_config,
-        "engine": merged.engine,
-        "quota": merged.quota,
+        "provider": candidate.provider,
+        "endpoint": candidate.endpoint,
+        "model": candidate.model,
+        "volume": candidate.volume_config,
+        "engine": candidate.engine,
+        "quota": candidate.quota,
     });
     let path = state.data_root.join("settings.json");
-    fs::write(&path, serde_json::to_string_pretty(&on_disk)?)?;
+    let bytes = serde_json::to_vec_pretty(&on_disk)?;
+    #[cfg(test)]
+    let persist_state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if let Some(result) = persist_state
+            .settings_update
+            .run_persistence_override(&path, &bytes)
+        {
+            return result;
+        }
+        crate::data_dir::replace_file(&path, &bytes)
+    })
+    .await
+    .map_err(|error| AirpError::Internal(format!("settings persistence task failed: {error}")))??;
 
-    Ok(Json(SettingsView::from_config(&merged, &state.data_root)))
+    let mut cfg = state
+        .config
+        .write()
+        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+    *cfg = candidate;
+    Ok(Json(SettingsView::from_config(&cfg, &state.data_root)))
 }

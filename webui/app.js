@@ -1077,7 +1077,12 @@
 
   charSelect.addEventListener('change', async () => {
     // CR#2: 切角色前若有未保存 lorebook 修改则提示
-    if (!confirmDiscardLoreIfDirty('切换角色')) return;
+    if (!confirmDiscardLoreIfDirty('切换角色')) {
+      // change 事件触发时 select 已显示新值；取消时恢复内部真值，
+      // 避免 UI 显示的角色与后续操作使用的 selectedChar 分裂（#186 W-01）。
+      charSelect.value = selectedChar;
+      return;
+    }
     selectedChar = charSelect.value;
     selectedSess = '';
     // 切角色时清零 loreDirty（旧角色的修改已被丢弃或保存）
@@ -2126,8 +2131,21 @@
       renderLoreEntries();
       loreStatus.textContent = '该角色尚无世界书（可新建条目后保存）';
     } else if (r.ok) {
+      if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data)) {
+        loreStatus.textContent = '加载失败: 响应格式异常';
+        loreData = { entries: [] };
+        renderLoreEntries();
+        return;
+      }
       loreData = r.data;
-      if (!loreData.entries) loreData.entries = [];
+      if (loreData.entries === undefined) {
+        loreData.entries = [];
+      } else if (!Array.isArray(loreData.entries)) {
+        loreStatus.textContent = '加载失败: 响应格式异常';
+        loreData = { entries: [] };
+        renderLoreEntries();
+        return;
+      }
       renderLoreEntries();
       loreStatus.textContent = '已加载 ' + loreData.entries.length + ' 条条目';
     } else {

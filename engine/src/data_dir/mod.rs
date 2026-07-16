@@ -53,6 +53,8 @@ pub use session::{
     create_session, delete_session, list_sessions, resolve_session_dir, session_dir,
     session_was_deleted,
 };
+#[cfg(test)]
+pub(crate) use utils::replace_file_with_backup_cleanup_for_test;
 pub(crate) use utils::{replace_file, strip_utf8_bom};
 
 #[cfg(test)]

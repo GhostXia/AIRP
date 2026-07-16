@@ -54,6 +54,52 @@ pub struct DaemonState {
     pub http_client: reqwest::Client,
     /// M4.4：热重载窗口。`GET /v1/settings` 读、`POST /v1/settings` 写。
     pub config: std::sync::RwLock<MutableConfig>,
+    /// 串行 settings 候选构造、持久化与 live config 提交，不阻塞其他 config readers。
+    pub settings_update: SettingsUpdateCoordinator,
+}
+
+/// `/v1/settings` 的异步事务协调器。
+pub struct SettingsUpdateCoordinator {
+    pub(crate) transaction: tokio::sync::Mutex<()>,
+    #[cfg(test)]
+    persistence_override: std::sync::Mutex<Option<SettingsPersistenceOverride>>,
+}
+
+#[cfg(test)]
+type SettingsPersistenceOverride =
+    Arc<dyn Fn(&std::path::Path, &[u8]) -> Result<(), crate::error::AirpError> + Send + Sync>;
+
+impl Default for SettingsUpdateCoordinator {
+    fn default() -> Self {
+        Self {
+            transaction: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            persistence_override: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(test)]
+impl SettingsUpdateCoordinator {
+    pub(crate) fn set_persistence_override(&self, hook: Option<SettingsPersistenceOverride>) {
+        *self
+            .persistence_override
+            .lock()
+            .expect("settings persistence override lock poisoned") = hook;
+    }
+
+    pub(crate) fn run_persistence_override(
+        &self,
+        path: &std::path::Path,
+        bytes: &[u8],
+    ) -> Option<Result<(), crate::error::AirpError>> {
+        let hook = self
+            .persistence_override
+            .lock()
+            .expect("settings persistence override lock poisoned")
+            .clone();
+        hook.map(|hook| hook(path, bytes))
+    }
 }
 
 /// M4.4：可在运行时热重载的配置子集。
