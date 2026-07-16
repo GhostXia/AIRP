@@ -986,12 +986,14 @@ mod tests {
         assert_eq!(card["data"]["name"], "PNG Import");
     }
 
-    /// #126 D-PR3: 验收清单第 5 项 — V3 character_book 含 `constant: true` 条目经
+    /// #126 D-PR3: 验收清单第 5 项 — character_book 含 `constant: true` 条目经
     /// 导入 → `normalize_worldbook` 落盘 → 读取 → `Orchestrator::trigger_lorebook`
     /// → `build_system_prompt` 完整链路后，constant 条目在真实 prompt assembly 中生效。
     ///
-    /// card_json 入口与 PNG 入口（`card_png_base64`）共享 `extract_card_assets`
-    /// 路径（见 `import_card_to_disk` 末尾调用），character_book 处理与导入入口无关。
+    /// 本测试覆盖 **V2 card_json 入口**。V3 PNG 入口（`card_png_base64` + ccv3 chunk）
+    /// 由 `png_character_book_constant_entry_injects_in_prompt_assembly` 覆盖。
+    /// 两个入口在 `import_card_to_disk` 内汇合到同一 `extract_card_assets` 路径，
+    /// character_book 处理与导入入口无关。
     #[test]
     fn character_book_constant_entry_injects_in_prompt_assembly() {
         let data_root = tempfile::tempdir().unwrap();
@@ -1026,7 +1028,7 @@ mod tests {
             data_root.path(),
             Some("e2e-constant"),
             None,
-            Some(card_json.clone()),
+            Some(card_json),
             None,
         )
         .unwrap();
@@ -1049,10 +1051,14 @@ mod tests {
             Some("The kingdom levies a salt tax.")
         );
 
-        // 2. 端到端 prompt assembly：读取落盘 lorebook → Orchestrator trigger
-        let orchestrator =
-            crate::orchestrator::Orchestrator::new(Some(&card_json), Some(&lorebook_json_str))
-                .unwrap();
+        // 2. 端到端 prompt assembly：读取落盘 card.json 与 lorebook.json → Orchestrator trigger
+        let card_path = data_root.path().join("characters/e2e-constant/card.json");
+        let persisted_card_json = fs::read_to_string(&card_path).unwrap();
+        let orchestrator = crate::orchestrator::Orchestrator::new(
+            Some(&persisted_card_json),
+            Some(&lorebook_json_str),
+        )
+        .unwrap();
 
         // 扫描文本不含任何关键词 → 只有 constant 条目应注入
         let triggered = orchestrator.trigger_lorebook("一段完全无关的对话文本。");
@@ -1076,6 +1082,105 @@ mod tests {
             system_prompt
         );
         assert!(system_prompt.contains("You are going to roleplay as Constant E2E"));
+    }
+
+    /// #126 D-PR3: V3 PNG 入口端到端 — 用 `ccv3` tEXt chunk 构造 V3 角色卡 PNG，
+    /// 经 `card_png_base64` 入口导入 → `parse_png_character_card_bytes` 提取
+    /// → `extract_card_assets` 调 `normalize_worldbook` 落盘 → 读盘 lorebook
+    /// → `Orchestrator::trigger_lorebook` → `build_system_prompt`，验证 constant
+    /// 条目在 V3 PNG 入口下同样注入到最终 system prompt。
+    ///
+    /// ccv3 chunk 数据为 base64 编码的 V3 card JSON；parse_png_character_card_bytes
+    /// 优先取 ccv3（见 png_parser.rs:95-104）。本测试字面满足 #126 验收清单
+    /// "V3 PNG 内嵌 character_book 导入后，constant 条目在真实 prompt assembly 中生效"。
+    #[test]
+    fn png_character_book_constant_entry_injects_in_prompt_assembly() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let data_root = tempfile::tempdir().unwrap();
+        // V3 card 内嵌 character_book：1 个 constant:true 条目
+        let card_json = serde_json::json!({
+            "spec": "chara_card_v3",
+            "data": {
+                "name": "PNG V3 Constant",
+                "description": "v3 png e2e",
+                "character_book": {
+                    "entries": [
+                        {
+                            "keys": [],
+                            "content": "The dragon council convenes at dusk.",
+                            "constant": true,
+                            "enabled": true,
+                            "priority": 50
+                        }
+                    ]
+                }
+            }
+        })
+        .to_string();
+        // 构造 PNG：签名 + ccv3 tEXt chunk（keyword\0 + base64(json)） + IEND
+        let encoded_card = STANDARD.encode(card_json.as_bytes());
+        let mut chunk = b"ccv3\0".to_vec();
+        chunk.extend_from_slice(encoded_card.as_bytes());
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        png.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
+        png.extend_from_slice(b"tEXt");
+        png.extend_from_slice(&chunk);
+        png.extend_from_slice(&[0u8; 4]); // CRC（解析器跳过）
+        png.extend_from_slice(&0u32.to_be_bytes());
+        png.extend_from_slice(b"IEND");
+        png.extend_from_slice(&[0u8; 4]);
+
+        import_card_to_disk(
+            data_root.path(),
+            Some("png-v3-constant"),
+            None,
+            None,
+            Some(STANDARD.encode(&png)),
+        )
+        .unwrap();
+
+        // 1. 落盘的 card.png 与 world/lorebook.json 应存在
+        let char_dir = data_root.path().join("characters/png-v3-constant");
+        let card_png_path = char_dir.join("card.png");
+        assert!(card_png_path.exists(), "card.png should be written");
+        let lb_path = char_dir.join("world/lorebook.json");
+        assert!(lb_path.exists(), "world/lorebook.json should be written");
+        let lorebook_json_str = fs::read_to_string(&lb_path).unwrap();
+        let lorebook: serde_json::Value = serde_json::from_str(&lorebook_json_str).unwrap();
+        assert_eq!(lorebook["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            lorebook["entries"][0]["constant"].as_bool(),
+            Some(true),
+            "constant field must be preserved through V3 PNG import"
+        );
+
+        // 2. 端到端 prompt assembly：用 png_parser 读盘 card.png 还原 card JSON
+        //    （PNG 入口不写 card.json，card.png 是唯一规范来源；与 daemon
+        //    read_character_card_text 的 PNG 回退路径一致）
+        let persisted_card_json =
+            crate::png_parser::parse_png_character_card(&card_png_path).unwrap();
+        let orchestrator = crate::orchestrator::Orchestrator::new(
+            Some(&persisted_card_json),
+            Some(&lorebook_json_str),
+        )
+        .unwrap();
+
+        // 扫描无关文本 → constant 条目应注入
+        let triggered = orchestrator.trigger_lorebook("无关的对话。");
+        assert!(
+            triggered.contains("The dragon council convenes at dusk."),
+            "V3 PNG constant entry must inject without keyword match: {}",
+            triggered
+        );
+
+        let vars = std::collections::HashMap::new();
+        let system_prompt = orchestrator.build_system_prompt("user", &vars, &triggered);
+        assert!(
+            system_prompt.contains("The dragon council convenes at dusk."),
+            "V3 PNG constant lore must appear in final system prompt: {}",
+            system_prompt
+        );
+        assert!(system_prompt.contains("You are going to roleplay as PNG V3 Constant"));
     }
 
     #[tokio::test]
