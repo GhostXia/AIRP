@@ -17,7 +17,7 @@ use crate::data_dir;
 use crate::domain::ChatService;
 use crate::error::AirpError;
 use crate::revision::atomic::{
-    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+    commit_revision, next_content_revision, CommitOptions, StagedRevision,
 };
 use crate::revision::manifest::{AssetKind, AssetSource};
 use crate::types::CharacterId;
@@ -47,10 +47,9 @@ fn commit_character_revision(
 ) -> Result<u64, AirpError> {
     use sha2::{Digest, Sha256};
     let char_dir = data_dir::character_dir(data_root, character_id)?;
-    let content_revision = match read_current_revision(&char_dir)? {
-        Some(existing) => existing + 1,
-        None => 1,
-    };
+    // 使用 next_content_revision 而非手动 read_current_revision + 1，
+    // 以跳过 commit_revision 中途崩溃留下的 orphan revision_dir（详见 atomic::next_content_revision 文档）。
+    let content_revision = next_content_revision(&char_dir)?;
     let card_bytes = card_json.as_bytes();
     let raw_bytes = raw_json.as_bytes();
     let source_hash_hex = {

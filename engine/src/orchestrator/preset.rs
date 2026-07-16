@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::card::{TavernPreset, TavernPrompt};
 use crate::error::AirpError;
 use crate::revision::atomic::{
-    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+    commit_revision, next_content_revision, CommitOptions, StagedRevision,
 };
 use crate::revision::manifest::{AssetKind, AssetSource};
 
@@ -538,10 +538,7 @@ impl PresetService {
         crate::data_dir::replace_file(&version_dir.join("preset.json"), &canonical_bytes)?;
         crate::data_dir::replace_file(&version_dir.join("raw.json"), raw_bytes)?;
 
-        let content_revision = match read_current_revision(&dir)? {
-            Some(existing) => existing + 1,
-            None => 1,
-        };
+        let content_revision = next_content_revision(&dir)?;
         // provenance source_hash = 与 normalize_preset 相同 input 的完整 SHA-256 hex。
         // normalize_preset 对 serde_json::to_vec(source) 计算 hash（重新序列化的 Value），
         // 因此这里用相同 input，确保 report.source_hash（12 hex 截断）与完整 hash 前缀一致。
@@ -1051,14 +1048,27 @@ mod tests {
     }
 
     #[test]
-    fn write_commit_failure_leaves_legacy_current_unchanged() {
-        // CodeRabbit #1 failure-path 测试：commit_revision 失败时 legacy current 指针不变。
-        // 触发方式：预先创建 revision_dir 1，使 commit_revision 因 "revision 已存在" 失败。
+    fn write_recovers_from_orphan_revision_dir_by_skipping_to_next_revision() {
+        // 关键回归测试：commit_revision 在第 5 步（staging → revision_dir rename）
+        // 成功后、第 8 步（current_revision 指针原子替换）前发生失败（I/O 错误、
+        // 磁盘满、进程被 SIGKILL/断电）时，磁盘上会留下一个**完整的 orphan
+        // revision_dir**：内容已写入、目录已 rename，但 `current_revision` 文件
+        // 未更新指向它。
+        //
+        // 在本修复前，下次 PresetService::write 会基于过时的 `current_revision`
+        // 计算出与 orphan 相同的 content_revision，commit_revision 的
+        // `revision_dir.exists()` 不变量检查会拒绝写入，asset 进入永久不可写状态。
+        //
+        // 修复后：next_content_revision 同时扫描磁盘上的 revision_dir，跳过 orphan，
+        // 使用更高的编号写入。orphan 目录本身保持不动（不可变快照，可能是合法内容）。
+        //
+        // 本测试用空目录模拟 orphan（最简单的 orphan 形态）。
         let dir = tempfile::tempdir().unwrap();
-        let preset_dir = dir.path().join("presets").join("fail-commit");
-        let preset_id = crate::types::PresetId::new("fail-commit").unwrap();
+        let preset_dir = dir.path().join("presets").join("orphan-recovery");
+        let preset_id = crate::types::PresetId::new("orphan-recovery").unwrap();
 
-        // 预先写入旧 legacy current 指针 + 一个占位 revision_dir 1
+        // 预先写入旧 legacy current 指针 + 一个 orphan revision_dir 1（空，
+        // 模拟 commit_revision 第 5 步成功后崩溃、current_revision 未更新的状态）
         std::fs::create_dir_all(preset_dir.join("versions").join("old-gen")).unwrap();
         std::fs::write(
             preset_dir
@@ -1071,24 +1081,134 @@ mod tests {
         std::fs::write(preset_dir.join("current"), "old-gen").unwrap();
         std::fs::create_dir_all(preset_dir.join("revisions").join("1")).unwrap();
 
-        // write 应失败（commit_revision 因 revision 1 已存在而报错）
+        // write 应成功：跳过 orphan revisions/1/，使用 content_revision=2
         let service = PresetService::new(dir.path());
         let source = r#"{"prompts":[{"identifier":"main","name":"Main","role":"system","content":"hello"}]}"#;
         let result = service.write(&preset_id, source);
         assert!(
-            result.is_err(),
-            "commit_revision 应因 revision 1 已存在而失败"
+            result.is_ok(),
+            "write 应跳过 orphan revisions/1/ 并使用 revision 2，实际: {:?}",
+            result.err()
         );
 
-        // legacy current 指针应仍指向 old-gen（未被新 write 切换）
-        let current = std::fs::read_to_string(preset_dir.join("current")).unwrap();
-        assert_eq!(current, "old-gen", "commit 失败时 legacy current 不应变");
+        // current_revision 应指向 2（跳过 orphan）
+        let current_revision =
+            std::fs::read_to_string(preset_dir.join("current_revision")).unwrap();
+        assert_eq!(
+            current_revision.trim(),
+            "2",
+            "current_revision 应为 2（跳过 orphan 1）"
+        );
 
-        // current_revision 应不存在（未被 publish）
+        // revisions/2/ 应存在并含 manifest + preset.json + raw.json + import_report.json
+        let revision_dir = preset_dir.join("revisions").join("2");
+        assert!(revision_dir.is_dir(), "revision 2 目录应存在");
+        assert!(revision_dir.join("manifest.json").is_file());
+        assert!(revision_dir.join("preset.json").is_file());
+        assert!(revision_dir.join("raw.json").is_file());
+        assert!(revision_dir.join("import_report.json").is_file());
+
+        // revisions/1/ 应保留（不可变快照，不删除）
         assert!(
-            !preset_dir.join("current_revision").exists(),
-            "commit 失败时 current_revision 不应被创建"
+            preset_dir.join("revisions").join("1").is_dir(),
+            "orphan revisions/1/ 应保留不删除"
         );
+
+        // legacy current 应被切换到新 generation（commit 成功后 publish）
+        let current = std::fs::read_to_string(preset_dir.join("current")).unwrap();
+        assert_ne!(current, "old-gen", "commit 成功后 legacy current 应被更新");
+        assert!(
+            preset_dir.join("versions").join(&current).is_dir(),
+            "legacy current 应指向存在的 versions 目录"
+        );
+    }
+
+    #[test]
+    fn write_recovers_from_orphan_with_higher_revision_than_pointer() {
+        // 进阶 orphan 场景：current_revision 指针 = 3，但磁盘上有 orphan revisions/5/
+        // （如：commit_revision 在 publish current_revision=5 前崩溃，下次启动时
+        // next_content_revision 必须跳过 orphan，使用 revision=6 而非 4）
+        let dir = tempfile::tempdir().unwrap();
+        let preset_dir = dir.path().join("presets").join("orphan-higher");
+        let preset_id = crate::types::PresetId::new("orphan-higher").unwrap();
+
+        // 写入 current_revision=3（指针滞后）+ orphan revisions/5/（磁盘已存在）
+        std::fs::create_dir_all(preset_dir.join("revisions").join("3")).unwrap();
+        std::fs::create_dir_all(preset_dir.join("revisions").join("5")).unwrap();
+        std::fs::write(preset_dir.join("current_revision"), "3").unwrap();
+
+        let service = PresetService::new(dir.path());
+        let source = r#"{"prompts":[{"identifier":"main","name":"Main","role":"system","content":"hello"}]}"#;
+        let result = service.write(&preset_id, source);
+        assert!(
+            result.is_ok(),
+            "write 应跳过 orphan revisions/5/ 并使用 revision=6，实际: {:?}",
+            result.err()
+        );
+
+        // current_revision 应为 6（max(3, 5) + 1）
+        let current_revision =
+            std::fs::read_to_string(preset_dir.join("current_revision")).unwrap();
+        assert_eq!(
+            current_revision.trim(),
+            "6",
+            "current_revision 应跳过 orphan 5 使用 6"
+        );
+
+        // revisions/6/ 应存在
+        assert!(
+            preset_dir.join("revisions").join("6").is_dir(),
+            "revision 6 目录应存在"
+        );
+
+        // revisions/3/ 和 revisions/5/ 都应保留
+        assert!(preset_dir.join("revisions").join("3").is_dir());
+        assert!(preset_dir.join("revisions").join("5").is_dir());
+    }
+
+    #[test]
+    fn write_corrupted_current_revision_leaves_legacy_current_unchanged() {
+        // 替代原 write_commit_failure_leaves_legacy_current_unchanged 测试：
+        // commit_revision 的 orphan revision_dir 触发已由 next_content_revision 修复
+        // （见 write_recovers_from_orphan_revision_dir_by_skipping_to_next_revision），
+        // 因此原触发方式（预创建 revisions/1/）已不再能产生 commit 失败。
+        //
+        // 本测试用另一种失败触发：current_revision 文件损坏（内容为非法值 "0"），
+        // read_current_revision 会返回 Err，next_content_revision 也返回 Err，
+        // PresetService::write 应在 commit 前失败，legacy current 不被切换。
+        let dir = tempfile::tempdir().unwrap();
+        let preset_dir = dir.path().join("presets").join("corrupted");
+        let preset_id = crate::types::PresetId::new("corrupted").unwrap();
+
+        std::fs::create_dir_all(preset_dir.join("versions").join("old-gen")).unwrap();
+        std::fs::write(
+            preset_dir
+                .join("versions")
+                .join("old-gen")
+                .join("preset.json"),
+            r#"{"prompts":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(preset_dir.join("current"), "old-gen").unwrap();
+        // current_revision 文件内容非法（revision 0），read_current_revision 会拒绝
+        std::fs::write(preset_dir.join("current_revision"), "0").unwrap();
+
+        let service = PresetService::new(dir.path());
+        let source = r#"{"prompts":[{"identifier":"main","name":"Main","role":"system","content":"hello"}]}"#;
+        let result = service.write(&preset_id, source);
+        assert!(result.is_err(), "current_revision 文件损坏时 write 应失败");
+
+        // legacy current 指针应仍指向 old-gen
+        let current = std::fs::read_to_string(preset_dir.join("current")).unwrap();
+        assert_eq!(
+            current, "old-gen",
+            "失败时 legacy current 不应变（只 versions 目录可能被新写入污染）"
+        );
+
+        // current_revision 文件应仍为 "0"（未被覆盖）
+        let current_revision =
+            std::fs::read_to_string(preset_dir.join("current_revision")).unwrap();
+        assert_eq!(current_revision, "0", "失败时 current_revision 不应被覆盖");
     }
 
     #[test]

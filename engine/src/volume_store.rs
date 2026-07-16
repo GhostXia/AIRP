@@ -1,6 +1,6 @@
 use crate::error::AirpError;
 use crate::revision::atomic::{
-    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+    commit_revision, next_content_revision, CommitOptions, StagedRevision,
 };
 use crate::revision::manifest::{AssetKind, AssetSource};
 use std::fs;
@@ -82,10 +82,8 @@ fn commit_memory_revision(
     source_kind: &str,
 ) -> Result<u64, AirpError> {
     use sha2::{Digest, Sha256};
-    let content_revision = match read_current_revision(session_dir)? {
-        Some(existing) => existing + 1,
-        None => 1,
-    };
+    // 使用 next_content_revision 跳过 orphan revision_dir（详见 atomic::next_content_revision 文档）。
+    let content_revision = next_content_revision(session_dir)?;
     let current_bytes = fs::read(current_path(session_dir))?;
     let index_bytes = fs::read(index_path(session_dir))?;
     let mut files = vec![
@@ -339,6 +337,7 @@ pub fn increment_turn_counter(session_dir: &Path) -> Result<u64, AirpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::revision::atomic::read_current_revision;
     use tempfile::tempdir;
 
     #[test]
@@ -523,6 +522,52 @@ mod tests {
         assert!(
             rev_dir.join("volumes").join("vol_001.md").is_file(),
             "revision 应包含封卷文件"
+        );
+    }
+
+    #[test]
+    fn append_to_current_recovers_from_orphan_revision_dir() {
+        // Memory orphan revision_dir 恢复测试。
+        //
+        // 模拟 commit_revision 第 5 步成功后崩溃（revision_dir 已 rename 但
+        // current_revision 指针未更新）：预先创建 orphan `revisions/2/` 空目录，
+        // 下次 `append_to_current` 应通过 `next_content_revision` 跳过 orphan，
+        // 使用 revision 3 而非与 orphan 冲突的 revision 2。
+        let tmp = tempdir().unwrap();
+        let session_dir = tmp.path().join("mem-orphan");
+        ensure_session_dirs(&session_dir).unwrap();
+
+        // 第一次 append → revision 1
+        append_to_current(&session_dir, "第一段").unwrap();
+        assert_eq!(
+            read_current_revision(&session_dir).unwrap(),
+            Some(1),
+            "首次 append 应创建 revision 1"
+        );
+
+        // 模拟 orphan：手动创建 revisions/2/ 空目录（current_revision 仍指向 1）
+        std::fs::create_dir_all(session_dir.join("revisions").join("2")).unwrap();
+
+        // 第二次 append 应跳过 orphan 2，使用 revision 3
+        let result = append_to_current(&session_dir, "第二段");
+        assert!(
+            result.is_ok(),
+            "append 应跳过 orphan revisions/2/ 并使用 revision 3，实际: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            read_current_revision(&session_dir).unwrap(),
+            Some(3),
+            "current_revision 应为 3（跳过 orphan 2）"
+        );
+        assert!(
+            session_dir.join("revisions").join("3").is_dir(),
+            "revision 3 目录应存在"
+        );
+        // orphan 目录应保留（不可变快照原则）
+        assert!(
+            session_dir.join("revisions").join("2").is_dir(),
+            "orphan revisions/2/ 应保留不删除"
         );
     }
 }

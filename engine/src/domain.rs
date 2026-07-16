@@ -15,7 +15,7 @@ use crate::chat_store::ChatLog;
 use crate::data_dir;
 use crate::error::AirpError;
 use crate::revision::atomic::{
-    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+    commit_revision, next_content_revision, CommitOptions, StagedRevision,
 };
 use crate::revision::manifest::{AssetKind, AssetSource};
 use crate::types::{CharacterId, SessionId, UserId};
@@ -482,11 +482,8 @@ impl LorebookService {
         // #115 Phase 2d：Worldbook 接入统一 revision 合同。
         // 工作副本 `lorebook.json` 已原子写入；下面在 `characters/{id}/world/` 下
         // 创建 `revisions/{content_revision}/` + `current_revision` 不可变快照。
-        // lazy migration：`current_revision` 不存在则从 1 起。
-        let content_revision = match read_current_revision(&world_dir)? {
-            Some(existing) => existing + 1,
-            None => 1,
-        };
+        // 使用 next_content_revision 跳过 orphan revision_dir（详见 atomic::next_content_revision 文档）。
+        let content_revision = next_content_revision(&world_dir)?;
         let source_hash_hex = {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
@@ -1525,6 +1522,7 @@ impl PersonaService {
 mod tests {
     use super::*;
     use crate::adapter::MessageRole;
+    use crate::revision::atomic::read_current_revision;
 
     #[test]
     fn lorebook_read_migrates_v3_selective_without_losing_explicit_false() {
@@ -2889,6 +2887,77 @@ mod tests {
         assert!(
             persona_asset_dir.join("revisions").join("1").is_dir(),
             "重新创建后 revision 1 目录应再次存在"
+        );
+    }
+
+    /// Lorebook orphan revision_dir 恢复测试。
+    ///
+    /// 模拟 `commit_revision` 第 5 步成功后崩溃（revision_dir 已 rename 但
+    /// current_revision 指针未更新）：预先创建 orphan `revisions/2/` 空目录，
+    /// 下次 `LorebookService::write` 应通过 `next_content_revision` 跳过 orphan，
+    /// 使用 revision 3 而非与 orphan 冲突的 revision 2。
+    #[test]
+    fn lorebook_write_recovers_from_orphan_revision_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = LorebookService::new(tmp.path());
+        let character = CharacterId::new("lore-orphan").unwrap();
+        let world_dir = data_dir::char_world_dir(tmp.path(), character.as_str()).unwrap();
+
+        // 第一次写入 → revision 1
+        let lb_v1 = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["剑".to_string()],
+                content: "古老的铁剑".to_string(),
+                enabled: Some(true),
+                priority: Some(10),
+                constant: None,
+                comment: None,
+                secondary_keys: vec![],
+                selective: false,
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
+        service.write(&character, &lb_v1).unwrap();
+        assert_eq!(read_current_revision(&world_dir).unwrap(), Some(1));
+
+        // 模拟 orphan：手动创建 revisions/2/ 空目录（current_revision 仍指向 1）
+        std::fs::create_dir_all(world_dir.join("revisions").join("2")).unwrap();
+
+        // 第二次写入应跳过 orphan 2，使用 revision 3
+        let lb_v2 = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["盾".to_string()],
+                content: "镶金的圆盾".to_string(),
+                enabled: Some(true),
+                priority: Some(5),
+                constant: None,
+                comment: None,
+                secondary_keys: vec![],
+                selective: false,
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
+        let result = service.write(&character, &lb_v2);
+        assert!(
+            result.is_ok(),
+            "write 应跳过 orphan revisions/2/ 并使用 revision 3，实际: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            read_current_revision(&world_dir).unwrap(),
+            Some(3),
+            "current_revision 应为 3（跳过 orphan 2）"
+        );
+        assert!(
+            world_dir.join("revisions").join("3").is_dir(),
+            "revision 3 目录应存在"
+        );
+        // orphan 目录应保留（不可变快照原则）
+        assert!(
+            world_dir.join("revisions").join("2").is_dir(),
+            "orphan revisions/2/ 应保留不删除"
         );
     }
 }

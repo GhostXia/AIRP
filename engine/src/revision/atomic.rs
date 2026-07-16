@@ -285,6 +285,67 @@ pub(crate) fn read_current_revision(asset_dir: &Path) -> Result<Option<u64>, Air
     Ok(Some(revision))
 }
 
+/// 计算下次 commit 应使用的 `content_revision`。
+///
+/// 取 `max(current_revision 指针, 磁盘上已有 revision_dir 最大编号) + 1`。
+/// 两者都不存在时返回 `1`（lazy migration 首次写入）。
+///
+/// # 为什么需要扫描磁盘上的 revision_dir
+///
+/// `commit_revision` 在第 5 步（staging → revision_dir rename）成功后、第 8 步
+/// （current_revision 指针原子替换）前发生失败（I/O 错误、磁盘满、进程被
+/// SIGKILL/断电）时，会留下一个**完整的 orphan revision_dir**：内容已写入、
+/// manifest 已校验、目录已 rename，但 `current_revision` 文件未更新指向它。
+///
+/// 此时若调用方仅依据 `current_revision` 推导下次的 `content_revision`，会
+/// 得到与 orphan 相同的编号，`commit_revision` 的 `revision_dir.exists()`
+/// 不变量检查会拒绝写入，asset 进入**永久不可写**状态。
+///
+/// 本函数同时扫描 `revisions/` 目录下的数字命名子目录，跳过 orphan revision_dir，
+/// 让下次 commit 使用更高的编号。orphan 目录本身保持不动（不可变快照，可能是
+/// 合法内容）；调用方或运维可在事后清理。
+///
+/// # 性能
+///
+/// `revisions/` 目录通常很小（一个 asset 的历史版本数），`read_dir` 开销可忽略。
+/// 写路径已通过 per-asset Mutex 串行化，无并发竞争。
+pub(crate) fn next_content_revision(asset_dir: &Path) -> Result<u64, AirpError> {
+    let from_pointer = read_current_revision(asset_dir)?.unwrap_or(0);
+    let from_disk = max_existing_revision_dir(asset_dir)?.unwrap_or(0);
+    Ok(from_pointer.max(from_disk) + 1)
+}
+
+/// 扫描 `revisions/` 目录，返回数字命名子目录的最大编号。
+///
+/// 跳过非目录、非数字命名、`.` 前缀（如 staging 残留 `.staging-{id}/`）的入口。
+/// 目录不存在或无合法子目录时返回 `Ok(None)`。
+fn max_existing_revision_dir(asset_dir: &Path) -> Result<Option<u64>, AirpError> {
+    let revisions_dir = asset_dir.join("revisions");
+    if !revisions_dir.exists() {
+        return Ok(None);
+    }
+    let mut max: Option<u64> = None;
+    for entry in fs::read_dir(&revisions_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // 跳过 staging 目录（`.staging-{revision_id}`）和其它 dot-prefixed 入口。
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        if let Ok(rev) = name.parse::<u64>() {
+            max = Some(max.map_or(rev, |m| m.max(rev)));
+        }
+    }
+    Ok(max)
+}
+
 /// 同步目录（持久化目录元数据，确保 rename 等变更落盘）。
 ///
 /// - Unix：调用 `sync_data` 并传播错误（目录元数据持久化对崩溃恢复至关重要）。
@@ -473,6 +534,69 @@ mod tests {
         // 此测试因 current_revision 回退保护拒绝（即使 revision_dir 不存在）
         let result = commit_revision(&staged(3), &options);
         assert!(result.is_err(), "不允许 commit 等于 current 的 revision");
+    }
+
+    // ── next_content_revision 单元测试 ──────────────────────────────────────────
+
+    #[test]
+    fn next_content_revision_returns_1_when_no_pointer_and_no_dirs() {
+        // 全新 asset：无 current_revision 文件、无 revisions/ 目录 → 返回 1（lazy migration）
+        let dir = tempdir().unwrap();
+        assert_eq!(next_content_revision(dir.path()).unwrap(), 1);
+    }
+
+    #[test]
+    fn next_content_revision_returns_pointer_plus_1_in_normal_case() {
+        // 正常场景：current_revision=3，磁盘上有 revisions/1/2/3/ → 返回 4
+        let dir = tempdir().unwrap();
+        let options = CommitOptions::new(dir.path());
+        commit_revision(&staged(1), &options).unwrap();
+        commit_revision(&staged(2), &options).unwrap();
+        commit_revision(&staged(3), &options).unwrap();
+        assert_eq!(next_content_revision(dir.path()).unwrap(), 4);
+    }
+
+    #[test]
+    fn next_content_revision_skips_orphan_equal_to_pointer() {
+        // orphan 场景 1：current_revision 不存在（指针缺失），但磁盘上有 orphan
+        // revisions/1/。next_content_revision 应跳过 orphan 返回 2，而非 1
+        // （否则 commit_revision 会因 revision_dir 已存在而拒绝）。
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("revisions").join("1")).unwrap();
+        assert_eq!(next_content_revision(dir.path()).unwrap(), 2);
+    }
+
+    #[test]
+    fn next_content_revision_skips_orphan_higher_than_pointer() {
+        // orphan 场景 2：current_revision=3，但磁盘上有 orphan revisions/5/
+        // （commit_revision 第 5 步成功后崩溃、current_revision 未更新到 5）。
+        // next_content_revision 应返回 6（max(3, 5) + 1），而非 4。
+        let dir = tempdir().unwrap();
+        let options = CommitOptions::new(dir.path());
+        commit_revision(&staged(3), &options).unwrap();
+        fs::create_dir_all(dir.path().join("revisions").join("5")).unwrap();
+        assert_eq!(next_content_revision(dir.path()).unwrap(), 6);
+    }
+
+    #[test]
+    fn next_content_revision_ignores_staging_dirs_and_non_numeric_names() {
+        // staging 目录（`.staging-xxx`）和非数字命名目录不应影响编号计算。
+        let dir = tempdir().unwrap();
+        let options = CommitOptions::new(dir.path());
+        commit_revision(&staged(2), &options).unwrap();
+        fs::create_dir_all(dir.path().join("revisions").join(".staging-abc")).unwrap();
+        fs::create_dir_all(dir.path().join("revisions").join("not-a-number")).unwrap();
+        fs::create_dir_all(dir.path().join("revisions").join("3.tmp")).unwrap();
+        assert_eq!(next_content_revision(dir.path()).unwrap(), 3);
+    }
+
+    #[test]
+    fn next_content_revision_propagates_io_error_on_corrupted_pointer() {
+        // current_revision 文件内容非法（"0"）→ read_current_revision 返回 Err，
+        // next_content_revision 应传播错误而非静默降级。
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("current_revision"), "0").unwrap();
+        assert!(next_content_revision(dir.path()).is_err());
     }
 
     #[test]
