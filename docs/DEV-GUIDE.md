@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-16，`main@13d07d7`
+> 最后校准：2026-07-17，`main@15cb6c0`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -205,8 +205,8 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. 在 #115 已交付的 pipeline/HTTP/WebUI 用户可读摘要闭环上补齐统一 revision/provenance；
-2. #114 已交付 Persona effective/绑定能力之上的 Persona/Preset P1 产品闭环；#126 已关闭，Worldbook 只按新需求继续演进；
+1. Phase 2 (#115) 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（PR #201/#202/#203/#206/#215），下一步是 #114 Persona/Preset 高级生命周期（base lock、drift/history/rollback、头像、导入导出/备份恢复、HTTP/UI 受控 dry-run、完整 provenance 审计）与统一有效配置摘要；
+2. #126 已关闭，Worldbook 只按新需求继续演进；#114 Persona effective/绑定能力已交付，剩余 P1 产品闭环按 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) Phase P1 推进；
 3. [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 的完整 session/revision/恢复分期；
 4. P2 运维与恢复；
 5. P3 release candidate。
