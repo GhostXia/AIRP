@@ -221,11 +221,18 @@ fn build_prompt_trace(
     //   - 可读 → 填充实际 u64
     //   - 不可读（旧数据未升级或文件损坏）→ 推送对应 *_revision_unavailable 诊断
     // 不允许用 mtime、文件名时间戳或单调递增计数器冒充内容版本。
+    //
+    // CodeRabbit 审计修复：当 `character_card_id` 或 `lorebook_path` 显式指定外部
+    // card/lorebook 源时，不读取 `characters/{cid}/` 下的 canonical revision 指针——
+    // 实际 prompt 内容不来自该目录，读取会产生误导性 revision。留 None 不 push 诊断。
     let is_character_context = payload.scene_id.is_none() && payload.character_id.is_some();
+    let uses_canonical_character_card = payload.character_card_id.is_none();
+    let uses_canonical_lorebook = payload.lorebook_path.is_none();
 
     // ── Character revision（character 上下文）─────────────────────────────
     // scene 模式下 character_revision 字段语义不适用（多角色无单一 revision），留 None 不 push。
-    let character_revision = if is_character_context {
+    // `character_card_id` 提供外部/内联 card 时，canonical 目录 revision 不代表实际内容，跳过。
+    let character_revision = if is_character_context && uses_canonical_character_card {
         payload.character_id.as_ref().and_then(|cid| {
             let char_dir = effective_root.join("characters").join(cid.as_str());
             read_revision_or_diagnostic(
@@ -241,9 +248,13 @@ fn build_prompt_trace(
 
     // ── Lorebook revision（character 上下文）───────────────────────────────
     // scene 模式下 lorebook 来源由场景决定，不在此处填充。
-    let lorebook_revision = if is_character_context {
+    // `lorebook_path` 提供外部/内联 lorebook 时，canonical world/ revision 不代表实际内容，跳过。
+    let lorebook_revision = if is_character_context && uses_canonical_lorebook {
         payload.character_id.as_ref().and_then(|cid| {
-            let world_dir = effective_root.join("characters").join(cid.as_str()).join("world");
+            let world_dir = effective_root
+                .join("characters")
+                .join(cid.as_str())
+                .join("world");
             read_revision_or_diagnostic(
                 &world_dir,
                 "lorebook_revision_unavailable",
@@ -258,7 +269,10 @@ fn build_prompt_trace(
     // ── State revision（character 上下文）─────────────────────────────────
     let state_revision = if is_character_context {
         payload.character_id.as_ref().and_then(|cid| {
-            let state_dir = effective_root.join("characters").join(cid.as_str()).join("state");
+            let state_dir = effective_root
+                .join("characters")
+                .join(cid.as_str())
+                .join("state");
             read_revision_or_diagnostic(
                 &state_dir,
                 "state_revision_unavailable",
@@ -273,7 +287,8 @@ fn build_prompt_trace(
     // ── Memory revision（character 上下文，按 session_dir 读取）───────────
     let memory_revision = if is_character_context {
         payload.character_id.as_ref().and_then(|cid| {
-            let session_dir = read_only_session_dir(effective_root, cid.as_str(), payload.session_id.as_ref());
+            let session_dir =
+                read_only_session_dir(effective_root, cid.as_str(), payload.session_id.as_ref());
             read_revision_or_diagnostic(
                 &session_dir,
                 "memory_revision_unavailable",
@@ -326,9 +341,15 @@ fn build_prompt_trace(
                     }
                 }
                 Err(e) => {
+                    tracing::warn!(
+                        persona_dir = ?persona_asset_dir,
+                        error = %e,
+                        "Phase 2h: persona current_revision 读取失败（路径仅记录在服务端日志）"
+                    );
                     diagnostics.push(PromptDiagnostic {
                         kind: "persona_revision_unavailable".to_string(),
-                        message: format!("Persona current_revision 读取失败: {e}"),
+                        message: "Persona current_revision 读取失败（详见服务端日志）。"
+                            .to_string(),
                     });
                     None
                 }
@@ -380,7 +401,11 @@ fn build_prompt_trace(
 /// Phase 2h：尝试读取 `asset_dir/current_revision`。
 /// - 可读 → `Some(rev)`
 /// - 文件不存在（旧数据未升级）→ 推送 `{kind}` 诊断，返回 `None`
-/// - 文件存在但损坏 → 推送带错误信息的诊断，返回 `None`
+/// - 文件存在但损坏 → 服务端日志记录详细错误（含路径），HTTP 诊断用通用消息，返回 `None`
+///
+/// CodeRabbit 审计修复：诊断消息不包含文件系统路径，避免通过 HTTP preview 接口泄露
+/// 服务器内部路径结构。详细错误（含 `asset_dir` 路径与原始错误）通过 `tracing::warn!`
+/// 记录到服务端日志，便于运维排查。
 fn read_revision_or_diagnostic(
     asset_dir: &std::path::Path,
     kind: &str,
@@ -399,9 +424,15 @@ fn read_revision_or_diagnostic(
             None
         }
         Err(e) => {
+            tracing::warn!(
+                asset_dir = ?asset_dir,
+                error = %e,
+                kind = kind,
+                "Phase 2h: current_revision 读取失败（路径仅记录在服务端日志，不进入 HTTP 诊断）"
+            );
             diagnostics.push(PromptDiagnostic {
                 kind: kind.to_string(),
-                message: format!("{asset_label} current_revision 读取失败: {e}"),
+                message: format!("{asset_label} current_revision 读取失败（详见服务端日志）。"),
             });
             None
         }

@@ -102,6 +102,10 @@ test('buildAssemblyViewModel marks chips as unavailable when revision diagnostic
 });
 
 test('buildAssemblyViewModel hostile identifiers stay inert when unavailable', () => {
+  // CodeRabbit nitpick 修复：此单元测试仅验证 view model 输出（纯函数，不涉及 DOM）。
+  // 实际 DOM sink 的 XSS 防护由 `ui/production-browser-smoke.mjs` #194 fixture 覆盖
+  // （通过 `injectionName` hostile 标识 + `window.__airpXss` 断言 + `img[src="x"]` count）。
+  // 此处验证 view model 正确保留 hostile 字符串作为 chip value 文本。
   const hostile = '<img src=x onerror="globalThis.pwned=1">';
   const view = buildAssemblyViewModel({
     effective: { character_id: hostile },
@@ -109,5 +113,29 @@ test('buildAssemblyViewModel hostile identifiers stay inert when unavailable', (
     diagnostics: [{ kind: 'character_revision_unavailable', message: hostile }],
   });
   assert.equal(view.chips[0].value, hostile + ' · unavailable');
-  assert.equal(globalThis.pwned, undefined);
+});
+
+// Gemini 审计修复：世界书 / 状态 / 记忆 在未激活（无 revision + 无诊断）时应回退到 "未启用"，
+// 而非显示 asset 标签（如 "世界书"），避免暗示 asset 已激活但缺少 revision。
+test('buildAssemblyViewModel falls back to inactive label when asset has no revision and no diagnostic', () => {
+  const view = buildAssemblyViewModel({
+    effective: {
+      // 6 个 revision 都缺失
+      character_id: null,
+      persona_id: null,
+      preset_id: null,
+      // lorebook_revision / state_revision / memory_revision 都未设置
+    },
+    segments: [],
+    diagnostics: [],  // 无任何诊断
+  });
+
+  // character / persona / preset: 无 ID → 已有的 fallback 行为
+  assert.equal(view.chips[0].value, '未选择');
+  assert.equal(view.chips[1].value, '未启用');
+  assert.equal(view.chips[2].value, '未启用');
+  // 世界书 / 状态 / 记忆: 无 revision + 无诊断 → 应回退到 "未启用"（不显示 asset 标签）
+  assert.equal(view.chips[3].value, '未启用', '世界书未激活时应显示 未启用');
+  assert.equal(view.chips[4].value, '未启用', '状态未激活时应显示 未启用');
+  assert.equal(view.chips[5].value, '未启用', '记忆未激活时应显示 未启用');
 });

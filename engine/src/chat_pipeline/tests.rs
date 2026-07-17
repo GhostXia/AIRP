@@ -439,7 +439,10 @@ mod tests {
         fs::write(preset_dir.join("current"), "gen-phase2h").unwrap();
         fs::create_dir_all(preset_dir.join("versions").join("gen-phase2h")).unwrap();
         fs::write(
-            preset_dir.join("versions").join("gen-phase2h").join("preset.json"),
+            preset_dir
+                .join("versions")
+                .join("gen-phase2h")
+                .join("preset.json"),
             serde_json::json!({
                 "schema_version": 1,
                 "name": "phase2h-preset",
@@ -483,7 +486,11 @@ mod tests {
         let pipeline = prepare_pipeline(&req, &state).unwrap();
 
         let eff = &pipeline.prompt_trace.effective;
-        assert_eq!(eff.character_revision, Some(3), "character_revision 应填充 3");
+        assert_eq!(
+            eff.character_revision,
+            Some(3),
+            "character_revision 应填充 3"
+        );
         assert_eq!(eff.lorebook_revision, Some(5), "lorebook_revision 应填充 5");
         assert_eq!(eff.state_revision, Some(42), "state_revision 应填充 42");
         assert_eq!(eff.memory_revision, Some(9), "memory_revision 应填充 9");
@@ -565,7 +572,10 @@ mod tests {
 
         // 全部 revision 字段应为 None
         let eff = &pipeline.prompt_trace.effective;
-        assert!(eff.character_revision.is_none(), "character_revision 应 None");
+        assert!(
+            eff.character_revision.is_none(),
+            "character_revision 应 None"
+        );
         assert!(eff.lorebook_revision.is_none(), "lorebook_revision 应 None");
         assert!(eff.state_revision.is_none(), "state_revision 应 None");
         assert!(eff.memory_revision.is_none(), "memory_revision 应 None");
@@ -577,6 +587,9 @@ mod tests {
     /// 应留 `None` 且**不**推送 `character_revision_unavailable` 诊断。
     /// 与 `test_ms6_scene_pipeline_builds_multi_char_prompt`（line ~748）互补：
     /// 那条测试断言 character_id 为 None；这条断言 character_revision 为 None。
+    ///
+    /// CodeRabbit 审计修复（nitpick）：扩展断言覆盖 lorebook / state / memory 三个字段，
+    /// 它们在 scene 模式下同样不适用，都应留 None 且不推送对应 *_revision_unavailable 诊断。
     #[test]
     fn test_phase_2h_scene_mode_leaves_character_revision_none_without_diagnostic() {
         use crate::scene::{CharacterEntry, CharacterRole, LorebookMerge, SceneConfig};
@@ -606,22 +619,106 @@ mod tests {
         req.character_id = Some(CharacterId::new("ignored-character").unwrap());
 
         let pipeline = prepare_pipeline(&req, &state).unwrap();
+        let eff = &pipeline.prompt_trace.effective;
+        let diag_kinds: Vec<_> = pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .map(|d| d.kind.as_str())
+            .collect();
+
+        // character / lorebook / state / memory 在 scene 模式下都应留 None
+        assert!(
+            eff.character_revision.is_none(),
+            "scene: character_revision 应 None"
+        );
+        assert!(
+            eff.lorebook_revision.is_none(),
+            "scene: lorebook_revision 应 None"
+        );
+        assert!(
+            eff.state_revision.is_none(),
+            "scene: state_revision 应 None"
+        );
+        assert!(
+            eff.memory_revision.is_none(),
+            "scene: memory_revision 应 None"
+        );
+        assert!(eff.character_id.is_none(), "scene: character_id 应 None");
+
+        // scene 模式不应推送任何 character/lorebook/state/memory 相关的 *_revision_unavailable
+        for kind in [
+            "character_revision_unavailable",
+            "lorebook_revision_unavailable",
+            "state_revision_unavailable",
+            "memory_revision_unavailable",
+        ] {
+            assert!(
+                !diag_kinds.contains(&kind),
+                "scene 模式不应推送 {kind}，实际诊断: {:?}",
+                diag_kinds
+            );
+        }
+    }
+
+    /// CodeRabbit 审计阻塞修复：当 `character_card_id` 或 `lorebook_path` 显式提供
+    /// 外部 card / lorebook 源时，不读取 `characters/{cid}/` 下的 canonical revision
+    /// 指针——实际 prompt 内容不来自该目录，读取会产生误导性 revision。
+    /// 应留 None 且不推送对应 *_revision_unavailable 诊断。
+    #[test]
+    fn test_phase_2h_external_card_and_lorebook_skip_canonical_revision() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        let uid = crate::types::UserId::new("phase2h-ext").unwrap();
+        let effective_root = state.data_root.join("users").join(uid.as_str());
+        fs::create_dir_all(effective_root.join("characters")).unwrap();
+
+        let cid = CharacterId::new("phase2h-ext-char").unwrap();
+        let char_dir = effective_root.join("characters").join(cid.as_str());
+        fs::create_dir_all(&char_dir).unwrap();
+        // canonical 目录下有 current_revision，但因为使用了外部 card，不应读取它
+        fs::write(char_dir.join("current_revision"), "99").unwrap();
+        // world/ 也放一个 current_revision，但因 lorebook_path 被指定，不应读取
+        let world_dir = char_dir.join("world");
+        fs::create_dir_all(&world_dir).unwrap();
+        fs::write(world_dir.join("current_revision"), "88").unwrap();
+
+        let mut req = base_request();
+        req.character_id = Some(cid.clone());
+        req.user_id = Some(uid.as_str().to_string());
+        // 外部内联 card（JSON 字符串）—— character_card_id 非 None，跳过 canonical revision
+        req.character_card_id = Some(
+            r#"{"name":"External","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}"#.to_string(),
+        );
+        // 外部内联 lorebook（JSON 字符串）—— lorebook_path 非 None，跳过 canonical revision
+        req.lorebook_path = Some(r#"{"entries":[]}"#.to_string());
+
+        let pipeline = prepare_pipeline(&req, &state).unwrap();
+        let eff = &pipeline.prompt_trace.effective;
+        let diag_kinds: Vec<_> = pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .map(|d| d.kind.as_str())
+            .collect();
 
         assert!(
-            pipeline.prompt_trace.effective.character_revision.is_none(),
-            "scene 模式下 character_revision 应留 None"
+            eff.character_revision.is_none(),
+            "外部 card 时 character_revision 应 None（不读 canonical 99）"
         );
         assert!(
-            pipeline.prompt_trace.effective.character_id.is_none(),
-            "scene 模式下 character_id 应留 None"
+            eff.lorebook_revision.is_none(),
+            "外部 lorebook 时 lorebook_revision 应 None（不读 canonical 88）"
         );
         assert!(
-            !pipeline
-                .prompt_trace
-                .diagnostics
-                .iter()
-                .any(|d| d.kind == "character_revision_unavailable"),
-            "scene 模式不应推送 character_revision_unavailable"
+            !diag_kinds.contains(&"character_revision_unavailable"),
+            "外部 card 不应推送 character_revision_unavailable"
+        );
+        assert!(
+            !diag_kinds.contains(&"lorebook_revision_unavailable"),
+            "外部 lorebook 不应推送 lorebook_revision_unavailable"
         );
     }
 }

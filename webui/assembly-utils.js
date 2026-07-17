@@ -36,6 +36,17 @@
     return label;
   }
 
+  // Gemini 审计修复：世界书 / 状态 / 记忆 没有独立 ID 字段，`value` 直接传 asset 标签
+  // 会导致 asset 未激活时仍显示标签（如 "世界书"）而非回退到 "未启用"。
+  // withAssetRevision 仅在 asset 激活（有 revision 或 unavailable 诊断）时展示标签，
+  // 未激活时回退到 fallback，语义与 character/persona/preset chip 一致。
+  function withAssetRevision(assetLabel, revision, fallback, diagnostics, unavailableKind) {
+    const hasDiagnostic = diagnostics && unavailableKind
+      && diagnostics.some(d => d && d.kind === unavailableKind);
+    const isActive = (revision !== undefined && revision !== null) || hasDiagnostic;
+    return withRevision(isActive ? assetLabel : null, revision, fallback, diagnostics, unavailableKind);
+  }
+
   function buildAssemblyViewModel(trace) {
     if (!trace || typeof trace !== 'object') return null;
     const effective = trace.effective || {};
@@ -46,9 +57,9 @@
         { label: '角色', value: withRevision(effective.character_id, effective.character_revision, '未选择', diagnostics, 'character_revision_unavailable') },
         { label: '身份', value: withRevision(effective.persona_id, effective.persona_revision, '未启用', diagnostics, 'persona_revision_unavailable') },
         { label: '预设', value: withRevision(effective.preset_id, effective.preset_revision, '未启用', diagnostics, 'preset_revision_unavailable') },
-        { label: '世界书', value: withRevision('世界书', effective.lorebook_revision, '未启用', diagnostics, 'lorebook_revision_unavailable') },
-        { label: '状态', value: withRevision('状态', effective.state_revision, '未启用', diagnostics, 'state_revision_unavailable') },
-        { label: '记忆', value: withRevision('记忆', effective.memory_revision, '未启用', diagnostics, 'memory_revision_unavailable') },
+        { label: '世界书', value: withAssetRevision('世界书', effective.lorebook_revision, '未启用', diagnostics, 'lorebook_revision_unavailable') },
+        { label: '状态', value: withAssetRevision('状态', effective.state_revision, '未启用', diagnostics, 'state_revision_unavailable') },
+        { label: '记忆', value: withAssetRevision('记忆', effective.memory_revision, '未启用', diagnostics, 'memory_revision_unavailable') },
         { label: '模型', value: valueOrFallback(effective.model, '未配置') },
         { label: '服务', value: valueOrFallback(effective.provider, '未知') },
       ],

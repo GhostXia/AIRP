@@ -177,12 +177,22 @@ try {
     page.locator('#btn-refresh-assembly').click(),
   ]);
   await page.waitForFunction(() => {
-    const text = document.querySelector('#assembly-summary')?.textContent || '';
-    return text.includes('legacy-char · unavailable')
-      && text.includes('未启用 · unavailable')   // persona chip
-      && text.includes('世界书 · unavailable')
-      && text.includes('状态 · unavailable')
-      && text.includes('记忆 · unavailable');
+    // CodeRabbit nitpick 修复：通过 DOM 选择器按 chip label 区分 persona 和 preset
+    // chip（二者 value 都是 '未启用 · unavailable'，text.includes 无法区分）。
+    const chips = document.querySelectorAll('#assembly-summary .assembly-chip');
+    if (chips.length < 6) return false;
+    const byLabel = {};
+    chips.forEach(chip => {
+      const label = chip.querySelector('.assembly-chip-label')?.textContent || '';
+      const value = chip.querySelector('.assembly-chip-value')?.textContent || '';
+      byLabel[label] = value;
+    });
+    return (byLabel['角色'] || '').includes('legacy-char · unavailable')
+      && (byLabel['身份'] || '').includes('unavailable')   // persona
+      && (byLabel['预设'] || '').includes('unavailable')    // preset
+      && (byLabel['世界书'] || '').includes('unavailable')
+      && (byLabel['状态'] || '').includes('unavailable')
+      && (byLabel['记忆'] || '').includes('unavailable');
   }, null, { timeout: 5_000 });
   await page.unroute('**/v1/chat/preview');
 
