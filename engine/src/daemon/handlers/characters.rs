@@ -252,6 +252,9 @@ pub(crate) fn import_card_to_disk(
     let raw_json = json_str.clone();
     if let Err(e) = commit_character_revision(data_root, &final_id, &json_str, &raw_json) {
         tracing::error!(err = %e, character_id = %final_id, "Phase 2c: commit character revision 失败");
+        // Gemini #1: commit 失败时清理新创建的角色目录，防止半导入状态遗留。
+        // char_dir 在本函数前面由 data_dir::character_dir 创建。
+        let _ = fs::remove_dir_all(&char_dir);
         return Err(e);
     }
 

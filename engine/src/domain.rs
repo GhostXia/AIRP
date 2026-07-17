@@ -1096,6 +1096,10 @@ impl PersonaService {
     }
 
     /// 删除指定 id 的 Persona；`default` 不允许删（返 BadRequest）。删除文件不可逆。
+    ///
+    /// Gemini #2：除工作副本 `personas/{pid}.json` 外，同时删除 revision 目录
+    /// `users/{uid}/personas/{pid}/`，避免后续以同 id 重建 Persona 时
+    /// `commit_revision` 因 `revisions/1` 已存在而失败。
     pub fn delete(&self, user_id: &UserId, persona_id: &str) -> Result<(), AirpError> {
         let persona_id = Self::canonical_persona_id(persona_id);
         if persona_id == "default" {
@@ -1108,6 +1112,20 @@ impl PersonaService {
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
         if path.exists() {
             fs::remove_file(&path)?;
+        }
+        // Gemini #2：同步删除 revision 目录。即使目录不存在或删除失败也不应阻塞
+        // 主删除流程；目录不存在是合法状态（旧版本未创建过 revision）。
+        let persona_asset_dir =
+            data_dir::user_personas_dir(&self.data_root, user_id).join(persona_id);
+        if persona_asset_dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&persona_asset_dir) {
+                tracing::warn!(
+                    user_id = %user_id.as_str(),
+                    persona_id = %persona_id,
+                    err = %e,
+                    "删除 persona revision 目录失败；工作副本已删除，残留 revision 目录不影响新 Persona 创建（commit_revision 会复用现有 revisions/1）"
+                );
+            }
         }
         Ok(())
     }
@@ -2629,6 +2647,9 @@ mod tests {
     /// Phase 2d：LorebookService::write 接入 revision 合同。
     /// 验证首次写入创建 revision 1 目录 + current_revision 文件，
     /// 第二次写入 bump 到 revision 2，旧 revision 目录保留不可变。
+    ///
+    /// CodeRabbit nitpick：v1/v2 必须用不同 entries，否则无法验证
+    /// revision 1 的 lorebook.json 在 revision 2 写入后内容不变（不可变性）。
     #[test]
     fn lorebook_write_creates_revision_dir_and_bumps_pointer() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2636,7 +2657,20 @@ mod tests {
         let character = CharacterId::new("lore-rev").unwrap();
         let world_dir = data_dir::char_world_dir(tmp.path(), character.as_str()).unwrap();
 
-        let lb_v1 = crate::orchestrator::Lorebook { entries: vec![] };
+        let lb_v1 = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["剑".to_string()],
+                content: "古老的铁剑".to_string(),
+                enabled: Some(true),
+                priority: Some(10),
+                constant: None,
+                comment: Some("v1".to_string()),
+                secondary_keys: vec![],
+                selective: false,
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
         service.write(&character, &lb_v1).unwrap();
 
         // 首次写入 → revision 1
@@ -2650,8 +2684,24 @@ mod tests {
             "current_revision 应指向 1"
         );
 
-        // 第二次写入 → revision 2
-        let lb_v2 = crate::orchestrator::Lorebook { entries: vec![] };
+        // 记录 revision 1 的 lorebook.json 字节，用于后续不可变性校验
+        let v1_bytes = fs::read(revision_dir_v1.join("lorebook.json")).unwrap();
+
+        // 第二次写入（不同 entries）→ revision 2
+        let lb_v2 = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["盾".to_string()],
+                content: "镶金的圆盾".to_string(),
+                enabled: Some(true),
+                priority: Some(5),
+                constant: None,
+                comment: Some("v2".to_string()),
+                secondary_keys: vec![],
+                selective: false,
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
         service.write(&character, &lb_v2).unwrap();
         let revision_dir_v2 = world_dir.join("revisions").join("2");
         assert!(revision_dir_v2.is_dir(), "revision 2 目录应存在");
@@ -2663,13 +2713,23 @@ mod tests {
             "current_revision 应 bump 到 2"
         );
 
-        // 旧 revision 目录保留不可变
+        // 旧 revision 目录保留不可变：revision 1 的 lorebook.json 内容不应被
+        // revision 2 的写入覆盖。
         assert!(revision_dir_v1.is_dir(), "旧 revision 1 目录应保留不可变");
+        let v1_bytes_after_v2 = fs::read(revision_dir_v1.join("lorebook.json")).unwrap();
+        assert_eq!(
+            v1_bytes, v1_bytes_after_v2,
+            "revision 1 的 lorebook.json 在 revision 2 写入后应保持不变"
+        );
 
-        // legacy 工作副本仍存在
-        assert!(
-            data_dir::char_world_lorebook_path(tmp.path(), character.as_str()).is_file(),
-            "legacy lorebook.json 工作副本应保留"
+        // legacy 工作副本仍存在（内容应等于 v2）
+        let legacy_path = data_dir::char_world_lorebook_path(tmp.path(), character.as_str());
+        assert!(legacy_path.is_file(), "legacy lorebook.json 工作副本应保留");
+        let legacy_bytes = fs::read(&legacy_path).unwrap();
+        let v2_bytes = fs::read(revision_dir_v2.join("lorebook.json")).unwrap();
+        assert_eq!(
+            legacy_bytes, v2_bytes,
+            "legacy lorebook.json 应与最新 revision 2 内容一致"
         );
     }
 
@@ -2782,6 +2842,53 @@ mod tests {
         assert_eq!(
             revision_persona_bytes, legacy_persona_bytes,
             "revision 内 persona.json 应与 legacy 工作副本内容一致"
+        );
+    }
+
+    /// Phase 2g + Gemini #2：`PersonaService::delete` 应同时删除工作副本
+    /// `personas/{pid}.json` 和 revision 目录 `users/{uid}/personas/{pid}/`，
+    /// 避免后续以同 id 重建 Persona 时 `commit_revision` 因 `revisions/1`
+    /// 已存在而失败。
+    #[test]
+    fn persona_delete_removes_revision_dir_and_allows_recreate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("paul").unwrap();
+        let pid = "p1";
+        let persona_asset_dir = data_dir::user_personas_dir(tmp.path(), &uid).join(pid);
+        let legacy_path = data_dir::user_persona_multi_path(tmp.path(), &uid, pid).unwrap();
+
+        // 首次保存 → 创建 revision 1
+        let saved_v1 = service
+            .save(&uid, pid, 0, Persona::initial("Paul v1"))
+            .unwrap();
+        assert_eq!(saved_v1.revision, 1);
+        assert!(legacy_path.is_file(), "工作副本应在保存后存在");
+        assert!(persona_asset_dir.is_dir(), "revision 目录应在保存后存在");
+        assert!(
+            persona_asset_dir.join("revisions").join("1").is_dir(),
+            "revision 1 目录应存在"
+        );
+
+        // 删除 → 工作副本与 revision 目录都应消失
+        service.delete(&uid, pid).unwrap();
+        assert!(!legacy_path.exists(), "工作副本应在 delete 后不存在");
+        assert!(
+            !persona_asset_dir.exists(),
+            "revision 目录应在 delete 后被清理（Gemini #2）"
+        );
+
+        // 重新以同 id 保存 → 应能成功从 revision 1 重新开始（不冲突）
+        let saved_v2 = service
+            .save(&uid, pid, 0, Persona::initial("Paul v2"))
+            .unwrap();
+        assert_eq!(
+            saved_v2.revision, 1,
+            "重新创建后 revision 应从 1 开始（revision 目录被清理）"
+        );
+        assert!(
+            persona_asset_dir.join("revisions").join("1").is_dir(),
+            "重新创建后 revision 1 目录应再次存在"
         );
     }
 }

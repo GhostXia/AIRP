@@ -86,13 +86,47 @@ fn commit_memory_revision(
         Some(existing) => existing + 1,
         None => 1,
     };
-    let current_bytes = fs::read(current_path(session_dir)).unwrap_or_default();
-    let index_bytes = fs::read(index_path(session_dir)).unwrap_or_default();
+    let current_bytes = fs::read(current_path(session_dir))?;
+    let index_bytes = fs::read(index_path(session_dir))?;
     let mut files = vec![
         ("current.md".to_string(), current_bytes.clone()),
         ("index.md".to_string(), index_bytes.clone()),
     ];
-    files.extend(extra_files);
+    // CodeRabbit #4: 枚举所有已存在的 volume 文件，不只新写的。
+    // 每个 revision 快照应包含完整的 memory 状态（current + index + 所有已封卷）。
+    let mut volume_files: Vec<(String, Vec<u8>)> = Vec::new();
+    let vd = volumes_dir(session_dir);
+    if vd.is_dir() {
+        if let Ok(entries) = fs::read_dir(&vd) {
+            let mut vol_paths: Vec<PathBuf> = entries
+                .flatten()
+                .filter(|e| {
+                    e.file_name()
+                        .to_str()
+                        .is_some_and(|n| n.starts_with("vol_") && n.ends_with(".md"))
+                })
+                .map(|e| e.path())
+                .collect();
+            vol_paths.sort();
+            for vp in vol_paths {
+                let relative = vp
+                    .strip_prefix(session_dir)
+                    .unwrap_or(&vp)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let bytes = fs::read(&vp)?;
+                volume_files.push((relative, bytes));
+            }
+        }
+    }
+    files.extend(volume_files);
+    // extra_files 是本次新写的文件（如新封卷），已包含在 volume_files 枚举中，
+    // 但如果 extra_files 含非 volume 文件则仍需追加。
+    for (path, content) in extra_files {
+        if !files.iter().any(|(p, _)| p == &path) {
+            files.push((path, content));
+        }
+    }
     let source_hash_hex = {
         let mut hasher = Sha256::new();
         hasher.update(&current_bytes);
@@ -151,6 +185,8 @@ pub fn append_to_current(session_dir: &Path, text: &str) -> Result<(), AirpError
     if !text.ends_with('\n') {
         f.write_all(b"\n")?;
     }
+    // Gemini #3: sync_data 确保追加内容落盘，与后续 revision commit 一致。
+    f.sync_data()?;
     drop(f);
     // #115 Phase 2f：追加后 commit memory revision。
     commit_memory_revision(session_dir, Vec::new(), "derived")?;
