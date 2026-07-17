@@ -486,48 +486,65 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
 
     // ── world/lorebook.json ──
     let lb_path = data_dir::char_world_lorebook_path(data_root, character_id);
-    if let Err(error) = fs::remove_file(&lb_path) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(err = %error, path = %lb_path.display(), "CF-7: 清理旧 lorebook 失败");
+    // D6: 原实现先无条件 `fs::remove_file(&lb_path)` 再尝试写新 lorebook，
+    // 如果新卡的 character_book 缺失/为空/归一化失败，旧 lorebook 会被静默
+    // 销毁且没有替代——用户精心整理的世界书条目直接丢失。
+    //
+    // 新行为：
+    //   - 新卡完全没有 `character_book` 字段 → 显式删除旧 lorebook（保留
+    //     `reextract_removes_stale_greetings_and_lorebook` 测试的语义）。
+    //   - 新卡有 `character_book` 但归一化失败/空 entries/序列化失败 →
+    //     **保留旧 lorebook**，仅 warn。
+    //   - 新卡有合法 `character_book` → 用 `replace_file` 原子替换旧 lorebook，
+    //     消除 truncate-then-write 窗口。
+    match card.data.character_book.as_ref() {
+        None => {
+            if let Err(error) = fs::remove_file(&lb_path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(err = %error, path = %lb_path.display(), "CF-7: 清理旧 lorebook 失败");
+                }
+            }
         }
-    }
-    if let Some(ref cb) = card.data.character_book {
-        let (lorebook, report) = crate::orchestrator::normalize_worldbook(cb);
-        if let Some(reason) = report.replacement_error() {
-            tracing::warn!(
-                character_id,
-                reason,
-                "CF-7: character_book 归一化失败，跳过 lorebook 写入"
-            );
-        } else if lorebook.entries.is_empty() && report.total_input == 0 {
-            tracing::warn!(
-                character_id,
-                "CF-7: character_book 无 entries，跳过 lorebook 写入"
-            );
-        } else {
-            match serde_json::to_string_pretty(&lorebook) {
-                Ok(lb_json) => {
-                    if let Err(e) = data_dir::char_world_dir(data_root, character_id) {
-                        tracing::warn!(err = %e, "CF-7: 创建 world/ 目录失败");
-                        return;
+        Some(cb) => {
+            let (lorebook, report) = crate::orchestrator::normalize_worldbook(cb);
+            if let Some(reason) = report.replacement_error() {
+                tracing::warn!(
+                    character_id,
+                    reason,
+                    "CF-7: character_book 归一化失败，保留旧 lorebook"
+                );
+            } else if lorebook.entries.is_empty() && report.total_input == 0 {
+                tracing::warn!(
+                    character_id,
+                    "CF-7: character_book 无 entries，保留旧 lorebook"
+                );
+            } else {
+                match serde_json::to_string_pretty(&lorebook) {
+                    Ok(lb_json) => {
+                        if let Err(e) = data_dir::char_world_dir(data_root, character_id) {
+                            tracing::warn!(err = %e, "CF-7: 创建 world/ 目录失败");
+                        } else if let Err(e) =
+                            data_dir::replace_file(&lb_path, lb_json.as_bytes())
+                        {
+                            tracing::warn!(err = %e, "CF-7: 写 world/lorebook.json 失败");
+                        } else {
+                            tracing::info!(
+                                character_id,
+                                entries = lorebook.entries.len(),
+                                total_input = report.total_input,
+                                converted = report.converted,
+                                aliases_normalized = report.aliases_normalized,
+                                advisory_preserved = report.advisory_preserved,
+                                invalid = report.invalid.len(),
+                                needs_review = report.needs_review.len(),
+                                "CF-7: world/lorebook.json 已写入（normalizer v3）"
+                            );
+                        }
                     }
-                    if let Err(e) = fs::write(&lb_path, lb_json) {
-                        tracing::warn!(err = %e, "CF-7: 写 world/lorebook.json 失败");
-                    } else {
-                        tracing::info!(
-                            character_id,
-                            entries = lorebook.entries.len(),
-                            total_input = report.total_input,
-                            converted = report.converted,
-                            aliases_normalized = report.aliases_normalized,
-                            advisory_preserved = report.advisory_preserved,
-                            invalid = report.invalid.len(),
-                            needs_review = report.needs_review.len(),
-                            "CF-7: world/lorebook.json 已写入（normalizer v3）"
-                        );
+                    Err(e) => {
+                        tracing::warn!(err = %e, "CF-7: 序列化 Lorebook 失败，保留旧 lorebook")
                     }
                 }
-                Err(e) => tracing::warn!(err = %e, "CF-7: 序列化 Lorebook 失败"),
             }
         }
     }
@@ -573,6 +590,14 @@ pub(in crate::daemon) async fn update_character_card(
     Json(card): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
+    // R1: 取 character_lock 写锁，串行化"工作副本写入 + commit_revision"
+    // 这一整段临界区。否则两个并发 PUT 会在 next_content_revision 上
+    // 读到同一个值，COMMIT_LOCK 只能保护 revision bump 本身，无法阻止
+    // 工作副本被 last-writer 覆盖、最终与最新 revision snapshot 不一致。
+    // 与 LorebookService::write / StateService::write 的锁纪律对齐。
+    let character = crate::domain::character_lock(cid.as_str());
+    let _guard = character.write().expect("character lock poisoned");
+
     // 校验角色已存在（character_dir 会创建子目录，所以用 list_characters 校验）
     let exists = data_dir::list_characters(&state.data_root)?
         .into_iter()
@@ -1072,6 +1097,59 @@ mod tests {
             0
         );
         assert!(!character_dir.join("world/lorebook.json").exists());
+    }
+
+    /// D6 回归：旧实现先无条件 `fs::remove_file(&lb_path)` 再尝试写新 lorebook。
+    /// 当新卡携带 `character_book` 但 `entries: []`（或归一化失败）时，旧 lorebook
+    /// 被销毁且没有替代——精心整理的世界书条目直接丢失。新实现在此场景下保留
+    /// 旧 lorebook，仅打 warn。
+    #[test]
+    fn reextract_preserves_lorebook_when_new_character_book_is_empty() {
+        let data_root = tempfile::tempdir().unwrap();
+        let initial = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {
+                "name": "Assets",
+                "character_book": {
+                    "entries": [{"keys": ["old"], "content": "old lore"}]
+                }
+            }
+        })
+        .to_string();
+        extract_card_assets(data_root.path(), "assets", &initial);
+        let lb_path = data_root
+            .path()
+            .join("characters/assets/world/lorebook.json");
+        assert!(lb_path.exists(), "initial lorebook must exist");
+        let original = fs::read_to_string(&lb_path).unwrap();
+        assert!(
+            original.contains("old lore"),
+            "initial lorebook must contain the old entry"
+        );
+
+        // Reextract with a character_book that has zero entries and zero
+        // total_input. Old behavior: line 489 deletes lb_path, then the
+        // empty-entries branch at line 502 skips the write — old lorebook
+        // is gone with no replacement. New behavior: preserve old lorebook.
+        let reduced = serde_json::json!({
+            "spec": "chara_card_v2",
+            "data": {
+                "name": "Assets",
+                "character_book": { "entries": [] }
+            }
+        })
+        .to_string();
+        extract_card_assets(data_root.path(), "assets", &reduced);
+
+        assert!(
+            lb_path.exists(),
+            "old lorebook must be preserved when new character_book normalizes to nothing"
+        );
+        let after = fs::read_to_string(&lb_path).unwrap();
+        assert_eq!(
+            after, original,
+            "old lorebook content must be byte-identical to the pre-reextract state"
+        );
     }
 
     #[test]

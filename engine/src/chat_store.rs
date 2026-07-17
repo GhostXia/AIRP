@@ -504,7 +504,11 @@ impl ChatLog {
             buf.push_str(&serde_json::to_string(&stored)?);
             buf.push('\n');
         }
-        fs::write(&jsonl, buf)?;
+        // D1: 使用 replace_file 而非 fs::write，避免 truncate-then-write 在崩溃时
+        // 留下 0 字节 jsonl，导致整个会话历史不可读。replace_file 内部用
+        // tmp + sync_all + rename + parent-dir sync，保证崩溃后要么是旧内容、
+        // 要么是新内容，永远不会是部分内容。
+        crate::data_dir::replace_file(&jsonl, buf.as_bytes())?;
 
         // 写 meta（小文件）
         let m = ChatLogMeta {
@@ -514,7 +518,7 @@ impl ChatLog {
             updated_at: self.updated_at.clone(),
         };
         let meta_content = serde_json::to_string_pretty(&m)?;
-        fs::write(&meta, meta_content)?;
+        crate::data_dir::replace_file(&meta, meta_content.as_bytes())?;
         Ok(())
     }
 
@@ -559,6 +563,12 @@ impl ChatLog {
             .append(true)
             .open(&jsonl)?;
         f.write_all(line.as_bytes())?;
+        // D2: 显式 sync_data 保证追加内容在返回 200 OK 前落盘，与
+        // `volume_store::append_to_current` 一致。否则崩溃可能在 page cache
+        // 中丢失最近一条用户/助手消息——客户端已经看到响应，但持久化真相
+        // 没有它。sync_data 比 sync_all 便宜（不刷 metadata mtime），且
+        // append 模式下文件长度变化对读取方的正确性不依赖 mtime。
+        f.sync_data()?;
 
         // meta 刷新
         self.updated_at = Utc::now().to_rfc3339();
@@ -569,7 +579,8 @@ impl ChatLog {
             updated_at: self.updated_at.clone(),
         };
         let meta_path = Self::scoped_meta_path(data_root, &self.character_id, scope);
-        fs::write(&meta_path, serde_json::to_string_pretty(&m)?)?;
+        // meta 用 replace_file 原子写入，避免与 D1 同型的 0 字节窗口。
+        crate::data_dir::replace_file(&meta_path, serde_json::to_string_pretty(&m)?.as_bytes())?;
 
         Ok(())
     }

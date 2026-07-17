@@ -14,6 +14,18 @@
 use crate::error::AirpError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+// C1: 进程级 quota 锁，串行化 `check_and_increment` 与 `record_tokens` 的
+// load-mutate-save 临界区。quota.json 没有像 ChatService 那样的 per-session
+// 锁，但所有 quota 写入都集中在单个文件上，因此一把全局 Mutex 足以消除
+// read-modify-write 之间的 TOCTOU 窗口。Mutex 是 std::sync——临界区内只做
+// 同步 fs IO，没有 .await，不会跨 await 持锁。
+static QUOTA_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn quota_lock() -> &'static Mutex<()> {
+    QUOTA_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +121,11 @@ pub fn check_and_increment(effective_root: &Path, config: &QuotaConfig) -> Resul
         return Ok(());
     }
 
+    // C1: 全局串行化，消除并发请求间 read-modify-write 的 TOCTOU 窗口。
+    // 没有这把锁，N 个并发请求会读到同一个 stale `requests_today`，各自 +1
+    // 后 save，导致实际放行 N 个请求而 limit 只允许 1 个。
+    let _guard = quota_lock().lock().expect("quota lock poisoned");
+
     let path = quota_file_path(effective_root);
     let mut state = QuotaState::load(&path);
 
@@ -141,6 +158,12 @@ pub fn record_tokens(effective_root: &Path, tokens: u32) {
     if tokens == 0 {
         return;
     }
+    // C1: 与 check_and_increment 共享同一把锁，防止 token 累加被并发
+    // check_and_increment 的 save 覆盖（lost update）。
+    let _guard = match quota_lock().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
     let path = quota_file_path(effective_root);
     let mut state = QuotaState::load(&path);
     state.tokens_today = state.tokens_today.saturating_add(tokens);
@@ -255,5 +278,93 @@ mod tests_dx3 {
         let state = QuotaState::load(&quota_file_path(dir.path()));
         assert_eq!(state.requests_today, 0);
         assert_eq!(state.tokens_today, 0);
+    }
+
+    /// C1 回归：旧实现 `check_and_increment` 在 load 与 save 之间没有任何锁，
+    /// N 个并发请求会读到同一个 stale `requests_today`，各自 +1 后 save，
+    /// 实际放行 N 个请求而 limit 只允许 1 个。修复后全局 Mutex 串行化
+    /// load-mutate-save，必须严格拒绝超过 limit 的请求。
+    #[test]
+    fn test_concurrent_check_and_increment_respects_limit() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = Arc::new(tempdir().unwrap());
+        // 限制为 5 次/天；8 个并发线程各尝试 1 次。修复前会有 >5 个成功
+        // （取决于调度），修复后必须恰好 5 个成功。
+        let cfg = Arc::new(limited(5, 0));
+        let success_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let dir = Arc::clone(&dir);
+            let cfg = Arc::clone(&cfg);
+            let success_count = Arc::clone(&success_count);
+            handles.push(thread::spawn(move || {
+                if check_and_increment(dir.path(), &cfg).is_ok() {
+                    success_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+
+        let observed = success_count.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            observed, 5,
+            "concurrent check_and_increment must not exceed the daily limit; observed {observed} successes"
+        );
+
+        // QuotaState on disk must also reflect exactly 5 (no lost updates).
+        let state = QuotaState::load(&quota_file_path(dir.path()));
+        assert_eq!(
+            state.requests_today, 5,
+            "persisted counter must equal the number of admitted requests"
+        );
+    }
+
+    /// C1 回归：`record_tokens` 与 `check_and_increment` 在没有锁时会发生
+    /// lost update——一边写 requests_today、另一边写 tokens_today，后写者
+    /// 覆盖前写者的字段。修复后两者共享同一把 Mutex。
+    #[test]
+    fn test_record_tokens_does_not_lose_against_concurrent_check_and_increment() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = Arc::new(tempdir().unwrap());
+        let cfg = Arc::new(limited(100, 0));
+        let dir_for_tokens = Arc::clone(&dir);
+
+        // Producer A: 10 sequential record_tokens(50) calls → expected 500 tokens.
+        let producer = thread::spawn(move || {
+            for _ in 0..10 {
+                record_tokens(dir_for_tokens.path(), 50);
+            }
+        });
+
+        // Producer B: 10 concurrent check_and_increment calls → expected 10 requests.
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let dir = Arc::clone(&dir);
+            let cfg = Arc::clone(&cfg);
+            handles.push(thread::spawn(move || {
+                let _ = check_and_increment(dir.path(), &cfg);
+            }));
+        }
+        producer.join().expect("token producer panicked");
+        for h in handles {
+            h.join().expect("request worker panicked");
+        }
+
+        let state = QuotaState::load(&quota_file_path(dir.path()));
+        assert_eq!(
+            state.requests_today, 10,
+            "all 10 check_and_increment calls must be accounted for"
+        );
+        assert_eq!(
+            state.tokens_today, 500,
+            "all 10 record_tokens(50) calls must be accounted for (no lost update)"
+        );
     }
 }
