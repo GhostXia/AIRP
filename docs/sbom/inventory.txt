@@ -1,0 +1,788 @@
+AIRP dependency inventory
+=========================
+Generated: 2026-07-17T16:40:16.767Z
+Repo root: /workspace
+Total records: 688
+
+Summary by audit class:
+  audit-required: 27
+  auto-pass: 661
+
+Summary by ecosystem:
+  cargo: 564
+  npm: 124
+
+Records requiring attention (block / audit-required)
+----------------------------------------------------
+  [audit-required] cargo/cssparser@0.36.0  license=MPL-2.0  scope=runtime
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://crates.io/api/v1/crates/cssparser/0.36.0/download
+  [audit-required] cargo/cssparser-macros@0.6.1  license=MPL-2.0  scope=runtime
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://crates.io/api/v1/crates/cssparser-macros/0.6.1/download
+  [audit-required] cargo/dtoa-short@0.3.5  license=MPL-2.0  scope=runtime
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://crates.io/api/v1/crates/dtoa-short/0.3.5/download
+  [audit-required] cargo/dunce@1.0.5  license=CC0-1.0 OR MIT-0 OR Apache-2.0  scope=runtime
+    reason: license CC0-1.0 OR MIT-0 OR Apache-2.0 not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/dunce/1.0.5/download
+  [audit-required] cargo/encoding_rs@0.8.35  license=(Apache-2.0 OR MIT) AND BSD-3-Clause  scope=runtime
+    reason: license (Apache-2.0 OR MIT) AND BSD-3-Clause not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/encoding_rs/0.8.35/download
+  [audit-required] cargo/linux-raw-sys@0.12.1  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
+    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/linux-raw-sys/0.12.1/download
+  [audit-required] cargo/option-ext@0.2.0  license=MPL-2.0  scope=runtime
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://crates.io/api/v1/crates/option-ext/0.2.0/download
+  [audit-required] cargo/r-efi@5.3.0  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime
+    reason: license LGPL-2.1-or-later requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://crates.io/api/v1/crates/r-efi/5.3.0/download
+  [audit-required] cargo/r-efi@6.0.0  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime
+    reason: license LGPL-2.1-or-later requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://crates.io/api/v1/crates/r-efi/6.0.0/download
+  [audit-required] cargo/rustix@1.1.4  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
+    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/rustix/1.1.4/download
+  [audit-required] cargo/selectors@0.36.1  license=MPL-2.0  scope=runtime
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://crates.io/api/v1/crates/selectors/0.36.1/download
+  [audit-required] cargo/unicode-ident@1.0.24  license=(MIT OR Apache-2.0) AND Unicode-3.0  scope=runtime
+    reason: license (MIT OR Apache-2.0) AND Unicode-3.0 not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/unicode-ident/1.0.24/download
+  [audit-required] cargo/wasi@0.11.1+wasi-snapshot-preview1  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
+    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/wasi/0.11.1+wasi-snapshot-preview1/download
+  [audit-required] cargo/wasip2@1.0.4+wasi-0.2.12  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
+    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/wasip2/1.0.4+wasi-0.2.12/download
+  [audit-required] cargo/wit-bindgen@0.57.1  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
+    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
+    source: https://crates.io/api/v1/crates/wit-bindgen/0.57.1/download
+  [audit-required] npm/lightningcss@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss/-/lightningcss-1.32.0.tgz
+  [audit-required] npm/lightningcss-android-arm64@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-android-arm64/-/lightningcss-android-arm64-1.32.0.tgz
+  [audit-required] npm/lightningcss-darwin-arm64@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-darwin-arm64/-/lightningcss-darwin-arm64-1.32.0.tgz
+  [audit-required] npm/lightningcss-darwin-x64@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-darwin-x64/-/lightningcss-darwin-x64-1.32.0.tgz
+  [audit-required] npm/lightningcss-freebsd-x64@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-freebsd-x64/-/lightningcss-freebsd-x64-1.32.0.tgz
+  [audit-required] npm/lightningcss-linux-arm-gnueabihf@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-linux-arm-gnueabihf/-/lightningcss-linux-arm-gnueabihf-1.32.0.tgz
+  [audit-required] npm/lightningcss-linux-arm64-gnu@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-linux-arm64-gnu/-/lightningcss-linux-arm64-gnu-1.32.0.tgz
+  [audit-required] npm/lightningcss-linux-arm64-musl@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-linux-arm64-musl/-/lightningcss-linux-arm64-musl-1.32.0.tgz
+  [audit-required] npm/lightningcss-linux-x64-gnu@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-linux-x64-gnu/-/lightningcss-linux-x64-gnu-1.32.0.tgz
+  [audit-required] npm/lightningcss-linux-x64-musl@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-linux-x64-musl/-/lightningcss-linux-x64-musl-1.32.0.tgz
+  [audit-required] npm/lightningcss-win32-arm64-msvc@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-win32-arm64-msvc/-/lightningcss-win32-arm64-msvc-1.32.0.tgz
+  [audit-required] npm/lightningcss-win32-x64-msvc@1.32.0  license=MPL-2.0  scope=dev
+    reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
+    source: https://registry.npmjs.org/lightningcss-win32-x64-msvc/-/lightningcss-win32-x64-msvc-1.32.0.tgz
+
+All records (sorted by ecosystem, name, version)
+------------------------------------------------
+cargo/adler2@2.0.1  [auto-pass]  license=0BSD OR MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/aho-corasick@1.1.4  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
+cargo/airp-core@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=first-party
+cargo/airp-state-protocol@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=first-party
+cargo/airp-ui@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=first-party
+cargo/alloc-no-stdlib@2.0.4  [auto-pass]  license=BSD-3-Clause  scope=runtime  tier=third-party
+cargo/alloc-stdlib@0.2.4  [auto-pass]  license=BSD-3-Clause  scope=runtime  tier=third-party
+cargo/android_system_properties@0.1.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/anstream@1.0.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/anstyle@1.0.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/anstyle-parse@1.0.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/anstyle-query@1.1.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/anstyle-wincon@3.0.11  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/anyhow@1.0.103  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/assert-json-diff@2.0.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
+cargo/async-stream@0.3.6  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/async-stream-impl@0.3.6  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/async-trait@0.1.89  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/atk@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/atk-sys@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/atomic-waker@1.1.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/autocfg@1.5.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=build  tier=third-party
+cargo/axum@0.7.9  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/axum-core@0.4.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/axum-macros@0.4.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/base64@0.21.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/base64@0.22.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/bit-set@0.8.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/bit-vec@0.8.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/bitflags@1.3.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/bitflags@2.13.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/block-buffer@0.10.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/block2@0.6.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/brotli@8.0.4  [auto-pass]  license=BSD-3-Clause AND MIT  scope=runtime  tier=third-party
+cargo/brotli-decompressor@5.0.3  [auto-pass]  license=BSD-3-Clause OR MIT  scope=runtime  tier=third-party
+cargo/bs58@0.5.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/bumpalo@3.20.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/bytemuck@1.25.0  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/byteorder@1.5.0  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
+cargo/bytes@1.12.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/cairo-rs@0.18.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/cairo-sys-rs@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/camino@1.2.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/cargo-platform@0.1.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/cargo_metadata@0.19.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/cargo_toml@0.22.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=build  tier=third-party
+cargo/cc@1.2.65  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/cesu8@1.1.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/cfb@0.7.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/cfg-expr@0.15.8  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/cfg-if@1.0.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/chacha20@0.10.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/chrono@0.4.45  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/clap@4.6.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/clap_builder@4.6.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/clap_derive@4.6.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/clap_lex@1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/colorchoice@1.0.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/combine@4.6.7  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/cookie@0.18.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/core-foundation@0.10.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/core-foundation@0.9.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/core-foundation-sys@0.8.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/core-graphics@0.25.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/core-graphics-types@0.2.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/cpufeatures@0.2.17  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/cpufeatures@0.3.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/crc32fast@1.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/crossbeam-channel@0.5.15  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/crossbeam-utils@0.8.21  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/crypto-common@0.1.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/cssparser@0.36.0  [audit-required]  license=MPL-2.0  scope=runtime  tier=third-party
+cargo/cssparser-macros@0.6.1  [audit-required]  license=MPL-2.0  scope=runtime  tier=third-party
+cargo/ctor@0.8.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/ctor-proc-macro@0.0.7  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/darling@0.23.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/darling_core@0.23.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/darling_macro@0.23.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/dashmap@5.5.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/dbus@0.9.11  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/deadpool@0.12.3  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/deadpool-runtime@0.1.4  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/deranged@0.5.8  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/derive_more@2.1.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/derive_more-impl@2.1.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/digest@0.10.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/dirs@6.0.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/dirs-sys@0.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/dispatch2@0.3.1  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/displaydoc@0.2.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/dlopen2@0.8.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/dlopen2_derive@0.4.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/dom_query@0.27.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/dpi@0.1.2  [auto-pass]  license=Apache-2.0 AND MIT  scope=runtime  tier=third-party
+cargo/dtoa@1.0.11  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/dtoa-short@0.3.5  [audit-required]  license=MPL-2.0  scope=runtime  tier=third-party
+cargo/dtor@0.3.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/dtor-proc-macro@0.0.6  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/dunce@1.0.5  [audit-required]  license=CC0-1.0 OR MIT-0 OR Apache-2.0  scope=runtime  tier=third-party
+cargo/dyn-clone@1.0.20  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/embed-resource@3.0.9  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/embed_plist@1.2.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/encoding_rs@0.8.35  [audit-required]  license=(Apache-2.0 OR MIT) AND BSD-3-Clause  scope=runtime  tier=third-party
+cargo/equivalent@1.0.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/erased-serde@0.4.10  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/errno@0.3.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/fastrand@2.4.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/fdeflate@0.3.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/field-offset@0.3.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/find-msvc-tools@0.1.9  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/flate2@1.1.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/fnv@1.0.7  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/foldhash@0.2.0  [auto-pass]  license=Zlib  scope=runtime  tier=third-party
+cargo/foreign-types@0.3.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/foreign-types@0.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/foreign-types-macros@0.2.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/foreign-types-shared@0.1.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/foreign-types-shared@0.3.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/form_urlencoded@1.2.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/forwarded-header-value@0.1.1  [auto-pass]  license=ISC  scope=runtime  tier=third-party
+cargo/futures@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-channel@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-core@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-executor@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-io@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-macro@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-sink@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-task@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-timer@3.0.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/futures-util@0.3.32  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/gdk@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gdk-pixbuf@0.18.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gdk-pixbuf-sys@0.18.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gdk-sys@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gdkwayland-sys@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gdkx11@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gdkx11-sys@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/generic-array@0.14.7  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/getrandom@0.2.17  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/getrandom@0.3.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/getrandom@0.4.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/gio@0.18.4  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gio-sys@0.18.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/glib@0.18.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/glib-macros@0.18.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/glib-sys@0.18.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/glob@0.3.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/gobject-sys@0.18.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/governor@0.6.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gtk@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gtk-sys@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/gtk3-macros@0.18.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/h2@0.4.15  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/hashbrown@0.12.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/hashbrown@0.14.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/hashbrown@0.17.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/heck@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/heck@0.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/hermit-abi@0.5.2  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/hex@0.4.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/html5ever@0.38.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/http@1.4.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/http-body@1.0.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/http-body-util@0.1.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/httparse@1.10.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/httpdate@1.0.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/hyper@1.10.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/hyper-rustls@0.27.9  [auto-pass]  license=Apache-2.0 OR ISC OR MIT  scope=runtime  tier=third-party
+cargo/hyper-tls@0.6.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/hyper-util@0.1.20  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/iana-time-zone@0.1.65  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/iana-time-zone-haiku@0.1.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/ico@0.5.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/icu_collections@2.2.0  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/icu_locale_core@2.2.0  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/icu_normalizer@2.2.0  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/icu_normalizer_data@2.2.0  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/icu_properties@2.2.0  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/icu_properties_data@2.2.0  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/icu_provider@2.2.0  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/ident_case@1.0.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/idna@1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/idna_adapter@1.2.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/indexmap@1.9.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/indexmap@2.14.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/infer@0.19.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/ipnet@2.12.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/is-docker@0.2.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/is-wsl@0.4.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/is_terminal_polyfill@1.70.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/itoa@1.0.18  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/javascriptcore-rs@1.1.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/javascriptcore-rs-sys@1.1.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/jni@0.21.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/jni-sys@0.3.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/jni-sys@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/jni-sys-macros@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/js-sys@0.3.103  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/json-patch@3.0.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/jsonptr@0.6.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/keyboard-types@0.7.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/lazy_static@1.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/libappindicator@0.9.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/libappindicator-sys@0.9.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/libc@0.2.186  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/libdbus-sys@0.2.7  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/libloading@0.7.4  [auto-pass]  license=ISC  scope=runtime  tier=third-party
+cargo/libredox@0.1.17  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/linux-raw-sys@0.12.1  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/litemap@0.8.2  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/lock_api@0.4.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/log@0.4.33  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/markup5ever@0.38.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/matchers@0.2.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/matchit@0.7.3  [auto-pass]  license=MIT AND BSD-3-Clause  scope=runtime  tier=third-party
+cargo/memchr@2.8.2  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
+cargo/memoffset@0.9.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/mime@0.3.17  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/miniz_oxide@0.8.9  [auto-pass]  license=MIT OR Zlib OR Apache-2.0  scope=runtime  tier=third-party
+cargo/mio@1.2.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/muda@0.19.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/native-tls@0.2.18  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/ndk@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/ndk-sys@0.6.0+11769913  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/new_debug_unreachable@1.0.6  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/no-std-compat@0.4.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/nonempty@0.7.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/nonzero_ext@0.3.0  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+cargo/nu-ansi-term@0.50.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/num-conv@0.2.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/num-traits@0.2.19  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/num_cpus@1.17.0  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/num_enum@0.7.6  [auto-pass]  license=BSD-3-Clause OR MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/num_enum_derive@0.7.6  [auto-pass]  license=BSD-3-Clause OR MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/objc2@0.6.4  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/objc2-app-kit@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-cloud-kit@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-core-data@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-core-foundation@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-core-graphics@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-core-image@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-core-location@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-core-text@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-encode@4.1.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/objc2-exception-helper@0.1.1  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-foundation@0.3.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/objc2-io-surface@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-quartz-core@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-ui-kit@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-user-notifications@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/objc2-web-kit@0.3.2  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/once_cell@1.21.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/once_cell_polyfill@1.70.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/open@5.3.6  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/openssl@0.10.81  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+cargo/openssl-macros@0.1.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/openssl-probe@0.2.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/openssl-sys@0.9.117  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/option-ext@0.2.0  [audit-required]  license=MPL-2.0  scope=runtime  tier=third-party
+cargo/os_pipe@1.2.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/pango@0.18.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/pango-sys@0.18.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/parking_lot@0.12.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/parking_lot_core@0.9.12  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/pastey@0.2.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/percent-encoding@2.3.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/phf@0.13.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/phf_codegen@0.13.1  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/phf_generator@0.13.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/phf_macros@0.13.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/phf_shared@0.13.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/pin-project@1.1.13  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/pin-project-internal@1.1.13  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/pin-project-lite@0.2.17  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/pkg-config@0.3.33  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/plist@1.9.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/png@0.17.16  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/png@0.18.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/portable-atomic@1.13.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/potential_utf@0.1.5  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/powerfmt@0.2.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/ppv-lite86@0.2.21  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/precomputed-hash@0.1.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/proc-macro-crate@1.3.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/proc-macro-crate@2.0.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/proc-macro-crate@3.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/proc-macro-error@1.0.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/proc-macro-error-attr@1.0.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/proc-macro2@1.0.106  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/proptest@1.11.0  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/quanta@0.12.6  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/quick-error@1.2.3  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/quick-xml@0.39.4  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/quote@1.0.46  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/r-efi@5.3.0  [audit-required]  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime  tier=third-party
+cargo/r-efi@6.0.0  [audit-required]  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime  tier=third-party
+cargo/rand@0.10.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rand@0.8.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rand@0.9.4  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/rand_chacha@0.3.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rand_chacha@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/rand_core@0.10.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rand_core@0.6.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rand_core@0.9.5  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/rand_xorshift@0.4.0  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/raw-cpuid@11.6.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/raw-window-handle@0.6.2  [auto-pass]  license=MIT OR Apache-2.0 OR Zlib  scope=runtime  tier=third-party
+cargo/redox_syscall@0.5.18  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/redox_users@0.5.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/ref-cast@1.0.25  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/ref-cast-impl@1.0.25  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/regex@1.12.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/regex-automata@0.4.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/regex-syntax@0.8.11  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/reqwest@0.12.28  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/reqwest@0.13.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rfd@0.16.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/ring@0.17.14  [auto-pass]  license=Apache-2.0 AND ISC  scope=runtime  tier=third-party
+cargo/rmcp@1.8.0  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+cargo/rmcp-macros@1.8.0  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+cargo/rustc-hash@2.1.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/rustc_version@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/rustix@1.1.4  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/rustls@0.23.41  [auto-pass]  license=Apache-2.0 OR ISC OR MIT  scope=runtime  tier=third-party
+cargo/rustls-pki-types@1.15.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rustls-webpki@0.103.13  [auto-pass]  license=ISC  scope=runtime  tier=third-party
+cargo/rustversion@1.0.22  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/rusty-fork@0.3.1  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/ryu@1.0.23  [auto-pass]  license=Apache-2.0 OR BSL-1.0  scope=runtime  tier=third-party
+cargo/same-file@1.0.6  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
+cargo/schannel@0.1.29  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/schemars@0.8.22  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/schemars@0.9.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/schemars@1.2.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/schemars_derive@0.8.22  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/schemars_derive@1.2.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/scopeguard@1.2.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/security-framework@3.7.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/security-framework-sys@2.17.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/selectors@0.36.1  [audit-required]  license=MPL-2.0  scope=runtime  tier=third-party
+cargo/semver@1.0.28  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde@1.0.228  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde-untagged@0.1.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_core@1.0.228  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_derive@1.0.228  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_derive_internals@0.29.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_json@1.0.150  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_path_to_error@0.1.20  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_repr@0.1.20  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_spanned@0.6.9  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/serde_spanned@1.1.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_urlencoded@0.7.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_with@3.21.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serde_with_macros@3.21.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serialize-to-javascript@0.1.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/serialize-to-javascript-impl@0.1.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/servo_arc@0.4.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/sha2@0.10.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/sharded-slab@0.1.7  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/shared_child@1.1.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/shlex@2.0.1  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/sigchld@0.2.4  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/signal-hook@0.3.18  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/signal-hook-registry@1.4.8  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/simd-adler32@0.3.9  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/siphasher@1.0.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/slab@0.4.12  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/smallvec@1.15.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/socket2@0.6.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/softbuffer@0.4.8  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/soup3@0.5.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/soup3-sys@0.5.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/spinning_top@0.3.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/sse-stream@0.2.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/stable_deref_trait@1.2.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/string_cache@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/string_cache_codegen@0.6.1  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/strsim@0.11.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/subtle@2.6.1  [auto-pass]  license=BSD-3-Clause  scope=runtime  tier=third-party
+cargo/swift-rs@1.0.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/syn@1.0.109  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/syn@2.0.118  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/sync_wrapper@1.0.2  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+cargo/synstructure@0.13.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/system-configuration@0.7.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/system-configuration-sys@0.6.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/system-deps@6.2.2  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/tao@0.35.3  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+cargo/tao-macros@0.1.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/target-lexicon@0.12.16  [auto-pass]  license=Apache-2.0 WITH LLVM-exception  scope=build  tier=third-party
+cargo/tauri@2.11.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-build@2.6.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=build  tier=third-party
+cargo/tauri-codegen@2.6.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-macros@2.6.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-plugin@2.6.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=build  tier=third-party
+cargo/tauri-plugin-dialog@2.7.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-plugin-fs@2.5.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-plugin-shell@2.3.5  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-runtime@2.11.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-runtime-wry@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-utils@2.9.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tauri-winres@0.3.6  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/tempfile@3.27.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/tendril@0.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/thiserror@1.0.69  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/thiserror@2.0.18  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/thiserror-impl@1.0.69  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/thiserror-impl@2.0.18  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/thread_local@1.1.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/time@0.3.49  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/time-core@0.1.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/time-macros@0.2.29  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/tinystr@0.8.3  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/tinyvec@1.11.0  [auto-pass]  license=Zlib OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/tinyvec_macros@0.1.1  [auto-pass]  license=MIT OR Apache-2.0 OR Zlib  scope=runtime  tier=third-party
+cargo/tokio@1.52.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tokio-macros@2.7.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tokio-native-tls@0.3.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tokio-rustls@0.26.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/tokio-stream@0.1.18  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tokio-util@0.7.18  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/toml@0.8.23  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/toml@0.9.12+spec-1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/toml@1.1.2+spec-1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/toml_datetime@0.6.11  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/toml_datetime@0.7.5+spec-1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/toml_datetime@1.1.1+spec-1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/toml_edit@0.19.15  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/toml_edit@0.20.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/toml_edit@0.22.27  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/toml_edit@0.25.12+spec-1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/toml_parser@1.1.2+spec-1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/toml_writer@1.1.1+spec-1.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/tower@0.5.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tower-http@0.5.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tower-http@0.6.11  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tower-layer@0.3.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tower-service@0.3.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tower_governor@0.4.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/tracing@0.1.44  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tracing-attributes@0.1.31  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tracing-core@0.1.36  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tracing-log@0.2.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tracing-serde@0.2.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tracing-subscriber@0.3.23  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/tray-icon@0.24.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/try-lock@0.2.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/typeid@1.0.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/typenum@1.20.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unarray@0.1.4  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/unic-char-property@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unic-char-range@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unic-common@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unic-ucd-ident@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unic-ucd-version@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unicode-ident@1.0.24  [audit-required]  license=(MIT OR Apache-2.0) AND Unicode-3.0  scope=runtime  tier=third-party
+cargo/unicode-normalization@0.1.25  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unicode-segmentation@1.13.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/untrusted@0.9.0  [auto-pass]  license=ISC  scope=runtime  tier=third-party
+cargo/url@2.5.8  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/urlpattern@0.3.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/utf-8@0.7.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/utf8_iter@1.0.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/utf8parse@0.2.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/uuid@1.23.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/valuable@0.1.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/vcpkg@0.2.15  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/version-compare@0.2.1  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/version_check@0.9.5  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
+cargo/vswhom@0.1.0  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/vswhom-sys@0.1.3  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/wait-timeout@0.2.1  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/walkdir@2.5.0  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
+cargo/want@0.3.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/wasi@0.11.1+wasi-snapshot-preview1  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/wasip2@1.0.4+wasi-0.2.12  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/wasm-bindgen@0.2.126  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/wasm-bindgen-futures@0.4.76  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/wasm-bindgen-macro@0.2.126  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/wasm-bindgen-macro-support@0.2.126  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/wasm-bindgen-shared@0.2.126  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/wasm-streams@0.4.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/wasm-streams@0.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/web-sys@0.3.103  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/web_atoms@0.2.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/webkit2gtk@2.0.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/webkit2gtk-sys@2.0.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/webview2-com@0.38.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/webview2-com-macros@0.8.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/webview2-com-sys@0.38.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/winapi@0.3.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/winapi-i686-pc-windows-gnu@0.4.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/winapi-util@0.1.11  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
+cargo/winapi-x86_64-pc-windows-gnu@0.4.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/window-vibrancy@0.6.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/windows@0.61.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-collections@0.2.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-core@0.61.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-core@0.62.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-future@0.2.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-implement@0.60.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-interface@0.59.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-link@0.1.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-link@0.2.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-numerics@0.2.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-registry@0.6.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-result@0.3.4  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-result@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-strings@0.4.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-strings@0.5.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-sys@0.45.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-sys@0.52.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-sys@0.59.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-sys@0.60.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-sys@0.61.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-targets@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-targets@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-targets@0.53.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-threading@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows-version@0.1.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_aarch64_gnullvm@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_aarch64_gnullvm@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_aarch64_gnullvm@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_aarch64_msvc@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_aarch64_msvc@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_aarch64_msvc@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_gnu@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_gnu@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_gnu@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_gnullvm@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_gnullvm@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_msvc@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_msvc@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_i686_msvc@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_gnu@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_gnu@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_gnu@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_gnullvm@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_gnullvm@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_gnullvm@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_msvc@0.42.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_msvc@0.52.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/windows_x86_64_msvc@0.53.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/winnow@0.5.40  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/winnow@0.7.15  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/winnow@1.0.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/winreg@0.55.0  [auto-pass]  license=MIT  scope=build  tier=third-party
+cargo/wiremock@0.6.5  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
+cargo/wit-bindgen@0.57.1  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/writeable@0.6.3  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/wry@0.55.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/x11@2.21.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/x11-dl@2.21.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/yoke@0.8.3  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/yoke-derive@0.8.2  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/zerocopy@0.8.52  [auto-pass]  license=BSD-2-Clause OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/zerocopy-derive@0.8.52  [auto-pass]  license=BSD-2-Clause OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/zerofrom@0.1.8  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/zerofrom-derive@0.1.7  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/zeroize@1.9.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/zerotrie@0.2.4  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/zerovec@0.11.6  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/zerovec-derive@0.11.3  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
+cargo/zmij@1.0.21  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@babel/helper-string-parser@7.29.7  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@babel/helper-validator-identifier@7.29.7  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@babel/parser@7.29.7  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@babel/types@7.29.7  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@emnapi/core@1.11.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@emnapi/runtime@1.11.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@emnapi/wasi-threads@1.2.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@jridgewell/sourcemap-codec@1.5.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@napi-rs/wasm-runtime@1.1.6  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@oxc-project/types@0.139.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-android-arm64@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-darwin-arm64@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-darwin-x64@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-freebsd-x64@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-linux-arm-gnueabihf@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-linux-arm64-gnu@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-linux-arm64-musl@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-linux-ppc64-gnu@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-linux-s390x-gnu@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-linux-x64-gnu@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-linux-x64-musl@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-openharmony-arm64@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-wasm32-wasi@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-win32-arm64-msvc@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/binding-win32-x64-msvc@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@rolldown/pluginutils@1.0.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@standard-schema/spec@1.1.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@tauri-apps/api@2.11.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
+npm/@tauri-apps/cli@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-darwin-arm64@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-darwin-x64@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-linux-arm-gnueabihf@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-linux-arm64-gnu@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-linux-arm64-musl@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-linux-riscv64-gnu@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-linux-x64-gnu@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-linux-x64-musl@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-win32-arm64-msvc@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-win32-ia32-msvc@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/cli-win32-x64-msvc@2.11.4  [auto-pass]  license=Apache-2.0 OR MIT  scope=dev  tier=third-party
+npm/@tauri-apps/plugin-dialog@2.7.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+npm/@tybys/wasm-util@0.10.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@types/chai@5.2.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@types/deep-eql@4.0.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@types/estree@1.0.9  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitejs/plugin-vue@6.0.8  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitest/expect@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitest/mocker@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitest/pretty-format@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitest/runner@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitest/snapshot@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitest/spy@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vitest/utils@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@volar/language-core@2.4.15  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@volar/source-map@2.4.15  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@volar/typescript@2.4.15  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vue/compiler-core@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/compiler-dom@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/compiler-sfc@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/compiler-ssr@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/compiler-vue2@2.7.16  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vue/language-core@2.2.12  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/@vue/reactivity@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/runtime-core@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/runtime-dom@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/server-renderer@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/@vue/shared@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/airp-ui@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=first-party
+npm/alien-signals@1.0.13  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/assertion-error@2.0.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/balanced-match@1.0.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/brace-expansion@2.1.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/chai@6.2.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/convert-source-map@2.0.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/csstype@3.2.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/de-indent@1.0.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/detect-libc@2.1.2  [auto-pass]  license=Apache-2.0  scope=dev  tier=third-party
+npm/entities@7.0.1  [auto-pass]  license=BSD-2-Clause  scope=runtime  tier=third-party
+npm/es-module-lexer@2.3.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/estree-walker@3.0.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/expect-type@1.4.0  [auto-pass]  license=Apache-2.0  scope=dev  tier=third-party
+npm/fdir@6.5.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/fsevents@2.3.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/he@1.2.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/lightningcss@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-android-arm64@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-darwin-arm64@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-darwin-x64@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-freebsd-x64@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-linux-arm-gnueabihf@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-linux-arm64-gnu@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-linux-arm64-musl@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-linux-x64-gnu@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-linux-x64-musl@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-win32-arm64-msvc@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/lightningcss-win32-x64-msvc@1.32.0  [audit-required]  license=MPL-2.0  scope=dev  tier=third-party
+npm/magic-string@0.30.21  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/minimatch@9.0.9  [auto-pass]  license=ISC  scope=dev  tier=third-party
+npm/muggle-string@0.4.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/nanoid@3.3.15  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/obug@2.1.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/path-browserify@1.0.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/pathe@2.0.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/picocolors@1.1.1  [auto-pass]  license=ISC  scope=runtime  tier=third-party
+npm/picomatch@4.0.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/playwright-core@1.61.1  [auto-pass]  license=Apache-2.0  scope=dev  tier=third-party
+npm/postcss@8.5.16  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/rolldown@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/siginfo@2.0.0  [auto-pass]  license=ISC  scope=dev  tier=third-party
+npm/source-map-js@1.2.1  [auto-pass]  license=BSD-3-Clause  scope=runtime  tier=third-party
+npm/stackback@0.0.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/std-env@4.2.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/tinybench@2.9.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/tinyexec@1.2.4  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/tinyglobby@0.2.17  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/tinyrainbow@3.1.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/tslib@2.8.1  [auto-pass]  license=0BSD  scope=dev  tier=third-party
+npm/typescript@5.9.3  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+npm/vite@8.1.4  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/vitest@4.1.10  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/vscode-uri@3.1.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/vue@3.5.39  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/vue-tsc@2.2.12  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/why-is-node-running@2.3.0  [auto-pass]  license=MIT  scope=dev  tier=third-party

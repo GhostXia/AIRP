@@ -1,0 +1,137 @@
+{
+  "_comment": "Fixture for #192 acceptance criterion #1: prove the five routing classes (patch, minor, major, 0x-minor, prerelease) plus the patch-sensitive override and three edge cases (downgrade, same-version, unparseable). Each sample is a synthetic (current, target, depMeta) triple fed to classifyUpgrade(). These are NOT real AIRP dependencies — they are deliberately minimal cases that exercise the classifier. Real upgrade detection against upstream registries is a documented future step (see README.md 'Deferred').",
+  "samples": [
+    {
+      "id": "patch-plain",
+      "description": "Patch bump on a major>=1, non-sensitive dep. Auto-PR allowed.",
+      "ecosystem": "cargo",
+      "name": "serde",
+      "current": "1.0.210",
+      "target": "1.0.211",
+      "areaTags": [],
+      "expected_class": "patch",
+      "expected_routing": "auto-pr"
+    },
+    {
+      "id": "patch-sensitive-name",
+      "description": "Patch bump on a major>=1 dep whose name matches a sensitive pattern ('tokio'). Escalated to patch-sensitive -> issue.",
+      "ecosystem": "cargo",
+      "name": "tokio",
+      "current": "1.52.3",
+      "target": "1.52.4",
+      "areaTags": [],
+      "expected_class": "patch-sensitive",
+      "expected_routing": "issue"
+    },
+    {
+      "id": "patch-sensitive-area-tag",
+      "description": "Patch bump on a major>=1 dep with area tag 'cryptography'. Escalated to patch-sensitive -> issue, even though the name doesn't match a pattern.",
+      "ecosystem": "npm",
+      "name": "fast-hasher",
+      "current": "1.4.0",
+      "target": "1.4.1",
+      "areaTags": ["cryptography"],
+      "expected_class": "patch-sensitive",
+      "expected_routing": "issue"
+    },
+    {
+      "id": "minor-stable",
+      "description": "Minor bump on a major>=1 dep (3.4 -> 3.5). Issue required.",
+      "ecosystem": "npm",
+      "name": "vue",
+      "current": "3.4.21",
+      "target": "3.5.0",
+      "areaTags": [],
+      "expected_class": "minor",
+      "expected_routing": "issue"
+    },
+    {
+      "id": "major-bump",
+      "description": "Major bump (4.x -> 5.0.0). Issue required.",
+      "ecosystem": "cargo",
+      "name": "clap",
+      "current": "4.5.20",
+      "target": "5.0.0",
+      "areaTags": [],
+      "expected_class": "major",
+      "expected_routing": "issue"
+    },
+    {
+      "id": "0x-minor-patch",
+      "description": "0.x dep patch bump (0.3.49 -> 0.3.50). Treated as major risk per DEV-GUIDE §7.1. Issue required. (The sensitive-name override does NOT fire here because the override only applies to major>=1 patch bumps; 0x-minor is already issue.)",
+      "ecosystem": "cargo",
+      "name": "time",
+      "current": "0.3.49",
+      "target": "0.3.50",
+      "areaTags": [],
+      "expected_class": "0x-minor",
+      "expected_routing": "issue"
+    },
+    {
+      "id": "0x-minor-minor",
+      "description": "0.x dep minor bump (0.7 -> 0.8). Treated as major risk per DEV-GUIDE §7.1. Issue required.",
+      "ecosystem": "cargo",
+      "name": "axum",
+      "current": "0.7.5",
+      "target": "0.8.0",
+      "areaTags": [],
+      "expected_class": "0x-minor",
+      "expected_routing": "issue"
+    },
+    {
+      "id": "prerelease-beta",
+      "description": "Target is a beta prerelease. Never auto-adopted. Skipped.",
+      "ecosystem": "npm",
+      "name": "vite",
+      "current": "8.1.4",
+      "target": "8.2.0-beta.1",
+      "areaTags": [],
+      "expected_class": "prerelease",
+      "expected_routing": "skip"
+    },
+    {
+      "id": "prerelease-alpha-on-0x",
+      "description": "Target is an alpha prerelease on a 0.x dep. Prerelease class wins over 0x-minor.",
+      "ecosystem": "cargo",
+      "name": "schemars",
+      "current": "0.8.22",
+      "target": "0.9.0-alpha.1",
+      "areaTags": [],
+      "expected_class": "prerelease",
+      "expected_routing": "skip"
+    },
+    {
+      "id": "downgrade",
+      "description": "Target is older than current. Treated as patch-sensitive (issue) — downgrades are rarely safe and need audit.",
+      "ecosystem": "cargo",
+      "name": "tokio",
+      "current": "1.52.3",
+      "target": "1.52.0",
+      "areaTags": [],
+      "expected_class": "patch-sensitive",
+      "expected_routing": "issue"
+    },
+    {
+      "id": "same-version",
+      "description": "Target equals current. No-op; routing is skip (nothing to upgrade).",
+      "ecosystem": "npm",
+      "name": "typescript",
+      "current": "5.9.3",
+      "target": "5.9.3",
+      "areaTags": [],
+      "expected_class": "patch",
+      "expected_routing": "skip"
+    },
+    {
+      "id": "unparseable",
+      "description": "Unparseable target version. Routes to issue (manual classification required). Never silently auto-PR.",
+      "ecosystem": "npm",
+      "name": "weird-pkg",
+      "current": "1.2.3",
+      "target": "latest",
+      "areaTags": [],
+      "expected_class": "patch-sensitive",
+      "expected_routing": "issue"
+    }
+  ]
+}
