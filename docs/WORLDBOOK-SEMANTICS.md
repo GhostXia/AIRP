@@ -2,7 +2,7 @@
 
 Status: version 4. Promotes `selective` from ST-only extension to canonical runtime field. `selective=true` entries require a `secondary_keys` match (in addition to primary key match) to activate. Version 3 advisory metadata (`secondary_keys`, `case_sensitive`, `extensions`) and import diagnostics are preserved. Version 2 runtime semantics (`constant`) are preserved unchanged. Version 1 behavior is preserved for entries without the `constant` field.
 
-Last implementation check: 2026-07-16 at `main@13d07d7`.
+Last implementation check: 2026-07-17 at `main@15cb6c0`.
 
 ## Version 4 schema
 

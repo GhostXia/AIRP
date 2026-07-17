@@ -4,7 +4,7 @@
 >
 > Decision date: 2026-07-13
 >
-> Last baseline check: 2026-07-16 (`main@13d07d7`; PR #194 added the prompt-preview gateway asset and production-browser path without changing this boundary)
+> Last baseline check: 2026-07-17 (`main@15cb6c0`; PR #196 scene lorebook provenance, PR #201-#203/#206/#215 unified revision contract, PR #208 launch-validation targets, PR #212 onboarding wizard Phase 1 已合并，未改变本 P0 边界)
 >
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)

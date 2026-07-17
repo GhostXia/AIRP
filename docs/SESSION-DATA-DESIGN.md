@@ -1,10 +1,10 @@
 # Session 存档与世界书物化设计
 
-> 状态：**产品方向已确认；PR #169 已交付目录去歧义与命名 session 身份，后续阶段待实现**
+> 状态：**产品方向已确认；PR #169 已交付目录去歧义与命名 session 身份，PR #201/#202/#203/#206/#215（Phase 2 of #115）落地 6 类 asset（character/persona/preset/lorebook/state/memory）的 asset 级统一 `content_revision` 合同；session 自包含、工作副本物化、世界书 manifest 与覆盖 character+worldbooks 的 session 级统一 revision 仍待分阶段实现**
 >
-> 关联：[PR #169](https://github.com/GhostXia/AIRP/pull/169) / [已关闭 Issue #168](https://github.com/GhostXia/AIRP/issues/168)
+> 关联：[PR #169](https://github.com/GhostXia/AIRP/pull/169) / [已关闭 Issue #168](https://github.com/GhostXia/AIRP/issues/168) / [#115 Phase 2](https://github.com/GhostXia/AIRP/pull/215)
 >
-> 最后更新：2026-07-16（在 `main@13d07d7` 复核合同与实现边界）
+> 最后更新：2026-07-17（在 `main@15cb6c0` 复核合同与实现边界）
 
 本文定义 AIRP 的 session、第三方世界书和可复现游玩存档边界。它是 AIRP 根据自身需求形成的独立设计；SillyTavern 仅作为公开行为与互操作性参考，不复用其实现代码、规则、测试或资产。
 

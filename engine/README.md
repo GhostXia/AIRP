@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-16 的 `main@13d07d7` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-17 的 `main@15cb6c0` 复核。
 
 ## 当前能力
 
@@ -19,6 +19,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - character/preset deterministic decompose、analysis preview/apply；
 - preset 规范化导入报告、原始输入 sidecar、版本目录与原子 current 指针；
 - `PromptAssemblyTrace` 已接入真实 single/scene chat 装配路径，按 provider payload 顺序记录材料 provenance；`POST /v1/chat/preview` 复用该路径，且不创建会话、不推进 history/memory/state 或修复 metadata；
+- Phase 2 (#115) 6 类 asset（character/persona/preset/lorebook/state/memory）统一 revision 合同已落地：`commit_revision` + 单调 u64 `content_revision` + 不可变 `revisions/{N}/` 快照 + 原子 `current_revision` 指针；旧数据推送 `*_revision_unavailable` 诊断；`next_content_revision` 在 orphan revision_dir 场景下跳过取号，避免 asset 永久不可写；base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计仍未交付；
 - settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；development CORS 保留 WebUI/Tauri 精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
 - settings 更新在专用异步事务边界内完成校验、原子持久化和 live commit；失败不产生部分更新，并发提交保持运行态与磁盘一致。
 
@@ -163,7 +164,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-`main@13d07d7` 的 [GitHub run `29488668196`](https://github.com/GhostXia/AIRP/actions/runs/29488668196) 中 Rust workspace（含 warning-free rustdoc 与神圣提示词不变式）、UI and WebUI、Production topology 全绿，并覆盖真实 prompt preview 的 engine、HTTP、WebUI 与生产浏览器路径。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+`main@15cb6c0` 的 [GitHub run `29590129817`](https://github.com/GhostXia/AIRP/actions/runs/29590129817) 中 Rust workspace（含 warning-free rustdoc 与神圣提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 全绿，并覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、prompt preview 的 engine/HTTP/WebUI 与生产浏览器路径。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 
