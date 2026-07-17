@@ -215,75 +215,153 @@ fn build_prompt_trace(
     }
 
     let mut diagnostics = Vec::new();
-    // #115 Phase 2h：character 上下文（非 scene 模式）下的 revision 缺口诊断。
-    // 这些 asset 尚未升级到统一 revision 合同（Phase 2b-2g 跟进）；
-    // 禁止静默留空，必须显式声明缺口，避免审计者无法区分"未填充"与"故意省略"。
+    // #115 Phase 2h：trace 完整性收口。
+    // Phase 2b-2g 已让 6 个 asset service 在写入时 commit_revision，落盘 `current_revision`。
+    // 这里按 spec §5.3 规则逐个 read_current_revision：
+    //   - 可读 → 填充实际 u64
+    //   - 不可读（旧数据未升级或文件损坏）→ 推送对应 *_revision_unavailable 诊断
+    // 不允许用 mtime、文件名时间戳或单调递增计数器冒充内容版本。
     let is_character_context = payload.scene_id.is_none() && payload.character_id.is_some();
-    if is_character_context {
-        diagnostics.push(PromptDiagnostic {
-            kind: "character_revision_unavailable".to_string(),
-            message: "角色卡尚未提供统一 revision；本摘要不会用文件时间冒充版本。".to_string(),
-        });
-        diagnostics.push(PromptDiagnostic {
-            kind: "lorebook_revision_unavailable".to_string(),
-            message: "Worldbook 尚未升级到统一 revision 合同；本摘要不会用文件时间冒充版本。"
-                .to_string(),
-        });
-        diagnostics.push(PromptDiagnostic {
-            kind: "state_revision_unavailable".to_string(),
-            message: "State 尚未升级到统一 revision 合同；本摘要不会用 history.jsonl revision 冒充内容版本。"
-                .to_string(),
-        });
-        diagnostics.push(PromptDiagnostic {
-            kind: "memory_revision_unavailable".to_string(),
-            message: "Memory 尚未升级到统一 revision 合同；本摘要不会用卷编号冒充内容版本。"
-                .to_string(),
-        });
-    }
-    // #115 Phase 2b：尝试读取 preset current_revision，可读则填充 preset_revision，
-    // 不可读（旧数据未升级或文件损坏）则推送 preset_revision_unavailable 诊断。
+
+    // ── Character revision（character 上下文）─────────────────────────────
+    // scene 模式下 character_revision 字段语义不适用（多角色无单一 revision），留 None 不 push。
+    let character_revision = if is_character_context {
+        payload.character_id.as_ref().and_then(|cid| {
+            let char_dir = effective_root.join("characters").join(cid.as_str());
+            read_revision_or_diagnostic(
+                &char_dir,
+                "character_revision_unavailable",
+                "角色卡",
+                &mut diagnostics,
+            )
+        })
+    } else {
+        None
+    };
+
+    // ── Lorebook revision（character 上下文）───────────────────────────────
+    // scene 模式下 lorebook 来源由场景决定，不在此处填充。
+    let lorebook_revision = if is_character_context {
+        payload.character_id.as_ref().and_then(|cid| {
+            let world_dir = effective_root.join("characters").join(cid.as_str()).join("world");
+            read_revision_or_diagnostic(
+                &world_dir,
+                "lorebook_revision_unavailable",
+                "Worldbook",
+                &mut diagnostics,
+            )
+        })
+    } else {
+        None
+    };
+
+    // ── State revision（character 上下文）─────────────────────────────────
+    let state_revision = if is_character_context {
+        payload.character_id.as_ref().and_then(|cid| {
+            let state_dir = effective_root.join("characters").join(cid.as_str()).join("state");
+            read_revision_or_diagnostic(
+                &state_dir,
+                "state_revision_unavailable",
+                "State",
+                &mut diagnostics,
+            )
+        })
+    } else {
+        None
+    };
+
+    // ── Memory revision（character 上下文，按 session_dir 读取）───────────
+    let memory_revision = if is_character_context {
+        payload.character_id.as_ref().and_then(|cid| {
+            let session_dir = read_only_session_dir(effective_root, cid.as_str(), payload.session_id.as_ref());
+            read_revision_or_diagnostic(
+                &session_dir,
+                "memory_revision_unavailable",
+                "Memory",
+                &mut diagnostics,
+            )
+        })
+    } else {
+        None
+    };
+
+    // ── Preset revision（已由 Phase 2b 实现，保持原逻辑）──────────────────
     let preset_revision = payload.preset_id.as_ref().and_then(|pid| {
         let preset_dir = effective_root.join("presets").join(pid.as_str());
-        match crate::revision::atomic::read_current_revision(&preset_dir) {
-            Ok(Some(rev)) => Some(rev),
-            Ok(None) => {
-                diagnostics.push(PromptDiagnostic {
-                    kind: "preset_revision_unavailable".to_string(),
-                    message: "Preset 尚未升级到统一 revision 合同（无 current_revision）。"
-                        .to_string(),
-                });
-                None
-            }
-            Err(e) => {
-                diagnostics.push(PromptDiagnostic {
-                    kind: "preset_revision_unavailable".to_string(),
-                    message: format!("Preset current_revision 读取失败: {e}"),
-                });
-                None
-            }
-        }
+        read_revision_or_diagnostic(
+            &preset_dir,
+            "preset_revision_unavailable",
+            "Preset",
+            &mut diagnostics,
+        )
     });
-    if persona.is_none() && is_character_context {
-        // persona 在本会话未激活时，persona_revision 一定为 None。
-        // 仅在用户/角色上下文应该有 persona 但未激活时声明缺口；scene 模式下 persona 由场景决定，跳过。
-        diagnostics.push(PromptDiagnostic {
-            kind: "persona_revision_unavailable".to_string(),
-            message: "本轮未激活 persona；persona_revision 不可用。".to_string(),
-        });
-    }
+
+    // ── Persona revision（双源读取：current_revision 优先，回退 Persona.revision）──
+    // spec §6.6 D6.4：新数据读 personas/{pid}/current_revision；旧数据无该指针时
+    // 回退到 Persona.revision，二者皆不可用才 push 诊断。
+    // scene 模式下 persona 由场景决定，跳过诊断推送。
+    // 注意：`effective_root` 在 Chat 模式下已被 `resolve_effective_root` 解析为
+    // `data_root/users/{uid}/`，所以 persona asset 路径直接基于 effective_root 拼装，
+    // 不要再叠加 `users/{uid}`（避免 double-prefix）。
+    let (persona_id, persona_revision) = match persona {
+        Some(value) => {
+            let pid = value.id.clone();
+            let persona_asset_dir = effective_root.join("personas").join(&value.id);
+            let rev = match crate::revision::atomic::read_current_revision(&persona_asset_dir) {
+                Ok(Some(rev)) => Some(rev),
+                Ok(None) => {
+                    // spec §6.6 D6.4 双源读取：current_revision 不存在时回退到
+                    // `Persona.revision`（legacy 字段）。但 `Persona.revision == 0`
+                    // 表示 `Persona::initial`（get_default 在无 persona 文件时返回
+                    // 的内存占位），实际从未保存过——视作"两者都不可用"，
+                    // 推送 persona_revision_unavailable 诊断。
+                    if value.revision > 0 {
+                        Some(value.revision)
+                    } else {
+                        diagnostics.push(PromptDiagnostic {
+                            kind: "persona_revision_unavailable".to_string(),
+                            message: "Persona 尚未升级到统一 revision 合同且无 legacy revision 可回退（Persona::initial 未保存）.".to_string(),
+                        });
+                        None
+                    }
+                }
+                Err(e) => {
+                    diagnostics.push(PromptDiagnostic {
+                        kind: "persona_revision_unavailable".to_string(),
+                        message: format!("Persona current_revision 读取失败: {e}"),
+                    });
+                    None
+                }
+            };
+            (Some(pid), rev)
+        }
+        None => {
+            if is_character_context {
+                diagnostics.push(PromptDiagnostic {
+                    kind: "persona_revision_unavailable".to_string(),
+                    message: "本轮未激活 persona；persona_revision 不可用。".to_string(),
+                });
+            }
+            (None, None)
+        }
+    };
 
     PromptAssemblyTrace::new(
         EffectiveIds {
-            character_id: payload
-                .scene_id
-                .is_none()
-                .then(|| payload.character_id.as_ref().map(ToString::to_string))
-                .flatten(),
-            persona_id: persona.map(|value| value.id.clone()),
-            persona_revision: persona.map(|value| value.revision),
+            character_id: if is_character_context {
+                payload.character_id.as_ref().map(ToString::to_string)
+            } else {
+                None
+            },
+            character_revision,
+            persona_id,
+            persona_revision,
             preset_id: payload.preset_id.as_ref().map(ToString::to_string),
             preset_revision,
+            lorebook_revision,
             scene_id: payload.scene_id.clone(),
+            state_revision,
+            memory_revision,
             provider: provider_label(&provider_config.provider),
             // Endpoint paths can contain deployment details or query credentials. The product
             // summary only needs to disclose whether an endpoint is configured.
@@ -293,11 +371,41 @@ fn build_prompt_trace(
                 "configured".to_string()
             },
             model: gen_params.model.clone(),
-            ..EffectiveIds::default()
         },
         segments,
         diagnostics,
     )
+}
+
+/// Phase 2h：尝试读取 `asset_dir/current_revision`。
+/// - 可读 → `Some(rev)`
+/// - 文件不存在（旧数据未升级）→ 推送 `{kind}` 诊断，返回 `None`
+/// - 文件存在但损坏 → 推送带错误信息的诊断，返回 `None`
+fn read_revision_or_diagnostic(
+    asset_dir: &std::path::Path,
+    kind: &str,
+    asset_label: &str,
+    diagnostics: &mut Vec<PromptDiagnostic>,
+) -> Option<u64> {
+    match crate::revision::atomic::read_current_revision(asset_dir) {
+        Ok(Some(rev)) => Some(rev),
+        Ok(None) => {
+            diagnostics.push(PromptDiagnostic {
+                kind: kind.to_string(),
+                message: format!(
+                    "{asset_label} 尚未升级到统一 revision 合同（无 current_revision）。"
+                ),
+            });
+            None
+        }
+        Err(e) => {
+            diagnostics.push(PromptDiagnostic {
+                kind: kind.to_string(),
+                message: format!("{asset_label} current_revision 读取失败: {e}"),
+            });
+            None
+        }
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
