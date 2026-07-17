@@ -31,6 +31,8 @@ Browser
 
 以下门槛全部满足前，只能称开发版或预览版。
 
+> 验证判据来源：[#207 strategic(rp): adopt 3+1 launch-validation targets](https://github.com/GhostXia/AIRP/issues/207)。P1/P2/P3 退出条件验证必须优先采用该 issue 的判据，不得继续用模糊口号（“更稳”、“好用”）替代；后续 PR 若修改本节 §2.2/§2.3/§2.4 退出条件，必须先确认与 #207 判据一致。本文将 #207 的 4 个验证目标（首聊完成率 / 资产日用可见性 / 恢复升级可测判据 / 干净提示词 + Agent loop 价值验证）物化为以下门禁。
+
 ### 2.1 部署与安全
 
 - 有版本化、可重复的首方部署产物；不把 `webui/start.bat`、`cargo run` 或裸 `serve.js` 当生产部署。
@@ -42,7 +44,8 @@ Browser
 
 ### 2.2 正式 RP 使用闭环
 
-- 首次启动向导完成部署健康检查、provider 配置、模型验证、角色导入、Persona/Preset 选择与首轮对话。
+- 目标用户画像：自带 provider key、带 PNG 角色卡 / `character_book` / preset JSON 的 RP 重度玩家，不是首次接触 RP 的新人。首发以“消费 ST 格式资产的 RP 重度用户”为目标画像，不定位为“从 ST 迁移”。
+- 首聊完成率（成功用户数 / 参与用户数）：用户在不读文档、不打开 dev 工具 / workbench 前提下，完成部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话全闭环；不设时间上限。**阻塞项**：当前 WebUI 尚无首次启动向导（onboarding wizard），现有 `webui/app.js` 是 M1 开发期 backend validation harness，不是面向 RP 重度用户的引导流程，本判据在向导落地前无法验证。
 - Persona/Preset 具备可理解的管理、选择和有效配置摘要；角色/会话切换不会静默改变或丢失绑定。
 - 角色卡、世界书、Preset、Persona、会话和聊天历史的关键 CRUD 不依赖开发工作台或手写 JSON。
 - 连续流式聊天、停止、重试、regen、rollback、历史分页和刷新恢复可稳定日用；branch/swipe/edit 若首发不交付，UI 必须诚实隐藏或标明不可用。
@@ -55,6 +58,12 @@ Browser
 - 删除角色、Persona、Preset 和会话采用确认与可恢复策略，或明确记录不可逆边界。
 - `/health` 区分 live/readiness；日志结构化、脱敏并有上限，能定位启动、provider、SSE、持久化和迁移错误。
 - 提供管理员可执行的备份、恢复、诊断和版本信息流程，不要求阅读源码。
+- **可复核恢复判据**（#207 目标 3，Phase P2 退出条件必须全部满足，不再使用“更稳”口号）：
+  1. 升级前后根哈希稳定：升级中断后重启，`AIRP-TREE-SHA256-v1` 比对前后根哈希一致（数据零丢失）；
+  2. 损坏行不阻塞：损坏单条 JSONL 行不阻塞会话加载（已有 best-effort 修复，需补负向测试矩阵）；
+  3. 旧版可冷启动：旧版本数据可冷启动加载，无静默覆盖修复（对齐上文“不得靠启动时静默覆盖损坏文件修复”）；
+  4. 备份恢复 ID 稳定：备份 → 恢复 → 继续对话，durable message_id 全部 stable；
+  5. soft-delete 窗口：删除角色 / Persona / Preset / 会话有可恢复窗口（对齐上文 soft-delete / 回收站，当前仍缺）。
 
 ### 2.4 发布质量
 
@@ -62,6 +71,11 @@ Browser
 - 自动化覆盖 engine contract、WebUI DOM、真实浏览器主路径、认证/安全负向路径、升级/恢复和生产部署 smoke。
 - 候选版本在生产拓扑下完成全新安装、旧数据升级、备份恢复和长会话 soak；证据写入版本化文档。
 - CI 对正式部署产物执行构建、secret scan、依赖/许可证清单和 smoke；只有全部 release gates 通过才打正式 tag。
+- **干净提示词 + Agent loop 价值验证**（#207 目标 4，Phase P3 发布候选门禁必须满足）：
+  1. 首轮对话中至少有一条由 Agent tool 调用驱动的 RP 资产变更（如 `update_state` / `get_preset` / `update_preset` dry-run）；
+  2. 本轮 `PromptAssemblyTrace` 可见来源（card / lorebook / state / preset / scene / memory / history / user）；
+  3. Agent 编排脚手架不进入角色 prompt（`subagent_context_has_no_orchestrator_noise` 不变式自动门禁通过，详见 [PLAN.md §2.1](PLAN.md)）；
+  4. 用真实场景证明干净角色平面不变式**有用户价值**（例如让 Agent 修改 worldbook 而不污染对话），否则未来会被业务压力冲掉。
 
 ## 3. 当前事实与差距
 
@@ -107,7 +121,7 @@ Browser
 5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
 6. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
 
-退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。
+退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。本阶段只验证“effective config 可见 + 日用 RP 闭环”，不强制要求角色卡 / Preset / Worldbook / state / memory 的统一 `content_revision` 号可见——后者属于 Phase P2 数据可靠性阶段的验证项（详见 [CURRENT-BASELINE.md §3](CURRENT-BASELINE.md)：当前只有 Persona 数值 revision，其余资产尚未全部映射到统一不可变 revision）。
 
 ### Phase P2：数据可靠性与恢复
 
@@ -116,7 +130,7 @@ Browser
 3. 并发写、磁盘满、损坏 JSON、升级中断和旧版本回退测试；
 4. readiness、结构化脱敏日志、诊断包和运维 runbook。
 
-退出条件：旧数据升级失败时不丢数据，管理员能用文档化命令恢复服务。
+退出条件：§2.3“可复核恢复判据”5 条全部满足（升级前后根哈希稳定 / 损坏行不阻塞 / 旧版可冷启动 / 备份恢复 ID 稳定 / soft-delete 窗口），并以自动化或可复核证据呈现，不再使用“更稳”作为发布口号。本阶段同时交付角色卡 / Preset / Worldbook / state / memory 的统一 `content_revision` 可见性、`AIRP-TREE-SHA256-v1` 完整性校验与 provenance 链路（source / converted / preserved / unsupported / invalid / needs-review）用户可读，退出条件对齐 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 自包含 session 合同。
 
 ### Phase P3：发布候选与上线
 
@@ -126,7 +140,7 @@ Browser
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
-退出条件：§2 全部有自动化或可复核证据，不以“本机能跑”代替正式发布证明。
+退出条件：§2 全部有自动化或可复核证据，不以“本机能跑”代替正式发布证明。本阶段额外要求 §2.4“干净提示词 + Agent loop 价值验证”4 条全部满足：至少一条 Agent tool 调用驱动的 RP 资产变更、本轮 `PromptAssemblyTrace` 可见来源、`subagent_context_has_no_orchestrator_noise` 不变式自动门禁通过、真实场景证明干净角色平面不变式有用户价值。
 
 ## 5. 非首发阻塞项
 
