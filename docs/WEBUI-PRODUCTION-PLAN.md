@@ -44,8 +44,14 @@ Browser
 
 ### 2.2 正式 RP 使用闭环
 
-- 目标用户画像：自带 provider key、带 PNG 角色卡 / `character_book` / preset JSON 的 RP 重度玩家，不是首次接触 RP 的新人。首发以“消费 ST 格式资产的 RP 重度用户”为目标画像，不定位为“从 ST 迁移”。
-- 首聊完成率（成功用户数 / 参与用户数）：用户在不读文档、不打开 dev 工具 / workbench 前提下，完成部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话全闭环；不设时间上限。**阻塞项**：当前 WebUI 尚无首次启动向导（onboarding wizard），现有 `webui/app.js` 是 M1 开发期 backend validation harness，不是面向 RP 重度用户的引导流程，本判据在向导落地前无法验证。
+- 目标用户画像：自带 provider key、带 PNG 角色卡 / `character_book` / preset JSON 的 RP 重度玩家，不是首次接触 RP 的新人。首发面向“消费 ST 格式资产的 RP 重度用户”；[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md) “吸收资产，不继承产品北极星”约束的是不继承源项目产品定位，不阻止把“ST 资产用户迁移成功率”作为市场验证指标（见下）。
+- **首聊完成率**（市场验证主指标）：用户在不读文档、不打开 dev 工具 / workbench 前提下，完成部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话全闭环。完整指标定义：
+  - **样本量 N**：首发验证 ≥5 名符合画像的自愿试用用户（定性模式发现门槛）；正式发布门禁 ≥10 名（定量信号门槛）；
+  - **通过阈值**：完成率 ≥80%（如 N=10 时 ≥8 人完成全闭环且未读文档 / 未开 dev 工具）；
+  - **软时间预算**：p50 ≤30 分钟（软诊断指标，不是硬 SLA；超时不自动判失败，但触发 UX 排查，避免“15 分钟首聊”式的硬 SLA 抹除）；
+  - **失败分类法**：按阶段（部署健康检查 / provider 配置 / 模型验证 / 角色导入 / Persona/Preset 选择 / 首轮对话）× 按类型（UX 混淆 / 错误信息不可行动 / 资产格式不兼容 / provider 特定 / 网络 / 崩溃）记录每例失败，用于定位阻塞而非只看通过率。
+- **ST 资产用户迁移成功率**（市场验证辅助指标）：在曾使用 SillyTavern 的试用用户子集中，完成首聊且回流进行第二次会话的比例（7 日内回流作为留存信号）。此指标验证 AIRP 能否承接 ST 格式资产重度用户的日用迁移，与首聊完成率互补。
+- **阻塞项**：当前 WebUI 尚无首次启动向导（onboarding wizard），现有 `webui/app.js` 是 M1 开发期 backend validation harness，不是面向 RP 重度用户的引导流程，本判据在向导落地前无法验证。向导实现跟踪于 [#209](https://github.com/GhostXia/AIRP/issues/209)。
 - Persona/Preset 具备可理解的管理、选择和有效配置摘要；角色/会话切换不会静默改变或丢失绑定。
 - 角色卡、世界书、Preset、Persona、会话和聊天历史的关键 CRUD 不依赖开发工作台或手写 JSON。
 - 连续流式聊天、停止、重试、regen、rollback、历史分页和刷新恢复可稳定日用；branch/swipe/edit 若首发不交付，UI 必须诚实隐藏或标明不可用。
@@ -71,11 +77,14 @@ Browser
 - 自动化覆盖 engine contract、WebUI DOM、真实浏览器主路径、认证/安全负向路径、升级/恢复和生产部署 smoke。
 - 候选版本在生产拓扑下完成全新安装、旧数据升级、备份恢复和长会话 soak；证据写入版本化文档。
 - CI 对正式部署产物执行构建、secret scan、依赖/许可证清单和 smoke；只有全部 release gates 通过才打正式 tag。
-- **干净提示词 + Agent loop 价值验证**（#207 目标 4，Phase P3 发布候选门禁必须满足）：
-  1. 首轮对话中至少有一条由 Agent tool 调用驱动的 RP 资产变更（如 `update_state` / `get_preset` / `update_preset` dry-run）；
-  2. 本轮 `PromptAssemblyTrace` 可见来源（card / lorebook / state / preset / scene / memory / history / user）；
-  3. Agent 编排脚手架不进入角色 prompt（`subagent_context_has_no_orchestrator_noise` 不变式自动门禁通过，详见 [PLAN.md §2.1](PLAN.md)）；
-  4. 用真实场景证明干净角色平面不变式**有用户价值**（例如让 Agent 修改 worldbook 而不污染对话），否则未来会被业务压力冲掉。
+- **干净提示词 + Agent loop 价值验证**（#207 目标 4，分两层）：
+  - **L0 自动化发布门禁**（CI 强制，每次 PR 验证，已存在）：
+    1. `subagent_context_has_no_orchestrator_noise` 不变式自动门禁通过——Agent 编排脚手架不进入角色 prompt（详见 [PLAN.md §2.1](PLAN.md)）；
+    2. 本轮 `PromptAssemblyTrace` 可见来源（card / lorebook / state / preset / scene / memory / history / user）——作为 trace 完整性自动回归。
+  - **L1 差异化价值证明**（场景证据库，发布候选人工复核，**不强制嵌入首轮对话流程**）：
+    1. 建立场景证据集：至少 3 个真实 RP 场景，证明 Agent tool 调用（如 `update_state` / `get_preset` / `update_preset` dry-run / worldbook 编辑）为用户创造了价值（如修改 worldbook 而不污染对话、自动校准 preset 而不手改 JSON）；
+    2. 不强制要求每位用户首轮对话必须触发 Agent tool——避免 onboarding 扭曲；价值证明通过场景证据库呈现，而非强制用户走 Agent 路径；
+    3. 若场景证据无法证明干净角色平面不变式**有用户价值**，须在发布前补齐证据或显式记录风险，否则未来会被业务压力冲掉。
 
 ## 3. 当前事实与差距
 
@@ -140,7 +149,7 @@ Browser
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
-退出条件：§2 全部有自动化或可复核证据，不以“本机能跑”代替正式发布证明。本阶段额外要求 §2.4“干净提示词 + Agent loop 价值验证”4 条全部满足：至少一条 Agent tool 调用驱动的 RP 资产变更、本轮 `PromptAssemblyTrace` 可见来源、`subagent_context_has_no_orchestrator_noise` 不变式自动门禁通过、真实场景证明干净角色平面不变式有用户价值。
+退出条件：§2 全部有自动化或可复核证据，不以“本机能跑”代替正式发布证明。本阶段额外要求 §2.4“干净提示词 + Agent loop 价值验证”两层全部满足：L0 自动化门禁（`subagent_context_has_no_orchestrator_noise` 不变式 + `PromptAssemblyTrace` 完整性）持续通过；L1 场景证据集（≥3 个真实 RP 场景证明 Agent tool 价值，不强制嵌入首轮对话）人工复核通过。
 
 ## 5. 非首发阻塞项
 
