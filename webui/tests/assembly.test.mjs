@@ -139,3 +139,117 @@ test('buildAssemblyViewModel falls back to inactive label when asset has no revi
   assert.equal(view.chips[4].value, '未启用', '状态未激活时应显示 未启用');
   assert.equal(view.chips[5].value, '未启用', '记忆未激活时应显示 未启用');
 });
+
+// ── #114 effective config summary：来源后缀 + 新增 chips ─────────────────────
+
+test('buildAssemblyViewModel appends persona activation source suffix when present', () => {
+  const view = buildAssemblyViewModel({
+    effective: {
+      persona_id: 'writer',
+      persona_revision: 7,
+      persona_activation_source: 'explicit',
+    },
+    total_estimated_tokens: 0,
+    segments: [],
+    diagnostics: [],
+  });
+  // 身份 chip：`writer · r7 · 显式`
+  assert.equal(view.chips[1].value, 'writer · r7 · 显式');
+});
+
+test('buildAssemblyViewModel maps all persona activation sources to readable labels', () => {
+  const cases = [
+    ['explicit', '显式'],
+    ['session_binding', '会话绑定'],
+    ['character_binding', '角色绑定'],
+    ['default', '默认'],
+  ];
+  for (const [source, expected] of cases) {
+    const view = buildAssemblyViewModel({
+      effective: { persona_id: 'p', persona_activation_source: source },
+      segments: [],
+      diagnostics: [],
+    });
+    assert.equal(view.chips[1].value, 'p · ' + expected, `source=${source} → ${expected}`);
+  }
+});
+
+test('buildAssemblyViewModel omits persona source suffix when absent (backward compat)', () => {
+  // 旧 trace 不带 persona_activation_source 字段，或值为 'absent'：不附加后缀
+  const viewNoField = buildAssemblyViewModel({
+    effective: { persona_id: 'writer', persona_revision: 7 },
+    segments: [],
+    diagnostics: [],
+  });
+  assert.equal(viewNoField.chips[1].value, 'writer · r7');
+
+  const viewAbsent = buildAssemblyViewModel({
+    effective: { persona_id: 'writer', persona_revision: 7, persona_activation_source: 'absent' },
+    segments: [],
+    diagnostics: [],
+  });
+  assert.equal(viewAbsent.chips[1].value, 'writer · r7');
+});
+
+test('buildAssemblyViewModel appends model and provider source suffixes', () => {
+  const view = buildAssemblyViewModel({
+    effective: {
+      model: 'gpt-test',
+      model_source: 'preset',
+      provider: 'openai_compatible',
+      provider_source: 'snapshot',
+    },
+    segments: [],
+    diagnostics: [],
+  });
+  // chips[6] = 模型, chips[7] = 服务
+  assert.equal(view.chips[6].value, 'gpt-test · 预设');
+  assert.equal(view.chips[7].value, 'openai_compatible · 默认');
+});
+
+test('buildAssemblyViewModel renders temperature and max_tokens chips with source', () => {
+  const view = buildAssemblyViewModel({
+    effective: {
+      temperature: 0.8,
+      temperature_source: 'request',
+      max_tokens: 2048,
+      max_tokens_source: 'preset',
+    },
+    segments: [],
+    diagnostics: [],
+  });
+  // chips[8] = 温度, chips[9] = 最大 tokens
+  assert.equal(view.chips[8].label, '温度');
+  assert.equal(view.chips[8].value, '0.8 · 请求');
+  assert.equal(view.chips[9].label, '最大 tokens');
+  assert.equal(view.chips[9].value, '2048 · 预设');
+});
+
+test('buildAssemblyViewModel shows 未设置 for missing temperature and max_tokens', () => {
+  const view = buildAssemblyViewModel({
+    effective: {
+      // temperature / max_tokens 都未提供
+    },
+    segments: [],
+    diagnostics: [],
+  });
+  assert.equal(view.chips[8].value, '未设置');
+  assert.equal(view.chips[9].value, '未设置');
+});
+
+test('buildAssemblyViewModel keeps source labels inert for hostile source strings', () => {
+  // hostile source 字符串只作为 chip value 文本展示，不进入 HTML；
+  // 与 character_id hostile 测试同样的 XSS 防护边界（DOM sink 由 production smoke 覆盖）。
+  const hostile = '<img src=x onerror="globalThis.pwned=1">';
+  const view = buildAssemblyViewModel({
+    effective: {
+      persona_id: 'p',
+      persona_activation_source: hostile,
+    },
+    segments: [],
+    diagnostics: [],
+  });
+  // 未知 source 值原样保留（便于排查），不映射成中文
+  assert.equal(view.chips[1].value, 'p · ' + hostile);
+  assert.equal(globalThis.pwned, undefined);
+});

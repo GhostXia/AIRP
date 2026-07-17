@@ -20,7 +20,8 @@ use crate::domain::{ChatService, Persona, PersonaService};
 use crate::error::AirpError;
 use crate::fsm::{RegexFilter, StreamingFsm};
 use crate::orchestrator::trace::{
-    EffectiveIds, PromptAssemblyTrace, PromptDiagnostic, PromptSegment, Stability,
+    EffectiveIds, ParamSources, PersonaActivationSource, PromptAssemblyTrace, PromptDiagnostic,
+    PromptSegment, Stability,
 };
 use crate::orchestrator::{
     inject_current_context, inject_volume_context, Orchestrator, SystemPromptPart, TavernPreset,
@@ -146,11 +147,14 @@ fn trace_source_id(source_kind: &str, payload: &ChatCompletionRequest) -> Option
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_prompt_trace(
     payload: &ChatCompletionRequest,
     persona: Option<&Persona>,
+    persona_source: PersonaActivationSource,
     provider_config: &ProviderConfig,
     gen_params: &GenerationParams,
+    param_sources: &ParamSources,
     prompt_parts: &[SystemPromptPart],
     messages: &[ChatMessage],
     effective_root: &std::path::Path,
@@ -392,10 +396,77 @@ fn build_prompt_trace(
                 "configured".to_string()
             },
             model: gen_params.model.clone(),
+            // ── #114 effective config summary ───────────────────────────────
+            // Persona 激活来源与显示名：source 来自 resolve_request_persona；
+            // name 仅暴露 persona.name（显示名），不暴露 variables / api_key。
+            persona_activation_source: Some(persona_source.as_str().to_string()),
+            persona_name: persona.map(|p| p.name.clone()),
+            // 参数来源：由 resolve_param_sources 在调用前一次性算好。
+            provider_source: param_sources.provider_source.map(|s| s.to_string()),
+            model_source: param_sources.model_source.map(|s| s.to_string()),
+            temperature: param_sources.temperature,
+            temperature_source: param_sources.temperature_source.map(|s| s.to_string()),
+            max_tokens: param_sources.max_tokens,
+            max_tokens_source: param_sources.max_tokens_source.map(|s| s.to_string()),
         },
         segments,
         diagnostics,
     )
+}
+
+/// #114 effective config summary：算出本轮生效参数的来源标签。
+///
+/// 与 `prepare_pipeline_with_mode` 的合并优先级严格对齐：
+/// - `provider`：`payload.provider` > `snapshot.provider` → `request` / `snapshot`
+/// - `model`：`payload.model` > `preset.model` > `snapshot.model` → `request` / `preset` / `snapshot`
+/// - `temperature`：`payload.temperature` > `preset.temperature` → `request` / `preset` / `none`
+/// - `max_tokens`：`payload.max_tokens` > `preset.max_tokens` → `request` / `preset` / `none`
+///
+/// `gen_params` 已是合并后的生效值；这里只补 source 标签。让 trace 能回答
+/// "model 来自请求体还是 preset 还是 daemon 默认"，无需暴露具体 endpoint / api_key。
+fn resolve_param_sources(
+    payload: &ChatCompletionRequest,
+    preset_params: Option<&TavernPreset>,
+) -> ParamSources {
+    let preset_temperature = preset_params.and_then(|p| p.temperature);
+    let preset_max_tokens = preset_params.and_then(|p| p.max_tokens);
+    let preset_model = preset_params.and_then(|p| p.model.as_deref());
+
+    let provider_source = if payload.provider.is_some() {
+        Some("request")
+    } else {
+        Some("snapshot")
+    };
+    let model_source = if payload.model.is_some() {
+        Some("request")
+    } else if preset_model.is_some() {
+        Some("preset")
+    } else {
+        Some("snapshot")
+    };
+    let (temperature, temperature_source) = if payload.temperature.is_some() {
+        (payload.temperature, Some("request"))
+    } else if preset_temperature.is_some() {
+        (preset_temperature, Some("preset"))
+    } else {
+        (None, None)
+    };
+    let (max_tokens, max_tokens_source) = if payload.max_tokens.is_some() {
+        (payload.max_tokens, Some("request"))
+    } else if preset_max_tokens.is_some() {
+        (preset_max_tokens, Some("preset"))
+    } else {
+        (None, None)
+    };
+
+    ParamSources {
+        provider_source,
+        model_source,
+        temperature,
+        temperature_source,
+        max_tokens,
+        max_tokens_source,
+    }
 }
 
 /// Phase 2h：尝试读取 `asset_dir/current_revision`。
@@ -469,26 +540,31 @@ fn load_char_card_json(root: &std::path::Path, character_id: &str) -> Option<Str
 /// effective root；`PersonaService` 内部用 `user_dir(root, uid)` 拼
 /// `users/{uid}/personas/` 路径，若传 user-scoped root 会双重嵌套。
 ///
-/// 返回 `None` 表示请求未带 `user_id`（保持单用户向后兼容）；否则按以下顺序
-/// 返回 Persona：
+/// 返回 `(Option<Persona>, PersonaActivationSource)`：`None` 表示请求未带
+/// `user_id`（保持单用户向后兼容，source = `Absent`）；否则按以下顺序返回 Persona：
 ///
-/// 1. **显式 `persona_id`**（请求体指定）：id 不存在时 `find_for_character` /
-///    `get` 已在 `PersonaService` 内返 `NotFound`，与本契约一致。`default`
-///    大小写不敏感（service 内 canonicalize）。
-/// 2. **绑定查找**（仅单角色分支；`scene_id` 缺省且 `character_id` 存在）：
-///    `PersonaService::find_for_character` 先精确匹配 session 绑定，再匹配
-///    该角色下的 generic 绑定。命中后用 `get` 读出 Persona。
-/// 3. **默认 persona**：`get_default` 返回存储的 default；未写盘时返回
-///    `Persona::initial` 内存快照（不触发隐式落盘）。
+/// 1. **显式 `persona_id`**（请求体指定；source = `Explicit`）：id 不存在时
+///    `find_for_character` / `get` 已在 `PersonaService` 内返 `NotFound`，与本契约一致。
+///    `default` 大小写不敏感（service 内 canonicalize）。
+/// 2. **绑定查找**（仅单角色分支；`scene_id` 缺省且 `character_id` 存在；
+///    source = `SessionBinding` 或 `CharacterBinding`）：`PersonaService::find_for_character`
+///    先精确匹配 session 绑定（→ `SessionBinding`），再匹配该角色下的 generic 绑定
+///    （→ `CharacterBinding`）。命中后用 `get` 读出 Persona。
+/// 3. **默认 persona**（source = `Default`）：`get_default` 返回存储的 default；
+///    未写盘时返回 `Persona::initial` 内存快照（不触发隐式落盘）。
 ///
 /// Scene 模式（`scene_id` 存在）只走 precedence 1 与 3：scene 有多角色，
 /// 没有单一绑定目标，`find_for_character` 跳过；多角色 persona 绑定语义延后。
+///
+/// #114 effective config summary：返回的 `PersonaActivationSource` 用于填充
+/// `EffectiveIds.persona_activation_source`，让用户能看到本轮 persona 是
+/// "显式选择" / "自动（绑定）" / "默认" 哪条路径命中。
 fn resolve_request_persona(
     payload: &ChatCompletionRequest,
     data_root: &std::path::Path,
-) -> Result<Option<Persona>, AirpError> {
+) -> Result<(Option<Persona>, PersonaActivationSource), AirpError> {
     let Some(user_id_str) = payload.user_id.as_deref() else {
-        return Ok(None);
+        return Ok((None, PersonaActivationSource::Absent));
     };
     let uid = UserId::new(user_id_str)?;
     let service = PersonaService::new(data_root);
@@ -497,26 +573,45 @@ fn resolve_request_persona(
     if let Some(persona_id) = payload.persona_id.as_deref() {
         data_dir::validate_id_segment(persona_id)?;
         let persona = service.get(&uid, persona_id, "User")?;
-        return Ok(Some(persona));
+        return Ok((Some(persona), PersonaActivationSource::Explicit));
     }
 
-    // precedence 2: find_for_character（仅单角色分支）
+    // precedence 2: resolve_effective_persona（仅单角色分支）
+    // 复用 PersonaService 的结构化解析，确保与 HTTP effective 端点使用同一真相；
+    // source 字段直接告诉调用方命中了 session_binding / character_binding / default。
     if payload.scene_id.is_none() {
         if let Some(ref cid) = payload.character_id {
             // SessionId 是 newtype(uuid::Uuid)；find_for_character 需要
             // Option<&str>。在本地构造 String 再借，避免给 SessionId 强加 Deref。
             let session_id_str = payload.session_id.as_ref().map(|s| s.to_string());
-            if let Some(pid) =
-                service.find_for_character(&uid, cid.as_str(), session_id_str.as_deref())?
-            {
+            let resolution = service.resolve_effective_persona(
+                &uid,
+                cid.as_str(),
+                session_id_str.as_deref(),
+            )?;
+            if let Some(pid) = resolution.effective_persona_id {
                 let persona = service.get(&uid, &pid, "User")?;
-                return Ok(Some(persona));
+                let source = match resolution.source {
+                    crate::domain::EffectivePersonaSource::SessionBinding => {
+                        PersonaActivationSource::SessionBinding
+                    }
+                    crate::domain::EffectivePersonaSource::CharacterBinding => {
+                        PersonaActivationSource::CharacterBinding
+                    }
+                    // resolve_effective_persona 在 session/character 都未命中时
+                    // 返回 source=Default + effective_persona_id=None，不会进到这里。
+                    crate::domain::EffectivePersonaSource::Default => {
+                        PersonaActivationSource::Default
+                    }
+                };
+                return Ok((Some(persona), source));
             }
         }
     }
 
     // precedence 3: default persona
-    Ok(Some(service.get_default(&uid, "User")?))
+    let persona = service.get_default(&uid, "User")?;
+    Ok((Some(persona), PersonaActivationSource::Default))
 }
 
 /// A1b：把解析到的 Persona 与请求体 `user_profile` 合并为有效的 (name, variables)。
@@ -678,7 +773,8 @@ fn prepare_scene_pipeline(
     // A1b: scene 模式只走 precedence 1（显式 persona_id）与 3（default）；
     //      `find_for_character` 跳过，因为 scene 有多角色，没有单一绑定目标。
     //      与 single 分支一致，传 `state.data_root`（全局 root）。
-    let request_persona = resolve_request_persona(payload, &state.data_root)?;
+    let (request_persona, persona_activation_source) =
+        resolve_request_persona(payload, &state.data_root)?;
     let (effective_user_name, effective_user_variables) =
         merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
 
@@ -812,11 +908,15 @@ fn prepare_scene_pipeline(
         });
         list
     };
+    // #114 effective config summary：算出本轮参数来源，传给 trace。
+    let param_sources = resolve_param_sources(payload, preset_params.as_ref());
     let prompt_trace = build_prompt_trace(
         payload,
         request_persona.as_ref(),
+        persona_activation_source,
         provider_config.as_ref(),
         &gen_params,
+        &param_sources,
         &prompt_parts,
         &messages,
         &effective_root,
@@ -888,7 +988,8 @@ fn prepare_pipeline_with_mode(
     // Resolve all Persona inputs before timeline advancement, chat persistence,
     // or any other request side effect. A rejected explicit Persona must leave
     // user state untouched.
-    let request_persona = resolve_request_persona(payload, &state.data_root)?;
+    let (request_persona, persona_activation_source) =
+        resolve_request_persona(payload, &state.data_root)?;
     let (effective_user_name, effective_user_variables) =
         merge_persona_into_user_profile(&payload.user_profile, request_persona.as_ref());
 
@@ -1145,6 +1246,9 @@ fn prepare_pipeline_with_mode(
         max_tokens: payload.max_tokens.or(preset_max_tokens),
     };
 
+    // #114 effective config summary：算出本轮参数来源，传给 trace。
+    let param_sources = resolve_param_sources(payload, preset_params.as_ref());
+
     // 12. Build message list
     // When client omits messages_history, fall back to auto_history (loaded before step 7).
     // auto_history does NOT include the current user message yet, so we append it here.
@@ -1163,8 +1267,10 @@ fn prepare_pipeline_with_mode(
     let prompt_trace = build_prompt_trace(
         payload,
         request_persona.as_ref(),
+        persona_activation_source,
         provider_config.as_ref(),
         &gen_params,
+        &param_sources,
         &prompt_parts,
         &messages,
         &effective_root,
