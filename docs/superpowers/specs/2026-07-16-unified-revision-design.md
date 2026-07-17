@@ -314,7 +314,7 @@ characters/{character_id}/memory/
 | 字段 | 填充来源 | 不可用时 |
 |---|---|---|
 | `character_revision` | `characters/{id}/current_revision` 文件读取 | 推送 `character_revision_unavailable` |
-| `persona_revision` | `personas/{id}/current_revision` 读取；回退 `Persona.revision` legacy 字段（仅当 `> 0`，`0` 视为未保存） | 推送 `persona_revision_unavailable` |
+| `persona_revision` | `personas/{id}/current_revision` 读取；**缺失**（Ok(None)）时回退 `Persona.revision` legacy 字段（仅当 `> 0`，`0` 视为未保存）；**读取/解析失败**（Err）不回退，直接推送诊断 | 推送 `persona_revision_unavailable` |
 | `preset_revision` | `presets/{id}/current_revision` 文件读取 | 推送 `preset_revision_unavailable` |
 | `lorebook_revision` | `characters/{id}/world/current_revision` 读取（仅 character 上下文；scene 模式留 `None` 不推送诊断） | 推送 `lorebook_revision_unavailable` |
 | `state_revision` | `characters/{id}/state/current_revision` 读取；= `history.jsonl` 末行 revision | 推送 `state_revision_unavailable` |
@@ -429,7 +429,7 @@ characters/{character_id}/memory/
 1. A 不符合"可追溯"目标；Persona 的 base lock / drift / rollback 合同由 #114 推进，但 revision 存储格式升级属本设计范围。
 2. C 违反 SESSION-DATA-DESIGN.md §4 的 `content_revision: u64` 合同；Persona 的 u64 形式符合合同，无需改字符串。
 3. B 实现路径：`PersonaService::save` 在 `replace_file(personas/{id}.json)` 之后，额外执行 atomic commit 到 `personas/{id}/revisions/{revision}/`；`personas/{id}.json` 保留作为快速读取的当前值（与 `personas/{id}/revisions/{current_revision}/persona.json` 内容一致）。
-4. B 的 `EffectiveIds.persona_revision` 填充规则：优先读 `personas/{id}/current_revision`，回退读 `personas/{id}.json` 的 `revision` 字段（兼容旧数据）；两者都不可用时推送 `persona_revision_unavailable` 诊断。
+4. B 的 `EffectiveIds.persona_revision` 填充规则：优先读 `personas/{id}/current_revision`；指针**缺失**（Ok(None)，旧数据未升级）时回退读 `personas/{id}.json` 的 `revision` 字段（仅当 `> 0`，`0` 视为未保存）；指针**读取/解析失败**（Err，文件损坏等）不回退，直接推送 `persona_revision_unavailable` 诊断。
 5. B 不实现 base lock / drift / rollback / 头像 / 导入导出；这些属 #114 范围。
 
 ### 6.7 决策 D7：乐观锁统一为 `RevisionConflict` 响应
