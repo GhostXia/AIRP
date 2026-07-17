@@ -2,11 +2,12 @@
 
 > 日期：2026-07-16
 >
-> 状态：**设计 spec，部分实现**。本文为 #115 Phase 2 的独立设计。
+> 状态：**已实现**。本文为 #115 Phase 2 的独立设计。
 >
 > - **Phase 2a 已实现**（PR #201）：`engine/src/revision/` 底层模块（tree_hash + manifest + atomic）+ Phase 2h 部分（4 个 `*_revision_unavailable` 诊断）。
-> - **Phase 2b-2g 未实现**：各 asset service（Preset / Character / Worldbook / State / Memory / Persona）尚未接入 revision 模块。
-> - **Phase 2h 部分实现**：诊断已补全，但 `EffectiveIds` 的 5 个 `*_revision` 字段仍留空（待 Phase 2b-2g 接入后填充）。
+> - **Phase 2b 已实现**（PR #202）：Preset 接入统一 revision 合同（保留 `versions/{generation}/` + `current` 旧指针）。
+> - **Phase 2c-2g 已实现**（PR #203）：Character / Worldbook / State / Memory / Persona 接入统一 revision 合同。
+> - **Phase 2h 已实现**（本 PR）：`build_prompt_trace` 全部 6 个 `*_revision` 字段按 §5.3 填充实际 u64 或推送对应 `*_revision_unavailable` 诊断；WebUI 装配预览面板展示 6 个 revision（含 unavailable 标识）；`production-browser-smoke.mjs` 覆盖 6 个 revision 字段渲染断言。
 >
 > 任何能力交付以源码、测试和 `CURRENT-BASELINE.md` 为准。
 >
