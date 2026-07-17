@@ -312,7 +312,14 @@ pub(crate) fn read_current_revision(asset_dir: &Path) -> Result<Option<u64>, Air
 pub(crate) fn next_content_revision(asset_dir: &Path) -> Result<u64, AirpError> {
     let from_pointer = read_current_revision(asset_dir)?.unwrap_or(0);
     let from_disk = max_existing_revision_dir(asset_dir)?.unwrap_or(0);
-    Ok(from_pointer.max(from_disk) + 1)
+    // CodeRabbit: 用 checked_add 防止 u64::MAX + 1 溢出（理论上可达，例如磁盘上
+    // 被恶意放置 revisions/18446744073709551615/ 目录，或 current_revision 指针
+    // 被人工改成 u64::MAX）。返回 BadRequest 而非 panic。
+    from_pointer.max(from_disk).checked_add(1).ok_or_else(|| {
+        AirpError::BadRequest(
+            "content_revision 已达 u64::MAX，无法继续递增（请清理 revisions/ 历史）".to_string(),
+        )
+    })
 }
 
 /// 扫描 `revisions/` 目录，返回数字命名子目录的最大编号。
@@ -327,12 +334,18 @@ fn max_existing_revision_dir(asset_dir: &Path) -> Result<Option<u64>, AirpError>
     let mut max: Option<u64> = None;
     for entry in fs::read_dir(&revisions_dir)? {
         let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
+        // Gemini: 用 entry.file_type() 避免 path.is_dir() 触发的额外 metadata syscall；
+        // 用 entry.file_name() 避免 entry.path() 分配 PathBuf。
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if !ft.is_dir() {
             continue;
         }
         // 跳过 staging 目录（`.staging-{revision_id}`）和其它 dot-prefixed 入口。
-        let name = match path.file_name().and_then(|n| n.to_str()) {
+        let file_name = entry.file_name();
+        let name = match file_name.to_str() {
             Some(n) => n,
             None => continue,
         };
@@ -597,6 +610,34 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("current_revision"), "0").unwrap();
         assert!(next_content_revision(dir.path()).is_err());
+    }
+
+    #[test]
+    fn next_content_revision_returns_err_when_pointer_at_u64_max() {
+        // CodeRabbit 边界测试：current_revision 指针 = u64::MAX → +1 溢出，
+        // 应返回 BadRequest 而非 panic。
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("current_revision"), u64::MAX.to_string()).unwrap();
+        let result = next_content_revision(dir.path());
+        assert!(
+            result.is_err(),
+            "u64::MAX + 1 应返回错误而非溢出，实际: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn next_content_revision_returns_err_when_disk_revision_at_u64_max() {
+        // CodeRabbit 边界测试：磁盘上有 revisions/u64::MAX/ 目录 → +1 溢出，
+        // 应返回 BadRequest 而非 panic。模拟恶意/损坏的 revision 目录命名。
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("revisions").join(u64::MAX.to_string())).unwrap();
+        let result = next_content_revision(dir.path());
+        assert!(
+            result.is_err(),
+            "磁盘 revision = u64::MAX 时 +1 应返回错误而非溢出，实际: {:?}",
+            result
+        );
     }
 
     #[test]
