@@ -64,12 +64,12 @@ Browser
 - 删除角色、Persona、Preset 和会话采用确认与可恢复策略，或明确记录不可逆边界。
 - `/health` 区分 live/readiness；日志结构化、脱敏并有上限，能定位启动、provider、SSE、持久化和迁移错误。
 - 提供管理员可执行的备份、恢复、诊断和版本信息流程，不要求阅读源码。
-- **可复核恢复判据**（#207 目标 3，Phase P2 退出条件必须全部满足，不再使用“更稳”口号）：
-  1. 升级前后根哈希稳定：升级中断后重启，`AIRP-TREE-SHA256-v1` 比对前后根哈希一致（数据零丢失）；
-  2. 损坏行不阻塞：损坏单条 JSONL 行不阻塞会话加载（已有 best-effort 修复，需补负向测试矩阵）；
-  3. 旧版可冷启动：旧版本数据可冷启动加载，无静默覆盖修复（对齐上文“不得靠启动时静默覆盖损坏文件修复”）；
-  4. 备份恢复 ID 稳定：备份 → 恢复 → 继续对话，durable message_id 全部 stable；
-  5. soft-delete 窗口：删除角色 / Persona / Preset / 会话有可恢复窗口（对齐上文 soft-delete / 回收站，当前仍缺）。
+- **可复核恢复判据**（#207 目标 3，Phase P2 退出条件必须全部满足，不再使用“更稳”口号）。每条判据须有可执行验收定义，避免不同实现都能宣称满足：
+  1. **升级前后根哈希稳定**：升级前对 session 数据根（`characters/` + `sessions/` + `third_party/` + 全局 settings/personas/presets，不含 `target/`、日志、临时文件）计算 `AIRP-TREE-SHA256-v1`（规范化规则：JSON 键排序、CRLF→LF、去除 trailing whitespace、按相对路径排序的文件树叶子哈希聚合）；升级中断后重启，重新计算并比对，根哈希一致 = 数据零丢失。比对时点：升级前快照 vs 升级完成且 engine 重启后。
+  2. **损坏行不阻塞**：单条 JSONL 行损坏（截断 / 乱码 / 重复 durable ID / 缺字段）时，session 仍可加载，损坏行跳过并记入 `chat_log_meta.json` 的 `skipped_lines`，剩余 history 完整可读。负向测试矩阵须覆盖：行截断、字段缺失、ID 冲突、编码损坏四类。
+  3. **旧版可冷启动**：列出必须支持冷启动的旧版本（当前为 pre-命名-session legacy 角色级数据 + 已命名 session UUID 数据）；冷启动加载时**不得**静默修改 legacy 文件（不重写 `chat_log_meta.json`、不迁移目录、不重生成 ID），只读加载并在 metadata 标注 `legacy=true`；任何修复须显式 migration 命令触发并留 audit log。
+  4. **备份恢复 ID 稳定**：备份 → 恢复 → 继续对话后，session 内所有 durable message_id 与备份逐字节匹配（无重新生成、无重映射、无 gap）；稳定性校验 = 恢复后 history 响应的 ID 集合 ⊆ 备份 ID 集合，且新增消息延续原 ID 序列无冲突。
+  5. **soft-delete 窗口**：删除角色 / Persona / Preset / 会话后进入可恢复窗口，默认保留 7 天（可配置）；可恢复对象 = 被删资产本身 + 其绑定关系元数据；恢复入口 = WebUI 回收站 UI 或管理员命令；恢复后状态 = 资产回到 active、`deleted_at` 清空、绑定关系复原；窗口过期后物理删除并记 audit log。
 
 ### 2.4 发布质量
 
@@ -78,13 +78,14 @@ Browser
 - 候选版本在生产拓扑下完成全新安装、旧数据升级、备份恢复和长会话 soak；证据写入版本化文档。
 - CI 对正式部署产物执行构建、secret scan、依赖/许可证清单和 smoke；只有全部 release gates 通过才打正式 tag。
 - **干净提示词 + Agent loop 价值验证**（#207 目标 4，分两层）：
-  - **L0 自动化发布门禁**（CI 强制，每次 PR 验证，已存在）：
-    1. `subagent_context_has_no_orchestrator_noise` 不变式自动门禁通过——Agent 编排脚手架不进入角色 prompt（详见 [PLAN.md §2.1](PLAN.md)）；
-    2. 本轮 `PromptAssemblyTrace` 可见来源（card / lorebook / state / preset / scene / memory / history / user）——作为 trace 完整性自动回归。
-  - **L1 差异化价值证明**（场景证据库，发布候选人工复核，**不强制嵌入首轮对话流程**）：
-    1. 建立场景证据集：至少 3 个真实 RP 场景，证明 Agent tool 调用（如 `update_state` / `get_preset` / `update_preset` dry-run / worldbook 编辑）为用户创造了价值（如修改 worldbook 而不污染对话、自动校准 preset 而不手改 JSON）；
-    2. 不强制要求每位用户首轮对话必须触发 Agent tool——避免 onboarding 扭曲；价值证明通过场景证据库呈现，而非强制用户走 Agent 路径；
-    3. 若场景证据无法证明干净角色平面不变式**有用户价值**，须在发布前补齐证据或显式记录风险，否则未来会被业务压力冲掉。
+  - **L0 自动化发布门禁**（CI 强制，每次 PR 须产出证据；门禁状态以 CI artifact 为准，不以文档断言为准）：
+    1. `subagent_context_has_no_orchestrator_noise` 不变式门禁——Agent 编排脚手架不进入角色 prompt（详见 [PLAN.md §2.1](PLAN.md)）；通过条件 = CI `Rust workspace` job 中该项测试 green；
+    2. 本轮 `PromptAssemblyTrace` 可见来源（card / persona / lorebook / state / preset / scene / memory / history / user）——trace 完整性自动回归；通过条件 = CI 中 `prompt_assembly_trace` 相关测试覆盖所有上述 source_kind 且断言非空。
+  - **L1 差异化价值证明**（场景证据库，发布候选人工复核，**不强制嵌入首轮对话流程**）。须定义可复现的 pass/fail 标准，避免主观判定：
+    1. **证据模板**（每条场景记录须包含）：场景描述 / 触发的 Agent tool 与调用参数 / 用户价值观察（可量化：减少操作步数、启用 otherwise 不可能的能力、或修复否则需手改 JSON 的问题）/ 基线对比（无 Agent loop 时用户须手动完成的等价操作）/ 复核人 / 复核日期 / 可重放脚本或 session 快照路径；
+    2. **场景选择规则**：≥3 个真实 RP 场景，且覆盖 ≥2 个不同 Agent tool 类别（如 state 更新类 / preset 调校类 / worldbook 编辑类），避免单工具巧合；
+    3. **最低可接受结果**：每条场景须满足“减少操作步数 ≥1”或“启用 otherwise 不可能的能力”之一；基线对比须真实可复现，不得为假设；
+    4. **pass/fail 判定**：RC 通过 = 所有场景证据齐全 + 每条满足最低结果 + 复核人签字记录入库；RC 失败 = 证据缺失 / 结果低于阈值 / 干净角色平面不变式缺乏用户价值证明；不强制要求每位用户首轮对话触发 Agent tool——避免 onboarding 扭曲。
 
 ## 3. 当前事实与差距
 
@@ -149,7 +150,7 @@ Browser
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
-退出条件：§2 全部有自动化或可复核证据，不以“本机能跑”代替正式发布证明。本阶段额外要求 §2.4“干净提示词 + Agent loop 价值验证”两层全部满足：L0 自动化门禁（`subagent_context_has_no_orchestrator_noise` 不变式 + `PromptAssemblyTrace` 完整性）持续通过；L1 场景证据集（≥3 个真实 RP 场景证明 Agent tool 价值，不强制嵌入首轮对话）人工复核通过。
+退出条件：§2 全部有自动化或可复核证据，不以“本机能跑”代替正式发布证明。本阶段额外要求 §2.4“干净提示词 + Agent loop 价值验证”两层全部满足：L0 自动化门禁（`subagent_context_has_no_orchestrator_noise` 不变式 + `PromptAssemblyTrace` source_kind 完整性，含 persona）CI artifact green；L1 场景证据集（≥3 真实 RP 场景、≥2 工具类别、按证据模板记录、复核人签字）按 §2.4 L1 pass/fail 判定通过。
 
 ## 5. 非首发阻塞项
 
