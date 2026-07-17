@@ -168,30 +168,28 @@ impl StreamingFsm {
                         self.state = FsmState::Buffering { buffer: temp };
                     }
                     String::new()
-                } else {
-                    if let Some(suffix_idx) = self.find_longest_special_start_prefix_suffix(&temp) {
-                        let to_output = temp[..suffix_idx].to_string();
-                        let new_buffer = temp[suffix_idx..].to_string();
+                } else if let Some(suffix_idx) = self.find_longest_special_start_prefix_suffix(&temp) {
+                    let to_output = temp[..suffix_idx].to_string();
+                    let new_buffer = temp[suffix_idx..].to_string();
 
-                        if let Some((filter_idx, is_var)) = self.check_full_match(&new_buffer) {
-                            if is_var {
-                                self.state = FsmState::VariableBuffering {
-                                    var_name_buffer: String::new(),
-                                };
-                            } else {
-                                self.state = FsmState::Filtering {
-                                    filter_index: filter_idx,
-                                    end_match_buffer: String::new(),
-                                };
-                            }
+                    if let Some((filter_idx, is_var)) = self.check_full_match(&new_buffer) {
+                        if is_var {
+                            self.state = FsmState::VariableBuffering {
+                                var_name_buffer: String::new(),
+                            };
                         } else {
-                            self.state = FsmState::Buffering { buffer: new_buffer };
+                            self.state = FsmState::Filtering {
+                                filter_index: filter_idx,
+                                end_match_buffer: String::new(),
+                            };
                         }
-                        to_output
                     } else {
-                        self.state = FsmState::Normal;
-                        temp
+                        self.state = FsmState::Buffering { buffer: new_buffer };
                     }
+                    to_output
+                } else {
+                    self.state = FsmState::Normal;
+                    temp
                 }
             }
             FsmState::VariableBuffering { var_name_buffer } => {
