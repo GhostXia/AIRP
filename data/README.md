@@ -1,6 +1,6 @@
 # `data/` 持久化目录规范
 
-> 当前/目标边界最后在 2026-07-16 的 `main@13d07d7` 复核。
+> 当前/目标边界最后在 2026-07-17 的 `main@15cb6c0` 复核。
 
 `data/` 是引擎的数据根，不是一个可以随意堆放资源的共享目录。角色相关资产按稳定角色 ID 聚合；每个命名 session 是一个独立开局/存档槽位。完整的目标合同见 [`docs/SESSION-DATA-DESIGN.md`](../docs/SESSION-DATA-DESIGN.md)。
 
@@ -67,7 +67,7 @@ data/
     └── context-bundles/{character_id}/
 ```
 
-这是目标归属模型，目录按需创建。当前代码已经隔离命名 session 的 history 与 memory，但 `meta.json`、session state、角色卡快照、第三方素材库、世界书物化和统一 revision 尚待分阶段实现，不能把本树全部视为已交付能力。
+这是目标归属模型，目录按需创建。当前代码已经隔离命名 session 的 history 与 memory，并落地 Phase 2 (#115) 6 类 asset（character/persona/preset/lorebook/state/memory）的统一 `content_revision` 合同（asset 级 `revisions/{N}/` 快照 + `current_revision` 指针，PR #201/#202/#203/#206/#215）；但 `meta.json`、session state、角色卡/世界书工作副本物化、第三方素材库、世界书 manifest 与覆盖二者的 session 级统一 revision 仍待分阶段实现，不能把本树全部视为已交付能力。
 
 ### 角色目录名
 

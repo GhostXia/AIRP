@@ -2,7 +2,7 @@
 
 > 状态：当前近期执行主入口
 >
-> 基线日期：2026-07-16，`main@13d07d7` / PR #194
+> 基线日期：2026-07-17，`main@15cb6c0` / PR #215
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
@@ -51,7 +51,7 @@ Browser
   - **软时间预算**：p50 ≤30 分钟（软诊断指标，不是硬 SLA；超时不自动判失败，但触发 UX 排查，避免“15 分钟首聊”式的硬 SLA 抹除）；
   - **失败分类法**：按阶段（部署健康检查 / provider 配置 / 模型验证 / 角色导入 / Persona/Preset 选择 / 首轮对话）× 按类型（UX 混淆 / 错误信息不可行动 / 资产格式不兼容 / provider 特定 / 网络 / 崩溃）记录每例失败，用于定位阻塞而非只看通过率。
 - **ST 资产用户迁移成功率**（市场验证辅助指标）：在曾使用 SillyTavern 的试用用户子集中，完成首聊且回流进行第二次会话的比例（7 日内回流作为留存信号）。此指标验证 AIRP 能否承接 ST 格式资产重度用户的日用迁移，与首聊完成率互补。
-- **阻塞项**：当前 WebUI 尚无首次启动向导（onboarding wizard），现有 `webui/app.js` 是 M1 开发期 backend validation harness，不是面向 RP 重度用户的引导流程，本判据在向导落地前无法验证。向导实现跟踪于 [#209](https://github.com/GhostXia/AIRP/issues/209)。
+- **阻塞项**：首次启动向导（onboarding wizard）已由 PR #212（[#209](https://github.com/GhostXia/AIRP/issues/209)）落地 Phase 1（6-stage 状态机 + Port 合同 + 动态 import 边界 + fail-open 降级 F1–F4，F5–F6 为向导内重试），现有 `webui/app.js` 仍是 M1 backend validation harness；但首聊完成率市场验证（≥5 名试用用户 / ≥80% 完成率 / p50 ≤30min 软预算 / 失败分类法）仍未执行，本判据在市场验证前无法宣称通过。Shadow DOM 隔离与 Port 版本协商跟踪于 [#210](https://github.com/GhostXia/AIRP/issues/210) / [#211](https://github.com/GhostXia/AIRP/issues/211)。
 - Persona/Preset 具备可理解的管理、选择和有效配置摘要；角色/会话切换不会静默改变或丢失绑定。
 - 角色卡、世界书、Preset、Persona、会话和聊天历史的关键 CRUD 不依赖开发工作台或手写 JSON。
 - 连续流式聊天、停止、重试、regen、rollback、历史分页和刷新恢复可稳定日用；branch/swipe/edit 若首发不交付，UI 必须诚实隐藏或标明不可用。
@@ -98,7 +98,7 @@ Browser
 - 多 Persona 存储、plural HTTP CRUD、chat pipeline 激活、effective endpoint、WebUI 自动/显式选择和角色/session 绑定/解绑已交付；Persona 高级生命周期、跨资产完整 revision/provenance 的统一有效配置合同和完整 Preset 生命周期仍未闭合。
 - Worldbook v4 `selective`/`secondary_keys` runtime、v3 presence-aware migration/诊断、普通用户主面板管理、advisory 只读可见性和 PNG/JSON 到最终 prompt 的回归已交付。
 - Preset 规范化导入报告、原始输入 sidecar、Agent `get_preset`/`update_preset`（含 dry-run 与确认门控）、不可变版本目录和原子 current 指针已交付；HTTP/UI 受控 dry-run、完整 revision/provenance/collision 合同仍未闭合。
-- `PromptAssemblyTrace` 已接入真实 chat pipeline，并交付无写副作用的脱敏 HTTP preview 与 WebUI 本轮配置/有序装配摘要；Persona revision 已可见，其余资产统一 revision/provenance 仍待补齐。
+- `PromptAssemblyTrace` 已接入真实 chat pipeline，并交付无写副作用的脱敏 HTTP preview 与 WebUI 本轮配置/有序装配摘要；Phase 2 (#115) 6 类 asset revision（character/persona/preset/lorebook/state/memory）已全部接入统一 `content_revision` 合同（PR #201/#202/#203/#206/#215），新数据 `EffectiveIds` 6 个 `*_revision` 字段填充实际 u64，旧数据推送 `*_revision_unavailable` 诊断并在 WebUI chips 显示 `unavailable`，禁止用 mtime 伪造 revision；但 base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计仍未交付。
 - 命名 session 已统一目录 UUID、history 响应与 metadata 身份；自包含 state/角色卡/worldbook 工作副本、统一 revision、恢复导出仍是分阶段合同。
 
 ### 尚缺的上线能力
@@ -106,7 +106,7 @@ Browser
 - P0 首方部署 artifact 与真实 topology smoke 已落地；正式升级/回滚流程、SBOM/notices、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
-- Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#114/#115 是 RP 首发主链，#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
+- Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#115 Phase 2 6 类 revision 合同与 trace 收口已落地，#114 Persona/Preset 高级生命周期（base lock/drift/rollback/dry-run/provenance 审计）仍是 RP 首发主链下一步；#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
 - 缺备份/恢复、数据迁移发布纪律、soft-delete/回收站、完整 production observability contract 和运行手册；当前 Caddy access log/filter 只是 P0 局部实现，仍需在 P2 决定是否保留及其用途、字段、输出和保留策略。
 - engine-truth smoke 与 production system-Chrome smoke 已并行进入 CI；浏览器兼容矩阵、升级恢复与完整发布安全门禁仍不足。
 
@@ -125,13 +125,13 @@ Browser
 ### Phase P1：RP 正式使用面
 
 1. #137 的 Vite/Vitest 工具链安全升级已由 PR #191 完成，当前 `npm audit` 为 0 项；
-2. 在 #115 已交付的真实 pipeline instrumentation、有界脱敏 HTTP preview 和 WebUI 用户摘要之上，继续补齐角色卡/Preset/Worldbook/state/memory 的统一 revision/provenance；
-3. 在已交付 Persona effective/绑定/聊天切换闭环和上述 trace 可观察性之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期和统一有效配置摘要；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
+2. #115 Phase 2 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（角色卡/Persona/Preset/Worldbook/State/Memory，PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地；
+3. 在已交付 Persona effective/绑定/聊天切换闭环和上述 trace 可观察性之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期、HTTP/UI 受控 dry-run、revision/collision/overwrite/provenance 审计和统一有效配置摘要；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
 4. 在已交付 Worldbook v4、shared normalizer、普通用户主面板和端到端导入回归之上，只继续实现首发确需的受控大对象上传与资产生命周期，不把 advisory 字段误宣称为 runtime 兼容；
 5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
 6. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
 
-退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。本阶段只验证“effective config 可见 + 日用 RP 闭环”，不强制要求角色卡 / Preset / Worldbook / state / memory 的统一 `content_revision` 号可见——后者属于 Phase P2 数据可靠性阶段的验证项（详见 [CURRENT-BASELINE.md §3](CURRENT-BASELINE.md)：当前只有 Persona 数值 revision，其余资产尚未全部映射到统一不可变 revision）。
+退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。本阶段验证“effective config 可见 + 日用 RP 闭环”；Phase 2 (#115) 6 类 `content_revision` 字段已填充并可见，但 base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计属于 Phase P2 数据可靠性阶段的验证项（详见 [CURRENT-BASELINE.md §3](CURRENT-BASELINE.md)）。
 
 ### Phase P2：数据可靠性与恢复
 
@@ -140,7 +140,7 @@ Browser
 3. 并发写、磁盘满、损坏 JSON、升级中断和旧版本回退测试；
 4. readiness、结构化脱敏日志、诊断包和运维 runbook。
 
-退出条件：§2.3“可复核恢复判据”5 条全部满足（升级前后根哈希稳定 / 损坏行不阻塞 / 旧版可冷启动 / 备份恢复 ID 稳定 / soft-delete 窗口），并以自动化或可复核证据呈现，不再使用“更稳”作为发布口号。本阶段同时交付角色卡 / Preset / Worldbook / state / memory 的统一 `content_revision` 可见性、`AIRP-TREE-SHA256-v1` 完整性校验与 provenance 链路（source / converted / preserved / unsupported / invalid / needs-review）用户可读，退出条件对齐 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 自包含 session 合同。
+退出条件：§2.3“可复核恢复判据”5 条全部满足（升级前后根哈希稳定 / 损坏行不阻塞 / 旧版可冷启动 / 备份恢复 ID 稳定 / soft-delete 窗口），并以自动化或可复核证据呈现，不再使用“更稳”作为发布口号。Phase 2 (#115) 6 类 `content_revision` 可见性已落地，但 `AIRP-TREE-SHA256-v1` 完整性校验与完整 provenance 链路（source / converted / preserved / unsupported / invalid / needs-review）用户可读仍是本阶段验证项，退出条件对齐 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 自包含 session 合同。
 
 ### Phase P3：发布候选与上线
 
@@ -165,5 +165,5 @@ Browser
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
 2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
-3. 下一项在 #115 可观察闭环上补齐统一 revision/provenance，再按 #114 的**剩余子项**完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
+3. #115 Phase 2 6 类 revision 合同与 trace 收口已落地（PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地；下一项按 #114 的**剩余子项**（Persona/Preset 高级生命周期、base lock/drift/rollback、受控 dry-run、完整 provenance 审计、统一有效配置摘要）完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
 4. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。
