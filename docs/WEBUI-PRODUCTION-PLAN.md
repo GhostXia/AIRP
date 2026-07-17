@@ -51,7 +51,7 @@ Browser
   - **软时间预算**：p50 ≤30 分钟（软诊断指标，不是硬 SLA；超时不自动判失败，但触发 UX 排查，避免“15 分钟首聊”式的硬 SLA 抹除）；
   - **失败分类法**：按阶段（部署健康检查 / provider 配置 / 模型验证 / 角色导入 / Persona/Preset 选择 / 首轮对话）× 按类型（UX 混淆 / 错误信息不可行动 / 资产格式不兼容 / provider 特定 / 网络 / 崩溃）记录每例失败，用于定位阻塞而非只看通过率。
 - **ST 资产用户迁移成功率**（市场验证辅助指标）：在曾使用 SillyTavern 的试用用户子集中，完成首聊且回流进行第二次会话的比例（7 日内回流作为留存信号）。此指标验证 AIRP 能否承接 ST 格式资产重度用户的日用迁移，与首聊完成率互补。
-- **阻塞项**：首次启动向导（onboarding wizard）已由 PR #212（[#209](https://github.com/GhostXia/AIRP/issues/209)）落地 Phase 1（6-stage 状态机 + Port 合同 + 动态 import 边界 + fail-open 降级 F1–F6），现有 `webui/app.js` 仍是 M1 backend validation harness；但首聊完成率市场验证（≥5 名试用用户 / ≥80% 完成率 / p50 ≤30min 软预算 / 失败分类法）仍未执行，本判据在市场验证前无法宣称通过。Shadow DOM 隔离与 Port 版本协商跟踪于 [#210](https://github.com/GhostXia/AIRP/issues/210) / [#211](https://github.com/GhostXia/AIRP/issues/211)。
+- **阻塞项**：首次启动向导（onboarding wizard）已由 PR #212（[#209](https://github.com/GhostXia/AIRP/issues/209)）落地 Phase 1（6-stage 状态机 + Port 合同 + 动态 import 边界 + fail-open 降级 F1–F4，F5–F6 为向导内重试），现有 `webui/app.js` 仍是 M1 backend validation harness；但首聊完成率市场验证（≥5 名试用用户 / ≥80% 完成率 / p50 ≤30min 软预算 / 失败分类法）仍未执行，本判据在市场验证前无法宣称通过。Shadow DOM 隔离与 Port 版本协商跟踪于 [#210](https://github.com/GhostXia/AIRP/issues/210) / [#211](https://github.com/GhostXia/AIRP/issues/211)。
 - Persona/Preset 具备可理解的管理、选择和有效配置摘要；角色/会话切换不会静默改变或丢失绑定。
 - 角色卡、世界书、Preset、Persona、会话和聊天历史的关键 CRUD 不依赖开发工作台或手写 JSON。
 - 连续流式聊天、停止、重试、regen、rollback、历史分页和刷新恢复可稳定日用；branch/swipe/edit 若首发不交付，UI 必须诚实隐藏或标明不可用。

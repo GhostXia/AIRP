@@ -62,7 +62,7 @@ node webui/serve.js
 - effective Persona 来源/双 scope owner 展示、角色/session 绑定与解绑、聊天请求按自动/显式省略或发送 `persona_id`；
 - 已有无写副作用的本轮有效 Persona/Preset/Provider/Model 与有序装配摘要；Phase 2 (#115) 6 类 asset（character/persona/preset/lorebook/state/memory）统一 `content_revision` 字段已填充并可见，对应 chip 有 `unavailable` 标识（旧数据或读取失败时），未激活 asset 显示「未启用」；base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计仍待 P2 完成；
 - 带确认/可恢复语义的生产级删除、完整 Preset 生命周期和 Persona drift/history 等高级生命周期仍待 P1 完成；
-- 首次启动 onboarding wizard Phase 1（PR #212 / #209）已交付：6-stage 状态机（部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话），Port 合同 + 动态 import 边界 + fail-open 降级（F1–F6），desync 可重触发；Shadow DOM 隔离与 Port 版本协商跟踪于 #210 / #211；
+- 首次启动 onboarding wizard Phase 1（PR #212 / #209）已交付：6-stage 状态机（部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话），Port 合同 + 动态 import 边界 + fail-open 降级（F1–F4，F5–F6 为向导内重试），desync 可重触发；Shadow DOM 隔离与 Port 版本协商跟踪于 #210 / #211；
 - state live/history、character-scoped worldbook 主面板与 decompose 工作台；
 - worldbook 支持 `constant`、`selective`/`secondary_keys` 编辑、advisory 只读展示、未保存修改确认和异步切换防串角色。
 
