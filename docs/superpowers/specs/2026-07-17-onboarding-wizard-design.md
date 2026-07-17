@@ -674,7 +674,13 @@ function makeMockPort(overrides = {}) {
 | `#onboarding-root` 含 `role="dialog"` + `aria-modal="true"` | §4.2 a11y | L1 DOM 静态检查 |
 | 向导 mount 时保存焦点、cleanup 时恢复 | §4.2 a11y | L2 cleanup 测试 |
 
-**网关日志过滤**（gemini id=3602733464）：生产模式下网关（Caddy / nginx）必须配置 access log 过滤规则，剥离请求 body 与 `Authorization` header 后才落盘。Caddy 示例：`log { output file /var/log/caddy/access.log { roll_size 100mb } format json }` + 自定义 `exclude` 字段；nginx 示例：`log_format api '$remote_addr - $remote_user [$time_local] "$request_method $uri" $status $body_bytes_sent';`（不带 `$request_body`）。Engine 自身日志（tracing）已通过 `tracing::warn!`/`tracing::info!` 输出不含 api_key 明文的结构化字段，无需额外过滤。
+**网关日志过滤**（gemini id=3602733464 + id=3602733482）：生产模式下网关（Caddy / nginx）必须配置 access log 过滤规则，剥离请求 body 与 `Authorization` header 后才落盘。Caddy 示例：`log { output file /var/log/caddy/access.log { roll_size 100mb } format json }` + 自定义 `exclude` 字段；nginx 示例：`log_format api '$remote_addr - $remote_user [$time_local] "$request_method $uri" $status $body_bytes_sent';`（不带 `$request_body`）。Engine 自身日志（tracing）已通过 `tracing::warn!`/`tracing::info!` 输出不含 api_key 明文的结构化字段，无需额外过滤。
+
+**凭证头与 query 参数过滤**（gemini id=3602733482）：除 body 过滤外，网关必须：
+- 显式从 access log 中删除 `Authorization`、`Cookie`、`Set-Cookie` 头，不得以任何形式记录
+- 对 query 参数进行正则脱敏，已知敏感参数（`api_key`、`access_token`、`key`、`token`、`secret`）替换为 `***REDACTED***`
+- 严禁启用 `log_credentials` 或等价的凭证记录选项
+- 验证方式：L4 production topology smoke 检查 access log 文件不含 `sk-` 前缀明文与 `Bearer ` 字面量
 
 ---
 

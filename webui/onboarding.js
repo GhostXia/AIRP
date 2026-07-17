@@ -126,6 +126,8 @@ export function mountOnboarding(container, hostPort) {
 
   // ── 阶段渲染分发 ──────────────────────────────────────────────────────────
   function renderStage() {
+    // 释放上一阶段的 listener 引用，避免跨阶段导航时闭包泄漏（CodeRabbit id=3602857760）
+    removeListeners();
     clearContainer();
     const wrap = el('div', 'onb-wizard');
     wrap.appendChild(renderHeader());
@@ -163,7 +165,11 @@ export function mountOnboarding(container, hostPort) {
     const skip = el('button', 'btn-tertiary onb-skip', '跳过向导');
     on(skip, 'click', safeSync(() => {
       // 任意阶段可跳过（spec §4.4）；Stage 6 跳过走 onComplete(firstChatCompleted:false)
-      if (stage === 6) { finish(false); }
+      // Stage 6 跳过时必须先中止流式，防止 SSE 完成后再次触发 finish(true)（CodeRabbit id=3602857770）
+      if (stage === 6) {
+        if (sseAbort) { try { sseAbort.abort(); } catch {} sseAbort = null; }
+        finish(false);
+      }
       else { try { hostPort.onSkip(); } catch (e) { console.error('[onboarding] onSkip threw:', e); } }
     }, 'nav-skip'));
     nav.appendChild(skip);
@@ -452,7 +458,12 @@ export function mountOnboarding(container, hostPort) {
 
     const btn = el('button', 'btn-primary', '导入');
     const skipBtn = el('button', 'btn-secondary', '跳过（选择已有角色）');
-    on(btn, 'click', safeSync(() => safeAsync(() => importCharacterOrPreset(fileInput.files[0], box), 'stage4-import'), 'stage4-import-entry'));
+    // 单飞守卫：导入是非幂等操作，双击会创建重复角色/预设。导入期间禁用按钮（CodeRabbit id=3602857791）
+    on(btn, 'click', safeSync(() => {
+      btn.disabled = true;
+      safeAsync(() => importCharacterOrPreset(fileInput.files[0], box)
+        .finally(() => { btn.disabled = false; }), 'stage4-import');
+    }, 'stage4-import-entry'));
     on(skipBtn, 'click', safeSync(() => { stage = 5; render(); }, 'stage4-skip'));
     box.appendChild(btn);
     box.appendChild(skipBtn);
@@ -623,6 +634,11 @@ export function mountOnboarding(container, hostPort) {
           opt.value = p.id;
           ppSelect.appendChild(opt);
         }
+      }
+      // 预选 Stage 4 导入的 preset，避免 Next 覆盖为 null（CodeRabbit id=3602857795）
+      if (state.presetId) {
+        const matched = Array.from(ppSelect.options).some(o => o.value === state.presetId);
+        if (matched) ppSelect.value = state.presetId;
       }
       presetWrap.appendChild(ppSelect);
 
@@ -845,7 +861,12 @@ export function mountOnboarding(container, hostPort) {
   }
 
   // ── 出口：onComplete / finish ─────────────────────────────────────────────
+  // finish() 必须幂等：Stage 6 Skip 可能在流式中触发 finish(false)，
+  // 之后 SSE 完成路径可能再触发 finish(true)。用 finished 守卫防双重 onComplete（CodeRabbit id=3602857770）。
+  let finished = false;
   function finish(firstChatCompleted) {
+    if (finished) return;
+    finished = true;
     const config = {
       provider: state.provider || '',
       model: state.model || '',

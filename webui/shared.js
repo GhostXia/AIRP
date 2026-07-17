@@ -47,11 +47,12 @@
       //   否则注入 30s 默认超时（CodeRabbit id=3602743403 采纳）。
       let signal = opts.signal || null;
       let timeoutCtl = null;
+      let timeoutId = null;
       if (!signal) {
         try {
           timeoutCtl = new AbortController();
           signal = timeoutCtl.signal;
-          setTimeout(() => { try { timeoutCtl.abort(); } catch {} }, DEFAULT_TIMEOUT_MS);
+          timeoutId = setTimeout(() => { try { timeoutCtl.abort(); } catch {} }, DEFAULT_TIMEOUT_MS);
         } catch { signal = null; }  // AbortController 不支持时降级为无超时
       }
       const finalOpts = Object.assign({}, opts, { headers: headers });
@@ -60,7 +61,8 @@
         const res = await fetch(base + path, finalOpts);
         return res;
       } finally {
-        // 超时定时器在 fetch 完成后无需清理（已触发或将被 GC），但 abort 已无副作用
+        // 清理超时定时器，避免 30s 内残留回调持有 AbortController 闭包（CodeRabbit id=3602857801）
+        if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
       }
     };
   }
