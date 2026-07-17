@@ -14,6 +14,10 @@ use crate::adapter::ChatMessage;
 use crate::chat_store::ChatLog;
 use crate::data_dir;
 use crate::error::AirpError;
+use crate::revision::atomic::{
+    commit_revision, read_current_revision, CommitOptions, StagedRevision,
+};
+use crate::revision::manifest::{AssetKind, AssetSource};
 use crate::types::{CharacterId, SessionId, UserId};
 use crate::ulid;
 
@@ -470,9 +474,48 @@ impl LorebookService {
         let _guard = character.read().expect("character lock poisoned");
         let resource = state_lock(character_id.as_str());
         let _resource_guard = resource.lock().expect("resource lock poisoned");
-        data_dir::char_world_dir(&self.data_root, character_id.as_str())?;
+        let world_dir = data_dir::char_world_dir(&self.data_root, character_id.as_str())?;
         let path = data_dir::char_world_lorebook_path(&self.data_root, character_id.as_str());
-        data_dir::replace_file(&path, &serde_json::to_vec_pretty(lorebook)?)
+        let lorebook_bytes = serde_json::to_vec_pretty(lorebook)?;
+        data_dir::replace_file(&path, &lorebook_bytes)?;
+
+        // #115 Phase 2d：Worldbook 接入统一 revision 合同。
+        // 工作副本 `lorebook.json` 已原子写入；下面在 `characters/{id}/world/` 下
+        // 创建 `revisions/{content_revision}/` + `current_revision` 不可变快照。
+        // lazy migration：`current_revision` 不存在则从 1 起。
+        let content_revision = match read_current_revision(&world_dir)? {
+            Some(existing) => existing + 1,
+            None => 1,
+        };
+        let source_hash_hex = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&lorebook_bytes);
+            format!("{:x}", hasher.finalize())
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let staged = StagedRevision {
+            content_revision,
+            asset_kind: AssetKind::Worldbook,
+            asset_id: character_id.to_string(),
+            created_at: now.clone(),
+            source: AssetSource {
+                source_kind: "controlled_upload".to_string(),
+                source_hash: Some(source_hash_hex),
+                source_filename: None,
+                converter_version: None,
+                imported_at: Some(now),
+                parent_revision: if content_revision > 1 {
+                    Some(content_revision - 1)
+                } else {
+                    None
+                },
+            },
+            files: vec![("lorebook.json".to_string(), lorebook_bytes)],
+        };
+        let commit_opts = CommitOptions::new(&world_dir);
+        commit_revision(&staged, &commit_opts)?;
+        Ok(())
     }
 }
 
@@ -555,10 +598,8 @@ impl StateService {
             state: state.clone(),
         };
 
-        data_dir::replace_file(
-            &state_dir.join("live.json"),
-            &serde_json::to_vec_pretty(state)?,
-        )?;
+        let state_bytes = serde_json::to_vec_pretty(state)?;
+        data_dir::replace_file(&state_dir.join("live.json"), &state_bytes)?;
         let mut history = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -566,6 +607,41 @@ impl StateService {
         serde_json::to_writer(&mut history, &snapshot)?;
         history.write_all(b"\n")?;
         history.sync_data()?;
+
+        // #115 Phase 2e：State 接入统一 revision 合同。
+        // `live.json` + `history.jsonl` 已写入；下面在 `characters/{id}/state/` 下
+        // 创建 `revisions/{content_revision}/` + `current_revision` 不可变快照。
+        // State 已有 `revision`（从 history.jsonl 派生），直接复用为 content_revision，
+        // 不需要 lazy migration。
+        // 批准文件 `state.json` 内容 = state Value 序列化（与 live.json 对齐，
+        // 只含 state 字段，不含 revision/timestamp）。
+        let source_hash_hex = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&state_bytes);
+            format!("{:x}", hasher.finalize())
+        };
+        let staged = StagedRevision {
+            content_revision: revision,
+            asset_kind: AssetKind::State,
+            asset_id: character_id.to_string(),
+            created_at: snapshot.timestamp.clone(),
+            source: AssetSource {
+                source_kind: "derived".to_string(),
+                source_hash: Some(source_hash_hex),
+                source_filename: None,
+                converter_version: None,
+                imported_at: Some(snapshot.timestamp.clone()),
+                parent_revision: if revision > 1 {
+                    Some(revision - 1)
+                } else {
+                    None
+                },
+            },
+            files: vec![("state.json".to_string(), state_bytes)],
+        };
+        let commit_opts = CommitOptions::new(&state_dir);
+        commit_revision(&staged, &commit_opts)?;
         Ok(snapshot)
     }
 }
@@ -976,10 +1052,54 @@ impl PersonaService {
         } else {
             data_dir::replace_file(&path, &serialized)?;
         }
+
+        // #115 Phase 2g：Persona 接入统一 revision 合同。
+        // 工作副本 `personas/{pid}.json` 已原子写入（含 default 的 legacy 镜像）；
+        // 下面在 `users/{uid}/personas/{pid}/` 下创建 `revisions/{content_revision}/`
+        // + `current_revision` 不可变快照。文件形态 `{pid}.json` 与目录形态 `{pid}/`
+        // 在同一 `personas/` 父目录下共存，互不冲突。
+        // Persona 已有 `revision`（自增），直接复用为 content_revision，不需要 lazy migration。
+        // 批准文件 `persona.json` 内容 = serialized persona bytes（与 `personas/{pid}.json` 相同）。
+        let persona_asset_dir =
+            data_dir::user_personas_dir(&self.data_root, user_id).join(persona_id);
+        fs::create_dir_all(&persona_asset_dir)?;
+        let source_hash_hex = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&serialized);
+            format!("{:x}", hasher.finalize())
+        };
+        let now = persona.updated_at.clone();
+        let content_revision = persona.revision;
+        let staged = StagedRevision {
+            content_revision,
+            asset_kind: AssetKind::Persona,
+            asset_id: persona_id.to_string(),
+            created_at: now.clone(),
+            source: AssetSource {
+                source_kind: "manual_edit".to_string(),
+                source_hash: Some(source_hash_hex),
+                source_filename: None,
+                converter_version: None,
+                imported_at: Some(now),
+                parent_revision: if content_revision > 1 {
+                    Some(content_revision - 1)
+                } else {
+                    None
+                },
+            },
+            files: vec![("persona.json".to_string(), serialized)],
+        };
+        let commit_opts = CommitOptions::new(&persona_asset_dir);
+        commit_revision(&staged, &commit_opts)?;
         Ok(persona)
     }
 
     /// 删除指定 id 的 Persona；`default` 不允许删（返 BadRequest）。删除文件不可逆。
+    ///
+    /// Gemini #2：除工作副本 `personas/{pid}.json` 外，同时删除 revision 目录
+    /// `users/{uid}/personas/{pid}/`，避免后续以同 id 重建 Persona 时
+    /// `commit_revision` 因 `revisions/1` 已存在而失败。
     pub fn delete(&self, user_id: &UserId, persona_id: &str) -> Result<(), AirpError> {
         let persona_id = Self::canonical_persona_id(persona_id);
         if persona_id == "default" {
@@ -992,6 +1112,20 @@ impl PersonaService {
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
         if path.exists() {
             fs::remove_file(&path)?;
+        }
+        // Gemini #2：同步删除 revision 目录。即使目录不存在或删除失败也不应阻塞
+        // 主删除流程；目录不存在是合法状态（旧版本未创建过 revision）。
+        let persona_asset_dir =
+            data_dir::user_personas_dir(&self.data_root, user_id).join(persona_id);
+        if persona_asset_dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&persona_asset_dir) {
+                tracing::warn!(
+                    user_id = %user_id.as_str(),
+                    persona_id = %persona_id,
+                    err = %e,
+                    "删除 persona revision 目录失败；工作副本已删除，残留 revision 目录不影响新 Persona 创建（commit_revision 会复用现有 revisions/1）"
+                );
+            }
         }
         Ok(())
     }
@@ -2505,6 +2639,256 @@ mod tests {
             final_log.messages.len(),
             final_log.message_timestamps.len(),
             "concurrent mutations must keep messages/timestamps equal length"
+        );
+    }
+
+    // ── #115 Phase 2d/2e/2g：revision 合同接入测试 ──────────────────────────────
+
+    /// Phase 2d：LorebookService::write 接入 revision 合同。
+    /// 验证首次写入创建 revision 1 目录 + current_revision 文件，
+    /// 第二次写入 bump 到 revision 2，旧 revision 目录保留不可变。
+    ///
+    /// CodeRabbit nitpick：v1/v2 必须用不同 entries，否则无法验证
+    /// revision 1 的 lorebook.json 在 revision 2 写入后内容不变（不可变性）。
+    #[test]
+    fn lorebook_write_creates_revision_dir_and_bumps_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = LorebookService::new(tmp.path());
+        let character = CharacterId::new("lore-rev").unwrap();
+        let world_dir = data_dir::char_world_dir(tmp.path(), character.as_str()).unwrap();
+
+        let lb_v1 = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["剑".to_string()],
+                content: "古老的铁剑".to_string(),
+                enabled: Some(true),
+                priority: Some(10),
+                constant: None,
+                comment: Some("v1".to_string()),
+                secondary_keys: vec![],
+                selective: false,
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
+        service.write(&character, &lb_v1).unwrap();
+
+        // 首次写入 → revision 1
+        let revision_dir_v1 = world_dir.join("revisions").join("1");
+        assert!(revision_dir_v1.is_dir(), "revision 1 目录应存在");
+        assert!(revision_dir_v1.join("lorebook.json").is_file());
+        assert!(revision_dir_v1.join("manifest.json").is_file());
+        assert_eq!(
+            read_current_revision(&world_dir).unwrap(),
+            Some(1),
+            "current_revision 应指向 1"
+        );
+
+        // 记录 revision 1 的 lorebook.json 字节，用于后续不可变性校验
+        let v1_bytes = fs::read(revision_dir_v1.join("lorebook.json")).unwrap();
+
+        // 第二次写入（不同 entries）→ revision 2
+        let lb_v2 = crate::orchestrator::Lorebook {
+            entries: vec![crate::orchestrator::LorebookEntry {
+                keys: vec!["盾".to_string()],
+                content: "镶金的圆盾".to_string(),
+                enabled: Some(true),
+                priority: Some(5),
+                constant: None,
+                comment: Some("v2".to_string()),
+                secondary_keys: vec![],
+                selective: false,
+                case_sensitive: None,
+                extensions: None,
+            }],
+        };
+        service.write(&character, &lb_v2).unwrap();
+        let revision_dir_v2 = world_dir.join("revisions").join("2");
+        assert!(revision_dir_v2.is_dir(), "revision 2 目录应存在");
+        assert!(revision_dir_v2.join("lorebook.json").is_file());
+        assert!(revision_dir_v2.join("manifest.json").is_file());
+        assert_eq!(
+            read_current_revision(&world_dir).unwrap(),
+            Some(2),
+            "current_revision 应 bump 到 2"
+        );
+
+        // 旧 revision 目录保留不可变：revision 1 的 lorebook.json 内容不应被
+        // revision 2 的写入覆盖。
+        assert!(revision_dir_v1.is_dir(), "旧 revision 1 目录应保留不可变");
+        let v1_bytes_after_v2 = fs::read(revision_dir_v1.join("lorebook.json")).unwrap();
+        assert_eq!(
+            v1_bytes, v1_bytes_after_v2,
+            "revision 1 的 lorebook.json 在 revision 2 写入后应保持不变"
+        );
+
+        // legacy 工作副本仍存在（内容应等于 v2）
+        let legacy_path = data_dir::char_world_lorebook_path(tmp.path(), character.as_str());
+        assert!(legacy_path.is_file(), "legacy lorebook.json 工作副本应保留");
+        let legacy_bytes = fs::read(&legacy_path).unwrap();
+        let v2_bytes = fs::read(revision_dir_v2.join("lorebook.json")).unwrap();
+        assert_eq!(
+            legacy_bytes, v2_bytes,
+            "legacy lorebook.json 应与最新 revision 2 内容一致"
+        );
+    }
+
+    /// Phase 2e：StateService::write 接入 revision 合同。
+    /// 验证首次写入创建 revision 1 目录 + current_revision 文件，
+    /// 第二次写入 bump 到 revision 2，批准文件 state.json 内容与 live.json 对齐。
+    #[test]
+    fn state_write_creates_revision_dir_and_bumps_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = StateService::new(tmp.path());
+        let character = CharacterId::new("state-rev").unwrap();
+        let state_dir = data_dir::char_state_dir(tmp.path(), character.as_str());
+
+        let first = service
+            .write(&character, &serde_json::json!({"hp": 80}))
+            .unwrap();
+        assert_eq!(first.revision, 1);
+
+        let revision_dir_v1 = state_dir.join("revisions").join("1");
+        assert!(revision_dir_v1.is_dir(), "revision 1 目录应存在");
+        assert!(revision_dir_v1.join("state.json").is_file());
+        assert!(revision_dir_v1.join("manifest.json").is_file());
+        assert_eq!(
+            read_current_revision(&state_dir).unwrap(),
+            Some(1),
+            "current_revision 应指向 1"
+        );
+
+        // 批准文件 state.json 内容应与 live.json 对齐（只含 state 字段）
+        let state_json_bytes = fs::read(revision_dir_v1.join("state.json")).unwrap();
+        let live_json_bytes = fs::read(state_dir.join("live.json")).unwrap();
+        assert_eq!(
+            state_json_bytes, live_json_bytes,
+            "state.json 应与 live.json 内容一致"
+        );
+
+        // 第二次写入 → revision 2
+        let second = service
+            .write(&character, &serde_json::json!({"hp": 60}))
+            .unwrap();
+        assert_eq!(second.revision, 2);
+
+        let revision_dir_v2 = state_dir.join("revisions").join("2");
+        assert!(revision_dir_v2.is_dir(), "revision 2 目录应存在");
+        assert!(revision_dir_v2.join("state.json").is_file());
+        assert_eq!(
+            read_current_revision(&state_dir).unwrap(),
+            Some(2),
+            "current_revision 应 bump 到 2"
+        );
+
+        // 旧 revision 目录保留不可变
+        assert!(revision_dir_v1.is_dir(), "旧 revision 1 目录应保留不可变");
+    }
+
+    /// Phase 2g：PersonaService::save 接入 revision 合同。
+    /// 验证首次保存创建 revision 1 目录 + current_revision 文件，
+    /// 第二次保存 bump 到 revision 2，legacy 工作副本 `personas/{pid}.json` 保留。
+    #[test]
+    fn persona_save_creates_revision_dir_and_bumps_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("paul").unwrap();
+        let persona_asset_dir = data_dir::user_personas_dir(tmp.path(), &uid).join("default");
+
+        let saved_v1 = service
+            .save_default(&uid, 0, Persona::initial("Paul v1"))
+            .unwrap();
+        assert_eq!(saved_v1.revision, 1);
+
+        // 首次保存 → revision 1
+        let revision_dir_v1 = persona_asset_dir.join("revisions").join("1");
+        assert!(revision_dir_v1.is_dir(), "revision 1 目录应存在");
+        assert!(revision_dir_v1.join("persona.json").is_file());
+        assert!(revision_dir_v1.join("manifest.json").is_file());
+        assert_eq!(
+            read_current_revision(&persona_asset_dir).unwrap(),
+            Some(1),
+            "current_revision 应指向 1"
+        );
+
+        // 第二次保存 → revision 2
+        let saved_v2 = service
+            .save_default(&uid, 1, Persona::initial("Paul v2"))
+            .unwrap();
+        assert_eq!(saved_v2.revision, 2);
+
+        let revision_dir_v2 = persona_asset_dir.join("revisions").join("2");
+        assert!(revision_dir_v2.is_dir(), "revision 2 目录应存在");
+        assert!(revision_dir_v2.join("persona.json").is_file());
+        assert_eq!(
+            read_current_revision(&persona_asset_dir).unwrap(),
+            Some(2),
+            "current_revision 应 bump 到 2"
+        );
+
+        // 旧 revision 目录保留不可变
+        assert!(revision_dir_v1.is_dir(), "旧 revision 1 目录应保留不可变");
+
+        // legacy 工作副本 personas/default.json 仍存在
+        let legacy_path = data_dir::user_persona_multi_path(tmp.path(), &uid, "default").unwrap();
+        assert!(
+            legacy_path.is_file(),
+            "legacy personas/default.json 工作副本应保留"
+        );
+
+        // 批准文件 persona.json 内容应与 legacy 工作副本一致
+        let revision_persona_bytes = fs::read(revision_dir_v2.join("persona.json")).unwrap();
+        let legacy_persona_bytes = fs::read(&legacy_path).unwrap();
+        assert_eq!(
+            revision_persona_bytes, legacy_persona_bytes,
+            "revision 内 persona.json 应与 legacy 工作副本内容一致"
+        );
+    }
+
+    /// Phase 2g + Gemini #2：`PersonaService::delete` 应同时删除工作副本
+    /// `personas/{pid}.json` 和 revision 目录 `users/{uid}/personas/{pid}/`，
+    /// 避免后续以同 id 重建 Persona 时 `commit_revision` 因 `revisions/1`
+    /// 已存在而失败。
+    #[test]
+    fn persona_delete_removes_revision_dir_and_allows_recreate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("paul").unwrap();
+        let pid = "p1";
+        let persona_asset_dir = data_dir::user_personas_dir(tmp.path(), &uid).join(pid);
+        let legacy_path = data_dir::user_persona_multi_path(tmp.path(), &uid, pid).unwrap();
+
+        // 首次保存 → 创建 revision 1
+        let saved_v1 = service
+            .save(&uid, pid, 0, Persona::initial("Paul v1"))
+            .unwrap();
+        assert_eq!(saved_v1.revision, 1);
+        assert!(legacy_path.is_file(), "工作副本应在保存后存在");
+        assert!(persona_asset_dir.is_dir(), "revision 目录应在保存后存在");
+        assert!(
+            persona_asset_dir.join("revisions").join("1").is_dir(),
+            "revision 1 目录应存在"
+        );
+
+        // 删除 → 工作副本与 revision 目录都应消失
+        service.delete(&uid, pid).unwrap();
+        assert!(!legacy_path.exists(), "工作副本应在 delete 后不存在");
+        assert!(
+            !persona_asset_dir.exists(),
+            "revision 目录应在 delete 后被清理（Gemini #2）"
+        );
+
+        // 重新以同 id 保存 → 应能成功从 revision 1 重新开始（不冲突）
+        let saved_v2 = service
+            .save(&uid, pid, 0, Persona::initial("Paul v2"))
+            .unwrap();
+        assert_eq!(
+            saved_v2.revision, 1,
+            "重新创建后 revision 应从 1 开始（revision 目录被清理）"
+        );
+        assert!(
+            persona_asset_dir.join("revisions").join("1").is_dir(),
+            "重新创建后 revision 1 目录应再次存在"
         );
     }
 }
