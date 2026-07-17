@@ -314,9 +314,9 @@ characters/{character_id}/memory/
 | 字段 | 填充来源 | 不可用时 |
 |---|---|---|
 | `character_revision` | `characters/{id}/current_revision` 文件读取 | 推送 `character_revision_unavailable` |
-| `persona_revision` | `personas/{id}/current_revision` 读取；回退 `Persona.revision` legacy 字段 | 推送 `persona_revision_unavailable` |
-| `preset_revision` | `presets/{id}/current_revision` 文件读取；回退到 `versions/{generation}/` 计数 | 推送 `preset_revision_unavailable` |
-| `lorebook_revision` | `characters/{id}/world/current_revision` 或 `scenes/{id}/world/current_revision` 读取 | 推送 `lorebook_revision_unavailable` |
+| `persona_revision` | `personas/{id}/current_revision` 读取；回退 `Persona.revision` legacy 字段（仅当 `> 0`，`0` 视为未保存） | 推送 `persona_revision_unavailable` |
+| `preset_revision` | `presets/{id}/current_revision` 文件读取 | 推送 `preset_revision_unavailable` |
+| `lorebook_revision` | `characters/{id}/world/current_revision` 读取（仅 character 上下文；scene 模式留 `None` 不推送诊断） | 推送 `lorebook_revision_unavailable` |
 | `state_revision` | `characters/{id}/state/current_revision` 读取；= `history.jsonl` 末行 revision | 推送 `state_revision_unavailable` |
 | `memory_revision` | `characters/{id}/memory/current_revision` 读取 | 推送 `memory_revision_unavailable` |
 
