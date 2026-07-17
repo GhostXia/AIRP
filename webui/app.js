@@ -2833,5 +2833,146 @@
 
   // ── auto-connect on load ─────────────────────────────────────────────────
   // #68 #5 fix: 改用 scheduleAutoConnect，用户在 300ms 内输入 URL/bearer 会取消
-  scheduleAutoConnect();
+  // #209 onboarding wizard：首次运行 / 脱同步时触发向导，否则走原 auto-connect
+  // 设计 spec §5.1, §5.4：shouldShowOnboarding 用同步信号，不发 HTTP
+  function shouldShowOnboarding() {
+    let onboarded = false;
+    let skipped = false;
+    try {
+      onboarded = localStorage.getItem('airp_onboarded') === 'true';
+      skipped = localStorage.getItem('airp_onboarding_skipped') === 'true';
+    } catch {}
+    if (!onboarded) return true;
+    // 脱同步检测（spec §5.3）：
+    // - 用户显式跳过向导（skipped=true）→ 不再因 character_id 缺失重触发
+    //   （"skip 也写 onboarded=true" 是"别再烦我"的偏好，不是"配置完整"的断言）
+    // - 完成向导但 character_id 失效（外部删除）→ 重新触发
+    if (skipped) return false;
+    let hasCharacter = false;
+    try { hasCharacter = localStorage.getItem('airp_character_id') !== null; } catch {}
+    if (!hasCharacter) return true;
+    return false;
+  }
+
+  // #209 onboarding host Port 成员：fetcher（封装 base + bearer，auth 单一实现，spec §3.2）
+  // 使用 window.AIRPShared.makeFetcher，dev 模式每次读 sessionStorage
+  function makeOnboardingFetcher() {
+    return window.AIRPShared.makeFetcher(productionMode ? 'production' : 'dev');
+  }
+
+  // #209 onboarding host Port 成员：formatError（复用现有 app.js:176-200 实现，spec §3.3）
+  // 不重新实现，直接用本作用域 formatError 函数
+
+  // #209 onboarding 完成回调（spec §5.5）
+  function onOnboardingComplete(config) {
+    try {
+      localStorage.setItem('airp_onboarded', 'true');
+      // 完成向导后清除 skipped 标志（之前可能跳过过，现在已正式完成）
+      localStorage.removeItem('airp_onboarding_skipped');
+      if (config.character_id) localStorage.setItem('airp_character_id', config.character_id);
+      if (config.persona_id) localStorage.setItem('airp_persona_id', config.persona_id);
+      // preset_id null clear（spec §5.5 修正）：null/空 → 移除旧值，避免残留
+      if (config.preset_id) {
+        localStorage.setItem('airp_preset_id', config.preset_id);
+      } else {
+        localStorage.removeItem('airp_preset_id');
+      }
+    } catch {}
+    unmountOnboarding();
+    renderEffectiveConfigIndicator(config);
+    scheduleAutoConnect();
+  }
+
+  // #209 onboarding 跳过回调（spec §5.5）：skip 也写标志，避免每次打扰；脱同步仍保护
+  function onOnboardingSkip() {
+    try {
+      localStorage.setItem('airp_onboarded', 'true');
+      // skipped 标志（spec §5.3 修正）：让 shouldShowOnboarding 区分"完成向导但 character 失效"
+      // 与"显式跳过向导"——后者不再因 character_id 缺失而重触发
+      localStorage.setItem('airp_onboarding_skipped', 'true');
+    } catch {}
+    unmountOnboarding();
+    renderEffectiveConfigIndicator(loadKnownConfig());
+    scheduleAutoConnect();
+  }
+
+  // #209 卸载向导（spec §5.6）：调用 mountOnboarding 返回的 cleanup
+  let onboardingCleanup = null;
+  function unmountOnboarding() {
+    if (onboardingCleanup) {
+      try { onboardingCleanup(); } catch (e) { console.error('[onboarding] cleanup threw:', e); }
+      onboardingCleanup = null;
+    }
+    const root = $('#onboarding-root');
+    if (root) root.hidden = true;
+  }
+
+  // #209 topbar effective config 指示器（spec §5.8）
+  // 不显示 api_key / access_api_key / engine URL / bearer（安全）
+  function renderEffectiveConfigIndicator(config) {
+    const ind = $('#effective-config-indicator');
+    if (!ind) return;
+    ind.innerHTML = '';
+    if (!config) { ind.hidden = true; return; }
+    const parts = [];
+    if (config.provider) parts.push('provider: ' + config.provider);
+    if (config.model) parts.push('model: ' + config.model);
+    if (config.character_id) parts.push('character: ' + (config.character_name || config.character_id));
+    if (config.persona_id) parts.push('persona: ' + config.persona_id);
+    parts.push('preset: ' + (config.preset_id || 'none'));
+    ind.textContent = parts.join(' | ');
+    ind.hidden = false;
+  }
+
+  // 从 localStorage 加载已知配置（skip 后指示器可能部分为空，spec §5.5）
+  function loadKnownConfig() {
+    const cfg = { provider: '', model: '', character_id: '', persona_id: 'default', preset_id: null };
+    try {
+      cfg.character_id = localStorage.getItem('airp_character_id') || '';
+      cfg.persona_id = localStorage.getItem('airp_persona_id') || 'default';
+      cfg.preset_id = localStorage.getItem('airp_preset_id') || null;
+    } catch {}
+    return cfg;
+  }
+
+  // #209 bootstrapApp（spec §5.4）：first-run 检测门，替代无条件 scheduleAutoConnect
+  async function bootstrapApp() {
+    if (!shouldShowOnboarding()) {
+      // 已 onboard（含 skip 路径）→ 恢复 topbar effective config 指示器（spec §5.4 修正）
+      // 之前遗漏此调用，导致已 onboard 用户刷新后指示器不显示
+      renderEffectiveConfigIndicator(loadKnownConfig());
+      scheduleAutoConnect();
+      return;
+    }
+    const root = $('#onboarding-root');
+    if (!root) { scheduleAutoConnect(); return; }
+    root.hidden = false;
+    try {
+      // 动态 import 向导模块（spec §2.1）：向导零 import 宿主代码
+      // serve.js:13 .js → application/javascript; charset=utf-8，合法 ESM MIME
+      const mod = await import('./onboarding.js');
+      const hostPort = Object.freeze({
+        version: 1,
+        mode: productionMode ? 'production' : 'dev',
+        fetcher: makeOnboardingFetcher(),
+        formatError: formatError,
+        onComplete: onOnboardingComplete,
+        onSkip: onOnboardingSkip,
+      });
+      onboardingCleanup = mod.mountOnboarding(root, hostPort);
+    } catch (err) {
+      // F1/F2/F3 降级到手动流程（spec §6.2, §6.3）
+      console.error('[onboarding] load failed, falling back to manual flow:', err);
+      root.hidden = true;
+      scheduleAutoConnect();
+      // 简单 toast 提示（无 inline style，用现有 CSS 类）
+      const toast = document.createElement('div');
+      toast.className = 'onb-toast onb-toast-warn';
+      toast.textContent = '向导加载失败，已退回手动配置（详见控制台）';
+      document.body.appendChild(toast);
+      setTimeout(() => { try { toast.remove(); } catch {} }, 5000);
+    }
+  }
+
+  bootstrapApp();
 })();
