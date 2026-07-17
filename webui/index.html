@@ -20,6 +20,7 @@
       <span id="conn-text">未连接</span>
       <span id="access-key-warning" class="access-warning" hidden></span>
       <span id="production-connection" class="production-connection" hidden>同源安全连接</span>
+      <span id="effective-config-indicator" class="effective-config-indicator" hidden></span>
       <label class="compact-field development-connection">Engine URL <input id="engine-url" value="http://127.0.0.1:8000" /></label>
       <label class="compact-field development-connection">Bearer <input id="bearer-token" type="password" placeholder="可选" /></label>
       <button id="btn-connect" class="btn-primary development-connection">连接</button>
@@ -211,11 +212,14 @@
     <div id="wb-tab-card" class="wb-tab-content"><p class="hint">通过 API 保存角色卡，不依赖内部文件路径。</p><div class="wb-fields" id="wb-card-fields"></div><div class="wb-actions"><button id="btn-wb-save-card" class="btn-primary">保存角色卡</button><span id="wb-card-status" class="hint">—</span></div></div>
     <div id="wb-tab-decompose" class="wb-tab-content" hidden><p class="hint">拆解角色卡或预设，增强操作会先显示预览。</p><div class="wb-actions"><button id="btn-wb-decompose" class="btn-primary">拆解角色卡</button><label class="inline-label"><input id="wb-decompose-force" type="checkbox" /> 覆盖已有结果</label><button id="btn-wb-list-analysis">刷新文件</button><span id="wb-decompose-status" class="hint">—</span></div><div class="wb-actions wb-preset-decompose-row"><button id="btn-wb-decompose-preset">拆解预设</button><select id="wb-preset-select" class="mono"></select></div><div id="wb-analysis-files" class="wb-analysis-files"></div><div id="wb-analysis-viewer" class="wb-analysis-viewer" hidden><div class="wb-analysis-viewer-header"><span id="wb-analysis-filename" class="mono">—</span><button id="btn-wb-analysis-enhance">Enhance 预览</button><button id="btn-wb-analysis-apply" hidden>写入</button><button id="btn-wb-analysis-close">×</button></div><div class="wb-analysis-diff"><div class="wb-analysis-pane"><div class="wb-analysis-pane-title">原始</div><pre id="wb-analysis-original" class="mono"></pre></div><div class="wb-analysis-pane"><div class="wb-analysis-pane-title">增强后</div><textarea id="wb-analysis-enhanced" rows="14" class="mono"></textarea></div></div></div></div>
   </aside>
+
+  <div id="onboarding-root" class="onboarding-root" hidden></div>
 </div>
 <script src="runtime-config.js"></script>
 <script src="persona-utils.js"></script>
 <script src="lorebook-utils.js"></script>
 <script src="assembly-utils.js"></script>
+<script src="shared.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

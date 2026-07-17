@@ -592,7 +592,8 @@ function makeMockPort(overrides = {}) {
 - `webui/tests/lorebook.test.mjs`
 - `webui/tests/persona.test.mjs`
 - `webui/smoke.mjs`（含新增 L3 用例）
-- `target/test-md-v2.js`、`target/test-serve-security.js`（markdown + security 回归）
+
+注：markdown 渲染和 security 不变式由 engine 侧 Rust 测试守护（`engine/src/daemon/tests/security.rs`、`engine/src/data_dir/security.rs` 等），本 PR 不触及 engine 代码，无影响。
 
 ### 7.6 测试不覆盖（显式声明）
 
