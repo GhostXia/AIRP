@@ -314,9 +314,12 @@ pub(crate) fn next_content_revision(asset_dir: &Path) -> Result<u64, AirpError> 
     let from_disk = max_existing_revision_dir(asset_dir)?.unwrap_or(0);
     // CodeRabbit: 用 checked_add 防止 u64::MAX + 1 溢出（理论上可达，例如磁盘上
     // 被恶意放置 revisions/18446744073709551615/ 目录，或 current_revision 指针
-    // 被人工改成 u64::MAX）。返回 BadRequest 而非 panic。
+    // 被人工改成 u64::MAX）。
+    // CodeRabbit #1 (68bc5b3): 用 Internal 而非 BadRequest——这不是客户端请求
+    // 格式问题（用户无法在 HTTP 请求中直接传入此值），而是服务端持久化状态
+    // 损坏（文件被篡改/恶意命名），属于 500 而非 400 语义。
     from_pointer.max(from_disk).checked_add(1).ok_or_else(|| {
-        AirpError::BadRequest(
+        AirpError::Internal(
             "content_revision 已达 u64::MAX，无法继续递增（请清理 revisions/ 历史）".to_string(),
         )
     })
