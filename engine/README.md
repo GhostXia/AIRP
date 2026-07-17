@@ -164,7 +164,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-`main@15cb6c0` 的 [GitHub run `29590129817`](https://github.com/GhostXia/AIRP/actions/runs/29590129817) 中 Rust workspace（含 warning-free rustdoc 与神圣提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 全绿，并覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、prompt preview 的 engine/HTTP/WebUI 与生产浏览器路径。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+`main@15cb6c0` 的 [GitHub run `29590129817`](https://github.com/GhostXia/AIRP/actions/runs/29590129817) 中 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 全绿，并覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、prompt preview 的 engine/HTTP/WebUI 与生产浏览器路径。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 
