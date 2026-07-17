@@ -30,11 +30,46 @@ export function mountOnboarding(container, hostPort) {
   let state = {};            // 向导内部状态；api_key 永不进入此对象
   const listeners = [];      // 注册的事件监听，cleanup 时遍历移除（spec §5.6）
   let sseAbort = null;       // Stage 6 SSE 中断用
+  let sendInFlight = false;  // Stage 6 sendFirstMessage 单飞保护（防双击/重试并发）
+  let preMountFocus = null;  // dialog 打开前焦点，cleanup 时恢复（spec §4.2 a11y）
+
+  // 焦点保存（spec §4.2 a11y）：mount 时记录当前焦点元素，cleanup 时恢复
+  try {
+    preMountFocus = document.activeElement;
+  } catch { preMountFocus = null; }
 
   // ── listener 注册 helper（spec §5.6：记录所有 addEventListener 以便 cleanup 移除）
   function on(target, type, handler, opts) {
     target.addEventListener(type, handler, opts);
     listeners.push({ target: target, type: type, handler: handler, opts: opts });
+  }
+
+  // ── 移除所有已注册 listener（retry / cleanup 共用，spec §6.4 retry 不可残留）
+  function removeListeners() {
+    listeners.forEach(({ target, type, handler, opts }) => {
+      try { target.removeEventListener(type, handler, opts); } catch {}
+    });
+    listeners.length = 0;
+  }
+
+  // ── 安全回调包装（F4 后续 stage 回调也走崩溃面板，spec §6.4 修正）
+  // 任何 event handler / async continuation 的异常都路由到 renderCrashFallback，
+  // 而不是变成浏览器 uncaught error。
+  function safeSync(fn, label) {
+    return function (...args) {
+      try { return fn.apply(this, args); }
+      catch (err) {
+        console.error('[onboarding] handler crashed (' + (label || 'unknown') + '):', err);
+        try { renderCrashFallback(err); } catch (e) { console.error('[onboarding] crash fallback threw:', e); }
+      }
+    };
+  }
+  async function safeAsync(fn, label) {
+    try { return await fn(); }
+    catch (err) {
+      console.error('[onboarding] async crashed (' + (label || 'unknown') + '):', err);
+      try { renderCrashFallback(err); } catch (e) { console.error('[onboarding] crash fallback threw:', e); }
+    }
   }
 
   // ── DOM helpers ──────────────────────────────────────────────────────────
@@ -61,6 +96,10 @@ export function mountOnboarding(container, hostPort) {
   }
 
   function renderCrashFallback(err) {
+    // retry 不可残留旧 listener（spec §6.4 修正：先 removeListeners 再清 DOM）
+    removeListeners();
+    if (sseAbort) { try { sseAbort.abort(); } catch {} sseAbort = null; }
+    sendInFlight = false;
     clearContainer();
     const panel = el('div', 'onb-crash');
     panel.appendChild(el('h2', '', '向导遇到问题'));
@@ -68,15 +107,21 @@ export function mountOnboarding(container, hostPort) {
     const btnRow = el('div', 'onb-btn-row');
     const btnRetry = el('button', 'btn-primary', '重试向导');
     const btnExit = el('button', 'btn-secondary', '退回手动配置');
-    on(btnRetry, 'click', () => { stage = 1; state = {}; render(); });
-    on(btnExit, 'click', () => {
+    on(btnRetry, 'click', safeSync(() => {
+      // 重置向导状态再渲染（spec §6.4 retry 入口）
+      stage = 1; state = {}; sendInFlight = false;
+      render();
+    }, 'crash-retry'));
+    on(btnExit, 'click', safeSync(() => {
       // F4 退回手动配置走 onSkip——宿主写 airp_onboarded=true（spec §6.4）
       try { hostPort.onSkip(); } catch (e) { console.error('[onboarding] onSkip threw:', e); }
-    });
+    }, 'crash-exit'));
     btnRow.appendChild(btnRetry);
     btnRow.appendChild(btnExit);
     panel.appendChild(btnRow);
     container.appendChild(panel);
+    // focus 入口（spec §4.2 a11y）：crash 面板聚焦重试按钮
+    try { btnRetry.focus(); } catch {}
   }
 
   // ── 阶段渲染分发 ──────────────────────────────────────────────────────────
@@ -112,15 +157,15 @@ export function mountOnboarding(container, hostPort) {
     const nav = el('div', 'onb-nav');
     if (stage > 1) {
       const back = el('button', 'btn-secondary', '上一步');
-      on(back, 'click', () => { stage--; render(); });
+      on(back, 'click', safeSync(() => { stage--; render(); }, 'nav-back'));
       nav.appendChild(back);
     }
     const skip = el('button', 'btn-tertiary onb-skip', '跳过向导');
-    on(skip, 'click', () => {
+    on(skip, 'click', safeSync(() => {
       // 任意阶段可跳过（spec §4.4）；Stage 6 跳过走 onComplete(firstChatCompleted:false)
       if (stage === 6) { finish(false); }
       else { try { hostPort.onSkip(); } catch (e) { console.error('[onboarding] onSkip threw:', e); } }
-    });
+    }, 'nav-skip'));
     nav.appendChild(skip);
     return nav;
   }
@@ -131,7 +176,7 @@ export function mountOnboarding(container, hostPort) {
     box.appendChild(el('p', '', message));
     if (onRetry) {
       const btn = el('button', 'btn-secondary', '重试');
-      on(btn, 'click', onRetry);
+      on(btn, 'click', safeSync(onRetry, 'error-retry'));
       box.appendChild(btn);
     }
     parent.appendChild(box);
@@ -170,16 +215,16 @@ export function mountOnboarding(container, hostPort) {
       box.appendChild(el('label', 'onb-label', 'Bearer'));
       box.appendChild(bearerInput);
       const btn = el('button', 'btn-primary', '连接并检查');
-      on(btn, 'click', async () => {
+      on(btn, 'click', safeSync(() => {
         // dev 模式 Stage 1 写 sessionStorage（spec §3.2），fetcher 每次调用读取
         sessionStorage.setItem('airp_engine_url', urlInput.value.replace(/\/+$/, ''));
         sessionStorage.setItem('airp_bearer', bearerInput.value || '');
-        await runHealthCheck(box);
-      });
+        safeAsync(() => runHealthCheck(box), 'stage1-health-check');
+      }, 'stage1-connect'));
       box.appendChild(btn);
     } else {
       box.appendChild(el('p', 'onb-hint', '生产模式：同源安全连接，网关注入认证。正在检查部署健康…'));
-      setTimeout(() => { runHealthCheck(box); }, 0);
+      setTimeout(() => { safeAsync(() => runHealthCheck(box), 'stage1-health-check-prod'); }, 0);
     }
     return box;
   }
@@ -211,7 +256,7 @@ export function mountOnboarding(container, hostPort) {
         state.dataRootWritable ? '✓ 数据目录可写' : '⚠ 数据目录不可写'));
       box.appendChild(summary);
       const next = el('button', 'btn-primary', '下一步');
-      on(next, 'click', () => { stage = 2; render(); });
+      on(next, 'click', safeSync(() => { stage = 2; render(); }, 'stage1-next'));
       box.appendChild(next);
     } catch (err) {
       if (loading.parentNode) box.removeChild(loading);
@@ -254,6 +299,7 @@ export function mountOnboarding(container, hostPort) {
     // GET /v1/settings 回填非密字段
     const loading = el('p', 'onb-hint', '加载当前配置…');
     box.appendChild(loading);
+    // .then / .catch 走 safeAsync 边界：异常 → renderCrashFallback（spec §6.4 修正）
     callApi('/v1/settings').then(r => {
       if (r.ok && r.data) {
         if (r.data.provider) providerInput.value = r.data.provider;
@@ -265,18 +311,22 @@ export function mountOnboarding(container, hostPort) {
         }
       }
       if (loading.parentNode) box.removeChild(loading);
-    }).catch(() => { if (loading.parentNode) box.removeChild(loading); });
+    }).catch(err => {
+      console.error('[onboarding] stage2 settings GET failed:', err);
+      try { renderCrashFallback(err); } catch (e) { console.error('[onboarding] crash fallback threw:', e); }
+    });
 
     const btn = el('button', 'btn-primary', '保存并验证');
-    on(btn, 'click', async () => {
-      // api_key 仅在非空时携带（spec §4.3；空字符串=不修改）
-      const body = {};
-      if (providerInput.value.trim()) body.provider = providerInput.value.trim();
-      if (endpointInput.value.trim()) body.endpoint = endpointInput.value.trim();
-      if (modelInput.value.trim()) body.model = modelInput.value.trim();
-      if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
-      // 安全不变量：api_key 永不进入向导 state（spec §3.6, §4.3）
-      try {
+    on(btn, 'click', safeSync(() => {
+      // 异步保存走 safeAsync 边界（spec §6.4）
+      safeAsync(async () => {
+        // api_key 仅在非空时携带（spec §4.3；空字符串=不修改）
+        const body = {};
+        if (providerInput.value.trim()) body.provider = providerInput.value.trim();
+        if (endpointInput.value.trim()) body.endpoint = endpointInput.value.trim();
+        if (modelInput.value.trim()) body.model = modelInput.value.trim();
+        if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
+        // 安全不变量：api_key 永不进入向导 state（spec §3.6, §4.3）
         const r = await callApi('/v1/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -294,10 +344,8 @@ export function mountOnboarding(container, hostPort) {
         state.apiKeySet = true;
         stage = 3;
         render();
-      } catch (err) {
-        showError(box, '保存异常：' + String(err.message || err), () => { render(); });
-      }
-    });
+      }, 'stage2-save');
+    }, 'stage2-save-entry'));
     box.appendChild(btn);
     return box;
   }
@@ -336,7 +384,7 @@ export function mountOnboarding(container, hostPort) {
         if (state.model) input.value = state.model;
         box.appendChild(input);
         const btn = el('button', 'btn-primary', '保存并下一步');
-        on(btn, 'click', () => saveModelAndAdvance(input.value.trim()));
+        on(btn, 'click', safeSync(() => saveModelAndAdvance(input.value.trim()), 'stage3-save-text'));
         box.appendChild(btn);
         return;
       }
@@ -355,11 +403,11 @@ export function mountOnboarding(container, hostPort) {
       selectWrap.appendChild(select);
       box.appendChild(selectWrap);
       const btn = el('button', 'btn-primary', '保存并下一步');
-      on(btn, 'click', () => saveModelAndAdvance(select.value));
+      on(btn, 'click', safeSync(() => saveModelAndAdvance(select.value), 'stage3-save-pick'));
       box.appendChild(btn);
     }).catch(err => {
-      if (loading.parentNode) box.removeChild(loading);
-      showError(box, '拉取异常：' + String(err.message || err), () => { render(); });
+      console.error('[onboarding] stage3 models GET failed:', err);
+      try { renderCrashFallback(err); } catch (e) { console.error('[onboarding] crash fallback threw:', e); }
     });
 
     return box;
@@ -367,6 +415,8 @@ export function mountOnboarding(container, hostPort) {
 
   async function saveModelAndAdvance(model) {
     if (!model) return; // 用户需选/输入
+    // 整个 async 流程走 safeAsync，异常 → renderCrashFallback（spec §6.4）
+    // 此处保留 try/catch 仅做"已知失败" → stage state 设置；真正未预期异常由 safeAsync 兜底
     try {
       const r = await callApi('/v1/settings', {
         method: 'POST',
@@ -393,7 +443,7 @@ export function mountOnboarding(container, hostPort) {
   function renderStage4() {
     const box = el('div', 'onb-stage');
     box.appendChild(el('h2', '', 'Step 4 · 角色导入'));
-    box.appendChild(el('p', 'onb-hint', '上传 PNG 角色卡或 character_book JSON。生产模式仅支持内容上传，card_path 被拒绝。'));
+    box.appendChild(el('p', 'onb-hint', '上传 PNG 角色卡、角色卡 JSON 或 Preset JSON。生产模式仅支持内容上传，card_path 被拒绝。'));
 
     const fileInput = el('input', 'onb-input');
     fileInput.type = 'file';
@@ -402,56 +452,85 @@ export function mountOnboarding(container, hostPort) {
 
     const btn = el('button', 'btn-primary', '导入');
     const skipBtn = el('button', 'btn-secondary', '跳过（选择已有角色）');
-    on(btn, 'click', () => importCharacter(fileInput.files[0], box));
-    on(skipBtn, 'click', () => { stage = 5; render(); });
+    on(btn, 'click', safeSync(() => safeAsync(() => importCharacterOrPreset(fileInput.files[0], box), 'stage4-import'), 'stage4-import-entry'));
+    on(skipBtn, 'click', safeSync(() => { stage = 5; render(); }, 'stage4-skip'));
     box.appendChild(btn);
     box.appendChild(skipBtn);
     return box;
   }
 
-  async function importCharacter(file, box) {
+  // Stage 4 文件分发：PNG / 角色 JSON / Preset JSON 三路径（spec §4.3 修正）
+  // Preset JSON 启发式检测：含 `prompts` 数组 → 路由 /v1/presets/import；
+  // 否则按角色卡处理（含 chara_card_v2 spec 字段或裸 data 对象）。
+  async function importCharacterOrPreset(file, box) {
     if (!file) { showError(box, '请选择文件', null); return; }
     // 客户端校验：10 MiB 字节计数（spec §4.3，复用 app.js:1807-1817 逻辑）
     if (file.size > 10 * 1024 * 1024) { showError(box, '文件超过 10 MiB 限制', null); return; }
-    try {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let body;
-      // PNG magic bytes 检测：89 50 4E 47 0D 0A 1A 0A
-      if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
-        let binary = '';
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        body = { card_png_base64: btoa(binary) };
-      } else {
-        const text = new TextDecoder().decode(bytes);
-        let parsed;
-        try { parsed = JSON.parse(text); } catch {
-          showError(box, '文件既非 PNG 也非有效 JSON', null);
-          return;
-        }
-        body = { card_json: JSON.stringify(parsed) };
-      }
-      // 生产模式不发送 card_path（spec §4.3，handlers 拒绝；向导侧也不构造）
-      const r = await callApi('/v1/characters/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) { showError(box, '导入失败：' + hostPort.formatError(r.data, r.text), null); return; }
-      const cid = r.data && (r.data.character_id || r.data.id || r.data.uuid);
-      if (!cid) { showError(box, '导入响应缺少 character_id', null); return; }
-      const lr = await callApi('/v1/characters');
-      if (!lr.ok || !Array.isArray(lr.data) || !lr.data.some(c => (c.id || c.character_id) === cid)) {
-        showError(box, '导入后角色列表未包含该 ID，可能持久化失败', null);
-        return;
-      }
-      state.characterId = cid;
-      state.characterName = (lr.data.find(c => (c.id || c.character_id) === cid) || {}).name || cid;
-      stage = 5;
-      render();
-    } catch (err) {
-      showError(box, '导入异常：' + String(err.message || err), null);
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    // PNG magic bytes 检测：89 50 4E 47 0D 0A 1A 0A
+    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      await importCharacterCard(box, { card_png_base64: btoa(binary) });
+      return;
     }
+    // JSON 路径：先解析，再按 shape 分发
+    const text = new TextDecoder().decode(bytes);
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      showError(box, '文件既非 PNG 也非有效 JSON', null);
+      return;
+    }
+    // Preset JSON 启发式：Tavern preset 顶层含 `prompts` 数组（spec §4.3）
+    if (parsed && Array.isArray(parsed.prompts)) {
+      await importPresetJson(box, parsed);
+      return;
+    }
+    // 否则按角色卡处理（card_json 走 stringified）
+    await importCharacterCard(box, { card_json: JSON.stringify(parsed) });
+  }
+
+  async function importCharacterCard(box, body) {
+    // 生产模式不发送 card_path（spec §4.3，handlers 拒绝；向导侧也不构造）
+    const r = await callApi('/v1/characters/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { showError(box, '角色卡导入失败：' + hostPort.formatError(r.data, r.text), null); return; }
+    const cid = r.data && (r.data.character_id || r.data.id || r.data.uuid);
+    if (!cid) { showError(box, '导入响应缺少 character_id', null); return; }
+    // 列表校验：支持 bare array 与 {characters: [...]} 两种 shape（对齐 smoke.mjs:233 既有约定）
+    const lr = await callApi('/v1/characters');
+    const list = Array.isArray(lr.data) ? lr.data : (lr.ok && lr.data && Array.isArray(lr.data.characters) ? lr.data.characters : null);
+    if (!lr.ok || !list || !list.some(c => (c.id || c.character_id) === cid)) {
+      showError(box, '导入后角色列表未包含该 ID，可能持久化失败', null);
+      return;
+    }
+    state.characterId = cid;
+    state.characterName = (list.find(c => (c.id || c.character_id) === cid) || {}).name || cid;
+    stage = 5;
+    render();
+  }
+
+  async function importPresetJson(box, presetObj) {
+    // Preset 导入：POST /v1/presets/import，body = { preset_json: <stringified>, preset_id?: <id> }
+    // preset_id 缺省时 engine 应生成；此处用文件名或 fallback 'onb-imported'
+    const presetId = (presetObj && typeof presetObj.name === 'string' && presetObj.name)
+      || 'onb-' + Date.now();
+    const r = await callApi('/v1/presets/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preset_id: presetId, preset_json: JSON.stringify(presetObj) }),
+    });
+    if (!r.ok) { showError(box, 'Preset 导入失败：' + hostPort.formatError(r.data, r.text), null); return; }
+    const pid = r.data && (r.data.preset_id || r.data.id);
+    if (!pid) { showError(box, 'Preset 导入响应缺少 preset_id', null); return; }
+    state.presetId = pid;
+    // Preset 导入后仍进入 Stage 5，让用户选 Persona / 确认 Preset 选择
+    stage = 5;
+    render();
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -470,23 +549,34 @@ export function mountOnboarding(container, hostPort) {
       ph.value = '';
       charSelect.appendChild(ph);
       box.appendChild(charSelect);
+      // 角色列表失败需有可行动错误 + 重试（CodeRabbit id=3602857767）
       callApi('/v1/characters').then(r => {
-        if (r.ok && Array.isArray(r.data)) {
-          for (const c of r.data) {
-            const opt = el('option', '', c.name || c.id || c.character_id);
-            opt.value = c.id || c.character_id;
-            charSelect.appendChild(opt);
-          }
+        // 列表 shape 兼容：bare array ['id1', ...] 与 {characters: [{id, ...}, ...]}
+        const list = Array.isArray(r.data) ? r.data
+          : (r.ok && r.data && Array.isArray(r.data.characters) ? r.data.characters : null);
+        if (!r.ok || !list) {
+          showError(box, '加载角色失败：' + hostPort.formatError(r.data, r.text), () => { render(); });
+          return;
         }
+        for (const c of list) {
+          const id = typeof c === 'string' ? c : (c.id || c.character_id);
+          const name = typeof c === 'string' ? c : (c.name || c.id || c.character_id);
+          const opt = el('option', '', name);
+          opt.value = id;
+          charSelect.appendChild(opt);
+        }
+      }).catch(err => {
+        console.error('[onboarding] stage5 char-list GET failed:', err);
+        try { renderCrashFallback(err); } catch (e) { console.error('[onboarding] crash fallback threw:', e); }
       });
       const selBtn = el('button', 'btn-secondary', '确认角色');
-      on(selBtn, 'click', () => {
+      on(selBtn, 'click', safeSync(() => {
         if (charSelect.value) {
           state.characterId = charSelect.value;
           state.characterName = charSelect.options[charSelect.selectedIndex].text;
           render();
         }
-      });
+      }, 'stage5-pick-char'));
       box.appendChild(selBtn);
       return box;
     }
@@ -538,20 +628,21 @@ export function mountOnboarding(container, hostPort) {
 
       // 预览按钮（spec §4.3：chat/preview 只读、不创建 session、不返回 prompt body/secrets）
       const previewBtn = el('button', 'btn-secondary', '预览 effective config');
-      on(previewBtn, 'click', () => previewEffective(pSelect.value, ppSelect.value || null, previewWrap));
+      on(previewBtn, 'click', safeSync(() => safeAsync(() => previewEffective(pSelect.value, ppSelect.value || null, previewWrap), 'stage5-preview'), 'stage5-preview-entry'));
       box.appendChild(previewBtn);
 
       const btn = el('button', 'btn-primary', '下一步');
-      on(btn, 'click', () => {
+      on(btn, 'click', safeSync(() => {
         state.personaId = pSelect.value || 'default';
         state.presetId = ppSelect.value || null;
         stage = 6;
         render();
-      });
+      }, 'stage5-next'));
       box.appendChild(btn);
     }).catch(err => {
-      if (loading.parentNode) box.removeChild(loading);
-      showError(box, '加载异常：' + String(err.message || err), () => { render(); });
+      // 列表加载未预期异常 → 崩溃面板（spec §6.4 修正）
+      console.error('[onboarding] stage5 Promise.all failed:', err);
+      try { renderCrashFallback(err); } catch (e) { console.error('[onboarding] crash fallback threw:', e); }
     });
     return box;
   }
@@ -559,6 +650,7 @@ export function mountOnboarding(container, hostPort) {
   async function previewEffective(personaId, presetId, wrap) {
     wrap.innerHTML = '';
     wrap.appendChild(el('p', 'onb-hint', '预览中…'));
+    // 整个 async 流程由调用方 safeAsync 兜底；此处 try/catch 仅做"已知失败" → 阶段错误
     try {
       const body = { character_id: state.characterId, user_id: 'default', persona_id: personaId };
       if (presetId) body.preset_id = presetId;
@@ -598,12 +690,22 @@ export function mountOnboarding(container, hostPort) {
     const input = el('textarea', 'onb-input onb-chat-input');
     input.rows = 3;
     input.placeholder = '输入第一条消息…';
+    // 单飞期间禁用输入（spec §4.3 Stage 6 防双击/重试并发）
+    input.disabled = sendInFlight;
     box.appendChild(input);
 
-    const btn = el('button', 'btn-primary', '发送');
+    const btn = el('button', 'btn-primary', sendInFlight ? '发送中…' : '发送');
+    btn.disabled = sendInFlight;
     const btnFinishLater = el('button', 'btn-secondary', '完成向导，稍后聊天');
-    on(btn, 'click', () => sendFirstMessage(input.value.trim(), box));
-    on(btnFinishLater, 'click', () => finish(false));
+    btnFinishLater.disabled = sendInFlight;
+    // 点击走 safeSync 边界 → safeAsync 包 sendFirstMessage（spec §6.4 修正）
+    on(btn, 'click', safeSync(() => {
+      if (sendInFlight) return;           // 单飞保护：重复点击直接忽略
+      const msg = input.value.trim();
+      if (!msg) return;
+      safeAsync(() => sendFirstMessage(msg, box), 'stage6-send');
+    }, 'stage6-send-click'));
+    on(btnFinishLater, 'click', safeSync(() => { finish(false); }, 'stage6-finish-later'));
     box.appendChild(btn);
     box.appendChild(btnFinishLater);
 
@@ -613,32 +715,46 @@ export function mountOnboarding(container, hostPort) {
   }
 
   async function sendFirstMessage(message, box) {
-    if (!message) return;
+    // 单飞保护：进入即置位，finally 释放（防双击/重试并发，spec §4.3 Stage 6）
+    if (sendInFlight) return;
+    sendInFlight = true;
+    // 立即把按钮切到 disabled + "发送中…"（避免在 await 期间用户再点）
+    const sendBtn = box.querySelector('.btn-primary');
+    const laterBtn = box.querySelector('.btn-secondary');
+    const inputEl = box.querySelector('.onb-chat-input');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '发送中…'; }
+    if (laterBtn) laterBtn.disabled = true;
+    if (inputEl) inputEl.disabled = true;
+
     const replyWrap = box.querySelector('.onb-chat-reply');
-    if (!replyWrap) return;
+    if (!replyWrap) { sendInFlight = false; return; }
     replyWrap.innerHTML = '';
     replyWrap.appendChild(el('p', 'onb-hint', '发送中…'));
     try {
-      // 懒创建 session（spec §4.1 Stage 6）
-      const sr = await callApi('/v1/sessions/' + encodeURIComponent(state.characterId), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!sr.ok) {
-        replyWrap.innerHTML = '';
-        showError(replyWrap, '创建会话失败：' + hostPort.formatError(sr.data, sr.text), null);
-        return;
+      // 懒创建 session（spec §4.1 Stage 6）；若已有 sessionId 则复用，避免孤儿会话
+      let sessionId = state.sessionId;
+      if (!sessionId) {
+        const sr = await callApi('/v1/sessions/' + encodeURIComponent(state.characterId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!sr.ok) {
+          replyWrap.innerHTML = '';
+          showError(replyWrap, '创建会话失败：' + hostPort.formatError(sr.data, sr.text), null);
+          return;
+        }
+        sessionId = sr.data && (sr.data.session_id || sr.data.uuid || sr.data);
+        if (typeof sessionId !== 'string') {
+          replyWrap.innerHTML = '';
+          showError(replyWrap, '会话响应缺少 session_id', null);
+          return;
+        }
+        state.sessionId = sessionId;
       }
-      const sessionId = sr.data && (sr.data.session_id || sr.data.uuid || sr.data);
-      if (typeof sessionId !== 'string') {
-        replyWrap.innerHTML = '';
-        showError(replyWrap, '会话响应缺少 session_id', null);
-        return;
-      }
-      state.sessionId = sessionId;
 
       // SSE 流式首聊（spec §4.3，走 Port.fetcher 注入 auth）
+      if (sseAbort) { try { sseAbort.abort(); } catch {} }
       sseAbort = new AbortController();
       const body = {
         character_id: state.characterId,
@@ -659,7 +775,7 @@ export function mountOnboarding(container, hostPort) {
         const text = await res.text();
         let data; try { data = JSON.parse(text); } catch { data = text; }
         replyWrap.innerHTML = '';
-        // F6：SSE 请求失败显示重试
+        // F6：SSE 请求失败显示重试（保留 sessionId，重试时复用）
         showError(replyWrap, '请求失败：' + hostPort.formatError(data, text), null);
         return;
       }
@@ -670,8 +786,12 @@ export function mountOnboarding(container, hostPort) {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      let done = false;
-      while (!done) {
+      // SSE 终止标记跟踪（spec §6.6 修正）：
+      // reader.read() done=true 不等于流正常完成；只有 [DONE] sentinel 或 done chunk 才算正常出口。
+      // 提前 EOF（reader done 但未见 sentinel）→ 显示中断错误，保留 sessionId 供重试复用。
+      let completed = false;
+      let receivedAny = false;
+      while (true) {
         const { value, done: rDone } = await reader.read();
         if (rDone) break;
         buf += decoder.decode(value, { stream: true });
@@ -680,28 +800,47 @@ export function mountOnboarding(container, hostPort) {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const payload = line.slice(6);
-          if (payload === '[DONE]') { done = true; break; }
+          if (payload === '[DONE]') { completed = true; receivedAny = true; break; }
           let chunk;
           try { chunk = JSON.parse(payload); } catch { continue; }
+          receivedAny = true;
           // chunk 类型：body_chunk/think_chunk/plan/tool_call/tool_result/done
           // spec §4.3：不强制 Agent tool 调用——展示但不作通过条件
           if (chunk.type === 'body_chunk' && chunk.content) {
             bodyP.append(chunk.content);
           } else if (chunk.type === 'done') {
-            done = true;
+            completed = true;
             break;
           }
           // think_chunk/plan/tool_call/tool_result 展示与否可选，首版不展示避免 UI 复杂
         }
+        if (completed) break;
       }
-      // 收到 done → onComplete（spec §4.1 Stage 6 出口条件）
-      finish(true);
+      // SSE 终止标记判定（spec §6.6 修正）：
+      // - completed=true → 收到 [DONE] sentinel 或 done chunk，走 onComplete 出口
+      // - completed=false → 提前 EOF（reader done 但未见 sentinel）→ F6 中断错误，保留 sessionId 供重试复用
+      if (completed) {
+        finish(true);
+      } else {
+        replyWrap.innerHTML = '';
+        showError(replyWrap,
+          receivedAny ? '回复中断：流提前结束（未收到 done 标记）' : '回复中断：未收到任何流数据',
+          null);
+      }
     } catch (err) {
-      // F6：SSE 中断
+      // F6：SSE 中断（网络异常 / abort）
       if (replyWrap) {
         replyWrap.innerHTML = '';
         showError(replyWrap, '回复中断：' + String(err.message || err), null);
       }
+    } finally {
+      // 单飞释放（spec §4.3 Stage 6）：无论成功/失败/异常都恢复按钮状态。
+      // completed=true 时已走 finish(true)→onComplete，宿主会卸载向导，UI 恢复无意义但安全。
+      sendInFlight = false;
+      if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送'; }
+      if (laterBtn) laterBtn.disabled = false;
+      if (inputEl) inputEl.disabled = false;
+      if (sseAbort) { try { sseAbort.abort(); } catch {} sseAbort = null; }
     }
   }
 
@@ -725,10 +864,18 @@ export function mountOnboarding(container, hostPort) {
   // ── 返回 cleanup（spec §5.6）──────────────────────────────────────────────
   return function cleanup() {
     if (sseAbort) { try { sseAbort.abort(); } catch {} sseAbort = null; }
+    sendInFlight = false;
     listeners.forEach(({ target, type, handler, opts }) => {
       try { target.removeEventListener(type, handler, opts); } catch {}
     });
     listeners.length = 0;
     container.innerHTML = '';
+    // 焦点恢复（spec §4.2 a11y）：cleanup 时恢复 mount 前焦点元素
+    try {
+      if (preMountFocus && typeof preMountFocus.focus === 'function') {
+        preMountFocus.focus();
+      }
+    } catch {}
+    preMountFocus = null;
   };
 }

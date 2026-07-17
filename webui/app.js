@@ -2837,9 +2837,17 @@
   // 设计 spec §5.1, §5.4：shouldShowOnboarding 用同步信号，不发 HTTP
   function shouldShowOnboarding() {
     let onboarded = false;
-    try { onboarded = localStorage.getItem('airp_onboarded') === 'true'; } catch {}
+    let skipped = false;
+    try {
+      onboarded = localStorage.getItem('airp_onboarded') === 'true';
+      skipped = localStorage.getItem('airp_onboarding_skipped') === 'true';
+    } catch {}
     if (!onboarded) return true;
-    // 脱同步检测：标志说已 onboard 但 character_id 失效 → 重新触发（spec §5.3）
+    // 脱同步检测（spec §5.3）：
+    // - 用户显式跳过向导（skipped=true）→ 不再因 character_id 缺失重触发
+    //   （"skip 也写 onboarded=true" 是"别再烦我"的偏好，不是"配置完整"的断言）
+    // - 完成向导但 character_id 失效（外部删除）→ 重新触发
+    if (skipped) return false;
     let hasCharacter = false;
     try { hasCharacter = localStorage.getItem('airp_character_id') !== null; } catch {}
     if (!hasCharacter) return true;
@@ -2859,9 +2867,16 @@
   function onOnboardingComplete(config) {
     try {
       localStorage.setItem('airp_onboarded', 'true');
+      // 完成向导后清除 skipped 标志（之前可能跳过过，现在已正式完成）
+      localStorage.removeItem('airp_onboarding_skipped');
       if (config.character_id) localStorage.setItem('airp_character_id', config.character_id);
       if (config.persona_id) localStorage.setItem('airp_persona_id', config.persona_id);
-      if (config.preset_id) localStorage.setItem('airp_preset_id', config.preset_id);
+      // preset_id null clear（spec §5.5 修正）：null/空 → 移除旧值，避免残留
+      if (config.preset_id) {
+        localStorage.setItem('airp_preset_id', config.preset_id);
+      } else {
+        localStorage.removeItem('airp_preset_id');
+      }
     } catch {}
     unmountOnboarding();
     renderEffectiveConfigIndicator(config);
@@ -2870,7 +2885,12 @@
 
   // #209 onboarding 跳过回调（spec §5.5）：skip 也写标志，避免每次打扰；脱同步仍保护
   function onOnboardingSkip() {
-    try { localStorage.setItem('airp_onboarded', 'true'); } catch {}
+    try {
+      localStorage.setItem('airp_onboarded', 'true');
+      // skipped 标志（spec §5.3 修正）：让 shouldShowOnboarding 区分"完成向导但 character 失效"
+      // 与"显式跳过向导"——后者不再因 character_id 缺失而重触发
+      localStorage.setItem('airp_onboarding_skipped', 'true');
+    } catch {}
     unmountOnboarding();
     renderEffectiveConfigIndicator(loadKnownConfig());
     scheduleAutoConnect();
@@ -2918,6 +2938,9 @@
   // #209 bootstrapApp（spec §5.4）：first-run 检测门，替代无条件 scheduleAutoConnect
   async function bootstrapApp() {
     if (!shouldShowOnboarding()) {
+      // 已 onboard（含 skip 路径）→ 恢复 topbar effective config 指示器（spec §5.4 修正）
+      // 之前遗漏此调用，导致已 onboard 用户刷新后指示器不显示
+      renderEffectiveConfigIndicator(loadKnownConfig());
       scheduleAutoConnect();
       return;
     }

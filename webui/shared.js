@@ -18,6 +18,18 @@
   // mode === 'dev': each call reads sessionStorage('airp_engine_url'/'airp_bearer')
   //   so the wizard's Stage 1 write takes effect immediately without a Port setter.
   //   Falls back to http://127.0.0.1:8000 if unset.
+  //
+  // CodeRabbit id=3602743403：fetcher 缺少超时保护。已采纳：调用方未提供 signal 时
+  //   注入 30s 默认超时（AbortController），避免向导或主界面挂在 unreachable engine。
+  //   SSE 调用方（Stage 6）自带 sseAbort.signal → 跳过默认超时，不影响流式长响应。
+  //
+  // CodeRabbit id=3602743403：!res.ok → throw 归一化未采纳。原因：
+  //   1) 现有契约是"raw Response，调用方解析"；onboarding.js callApi 与 app.js api()
+  //      都需要读取非 200 响应体来 formatError。throw 会丢失 body 上下文。
+  //   2) SSE 端点 200 + 流式 body——!res.ok throw 对它无意义。
+  //   3) 强制 try/catch 在所有调用点扩散，违反"最小修改"原则。
+  //   若未来统一错误模型，应在 callApi 层包装而非 fetcher 层。
+  const DEFAULT_TIMEOUT_MS = 30000;
   function makeFetcher(mode) {
     return async function fetcher(path, opts) {
       opts = opts || {};
@@ -31,8 +43,25 @@
       }
       const headers = Object.assign({}, opts.headers || {});
       if (bearer) headers['Authorization'] = 'Bearer ' + bearer;
-      const res = await fetch(base + path, Object.assign({}, opts, { headers: headers }));
-      return res;
+      // 超时策略：调用方自带 signal（如 SSE sseAbort）→ 完全交给调用方管理；
+      //   否则注入 30s 默认超时（CodeRabbit id=3602743403 采纳）。
+      let signal = opts.signal || null;
+      let timeoutCtl = null;
+      if (!signal) {
+        try {
+          timeoutCtl = new AbortController();
+          signal = timeoutCtl.signal;
+          setTimeout(() => { try { timeoutCtl.abort(); } catch {} }, DEFAULT_TIMEOUT_MS);
+        } catch { signal = null; }  // AbortController 不支持时降级为无超时
+      }
+      const finalOpts = Object.assign({}, opts, { headers: headers });
+      if (signal) finalOpts.signal = signal;
+      try {
+        const res = await fetch(base + path, finalOpts);
+        return res;
+      } finally {
+        // 超时定时器在 fetch 完成后无需清理（已触发或将被 GC），但 abort 已无副作用
+      }
     };
   }
 

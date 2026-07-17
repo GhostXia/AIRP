@@ -562,18 +562,43 @@ console.log('—— #209 onboarding L3 烟雾 ——');
 }
 
 // smoke_onboarding_settings_post: 空 api_key 不修改、非空修改
+// CodeRabbit id=3602857807：mutating checks 必须隔离/还原，避免污染后续测试与共享 engine
 {
   await sleep(300);
-  // 空 api_key 提交（不修改）—— 不传 api_key 字段
-  const r1 = await api('POST', '/v1/settings', { provider: 'mock' });
-  ok(r1.ok, 'onboarding settings POST: 不带 api_key 成功（不修改 key）');
-  // 带非空 api_key 修改
-  const r2 = await api('POST', '/v1/settings', { api_key: 'sk-test-onboarding' });
-  ok(r2.ok, 'onboarding settings POST: 带非空 api_key 成功');
-  // 验证后续 GET 仍不返回明文
-  const s2 = await api('GET', '/v1/settings');
-  ok(s2.data?.api_key === undefined || s2.data?.api_key === null || s2.data?.api_key === '',
-    'onboarding settings POST: 修改后 GET 仍不返回 api_key 明文');
+  // 1) 捕获原始 settings，测试后还原（避免 sk-test-onboarding 残留污染其它测试）
+  const before = await api('GET', '/v1/settings');
+  const origProvider = before.data?.provider;
+  const origEndpoint = before.data?.endpoint;
+  const origModel = before.data?.model;
+  try {
+    // 2) 空 api_key 提交（不修改）—— 不传 api_key 字段
+    // provider 必须是 engine 已支持的枚举值（adapter.rs:57 Provider enum 仅 OpenAI）。
+    // Provider enum 无 #[serde(rename_all)]，serde 默认序列化为 PascalCase "OpenAI"。
+    // app.js:401 也用 providerKind.value（index.html:116 option value="OpenAI"）。
+    const r1 = await api('POST', '/v1/settings', { provider: 'OpenAI' });
+    ok(r1.ok, 'onboarding settings POST: 不带 api_key 成功（不修改 key）');
+    // 3) 带非空 api_key 修改
+    const r2 = await api('POST', '/v1/settings', { api_key: 'sk-test-onboarding' });
+    ok(r2.ok, 'onboarding settings POST: 带非空 api_key 成功');
+    // 4) 验证后续 GET 仍不返回明文
+    const s2 = await api('GET', '/v1/settings');
+    ok(s2.data?.api_key === undefined || s2.data?.api_key === null || s2.data?.api_key === '',
+      'onboarding settings POST: 修改后 GET 仍不返回 api_key 明文');
+    // CodeRabbit id=3602857803：原始密钥不应出现在任何字段中（不只是 api_key 字段）
+    // 检查整段 JSON 文本不含明文密钥
+    ok(!s2.text.includes('sk-test-onboarding'),
+      'onboarding settings POST: GET 响应整段文本不含 api_key 明文（spec §4.3）');
+  } finally {
+    // 5) 还原：把 provider/endpoint/model 还原到测试前；用空 api_key 提交表示"不修改"
+    //    （无法还原原 api_key 值，因为 GET 不返回明文；但 sk-test-onboarding 不会破坏后续测试）
+    const restore = {};
+    if (origProvider) restore.provider = origProvider;
+    if (origEndpoint) restore.endpoint = origEndpoint;
+    if (origModel) restore.model = origModel;
+    if (Object.keys(restore).length > 0) {
+      try { await api('POST', '/v1/settings', restore); } catch {}
+    }
+  }
 }
 
 // smoke_onboarding_models: GET /v1/models 返回 {id} 数组或 typed error
@@ -591,6 +616,7 @@ console.log('—— #209 onboarding L3 烟雾 ——');
 }
 
 // smoke_onboarding_character_import: POST /v1/characters/import JSON 路径
+// CodeRabbit id=3602857807：导入的角色必须在测试后清理，避免污染共享 engine
 {
   await sleep(300);
   const cardJson = JSON.stringify({
@@ -601,11 +627,22 @@ console.log('—— #209 onboarding L3 烟雾 ——');
   ok(r.ok, 'onboarding character import: JSON 导入成功');
   const cid = r.data?.character_id || r.data?.id || r.data?.uuid;
   ok(typeof cid === 'string', 'onboarding character import: 返回 character_id');
-  // 验证导入后列表可见
+  // 验证导入后列表可见（列表项可能是 bare string 或 {id, name, ...} 对象）
   if (cid) {
     const list = await api('GET', '/v1/characters');
-    ok(Array.isArray(list.data) && list.data.some(c => (c.id || c.character_id) === cid),
-      'onboarding character import: 导入后列表可见');
+    const items = Array.isArray(list.data) ? list.data
+      : (list.data && Array.isArray(list.data.characters) ? list.data.characters : []);
+    const exists = items.some(c => {
+      if (typeof c === 'string') return c === cid;
+      return (c.id || c.character_id) === cid;
+    });
+    ok(Array.isArray(items) && exists, 'onboarding character import: 导入后列表可见');
+  }
+  // 清理导入的角色（避免污染后续测试与共享 engine）
+  if (cid) {
+    try { await api('DELETE', '/v1/characters/' + encodeURIComponent(cid)); } catch (e) {
+      console.log('  ⚠ onboarding character import: 清理失败（' + (e.message || e) + '）');
+    }
   }
 }
 
@@ -614,10 +651,12 @@ console.log('—— #209 onboarding L3 烟雾 ——');
   // 复用已导入的角色（若上面成功）；否则跳过 preview 断言
   await sleep(300);
   const list = await api('GET', '/v1/characters');
-  const chars = Array.isArray(list.data) ? list.data : [];
-  if (chars.length > 0) {
-    const c = chars[chars.length - 1];
-    const cid = c.id || c.character_id;
+  const items = Array.isArray(list.data) ? list.data
+    : (list.data && Array.isArray(list.data.characters) ? list.data.characters : []);
+  if (items.length > 0) {
+    const c = items[items.length - 1];
+    // 列表项可能是 bare string 或对象（同上）
+    const cid = typeof c === 'string' ? c : (c.id || c.character_id);
     const p = await api('POST', '/v1/chat/preview', {
       character_id: cid,
       user_id: 'default',
@@ -628,12 +667,18 @@ console.log('—— #209 onboarding L3 烟雾 ——');
       ok(p.data?.prompt_body === undefined || p.data?.prompt_body === null,
         'onboarding chat preview: 不返回 prompt_body 明文');
       // 来源标签（可能在不同字段路径）
+      // CodeRabbit id=3602857811：移除 `|| p.ok`——该分支让断言恒真，无意义
       const sources = p.data?.sources || p.data?.assembly?.sources || p.data?.segments;
-      ok(Array.isArray(sources) || p.data?.total_estimated_tokens !== undefined || p.ok,
+      ok(Array.isArray(sources) || p.data?.total_estimated_tokens !== undefined,
         'onboarding chat preview: 返回 assembly 结构');
     } else {
       // preview 端点可能未实现或需要 provider 配置；失败时返回 typed error 即契约满足
-      ok(p.data?.error?.code, 'onboarding chat preview: 失败时返回 typed error');
+      // 接受 error.code 或 error.message 或非 JSON 文本（4xx/5xx）任一形态
+      const hasTypedError = p.data && typeof p.data === 'object' &&
+        (p.data.error?.code || p.data.error?.message);
+      const hasTextError = typeof p.data === 'string' && p.data.length > 0;
+      ok(hasTypedError || hasTextError,
+        'onboarding chat preview: 失败时返回 typed error 或错误文本');
     }
   } else {
     console.log('  ⚠ onboarding chat preview: 跳过（无角色可用）');

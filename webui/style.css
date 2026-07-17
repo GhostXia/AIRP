@@ -102,13 +102,13 @@ select, textarea, input[type="file"], input[type="number"] { max-width:100%; bor
 .onb-reply-body { padding:10px; background:var(--surface-alt); border-radius:6px; white-space:pre-wrap; }
 .onb-crash { text-align:center; padding:40px 20px; }
 .onb-crash h2 { color:var(--danger); margin:0 0 12px; }
-.onb-crash-msg { color:var(--muted); font-size:12px; margin:0 0 20px; word-break:break-word; }
+.onb-crash-msg { color:var(--muted); font-size:12px; margin:0 0 20px; overflow-wrap:anywhere; }
 .onb-btn-row { display:flex; gap:10px; justify-content:center; }
 .btn-tertiary { border-color:transparent; background:transparent; color:var(--muted); }
 .btn-tertiary:hover { color:var(--primary); border-color:transparent; }
 .onb-toast { position:fixed; bottom:20px; right:20px; z-index:2000; padding:10px 14px; border-radius:6px; font-size:12px; max-width:320px; }
 .onb-toast-warn { background:#fff8f4; border:1px solid #a16207; color:#a16207; }
-/* topbar effective config 指示器（spec §5.8）*/
+/* topbar effective config 指示器（spec §5.8） */
 .effective-config-indicator { font-size:11px; color:var(--muted); margin-left:auto; padding:3px 8px; border:1px solid var(--border); border-radius:5px; background:var(--surface-alt); }
 .effective-config-indicator[hidden] { display:none; }
 

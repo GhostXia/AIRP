@@ -203,6 +203,113 @@ test('F4 运行时崩溃：cleanup 不 throw 且清空 container', () => {
   assert.equal(container.innerHTML, '');
 });
 
+test('F4 renderStage 同步抛错 → renderCrashFallback 渲染崩溃面板（spec §6.4）', () => {
+  // 触发 render() 顶层 try/catch → renderCrashFallback 路径：
+  // 让 container.appendChild 第一次调用抛错（renderStage 同步异常），
+  // 第二次正常（让 renderCrashFallback 能渲染崩溃面板）
+  const { port } = makeMockPort();
+  const container = makeMockContainer();
+  let firstCall = true;
+  const orig = container.appendChild;
+  container.appendChild = function (node) {
+    if (firstCall) { firstCall = false; throw new Error('mock sync render crash'); }
+    return orig.call(this, node);
+  };
+  // mount 应不 throw（render 的 try/catch 捕获 + renderCrashFallback 渲染面板）
+  assert.doesNotThrow(() => mountOnboarding(container, port));
+  // 验证渲染了崩溃面板：递归查找 h2 with textContent '向导遇到问题'
+  function findCrashH2(node) {
+    if (node.tagName === 'H2' && node.textContent === '向导遇到问题') return node;
+    if (!node._children) return null;
+    for (const c of node._children) {
+      const r = findCrashH2(c);
+      if (r) return r;
+    }
+    return null;
+  }
+  let crashH2 = null;
+  for (const c of container._children) {
+    crashH2 = findCrashH2(c);
+    if (crashH2) break;
+  }
+  assert.ok(crashH2, '应渲染崩溃面板（h2 "向导遇到问题"）');
+});
+
+test('F4 崩溃面板含 [重试向导] / [退回手动配置] 按钮（spec §6.4）', () => {
+  const { port } = makeMockPort();
+  const container = makeMockContainer();
+  let firstCall = true;
+  const orig = container.appendChild;
+  container.appendChild = function (node) {
+    if (firstCall) { firstCall = false; throw new Error('mock crash'); }
+    return orig.call(this, node);
+  };
+  mountOnboarding(container, port);
+  // 递归查找所有 button 节点
+  function findAll(node, pred, acc) {
+    if (pred(node)) acc.push(node);
+    if (node._children) for (const c of node._children) findAll(c, pred, acc);
+  }
+  const buttons = [];
+  for (const c of container._children) {
+    findAll(c, n => n.tagName === 'BUTTON', buttons);
+  }
+  const texts = buttons.map(b => b.textContent);
+  assert.ok(texts.includes('重试向导'), '崩溃面板应含 [重试向导] 按钮');
+  assert.ok(texts.includes('退回手动配置'), '崩溃面板应含 [退回手动配置] 按钮');
+});
+
+test('F5 Stage 1 fetcher 抛错 → 渲染 Stage 1 错误面板（不降级 onSkip，不触发 renderCrashFallback）', async () => {
+  // spec §6.5：F5 HTTP 失败由向导内阶段错误处理，不降级；spec §6.4：仅同步渲染崩溃走 F4
+  const { port, calls } = makeMockPort({
+    mode: 'production',  // prod 模式自动触发 runHealthCheck
+    fetcher: async () => { throw new Error('mock network failure'); },
+    onSkip: () => calls.onSkip.push(null),
+  });
+  const container = makeMockContainer();
+  mountOnboarding(container, port);
+  // prod 模式通过 setTimeout(0) 触发 safeAsync(runHealthCheck)
+  // 等待 setTimeout + microtasks 完成
+  await new Promise(r => setTimeout(r, 50));
+
+  // onSkip 不应被调用（fetcher 失败由向导内 Stage 1 错误处理）
+  assert.equal(calls.onSkip.length, 0, 'fetcher 失败不应自动 onSkip');
+
+  // 应渲染错误面板（showError 添加 .onb-error 元素）
+  function findErrorNode(node) {
+    if (node.className && node.className.includes('onb-error')) return node;
+    if (!node._children) return null;
+    for (const c of node._children) {
+      const r = findErrorNode(c);
+      if (r) return r;
+    }
+    return null;
+  }
+  let errNode = null;
+  for (const c of container._children) {
+    errNode = findErrorNode(c);
+    if (errNode) break;
+  }
+  assert.ok(errNode, '应渲染 .onb-error 错误面板（Stage 1 fetcher 失败 → showError）');
+
+  // 不应渲染崩溃面板（F4 不应触发——F5 由 runHealthCheck 内 try/catch 处理）
+  function findCrashH2(node) {
+    if (node.tagName === 'H2' && node.textContent === '向导遇到问题') return node;
+    if (!node._children) return null;
+    for (const c of node._children) {
+      const r = findCrashH2(c);
+      if (r) return r;
+    }
+    return null;
+  }
+  let crashH2 = null;
+  for (const c of container._children) {
+    crashH2 = findCrashH2(c);
+    if (crashH2) break;
+  }
+  assert.equal(crashH2, null, 'F5 不应触发 renderCrashFallback');
+});
+
 test('F5 fetcher 失败不降级到 onSkip（向导内处理）', async () => {
   const { port, calls } = makeMockPort({
     fetcher: async () => {
