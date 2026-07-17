@@ -397,6 +397,330 @@ mod tests {
         assert!(serialized.contains("上一轮用户消息"));
         assert!(serialized.contains("上一轮 AI 回复"));
     }
+
+    // ── Phase 2h: trace 完整性收口 ───────────────────────────────────────────
+
+    #[test]
+    fn test_phase_2h_trace_fills_all_six_revisions_on_new_data() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        // effective_root（Chat 模式下 = data_root/users/{uid}）
+        let uid = crate::types::UserId::new("phase2h-user").unwrap();
+        let effective_root = state.data_root.join("users").join(uid.as_str());
+        fs::create_dir_all(effective_root.join("characters")).unwrap();
+        fs::create_dir_all(effective_root.join("presets")).unwrap();
+
+        // 角色：写入 card.json + 手动创建 character revision 指针（绕过 import 路径）
+        let cid = CharacterId::new("phase2h-char").unwrap();
+        let char_dir = effective_root.join("characters").join(cid.as_str());
+        fs::create_dir_all(&char_dir).unwrap();
+        fs::write(char_dir.join("card.json"), r#"{"name":"Phase2h","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}"#).unwrap();
+        fs::write(char_dir.join("current_revision"), "3").unwrap();
+        // 角色 world（lorebook）revision
+        let world_dir = char_dir.join("world");
+        fs::create_dir_all(&world_dir).unwrap();
+        fs::write(world_dir.join("current_revision"), "5").unwrap();
+        // 角色 state revision
+        let state_dir = char_dir.join("state");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(state_dir.join("current_revision"), "42").unwrap();
+        // 角色 memory revision（已升级路径，CF-3 后 memory/ 为权威）
+        let memory_dir = char_dir.join("memory");
+        fs::create_dir_all(&memory_dir).unwrap();
+        fs::write(memory_dir.join("current_revision"), "9").unwrap();
+
+        // Preset revision
+        let preset_dir = effective_root.join("presets").join("phase2h-preset");
+        fs::create_dir_all(&preset_dir).unwrap();
+        fs::write(preset_dir.join("current_revision"), "2").unwrap();
+        // Preset 必须存在 current 指针才能被加载（preset.rs::load 要求）
+        fs::write(preset_dir.join("current"), "gen-phase2h").unwrap();
+        fs::create_dir_all(preset_dir.join("versions").join("gen-phase2h")).unwrap();
+        fs::write(
+            preset_dir
+                .join("versions")
+                .join("gen-phase2h")
+                .join("preset.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "name": "phase2h-preset",
+                "prompt_order": [],
+                "prompts": [],
+                "parameters": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Persona revision（双源读取：优先 current_revision）
+        // personas 目录在 effective_root 下（effective_root 已含 users/{uid}）
+        let persona_asset_dir = effective_root.join("personas").join("default");
+        fs::create_dir_all(&persona_asset_dir).unwrap();
+        fs::write(persona_asset_dir.join("current_revision"), "7").unwrap();
+        // 同步写入工作副本 personas/default.json，使 PersonaService::load 能读到
+        let persona_path = persona_asset_dir.with_file_name("default.json");
+        fs::write(
+            &persona_path,
+            serde_json::json!({
+                "schema": 2,
+                "id": "default",
+                "revision": 7,
+                "updated_at": "2026-07-17T00:00:00Z",
+                "name": "Phase2h Persona",
+                "description": "phase2h test persona",
+                "variables": {},
+                "bindings": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut req = base_request();
+        req.character_id = Some(cid.clone());
+        req.preset_id = Some(crate::types::PresetId::new("phase2h-preset").unwrap());
+        req.user_id = Some(uid.as_str().to_string());
+        req.persona_id = Some("default".to_string());
+
+        let pipeline = prepare_pipeline(&req, &state).unwrap();
+
+        let eff = &pipeline.prompt_trace.effective;
+        assert_eq!(
+            eff.character_revision,
+            Some(3),
+            "character_revision 应填充 3"
+        );
+        assert_eq!(eff.lorebook_revision, Some(5), "lorebook_revision 应填充 5");
+        assert_eq!(eff.state_revision, Some(42), "state_revision 应填充 42");
+        assert_eq!(eff.memory_revision, Some(9), "memory_revision 应填充 9");
+        assert_eq!(eff.preset_revision, Some(2), "preset_revision 应填充 2");
+        assert_eq!(
+            eff.persona_revision,
+            Some(7),
+            "persona_revision 应填充 7（双源优先读 current_revision）"
+        );
+
+        // 新数据上不应推送任何 *_revision_unavailable 诊断
+        let unavailable: Vec<_> = pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind.ends_with("_revision_unavailable"))
+            .collect();
+        assert!(
+            unavailable.is_empty(),
+            "新数据上不应推送 *_revision_unavailable，实际: {:?}",
+            unavailable
+        );
+    }
+
+    #[test]
+    fn test_phase_2h_trace_pushes_all_six_unavailable_diagnostics_on_legacy_data() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        // 旧数据场景：仅创建角色目录与 card.json，无任何 current_revision 指针；
+        // 也不创建 world/state/memory 目录、preset 目录、persona asset 目录。
+        let uid = crate::types::UserId::new("phase2h-legacy").unwrap();
+        let effective_root = state.data_root.join("users").join(uid.as_str());
+        fs::create_dir_all(effective_root.join("characters")).unwrap();
+
+        let cid = CharacterId::new("phase2h-legacy-char").unwrap();
+        let char_dir = effective_root.join("characters").join(cid.as_str());
+        fs::create_dir_all(&char_dir).unwrap();
+        fs::write(
+            char_dir.join("card.json"),
+            r#"{"name":"Phase2h Legacy","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}"#,
+        )
+        .unwrap();
+        // 故意不写 char_dir/current_revision
+        // 故意不创建 world/、state/、memory/ 子目录
+        // 故意不创建 presets/phase2h-legacy-preset/ 目录
+        // 故意不创建 personas/default/ 目录（PersonaService::get_default 会回退到 Persona::initial，
+        //   revision = 0，触发我们新加的 "Persona.revision == 0 视作 unavailable" 分支）
+
+        let mut req = base_request();
+        req.character_id = Some(cid.clone());
+        req.preset_id = Some(crate::types::PresetId::new("phase2h-legacy-preset").unwrap());
+        req.user_id = Some(uid.as_str().to_string());
+        // 不设置 req.persona_id —— 让 PersonaService 走 get_default 兜底
+
+        let pipeline = prepare_pipeline(&req, &state).unwrap();
+
+        let mut kinds: Vec<String> = pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .map(|d| d.kind.clone())
+            .collect();
+        kinds.sort();
+        let expected = vec![
+            "character_revision_unavailable",
+            "lorebook_revision_unavailable",
+            "memory_revision_unavailable",
+            "persona_revision_unavailable",
+            "preset_revision_unavailable",
+            "state_revision_unavailable",
+        ];
+        assert_eq!(
+            kinds, expected,
+            "6 个 *_revision_unavailable 诊断都应推送，实际: {:?}",
+            kinds
+        );
+
+        // 全部 revision 字段应为 None
+        let eff = &pipeline.prompt_trace.effective;
+        assert!(
+            eff.character_revision.is_none(),
+            "character_revision 应 None"
+        );
+        assert!(eff.lorebook_revision.is_none(), "lorebook_revision 应 None");
+        assert!(eff.state_revision.is_none(), "state_revision 应 None");
+        assert!(eff.memory_revision.is_none(), "memory_revision 应 None");
+        assert!(eff.preset_revision.is_none(), "preset_revision 应 None");
+        assert!(eff.persona_revision.is_none(), "persona_revision 应 None");
+    }
+
+    /// Phase 2h：scene 模式下 character_revision 字段语义不适用（多角色无单一 revision），
+    /// 应留 `None` 且**不**推送 `character_revision_unavailable` 诊断。
+    /// 与 `test_ms6_scene_pipeline_builds_multi_char_prompt`（line ~748）互补：
+    /// 那条测试断言 character_id 为 None；这条断言 character_revision 为 None。
+    ///
+    /// CodeRabbit 审计修复（nitpick）：扩展断言覆盖 lorebook / state / memory 三个字段，
+    /// 它们在 scene 模式下同样不适用，都应留 None 且不推送对应 *_revision_unavailable 诊断。
+    #[test]
+    fn test_phase_2h_scene_mode_leaves_character_revision_none_without_diagnostic() {
+        use crate::scene::{CharacterEntry, CharacterRole, LorebookMerge, SceneConfig};
+        use crate::types::SceneId;
+
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        let scene = SceneConfig {
+            scene_id: SceneId::new("phase2h_scene").unwrap(),
+            description: "phase2h scene".to_string(),
+            characters: vec![CharacterEntry {
+                character_id: "phase2h_scene_char".to_string(),
+                role: CharacterRole::Primary,
+                intro: String::new(),
+            }],
+            narrator_style: String::new(),
+            lorebook_merge: LorebookMerge::Union,
+            format_hint: String::new(),
+        };
+        scene.save(tmp.path()).unwrap();
+
+        let mut req = base_request();
+        req.scene_id = Some(SceneId::new("phase2h_scene").unwrap().to_string());
+        // 同时提供 character_id，应被 scene 模式忽略（参见 chat_pipeline/tests.rs:774-794 现有 scene 测试）
+        req.character_id = Some(CharacterId::new("ignored-character").unwrap());
+
+        let pipeline = prepare_pipeline(&req, &state).unwrap();
+        let eff = &pipeline.prompt_trace.effective;
+        let diag_kinds: Vec<_> = pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .map(|d| d.kind.as_str())
+            .collect();
+
+        // character / lorebook / state / memory 在 scene 模式下都应留 None
+        assert!(
+            eff.character_revision.is_none(),
+            "scene: character_revision 应 None"
+        );
+        assert!(
+            eff.lorebook_revision.is_none(),
+            "scene: lorebook_revision 应 None"
+        );
+        assert!(
+            eff.state_revision.is_none(),
+            "scene: state_revision 应 None"
+        );
+        assert!(
+            eff.memory_revision.is_none(),
+            "scene: memory_revision 应 None"
+        );
+        assert!(eff.character_id.is_none(), "scene: character_id 应 None");
+
+        // scene 模式不应推送任何 character/lorebook/state/memory 相关的 *_revision_unavailable
+        for kind in [
+            "character_revision_unavailable",
+            "lorebook_revision_unavailable",
+            "state_revision_unavailable",
+            "memory_revision_unavailable",
+        ] {
+            assert!(
+                !diag_kinds.contains(&kind),
+                "scene 模式不应推送 {kind}，实际诊断: {:?}",
+                diag_kinds
+            );
+        }
+    }
+
+    /// CodeRabbit 审计阻塞修复：当 `character_card_id` 或 `lorebook_path` 显式提供
+    /// 外部 card / lorebook 源时，不读取 `characters/{cid}/` 下的 canonical revision
+    /// 指针——实际 prompt 内容不来自该目录，读取会产生误导性 revision。
+    /// 应留 None 且不推送对应 *_revision_unavailable 诊断。
+    #[test]
+    fn test_phase_2h_external_card_and_lorebook_skip_canonical_revision() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+
+        let uid = crate::types::UserId::new("phase2h-ext").unwrap();
+        let effective_root = state.data_root.join("users").join(uid.as_str());
+        fs::create_dir_all(effective_root.join("characters")).unwrap();
+
+        let cid = CharacterId::new("phase2h-ext-char").unwrap();
+        let char_dir = effective_root.join("characters").join(cid.as_str());
+        fs::create_dir_all(&char_dir).unwrap();
+        // canonical 目录下有 current_revision，但因为使用了外部 card，不应读取它
+        fs::write(char_dir.join("current_revision"), "99").unwrap();
+        // world/ 也放一个 current_revision，但因 lorebook_path 被指定，不应读取
+        let world_dir = char_dir.join("world");
+        fs::create_dir_all(&world_dir).unwrap();
+        fs::write(world_dir.join("current_revision"), "88").unwrap();
+
+        let mut req = base_request();
+        req.character_id = Some(cid.clone());
+        req.user_id = Some(uid.as_str().to_string());
+        // 外部内联 card（JSON 字符串）—— character_card_id 非 None，跳过 canonical revision
+        req.character_card_id = Some(
+            r#"{"name":"External","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}"#.to_string(),
+        );
+        // 外部内联 lorebook（JSON 字符串）—— lorebook_path 非 None，跳过 canonical revision
+        req.lorebook_path = Some(r#"{"entries":[]}"#.to_string());
+
+        let pipeline = prepare_pipeline(&req, &state).unwrap();
+        let eff = &pipeline.prompt_trace.effective;
+        let diag_kinds: Vec<_> = pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .map(|d| d.kind.as_str())
+            .collect();
+
+        assert!(
+            eff.character_revision.is_none(),
+            "外部 card 时 character_revision 应 None（不读 canonical 99）"
+        );
+        assert!(
+            eff.lorebook_revision.is_none(),
+            "外部 lorebook 时 lorebook_revision 应 None（不读 canonical 88）"
+        );
+        assert!(
+            !diag_kinds.contains(&"character_revision_unavailable"),
+            "外部 card 不应推送 character_revision_unavailable"
+        );
+        assert!(
+            !diag_kinds.contains(&"lorebook_revision_unavailable"),
+            "外部 lorebook 不应推送 lorebook_revision_unavailable"
+        );
+    }
 }
 
 // ── M_LS-3 tests: persist_live_state → history.jsonl ─────────────────────────

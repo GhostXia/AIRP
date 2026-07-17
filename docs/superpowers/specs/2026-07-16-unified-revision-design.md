@@ -2,11 +2,12 @@
 
 > 日期：2026-07-16
 >
-> 状态：**设计 spec，部分实现**。本文为 #115 Phase 2 的独立设计。
+> 状态：**已实现**。本文为 #115 Phase 2 的独立设计。
 >
 > - **Phase 2a 已实现**（PR #201）：`engine/src/revision/` 底层模块（tree_hash + manifest + atomic）+ Phase 2h 部分（4 个 `*_revision_unavailable` 诊断）。
-> - **Phase 2b-2g 未实现**：各 asset service（Preset / Character / Worldbook / State / Memory / Persona）尚未接入 revision 模块。
-> - **Phase 2h 部分实现**：诊断已补全，但 `EffectiveIds` 的 5 个 `*_revision` 字段仍留空（待 Phase 2b-2g 接入后填充）。
+> - **Phase 2b 已实现**（PR #202）：Preset 接入统一 revision 合同（保留 `versions/{generation}/` + `current` 旧指针）。
+> - **Phase 2c-2g 已实现**（PR #203）：Character / Worldbook / State / Memory / Persona 接入统一 revision 合同。
+> - **Phase 2h 已实现**（本 PR）：`build_prompt_trace` 全部 6 个 `*_revision` 字段按 §5.3 填充实际 u64 或推送对应 `*_revision_unavailable` 诊断；WebUI 装配预览面板展示 6 个 revision（含 unavailable 标识）；`production-browser-smoke.mjs` 覆盖 6 个 revision 字段渲染断言。
 >
 > 任何能力交付以源码、测试和 `CURRENT-BASELINE.md` 为准。
 >
@@ -313,11 +314,13 @@ characters/{character_id}/memory/
 | 字段 | 填充来源 | 不可用时 |
 |---|---|---|
 | `character_revision` | `characters/{id}/current_revision` 文件读取 | 推送 `character_revision_unavailable` |
-| `persona_revision` | `PersonaService::get` 返回的 `revision` 字段（已实现） | 推送 `persona_revision_unavailable`（当前未推送，§6.6 补） |
-| `preset_revision` | `presets/{id}/current_revision` 文件读取；回退到 `versions/{generation}/` 计数 | 推送 `preset_revision_unavailable` |
-| `lorebook_revision` | `characters/{id}/world/current_revision` 或 `scenes/{id}/world/current_revision` 读取 | 推送 `lorebook_revision_unavailable`（当前未推送，§6.4 补） |
-| `state_revision` | `characters/{id}/state/current_revision` 读取；= `history.jsonl` 末行 revision | 推送 `state_revision_unavailable`（当前未推送，§6.5 补） |
-| `memory_revision` | `characters/{id}/memory/current_revision` 读取 | 推送 `memory_revision_unavailable`（当前未推送，§6.6 补） |
+| `persona_revision` | `personas/{id}/current_revision` 读取；**缺失**（Ok(None)）时回退 `Persona.revision` legacy 字段（仅当 `> 0`，`0` 视为未保存）；**读取/解析失败**（Err）不回退，直接推送诊断 | 推送 `persona_revision_unavailable` |
+| `preset_revision` | `presets/{id}/current_revision` 文件读取 | 推送 `preset_revision_unavailable` |
+| `lorebook_revision` | `characters/{id}/world/current_revision` 读取（仅 character 上下文；scene 模式留 `None` 不推送诊断） | 推送 `lorebook_revision_unavailable` |
+| `state_revision` | `characters/{id}/state/current_revision` 读取；= `history.jsonl` 末行 revision | 推送 `state_revision_unavailable` |
+| `memory_revision` | `characters/{id}/memory/current_revision` 读取 | 推送 `memory_revision_unavailable` |
+
+> **Phase 2h 实现备注**：当 `character_card_id` 或 `lorebook_path` 显式提供外部/内联源时，不读取 canonical `characters/{cid}/` revision 指针（实际 prompt 内容不来自该目录），对应字段留 `None` 且不推送诊断。scene 模式下 `character/lorebook/state/memory_revision` 均留 `None` 不推送诊断（多角色无单一 revision）。
 
 **回退规则**：asset 目录无 `current_revision` 文件时（旧数据未升级），**禁止**用 mtime、文件名时间戳或 `0` 冒充；必须推送对应 `*_revision_unavailable` 诊断，并在诊断 message 中说明原因（如「asset 未升级到 revision 合同」）。
 
@@ -426,7 +429,7 @@ characters/{character_id}/memory/
 1. A 不符合"可追溯"目标；Persona 的 base lock / drift / rollback 合同由 #114 推进，但 revision 存储格式升级属本设计范围。
 2. C 违反 SESSION-DATA-DESIGN.md §4 的 `content_revision: u64` 合同；Persona 的 u64 形式符合合同，无需改字符串。
 3. B 实现路径：`PersonaService::save` 在 `replace_file(personas/{id}.json)` 之后，额外执行 atomic commit 到 `personas/{id}/revisions/{revision}/`；`personas/{id}.json` 保留作为快速读取的当前值（与 `personas/{id}/revisions/{current_revision}/persona.json` 内容一致）。
-4. B 的 `EffectiveIds.persona_revision` 填充规则：优先读 `personas/{id}/current_revision`，回退读 `personas/{id}.json` 的 `revision` 字段（兼容旧数据）；两者都不可用时推送 `persona_revision_unavailable` 诊断（当前未推送，本设计补）。
+4. B 的 `EffectiveIds.persona_revision` 填充规则：优先读 `personas/{id}/current_revision`；指针**缺失**（Ok(None)，旧数据未升级）时回退读 `personas/{id}.json` 的 `revision` 字段（仅当 `> 0`，`0` 视为未保存）；指针**读取/解析失败**（Err，文件损坏等）不回退，直接推送 `persona_revision_unavailable` 诊断。
 5. B 不实现 base lock / drift / rollback / 头像 / 导入导出；这些属 #114 范围。
 
 ### 6.7 决策 D7：乐观锁统一为 `RevisionConflict` 响应
@@ -584,7 +587,7 @@ SESSION-DATA-DESIGN.md §4 定义 session-scoped `revisions/{revision_id}/manife
 - 角色级和场景级世界书各自独立 revision 空间
 - `WorldbookImportReport` 补 `source_hash` / `imported_at` / `converter_version` 字段，对齐 `PresetImportReport` schema
 - `WorldbookImportReport` 持久化到 `revisions/{content_revision}/import_report.json` sidecar
-- `build_prompt_trace` 填充 `lorebook_revision`，新增 `lorebook_revision_unavailable` 诊断（当前缺）
+- `build_prompt_trace` 填充 `lorebook_revision`，新增 `lorebook_revision_unavailable` 诊断
 
 **验收**：
 
@@ -600,7 +603,7 @@ SESSION-DATA-DESIGN.md §4 定义 session-scoped `revisions/{revision_id}/manife
 - `StateService::write` 在现有 `state/live.json` + `state/history.jsonl` 基础上，新增 `state/revisions/{content_revision}/state.json` + `state/current_revision`
 - `state/revisions/{content_revision}/state.json` 内容 = 对应 `history.jsonl` 行的 `state` 字段
 - `state/current_revision` = `history.jsonl` 末行 `revision`
-- `build_prompt_trace` 填充 `state_revision`，新增 `state_revision_unavailable` 诊断（当前缺）
+- `build_prompt_trace` 填充 `state_revision`，新增 `state_revision_unavailable` 诊断
 
 **不包含**：gating 版本化（见 D5）
 
@@ -617,7 +620,7 @@ SESSION-DATA-DESIGN.md §4 定义 session-scoped `revisions/{revision_id}/manife
 - `VolumeStore` 在 `current.md` / `index.md` / `volumes/` 基础上，新增 `memory/revisions/{content_revision}/` + `memory/current_revision`
 - `append_to_current` 不再直接 append；改为：复制 `current.md` 到 staging、append 新内容、atomic commit 为新 revision、更新 `current.md` 和 `current_revision`
 - `write_volume`（封卷）产生新 revision
-- `build_prompt_trace` 填充 `memory_revision`，新增 `memory_revision_unavailable` 诊断（当前缺）
+- `build_prompt_trace` 填充 `memory_revision`，新增 `memory_revision_unavailable` 诊断
 
 **验收**：
 
@@ -631,7 +634,7 @@ SESSION-DATA-DESIGN.md §4 定义 session-scoped `revisions/{revision_id}/manife
 
 - `PersonaService::save` 在现有 `replace_file(personas/{id}.json)` 基础上，新增 `personas/{id}/revisions/{revision}/persona.json` + `personas/{id}/current_revision`
 - `personas/{id}.json` 保留作为快速读取的当前值（与 `revisions/{current_revision}/persona.json` 内容一致）
-- `build_prompt_trace` 在 `personas/{id}/current_revision` 不可读时推送 `persona_revision_unavailable` 诊断（当前未推送，本阶段补）
+- `build_prompt_trace` 在 `personas/{id}/current_revision` 不可读时推送 `persona_revision_unavailable` 诊断
 - 乐观锁冲突响应迁移到统一 `RevisionConflict { asset_kind: "persona", asset_id, current_revision }`，`PersonaRevisionConflict` 作为 schema=1 兼容格式保留一个迁移窗口
 
 **不包含**：base lock / drift / rollback / 头像 / 导入导出（属 #114）
@@ -649,7 +652,7 @@ SESSION-DATA-DESIGN.md §4 定义 session-scoped `revisions/{revision_id}/manife
 
 - `build_prompt_trace` 全部 6 个 `*_revision` 字段按 §5.3 规则填充
 - 6 个 `*_revision_unavailable` 诊断在 asset 未升级时全部推送
-- WebUI 装配预览面板展示 6 个 revision（已交付 Persona revision 展示，本阶段补其他 5 个）
+- WebUI 装配预览面板展示 6 个 revision（含 unavailable 标识）
 - `production-browser-smoke.mjs` 覆盖 6 个 revision 字段的渲染断言
 
 **验收**：

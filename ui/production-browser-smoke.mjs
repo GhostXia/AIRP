@@ -106,12 +106,25 @@ try {
   assert.equal(await page.evaluate(() => window.__airpXss), 0);
 
   // #194: hostile trace metadata must flow through the real renderer as text only.
+  // #115 Phase 2h: 同时验证 6 个 *_revision 字段都在装配预览面板渲染（· r{N} 后缀）。
   await page.route('**/v1/chat/preview', async route => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        effective: { character_id: 'smoke-xss', model: injectionName, provider: 'test' },
+        effective: {
+          character_id: 'smoke-xss',
+          character_revision: 3,
+          persona_id: 'smoke-persona',
+          persona_revision: 7,
+          preset_id: 'smoke-preset',
+          preset_revision: 2,
+          lorebook_revision: 5,
+          state_revision: 42,
+          memory_revision: 9,
+          model: injectionName,
+          provider: 'test',
+        },
         total_estimated_tokens: 1,
         segments: [{ source_kind: 'card', source_id: injectionName, chars: 1, estimated_tokens: 1, stable_or_volatile: 'stable' }],
         diagnostics: [{ kind: 'fixture', message: injectionName }],
@@ -126,6 +139,61 @@ try {
   await page.waitForFunction(name => document.querySelector('#assembly-summary')?.textContent?.includes(name), injectionName);
   assert.equal(await page.locator('#assembly-summary img[src="x"]').count(), 0);
   assert.equal(await page.evaluate(() => window.__airpXss), 0);
+
+  // #115 Phase 2h: 6 个 revision 都应在装配预览面板渲染（· r{N} 后缀）
+  await page.waitForFunction(() => {
+    const text = document.querySelector('#assembly-summary')?.textContent || '';
+    return text.includes('smoke-xss · r3')
+      && text.includes('smoke-persona · r7')
+      && text.includes('smoke-preset · r2')
+      && text.includes('世界书 · r5')
+      && text.includes('状态 · r42')
+      && text.includes('记忆 · r9');
+  }, null, { timeout: 5_000 });
+  await page.unroute('**/v1/chat/preview');
+
+  // #115 Phase 2h: 旧数据场景 — 6 个 *_revision_unavailable 诊断应让对应 chip 显示 · unavailable
+  await page.route('**/v1/chat/preview', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        effective: { character_id: 'legacy-char' },
+        total_estimated_tokens: 1,
+        segments: [],
+        diagnostics: [
+          { kind: 'character_revision_unavailable', message: '角色卡未升级' },
+          { kind: 'persona_revision_unavailable', message: 'Persona 未升级' },
+          { kind: 'preset_revision_unavailable', message: 'Preset 未升级' },
+          { kind: 'lorebook_revision_unavailable', message: 'Worldbook 未升级' },
+          { kind: 'state_revision_unavailable', message: 'State 未升级' },
+          { kind: 'memory_revision_unavailable', message: 'Memory 未升级' },
+        ],
+      }),
+    });
+  });
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/v1/chat/preview') && response.request().method() === 'POST'),
+    page.locator('#btn-refresh-assembly').click(),
+  ]);
+  await page.waitForFunction(() => {
+    // CodeRabbit nitpick 修复：通过 DOM 选择器按 chip label 区分 persona 和 preset
+    // chip（二者 value 都是 '未启用 · unavailable'，text.includes 无法区分）。
+    const chips = document.querySelectorAll('#assembly-summary .assembly-chip');
+    if (chips.length < 6) return false;
+    const byLabel = {};
+    chips.forEach(chip => {
+      const label = chip.querySelector('.assembly-chip-label')?.textContent || '';
+      const value = chip.querySelector('.assembly-chip-value')?.textContent || '';
+      byLabel[label] = value;
+    });
+    return (byLabel['角色'] || '').includes('legacy-char · unavailable')
+      && (byLabel['身份'] || '').includes('unavailable')   // persona
+      && (byLabel['预设'] || '').includes('unavailable')    // preset
+      && (byLabel['世界书'] || '').includes('unavailable')
+      && (byLabel['状态'] || '').includes('unavailable')
+      && (byLabel['记忆'] || '').includes('unavailable');
+  }, null, { timeout: 5_000 });
   await page.unroute('**/v1/chat/preview');
 
   // #126 D-PR2: lorebook-section DOM wiring（主面板迁移后 workbench 不再有 lorebook tab）
