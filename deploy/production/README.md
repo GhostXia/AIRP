@@ -98,8 +98,19 @@ docker run --rm -v airp-data-rollback:/restore -v ${PWD}:/backup alpine:3.22.1 s
 
 Set `AIRP_DATA_VOLUME=airp-data-rollback`, `AIRP_BIND_ADDRESS=127.0.0.1`, and restore the recorded
 `AIRP_VERSION` in `.env`, run
-`docker compose --env-file .env -f compose.yaml config --quiet`, then run
-`docker compose --env-file .env -f compose.yaml up -d`.
+`docker compose --env-file .env -f compose.yaml config --quiet`, then verify that `.env` names the
+restored volume and that it already exists before starting Compose:
+
+```powershell
+$volumeSetting = Get-Content .env | Where-Object { $_ -match '^AIRP_DATA_VOLUME=' } | Select-Object -Last 1
+if (-not $volumeSetting) { throw 'AIRP_DATA_VOLUME is missing from .env' }
+$rollbackVolume = ($volumeSetting -split '=', 2)[1].Trim()
+if ($rollbackVolume -ne 'airp-data-rollback') { throw 'AIRP_DATA_VOLUME does not name the verified rollback volume' }
+docker volume inspect $rollbackVolume | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Verified rollback volume does not exist; startup aborted' }
+docker compose --env-file .env -f compose.yaml up -d
+```
+
 The loopback bind prevents public traffic during verification. From the host, verify health,
 character/Persona/Preset lists, the last session and chat history using read-only requests. If
 verification succeeds, keep `AIRP_DATA_VOLUME=airp-data-rollback` (it is now canonical), set
