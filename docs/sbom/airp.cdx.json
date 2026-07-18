@@ -2552,7 +2552,7 @@
       ],
       "licenses": [
         {
-          "expression": "Apache-2.0 OR MIT AND BSD-3-Clause"
+          "expression": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
         }
       ],
       "name": "encoding_rs",
@@ -11605,7 +11605,7 @@
       ],
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0 AND Unicode-3.0"
+          "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
         }
       ],
       "name": "unicode-ident",
@@ -17681,7 +17681,7 @@
       "type": "application",
       "version": "0.1.0"
     },
-    "timestamp": "2026-07-18T05:18:50.024Z",
+    "timestamp": "2026-07-18T06:03:13.164Z",
     "tools": [
       {
         "name": "AIRP dep-governance generate-sbom.mjs",
@@ -17690,7 +17690,7 @@
       }
     ]
   },
-  "serialNumber": "urn:uuid:f00ac3c5-69f1-4dec-bf60-fa9765664d3e",
+  "serialNumber": "urn:uuid:c87ac582-6b1b-4841-9cfd-574806ffc226",
   "specVersion": "1.5",
   "version": 1
 }

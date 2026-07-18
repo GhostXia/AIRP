@@ -308,20 +308,37 @@ export function parseSpdxExpression(expr) {
  * output so the rendered expression is deterministic regardless of input
  * whitespace/paren style.
  *
+ * SPDX operator precedence: `WITH` > `AND` > `OR`. To preserve the AST's
+ * grouping, a child must be parenthesized when its operator is looser than
+ * the parent expects:
+ *   - `or` under `and` → parens (else `A OR B AND C` re-parses as `A OR (B AND C)`)
+ *   - `or` or `and` under `with.license` → parens (`with` expects an atom)
+ *   - `or` under `or` and `and` under `and` → no parens (associative)
+ *   - `with` under `and`/`or` → no parens (`with` binds tighter)
+ *
  * @param {object} ast
+ * @param {"root"|"and"|"or"|"atom"} [parent="root"] - parent operator kind
  * @returns {string}
  */
-export function renderSpdxAst(ast) {
+export function renderSpdxAst(ast, parent = "root") {
   if (!ast) return "";
   switch (ast.type) {
     case "license":
       return ast.id;
     case "with":
-      return `${renderSpdxAst(ast.license)} WITH ${ast.exception}`;
-    case "or":
-      return `${renderSpdxAst(ast.left)} OR ${renderSpdxAst(ast.right)}`;
-    case "and":
-      return `${renderSpdxAst(ast.left)} AND ${renderSpdxAst(ast.right)}`;
+      // `with.license` must be an atom; any composite child needs parens.
+      return `${renderSpdxAst(ast.license, "atom")} WITH ${ast.exception}`;
+    case "or": {
+      const inner = `${renderSpdxAst(ast.left, "or")} OR ${renderSpdxAst(ast.right, "or")}`;
+      // `or` is looser than `and` and cannot appear bare inside an atom slot.
+      return parent === "and" || parent === "atom" ? `(${inner})` : inner;
+    }
+    case "and": {
+      const inner = `${renderSpdxAst(ast.left, "and")} AND ${renderSpdxAst(ast.right, "and")}`;
+      // `and` binds tighter than `or` so no parens under `or`; but `and`
+      // cannot appear bare inside an atom slot either.
+      return parent === "atom" ? `(${inner})` : inner;
+    }
     default:
       return "";
   }

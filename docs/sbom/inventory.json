@@ -8,7 +8,7 @@
       "path+file:///D:/AIRP-Dev/ui/src-tauri#airp-ui@0.1.0"
     ],
     "config_version": "https://airp.local/dep-governance/audit-routing.config.json",
-    "generated_at": "2026-07-18T05:18:50.024Z",
+    "generated_at": "2026-07-18T06:03:13.164Z",
     "generator": "tools/dep-governance/discover-deps.mjs",
     "npm_lockfile_version": 3,
     "repo_root": "D:\\AIRP-Dev",

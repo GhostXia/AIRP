@@ -61,7 +61,7 @@
 
 ## RR-008 · Automatic PR quality gate
 
-- **Status**: Mitigated in PR #111; `pr-gate.yml` runs Rust and UI quality gates without persisted checkout credentials. PR #218 upgraded GitHub Actions to `actions/checkout@v7` / `setup-node@v6` / `upload-artifact@v7` on Node 24 runtime, and delivered `tools/dep-governance/` (dependency discovery + audit routing + SPDX-2.3 / CycloneDX 1.5 SBOM generation) as an offline manual toolchain; SBOM snapshot lives in `docs/sbom/`.
+- **Status**: Mitigated in PR #111; `pr-gate.yml` runs Rust and UI quality gates without persisted checkout credentials. PR #218 upgraded GitHub Actions to `actions/checkout@v7` / `setup-node@v6` / `upload-artifact@v7` (the v6/v7 action wrappers themselves run on Node 24; workflow step `node-version` stays at 20.19.0 and is what UI/Vitest/WebUI tests execute under), and delivered `tools/dep-governance/` (dependency discovery + audit routing + SPDX-2.3 / CycloneDX 1.5 SBOM generation) as an offline manual toolchain; SBOM snapshot lives in `docs/sbom/`.
 - **Surface**: `pr-gate.yml` runs formatting, strict Clippy, workspace tests, sacred prompt-boundary invariants, UI tests/typecheck, WebUI syntax checks and production topology smoke.
 - **Risk**: Packaged installer/runtime behavior, provider-backed remote smoke, automatic upstream version detection, and SBOM-as-release-gate are intentionally outside routine PR CI; dep-governance tooling is manually run, not enforced.
 - **Current control**: Required PR checks plus local/human review; checkout credentials are not persisted; dep-governance routing policy documents auto-pass / audit-required / block classes for known licenses.

@@ -166,5 +166,5 @@ Browser
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
 2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
 3. #115 Phase 2 6 类 revision 合同与 trace 收口已落地（PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地，#114 统一有效配置摘要已交付（PR #217），单资源持久化边界已加固（PR #219 + PR #227）；下一项按 #114 的**剩余子项**（Persona/Preset 高级生命周期、base lock/drift/rollback、受控 dry-run、完整 provenance 审计）完成 RP 使用面；#220 deferred 项按独立 PR 推进；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
-4. 工程治理项（PR #218 #190 SBOM/声明 + #192 依赖发现/审计路由 + #128 Actions Node 24 runtime 升级）按 #192 后续切片推进 release pipeline 强制度量与发布签名；
+4. 工程治理项（PR #218 #190 SBOM/声明 + #192 依赖发现/审计路由 + #128 Actions `checkout@v7` / `setup-node@v6` / `upload-artifact@v7` 升级；workflow step Node 仍为 20.19.0）按 #192 后续切片推进 release pipeline 强制度量与发布签名；
 5. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

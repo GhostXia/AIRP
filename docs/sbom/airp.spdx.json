@@ -1,7 +1,7 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-07-18T05:18:50.024Z",
+    "created": "2026-07-18T06:03:13.164Z",
     "creators": [
       "Tool: AIRP dep-governance generate-sbom.mjs",
       "Organization: GhostXia"
@@ -2552,8 +2552,8 @@
       ],
       "filesAnalyzed": false,
       "homepage": "https://docs.rs/encoding_rs/",
-      "licenseConcluded": "Apache-2.0 OR MIT AND BSD-3-Clause",
-      "licenseDeclared": "Apache-2.0 OR MIT AND BSD-3-Clause",
+      "licenseConcluded": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
+      "licenseDeclared": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
       "name": "encoding_rs",
       "supplier": "NOASSERTION",
       "versionInfo": "0.8.35"
@@ -11506,8 +11506,8 @@
         }
       ],
       "filesAnalyzed": false,
-      "licenseConcluded": "MIT OR Apache-2.0 AND Unicode-3.0",
-      "licenseDeclared": "MIT OR Apache-2.0 AND Unicode-3.0",
+      "licenseConcluded": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "licenseDeclared": "(MIT OR Apache-2.0) AND Unicode-3.0",
       "name": "unicode-ident",
       "supplier": "NOASSERTION",
       "versionInfo": "1.0.24"
