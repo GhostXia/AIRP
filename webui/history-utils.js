@@ -21,12 +21,19 @@
     const loading = Boolean(historyState && historyState.loading);
     const total = Number(historyState && historyState.total) || 0;
     const hasMore = Boolean(historyState && historyState.hasMore);
+    // 防御性 fallback：若 countFormatter 为 null/undefined 或无 format 方法，
+    // 退化为 String()，避免纯函数抛 TypeError（gemini-code-assist 建议）。
+    const format = function (num) {
+      return countFormatter && typeof countFormatter.format === 'function'
+        ? countFormatter.format(num)
+        : String(num);
+    };
     return {
       toolbarHidden: total === 0,
       statusText:
-        countFormatter.format(loadedCount || 0) +
+        format(loadedCount || 0) +
         ' / ' +
-        countFormatter.format(total) +
+        format(total) +
         ' 条消息',
       loadEarlierHidden: !hasMore,
       // #148: loading 结束后（含网络失败 r.status===0）按钮必须恢复可用

@@ -5,7 +5,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { computeHistoryToolbarState } = require('../history-utils.js');
 
-const fmt = new Intl.NumberFormat();
+// CodeRabbit 建议：显式 en-US locale，避免 CI 在非西方 locale（如 ar-EG）下
+// Intl.NumberFormat() 产出阿拉伯数字导致断言失败。
+const fmt = new Intl.NumberFormat('en-US');
 
 test('computeHistoryToolbarState shows loading UI when loading=true', () => {
   const ui = computeHistoryToolbarState(
@@ -60,6 +62,26 @@ test('computeHistoryToolbarState handles null/undefined historyState gracefully'
   assert.equal(ui.loadEarlierHidden, true);
   assert.equal(ui.loadEarlierDisabled, false);
   assert.equal(ui.loadEarlierText, '加载更早');
+});
+
+test('computeHistoryToolbarState handles null/undefined countFormatter gracefully (gemini-code-assist)', () => {
+  // 防御性：纯函数不应因 countFormatter 缺失而抛 TypeError
+  const ui = computeHistoryToolbarState(
+    { total: 10, hasMore: true, loading: false },
+    5,
+    null
+  );
+  assert.equal(ui.statusText, '5 / 10 条消息');
+  assert.equal(ui.loadEarlierDisabled, false);
+});
+
+test('computeHistoryToolbarState handles countFormatter without format method', () => {
+  const ui = computeHistoryToolbarState(
+    { total: 100, hasMore: false, loading: false },
+    50,
+    {}
+  );
+  assert.equal(ui.statusText, '50 / 100 条消息');
 });
 
 test('computeHistoryToolbarState formats counts with provided formatter', () => {
