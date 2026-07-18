@@ -118,6 +118,9 @@ pub struct EffectiveIds {
     /// Persona 激活来源：`explicit` / `session_binding` / `character_binding` / `default` / `absent`。
     pub persona_activation_source: Option<String>,
     /// Persona 显示名（不暴露 variables / api_key 等敏感字段，只暴露 name）。
+    ///
+    /// 与 `persona_id` 的关系：两者同时为 `Some` 或同时为 `None`（除 absent 路径外）；
+    /// `persona_name` 是 `persona_id` 对应 Persona 的显示名快照，避免 WebUI 二次查询存储。
     pub persona_name: Option<String>,
     /// `provider` 来源：`request` / `snapshot`。
     pub provider_source: Option<String>,

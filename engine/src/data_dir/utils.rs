@@ -22,8 +22,13 @@ fn replace_file_with_backup_cleanup<F>(
 where
     F: FnOnce(&Path) -> std::io::Result<()>,
 {
-    let temporary = path.with_extension("json.tmp");
-    let backup = path.with_extension("json.bak");
+    // L1 修复（PR #220）：保留原扩展名而非替换为 .json.tmp/.json.bak。
+    // `with_extension("json.tmp")` 会把 `current.md` 变成 `current.json.tmp`，
+    // `chat_log.jsonl` 变成 `chat_log.json.tmp`，导致文件名污染。
+    // 改为追加 .tmp/.bak 后缀，保留原扩展名：`current.md.tmp` / `chat_log.jsonl.bak`。
+    let original_ext = path.extension().and_then(|s| s.to_str()).unwrap_or("tmp");
+    let temporary = path.with_extension(format!("{original_ext}.tmp"));
+    let backup = path.with_extension(format!("{original_ext}.bak"));
     {
         let mut file = fs::File::create(&temporary)?;
         file.write_all(bytes)?;
@@ -146,5 +151,31 @@ mod tests {
         let path = tmp.path().join("fresh.json");
         replace_file(&path, b"created").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"created");
+    }
+
+    /// #220 L4 回归：非 .json 文件（如 .md / .jsonl）的 tmp/backup 必须保留原扩展名，
+    /// 不能变成 `.json.tmp`。验证 `current.md` 替换后无残留且内容正确。
+    #[test]
+    fn replace_file_preserves_non_json_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("current.md");
+
+        replace_file(&path, b"# v1").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"# v1");
+
+        replace_file(&path, b"# v2").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"# v2");
+
+        // 无残留 .json.tmp / .json.bak（旧 bug 会产生 current.json.tmp）
+        let entries: Vec<String> = fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            entries,
+            vec!["current.md".to_string()],
+            "no stale tmp/bak files; got {entries:?}"
+        );
     }
 }

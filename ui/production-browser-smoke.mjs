@@ -161,13 +161,20 @@ try {
   }, null, { timeout: 5_000 });
   // #114 effective config summary：模型 chip 应显示 · 预设（model_source=preset），
   // 身份 chip 应显示 · 显式（persona_activation_source=explicit），温度 chip 应显示 0.8 · 请求。
-  // 用 substring 匹配避免与 Phase 2h revision 后缀的依赖耦合。
+  // #221 L2：用 DOM 选择器精确定位 chip（byLabel），避免 text.includes 子串冗余断言。
   await page.waitForFunction(() => {
-    const text = document.querySelector('#assembly-summary')?.textContent || '';
-    return text.includes('· 预设')
-      && text.includes('· 显式')
-      && text.includes('0.8 · 请求')
-      && text.includes('2048 · 预设');
+    const chips = document.querySelectorAll('#assembly-summary .assembly-chip');
+    if (chips.length < 10) return false;
+    const byLabel = {};
+    chips.forEach(chip => {
+      const label = chip.querySelector('.assembly-chip-label')?.textContent || '';
+      const value = chip.querySelector('.assembly-chip-value')?.textContent || '';
+      byLabel[label] = value;
+    });
+    return (byLabel['模型'] || '').endsWith('· 预设')
+      && (byLabel['身份'] || '').endsWith('· 显式')
+      && (byLabel['温度'] || '') === '0.8 · 请求'
+      && (byLabel['最大 tokens'] || '') === '2048 · 预设';
   }, null, { timeout: 5_000 });
   await page.unroute('**/v1/chat/preview');
 

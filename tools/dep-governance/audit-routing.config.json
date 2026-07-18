@@ -7,6 +7,7 @@
       "_comment": "Licenses that are permissive and compatible with AIRP's MIT OR Apache-2.0 distribution. Still recorded in the SBOM but do not trigger a dedicated audit. Composite expressions (OR/AND/WITH) are classified leaf-by-leaf by the AST parser in audit-routing.mjs, so only single SPDX ids need to be listed here.",
       "licenses": [
         "MIT",
+        "MIT-0",
         "Apache-2.0",
         "BSD-2-Clause",
         "BSD-3-Clause",
