@@ -7,7 +7,7 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端。产品采用“无头 en
 - **ui**（`airp-ui`）：保留的 Tauri + Vue 桌面客户端，近期开发与打包验收暂停；
 - **protocol**（`airp-state-protocol`）：UI/engine 共用的线协议类型。
 
-当前权威实现基线是 `main@63f1c5b` / PR #227，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
+当前权威实现基线是 `main@2a14b7e` / PR #232，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
 
 ## 项目原则
 
@@ -63,9 +63,11 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。旧 `gatewa
 - worldbook v4 `constant` + `selective`/`secondary_keys` 运行时语义、presence-aware v3 迁移、shared normalizer/导入诊断、普通用户主面板编辑与 PNG/JSON 到最终 prompt 的端到端回归；
 - WebUI 基础 RP 闭环、history window 与 rollback-by-ID；
 - 单实例自托管 WebUI 的 production P0：同源 HTTPS、私有 engine、secret mounts、fail-closed 配置和真实 topology CI；
+- P1 首聊失败关闭与安全边界：关键持久化失败不返回虚假成功，SSE 保留 commit state，提交状态不明时不盲目重发，客户端错误与诊断脱敏；
+- P1 人工冷备份/回滚逃生路径：归档哈希校验、独立回滚卷验证，以及只在只读核验通过后恢复公网监听；
 - 规范 session UUID、legacy metadata best-effort 修复，以及自包含 session/revision 的后续合同。
 
-尚不能称正式发布。Persona 高级生命周期、Preset 完整生命周期、Worldbook 完整资产生命周期、完整 session revision、migration、备份/恢复、可恢复删除、升级回滚、浏览器矩阵和长会话 soak 仍未完成。不要从本页推断细节；以 [CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md) 为准。
+P1 有限试用代码候选已经形成，但仍为“待真实用户验证”，不能称 P1 已通过或正式发布。Persona 高级生命周期、Preset 完整生命周期、Worldbook 完整资产生命周期、完整 session revision、版本化 migration、自动备份/恢复、可恢复删除、正式升级回滚、浏览器矩阵和长会话 soak 仍未完成。不要从本页推断细节；以 [CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md) 为准。
 
 ## 开发环境
 
@@ -120,7 +122,7 @@ npm run test -- --run
 
 `.github/workflows/pr-gate.yml` 自动执行 Rust workspace、UI/WebUI 和 production topology 门禁。`.github/workflows/manual-build.yml` 负责手动 Windows desktop package。审计 bot 是合并前阻塞门禁：本地全绿只允许开 PR，必须等待审计通过并由人工 review 决定是否合并。
 
-`main@63f1c5b` 的 [push gate run 29631048229](https://github.com/GhostXia/AIRP/actions/runs/29631048229) 已通过 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology；本地复算 750 lib（734 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests、WebUI 89 tests、dep-governance 82 tests、ui Vitest 98 tests；覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、onboarding wizard L1/L2/L4 回归、#114 effective config summary（PR #217）、PR #218 工程治理基础设施（dep-governance + SBOM + Actions `checkout@v7`/`setup-node@v6`/`upload-artifact@v7` 升级；workflow step Node 仍为 20.19.0）、PR #219 post-commit 高影响缺陷修复（quota race / chat_store 原子性 / replace_file fsync / character_lock / lorebook 保留 / volume 溢出 / silent error swallow）与 PR #227 审计遗留批清理。证据只证明该 commit/PR head，不自动证明后续改动。
+PR #232 最终 head `29b52fa` 的 [PR gate run 29645599733](https://github.com/GhostXia/AIRP/actions/runs/29645599733) 已通过 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 与 CodeRabbit，随后以代码树等价的 merge commit `main@2a14b7e` 合入。远端证据为 756 lib（740 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests、WebUI 97 tests、ui Vitest 98 tests、production topology 104 checks / 0 failures；本次校准本地复算 dep-governance 90 tests。证据只证明该 PR head 与对应合入代码树，不自动证明后续改动。
 
 ## 关键文档
 

@@ -4,7 +4,7 @@
 >
 > 关联：[PR #169](https://github.com/GhostXia/AIRP/pull/169) / [已关闭 Issue #168](https://github.com/GhostXia/AIRP/issues/168) / [#115 Phase 2](https://github.com/GhostXia/AIRP/pull/215)
 >
-> 最后更新：2026-07-18（在 `main@63f1c5b` 复核合同与实现边界；PR #219 加固了单资源持久化边界（chat_store 原子替换 + sync_data / replace_file parent-dir fsync / character_lock / quota Mutex / extract_card_assets lorebook 保留 / next_volume_number saturating / append_to_current warn），但跨资源事务、`AIRP-TREE-SHA256-v1` 完整性校验、版本化 migration registry、备份恢复与完整 session 自包含仍待分阶段实现）
+> 最后更新：2026-07-18（在 `main@2a14b7e` 复核合同与实现边界；PR #219/#227/#232 加固了单资源持久化边界：chat_store 原子替换 + sync_data / replace_file parent-dir fsync / character_lock / quota Mutex / extract_card_assets lorebook 保留 / next_volume_number saturating；chat pipeline 现在先落盘 user message 再推进时间线，assistant 的 live state、ChatLog、`current.md` 任一关键写入失败都会硬失败，不再 warn 后继续。但跨资源事务、`AIRP-TREE-SHA256-v1` 完整性校验、版本化 migration registry、自动备份恢复与完整 session 自包含仍待分阶段实现）
 
 本文定义 AIRP 的 session、第三方世界书和可复现游玩存档边界。它是 AIRP 根据自身需求形成的独立设计；SillyTavern 仅作为公开行为与互操作性参考，不复用其实现代码、规则、测试或资产。
 

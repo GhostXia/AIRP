@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-18 的 `main@63f1c5b` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-18 的 `main@2a14b7e` 复核。
 
 ## 当前能力
 
@@ -12,7 +12,9 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - Tavern Card JSON/PNG 导入、canonical/sidecar 落盘和角色 CRUD；
 - 会话创建/列表、history、append、rollback、regen；
 - rollback 在 service/API 与 `ChatLog` 持久化边界都拒绝非法 index；空日志 `index=0` 保留兼容；
+- chat pipeline 先持久化 user message 再推进时间线；assistant 的 live state、ChatLog 与 `current.md` 任一关键写入失败都会终止回合，SSE `done` 只在 finalization 全部成功后发送；
 - 多 Persona 存储、revision、HTTP CRUD/绑定，以及 chat pipeline 的显式/绑定/default 激活；
+- Persona 删除先验证 ID，revision 清理仅忽略 `NotFound`；路径穿越与其他清理错误 fail-closed 并保留工作副本；
 - lorebook CRUD、OR-key 触发、`enabled`、`priority`、`constant` 常驻注入、v4 `selective`/`secondary_keys` gate 与 shared normalizer/导入诊断；
 - live state/history/schema 读取与模型 `<state>` 提取；
 - scene、多角色 prompt、preset、regex、volume sealing；
@@ -52,7 +54,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ### Production P0 已实现，正式发布仍未完成
 
-默认 daemon 绑定 loopback；只有隔离容器网络中的首方部署才显式传 `daemon --host 0.0.0.0`，且 Compose 不发布 engine 端口。development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用；`deploy/production/` 已提供 OCI/Compose + Caddy artifact，并由真实 HTTPS topology CI 验证。P1-P3 发布门禁仍未完成，且无论何种部署都不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
+默认 daemon 绑定 loopback；只有隔离容器网络中的首方部署才显式传 `daemon --host 0.0.0.0`，且 Compose 不发布 engine 端口。development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用；`deploy/production/` 已提供 OCI/Compose + Caddy artifact，并由真实 HTTPS topology CI 验证。P1 代码候选已形成但仍待真实用户验证；P2/P3 与正式发布门禁仍未完成。无论何种部署都不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
 
 ## 快速开始
 
@@ -164,7 +166,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-`main@63f1c5b` 的 [GitHub run `29631048229`](https://github.com/GhostXia/AIRP/actions/runs/29631048229) 中 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 全绿；本地复算 `cargo test --workspace --locked` = 750 lib（734 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests（4 agent_run + 11 openai_compat + 5 production_startup + 5 sse_wiremock），并覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、prompt preview 的 engine/HTTP/WebUI 与生产浏览器路径、#114 effective config summary（PR #217 Persona 激活来源 + 参数来源）、PR #219 高影响缺陷修复回归（quota 并发 / chat_store 原子替换 / character_lock 串行化 / replace_file parent-dir fsync / extract_card_assets 空 entries 保留旧 lorebook / next_volume_number u32::MAX saturating）与 PR #227 `replace_file` 扩展名保留回归。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+PR #232 最终 head `29b52fa` 的 [GitHub run `29645599733`](https://github.com/GhostXia/AIRP/actions/runs/29645599733) 中 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 与 CodeRabbit 全绿，随后以代码树等价的 merge commit `main@2a14b7e` 合入。`cargo test --workspace --locked` = 756 lib（740 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests（4 agent_run + 11 openai_compat + 5 production_startup + 5 sse_wiremock）；新增回归覆盖 timeline/持久化顺序、finalization 失败关闭、结构化 SSE commit state、Persona 删除路径与清理安全、客户端错误脱敏和生产镜像静态资产。后续修改必须重跑并记录新结果。
 
 ## License
 
