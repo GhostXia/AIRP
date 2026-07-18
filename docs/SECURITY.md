@@ -2,7 +2,7 @@
 
 > Baseline reviewed: 2026-07-18 at `main@2a14b7e`. Current implementation status and release gates are in [CURRENT-BASELINE.md](CURRENT-BASELINE.md).
 
-AIRP defaults to a single-user local topology. The daemon binds to loopback; the bundled desktop UI owns its sidecar process and stops it when the UI exits.
+AIRP defaults to a single-user local topology. The current priority artifact is a portable Windows WebUI package; Tauri remains a long-term client line.
 
 ## Credentials
 
@@ -19,6 +19,12 @@ Use the operating system/service secret facility for non-interactive deployment.
 Development CORS origins are the bundled WebUI (`127.0.0.1:9001` and `localhost:9001`) plus Tauri origins. `AIRP_CORS_ORIGINS` extends this development allowlist. Production ignores those conveniences and allows only the canonical HTTPS `AIRP_PUBLIC_ORIGIN`. Wildcard origins are not supported.
 
 Loopback plus CORS is not authentication. Before exposing the daemon through a reverse proxy or non-loopback bind, set `AIRP_ACCESS_KEY`, terminate TLS at the proxy, restrict trusted origins, and apply network-level access control.
+
+## Portable Windows WebUI boundary
+
+The portable launcher binds `airp-core.exe` to `127.0.0.1:8765` and serves WebUI/API from one origin. It fixes mutable state to the extracted package (`data/` plus root `config.json`), explicitly disables `AIRP_ALLOW_LOCAL_PATH`, and clears inherited deployment/access/public-origin/CORS variables. The browser therefore imports card content rather than asking the engine to read arbitrary host paths. Static responses use a same-origin CSP, `nosniff`, frame denial, no referrer, and `no-store`; SSE uses `no-cache`.
+
+This is a local single-user boundary, not authentication against other processes running as the same Windows user. Do not expose port 8765, run the package from a shared/synchronized directory, or grant untrusted users write access to the package. Back up and carry forward `data/` before replacing the extracted directory.
 
 ## WebUI production profile (deployment artifact and topology smoke implemented)
 

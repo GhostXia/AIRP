@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::ServeDir;
 
 use decompose_handlers::{
     decompose_character, decompose_preset, enhance_or_apply_character_analysis,
@@ -428,6 +429,61 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         ))
         .layer(cors)
         .with_state(state)
+}
+
+/// Add the browser UI to the daemon for the loopback-only Windows package.
+///
+/// This remains opt-in so API-only and Tauri callers retain their existing
+/// router, while the local WebUI package gets a single same-origin process.
+pub fn create_local_webui_router(state: Arc<DaemonState>, webui_dir: PathBuf) -> Router {
+    create_router(state)
+        .route(
+            "/runtime-config.js",
+            get(|| async {
+                (
+                    [(
+                        header::CONTENT_TYPE,
+                        "application/javascript; charset=utf-8",
+                    )],
+                    "window.AIRP_WEBUI_CONFIG = Object.freeze({ mode: 'local' });\n",
+                )
+            }),
+        )
+        .fallback_service(ServeDir::new(webui_dir))
+        .layer(middleware::from_fn(local_webui_security_headers))
+}
+
+async fn local_webui_security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        ),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    let is_event_stream = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if is_event_stream {
+            "no-cache"
+        } else {
+            "no-store"
+        }),
+    );
+    response
 }
 
 fn cors_layer(state: &DaemonState) -> CorsLayer {

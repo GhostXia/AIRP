@@ -1,6 +1,6 @@
 {
   "meta": {
-    "cargo_lock_packages": 564,
+    "cargo_lock_packages": 567,
     "cargo_metadata_version": null,
     "cargo_workspace_members": [
       "path+file:///D:/AIRP-Dev/engine#airp-core@0.1.0",
@@ -8,30 +8,30 @@
       "path+file:///D:/AIRP-Dev/ui/src-tauri#airp-ui@0.1.0"
     ],
     "config_version": "https://airp.local/dep-governance/audit-routing.config.json",
-    "generated_at": "2026-07-18T06:03:13.164Z",
+    "generated_at": "2026-07-18T16:58:15.011Z",
     "generator": "tools/dep-governance/discover-deps.mjs",
     "npm_lockfile_version": 3,
     "repo_root": "D:\\AIRP-Dev",
     "summary": {
       "by_audit_class": {
         "audit-required": 17,
-        "auto-pass": 671
+        "auto-pass": 674
       },
       "by_ecosystem": {
-        "cargo": 564,
+        "cargo": 567,
         "npm": 124
       },
       "by_scope": {
         "build": 28,
         "dev": 113,
-        "runtime": 547
+        "runtime": 550
       },
       "by_tier": {
         "first-party": 4,
-        "third-party": 684
+        "third-party": 687
       }
     },
-    "total_records": 688
+    "total_records": 691
   },
   "records": [
     {
@@ -2988,6 +2988,24 @@
     },
     {
       "audit_class": "auto-pass",
+      "audit_reason": "permissive license (MIT)",
+      "description": "No-dep range header parser",
+      "ecosystem": "cargo",
+      "homepage": "https://github.com/MarcusGrass/parse-range-headers",
+      "integrity": "sha256:9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c",
+      "license": "MIT",
+      "license_normalized": "MIT",
+      "manifest_path": "D:\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\http-range-header-0.4.2\\Cargo.toml",
+      "name": "http-range-header",
+      "repository": "https://github.com/MarcusGrass/parse-range-headers",
+      "resolved": "https://crates.io/api/v1/crates/http-range-header/0.4.2/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "0.4.2"
+    },
+    {
+      "audit_class": "auto-pass",
       "audit_reason": "OR (auto-pass | auto-pass); recipient may choose auto-pass branch",
       "description": "A tiny, safe, speedy, zero-copy HTTP/1.x parser.",
       "ecosystem": "cargo",
@@ -3957,6 +3975,24 @@
       "source": "crates.io",
       "tier": "third-party",
       "version": "0.3.17"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "permissive license (MIT)",
+      "description": "A simple crate for detection of a file's MIME type by its extension.",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e",
+      "license": "MIT",
+      "license_normalized": "MIT",
+      "manifest_path": "D:\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\mime_guess-2.0.5\\Cargo.toml",
+      "name": "mime_guess",
+      "repository": "https://github.com/abonander/mime_guess",
+      "resolved": "https://crates.io/api/v1/crates/mime_guess/2.0.5/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "2.0.5"
     },
     {
       "audit_class": "auto-pass",
@@ -8223,6 +8259,24 @@
       "source": "crates.io",
       "tier": "third-party",
       "version": "0.9.0"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "OR (auto-pass | auto-pass); recipient may choose auto-pass branch",
+      "description": "A case-insensitive wrapper around strings.",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142",
+      "license": "MIT OR Apache-2.0",
+      "license_normalized": "MIT OR Apache-2.0",
+      "manifest_path": "D:\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\unicase-2.9.0\\Cargo.toml",
+      "name": "unicase",
+      "repository": "https://github.com/seanmonstar/unicase",
+      "resolved": "https://crates.io/api/v1/crates/unicase/2.9.0/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "2.9.0"
     },
     {
       "audit_class": "auto-pass",

@@ -203,7 +203,7 @@ export function mountOnboarding(container, hostPort) {
   function renderStage1() {
     const box = el('div', 'onb-stage');
     box.appendChild(el('h2', '', 'Step 1 · 部署健康检查'));
-    const isDev = hostPort.mode !== 'production';
+    const isDev = hostPort.mode !== 'production' && hostPort.mode !== 'local';
 
     if (isDev) {
       box.appendChild(el('p', 'onb-hint', '请输入 Engine URL 与 Bearer（可选），用于本地开发连接。'));
@@ -230,6 +230,9 @@ export function mountOnboarding(container, hostPort) {
       box.appendChild(btn);
     } else {
       box.appendChild(el('p', 'onb-hint', '生产模式：同源安全连接，网关注入认证。正在检查部署健康…'));
+      if (hostPort.mode === 'local' && box.lastChild) {
+        box.lastChild.textContent = '本机模式：WebUI 与 Engine 使用同源回环连接。正在检查运行状态…';
+      }
       setTimeout(() => { safeAsync(() => runHealthCheck(box), 'stage1-health-check-prod'); }, 0);
     }
     return box;

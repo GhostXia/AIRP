@@ -8,7 +8,8 @@ use tokio::net::TcpListener;
 use airp_core::chat_pipeline;
 use airp_core::config::{AppConfig, DeploymentMode};
 use airp_core::daemon::{
-    create_router, ChatCompletionRequest, DaemonState, MutableConfig, UserProfile,
+    create_local_webui_router, create_router, ChatCompletionRequest, DaemonState, MutableConfig,
+    UserProfile,
 };
 use airp_core::error::AirpError;
 use airp_core::types::CharacterId;
@@ -40,6 +41,10 @@ enum Commands {
         /// 监听地址。默认仅 loopback；容器部署必须显式传入 0.0.0.0，且不得发布 engine 端口。
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+
+        /// Serve a WebUI directory from the same loopback origin.
+        #[arg(long)]
+        webui_dir: Option<PathBuf>,
     },
     /// 在终端控制台直接运行单次流式过滤
     Run {
@@ -116,13 +121,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_client = airp_core::outbound::outbound_client();
 
     match cli.command {
-        Commands::Daemon { port, host } => {
+        Commands::Daemon {
+            port,
+            host,
+            webui_dir,
+        } => {
             let daemon_port = port.unwrap_or(app_config.daemon_port);
             let bind_ip = host
                 .parse::<IpAddr>()
                 .map_err(|_| "--host must be an IP literal such as 127.0.0.1 or 0.0.0.0")?;
             if !bind_ip.is_loopback() && app_config.deployment_mode != DeploymentMode::Production {
                 return Err("non-loopback --host is allowed only in production mode".into());
+            }
+            if webui_dir.is_some() && !bind_ip.is_loopback() {
+                return Err("--webui-dir is restricted to a loopback --host".into());
             }
 
             let state = Arc::new(DaemonState {
@@ -143,7 +155,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }),
             });
 
-            let router = create_router(state);
+            let router = match webui_dir {
+                Some(dir) => {
+                    let dir = std::fs::canonicalize(&dir).map_err(|error| {
+                        format!("cannot open --webui-dir {}: {error}", dir.display())
+                    })?;
+                    if !dir.join("index.html").is_file() {
+                        return Err(format!(
+                            "--webui-dir {} does not contain index.html",
+                            dir.display()
+                        )
+                        .into());
+                    }
+                    create_local_webui_router(state, dir)
+                }
+                None => create_router(state),
+            };
             let addr = SocketAddr::new(bind_ip, daemon_port);
             let listener = TcpListener::bind(&addr).await?;
 

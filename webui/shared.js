@@ -14,7 +14,8 @@
   // envelope — callers parse JSON/text themselves. This keeps the contract standard.
   //
   // mode === 'production': same-origin, gateway injects Authorization. Browser never
-  //   holds the access key.
+  //   holds the access key. mode === 'local' is also same-origin and relies on
+  //   the engine's loopback-only bind instead of a remote gateway.
   // mode === 'dev': each call reads sessionStorage('airp_engine_url'/'airp_bearer')
   //   so the wizard's Stage 1 write takes effect immediately without a Port setter.
   //   Falls back to http://127.0.0.1:8000 if unset.
@@ -34,7 +35,7 @@
     return async function fetcher(path, opts) {
       opts = opts || {};
       let base, bearer;
-      if (mode === 'production') {
+      if (mode === 'production' || mode === 'local') {
         base = window.location.origin;
         bearer = '';
       } else {

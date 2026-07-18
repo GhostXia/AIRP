@@ -98,3 +98,11 @@
 - **Risk**: A diagnostic endpoint could accidentally return prompt text, provider secrets/endpoints, or advance history/session state; even a redacted response can disclose selected asset IDs, provider/model names and prompt composition metadata.
 - **Current control**: The endpoint uses the real assembly path but returns bounded metadata only, omits prompt content/API keys/endpoints, uses the common `/v1/*` bearer middleware (mandatory in production), and has regression tests proving it does not create sessions, append history, advance memory/state, or repair metadata. Production browser smoke covers the same-origin UI path.
 - **Required direction**: Keep response fields allowlisted and regression-tested; redact this metadata from logs/support bundles, and add per-user authorization before any multi-user topology.
+
+## RR-013 · Portable WebUI data boundary and upgrade loss
+
+- **Status**: Initial Windows portable controls implemented; upgrade/migration automation remains open.
+- **Surface**: The current Windows WebUI package keeps `airp-core.exe`, `webui/`, mutable `data/`, and `config.json` in one extracted directory.
+- **Risk**: Deleting or overwriting the extracted directory can delete user assets; running from a read-only/shared/synchronized directory can break writes or expose credentials. A shell environment could otherwise enable service topology or local-path import privileges unexpectedly.
+- **Current control**: The launcher fixes `AIRP_DATA_DIR` and config inside the package, binds `127.0.0.1`, uses same-origin browser calls, clears inherited access/deployment/public-origin/CORS variables, and explicitly disables `AIRP_ALLOW_LOCAL_PATH`. Engine data paths retain traversal and atomic-write controls. Package smoke verifies the portable paths, security headers, local runtime mode, and real Chrome startup.
+- **Required direction**: Before wider distribution, add a versioned in-folder migration/backup flow and a recoverable upgrade UI. Until then, release notes must require backing up and carrying forward `data/`; users must not be told that replacing the folder preserves data automatically.
