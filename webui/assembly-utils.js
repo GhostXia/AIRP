@@ -142,5 +142,7 @@
     };
   }
 
-  return { buildAssemblyViewModel };
+  // PR #227 审计修复（coderabbit）：export sourceLabel 以便直接测试 null/undefined table
+  // 路径，而非仅通过 buildAssemblyViewModel 间接覆盖。
+  return { buildAssemblyViewModel, sourceLabel };
 });
