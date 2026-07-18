@@ -240,11 +240,16 @@ pub fn list_volume_numbers(session_dir: &Path) -> Vec<u32> {
 }
 
 /// 返回下一个可用的卷编号（已有最大值 + 1，初始为 1）。
+///
+/// R4: 用 `saturating_add` 防止 u32 溢出。若磁盘上出现 `vol_4294967295.md`
+/// （u32::MAX），返回值会停在 u32::MAX 而不是回绕到 0；后续 `write_volume`
+/// 会原地把 `vol_4294967295.md` 替换为最新内容，避免静默覆盖 `vol_000.md`。
+/// 这与 `revision::atomic::next_content_revision` 的 `checked_add` 纪律一致。
 pub fn next_volume_number(session_dir: &Path) -> u32 {
     list_volume_numbers(session_dir)
         .last()
         .copied()
-        .map(|n| n + 1)
+        .map(|n| n.saturating_add(1))
         .unwrap_or(1)
 }
 
@@ -441,6 +446,26 @@ mod tests {
 
         let nums = list_volume_numbers(&session_dir);
         assert_eq!(nums, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_next_volume_number_saturates_at_u32_max() {
+        // R4: 旧实现用 `n + 1`，u32::MAX 时 debug 构建会 panic、release 构建
+        // 会回绕到 0，导致 `write_volume(session_dir, 0, ...)` 静默覆盖
+        // `vol_000.md`。saturating_add 保证停在 u32::MAX。
+        let tmp = tempdir().unwrap();
+        let session_dir = tmp.path().join("saturate");
+        ensure_session_dirs(&session_dir).unwrap();
+
+        // 直接构造 u32::MAX 编号的卷文件，绕过 write_volume 的正常路径。
+        let max_path = session_dir.join("volumes").join("vol_4294967295.md");
+        std::fs::write(&max_path, "max").unwrap();
+
+        assert_eq!(
+            next_volume_number(&session_dir),
+            u32::MAX,
+            "saturating_add must not wrap to 0"
+        );
     }
 
     #[test]

@@ -1455,7 +1455,15 @@ async fn run_finalize(ctx: FinalizerCtx, raw_acc: String, cleaned_acc: String) {
         let (cleaned, signal) = volume_manager::parse_seal_signal(&raw_acc);
 
         if !cleaned.trim().is_empty() {
-            let _ = volume_store::append_to_current(&sd, &cleaned);
+            // R3: 旧实现 `let _ = ...` 静默吞掉 `append_to_current` 的错误，
+            // 包括磁盘满、权限拒绝、`commit_memory_revision` 因并发 commit
+            // 同号 revision 被拒等。结果：刚生成的助手消息对客户端已可见，
+            // 但 `current.md` 与 memory revision 都没记录，用户体感为"AI 忘了
+            // 刚才说过什么"。改为 best-effort warn，保留与上方 assistant 消息
+            // 持久化失败相同的退化策略——不阻塞当前回合，但留下日志线索。
+            if let Err(e) = volume_store::append_to_current(&sd, &cleaned) {
+                tracing::warn!(err = %e, "append_to_current 失败：本轮助手输出未写入 memory current.md");
+            }
         }
 
         let should_seal = signal.as_ref().map(|s| s.should_seal).unwrap_or(false)

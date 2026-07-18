@@ -371,7 +371,7 @@ fn max_existing_revision_dir(asset_dir: &Path) -> Result<Option<u64>, AirpError>
 ///   NTFS 的 rename 本身是原子的，目录元数据由文件系统保证一致性。
 ///
 /// 文件内容的持久化由写入时的 `file.sync_all()` 保证，与目录 sync 独立。
-fn sync_dir(path: &Path) -> Result<(), AirpError> {
+pub(crate) fn sync_dir(path: &Path) -> Result<(), AirpError> {
     #[cfg(unix)]
     {
         let file = fs::File::open(path)?;
