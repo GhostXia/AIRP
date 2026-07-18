@@ -42,7 +42,6 @@ try {
 
   const response = await page.goto(origin, { waitUntil: 'domcontentloaded' });
   assert.equal(response?.status(), 200);
-  await page.waitForFunction(() => document.querySelector('#conn-text')?.textContent?.startsWith('已连接'), null, { timeout: 15_000 });
 
   const headers = response.headers();
   assert.match(headers['content-security-policy'] || '', /script-src 'self'/);
@@ -54,6 +53,107 @@ try {
   assert.equal(await page.locator('#engine-url').isVisible(), false);
   assert.equal(await page.locator('#bearer-token').isVisible(), false);
   assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), []);
+
+  // P1 golden path: a fresh production browser must load the real onboarding
+  // module, complete the first chat through visible UI, and retain that session
+  // after a page refresh. A missing module used to fall back to the manual
+  // console and let this smoke pass without testing onboarding at all.
+  const onboardingAsset = await context.request.get(origin + '/onboarding.js');
+  assert.equal(onboardingAsset.status(), 200);
+  assert.match(onboardingAsset.headers()['content-type'] || '', /javascript/);
+
+  const onboardingRoot = page.locator('#onboarding-root');
+  await page.waitForFunction(() => document.querySelector('#onboarding-root h2')?.textContent?.includes('Step 1'));
+  await onboardingRoot.getByRole('button', { name: '下一步', exact: true }).click();
+
+  await page.waitForFunction(() => document.querySelector('#onboarding-root h2')?.textContent?.includes('Step 2'));
+  await page.waitForFunction(() => {
+    const inputs = document.querySelectorAll('#onboarding-root .onb-stage input');
+    return inputs.length >= 4 && inputs[0].value && inputs[1].value && inputs[2].value;
+  });
+  await onboardingRoot.getByRole('button', { name: '保存并验证' }).click();
+
+  await page.waitForFunction(() => document.querySelector('#onboarding-root h2')?.textContent?.includes('Step 3'));
+  const modelPicker = onboardingRoot.locator('.onb-model-picker select');
+  await page.waitForFunction(() => document.querySelectorAll('#onboarding-root .onb-model-picker select option').length > 1);
+  await modelPicker.selectOption({ index: 1 });
+  await onboardingRoot.getByRole('button', { name: '保存并下一步' }).click();
+
+  await page.waitForFunction(() => document.querySelector('#onboarding-root h2')?.textContent?.includes('Step 4'));
+  const onboardingCard = {
+    spec: 'chara_card_v2',
+    spec_version: '2.0',
+    data: {
+      name: 'Onboarding Browser',
+      description: '生产向导黄金路径角色',
+      personality: '沉稳',
+      scenario: '黄昏的旧街区',
+      first_mes: '你来了。',
+      mes_example: '',
+      creator_notes: 'production browser smoke fixture',
+      system_prompt: '保持角色回复。',
+      post_history_instructions: '',
+      alternate_greetings: [],
+      character_book: null,
+      tags: ['smoke'],
+      creator: 'airp-smoke',
+      character_version: '1',
+      extensions: {},
+    },
+  };
+  await onboardingRoot.locator('input[type="file"]').setInputFiles({
+    name: 'onboarding-browser.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(onboardingCard)),
+  });
+  await onboardingRoot.getByRole('button', { name: '导入', exact: true }).click();
+
+  await page.waitForFunction(() => document.querySelector('#onboarding-root h2')?.textContent?.includes('Step 5'));
+  await page.waitForFunction(() => document.querySelectorAll('#onboarding-root .onb-stage select').length >= 2);
+  await onboardingRoot.getByRole('button', { name: '下一步', exact: true }).click();
+
+  const firstMessage = '请带我看看这条旧街。';
+  await page.waitForFunction(() => document.querySelector('#onboarding-root h2')?.textContent?.includes('Step 6'));
+  await onboardingRoot.locator('textarea').fill(firstMessage);
+  await onboardingRoot.getByRole('button', { name: '发送', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('#onboarding-root')?.hidden === true, null, { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelector('#conn-text')?.textContent?.startsWith('已连接'), null, { timeout: 15_000 });
+
+  const onboardingState = await page.evaluate(() => ({
+    onboarded: localStorage.getItem('airp_onboarded'),
+    characterId: localStorage.getItem('airp_character_id'),
+    sessionId: localStorage.getItem('airp_session_id'),
+  }));
+  assert.equal(onboardingState.onboarded, 'true');
+  assert.ok(onboardingState.characterId, 'onboarding must persist the selected character');
+  assert.ok(onboardingState.sessionId, 'onboarding must persist the first-chat session');
+
+  // Allow the shared rate-limit bucket to refill, then prove that onboarding
+  // finalized a durable assistant turn before testing refresh recovery.
+  await page.waitForTimeout(2_500);
+  await page.locator('[data-view="session"]').first().click();
+  await page.locator('#btn-history').click();
+  await page.waitForFunction(() => {
+    const turns = document.querySelectorAll('#chat-log .msg.assistant[data-message-id] .text');
+    return turns.length > 0 && turns[turns.length - 1].textContent?.trim();
+  }, null, { timeout: 10_000 });
+  const firstAssistant = await page.locator('#chat-log .msg.assistant[data-message-id]').last().evaluate(node => ({
+    messageId: node.dataset.messageId,
+    text: node.querySelector('.text')?.textContent || '',
+  }));
+  assert.ok(firstAssistant.messageId, 'first chat must finalize a durable assistant message');
+  assert.ok(firstAssistant.text.trim(), 'first chat assistant response must be non-empty');
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => document.querySelector('#conn-text')?.textContent?.startsWith('已连接'), null, { timeout: 15_000 });
+  await page.waitForFunction(message => document.querySelector('#chat-log')?.textContent?.includes(message), firstMessage, { timeout: 10_000 });
+  await page.waitForFunction(expected => Array.from(document.querySelectorAll('#chat-log .msg.assistant[data-message-id]')).some(node =>
+    node.dataset.messageId === expected.messageId && node.querySelector('.text')?.textContent === expected.text
+  ), firstAssistant, { timeout: 10_000 });
+  assert.equal(await page.locator('#char-select').inputValue(), onboardingState.characterId);
+  assert.equal(await page.locator('#sess-select').inputValue(), onboardingState.sessionId);
+  await page.waitForTimeout(2_500);
+
   // #182 防回归：确保 production 容器 serve 了 lorebook-utils.js。
   // 根因曾是 Dockerfile.gateway 漏 COPY → Caddy try_files fallback 到 index.html
   // → MIME text/html → 浏览器拒绝执行 → AIRPLorebookUtils undefined。
