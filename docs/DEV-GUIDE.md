@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-17，`main@15cb6c0`
+> 最后校准：2026-07-18，`main@63f1c5b`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -192,7 +192,7 @@ Remove-Item Env:RUSTDOCFLAGS
 - `0.x` 依赖的次版本按主版本风险处理。即使只是补丁版本，只要涉及数据格式、网络/权限边界、密码学、构建/发布链或已知行为变化，也升级为 issue + 专项审计。
 - “发现有新版本”不是升级理由；升级 PR 要说明用户价值、风险、验证证据和不升级的后果。安全修复可提高优先级，但不得跳过兼容性验证。
 
-仓库当前尚未配置能完整执行上述分类与去重的依赖检测器。在自动化落地前，开发任务涉及依赖时需人工查询上游稳定版本和安全公告；不得把本节误述为已经运行的能力。
+仓库已落地 `tools/dep-governance/`（PR #218）：`discover-deps.mjs` 扫描 Cargo workspace 与 npm package-lock.json v3 并按 BFS 划分 runtime/build/dev 作用域，`audit-routing.mjs` 提供纯函数审计路由（`classifyInventory` auto-pass/audit-required/block + `classifyUpgrade` 五类升级路由 + patch-sensitive 覆盖），`generate-sbom.mjs` 输出 SPDX-2.3 / CycloneDX 1.5 SBOM 与人类可读第三方声明；当前 SBOM 快照存于 `docs/sbom/`。该工具链是手动运行的离线工具（无上游版本比较、不自动开 PR），自动化版本检测与去重 issue 仍是 #192 后续切片；在自动化落地前，开发任务涉及依赖时仍需人工查询上游稳定版本和安全公告，不得把本节误述为 CI 强制门禁。
 
 ## 8. 文档维护
 
@@ -205,10 +205,11 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. Phase 2 (#115) 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（PR #201/#202/#203/#206/#215），下一步是 #114 Persona/Preset 高级生命周期（base lock、drift/history/rollback、头像、导入导出/备份恢复、HTTP/UI 受控 dry-run、完整 provenance 审计）与统一有效配置摘要；
-2. #126 已关闭，Worldbook 只按新需求继续演进；#114 Persona effective/绑定能力已交付，剩余 P1 产品闭环按 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) Phase P1 推进；
+1. Phase 2 (#115) 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（PR #201/#202/#203/#206/#215），#114 统一有效配置摘要已交付（PR #217 Persona 激活来源 + 参数来源 chips），单资源持久化边界已加固（PR #219 高影响缺陷修复 + PR #227 审计遗留 L4 收口）；下一步是 #114 Persona/Preset 高级生命周期（base lock、drift/history/rollback、头像、导入导出/备份恢复、HTTP/UI 受控 dry-run、完整 provenance 审计），#220 deferred 项（character_lock poison 恢复、record_tokens spawn_blocking、resolve_param_sources 重构、temperature None 语义）按独立 PR 推进；
+2. #126 已关闭，Worldbook 只按新需求继续演进；#114 Persona effective/绑定能力与统一有效配置摘要已交付，剩余 P1 产品闭环按 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) Phase P1 推进；
 3. [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 的完整 session/revision/恢复分期；
 4. P2 运维与恢复；
-5. P3 release candidate。
+5. P3 release candidate；
+6. 工程治理后续切片（#192 自动版本检测与去重 issue、release pipeline 强制 SBOM 度量、发布签名）按 #192 推进，不抢占产品主链。
 
 动手前必须重新查询 issues 和 `main`，不要把本节当成永久队列。

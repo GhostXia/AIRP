@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-17 at `main@15cb6c0`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
+> Last reviewed: 2026-07-18 at `main@63f1c5b`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -29,11 +29,11 @@
 
 ## RR-004 · Divergent write paths and non-atomic persistence
 
-- **Status**: Partially mitigated in PR #111 through shared Chat/State/Lorebook services, atomic replacement, revision/schema validation, and shared locks. Cross-resource transactions and lock-cache lifecycle remain tracked separately.
-- **Surface**: Chat/State/Lorebook use shared services, but cross-resource operations and future session revisions still lack one transaction boundary.
-- **Risk**: Concurrent append/rollback/regen/state updates can lose ordering, overwrite a newer snapshot, or make live state disagree with history.
-- **Current control**: Shared per-character/per-session locks, atomic replacement, revision/schema validation, and append-only history cover current single-resource writes; cross-resource consistency remains incomplete.
-- **Required direction**: One versioned Chat/State service with shared locks, atomic replace, revisions/idempotency, schema validation, and concurrency tests.
+- **Status**: Partially mitigated in PR #111 through shared Chat/State/Lorebook services, atomic replacement, revision/schema validation, and shared locks. PR #219 further hardened single-resource durability (chat_store `replace_file` + `sync_data`, replace_file parent-dir fsync, character_lock serialization, quota Mutex, extract_card_assets lorebook preservation, next_volume_number saturating, append_to_current warning instead of silent swallow). Cross-resource transactions, `AIRP-TREE-SHA256-v1` integrity, full migration registry, backup/restore, lock-cache lifecycle and character_lock poison recovery remain tracked separately (see #220 deferred items).
+- **Surface**: Chat/State/Lorebook use shared services with crash-atomic writes, but cross-resource operations and future session revisions still lack one transaction boundary.
+- **Risk**: Concurrent append/rollback/regen/state updates can lose ordering, overwrite a newer snapshot, or make live state disagree with history; a crash mid-write no longer leaves a 0-byte `chat.jsonl`, but cross-resource consistency is still best-effort.
+- **Current control**: Shared per-character/per-session locks, atomic replacement with parent-dir fsync, revision/schema validation, append-only history with `sync_data`, `character_lock` for `update_character_card`, `quota` Mutex, and `extract_card_assets` data-safety-first lorebook preservation cover current single-resource writes; cross-resource consistency remains incomplete.
+- **Required direction**: One versioned Chat/State service with shared locks, atomic replace, revisions/idempotency, schema validation, and concurrency tests; then `AIRP-TREE-SHA256-v1` integrity, versioned migration registry, backup/restore and `character_lock` poison recovery (Phase P2).
 
 ## RR-005 · State schema enforcement at the write boundary
 
@@ -61,11 +61,11 @@
 
 ## RR-008 · Automatic PR quality gate
 
-- **Status**: Mitigated in PR #111; `pr-gate.yml` runs Rust and UI quality gates without persisted checkout credentials.
-- **Surface**: `pr-gate.yml` runs formatting, strict Clippy, workspace tests, sacred prompt-boundary invariants, UI tests/typecheck, and WebUI syntax checks.
-- **Risk**: Packaged installer/runtime behavior and provider-backed remote smoke are intentionally outside routine PR CI.
-- **Current control**: Required PR checks plus local/human review; checkout credentials are not persisted.
-- **Required direction**: Keep release artifact smoke as a separate release gate and expand CI only when deterministic fixtures exist.
+- **Status**: Mitigated in PR #111; `pr-gate.yml` runs Rust and UI quality gates without persisted checkout credentials. PR #218 upgraded GitHub Actions to `actions/checkout@v7` / `setup-node@v6` / `upload-artifact@v7` on Node 24 runtime, and delivered `tools/dep-governance/` (dependency discovery + audit routing + SPDX-2.3 / CycloneDX 1.5 SBOM generation) as an offline manual toolchain; SBOM snapshot lives in `docs/sbom/`.
+- **Surface**: `pr-gate.yml` runs formatting, strict Clippy, workspace tests, sacred prompt-boundary invariants, UI tests/typecheck, WebUI syntax checks and production topology smoke.
+- **Risk**: Packaged installer/runtime behavior, provider-backed remote smoke, automatic upstream version detection, and SBOM-as-release-gate are intentionally outside routine PR CI; dep-governance tooling is manually run, not enforced.
+- **Current control**: Required PR checks plus local/human review; checkout credentials are not persisted; dep-governance routing policy documents auto-pass / audit-required / block classes for known licenses.
+- **Required direction**: Keep release artifact smoke as a separate release gate; wire dep-governance SBOM into release pipeline as a mandatory gate; add automatic upstream-version detection with de-duplicated issues (#192 follow-up slice); expand CI only when deterministic fixtures exist.
 
 ## RR-009 · Production gateway/engine authority confusion
 

@@ -1,12 +1,12 @@
 AIRP dependency inventory
 =========================
-Generated: 2026-07-17T16:40:16.767Z
-Repo root: /workspace
+Generated: 2026-07-18T05:18:50.024Z
+Repo root: D:\AIRP-Dev
 Total records: 688
 
 Summary by audit class:
-  audit-required: 27
-  auto-pass: 661
+  audit-required: 17
+  auto-pass: 671
 
 Summary by ecosystem:
   cargo: 564
@@ -23,42 +23,12 @@ Records requiring attention (block / audit-required)
   [audit-required] cargo/dtoa-short@0.3.5  license=MPL-2.0  scope=runtime
     reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
     source: https://crates.io/api/v1/crates/dtoa-short/0.3.5/download
-  [audit-required] cargo/dunce@1.0.5  license=CC0-1.0 OR MIT-0 OR Apache-2.0  scope=runtime
-    reason: license CC0-1.0 OR MIT-0 OR Apache-2.0 not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/dunce/1.0.5/download
-  [audit-required] cargo/encoding_rs@0.8.35  license=(Apache-2.0 OR MIT) AND BSD-3-Clause  scope=runtime
-    reason: license (Apache-2.0 OR MIT) AND BSD-3-Clause not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/encoding_rs/0.8.35/download
-  [audit-required] cargo/linux-raw-sys@0.12.1  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
-    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/linux-raw-sys/0.12.1/download
   [audit-required] cargo/option-ext@0.2.0  license=MPL-2.0  scope=runtime
     reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
     source: https://crates.io/api/v1/crates/option-ext/0.2.0/download
-  [audit-required] cargo/r-efi@5.3.0  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime
-    reason: license LGPL-2.1-or-later requires dedicated audit (weak copyleft / non-commercial / attribution)
-    source: https://crates.io/api/v1/crates/r-efi/5.3.0/download
-  [audit-required] cargo/r-efi@6.0.0  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime
-    reason: license LGPL-2.1-or-later requires dedicated audit (weak copyleft / non-commercial / attribution)
-    source: https://crates.io/api/v1/crates/r-efi/6.0.0/download
-  [audit-required] cargo/rustix@1.1.4  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
-    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/rustix/1.1.4/download
   [audit-required] cargo/selectors@0.36.1  license=MPL-2.0  scope=runtime
     reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
     source: https://crates.io/api/v1/crates/selectors/0.36.1/download
-  [audit-required] cargo/unicode-ident@1.0.24  license=(MIT OR Apache-2.0) AND Unicode-3.0  scope=runtime
-    reason: license (MIT OR Apache-2.0) AND Unicode-3.0 not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/unicode-ident/1.0.24/download
-  [audit-required] cargo/wasi@0.11.1+wasi-snapshot-preview1  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
-    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/wasi/0.11.1+wasi-snapshot-preview1/download
-  [audit-required] cargo/wasip2@1.0.4+wasi-0.2.12  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
-    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/wasip2/1.0.4+wasi-0.2.12/download
-  [audit-required] cargo/wit-bindgen@0.57.1  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime
-    reason: license Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT not in any configured tier; add to audit-routing.config.json or verify permissive
-    source: https://crates.io/api/v1/crates/wit-bindgen/0.57.1/download
   [audit-required] npm/lightningcss@1.32.0  license=MPL-2.0  scope=dev
     reason: license MPL-2.0 requires dedicated audit (weak copyleft / non-commercial / attribution)
     source: https://registry.npmjs.org/lightningcss/-/lightningcss-1.32.0.tgz
@@ -196,11 +166,11 @@ cargo/dtoa@1.0.11  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=t
 cargo/dtoa-short@0.3.5  [audit-required]  license=MPL-2.0  scope=runtime  tier=third-party
 cargo/dtor@0.3.0  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/dtor-proc-macro@0.0.6  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
-cargo/dunce@1.0.5  [audit-required]  license=CC0-1.0 OR MIT-0 OR Apache-2.0  scope=runtime  tier=third-party
+cargo/dunce@1.0.5  [auto-pass]  license=CC0-1.0 OR MIT-0 OR Apache-2.0  scope=runtime  tier=third-party
 cargo/dyn-clone@1.0.20  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/embed-resource@3.0.9  [auto-pass]  license=MIT  scope=build  tier=third-party
 cargo/embed_plist@1.2.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
-cargo/encoding_rs@0.8.35  [audit-required]  license=(Apache-2.0 OR MIT) AND BSD-3-Clause  scope=runtime  tier=third-party
+cargo/encoding_rs@0.8.35  [auto-pass]  license=(Apache-2.0 OR MIT) AND BSD-3-Clause  scope=runtime  tier=third-party
 cargo/equivalent@1.0.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/erased-serde@0.4.10  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/errno@0.3.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
@@ -306,7 +276,7 @@ cargo/libc@0.2.186  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=
 cargo/libdbus-sys@0.2.7  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/libloading@0.7.4  [auto-pass]  license=ISC  scope=runtime  tier=third-party
 cargo/libredox@0.1.17  [auto-pass]  license=MIT  scope=runtime  tier=third-party
-cargo/linux-raw-sys@0.12.1  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/linux-raw-sys@0.12.1  [auto-pass]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/litemap@0.8.2  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
 cargo/lock_api@0.4.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/log@0.4.33  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
@@ -392,8 +362,8 @@ cargo/quanta@0.12.6  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/quick-error@1.2.3  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
 cargo/quick-xml@0.39.4  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/quote@1.0.46  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
-cargo/r-efi@5.3.0  [audit-required]  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime  tier=third-party
-cargo/r-efi@6.0.0  [audit-required]  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime  tier=third-party
+cargo/r-efi@5.3.0  [auto-pass]  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime  tier=third-party
+cargo/r-efi@6.0.0  [auto-pass]  license=MIT OR Apache-2.0 OR LGPL-2.1-or-later  scope=runtime  tier=third-party
 cargo/rand@0.10.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/rand@0.8.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/rand@0.9.4  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
@@ -420,7 +390,7 @@ cargo/rmcp@1.8.0  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-par
 cargo/rmcp-macros@1.8.0  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
 cargo/rustc-hash@2.1.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/rustc_version@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
-cargo/rustix@1.1.4  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/rustix@1.1.4  [auto-pass]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/rustls@0.23.41  [auto-pass]  license=Apache-2.0 OR ISC OR MIT  scope=runtime  tier=third-party
 cargo/rustls-pki-types@1.15.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/rustls-webpki@0.103.13  [auto-pass]  license=ISC  scope=runtime  tier=third-party
@@ -553,7 +523,7 @@ cargo/unic-char-range@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runti
 cargo/unic-common@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/unic-ucd-ident@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/unic-ucd-version@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
-cargo/unicode-ident@1.0.24  [audit-required]  license=(MIT OR Apache-2.0) AND Unicode-3.0  scope=runtime  tier=third-party
+cargo/unicode-ident@1.0.24  [auto-pass]  license=(MIT OR Apache-2.0) AND Unicode-3.0  scope=runtime  tier=third-party
 cargo/unicode-normalization@0.1.25  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/unicode-segmentation@1.13.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/untrusted@0.9.0  [auto-pass]  license=ISC  scope=runtime  tier=third-party
@@ -572,8 +542,8 @@ cargo/vswhom-sys@0.1.3  [auto-pass]  license=MIT  scope=build  tier=third-party
 cargo/wait-timeout@0.2.1  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
 cargo/walkdir@2.5.0  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
 cargo/want@0.3.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
-cargo/wasi@0.11.1+wasi-snapshot-preview1  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
-cargo/wasip2@1.0.4+wasi-0.2.12  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/wasi@0.11.1+wasi-snapshot-preview1  [auto-pass]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/wasip2@1.0.4+wasi-0.2.12  [auto-pass]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/wasm-bindgen@0.2.126  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/wasm-bindgen-futures@0.4.76  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/wasm-bindgen-macro@0.2.126  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
@@ -646,7 +616,7 @@ cargo/winnow@0.7.15  [auto-pass]  license=MIT  scope=build  tier=third-party
 cargo/winnow@1.0.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/winreg@0.55.0  [auto-pass]  license=MIT  scope=build  tier=third-party
 cargo/wiremock@0.6.5  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
-cargo/wit-bindgen@0.57.1  [audit-required]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
+cargo/wit-bindgen@0.57.1  [auto-pass]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/writeable@0.6.3  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
 cargo/wry@0.55.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/x11@2.21.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party

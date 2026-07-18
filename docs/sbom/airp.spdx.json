@@ -1,7 +1,7 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-07-17T16:40:16.767Z",
+    "created": "2026-07-18T05:18:50.024Z",
     "creators": [
       "Tool: AIRP dep-governance generate-sbom.mjs",
       "Organization: GhostXia"
@@ -9,7 +9,7 @@
     "licenseListVersion": "3.21"
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://airp.local/spdx/AIRP-2026-07-17",
+  "documentNamespace": "https://airp.local/spdx/AIRP-2026-07-18",
   "name": "AIRP",
   "packages": [
     {
@@ -2450,8 +2450,8 @@
       ],
       "filesAnalyzed": false,
       "homepage": "https://lib.rs/crates/dunce",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "CC0-1.0 OR MIT-0 OR Apache-2.0",
+      "licenseDeclared": "CC0-1.0 OR MIT-0 OR Apache-2.0",
       "name": "dunce",
       "supplier": "NOASSERTION",
       "versionInfo": "1.0.5"
@@ -2552,8 +2552,8 @@
       ],
       "filesAnalyzed": false,
       "homepage": "https://docs.rs/encoding_rs/",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0 OR MIT AND BSD-3-Clause",
+      "licenseDeclared": "Apache-2.0 OR MIT AND BSD-3-Clause",
       "name": "encoding_rs",
       "supplier": "NOASSERTION",
       "versionInfo": "0.8.35"
@@ -5248,8 +5248,8 @@
         }
       ],
       "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
       "name": "linux-raw-sys",
       "supplier": "NOASSERTION",
       "versionInfo": "0.12.1"
@@ -8131,8 +8131,8 @@
         }
       ],
       "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
       "name": "rustix",
       "supplier": "NOASSERTION",
       "versionInfo": "1.1.4"
@@ -9827,8 +9827,8 @@
         }
       ],
       "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
       "name": "target-lexicon",
       "supplier": "NOASSERTION",
       "versionInfo": "0.12.16"
@@ -11506,8 +11506,8 @@
         }
       ],
       "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "MIT OR Apache-2.0 AND Unicode-3.0",
+      "licenseDeclared": "MIT OR Apache-2.0 AND Unicode-3.0",
       "name": "unicode-ident",
       "supplier": "NOASSERTION",
       "versionInfo": "1.0.24"
@@ -11988,8 +11988,8 @@
         }
       ],
       "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
       "name": "wasi",
       "supplier": "NOASSERTION",
       "versionInfo": "0.11.1+wasi-snapshot-preview1"
@@ -12013,8 +12013,8 @@
         }
       ],
       "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
       "name": "wasip2",
       "supplier": "NOASSERTION",
       "versionInfo": "1.0.4+wasi-0.2.12"
@@ -13846,8 +13846,8 @@
       ],
       "filesAnalyzed": false,
       "homepage": "https://github.com/bytecodealliance/wit-bindgen",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
       "name": "wit-bindgen",
       "supplier": "NOASSERTION",
       "versionInfo": "0.57.1"
