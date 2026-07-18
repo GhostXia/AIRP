@@ -18,6 +18,8 @@ import {
   isPrerelease,
   normalizeLicense,
   splitLicenseExpression,
+  parseSpdxExpression,
+  renderSpdxAst,
   classifyInventory,
   classifyUpgrade,
   isSensitive,
@@ -142,6 +144,81 @@ test("splitLicenseExpression: splits on OR/AND, preserves WITH", () => {
   assert.deepEqual(splitLicenseExpression("Apache-2.0 WITH LLVM-exception"), ["Apache-2.0 WITH LLVM-exception"]);
   assert.deepEqual(splitLicenseExpression("MIT"), ["MIT"]);
   assert.deepEqual(splitLicenseExpression(""), []);
+});
+
+// ---------------------------------------------------------------------------
+// renderSpdxAst: parentheses preservation (regression for SBOM B2)
+// ---------------------------------------------------------------------------
+
+test("renderSpdxAst: preserves parens around OR under AND (SPDX precedence)", () => {
+  // (Apache-2.0 OR MIT) AND BSD-3-Clause — without parens this re-parses as
+  // Apache-2.0 OR (MIT AND BSD-3-Clause), flipping the license obligation.
+  const ast = parseSpdxExpression("(Apache-2.0 OR MIT) AND BSD-3-Clause");
+  assert.equal(renderSpdxAst(ast), "(Apache-2.0 OR MIT) AND BSD-3-Clause");
+});
+
+test("renderSpdxAst: preserves parens around OR under AND for MIT OR Apache-2.0 AND Unicode-3.0", () => {
+  const ast = parseSpdxExpression("(MIT OR Apache-2.0) AND Unicode-3.0");
+  assert.equal(renderSpdxAst(ast), "(MIT OR Apache-2.0) AND Unicode-3.0");
+});
+
+test("renderSpdxAst: no parens for OR under OR (associative)", () => {
+  const ast = parseSpdxExpression("MIT OR Apache-2.0 OR BSD-3-Clause");
+  // Right-associative parse tree; renderer must not insert spurious parens.
+  const rendered = renderSpdxAst(ast);
+  assert.equal(rendered, "MIT OR Apache-2.0 OR BSD-3-Clause");
+  // Round-trip: re-parsing the rendered form yields an AST whose render is
+  // identical (idempotence under re-render).
+  assert.equal(renderSpdxAst(parseSpdxExpression(rendered)), rendered);
+});
+
+test("renderSpdxAst: no parens for AND under AND (associative)", () => {
+  const ast = parseSpdxExpression("MIT AND Apache-2.0 AND BSD-3-Clause");
+  const rendered = renderSpdxAst(ast);
+  assert.equal(rendered, "MIT AND Apache-2.0 AND BSD-3-Clause");
+  assert.equal(renderSpdxAst(parseSpdxExpression(rendered)), rendered);
+});
+
+test("renderSpdxAst: no parens for AND under OR (and binds tighter than or)", () => {
+  // MIT OR Apache-2.0 AND BSD-3-Clause parses as MIT OR (Apache-2.0 AND BSD-3-Clause);
+  // the `and` child of `or` needs no parens.
+  const ast = parseSpdxExpression("MIT OR Apache-2.0 AND BSD-3-Clause");
+  assert.equal(renderSpdxAst(ast), "MIT OR Apache-2.0 AND BSD-3-Clause");
+});
+
+test("renderSpdxAst: WITH under AND/OR needs no parens (WITH binds tightest)", () => {
+  const ast = parseSpdxExpression("Apache-2.0 WITH LLVM-exception AND MIT");
+  assert.equal(renderSpdxAst(ast), "Apache-2.0 WITH LLVM-exception AND MIT");
+});
+
+test("parseSpdxExpression: rejects composite operand before WITH (SPDX 2.x grammar)", () => {
+  // SPDX 2.x restricts WITH's left operand to a simple-license. A composite
+  // or parenthesized operand like `(Apache-2.0 OR MIT) WITH LLVM-exception`
+  // is not legal SPDX; parser must reject so the caller falls back to
+  // audit-required rather than emitting an ambiguous expression.
+  const ast = parseSpdxExpression("(Apache-2.0 OR MIT) WITH LLVM-exception");
+  assert.equal(ast, null);
+});
+
+test("renderSpdxAst: round-trip idempotence on real-world expressions", () => {
+  // Idempotence: render(parse(render(parse(x)))) === render(parse(x)).
+  // This catches any parenthesization that drifts on re-parse.
+  const samples = [
+    "MIT OR Apache-2.0",
+    "(Apache-2.0 OR MIT) AND BSD-3-Clause",
+    "(MIT OR Apache-2.0) AND Unicode-3.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT AND Apache-2.0 AND BSD-3-Clause",
+    "MIT OR Apache-2.0 OR BSD-3-Clause",
+    "GPL-3.0 AND (MIT OR Apache-2.0)",
+    "(MIT OR GPL-3.0) AND (Apache-2.0 OR BSD-3-Clause)",
+  ];
+  for (const sample of samples) {
+    const ast = parseSpdxExpression(sample);
+    const r1 = renderSpdxAst(ast);
+    const r2 = renderSpdxAst(parseSpdxExpression(r1));
+    assert.equal(r2, r1, `idempotence broken for: ${sample} → ${r1} → ${r2}`);
+  }
 });
 
 // ---------------------------------------------------------------------------

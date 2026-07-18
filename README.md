@@ -7,7 +7,7 @@ AIRP 是一个专精 Role Play 的 AI Agent 客户端。产品采用“无头 en
 - **ui**（`airp-ui`）：保留的 Tauri + Vue 桌面客户端，近期开发与打包验收暂停；
 - **protocol**（`airp-state-protocol`）：UI/engine 共用的线协议类型。
 
-当前权威实现基线是 `main@15cb6c0` / PR #215，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
+当前权威实现基线是 `main@63f1c5b` / PR #227，详见 [当前开发基线](docs/CURRENT-BASELINE.md)。文档角色与最短阅读路径见 [文档地图](docs/README.md)。
 
 ## 项目原则
 
@@ -120,7 +120,7 @@ npm run test -- --run
 
 `.github/workflows/pr-gate.yml` 自动执行 Rust workspace、UI/WebUI 和 production topology 门禁。`.github/workflows/manual-build.yml` 负责手动 Windows desktop package。审计 bot 是合并前阻塞门禁：本地全绿只允许开 PR，必须等待审计通过并由人工 review 决定是否合并。
 
-`main@15cb6c0` 的 [push gate run 29590129817](https://github.com/GhostXia/AIRP/actions/runs/29590129817) 已通过 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology；覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复与 onboarding wizard 22 项 L1/L2 + 43 项 L4 回归。证据只证明该 commit/PR head，不自动证明后续改动。
+`main@63f1c5b` 的 [push gate run 29631048229](https://github.com/GhostXia/AIRP/actions/runs/29631048229) 已通过 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology；本地复算 750 lib（734 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests、WebUI 89 tests、dep-governance 82 tests、ui Vitest 98 tests；覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、onboarding wizard L1/L2/L4 回归、#114 effective config summary（PR #217）、PR #218 工程治理基础设施（dep-governance + SBOM + Actions `checkout@v7`/`setup-node@v6`/`upload-artifact@v7` 升级；workflow step Node 仍为 20.19.0）、PR #219 post-commit 高影响缺陷修复（quota race / chat_store 原子性 / replace_file fsync / character_lock / lorebook 保留 / volume 溢出 / silent error swallow）与 PR #227 审计遗留批清理。证据只证明该 commit/PR head，不自动证明后续改动。
 
 ## 关键文档
 

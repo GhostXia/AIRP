@@ -4,7 +4,7 @@
 >
 > Decision date: 2026-07-13
 >
-> Last baseline check: 2026-07-17 (`main@15cb6c0`; PR #196 scene lorebook provenance, PR #201-#203/#206/#215 unified revision contract, PR #208 launch-validation targets, PR #212 onboarding wizard Phase 1 已合并，未改变本 P0 边界)
+> Last baseline check: 2026-07-18 (`main@63f1c5b`; PR #196 scene lorebook provenance, PR #201-#203/#206/#215 unified revision contract, PR #208 launch-validation targets, PR #212 onboarding wizard Phase 1, PR #217 #114 effective config summary, PR #218 dep-governance/SBOM, PR #219 post-commit high-impact persistence fixes, PR #227 audit-followup batch cleanup 已合并，未改变本 P0 边界)
 >
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)

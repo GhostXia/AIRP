@@ -2,7 +2,7 @@
 
 > 状态：当前近期执行主入口
 >
-> 基线日期：2026-07-17，`main@15cb6c0` / PR #215
+> 基线日期：2026-07-18，`main@63f1c5b` / PR #227
 >
 > 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
 
@@ -103,11 +103,11 @@ Browser
 
 ### 尚缺的上线能力
 
-- P0 首方部署 artifact 与真实 topology smoke 已落地；正式升级/回滚流程、SBOM/notices、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。
+- P0 首方部署 artifact 与真实 topology smoke 已落地；正式升级/回滚流程、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。SBOM/notices 已由 PR #218 `tools/dep-governance/` 提供离线生成（SPDX-2.3 / CycloneDX 1.5 / 人类可读声明，当前快照在 `docs/sbom/`），但尚未嵌入 release pipeline 作为强制度量。
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
-- Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#115 Phase 2 6 类 revision 合同与 trace 收口已落地，#114 统一有效配置摘要已交付，#114 Persona/Preset 高级生命周期（base lock/drift/rollback/dry-run/provenance 审计）仍是 RP 首发主链下一步；#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
-- 缺备份/恢复、数据迁移发布纪律、soft-delete/回收站、完整 production observability contract 和运行手册；当前 Caddy access log/filter 只是 P0 局部实现，仍需在 P2 决定是否保留及其用途、字段、输出和保留策略。
+- Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#115 Phase 2 6 类 revision 合同与 trace 收口已落地，#114 统一有效配置摘要已交付（PR #217），#114 Persona/Preset 高级生命周期（base lock/drift/rollback/dry-run/provenance 审计）仍是 RP 首发主链下一步；#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
+- 单资源持久化边界已加固（PR #219 quota race / chat_store 原子性 / replace_file fsync / character_lock / lorebook 保留 / volume 溢出 / silent error swallow + PR #227 `replace_file` 扩展名保留等审计遗留收口），但跨资源事务、`AIRP-TREE-SHA256-v1` 完整性校验、版本化 migration registry、备份恢复、soft-delete/回收站、完整 production observability contract 和运行手册仍缺；当前 Caddy access log/filter 只是 P0 局部实现，仍需在 P2 决定是否保留及其用途、字段、输出和保留策略；#220 deferred 项（character_lock poison 恢复、record_tokens spawn_blocking、resolve_param_sources 重构、temperature None 语义）按独立 PR 推进。
 - engine-truth smoke 与 production system-Chrome smoke 已并行进入 CI；浏览器兼容矩阵、升级恢复与完整发布安全门禁仍不足。
 
 ## 4. 推进顺序
@@ -125,7 +125,7 @@ Browser
 ### Phase P1：RP 正式使用面
 
 1. #137 的 Vite/Vitest 工具链安全升级已由 PR #191 完成，当前 `npm audit` 为 0 项；
-2. #115 Phase 2 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（角色卡/Persona/Preset/Worldbook/State/Memory，PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地；
+2. #115 Phase 2 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（角色卡/Persona/Preset/Worldbook/State/Memory，PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地，#114 统一有效配置摘要已由 PR #217 交付（Persona 激活来源 + 参数来源 chips）；
 3. 在已交付 Persona effective/绑定/聊天切换闭环、上述 trace 可观察性和 #114 统一有效配置摘要之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期、HTTP/UI 受控 dry-run、revision/collision/overwrite/provenance 审计；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
 4. 在已交付 Worldbook v4、shared normalizer、普通用户主面板和端到端导入回归之上，只继续实现首发确需的受控大对象上传与资产生命周期，不把 advisory 字段误宣称为 runtime 兼容；
 5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
@@ -146,7 +146,7 @@ Browser
 
 1. 浏览器兼容、响应式、键盘与基础可访问性收口；
 2. 真实 provider 脱敏 smoke、长会话与断网/重连 soak；
-3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值；
+3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #218 `tools/dep-governance/` 已提供 SPDX-2.3 / CycloneDX 1.5 离线生成器，需嵌入 release pipeline 并补发布签名）；
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
@@ -165,5 +165,6 @@ Browser
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
 2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
-3. #115 Phase 2 6 类 revision 合同与 trace 收口已落地（PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地，#114 统一有效配置摘要已交付；下一项按 #114 的**剩余子项**（Persona/Preset 高级生命周期、base lock/drift/rollback、受控 dry-run、完整 provenance 审计）完成 RP 使用面；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
-4. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。
+3. #115 Phase 2 6 类 revision 合同与 trace 收口已落地（PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地，#114 统一有效配置摘要已交付（PR #217），单资源持久化边界已加固（PR #219 + PR #227）；下一项按 #114 的**剩余子项**（Persona/Preset 高级生命周期、base lock/drift/rollback、受控 dry-run、完整 provenance 审计）完成 RP 使用面；#220 deferred 项按独立 PR 推进；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
+4. 工程治理项（PR #218 #190 SBOM/声明 + #192 依赖发现/审计路由 + #128 Actions `checkout@v7` / `setup-node@v6` / `upload-artifact@v7` 升级；workflow step Node 仍为 20.19.0）按 #192 后续切片推进 release pipeline 强制度量与发布签名；
+5. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。

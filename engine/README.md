@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-17 的 `main@15cb6c0` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-18 的 `main@63f1c5b` 复核。
 
 ## 当前能力
 
@@ -164,7 +164,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-`main@15cb6c0` 的 [GitHub run `29590129817`](https://github.com/GhostXia/AIRP/actions/runs/29590129817) 中 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 全绿，并覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、prompt preview 的 engine/HTTP/WebUI 与生产浏览器路径。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
+`main@63f1c5b` 的 [GitHub run `29631048229`](https://github.com/GhostXia/AIRP/actions/runs/29631048229) 中 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 全绿；本地复算 `cargo test --workspace --locked` = 750 lib（734 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests（4 agent_run + 11 openai_compat + 5 production_startup + 5 sse_wiremock），并覆盖 Phase 2h 6 类 revision 字段填充、`*_revision_unavailable` 诊断、orphan revision_dir 恢复、prompt preview 的 engine/HTTP/WebUI 与生产浏览器路径、#114 effective config summary（PR #217 Persona 激活来源 + 参数来源）、PR #219 高影响缺陷修复回归（quota 并发 / chat_store 原子替换 / character_lock 串行化 / replace_file parent-dir fsync / extract_card_assets 空 entries 保留旧 lorebook / next_volume_number u32::MAX saturating）与 PR #227 `replace_file` 扩展名保留回归。这些结果只属于该 commit，后续修改必须重跑并记录新结果。
 
 ## License
 

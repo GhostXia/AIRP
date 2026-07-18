@@ -2,7 +2,7 @@
 
 `webui/` 是当前 AIRP 产品交付主面：零构建、浏览器可运行的 RP 客户端。它已经具备基本日用闭环，但仍是 preview；正式发布前的 P1–P3 门禁见 [WebUI 正式上线计划](../docs/WEBUI-PRODUCTION-PLAN.md)。当前事实见 [开发基线](../docs/CURRENT-BASELINE.md)，P0 拓扑见 [production architecture](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md)。
 
-> 本页最后在 2026-07-17 的 `main@15cb6c0` 复核。
+> 本页最后在 2026-07-18 的 `main@63f1c5b` 复核。
 > `start.bat`、`serve.js`、`cargo run`、手填 engine URL 和可选 bearer 都是开发路径。不要把 8000/9001 端口或静态开发服务器直接暴露到公网。首方 P0 preview 位于 [deploy/production](../deploy/production/README.md)。
 
 ## 本地启动

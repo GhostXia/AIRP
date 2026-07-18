@@ -2,7 +2,7 @@
 
 > Status: A1a (PR #151), A1b (PR #152), A2a (PR #154), and the A2b/A2c WebUI closure (PR #180) delivered.
 > This document records the stable HTTP/pipeline contract and the remaining
-> product boundary; it is not an execution log. Last checked: 2026-07-17 at `main@15cb6c0`.
+> product boundary; it is not an execution log. Last checked: 2026-07-18 at `main@63f1c5b` (#114 Persona activation source delivered in PR #217; advanced lifecycle — base lock / drift / rollback / avatar / import-export / backup-restore — remains open).
 
 ## Scope
 
