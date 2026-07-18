@@ -128,11 +128,28 @@ try {
   assert.ok(onboardingState.characterId, 'onboarding must persist the selected character');
   assert.ok(onboardingState.sessionId, 'onboarding must persist the first-chat session');
 
-  // Allow the shared rate-limit bucket to refill before reload hydration.
+  // Allow the shared rate-limit bucket to refill, then prove that onboarding
+  // finalized a durable assistant turn before testing refresh recovery.
   await page.waitForTimeout(2_500);
+  await page.locator('[data-view="session"]').first().click();
+  await page.locator('#btn-history').click();
+  await page.waitForFunction(() => {
+    const turns = document.querySelectorAll('#chat-log .msg.assistant[data-message-id] .text');
+    return turns.length > 0 && turns[turns.length - 1].textContent?.trim();
+  }, null, { timeout: 10_000 });
+  const firstAssistant = await page.locator('#chat-log .msg.assistant[data-message-id]').last().evaluate(node => ({
+    messageId: node.dataset.messageId,
+    text: node.querySelector('.text')?.textContent || '',
+  }));
+  assert.ok(firstAssistant.messageId, 'first chat must finalize a durable assistant message');
+  assert.ok(firstAssistant.text.trim(), 'first chat assistant response must be non-empty');
+
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('#conn-text')?.textContent?.startsWith('已连接'), null, { timeout: 15_000 });
   await page.waitForFunction(message => document.querySelector('#chat-log')?.textContent?.includes(message), firstMessage, { timeout: 10_000 });
+  await page.waitForFunction(expected => Array.from(document.querySelectorAll('#chat-log .msg.assistant[data-message-id]')).some(node =>
+    node.dataset.messageId === expected.messageId && node.querySelector('.text')?.textContent === expected.text
+  ), firstAssistant, { timeout: 10_000 });
   assert.equal(await page.locator('#char-select').inputValue(), onboardingState.characterId);
   assert.equal(await page.locator('#sess-select').inputValue(), onboardingState.sessionId);
   await page.waitForTimeout(2_500);
