@@ -124,7 +124,15 @@ pub fn check_and_increment(effective_root: &Path, config: &QuotaConfig) -> Resul
     // C1: 全局串行化，消除并发请求间 read-modify-write 的 TOCTOU 窗口。
     // 没有这把锁，N 个并发请求会读到同一个 stale `requests_today`，各自 +1
     // 后 save，导致实际放行 N 个请求而 limit 只允许 1 个。
-    let _guard = quota_lock().lock().expect("quota lock poisoned");
+    //
+    // Q-A1 fix: 与 `record_tokens` 一致使用 `into_inner()` 恢复 poison，
+    // 而非 `.expect()`。poison 意味着前一次临界区内某线程 panic，但
+    // quota.json 本身是 plain JSON（load 时反序列化失败会回退到零值），
+    // poison 后继续服务比 crash 整个 daemon 更安全。
+    let _guard = match quota_lock().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
 
     let path = quota_file_path(effective_root);
     let mut state = QuotaState::load(&path);

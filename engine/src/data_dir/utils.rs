@@ -45,8 +45,12 @@ where
     // content on disk, undermining every caller that depends on
     // `replace_file` for crash-atomic updates (lorebook, state, character
     // card, revisions, etc.).
+    //
+    // Q-A2 fix: 复用 `revision::atomic::sync_dir`，避免两处实现漂移。
+    // Unix 上打开目录并 sync_data；Windows 上 no-op（NTFS rename 原子性
+    // 由文件系统保证，且打开目录句柄会触发 ACCESS_DENIED 延迟释放）。
     if let Some(parent) = path.parent() {
-        sync_dir(parent)?;
+        crate::revision::atomic::sync_dir(parent)?;
     }
     if backup.exists() {
         if let Err(error) = cleanup_backup(&backup) {
@@ -56,25 +60,6 @@ where
                 "replacement committed but stale backup cleanup failed"
             );
         }
-    }
-    Ok(())
-}
-
-/// fsync a directory so that rename/create/unlink operations on its entries
-/// become durable. On Unix we open the directory and call `sync_data`; on
-/// Windows we intentionally do nothing because opening a directory handle
-/// returns ACCESS_DENIED and NTFS rename atomicity is provided by the
-/// filesystem. Mirrors `revision::atomic::sync_dir`.
-fn sync_dir(path: &Path) -> Result<(), AirpError> {
-    #[cfg(unix)]
-    {
-        let file = fs::File::open(path)?;
-        file.sync_data()
-            .map_err(|e| AirpError::Internal(format!("sync_dir {:?} 失败: {e}", path)))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
     }
     Ok(())
 }
