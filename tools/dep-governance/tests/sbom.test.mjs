@@ -85,6 +85,14 @@ test("toSpdxExpression: OR expression isComposite=true", () => {
   assert.equal(r.ast.type, "or");
 });
 
+test("toSpdxExpression: MIT-0 recognized as valid SPDX id", () => {
+  // L1 fix: MIT-0 (no-attribution MIT) was missing from KNOWN_SPDX_IDS.
+  const r = toSpdxExpression("MIT-0");
+  assert.equal(r.expression, "MIT-0");
+  assert.equal(r.unknown, false);
+  assert.equal(r.isComposite, false);
+});
+
 // ---------------------------------------------------------------------------
 // toPurl
 // ---------------------------------------------------------------------------

@@ -54,9 +54,15 @@ import {
  * (and not a valid SPDX expression) is mapped to NOASSERTION and flagged
  * for human review. This is a conservative allowlist — additions here
  * should be deliberate.
+ *
+ * Source: https://spdx.org/licenses/ (SPDX License List). Sync periodically
+ * when upgrading to a newer SPDX License List version. The current set
+ * covers all license ids AIRP has encountered in its Cargo + npm dependency
+ * graph plus common forward-compat ids (GPL/AGPL/SSPL/BUSL for block-tier
+ * matching).
  */
 const KNOWN_SPDX_IDS = new Set([
-  "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+  "MIT", "MIT-0", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
   "0BSD", "Unicode-DFS-2016", "Unicode-3.0", "Unlicense", "CC0-1.0",
   "OpenSSL", "BSL-1.0", "MPL-2.0", "EPL-1.0", "EPL-2.0", "LGPL-2.0",
   "LGPL-2.1", "LGPL-3.0", "LGPL-2.1-or-later", "LGPL-3.0-or-later",
@@ -74,7 +80,8 @@ const KNOWN_SPDX_IDS = new Set([
  * `WITH` clause uses a known exception, the whole expression is
  * considered valid (the license id is checked separately).
  *
- * Source: SPDX License Exceptions list (https://spdx.org/licenses/exceptions-index.html)
+ * Source: https://spdx.org/licenses/exceptions-index.html (SPDX License
+ * Exceptions list). Sync periodically when upgrading the SPDX License List.
  * Subset: only the exceptions AIRP actually encounters in its dependency
  * graph, plus the common LLVM/GPL ones for forward compatibility.
  */
@@ -299,9 +306,7 @@ export function buildSpdxDocument(inventory, opts) {
       filesAnalyzed: false,
       licenseConcluded: spdx.expression,
       licenseDeclared: spdx.expression,
-      supplier: r.source === "crates.io" || r.source === "npm"
-        ? "NOASSERTION"
-        : "NOASSERTION",
+      supplier: "NOASSERTION",
       copyrightText: "NOASSERTION",
       externalRefs: [],
     };

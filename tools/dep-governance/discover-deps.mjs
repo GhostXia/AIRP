@@ -189,6 +189,12 @@ export function computeCargoScopes(metadata) {
   // BFS queue: entries of {id, scope}. Seed with workspace members as runtime
   // (workspace members themselves are first-party; their direct normal deps
   // are runtime, build deps are build, dev deps are dev).
+  //
+  // Limitation: the visited-check below skips re-expansion when a node is
+  // revisited at an equal-or-lower scope. This is correct for AIRP's current
+  // dependency graph (no diamond where a higher-scope path arrives second),
+  // but a pathological graph could misclassify. If AIRP ever adopts a dep
+  // graph with such a shape, switch to a per-scope-tier visited set.
   const queue = [];
   for (const id of workspaceMemberIds) {
     queue.push({ id, scope: "runtime" }); // workspace member itself; its deps get classified by edge kind
@@ -367,8 +373,14 @@ export function parseNpmLockfile(lockPath, rootPackageName) {
     // usage these are always first-party workspace members (airp-ui,
     // @airp/* packages). We mark them as first-party with source=workspace
     // so they carry AIRP's own license rather than being audited as
-    // third-party. Non-workspace `file:`-linked deps are rare and would
-    // need explicit handling if AIRP ever adopts one.
+    // third-party.
+    //
+    // Heuristic caveat: if AIRP ever adopts a non-workspace `file:`-linked
+    // dependency (rare; would be a local override of an upstream package),
+    // this check would misclassify it as first-party. The fix would be to
+    // inspect `info.resolved` for a `file:` prefix and cross-check against
+    // config.first_party.npm_root_package / npm workspace globs. Deferred
+    // until AIRP actually has such a dep.
     const isWorkspaceLink = isLink && !isGit;
 
     const sourceType = isGit ? "git" : isWorkspaceLink ? "workspace" : "npm";

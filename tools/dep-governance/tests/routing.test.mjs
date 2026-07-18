@@ -97,6 +97,14 @@ test("compareSemver: build metadata ignored", () => {
   );
 });
 
+test("compareSemver: null inputs do not crash (defensive export contract)", () => {
+  // L7 fix: exported function must not throw on null. classifyUpgrade
+  // filters null before calling, but the export is public API.
+  assert.equal(compareSemver(null, null), 0);
+  assert.ok(compareSemver(null, parseSemver("1.0.0")) < 0);
+  assert.ok(compareSemver(parseSemver("1.0.0"), null) > 0);
+});
+
 test("isPrerelease", () => {
   assert.equal(isPrerelease(parseSemver("1.0.0")), false);
   assert.equal(isPrerelease(parseSemver("1.0.0-alpha")), true);

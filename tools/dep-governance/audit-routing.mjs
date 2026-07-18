@@ -118,6 +118,12 @@ export function isPrerelease(s) {
  * @returns {number}
  */
 export function compareSemver(a, b) {
+  // Defensive: exported function should not crash on null. `classifyUpgrade`
+  // filters null before calling this, but the export contract is public.
+  if (a == null || b == null) {
+    if (a == null && b == null) return 0;
+    return a == null ? -1 : 1;
+  }
   if (a.major !== b.major) return a.major - b.major;
   if (a.minor !== b.minor) return a.minor - b.minor;
   if (a.patch !== b.patch) return a.patch - b.patch;

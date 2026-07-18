@@ -4,11 +4,10 @@
   "inventory_routing": {
     "_comment": "Classifies the CURRENT dependency inventory (used by SBOM/notices generation, #190). Driven by license + scope, not version bumps.",
     "auto_pass": {
-      "_comment": "Licenses that are permissive and compatible with AIRP's MIT OR Apache-2.0 distribution. Still recorded in the SBOM but do not trigger a dedicated audit.",
+      "_comment": "Licenses that are permissive and compatible with AIRP's MIT OR Apache-2.0 distribution. Still recorded in the SBOM but do not trigger a dedicated audit. Composite expressions (OR/AND/WITH) are classified leaf-by-leaf by the AST parser in audit-routing.mjs, so only single SPDX ids need to be listed here.",
       "licenses": [
         "MIT",
         "Apache-2.0",
-        "Apache 2.0",
         "BSD-2-Clause",
         "BSD-3-Clause",
         "ISC",
@@ -20,12 +19,6 @@
         "CC0-1.0",
         "OpenSSL",
         "BSL-1.0"
-      ],
-      "license_expressions": [
-        "MIT OR Apache-2.0",
-        "Apache-2.0 OR MIT",
-        "MIT/Apache-2.0",
-        "Apache-2.0 WITH LLVM-exception"
       ]
     },
     "audit_required": {
