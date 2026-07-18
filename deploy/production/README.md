@@ -67,6 +67,34 @@ docker compose --env-file .env -f compose.yaml down
 not use `down --volumes` on a real deployment. Image tags come from `AIRP_VERSION`; never replace
 them with `latest`.
 
+## P1 manual backup and rollback
+
+The persistent AIRP data root is `/var/lib/airp` inside the engine and the named Docker volume
+`airp-data` on the host. Before every P1 candidate upgrade, record the current `AIRP_VERSION`,
+stop both services, and create a cold backup:
+
+```powershell
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+docker compose --env-file .env -f compose.yaml down
+docker run --rm -v airp-data:/source:ro -v ${PWD}:/backup alpine:3.22.1 tar -czf "/backup/airp-data-$stamp.tgz" -C /source .
+Get-FileHash ".\airp-data-$stamp.tgz" -Algorithm SHA256
+```
+
+Keep the archive, its SHA-256, the old `.env` (without copying secrets into tickets), and the old
+`AIRP_VERSION` together. To roll back, leave services stopped, preserve the failed data instead of
+overwriting it, restore into a fresh volume, and then start the recorded old version:
+
+```powershell
+docker volume create airp-data-rollback
+docker run --rm -v airp-data-rollback:/restore -v ${PWD}:/backup alpine:3.22.1 sh -c 'tar -xzf /backup/airp-data-YYYYMMDD-HHMMSS.tgz -C /restore'
+```
+
+Change the `airp-data` volume `name:` in `compose.yaml` temporarily to `airp-data-rollback`, restore
+the recorded `AIRP_VERSION` in `.env`, run `docker compose ... config --quiet`, then `up -d`.
+Verify health, character/Persona/Preset lists, the last session and chat history before allowing
+new writes. If verification fails, stop and retain both volumes for diagnosis. This is a manual
+P1 escape hatch; automated backup, migration and restore verification remain P2 work.
+
 ## CI topology proof
 
 `smoke-ci.sh` plus `smoke-compose.yaml` are CI-only acceptance assets, not operator startup
@@ -77,6 +105,6 @@ system-Chrome injection/stream-cancel/prompt-preview
 behavior and absence of synthetic secrets/private runner paths in logs, image metadata and WebUI
 assets. Cleanup deletes only the uniquely named smoke volumes.
 
-Passing this P0 topology gate does not make the bundle a formal release. P1 RP management, P2
-backup/restore and upgrade rollback, and P3 provenance/compatibility/release-candidate gates remain
+Passing this P0 topology gate does not make the bundle a formal release. P1 trial validation, P2
+automated backup/restore and migration rollback, and P3 provenance/compatibility/release-candidate gates remain
 required by `docs/WEBUI-PRODUCTION-PLAN.md`.

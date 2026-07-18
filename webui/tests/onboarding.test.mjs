@@ -389,6 +389,62 @@ test('formatError 白名单展开已知字段（复用 app.js 行为）', async 
   assert.equal(formatError(null, 'fallback'), 'fallback');
 });
 
+test('formatError 不向 UI 泄露凭据', async () => {
+  globalThis.window = globalThis.window || {};
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  if (!globalThis.window.AIRPShared) require('../shared.js');
+  const { formatError } = globalThis.window.AIRPShared;
+  const rendered = formatError({
+    error: {
+      code: 'upstream_error',
+      upstream_body: 'Authorization: Bearer bearer-secret api_key=plain-secret sk-abcdefghijk',
+      access_token: 'nested-secret',
+    },
+  });
+  assert.ok(rendered.includes('[REDACTED]'));
+  for (const secret of ['bearer-secret', 'plain-secret', 'sk-abcdefghijk', 'nested-secret']) {
+    assert.ok(!rendered.includes(secret), '不得显示 ' + secret);
+  }
+});
+
+test('Stage 6 消费 engine 的 {type,text} chunk 并识别 SSE error 事件（静态回归）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../onboarding.js', import.meta.url), 'utf8');
+  assert.match(src, /chunk\.type === 'body_chunk' && chunk\.text/);
+  assert.ok(!src.includes('bodyP.append(chunk.content)'), 'engine chunk 字段是 text，不是 content');
+  assert.match(src, /eventName === 'error'/);
+});
+
+test('角色导入校验兼容 engine 的 bare string ID 列表（静态回归）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../onboarding.js', import.meta.url), 'utf8');
+  assert.match(src, /typeof c === 'string' \? c : \(c\.id \|\| c\.character_id\)/);
+});
+
+test('effective config 预览提供 chat preview 必需的 user_profile（静态回归）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../onboarding.js', import.meta.url), 'utf8');
+  assert.match(src, /user_profile: \{ name: '', variables: \{\} \}/);
+  assert.match(src, /message: ''/);
+});
+
+test('向导完成配置携带 session_id，供刷新后恢复当前会话（静态回归）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../onboarding.js', import.meta.url), 'utf8');
+  assert.match(src, /session_id: state\.sessionId \|\| ''/);
+});
+
+test('宿主在向导完成后同步开发连接配置再自动连接（静态回归）', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../app.js', import.meta.url), 'utf8');
+  const completeStart = src.indexOf('function onOnboardingComplete');
+  const skipStart = src.indexOf('function onOnboardingSkip');
+  const completeBody = src.slice(completeStart, skipStart);
+  assert.match(completeBody, /engineUrl\.value = sessionStorage\.getItem\('airp_engine_url'\)/);
+  assert.ok(completeBody.indexOf('engineUrl.value =') < completeBody.indexOf('scheduleAutoConnect()'));
+});
+
 test('makeFetcher dev 模式从 sessionStorage 读取（auth 单一实现 §3.2）', async () => {
   globalThis.window = globalThis.window || {};
   globalThis.window.location = { origin: 'http://localhost:8080' };

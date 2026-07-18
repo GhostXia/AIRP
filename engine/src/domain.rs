@@ -1106,23 +1106,15 @@ impl PersonaService {
         }
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
-        let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
-        if path.exists() {
-            fs::remove_file(&path)?;
-        }
-        // Gemini #2：同步删除 revision 目录。即使目录不存在或删除失败也不应阻塞
-        // 主删除流程；目录不存在是合法状态（旧版本未创建过 revision）。
         let persona_asset_dir =
             data_dir::user_personas_dir(&self.data_root, user_id).join(persona_id);
         if persona_asset_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&persona_asset_dir) {
-                tracing::warn!(
-                    user_id = %user_id.as_str(),
-                    persona_id = %persona_id,
-                    err = %e,
-                    "删除 persona revision 目录失败；工作副本已删除，残留 revision 目录不影响新 Persona 创建（commit_revision 会复用现有 revisions/1）"
-                );
-            }
+            // Fail closed: retain the working copy when revision cleanup fails.
+            fs::remove_dir_all(&persona_asset_dir)?;
+        }
+        let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
+        if path.exists() {
+            fs::remove_file(&path)?;
         }
         Ok(())
     }
@@ -2888,6 +2880,24 @@ mod tests {
             persona_asset_dir.join("revisions").join("1").is_dir(),
             "重新创建后 revision 1 目录应再次存在"
         );
+    }
+
+    #[test]
+    fn persona_delete_keeps_working_copy_when_revision_cleanup_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("paul").unwrap();
+        let pid = "blocked";
+        let legacy_path = data_dir::user_persona_multi_path(tmp.path(), &uid, pid).unwrap();
+        fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        fs::write(&legacy_path, b"user asset").unwrap();
+
+        let persona_asset_dir = data_dir::user_personas_dir(tmp.path(), &uid).join(pid);
+        fs::create_dir_all(persona_asset_dir.parent().unwrap()).unwrap();
+        fs::write(&persona_asset_dir, b"not a directory").unwrap();
+
+        assert!(service.delete(&uid, pid).is_err());
+        assert_eq!(fs::read(&legacy_path).unwrap(), b"user asset");
     }
 
     /// Lorebook orphan revision_dir 恢复测试。
