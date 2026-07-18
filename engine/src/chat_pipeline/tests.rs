@@ -2004,6 +2004,79 @@ mod tests_a1b_pipeline_e2e {
         assert!(pipeline.system_prompt.contains("A concise scene"));
         assert!(!pipeline.system_prompt.contains("{{tone}}"));
     }
+
+    /// #114 e2e：验证 `prepare_pipeline` → `build_prompt_trace` → `EffectiveIds`
+    /// 正确填充 #114 新增的 8 个字段（`persona_activation_source`, `persona_name`,
+    /// `provider_source`, `model_source`, `temperature`, `temperature_source`,
+    /// `max_tokens`, `max_tokens_source`）。单元测试 `tests_effective_config_summary`
+    /// 只覆盖 `resolve_param_sources` 函数本身；此测试覆盖端到端传递。
+    #[test]
+    fn prepare_pipeline_populates_effective_config_summary_fields() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+
+        let uid = UserId::new("alice").unwrap();
+        PersonaService::new(tmp.path())
+            .save(
+                &uid,
+                "writer",
+                0,
+                Persona {
+                    schema: Persona::SCHEMA,
+                    revision: 0,
+                    updated_at: String::new(),
+                    name: "Writer".to_string(),
+                    description: String::new(),
+                    variables: HashMap::new(),
+                    id: "writer".to_string(),
+                    bindings: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        // 请求带 persona_id="writer" → activation_source=Explicit；
+        // 所有 gen 参数 None → 从 snapshot 取 model/provider，temperature/max_tokens 无来源。
+        let req = base_chat_request(Some("alice"), Some("writer"));
+        let pipeline = prepare_pipeline(&req, &state).expect("pipeline should build");
+        let eff = &pipeline.prompt_trace.effective;
+
+        // persona 来源与名称
+        assert_eq!(
+            eff.persona_activation_source.as_deref(),
+            Some("explicit"),
+            "persona_id 在请求中显式指定 → Explicit"
+        );
+        assert_eq!(
+            eff.persona_name.as_deref(),
+            Some("Writer"),
+            "persona_name 应为 persona 的显示名"
+        );
+
+        // provider/model 从 snapshot 取（请求未带）
+        assert_eq!(
+            eff.provider_source.as_deref(),
+            Some("snapshot"),
+            "请求未带 provider → snapshot"
+        );
+        assert_eq!(
+            eff.model_source.as_deref(),
+            Some("snapshot"),
+            "请求未带 model 且无 preset → snapshot"
+        );
+
+        // temperature/max_tokens 无来源（请求与 preset 均未提供）
+        assert!(
+            eff.temperature_source.is_none(),
+            "请求与 preset 均未提供 temperature → None"
+        );
+        assert!(
+            eff.max_tokens_source.is_none(),
+            "请求与 preset 均未提供 max_tokens → None"
+        );
+        assert!(eff.temperature.is_none());
+        assert!(eff.max_tokens.is_none());
+    }
 }
 
 // ── #114 effective config summary：参数来源标签 ──────────────────────────────
