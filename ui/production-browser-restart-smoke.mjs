@@ -74,8 +74,12 @@ try {
   const secondMessage = `restart continuity ${Date.now()}`;
   await page.locator('[data-view="session"]').first().click();
   await page.locator('#chat-input').fill(secondMessage);
+  const chatResponsePromise = page.waitForResponse(response =>
+    response.url().endsWith('/v1/chat/completions') && response.request().method() === 'POST'
+  );
   await page.locator('#btn-send').click();
-  await page.waitForFunction(() => document.querySelector('#btn-stop')?.hidden === false, null, { timeout: 5_000 });
+  const chatResponse = await chatResponsePromise;
+  assert.equal(chatResponse.status(), 200);
   await page.waitForFunction(() => document.querySelector('#btn-stop')?.hidden === true, null, { timeout: 15_000 });
 
   // Reload from the durable history endpoint instead of accepting the streamed

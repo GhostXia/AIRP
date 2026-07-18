@@ -153,6 +153,7 @@ for _ in $(seq 1 60); do
   if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
   sleep 1
 done
+$curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
 character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
 session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file")
 history=$($curl_tls --user "$admin_user:$admin_password" \
@@ -176,6 +177,7 @@ for _ in $(seq 1 60); do
   if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
   sleep 1
 done
+$curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
 AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
 AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
