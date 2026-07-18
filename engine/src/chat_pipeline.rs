@@ -1059,21 +1059,16 @@ fn prepare_pipeline_with_mode(
     // 4. Build orchestrator
     let orchestrator = Orchestrator::new(card_json.as_deref(), lore_json.as_deref())?;
 
-    // 5. Resolve the checkpoint for this turn before assembly. Preview computes the same
-    // next checkpoint read-only; Chat additionally persists the timeline advancement.
+    // 5. Resolve the checkpoint for this turn before assembly. Both modes stay
+    // read-only here; Chat persists the user message and advances the timeline
+    // only after every other fallible preparation step succeeds.
     let next_checkpoint = payload
         .character_id
         .as_ref()
         .map(|cid| crate::orchestrator::gating::get_next_checkpoint(&effective_root, cid.as_str()));
-    if mode == PrepareMode::Chat {
-        if let Some(ref cid) = payload.character_id {
-            Orchestrator::advance_timeline_and_checkpoint(&effective_root, cid.as_str());
-        }
-    }
-
     // R-04: Pre-load chat history when client omits messages_history.
-    // Loaded BEFORE step 7 so it excludes the current user message;
-    // step 12 appends it explicitly. Reused for both lorebook scan and context.
+    // Loaded before the durable user append so it excludes the current message;
+    // the provider message list appends that message explicitly below.
     let auto_history: Option<Vec<ChatMessage>> = if payload.messages_history.is_none() {
         payload.character_id.as_ref().and_then(|cid| {
             let service = ChatService::new(&effective_root);
@@ -1099,21 +1094,7 @@ fn prepare_pipeline_with_mode(
     }
     let triggered_lore = orchestrator.trigger_lorebook(&scan_text);
 
-    // 7. Persist user message (early-write; survives stream failures)
-    if mode == PrepareMode::Chat {
-        if let Some(ref cid) = payload.character_id {
-            ChatService::new(&effective_root).append(
-                cid,
-                payload.session_id.as_ref(),
-                ChatMessage {
-                    role: crate::adapter::MessageRole::User,
-                    content: payload.message.clone(),
-                },
-            )?;
-        }
-    }
-
-    // 8. Load preset JSON + extract top-level API params (P-08)
+    // 7. Load preset JSON + extract top-level API params (P-08)
     //    PR-3: 优先读 `presets/{pid}/preset.json`（M_PR 目录形态），
     //    降级读旧扁平 `presets/{pid}.json`（兜底用户未触发启动迁移的边缘场景）。
     let preset_json: Option<String> = payload.preset_id.as_ref().and_then(|pid| {
@@ -1290,6 +1271,23 @@ fn prepare_pipeline_with_mode(
     }
     let fsm = StreamingFsm::new(filters, runtime_variables);
 
+    // Commit preparation side effects last. A non-2xx preparation response is
+    // therefore guaranteed uncommitted and safe for the onboarding retry UI.
+    // Persist first so an append failure cannot consume a timeline checkpoint.
+    if mode == PrepareMode::Chat {
+        if let Some(ref cid) = payload.character_id {
+            ChatService::new(&effective_root).append(
+                cid,
+                payload.session_id.as_ref(),
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: payload.message.clone(),
+                },
+            )?;
+            Orchestrator::advance_timeline_and_checkpoint(&effective_root, cid.as_str());
+        }
+    }
+
     Ok(PreparedPipeline {
         provider_config: provider_config.clone(),
         gen_params: gen_params.clone(),
@@ -1317,7 +1315,12 @@ fn prepare_pipeline_with_mode(
 
 enum SseMessage {
     Chunks(Vec<UnpackedChunk>),
-    Error(String),
+    Error {
+        code: String,
+        message: String,
+        retryable: bool,
+        commit_state: &'static str,
+    },
     Done,
 }
 
@@ -1380,10 +1383,19 @@ pub fn build_sse_stream(
                         break;
                     }
                 }
-                Err(e) => {
-                    // API error; push error event then stop
+                Err(_) => {
+                    // The user message is already durable once streaming starts.
+                    // Never expose the raw upstream body or invite a blind resend.
                     failed = true;
-                    let _ = chunk_tx.send(SseMessage::Error(e)).await;
+                    tracing::error!("chat upstream stream failed");
+                    let _ = chunk_tx
+                        .send(SseMessage::Error {
+                            code: "upstream".to_string(),
+                            message: "upstream request failed".to_string(),
+                            retryable: false,
+                            commit_state: "partially_committed",
+                        })
+                        .await;
                     break;
                 }
             }
@@ -1407,7 +1419,14 @@ pub fn build_sse_stream(
             Ok(()) => {}
             Err(error) => {
                 tracing::error!(%error, "chat finalization failed");
-                let _ = chunk_tx.send(SseMessage::Error(error.to_string())).await;
+                let _ = chunk_tx
+                    .send(SseMessage::Error {
+                        code: error.code_str().to_string(),
+                        message: error.public_message(),
+                        retryable: false,
+                        commit_state: "partially_committed",
+                    })
+                    .await;
             }
         }
     });
@@ -1465,8 +1484,8 @@ async fn run_finalize(
             // 包括磁盘满、权限拒绝、`commit_memory_revision` 因并发 commit
             // 同号 revision 被拒等。结果：刚生成的助手消息对客户端已可见，
             // 但 `current.md` 与 memory revision 都没记录，用户体感为"AI 忘了
-            // 刚才说过什么"。改为 best-effort warn，保留与上方 assistant 消息
-            // 持久化失败相同的退化策略——不阻塞当前回合，但留下日志线索。
+            // 刚才说过什么"。因此改为硬失败，只有关键持久化全部成功后
+            // 才向客户端发送 done；详细错误仅写内部日志。
             volume_store::append_to_current(&sd, &cleaned)?;
         }
 
@@ -1542,10 +1561,21 @@ fn chunks_result_to_events(result: SseMessage) -> Vec<Result<Event, Infallible>>
                 }
             })
             .collect(),
-        SseMessage::Error(e) => {
+        SseMessage::Error {
+            code,
+            message,
+            retryable,
+            commit_state,
+        } => {
             let data = serde_json::to_string(&serde_json::json!({
-                "type": "body_chunk",
-                "text": format!("\n[Error/网关错误]: {}\n", e)
+                "type": "error",
+                "text": message,
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "retryable": retryable,
+                    "commit_state": commit_state,
+                }
             }))
             .unwrap_or_default();
             vec![Ok(Event::default().event("error").data(data))]

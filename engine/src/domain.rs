@@ -1106,15 +1106,19 @@ impl PersonaService {
         }
         let lock = persona_lock(user_id.as_str());
         let _guard = lock.lock().expect("persona lock poisoned");
-        let persona_asset_dir =
-            data_dir::user_personas_dir(&self.data_root, user_id).join(persona_id);
-        if persona_asset_dir.exists() {
-            // Fail closed: retain the working copy when revision cleanup fails.
-            fs::remove_dir_all(&persona_asset_dir)?;
-        }
+        // Validate the untrusted ID before constructing either destructive path.
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
-        if path.exists() {
-            fs::remove_file(&path)?;
+        let persona_asset_dir = path.with_extension("");
+        match fs::remove_dir_all(&persona_asset_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // Fail closed: retain the working copy when revision cleanup fails.
+            Err(error) => return Err(error.into()),
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
         Ok(())
     }
@@ -2898,6 +2902,20 @@ mod tests {
 
         assert!(service.delete(&uid, pid).is_err());
         assert_eq!(fs::read(&legacy_path).unwrap(), b"user asset");
+    }
+
+    #[test]
+    fn persona_delete_rejects_traversal_before_touching_user_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = PersonaService::new(tmp.path());
+        let uid = UserId::new("paul").unwrap();
+        let user_dir = data_dir::user_dir(tmp.path(), &uid);
+        fs::create_dir_all(&user_dir).unwrap();
+        let unrelated = user_dir.join("unrelated.txt");
+        fs::write(&unrelated, b"keep me").unwrap();
+
+        assert!(service.delete(&uid, "..").is_err());
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep me");
     }
 
     /// Lorebook orphan revision_dir 恢复测试。

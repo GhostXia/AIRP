@@ -87,7 +87,8 @@
       .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [REDACTED]')
       .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
       .replace(/([?&](?:api[_-]?key|access[_-]?token|token|key)=)[^&#\s]+/gi, '$1[REDACTED]')
-      .replace(/((?:api[_-]?key|authorization|access[_-]?token|token|secret|password|credential)\s*[=:]\s*)[^,;\s"']+/gi, '$1[REDACTED]');
+      .replace(/(["']?)(api[_-]?key|authorization|access[_-]?token|token|secret|password|credential)\1(\s*[=:]\s*)(["'])[^"'\r\n]*\4/gi, '$1$2$1$3$4[REDACTED]$4')
+      .replace(/(["']?)(api[_-]?key|authorization|access[_-]?token|token|secret|password|credential)\1(\s*[=:]\s*)[^,;\s"']+/gi, '$1$2$1$3[REDACTED]');
   }
 
   function formatError(data, text) {

@@ -57,6 +57,7 @@ try {
   // #182 防回归：确保 production 容器 serve 了 lorebook-utils.js。
   // 根因曾是 Dockerfile.gateway 漏 COPY → Caddy try_files fallback 到 index.html
   // → MIME text/html → 浏览器拒绝执行 → AIRPLorebookUtils undefined。
+  assert.equal(await page.evaluate(() => typeof window.AIRPShared), 'object');
   assert.equal(await page.evaluate(() => typeof window.AIRPLorebookUtils), 'object');
   assert.equal(await page.evaluate(() => typeof window.AIRPAssemblyUtils), 'object');
   assert.equal(await page.evaluate(() => typeof window.AIRPHistoryUtils), 'object');

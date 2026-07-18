@@ -1471,8 +1471,12 @@
         try {
           const chunk = JSON.parse(data);
           if (eventName === 'error') {
-            const err = new Error(chunk.text || chunk.message || 'stream failed');
+            const detail = chunk.error || chunk;
+            const err = new Error(detail.message || chunk.text || 'stream failed');
             err.kind = 'stream_error';
+            err.code = detail.code || 'stream_error';
+            err.retryable = detail.retryable === true;
+            err.commitState = detail.commit_state || 'ambiguous';
             throw err;
           }
           seq++;
@@ -2876,6 +2880,9 @@
       if (config.session_id) {
         selectedSess = config.session_id;
         localStorage.setItem('airp_session_id', config.session_id);
+      } else {
+        selectedSess = '';
+        localStorage.removeItem('airp_session_id');
       }
       if (config.persona_id) {
         selectedPersonaId = config.persona_id;

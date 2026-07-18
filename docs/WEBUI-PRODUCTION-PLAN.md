@@ -124,7 +124,7 @@ Browser
 
 ### Phase P1：有限试用版（当前唯一近期主线）
 
-P1 不是正式发布，也不以补齐全部资产生命周期为目标。它只验证 AIRP 是否能让少量目标用户安全、连续地完成真实 RP 首聊并愿意继续使用。
+P1 不是正式发布，也不以补齐全部资产生命周期为目标。它只验证 AIRP 是否能让少量目标用户安全、连续地完成真实 RP 首聊；“是否愿意再次使用”保留为诊断信息，不作为 P1 退出门槛。
 
 1. 已有地基保持不变：P0 production topology、Vite/Vitest 安全升级、onboarding wizard、Persona effective/绑定、Preset/Worldbook 基础管理、`PromptAssemblyTrace`、有效配置摘要和单资源持久化加固均已交付；
 2. 闭合唯一黄金路径：部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮流式对话 → 页面刷新/服务重启后继续当前会话；

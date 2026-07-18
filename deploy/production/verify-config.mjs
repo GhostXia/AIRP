@@ -23,6 +23,7 @@ assert.match(compose, /engine_access_key:\s*\n\s+file: \.\/secrets\/engine_acces
 assert.doesNotMatch(compose, /AIRP_ACCESS_KEY:\s*\$/);
 assert.doesNotMatch(compose, /latest/);
 assert.doesNotMatch(gatewayImage, /COPY webui \/srv/);
+assert.match(gatewayImage, /webui\/shared\.js/, 'shared WebUI runtime must ship in gateway image');
 assert.match(gatewayImage, /webui\/assembly-utils\.js/, 'assembly preview helper must ship in gateway image');
 assert.doesNotMatch(gatewayImage, /mock-provider|smoke\.mjs|serve\.js|start\.bat/);
 assert.doesNotMatch(smokeCompose, /^\s+ports:/m, 'smoke override must not publish engine ports');

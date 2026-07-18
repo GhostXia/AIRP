@@ -128,6 +128,17 @@ impl AirpError {
             AirpError::Internal(_) => "internal_error",
         }
     }
+
+    /// Stable client-facing message that never includes internal or upstream details.
+    pub fn public_message(&self) -> String {
+        match self {
+            AirpError::Upstream { .. } => "upstream request failed".to_string(),
+            error if error.status() == StatusCode::INTERNAL_SERVER_ERROR => {
+                "internal error".to_string()
+            }
+            error => error.to_string(),
+        }
+    }
 }
 
 /// #67 #9 / PR #74 方案 A：JSON envelope body。
@@ -154,15 +165,12 @@ impl IntoResponse for AirpError {
     fn into_response(self) -> Response {
         let status = self.status();
         let code = self.code_str();
-        let message = self.to_string();
+        let internal_message = self.to_string();
+        let message = self.public_message();
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(err = %message, "internal error");
-            // 500 不暴露细节，仅返回通用 message（与原行为一致）
+            tracing::error!(err = %internal_message, "internal error");
             let body = AirpErrorResponse {
-                error: AirpErrorBody {
-                    code,
-                    message: "internal error".to_string(),
-                },
+                error: AirpErrorBody { code, message },
             };
             (status, Json(body)).into_response()
         } else {
@@ -195,6 +203,17 @@ mod tests {
         }
         let r = produces();
         assert!(matches!(r, Err(AirpError::Io(_))));
+    }
+
+    #[test]
+    fn public_message_hides_internal_and_upstream_details() {
+        let io = AirpError::Io(std::io::Error::other("secret path"));
+        assert_eq!(io.public_message(), "internal error");
+        let upstream = AirpError::Upstream {
+            status: 502,
+            body: "provider secret".to_string(),
+        };
+        assert_eq!(upstream.public_message(), "upstream request failed");
     }
 
     // #67 #9 / PR #74 方案 A：envelope 形状回归。webui formatError 依赖此结构。

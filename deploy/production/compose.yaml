@@ -78,7 +78,7 @@ secrets:
 
 volumes:
   airp-data:
-    name: airp-data
+    name: ${AIRP_DATA_VOLUME:-airp-data}
   caddy-data:
     name: airp-caddy-data
   caddy-config:

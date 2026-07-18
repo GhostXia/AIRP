@@ -75,8 +75,9 @@ stop both services, and create a cold backup:
 
 ```powershell
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$dataVolume = 'airp-data' # Keep this equal to AIRP_DATA_VOLUME in .env.
 docker compose --env-file .env -f compose.yaml down
-docker run --rm -v airp-data:/source:ro -v ${PWD}:/backup alpine:3.22.1 tar -czf "/backup/airp-data-$stamp.tgz" -C /source .
+docker run --rm -v ${dataVolume}:/source:ro -v ${PWD}:/backup alpine:3.22.1 tar -czf "/backup/airp-data-$stamp.tgz" -C /source .
 Get-FileHash ".\airp-data-$stamp.tgz" -Algorithm SHA256
 ```
 
@@ -89,11 +90,15 @@ docker volume create airp-data-rollback
 docker run --rm -v airp-data-rollback:/restore -v ${PWD}:/backup alpine:3.22.1 sh -c 'tar -xzf /backup/airp-data-YYYYMMDD-HHMMSS.tgz -C /restore'
 ```
 
-Change the `airp-data` volume `name:` in `compose.yaml` temporarily to `airp-data-rollback`, restore
-the recorded `AIRP_VERSION` in `.env`, run `docker compose ... config --quiet`, then `up -d`.
+Set `AIRP_DATA_VOLUME=airp-data-rollback` and restore the recorded `AIRP_VERSION` in `.env`, run
+`docker compose --env-file .env -f compose.yaml config --quiet`, then run
+`docker compose --env-file .env -f compose.yaml up -d`.
 Verify health, character/Persona/Preset lists, the last session and chat history before allowing
-new writes. If verification fails, stop and retain both volumes for diagnosis. This is a manual
-P1 escape hatch; automated backup, migration and restore verification remain P2 work.
+new writes. If verification succeeds, keep `AIRP_DATA_VOLUME=airp-data-rollback`: that volume is
+now canonical, and every later backup must set `$dataVolume = 'airp-data-rollback'`. Do not silently
+switch back to the stale `airp-data` volume. If verification fails, stop and retain both volumes
+for diagnosis. This is a manual P1 escape hatch; automated backup, migration and restore
+verification remain P2 work.
 
 ## CI topology proof
 

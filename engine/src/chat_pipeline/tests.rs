@@ -1940,6 +1940,26 @@ mod tests_a1b_pipeline_e2e {
     }
 
     #[test]
+    fn failed_user_message_persistence_does_not_advance_timeline() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let character = tmp.path().join("characters/hero");
+        std::fs::create_dir_all(character.join("gating")).unwrap();
+        let timeline = character.join("gating/timeline.md");
+        std::fs::write(&timeline, "- 累计消耗时槽: 7\n").unwrap();
+        std::fs::write(character.join("history"), b"blocks history directory").unwrap();
+
+        let mut req = base_chat_request(None, None);
+        req.character_id = Some(CharacterId::new("hero").unwrap());
+        assert!(prepare_pipeline(&req, &state).is_err());
+        assert_eq!(
+            std::fs::read_to_string(timeline).unwrap(),
+            "- 累计消耗时槽: 7\n"
+        );
+    }
+
+    #[test]
     fn prepare_pipeline_request_variables_override_persona_variables() {
         let tmp = tempdir().unwrap();
         crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();

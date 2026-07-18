@@ -177,11 +177,11 @@ export function mountOnboarding(container, hostPort) {
   }
 
   // ── 错误展示 helper（F5/F6 阶段错误，不降级，spec §6.5）
-  function showError(parent, message, onRetry) {
+  function showError(parent, message, onRetry, actionLabel) {
     const box = el('div', 'onb-error');
     box.appendChild(el('p', '', message));
     if (onRetry) {
-      const btn = el('button', 'btn-secondary', '重试');
+      const btn = el('button', 'btn-secondary', actionLabel || '重试');
       on(btn, 'click', safeSync(onRetry, 'error-retry'));
       box.appendChild(btn);
     }
@@ -810,7 +810,7 @@ export function mountOnboarding(container, hostPort) {
       let buf = '';
       // SSE 终止标记跟踪（spec §6.6 修正）：
       // reader.read() done=true 不等于流正常完成；只有 [DONE] sentinel 或 done chunk 才算正常出口。
-      // 提前 EOF（reader done 但未见 sentinel）→ 显示中断错误，保留 sessionId 供重试复用。
+      // 提前 EOF（reader done 但未见 sentinel）提交状态不确定，不得盲目重发。
       let completed = false;
       let receivedAny = false;
       let eventName = 'message';
@@ -835,7 +835,13 @@ export function mountOnboarding(container, hostPort) {
           let chunk;
           try { chunk = JSON.parse(payload); } catch { continue; }
           if (eventName === 'error') {
-            throw new Error(chunk.text || chunk.message || 'stream failed');
+            const detail = chunk.error || chunk;
+            const error = new Error(detail.message || chunk.text || 'stream failed');
+            error.kind = 'stream_error';
+            error.code = detail.code || 'stream_error';
+            error.retryable = detail.retryable === true;
+            error.commitState = detail.commit_state || 'ambiguous';
+            throw error;
           }
           receivedAny = true;
           // chunk 类型：body_chunk/think_chunk/plan/tool_call/tool_result/done
@@ -852,20 +858,25 @@ export function mountOnboarding(container, hostPort) {
       }
       // SSE 终止标记判定（spec §6.6 修正）：
       // - completed=true → 收到 [DONE] sentinel 或 done chunk，走 onComplete 出口
-      // - completed=false → 提前 EOF（reader done 但未见 sentinel）→ F6 中断错误，保留 sessionId 供重试复用
+      // - completed=false → 提前 EOF，提交状态不确定，只允许进入聊天检查历史
       if (completed) {
         finish(true);
       } else {
         replyWrap.innerHTML = '';
         showError(replyWrap,
           receivedAny ? '回复中断：流提前结束（未收到 done 标记）' : '回复中断：未收到任何流数据',
-          () => sendFirstMessage(message, box));
+          () => finish(false), '进入聊天检查记录');
       }
     } catch (err) {
       // F6：SSE 中断（网络异常 / abort）
       if (replyWrap) {
         replyWrap.innerHTML = '';
-        showError(replyWrap, '回复中断：' + hostPort.formatError(null, String(err.message || err)), () => sendFirstMessage(message, box));
+        const suffix = err.commitState ? '（提交状态：' + err.commitState + '）' : '（提交状态不确定）';
+        const canResend = err.retryable === true && err.commitState === 'uncommitted';
+        showError(replyWrap,
+          '回复中断：' + hostPort.formatError(null, String(err.message || err)) + suffix,
+          canResend ? () => sendFirstMessage(message, box) : () => finish(false),
+          canResend ? '重试' : '进入聊天检查记录');
       }
     } finally {
       // 单飞释放（spec §4.3 Stage 6）：无论成功/失败/异常都恢复按钮状态。
