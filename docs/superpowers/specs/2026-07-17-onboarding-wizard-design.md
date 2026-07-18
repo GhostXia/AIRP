@@ -233,7 +233,7 @@ dev 模式下向导 Stage 1 收集 engine URL + bearer 后，**直接写 session
 - 每阶段有"上一步"按钮（除 Stage 1）+ "跳过向导"按钮（任意阶段可跳，触发 `onSkip`）。
 - Stage 4 角色导入可跳过（用户可能已有角色）——但跳过后 Stage 6 首聊需要选已有角色，向导内补一步"选择已有角色"picker。
 - Stage 5 persona/preset 可跳过（保持 default + 不使用预设）。
-- Stage 6 不可跳过（首聊是 #207 黄金路径的最终阶段）；但用户可“完成向导，稍后聊天”——这算 `onComplete` 出口（config 中 `firstChatCompleted: false`），验收记录区分“完成向导”与“完成首聊”。
+- Stage 6 不可通过 `onSkip` 跳过（首聊是 #207 黄金路径的最终阶段）；但用户可“完成向导，稍后聊天”——这算 `onComplete` 出口（config 中 `firstChatCompleted: false`），验收记录区分“完成向导”与“完成首聊”。
 
 ---
 
