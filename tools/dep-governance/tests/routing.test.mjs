@@ -191,11 +191,13 @@ test("renderSpdxAst: WITH under AND/OR needs no parens (WITH binds tightest)", (
   assert.equal(renderSpdxAst(ast), "Apache-2.0 WITH LLVM-exception AND MIT");
 });
 
-test("renderSpdxAst: composite under WITH.license is parenthesized", () => {
-  // SPDX grammar: `with` applies to an atom, so a composite license must be
-  // parenthesized to preserve grouping.
+test("parseSpdxExpression: rejects composite operand before WITH (SPDX 2.x grammar)", () => {
+  // SPDX 2.x restricts WITH's left operand to a simple-license. A composite
+  // or parenthesized operand like `(Apache-2.0 OR MIT) WITH LLVM-exception`
+  // is not legal SPDX; parser must reject so the caller falls back to
+  // audit-required rather than emitting an ambiguous expression.
   const ast = parseSpdxExpression("(Apache-2.0 OR MIT) WITH LLVM-exception");
-  assert.equal(renderSpdxAst(ast), "(Apache-2.0 OR MIT) WITH LLVM-exception");
+  assert.equal(ast, null);
 });
 
 test("renderSpdxAst: round-trip idempotence on real-world expressions", () => {

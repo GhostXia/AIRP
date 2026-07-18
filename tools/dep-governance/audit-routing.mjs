@@ -257,6 +257,17 @@ export function parseSpdxExpression(expr) {
     let left = parseAtom();
     const t = peek();
     if (t && t.type === "op" && t.value === "WITH") {
+      // SPDX 2.x grammar restricts WITH's left operand to a simple-license
+      // (or simple-license WITH exception, handled by the recursive shape).
+      // Composite/parenthesized operands like `(Apache-2.0 OR MIT) WITH exc`
+      // are not legal SPDX; reject here so the caller falls back to
+      // audit-required rather than emitting a semantically ambiguous
+      // expression. The right operand (exception) must also be a simple id.
+      if (left.type !== "license") {
+        throw new Error(
+          "WITH requires a simple-license operand; composite or parenthesized expressions before WITH are not allowed",
+        );
+      }
       consume();
       const exc = parseAtom();
       if (!exc || exc.type !== "license") {
