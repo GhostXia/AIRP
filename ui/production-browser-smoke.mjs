@@ -59,6 +59,7 @@ try {
   // → MIME text/html → 浏览器拒绝执行 → AIRPLorebookUtils undefined。
   assert.equal(await page.evaluate(() => typeof window.AIRPLorebookUtils), 'object');
   assert.equal(await page.evaluate(() => typeof window.AIRPAssemblyUtils), 'object');
+  assert.equal(await page.evaluate(() => typeof window.AIRPHistoryUtils), 'object');
   assert.equal(await page.locator('#assembly-summary').count(), 1);
   await page.waitForFunction(() => document.querySelector('#persona-select option[value=""]'));
   assert.equal(await page.locator('#persona-effective-hint').getAttribute('role'), 'status');

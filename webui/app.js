@@ -6,6 +6,7 @@
 
   const { describeEffectiveHint, buildBindAction, buildPersonaPayload } = window.AIRPPersonaUtils;
   const { buildAssemblyViewModel } = window.AIRPAssemblyUtils;
+  const { computeHistoryToolbarState } = window.AIRPHistoryUtils;
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
   const $ = (s) => document.querySelector(s);
@@ -1497,11 +1498,12 @@
   // loadHistory 抽出来供 charSelect/sessSelect 切换时自动复用，避免用户每次手点。
   function updateHistoryToolbar() {
     const loaded = messageNodes.size;
-    historyToolbar.hidden = historyState.total === 0;
-    historyStatus.textContent = countFormatter.format(loaded) + ' / ' + countFormatter.format(historyState.total) + ' 条消息';
-    btnLoadEarlier.hidden = !historyState.hasMore;
-    btnLoadEarlier.disabled = historyState.loading;
-    btnLoadEarlier.textContent = historyState.loading ? '加载中…' : '加载更早';
+    const ui = computeHistoryToolbarState(historyState, loaded, countFormatter);
+    historyToolbar.hidden = ui.toolbarHidden;
+    historyStatus.textContent = ui.statusText;
+    btnLoadEarlier.hidden = ui.loadEarlierHidden;
+    btnLoadEarlier.disabled = ui.loadEarlierDisabled;
+    btnLoadEarlier.textContent = ui.loadEarlierText;
   }
 
   async function loadHistory(options) {
@@ -1558,6 +1560,10 @@
     } else if (r.status !== 0) {
       // 0 = 网络层失败（已 logEvent），其它状态码显式提示
       appendMsg('assistant', '[history err ' + r.status + '] ' + formatError(r.data, r.text), false, new Date());
+      updateHistoryToolbar();
+    } else {
+      // #148: r.status === 0 网络层失败时 api() 已 logEvent，不重复显示错误消息，
+      // 但必须刷新 toolbar 恢复按钮状态，避免卡在"加载中…"导致用户无法重试。
       updateHistoryToolbar();
     }
   }

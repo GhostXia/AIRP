@@ -84,6 +84,7 @@ jobs:
           node --check webui/persona-utils.js
           node --check webui/lorebook-utils.js
           node --check webui/assembly-utils.js
+          node --check webui/history-utils.js
           node --check webui/app.js
           node --check webui/serve.js
           node --check webui/runtime-config.js
