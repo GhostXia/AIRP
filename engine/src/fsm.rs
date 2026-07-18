@@ -168,7 +168,9 @@ impl StreamingFsm {
                         self.state = FsmState::Buffering { buffer: temp };
                     }
                     String::new()
-                } else if let Some(suffix_idx) = self.find_longest_special_start_prefix_suffix(&temp) {
+                } else if let Some(suffix_idx) =
+                    self.find_longest_special_start_prefix_suffix(&temp)
+                {
                     let to_output = temp[..suffix_idx].to_string();
                     let new_buffer = temp[suffix_idx..].to_string();
 
