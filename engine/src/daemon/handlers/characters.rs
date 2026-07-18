@@ -523,8 +523,7 @@ pub(crate) fn extract_card_assets(data_root: &std::path::Path, character_id: &st
                     Ok(lb_json) => {
                         if let Err(e) = data_dir::char_world_dir(data_root, character_id) {
                             tracing::warn!(err = %e, "CF-7: 创建 world/ 目录失败");
-                        } else if let Err(e) =
-                            data_dir::replace_file(&lb_path, lb_json.as_bytes())
+                        } else if let Err(e) = data_dir::replace_file(&lb_path, lb_json.as_bytes())
                         {
                             tracing::warn!(err = %e, "CF-7: 写 world/lorebook.json 失败");
                         } else {
