@@ -175,29 +175,7 @@
   // #67 #9 fix: formatError 用白名单展开已知字段，其余字段折叠为 raw JSON 显示。
   // 避免 engine 错误模型扩展（如 request_id / hint / suggestion）时 webui 自动丢失。
   function formatError(data, text) {
-    if (data && typeof data === 'object' && data.error) {
-      const err = data.error;
-      const KNOWN_FIELDS = ['code', 'message', 'upstream_status', 'upstream_body', 'detail'];
-      const lines = [err.code || 'error'];
-      if (err.message) lines.push(err.message);
-      if (err.upstream_status) lines.push('upstream_status=' + err.upstream_status);
-      if (err.upstream_body) lines.push('upstream_body=' + err.upstream_body);
-      if (err.detail) lines.push('detail=' + err.detail);
-      // 折叠未知字段为 raw JSON（排除已知字段和已展开的字段）
-      const extras = {};
-      let hasExtra = false;
-      for (const k of Object.keys(err)) {
-        if (!KNOWN_FIELDS.includes(k)) {
-          extras[k] = err[k];
-          hasExtra = true;
-        }
-      }
-      if (hasExtra) lines.push('extras=' + JSON.stringify(extras));
-      return lines.join('\n');
-    }
-    if (typeof data === 'string' && data) return data;
-    if (text) return text;
-    return JSON.stringify(data);
+    return window.AIRPShared.formatError(data, text);
   }
 
   async function connect() {
@@ -1457,6 +1435,7 @@
     let buf = '';
     let seq = 0;
     let sawDone = false;
+    let eventName = 'message';
     while (!sawDone) {
       let done, value;
       try {
@@ -1475,6 +1454,14 @@
       const lines = buf.split('\n');
       buf = lines.pop() || '';
       for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventName = line.slice(6).trim() || 'message';
+          continue;
+        }
+        if (line.trim() === '') {
+          eventName = 'message';
+          continue;
+        }
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
         if (data === '[DONE]') {
@@ -1483,9 +1470,20 @@
         }
         try {
           const chunk = JSON.parse(data);
+          if (eventName === 'error') {
+            const detail = chunk.error || chunk;
+            const err = new Error(detail.message || chunk.text || 'stream failed');
+            err.kind = 'stream_error';
+            err.code = detail.code || 'stream_error';
+            err.retryable = detail.retryable === true;
+            err.commitState = detail.commit_state || 'ambiguous';
+            throw err;
+          }
           seq++;
           onChunk(chunk, seq);
-        } catch {}
+        } catch (e) {
+          if (e && e.kind === 'stream_error') throw e;
+        }
       }
     }
     return seq;
@@ -2875,8 +2873,21 @@
       localStorage.setItem('airp_onboarded', 'true');
       // 完成向导后清除 skipped 标志（之前可能跳过过，现在已正式完成）
       localStorage.removeItem('airp_onboarding_skipped');
-      if (config.character_id) localStorage.setItem('airp_character_id', config.character_id);
-      if (config.persona_id) localStorage.setItem('airp_persona_id', config.persona_id);
+      if (config.character_id) {
+        selectedChar = config.character_id;
+        localStorage.setItem('airp_character_id', config.character_id);
+      }
+      if (config.session_id) {
+        selectedSess = config.session_id;
+        localStorage.setItem('airp_session_id', config.session_id);
+      } else {
+        selectedSess = '';
+        localStorage.removeItem('airp_session_id');
+      }
+      if (config.persona_id) {
+        selectedPersonaId = config.persona_id;
+        localStorage.setItem('airp_persona_id', config.persona_id);
+      }
       // preset_id null clear（spec §5.5 修正）：null/空 → 移除旧值，避免残留
       if (config.preset_id) {
         localStorage.setItem('airp_preset_id', config.preset_id);
@@ -2886,6 +2897,12 @@
     } catch {}
     unmountOnboarding();
     renderEffectiveConfigIndicator(config);
+    if (!productionMode) {
+      try {
+        engineUrl.value = sessionStorage.getItem('airp_engine_url') || engineUrl.value;
+        bearerToken.value = sessionStorage.getItem('airp_bearer') || '';
+      } catch {}
+    }
     scheduleAutoConnect();
   }
 

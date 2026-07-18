@@ -4,7 +4,7 @@
 >
 > 基线日期：2026-07-18，`main@63f1c5b` / PR #227
 >
-> 产品目标：把现有“基本可用的开发/验证 WebUI”推进为普通用户可持续日用、可部署、可升级、可恢复的正式 Web 产品。
+> 产品目标：先把现有“基本可用的开发/验证 WebUI”快速收敛为少量自愿用户可完成首聊并持续试用的 P1 有限试用版；再以真实使用证据推进可升级、可恢复的正式 Web 产品。
 
 P0 的已接受实现合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。首方 OCI/Compose + Caddy 同源入口、生产配置、鉴权、远端导入边界与 production topology smoke 已实现；P1-P3 仍是正式上线前置，不能把 P0 全绿写成正式发布。
 
@@ -122,23 +122,37 @@ Browser
 
 退出条件已由 PR #132/#133/#135/#136 和 GitHub run `29249333920` 满足：一次性环境可启动真实 HTTPS/Compose 拓扑，浏览器不需要知道 engine 私有地址或 bearer。P0 的局部 access-log filtering 不等于 P2 结构化可观测性已经完成。
 
-### Phase P1：RP 正式使用面
+### Phase P1：有限试用版（当前唯一近期主线）
 
-1. #137 的 Vite/Vitest 工具链安全升级已由 PR #191 完成，当前 `npm audit` 为 0 项；
-2. #115 Phase 2 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（角色卡/Persona/Preset/Worldbook/State/Memory，PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地，#114 统一有效配置摘要已由 PR #217 交付（Persona 激活来源 + 参数来源 chips）；
-3. 在已交付 Persona effective/绑定/聊天切换闭环、上述 trace 可观察性和 #114 统一有效配置摘要之上，完成 #114 的 base lock、drift/history/rollback、导入导出/备份恢复、Preset 生命周期、HTTP/UI 受控 dry-run、revision/collision/overwrite/provenance 审计；UI 切片以 WebUI 为当前主面，不恢复暂停的桌面排期；
-4. 在已交付 Worldbook v4、shared normalizer、普通用户主面板和端到端导入回归之上，只继续实现首发确需的受控大对象上传与资产生命周期，不把 advisory 字段误宣称为 runtime 兼容；
-5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
-6. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
+P1 不是正式发布，也不以补齐全部资产生命周期为目标。它只验证 AIRP 是否能让少量目标用户安全、连续地完成真实 RP 首聊；“是否愿意再次使用”保留为诊断信息，不作为 P1 退出门槛。
 
-退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。本阶段验证“effective config 可见 + 日用 RP 闭环”；Phase 2 (#115) 6 类 `content_revision` 字段已填充并可见。#114 统一有效配置摘要（Persona 激活来源 + 参数来源 chips）已在 P1 交付；base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计在 P1 实现基础能力，其完整数据可靠性验证（crash recovery / 并发竞争 / migration 回滚）属于 Phase P2 数据可靠性阶段的验证项（详见 [CURRENT-BASELINE.md §3](CURRENT-BASELINE.md)）。
+1. 已有地基保持不变：P0 production topology、Vite/Vitest 安全升级、onboarding wizard、Persona effective/绑定、Preset/Worldbook 基础管理、`PromptAssemblyTrace`、有效配置摘要和单资源持久化加固均已交付；
+2. 闭合唯一黄金路径：部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮流式对话 → 页面刷新/服务重启后继续当前会话；
+3. 修复黄金路径上的认证、provider、网络、超时、SSE、历史恢复和持久化失败，使错误 fail-visible、可行动、可重试，不允许按钮永久 loading 或成功响应掩盖落盘失败；
+4. 保持 secret 边界：API key/access key 不进入 URL、WebUI 持久存储、日志、诊断摘要或错误详情；
+5. 保持用户资产底线：角色卡、世界书、Persona、Preset、session 和聊天历史不得静默删除或覆盖；关键写入失败不得返回虚假成功；明确 data root，并提供升级前人工备份与恢复旧目录/旧版本的简短操作说明；
+6. 冻结横向基础设施：不新增 asset revision 类型、revision chip、provenance 展示、dependency-governance 自动化、桌面功能或新的大型管理面。现有 revision 在 P1 只作为实验性诊断基础，不承诺回滚/恢复能力；
+7. 对 branch/swipe/edit、完整 Persona/Preset 生命周期、大对象上传和高级 developer controls 做诚实取舍：未交付能力隐藏、禁用或明确标为非 P1，不为追求表面完整阻塞首聊。
+
+退出条件：
+
+- 用户不编辑磁盘 JSON、不读开发文档、不打开 dev tools/workbench 即可完成黄金路径；
+- 刷新页面后和重启服务后均可以继续，并分别记录两项恢复结果；常见网络/认证/provider 失败可重试；
+- secret scan 与现有安全负向门禁全绿；
+- 针对角色卡、世界书、Persona、Preset、session、聊天历史的 P1 路径，没有已知静默丢失、静默覆盖或虚假成功；
+- 至少 5 名符合 §2.2 画像的自愿用户中首聊完成率 ≥80%，每个失败按阶段×类型记录；
+- P1 候选版明确标注“有限试用”，并提供 data root 与人工备份/恢复说明。
+
+市场验证不得由开发者自测或自动化 smoke 代替。每名自愿试用者使用同一份记录：匿名编号、目标用户画像是否匹配、候选版本、浏览器/设备、开始与结束时间、完成到哪个阶段、是否在不读开发文档/不打开开发工具的情况下完成首聊、刷新后是否继续、重启后是否继续、失败的阶段×类型、是否重试成功、是否愿意再次使用、经同意保留的原话摘要。累计至少 5 名符合 §2.2 画像的自愿用户后，以“符合画像且成功完成首聊人数 ÷ 符合画像参与人数”计算完成率；不符合画像的参与者单独报告，不计入分母。完成率低于 80% 或存在 secret/资产损坏事件时 P1 不退出。当前状态必须写“待真实用户验证”，不得用 mock、agent 或维护者代填。
 
 ### Phase P2：数据可靠性与恢复
 
-1. 版本化 migration registry 与启动前 dry-run/备份；
-2. 备份、恢复、导出和可恢复删除；
-3. 并发写、磁盘满、损坏 JSON、升级中断和旧版本回退测试；
-4. readiness、结构化脱敏日志、诊断包和运维 runbook。
+1. 完成 #114 剩余高级生命周期：Persona base lock、drift/history/rollback、头像、导入导出/备份恢复，完整 Preset 生命周期与 HTTP/UI 受控 dry-run；
+2. 先选择一种高价值资产完成“工作副本/读取真值 → revision 完整性校验 → 差异比较 → 回滚 → 恢复 → 导出”的端到端 vertical slice；验证后再决定是否横向扩展其余 asset revision，不以新增 chip 代替恢复能力；
+3. 版本化 migration registry 与启动前 dry-run/备份；
+4. 备份、恢复、导出和可恢复删除；
+5. 并发写、磁盘满、损坏 JSON、升级中断和旧版本回退测试；
+6. readiness、结构化脱敏日志、诊断包和运维 runbook。
 
 退出条件：§2.3“可复核恢复判据”5 条全部满足（升级前后根哈希稳定 / 损坏行不阻塞 / 旧版可冷启动 / 备份恢复 ID 稳定 / soft-delete 窗口），并以自动化或可复核证据呈现，不再使用“更稳”作为发布口号。Phase 2 (#115) 6 类 `content_revision` 可见性已落地，但 `AIRP-TREE-SHA256-v1` 完整性校验与完整 provenance 链路（source / converted / preserved / unsupported / invalid / needs-review）用户可读仍是本阶段验证项，退出条件对齐 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 自包含 session 合同。
 
@@ -154,6 +168,9 @@ Browser
 
 ## 5. 非首发阻塞项
 
+- Persona/Preset 高级生命周期、完整 revision/provenance/collision 审计、自动 backup/restore、migration registry 与 soft-delete；它们进入 P2，不阻塞 P1 有限试用。
+- 新增 asset revision 类型/chip、dependency-governance 自动升级与 GitHub 写入自动化、SBOM release gate 和发布签名；它们不得抢占 P1 黄金路径。
+- #220 中不直接造成 secret 泄露、虚假成功或用户资产损坏的性能、锁 poison 一致性、代码组织与默认值展示改进。
 - #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review；它们在核心 WebUI 正式版之后继续推进。
 - MCP upstream、skills/plugin marketplace、可配置多 Agent 编排。
 - Tauri 安装包、sidecar 生命周期与 100k 桌面虚拟列表验收。
@@ -164,7 +181,8 @@ Browser
 ## 6. 下一批可执行工作
 
 1. WebUI production umbrella issue 为 [#130](https://github.com/GhostXia/AIRP/issues/130)；P0-P3 在其中按独立验收切片追踪；
-2. P0 架构/威胁模型、engine production-mode fail-closed、`deploy/production/` artifact 与真实 topology smoke 已实现，但不等于产品已正式上线；
-3. #115 Phase 2 6 类 revision 合同与 trace 收口已落地（PR #201/#202/#203/#206/#215），onboarding wizard Phase 1 已由 PR #212 落地，#114 统一有效配置摘要已交付（PR #217），单资源持久化边界已加固（PR #219 + PR #227）；下一项按 #114 的**剩余子项**（Persona/Preset 高级生命周期、base lock/drift/rollback、受控 dry-run、完整 provenance 审计）完成 RP 使用面；#220 deferred 项按独立 PR 推进；#126 已交付部分不再重复排期，也不先做 #117/#87/#116；
-4. 工程治理项（PR #218 #190 SBOM/声明 + #192 依赖发现/审计路由 + #128 Actions `checkout@v7` / `setup-node@v6` / `upload-artifact@v7` 升级；workflow step Node 仍为 20.19.0）按 #192 后续切片推进 release pipeline 强制度量与发布签名；
-5. 每个 PR 更新 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)，区分“已交付”与“下一步”。
+2. 第一优先级是对 Phase P1 黄金路径做真实 provider + 真实浏览器的逐阶段验收，修复所有首聊阻塞、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏；
+3. 第二优先级是补 P1 有限试用所需的 data root、升级前人工备份、恢复旧目录/旧版本说明，并执行 ≥5 名目标用户的首聊完成率验证；
+4. #114/#115/#190/#192 的关闭状态与原验收项存在偏差，按 [#231](https://github.com/GhostXia/AIRP/issues/231) 核对后重新打开或拆分剩余项；该流程修正不阻塞 P1 代码主线，但必须在宣称对应 umbrella 完成前完成；
+5. Persona/Preset 高级生命周期、完整 revision 恢复 vertical slice、#220 非阻塞项、工程治理自动化、release pipeline 强制度量与发布签名后移到 P2/P3；
+6. [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 只在能力边界、执行顺序或 release batch 发生实质变化时统一校准；不再要求每个小 PR 单独创建 baseline recalibration。

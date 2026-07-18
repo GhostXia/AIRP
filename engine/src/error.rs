@@ -128,6 +128,18 @@ impl AirpError {
             AirpError::Internal(_) => "internal_error",
         }
     }
+
+    /// Stable client-facing message that never includes internal or upstream details.
+    pub fn public_message(&self) -> String {
+        match self {
+            AirpError::Upstream { .. } => "upstream request failed".to_string(),
+            AirpError::PathEscape(_) => "invalid path".to_string(),
+            error if error.status() == StatusCode::INTERNAL_SERVER_ERROR => {
+                "internal error".to_string()
+            }
+            error => error.to_string(),
+        }
+    }
 }
 
 /// #67 #9 / PR #74 方案 A：JSON envelope body。
@@ -154,15 +166,12 @@ impl IntoResponse for AirpError {
     fn into_response(self) -> Response {
         let status = self.status();
         let code = self.code_str();
-        let message = self.to_string();
+        let internal_message = self.to_string();
+        let message = self.public_message();
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(err = %message, "internal error");
-            // 500 不暴露细节，仅返回通用 message（与原行为一致）
+            tracing::error!(err = %internal_message, "internal error");
             let body = AirpErrorResponse {
-                error: AirpErrorBody {
-                    code,
-                    message: "internal error".to_string(),
-                },
+                error: AirpErrorBody { code, message },
             };
             (status, Json(body)).into_response()
         } else {
@@ -195,6 +204,19 @@ mod tests {
         }
         let r = produces();
         assert!(matches!(r, Err(AirpError::Io(_))));
+    }
+
+    #[test]
+    fn public_message_hides_internal_and_upstream_details() {
+        let io = AirpError::Io(std::io::Error::other("secret path"));
+        assert_eq!(io.public_message(), "internal error");
+        let upstream = AirpError::Upstream {
+            status: 502,
+            body: "provider secret".to_string(),
+        };
+        assert_eq!(upstream.public_message(), "upstream request failed");
+        let path = AirpError::PathEscape(PathBuf::from("/srv/private/users/alice"));
+        assert_eq!(path.public_message(), "invalid path");
     }
 
     // #67 #9 / PR #74 方案 A：envelope 形状回归。webui formatError 依赖此结构。
@@ -231,5 +253,17 @@ mod tests {
             !bytes.windows(b"hunter2".len()).any(|w| w == b"hunter2"),
             "500 响应不得泄露内部细节"
         );
+    }
+
+    #[tokio::test]
+    async fn into_response_path_escape_redacts_server_path() {
+        use axum::body::to_bytes;
+        let resp = AirpError::PathEscape(PathBuf::from("/srv/private/users/alice")).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "path_escape");
+        assert_eq!(value["error"]["message"], "invalid path");
+        assert!(!String::from_utf8_lossy(&bytes).contains("/srv/private"));
     }
 }

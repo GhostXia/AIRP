@@ -735,7 +735,7 @@ mod tests_mls3 {
     async fn test_mls3_history_appended_on_first_call() {
         let tmp = tempdir().unwrap();
         let state = serde_json::json!({"hp": 80, "location": "dock"});
-        persist_live_state(tmp.path(), "bob", &state).await;
+        persist_live_state(tmp.path(), "bob", &state).await.unwrap();
 
         let history_path = crate::data_dir::char_state_history_path(tmp.path(), "bob");
         assert!(history_path.exists(), "history.jsonl should exist");
@@ -763,9 +763,9 @@ mod tests_mls3 {
         let s2 = serde_json::json!({"hp": 50});
         let s3 = serde_json::json!({"hp": 20});
 
-        persist_live_state(tmp.path(), "carol", &s1).await;
-        persist_live_state(tmp.path(), "carol", &s2).await;
-        persist_live_state(tmp.path(), "carol", &s3).await;
+        persist_live_state(tmp.path(), "carol", &s1).await.unwrap();
+        persist_live_state(tmp.path(), "carol", &s2).await.unwrap();
+        persist_live_state(tmp.path(), "carol", &s3).await.unwrap();
 
         let history_path = crate::data_dir::char_state_history_path(tmp.path(), "carol");
         let file = std::fs::File::open(&history_path).unwrap();
@@ -785,8 +785,8 @@ mod tests_mls3 {
         let s1 = serde_json::json!({"turn": 1});
         let s2 = serde_json::json!({"turn": 2});
 
-        persist_live_state(tmp.path(), "dave", &s1).await;
-        persist_live_state(tmp.path(), "dave", &s2).await;
+        persist_live_state(tmp.path(), "dave", &s1).await.unwrap();
+        persist_live_state(tmp.path(), "dave", &s2).await.unwrap();
 
         let state_dir = crate::data_dir::char_state_dir(tmp.path(), "dave");
         let live_json: serde_json::Value =
@@ -828,7 +828,7 @@ mod tests_mls9 {
         assert_eq!(state_opt.as_ref().unwrap()["hp"], 90);
 
         let state = state_opt.unwrap();
-        persist_live_state(tmp.path(), "eve", &state).await;
+        persist_live_state(tmp.path(), "eve", &state).await.unwrap();
 
         // Inject into prompt and verify presence
         let mut prompt = String::new();
@@ -848,7 +848,9 @@ mod tests_mls9 {
     async fn test_ls9_empty_state_object_persisted() {
         let tmp = tempdir().unwrap();
         let state = serde_json::json!({});
-        persist_live_state(tmp.path(), "frank", &state).await;
+        persist_live_state(tmp.path(), "frank", &state)
+            .await
+            .unwrap();
 
         let live_path = char_state_dir(tmp.path(), "frank").join("live.json");
         assert!(
@@ -1319,6 +1321,16 @@ mod tests_dx1 {
         let root = tmp.path().to_path_buf();
         let effective = data_dir::resolve_effective_root(&root, Some("")).unwrap();
         assert_eq!(effective, root);
+    }
+
+    #[test]
+    fn p1_default_user_uses_global_session_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        assert_eq!(
+            effective_root_for_mode(&root, Some("default"), PrepareMode::Chat).unwrap(),
+            root
+        );
     }
 
     #[test]
@@ -1924,6 +1936,26 @@ mod tests_a1b_pipeline_e2e {
         assert!(
             !effective_root.join("characters").join("hero").exists(),
             "rejected Persona selection must not create character chat or timeline state"
+        );
+    }
+
+    #[test]
+    fn failed_user_message_persistence_does_not_advance_timeline() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let character = tmp.path().join("characters/hero");
+        std::fs::create_dir_all(character.join("gating")).unwrap();
+        let timeline = character.join("gating/timeline.md");
+        std::fs::write(&timeline, "- 累计消耗时槽: 7\n").unwrap();
+        std::fs::write(character.join("history"), b"blocks history directory").unwrap();
+
+        let mut req = base_chat_request(None, None);
+        req.character_id = Some(CharacterId::new("hero").unwrap());
+        assert!(prepare_pipeline(&req, &state).is_err());
+        assert_eq!(
+            std::fs::read_to_string(timeline).unwrap(),
+            "- 累计消耗时槽: 7\n"
         );
     }
 

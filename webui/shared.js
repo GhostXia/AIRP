@@ -67,10 +67,33 @@
     };
   }
 
-  // formatError(data, text) — lifted verbatim from app.js:176-200.
-  // Whitelist-expands known engine error fields, folds unknown fields into raw JSON.
-  // Used by both app.js and onboarding.js so error UI stays consistent.
+  // Shared secret redaction and error formatting for app.js and onboarding.js.
+  // Known engine fields are expanded while unknown fields remain available as
+  // redacted JSON, keeping diagnostics useful without exposing credentials.
+  function redactSecrets(value, key) {
+    if (/api[_-]?key|authorization|access[_-]?token|token|secret|password|credential/i.test(key || '')) {
+      return '[REDACTED]';
+    }
+    if (Array.isArray(value)) return value.map((item) => redactSecrets(item, ''));
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const [childKey, childValue] of Object.entries(value)) {
+        out[childKey] = redactSecrets(childValue, childKey);
+      }
+      return out;
+    }
+    if (typeof value !== 'string') return value;
+    return value
+      .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [REDACTED]')
+      .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+      .replace(/([?&](?:api[_-]?key|access[_-]?token|token|key)=)[^&#\s]+/gi, '$1[REDACTED]')
+      .replace(/(["']?)(api[_-]?key|authorization|access[_-]?token|token|secret|password|credential)\1(\s*[=:]\s*)(["'])[^"'\r\n]*\4/gi, '$1$2$1$3$4[REDACTED]$4')
+      .replace(/(["']?)(api[_-]?key|authorization|access[_-]?token|token|secret|password|credential)\1(\s*[=:]\s*)[^,;\s"']+/gi, '$1$2$1$3[REDACTED]');
+  }
+
   function formatError(data, text) {
+    data = redactSecrets(data, '');
+    text = redactSecrets(text, '');
     if (data && typeof data === 'object' && data.error) {
       const err = data.error;
       const KNOWN_FIELDS = ['code', 'message', 'upstream_status', 'upstream_body', 'detail'];
@@ -107,6 +130,7 @@
   window.AIRPShared = Object.freeze({
     makeFetcher: makeFetcher,
     formatError: formatError,
+    redactSecrets: redactSecrets,
     readJson: readJson,
   });
 })();

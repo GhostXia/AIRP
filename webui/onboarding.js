@@ -177,11 +177,11 @@ export function mountOnboarding(container, hostPort) {
   }
 
   // ── 错误展示 helper（F5/F6 阶段错误，不降级，spec §6.5）
-  function showError(parent, message, onRetry) {
+  function showError(parent, message, onRetry, actionLabel) {
     const box = el('div', 'onb-error');
     box.appendChild(el('p', '', message));
     if (onRetry) {
-      const btn = el('button', 'btn-secondary', '重试');
+      const btn = el('button', 'btn-secondary', actionLabel || '重试');
       on(btn, 'click', safeSync(onRetry, 'error-retry'));
       box.appendChild(btn);
     }
@@ -515,7 +515,7 @@ export function mountOnboarding(container, hostPort) {
     // 列表校验：支持 bare array 与 {characters: [...]} 两种 shape（对齐 smoke.mjs:233 既有约定）
     const lr = await callApi('/v1/characters');
     const list = Array.isArray(lr.data) ? lr.data : (lr.ok && lr.data && Array.isArray(lr.data.characters) ? lr.data.characters : null);
-    if (!lr.ok || !list || !list.some(c => (c.id || c.character_id) === cid)) {
+    if (!lr.ok || !list || !list.some(c => (typeof c === 'string' ? c : (c.id || c.character_id)) === cid)) {
       showError(box, '导入后角色列表未包含该 ID，可能持久化失败', null);
       return;
     }
@@ -668,7 +668,13 @@ export function mountOnboarding(container, hostPort) {
     wrap.appendChild(el('p', 'onb-hint', '预览中…'));
     // 整个 async 流程由调用方 safeAsync 兜底；此处 try/catch 仅做"已知失败" → 阶段错误
     try {
-      const body = { character_id: state.characterId, user_id: 'default', persona_id: personaId };
+      const body = {
+        character_id: state.characterId,
+        user_id: 'default',
+        persona_id: personaId,
+        user_profile: { name: '', variables: {} },
+        message: '',
+      };
       if (presetId) body.preset_id = presetId;
       const r = await callApi('/v1/chat/preview', {
         method: 'POST',
@@ -757,13 +763,13 @@ export function mountOnboarding(container, hostPort) {
         });
         if (!sr.ok) {
           replyWrap.innerHTML = '';
-          showError(replyWrap, '创建会话失败：' + hostPort.formatError(sr.data, sr.text), null);
+          showError(replyWrap, '创建会话失败：' + hostPort.formatError(sr.data, sr.text), () => sendFirstMessage(message, box));
           return;
         }
         sessionId = sr.data && (sr.data.session_id || sr.data.uuid || sr.data);
         if (typeof sessionId !== 'string') {
           replyWrap.innerHTML = '';
-          showError(replyWrap, '会话响应缺少 session_id', null);
+          showError(replyWrap, '会话响应缺少 session_id', () => sendFirstMessage(message, box));
           return;
         }
         state.sessionId = sessionId;
@@ -777,7 +783,7 @@ export function mountOnboarding(container, hostPort) {
         session_id: sessionId,
         user_id: 'default',
         persona_id: state.personaId || 'default',
-        user_profile: '',
+        user_profile: { name: '', variables: {} },
         message: message,
       };
       if (state.presetId) body.preset_id = state.presetId;
@@ -792,7 +798,7 @@ export function mountOnboarding(container, hostPort) {
         let data; try { data = JSON.parse(text); } catch { data = text; }
         replyWrap.innerHTML = '';
         // F6：SSE 请求失败显示重试（保留 sessionId，重试时复用）
-        showError(replyWrap, '请求失败：' + hostPort.formatError(data, text), null);
+        showError(replyWrap, '请求失败：' + hostPort.formatError(data, text), () => sendFirstMessage(message, box));
         return;
       }
       // 解析 SSE
@@ -804,9 +810,10 @@ export function mountOnboarding(container, hostPort) {
       let buf = '';
       // SSE 终止标记跟踪（spec §6.6 修正）：
       // reader.read() done=true 不等于流正常完成；只有 [DONE] sentinel 或 done chunk 才算正常出口。
-      // 提前 EOF（reader done 但未见 sentinel）→ 显示中断错误，保留 sessionId 供重试复用。
+      // 提前 EOF（reader done 但未见 sentinel）提交状态不确定，不得盲目重发。
       let completed = false;
       let receivedAny = false;
+      let eventName = 'message';
       while (true) {
         const { value, done: rDone } = await reader.read();
         if (rDone) break;
@@ -814,16 +821,33 @@ export function mountOnboarding(container, hostPort) {
         const lines = buf.split('\n');
         buf = lines.pop() || '';
         for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim() || 'message';
+            continue;
+          }
+          if (line.trim() === '') {
+            eventName = 'message';
+            continue;
+          }
           if (!line.startsWith('data: ')) continue;
           const payload = line.slice(6);
           if (payload === '[DONE]') { completed = true; receivedAny = true; break; }
           let chunk;
           try { chunk = JSON.parse(payload); } catch { continue; }
+          if (eventName === 'error') {
+            const detail = chunk.error || chunk;
+            const error = new Error(detail.message || chunk.text || 'stream failed');
+            error.kind = 'stream_error';
+            error.code = detail.code || 'stream_error';
+            error.retryable = detail.retryable === true;
+            error.commitState = detail.commit_state || 'ambiguous';
+            throw error;
+          }
           receivedAny = true;
           // chunk 类型：body_chunk/think_chunk/plan/tool_call/tool_result/done
           // spec §4.3：不强制 Agent tool 调用——展示但不作通过条件
-          if (chunk.type === 'body_chunk' && chunk.content) {
-            bodyP.append(chunk.content);
+          if (chunk.type === 'body_chunk' && chunk.text) {
+            bodyP.append(chunk.text);
           } else if (chunk.type === 'done') {
             completed = true;
             break;
@@ -834,20 +858,25 @@ export function mountOnboarding(container, hostPort) {
       }
       // SSE 终止标记判定（spec §6.6 修正）：
       // - completed=true → 收到 [DONE] sentinel 或 done chunk，走 onComplete 出口
-      // - completed=false → 提前 EOF（reader done 但未见 sentinel）→ F6 中断错误，保留 sessionId 供重试复用
+      // - completed=false → 提前 EOF，提交状态不确定，只允许进入聊天检查历史
       if (completed) {
         finish(true);
       } else {
         replyWrap.innerHTML = '';
         showError(replyWrap,
           receivedAny ? '回复中断：流提前结束（未收到 done 标记）' : '回复中断：未收到任何流数据',
-          null);
+          () => finish(false), '进入聊天检查记录');
       }
     } catch (err) {
       // F6：SSE 中断（网络异常 / abort）
       if (replyWrap) {
         replyWrap.innerHTML = '';
-        showError(replyWrap, '回复中断：' + String(err.message || err), null);
+        const suffix = err.commitState ? '（提交状态：' + err.commitState + '）' : '（提交状态不确定）';
+        const canResend = err.retryable === true && err.commitState === 'uncommitted';
+        showError(replyWrap,
+          '回复中断：' + hostPort.formatError(null, String(err.message || err)) + suffix,
+          canResend ? () => sendFirstMessage(message, box) : () => finish(false),
+          canResend ? '重试' : '进入聊天检查记录');
       }
     } finally {
       // 单飞释放（spec §4.3 Stage 6）：无论成功/失败/异常都恢复按钮状态。
@@ -871,6 +900,7 @@ export function mountOnboarding(container, hostPort) {
       provider: state.provider || '',
       model: state.model || '',
       character_id: state.characterId || '',
+      session_id: state.sessionId || '',
       persona_id: state.personaId || 'default',
       preset_id: state.presetId || null,
       user_id: 'default',
