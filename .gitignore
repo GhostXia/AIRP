@@ -72,3 +72,6 @@ data/**/*.lock
 # 本地审计/烟测原始输出只作临时诊断；可重复证据由 CI run 与历史归档索引保存
 docs/audits/
 docs/smoke-evidence/
+
+# PR body 模板（本地起草用，不入库；避免误提交污染仓库根）
+.pr-*.md

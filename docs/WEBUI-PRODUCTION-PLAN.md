@@ -131,7 +131,7 @@ Browser
 5. 清理开发诊断控件与日用操作的混杂，把高级工具放入明确的 developer mode；
 6. 对 #37 的 branch/swipe/edit 做首发取舍并形成显式合同。
 
-退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。本阶段验证“effective config 可见 + 日用 RP 闭环”；Phase 2 (#115) 6 类 `content_revision` 字段已填充并可见，但 base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计属于 Phase P2 数据可靠性阶段的验证项（详见 [CURRENT-BASELINE.md §3](CURRENT-BASELINE.md)）。
+退出条件：用户不编辑磁盘 JSON、不打开开发工作台也能完成角色与 RP 配置的日常生命周期。本阶段验证“effective config 可见 + 日用 RP 闭环”；Phase 2 (#115) 6 类 `content_revision` 字段已填充并可见。#114 统一有效配置摘要（Persona 激活来源 + 参数来源 chips）已在 P1 交付；base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计在 P1 实现基础能力，其完整数据可靠性验证（crash recovery / 并发竞争 / migration 回滚）属于 Phase P2 数据可靠性阶段的验证项（详见 [CURRENT-BASELINE.md §3](CURRENT-BASELINE.md)）。
 
 ### Phase P2：数据可靠性与恢复
 
