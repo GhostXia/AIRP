@@ -1,0 +1,139 @@
+{
+  "$schema": "https://airp.local/dep-governance/audit-routing.config.json",
+  "_comment": "Audit routing configuration for AIRP dependency governance. Edit this file to change which licenses auto-pass, which require audit, and which are blocked. See README.md for the policy anchors (DEV-GUIDE.md §7.1, AGENTS.md third-party rules).",
+  "inventory_routing": {
+    "_comment": "Classifies the CURRENT dependency inventory (used by SBOM/notices generation, #190). Driven by license + scope, not version bumps.",
+    "auto_pass": {
+      "_comment": "Licenses that are permissive and compatible with AIRP's MIT OR Apache-2.0 distribution. Still recorded in the SBOM but do not trigger a dedicated audit. Composite expressions (OR/AND/WITH) are classified leaf-by-leaf by the AST parser in audit-routing.mjs, so only single SPDX ids need to be listed here.",
+      "licenses": [
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "ISC",
+        "Zlib",
+        "0BSD",
+        "Unicode-DFS-2016",
+        "Unicode-3.0",
+        "Unlicense",
+        "CC0-1.0",
+        "OpenSSL",
+        "BSL-1.0"
+      ]
+    },
+    "audit_required": {
+      "_comment": "Licenses that need a dedicated audit before release. Weak copyleft (file-level isolation), copyleft in dev-only scope, non-commercial, or unknown licenses.",
+      "licenses": [
+        "MPL-2.0",
+        "EPL-1.0",
+        "EPL-2.0",
+        "LGPL-2.0",
+        "LGPL-2.1",
+        "LGPL-3.0",
+        "LGPL-2.1-or-later",
+        "LGPL-3.0-or-later",
+        "PolyForm-Noncommercial-1.0.0",
+        "PolyForm-Small-Business-1.0.0",
+        "CC-BY-4.0",
+        "CC-BY-SA-4.0"
+      ],
+      "unknown_license": true,
+      "copyleft_in_dev_scope_only": true
+    },
+    "block": {
+      "_comment": "Licenses that block release. Strong copyleft in runtime/link dependencies would force the whole AIRP binary to copyleft, incompatible with MIT OR Apache-2.0 distribution. Also: unlicensed code, proprietary, no-license.",
+      "licenses": [
+        "GPL-1.0",
+        "GPL-2.0",
+        "GPL-3.0",
+        "GPL-2.0-or-later",
+        "GPL-3.0-or-later",
+        "AGPL-3.0",
+        "AGPL-3.0-or-later",
+        "SSPL-1.0",
+        "BUSL-1.1",
+        "Proprietary",
+        "UNLICENSED"
+      ],
+      "strong_copyleft_in_runtime_scope": true
+    }
+  },
+  "upgrade_routing": {
+    "_comment": "Classifies proposed version upgrades (DEV-GUIDE.md §7.1). Determines whether an upgrade can be an auto-PR or must route to a deduplicated GitHub issue with a dedicated audit.",
+    "classes": {
+      "patch": {
+        "_comment": "Same major.minor, patch bump (e.g. 1.2.3 -> 1.2.4). Auto-PR allowed; PR must carry version diff, upstream release/security links, audit result, and gating by impact scope. Auto-PR still subject to audit bot + human review.",
+        "routing": "auto-pr"
+      },
+      "minor": {
+        "_comment": "Major >= 1, minor bump (e.g. 1.2.x -> 1.3.0). Issue required; audit changelog, migration/deprecation, Node/Rust/platform floors, plugin/runtime compat, license/provenance, security advisories, data/build artifact changes, rollback path.",
+        "routing": "issue"
+      },
+      "major": {
+        "_comment": "Major bump (e.g. 1.x -> 2.0.0). Issue required; same audit scope as minor.",
+        "routing": "issue"
+      },
+      "0x-minor": {
+        "_comment": "0.x dependency minor bump (e.g. 0.1.2 -> 0.1.3). Treated as major risk per DEV-GUIDE §7.1. Issue required.",
+        "routing": "issue"
+      },
+      "prerelease": {
+        "_comment": "Target is a prerelease (alpha/beta/rc/dev). Never auto-adopted. Issue required even if the stable major would otherwise auto-pass.",
+        "routing": "skip"
+      },
+      "patch-sensitive": {
+        "_comment": "Patch bump that touches data format, network/permission boundary, cryptography, or build/release chain. Escalated from auto-pr to issue per DEV-GUIDE §7.1. Override of patch.",
+        "routing": "issue"
+      }
+    },
+    "sensitive_areas": {
+      "_comment": "Substring matches against the dependency name or its configured area tags. A patch bump matching any of these is reclassified patch -> patch-sensitive (issue required).",
+      "name_patterns": [
+        "aes",
+        "argon2",
+        "bcrypt",
+        "cookie",
+        "crypto",
+        "cipher",
+        "digest",
+        "ecdsa",
+        "ed25519",
+        "hmac",
+        "jwt",
+        "kdf",
+        "openssl",
+        "pbkdf",
+        "rand",
+        "rsa",
+        "rustls",
+        "salsa",
+        "sha1",
+        "sha2",
+        "sha3",
+        "tls",
+        "tokio",
+        "x509"
+      ],
+      "area_tags": [
+        "cryptography",
+        "network",
+        "auth",
+        "serialization-of-trusted-data",
+        "release-chain"
+      ]
+    },
+    "dedup": {
+      "_comment": "Issue dedup key. Two upgrade proposals with the same key MUST update the same issue, never create a second one. Key = ecosystem:name:target-version. Class is NOT part of the key (a re-classification updates the existing issue).",
+      "key_format": "{ecosystem}:{name}@{target_version}"
+    }
+  },
+  "first_party": {
+    "_comment": "Workspace members and AIRP first-party crates. These are not third-party dependencies; they auto-pass inventory routing and are excluded from third-party notices (they carry AIRP's own MIT OR Apache-2.0 license).",
+    "cargo_workspace_members": [
+      "airp-core",
+      "airp-state-protocol",
+      "airp-ui"
+    ],
+    "npm_root_package": "airp-ui"
+  }
+}

@@ -20,13 +20,13 @@ jobs:
       npm_config_cache: ${{ github.workspace }}\.ci\npm-cache
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20.19.0"
           cache: npm
@@ -62,7 +62,7 @@ jobs:
 
       - name: Upload Windows artifacts
         if: ${{ inputs.upload_release_artifacts }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: airp-ui-windows
           if-no-files-found: error
