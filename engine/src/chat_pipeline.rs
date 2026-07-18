@@ -584,11 +584,8 @@ fn resolve_request_persona(
             // SessionId 是 newtype(uuid::Uuid)；find_for_character 需要
             // Option<&str>。在本地构造 String 再借，避免给 SessionId 强加 Deref。
             let session_id_str = payload.session_id.as_ref().map(|s| s.to_string());
-            let resolution = service.resolve_effective_persona(
-                &uid,
-                cid.as_str(),
-                session_id_str.as_deref(),
-            )?;
+            let resolution =
+                service.resolve_effective_persona(&uid, cid.as_str(), session_id_str.as_deref())?;
             if let Some(pid) = resolution.effective_persona_id {
                 let persona = service.get(&uid, &pid, "User")?;
                 let source = match resolution.source {

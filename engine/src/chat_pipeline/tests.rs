@@ -1577,7 +1577,10 @@ mod tests_a1b_resolve {
 
         let mut req = base_request_with_user(Some("alice"));
         req.persona_id = Some("DEFAULT".to_string());
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap().0.unwrap();
+        let persona = resolve_request_persona(&req, tmp.path())
+            .unwrap()
+            .0
+            .unwrap();
         assert_eq!(persona.id, "default");
     }
 
@@ -2088,7 +2091,12 @@ mod tests_effective_config_summary {
     use crate::orchestrator::TavernPreset;
     use std::collections::HashMap;
 
-    fn req_with(provider: Option<Provider>, model: Option<&str>, temp: Option<f32>, mt: Option<u32>) -> ChatCompletionRequest {
+    fn req_with(
+        provider: Option<Provider>,
+        model: Option<&str>,
+        temp: Option<f32>,
+        mt: Option<u32>,
+    ) -> ChatCompletionRequest {
         ChatCompletionRequest {
             character_id: None,
             character_card_id: None,
