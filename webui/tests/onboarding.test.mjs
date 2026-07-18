@@ -467,6 +467,8 @@ test('流式错误仅在 engine 确认未提交时允许重发（静态回归）
   assert.match(src, /进入聊天检查记录/);
   const eofStart = src.indexOf('// - completed=false');
   const catchStart = src.indexOf('} catch (err)', eofStart);
+  assert.ok(eofStart >= 0, '必须找到提前 EOF 分支起点');
+  assert.ok(catchStart > eofStart, '必须找到位于提前 EOF 分支之后的 catch 边界');
   assert.ok(!src.slice(eofStart, catchStart).includes('() => sendFirstMessage(message, box)'), '提前 EOF 不得盲目重发');
 });
 

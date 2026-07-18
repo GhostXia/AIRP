@@ -18,7 +18,7 @@ assert.doesNotMatch(engineBlock, /^\s+ports:/m, 'engine service publishes a host
 assert.match(engineBlock, /cap_drop:\s*\n\s*- ALL/);
 assert.match(engineBlock, /no-new-privileges:true/);
 assert.match(compose, /backend:\s*\n\s+internal: true/);
-assert.match(compose, /AIRP_HTTPS_PORT:-443}:\$\{AIRP_HTTPS_PORT:-443}/);
+assert.match(compose, /AIRP_BIND_ADDRESS:-0\.0\.0\.0}:\$\{AIRP_HTTPS_PORT:-443}:\$\{AIRP_HTTPS_PORT:-443}/);
 assert.match(compose, /engine_access_key:\s*\n\s+file: \.\/secrets\/engine_access_key/);
 assert.doesNotMatch(compose, /AIRP_ACCESS_KEY:\s*\$/);
 assert.doesNotMatch(compose, /latest/);

@@ -78,7 +78,9 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $dataVolume = 'airp-data' # Keep this equal to AIRP_DATA_VOLUME in .env.
 docker compose --env-file .env -f compose.yaml down
 docker run --rm -v ${dataVolume}:/source:ro -v ${PWD}:/backup alpine:3.22.1 tar -czf "/backup/airp-data-$stamp.tgz" -C /source .
-Get-FileHash ".\airp-data-$stamp.tgz" -Algorithm SHA256
+$archive = ".\airp-data-$stamp.tgz"
+$hash = (Get-FileHash $archive -Algorithm SHA256).Hash
+Set-Content "$archive.sha256" "$hash  airp-data-$stamp.tgz"
 ```
 
 Keep the archive, its SHA-256, the old `.env` (without copying secrets into tickets), and the old
@@ -86,19 +88,27 @@ Keep the archive, its SHA-256, the old `.env` (without copying secrets into tick
 overwriting it, restore into a fresh volume, and then start the recorded old version:
 
 ```powershell
+$archive = ".\airp-data-YYYYMMDD-HHMMSS.tgz"
+$expectedHash = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
+$actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash
+if ($actualHash -ne $expectedHash) { throw 'AIRP backup SHA-256 mismatch; restore aborted' }
 docker volume create airp-data-rollback
 docker run --rm -v airp-data-rollback:/restore -v ${PWD}:/backup alpine:3.22.1 sh -c 'tar -xzf /backup/airp-data-YYYYMMDD-HHMMSS.tgz -C /restore'
 ```
 
-Set `AIRP_DATA_VOLUME=airp-data-rollback` and restore the recorded `AIRP_VERSION` in `.env`, run
+Set `AIRP_DATA_VOLUME=airp-data-rollback`, `AIRP_BIND_ADDRESS=127.0.0.1`, and restore the recorded
+`AIRP_VERSION` in `.env`, run
 `docker compose --env-file .env -f compose.yaml config --quiet`, then run
 `docker compose --env-file .env -f compose.yaml up -d`.
-Verify health, character/Persona/Preset lists, the last session and chat history before allowing
-new writes. If verification succeeds, keep `AIRP_DATA_VOLUME=airp-data-rollback`: that volume is
-now canonical, and every later backup must set `$dataVolume = 'airp-data-rollback'`. Do not silently
-switch back to the stale `airp-data` volume. If verification fails, stop and retain both volumes
-for diagnosis. This is a manual P1 escape hatch; automated backup, migration and restore
-verification remain P2 work.
+The loopback bind prevents public traffic during verification. From the host, verify health,
+character/Persona/Preset lists, the last session and chat history using read-only requests. If
+verification succeeds, keep `AIRP_DATA_VOLUME=airp-data-rollback` (it is now canonical), set
+`AIRP_BIND_ADDRESS=0.0.0.0`, and expose the verified deployment with
+`docker compose --env-file .env -f compose.yaml up -d --force-recreate gateway`. Every later backup
+must set `$dataVolume = 'airp-data-rollback'`; do not silently switch back to stale `airp-data`.
+If verification fails, keep the loopback bind, stop the services, and retain both volumes for
+diagnosis. This is a manual P1 escape hatch; automated backup, migration and restore verification
+remain P2 work.
 
 ## CI topology proof
 
