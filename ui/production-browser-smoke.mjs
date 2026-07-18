@@ -1,15 +1,25 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 
 const origin = process.env.AIRP_SMOKE_ORIGIN;
 const username = process.env.AIRP_SMOKE_ADMIN_USER;
 const password = process.env.AIRP_SMOKE_ADMIN_PASSWORD;
 const resultFile = process.env.AIRP_SMOKE_RESULT_FILE;
+const browserStateFile = process.env.AIRP_SMOKE_BROWSER_STATE_FILE;
+const browserResultFile = process.env.AIRP_SMOKE_BROWSER_RESULT_FILE;
 const executablePath = process.env.AIRP_CHROME_PATH || '/usr/bin/google-chrome';
 const chromeSpki = process.env.AIRP_CHROME_SPKI;
 
-for (const [name, value] of Object.entries({ origin, username, password, resultFile, chromeSpki })) {
+for (const [name, value] of Object.entries({
+  origin,
+  username,
+  password,
+  resultFile,
+  browserStateFile,
+  browserResultFile,
+  chromeSpki,
+})) {
   assert.ok(value, `${name} is required`);
 }
 assert.match(chromeSpki, /^[A-Za-z0-9+/]{43}=$/, 'chromeSpki must be one SHA-256 hash');
@@ -152,6 +162,17 @@ try {
   ), firstAssistant, { timeout: 10_000 });
   assert.equal(await page.locator('#char-select').inputValue(), onboardingState.characterId);
   assert.equal(await page.locator('#sess-select').inputValue(), onboardingState.sessionId);
+
+  // Preserve the exact user-visible state before the remaining smoke cases
+  // intentionally change selections. A separate browser process restores this
+  // snapshot only after the production services have restarted.
+  await context.storageState({ path: browserStateFile });
+  writeFileSync(browserResultFile, JSON.stringify({
+    firstMessage,
+    characterId: onboardingState.characterId,
+    sessionId: onboardingState.sessionId,
+    firstAssistant,
+  }, null, 2));
   await page.waitForTimeout(2_500);
 
   // #182 防回归：确保 production 容器 serve 了 lorebook-utils.js。

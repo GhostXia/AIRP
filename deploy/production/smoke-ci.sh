@@ -12,6 +12,8 @@ origin=https://localhost:9443
 admin_user=airp-smoke
 admin_password=synthetic-smoke-password
 result_file="$deploy/smoke-result.json"
+browser_state_file="$deploy/smoke-browser-state.json"
+browser_result_file="$deploy/smoke-browser-result.json"
 root_ca="$deploy/smoke-root.crt"
 mock_log="$deploy/mock-provider.log"
 mock_root="$deploy/certs/mock-root.crt"
@@ -163,9 +165,25 @@ AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
 AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
 AIRP_SMOKE_RESULT_FILE="$result_file" \
+AIRP_SMOKE_BROWSER_STATE_FILE="$browser_state_file" \
+AIRP_SMOKE_BROWSER_RESULT_FILE="$browser_result_file" \
 AIRP_CHROME_SPKI="$chrome_spki" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-smoke.mjs"
+
+$compose restart engine gateway >/dev/null
+for _ in $(seq 1 60); do
+  if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+AIRP_SMOKE_ORIGIN="$origin" \
+AIRP_SMOKE_ADMIN_USER="$admin_user" \
+AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
+AIRP_SMOKE_BROWSER_STATE_FILE="$browser_state_file" \
+AIRP_SMOKE_BROWSER_RESULT_FILE="$browser_result_file" \
+AIRP_CHROME_SPKI="$chrome_spki" \
+NODE_EXTRA_CA_CERTS="$trust_bundle" \
+node "$repo/ui/production-browser-restart-smoke.mjs"
 
 $curl_tls --user "$admin_user:$admin_password" "$origin/version?smoke_secret_query=marker" >/dev/null
 $compose logs --no-color > "$deploy/topology-smoke.log"
