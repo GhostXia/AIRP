@@ -26,9 +26,21 @@ where
     // `with_extension("json.tmp")` 会把 `current.md` 变成 `current.json.tmp`，
     // `chat_log.jsonl` 变成 `chat_log.json.tmp`，导致文件名污染。
     // 改为追加 .tmp/.bak 后缀，保留原扩展名：`current.md.tmp` / `chat_log.jsonl.bak`。
-    let original_ext = path.extension().and_then(|s| s.to_str()).unwrap_or("tmp");
-    let temporary = path.with_extension(format!("{original_ext}.tmp"));
-    let backup = path.with_extension(format!("{original_ext}.bak"));
+    //
+    // PR #227 审计修复（gemini + coderabbit）：
+    // - 无扩展名文件（如 `current`）不能 fallback 成 `"tmp"`，否则会变成
+    //   `current.tmp.tmp`；应用 `with_extension("tmp")` 直接替换为 `current.tmp`。
+    // - 使用 `OsString` 避免 non-UTF-8 路径的 lossy 转换。
+    let (temporary, backup) = match path.extension() {
+        Some(ext) => {
+            let mut tmp_ext = ext.to_os_string();
+            tmp_ext.push(".tmp");
+            let mut bak_ext = ext.to_os_string();
+            bak_ext.push(".bak");
+            (path.with_extension(tmp_ext), path.with_extension(bak_ext))
+        }
+        None => (path.with_extension("tmp"), path.with_extension("bak")),
+    };
     {
         let mut file = fs::File::create(&temporary)?;
         file.write_all(bytes)?;
@@ -155,6 +167,11 @@ mod tests {
 
     /// #220 L4 回归：非 .json 文件（如 .md / .jsonl）的 tmp/backup 必须保留原扩展名，
     /// 不能变成 `.json.tmp`。验证 `current.md` 替换后无残留且内容正确。
+    ///
+    /// PR #227 审计修复（coderabbit）：注入 backup-cleanup 失败，直接断言 backup
+    /// 文件名为 `current.md.bak` 而非 `current.json.bak`，让测试真正观察文件名
+    /// 而非只检查"无残留"（无残留会被旧 bug 通过——cleanup 把错误命名的 backup
+    /// 也删掉了）。
     #[test]
     fn replace_file_preserves_non_json_extension() {
         let tmp = tempfile::tempdir().unwrap();
@@ -163,19 +180,66 @@ mod tests {
         replace_file(&path, b"# v1").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"# v1");
 
-        replace_file(&path, b"# v2").unwrap();
+        // 注入 backup-cleanup 失败，让 backup 文件留下来以便断言其命名。
+        // 失败的 cleanup 不影响主路径成功（replace_file 仍返回 Ok）。
+        replace_file_with_backup_cleanup_for_test(&path, b"# v2", |_| {
+            Err(std::io::Error::other("keep backup for naming assertion"))
+        })
+        .unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"# v2");
 
-        // 无残留 .json.tmp / .json.bak（旧 bug 会产生 current.json.tmp）
-        let entries: Vec<String> = fs::read_dir(tmp.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        assert_eq!(
-            entries,
-            vec!["current.md".to_string()],
-            "no stale tmp/bak files; got {entries:?}"
+        // backup 文件名必须是 current.md.bak（旧 bug 会产生 current.json.bak）
+        assert!(
+            tmp.path().join("current.md.bak").exists(),
+            "backup must preserve .md extension; dir: {:?}",
+            fs::read_dir(tmp.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !tmp.path().join("current.json.bak").exists(),
+            "current.json.bak must not exist (old bug)"
+        );
+        assert!(
+            !tmp.path().join("current.md.tmp").exists(),
+            "tmp file must be renamed into place, not left behind"
+        );
+        assert!(
+            !tmp.path().join("current.json.tmp").exists(),
+            "current.json.tmp must not exist (old bug)"
+        );
+    }
+
+    /// PR #227 审计修复（coderabbit）：无扩展名文件（如 `current`）的 tmp/backup
+    /// 必须是 `current.tmp` / `current.bak`，不能是 `current.tmp.tmp`。
+    #[test]
+    fn replace_file_handles_extensionless_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("current");
+
+        replace_file(&path, b"v1").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"v1");
+
+        // 注入失败以观察 backup 文件名
+        replace_file_with_backup_cleanup_for_test(&path, b"v2", |_| {
+            Err(std::io::Error::other("keep backup for naming assertion"))
+        })
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"v2");
+
+        assert!(
+            tmp.path().join("current.bak").exists(),
+            "extensionless backup must be current.bak, not current.tmp.bak"
+        );
+        assert!(
+            !tmp.path().join("current.tmp.bak").exists(),
+            "current.tmp.bak must not exist (bug from unwrap_or(\"tmp\") fallback)"
+        );
+        assert!(
+            !tmp.path().join("current.tmp.tmp").exists(),
+            "current.tmp.tmp must not exist (bug from unwrap_or(\"tmp\") fallback)"
         );
     }
 }

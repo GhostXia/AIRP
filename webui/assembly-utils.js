@@ -40,7 +40,8 @@
 
   function sourceLabel(source, table) {
     if (source === undefined || source === null || source === '') return '';
-    if (table[source]) return table[source];
+    // PR #227 审计修复（gemini）：防御 table 为 null/undefined（未来扩展或测试场景）
+    if (table && table[source]) return table[source];
     // #221 L4：未知 source 值（engine 未来新增）回退到原始字符串，
     // 并在控制台告警便于开发者发现 label table 未同步。
     if (typeof console !== 'undefined' && console.warn) {

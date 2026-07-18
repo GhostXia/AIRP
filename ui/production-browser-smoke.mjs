@@ -167,8 +167,9 @@ try {
     if (chips.length < 10) return false;
     const byLabel = {};
     chips.forEach(chip => {
-      const label = chip.querySelector('.assembly-chip-label')?.textContent || '';
-      const value = chip.querySelector('.assembly-chip-value')?.textContent || '';
+      // PR #227 审计修复（gemini）：.trim() 防止 HTML 格式微小变化（空白/换行）破坏严格相等断言
+      const label = (chip.querySelector('.assembly-chip-label')?.textContent || '').trim();
+      const value = (chip.querySelector('.assembly-chip-value')?.textContent || '').trim();
       byLabel[label] = value;
     });
     return (byLabel['模型'] || '').endsWith('· 预设')
@@ -209,8 +210,9 @@ try {
     if (chips.length < 6) return false;
     const byLabel = {};
     chips.forEach(chip => {
-      const label = chip.querySelector('.assembly-chip-label')?.textContent || '';
-      const value = chip.querySelector('.assembly-chip-value')?.textContent || '';
+      // PR #227 审计修复（gemini）：.trim() 防止 HTML 格式微小变化（空白/换行）破坏严格相等断言
+      const label = (chip.querySelector('.assembly-chip-label')?.textContent || '').trim();
+      const value = (chip.querySelector('.assembly-chip-value')?.textContent || '').trim();
       byLabel[label] = value;
     });
     return (byLabel['角色'] || '').includes('legacy-char · unavailable')
