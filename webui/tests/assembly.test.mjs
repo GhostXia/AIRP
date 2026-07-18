@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { buildAssemblyViewModel } = require('../assembly-utils.js');
+const { buildAssemblyViewModel, sourceLabel } = require('../assembly-utils.js');
 
 test('buildAssemblyViewModel presents effective revisions and ordered materials', () => {
   const view = buildAssemblyViewModel({
@@ -252,4 +252,30 @@ test('buildAssemblyViewModel keeps source labels inert for hostile source string
   // 未知 source 值原样保留（便于排查），不映射成中文
   assert.equal(view.chips[1].value, 'p · ' + hostile);
   assert.equal(globalThis.pwned, undefined);
+});
+
+// PR #227 审计修复（coderabbit）：直接测试 sourceLabel 的 null/undefined table 路径，
+// 而非仅通过 buildAssemblyViewModel 间接覆盖。覆盖三种 nullish 场景：
+//   - table === null
+//   - table === undefined
+//   - source 不在已知 table 中（unknown source fallback）
+// 全部应回退到原始 source 字符串，不抛 TypeError。
+test('sourceLabel returns original source string when table is null', () => {
+  assert.equal(sourceLabel('custom_source', null), 'custom_source');
+});
+
+test('sourceLabel returns original source string when table is undefined', () => {
+  assert.equal(sourceLabel('custom_source', undefined), 'custom_source');
+});
+
+test('sourceLabel returns original source string for unknown source in known table', () => {
+  // 已知 table 但 source 不在其中（未来 engine 新增 source 值的回退路径）
+  const knownTable = { explicit: '显式', preset: '预设' };
+  assert.equal(sourceLabel('future_source', knownTable), 'future_source');
+});
+
+test('sourceLabel handles empty/null/undefined source by returning empty string', () => {
+  assert.equal(sourceLabel('', null), '');
+  assert.equal(sourceLabel(null, null), '');
+  assert.equal(sourceLabel(undefined, null), '');
 });
