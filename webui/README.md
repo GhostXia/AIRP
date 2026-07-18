@@ -2,7 +2,7 @@
 
 `webui/` 是当前 AIRP 产品交付主面：零构建、浏览器可运行的 RP 客户端。它已经具备基本日用闭环，但仍是 preview；正式发布前的 P1–P3 门禁见 [WebUI 正式上线计划](../docs/WEBUI-PRODUCTION-PLAN.md)。当前事实见 [开发基线](../docs/CURRENT-BASELINE.md)，P0 拓扑见 [production architecture](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md)。
 
-> 本页最后在 2026-07-18 的 `main@63f1c5b` 复核。
+> 本页最后在 2026-07-18 的 `main@2a14b7e` 复核。
 > `start.bat`、`serve.js`、`cargo run`、手填 engine URL 和可选 bearer 都是开发路径。不要把 8000/9001 端口或静态开发服务器直接暴露到公网。首方 P0 preview 位于 [deploy/production](../deploy/production/README.md)。
 
 ## 本地启动
@@ -61,8 +61,9 @@ node webui/serve.js
 - 多 Persona 列表、创建、编辑、基础删除，以及「自动（跟随绑定/默认）」和显式选择；
 - effective Persona 来源/双 scope owner 展示、角色/session 绑定与解绑、聊天请求按自动/显式省略或发送 `persona_id`；
 - 已有无写副作用的本轮有效 Persona/Preset/Provider/Model 与有序装配摘要；Phase 2 (#115) 6 类 asset（character/persona/preset/lorebook/state/memory）统一 `content_revision` 字段已填充并可见，对应 chip 有 `unavailable` 标识（旧数据或读取失败时），未激活 asset 显示「未启用」；base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计仍待 P2 完成；
-- 带确认/可恢复语义的生产级删除、完整 Preset 生命周期和 Persona drift/history 等高级生命周期仍待 P1 完成；
+- 带确认/可恢复语义的生产级删除、完整 Preset 生命周期和 Persona drift/history 等高级生命周期后移到 P2；
 - 首次启动 onboarding wizard Phase 1（PR #212 / #209）已交付：6-stage 状态机（部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话），Port 合同 + 动态 import 边界 + fail-open 降级（F1–F4，F5–F6 为向导内重试），desync 可重触发；Shadow DOM 隔离与 Port 版本协商跟踪于 #210 / #211；
+- P1 首聊代码候选已收口：流式错误保留 `code`/`retryability`/`commit state`，提前 `EOF` 或提交状态不明时不盲目重发；“稍后聊天”清除旧 session；错误摘要脱敏 credential 字段、quoted JSON、URL userinfo 和 secret query；
 - state live/history、character-scoped worldbook 主面板与 decompose 工作台；
 - worldbook 支持 `constant`、`selective`/`secondary_keys` 编辑、advisory 只读展示、未保存修改确认和异步切换防串角色。
 
@@ -78,9 +79,9 @@ node webui/serve.js
 
 ## 明确未完成
 
-- P1 的 Persona 高级生命周期、Preset 完整产品管理、Worldbook 完整资产生命周期和统一有效配置（Phase 2 6 类 revision 合同已落地，base lock/drift/rollback/dry-run/provenance 审计仍开放）；
+- P2 的 Persona 高级生命周期、Preset 完整产品管理、Worldbook 完整资产生命周期和统一有效配置（Phase 2 6 类 revision 合同已落地，base lock/drift/rollback/dry-run/provenance 审计仍开放）；
 - 自包含 session revision manifest、migration、备份/恢复、可恢复删除与运维 runbook；
-- onboarding wizard 市场验证（#207 首聊完成率 + ST 资产用户迁移成功率，#209 跟踪）；
+- P1 onboarding → 首聊黄金路径的可重复验收（真实 provider、真实浏览器、生产拓扑；刷新恢复与服务重启恢复分别记录，#207/#209 跟踪）；
 - branch/swipe/edit 的首发取舍；
 - 浏览器矩阵、移动端收口、长会话 soak、SBOM/notices、升级和回滚演练；
 - plugin/skills/MCP upstream、ChangeInbox、可配置多 Agent；

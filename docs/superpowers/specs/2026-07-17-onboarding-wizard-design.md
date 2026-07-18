@@ -1,6 +1,6 @@
 # Onboarding Wizard Design Spec
 
-**Issue**: [#209](https://github.com/GhostXia/AIRP/issues/209) — webui: implement first-run onboarding wizard (解阻 #207 目标 1 首聊完成率)
+**Issue**: [#209](https://github.com/GhostXia/AIRP/issues/209) — webui: implement first-run onboarding wizard (解阻 #207 目标 1 首聊黄金路径)
 **Date**: 2026-07-17
 **Status**: Design approved (sections ①-⑤), pending spec review
 **Approach**: 方案 4（裁剪版）= 函数注入契约 + 动态 import 边界 + fail-open 降级，砍除 Shadow DOM（#210）与完整版本协商（#211）
@@ -11,7 +11,7 @@
 
 ### 1.1 目标
 
-解阻 [#207](https://github.com/GhostXia/AIRP/issues/207) 目标 1（首聊完成率）：用户在不读文档、不打开 dev 工具前提下，完成部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话全闭环。
+解阻 [#207](https://github.com/GhostXia/AIRP/issues/207) 目标 1（首聊黄金路径）：在不读开发文档、不打开 dev tools 前提下，完成部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话全闭环。
 
 目标用户画像：自带 provider key、带 PNG 角色卡 / `character_book` / preset JSON 的 RP 重度玩家，不是首次接触 RP 的新人。
 
@@ -233,7 +233,7 @@ dev 模式下向导 Stage 1 收集 engine URL + bearer 后，**直接写 session
 - 每阶段有"上一步"按钮（除 Stage 1）+ "跳过向导"按钮（任意阶段可跳，触发 `onSkip`）。
 - Stage 4 角色导入可跳过（用户可能已有角色）——但跳过后 Stage 6 首聊需要选已有角色，向导内补一步"选择已有角色"picker。
 - Stage 5 persona/preset 可跳过（保持 default + 不使用预设）。
-- Stage 6 不可跳过（首聊是 #207 完成率的核心度量）；但用户可"完成向导，稍后聊天"——这算 `onComplete` 出口（config 中 `firstChatCompleted: false`），首聊完成率统计区分"完成向导"与"完成首聊"。
+- Stage 6 不可通过 `onSkip` 跳过（首聊是 #207 黄金路径的最终阶段）；但用户可“完成向导，稍后聊天”——这算 `onComplete` 出口（config 中 `firstChatCompleted: false`），验收记录区分“完成向导”与“完成首聊”。
 
 ---
 
@@ -640,7 +640,7 @@ function makeMockPort(overrides = {}) {
 
 ### 7.6 测试不覆盖（显式声明）
 
-1. **真实浏览器自动化**（Playwright/Puppeteer）：首版不引入。理由：现有测试约定是 node:test + HTTP，引入浏览器自动化会改变测试基建。#207 首聊完成率验证是人工试用，不是自动化。
+1. **真实浏览器自动化**（Playwright/Puppeteer）：首版未引入；它会改变现有 node:test + HTTP 测试基建，但属于 #207 首聊黄金路径仍需继续补齐的工程验收能力。
 2. **CSP 违规检测**：依赖现有 system-Chrome smoke（`docs/WEBUI-PRODUCTION-ARCHITECTURE.md` §4 提到的 `securitypolicyviolation` 监听），不新增。
 3. **跨浏览器兼容**：evergreen 浏览器假设，不测 IE/旧 Edge。
 
@@ -649,7 +649,7 @@ function makeMockPort(overrides = {}) {
 | #207 验收 | 测试层覆盖 |
 |---|---|
 | 6 阶段全闭环 | L2 happy_path_dev/prod |
-| 不读文档/不开 dev 工具 | 人工试用（#207 N≥5/≥10） |
+| 不读开发文档/不开 dev tools | 真实浏览器自动化 + 维护者人工验收 |
 | 有效配置可见 | L1 chat/preview 来源标签 + L2 topbar 指示器 |
 | 失败返回可行动错误 | L1 F5/F6 用例 + L3 端点错误契约 |
 | provider secret 不持久化 | L1 api_key 用例 + L3 settings_post 用例 |
@@ -700,7 +700,7 @@ function makeMockPort(overrides = {}) {
 
 ## 10. 关联
 
-- 解阻：[#207](https://github.com/GhostXia/AIRP/issues/207) 目标 1（首聊完成率）
+- 解阻：[#207](https://github.com/GhostXia/AIRP/issues/207) 目标 1（首聊黄金路径）
 - 实现 issue：[#209](https://github.com/GhostXia/AIRP/issues/209)
 - 砍除项跟踪：[#210](https://github.com/GhostXia/AIRP/issues/210)（Shadow DOM）、[#211](https://github.com/GhostXia/AIRP/issues/211)（版本协商）
 - 上层 umbrella：[#130](https://github.com/GhostXia/AIRP/issues/130) WebUI production launch

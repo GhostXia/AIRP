@@ -2,7 +2,7 @@
 
 > 状态：**待持续更新的活文档**
 >
-> 最后基线校准：2026-07-18，`main@63f1c5b`；上游版本与许可证的实际核验日期见各表。`tools/dep-governance/`（PR #218）已提供 Cargo + npm 依赖发现与 SPDX/CycloneDX SBOM 生成器，当前 SBOM 快照存于 `docs/sbom/`；该工具是手动离线运行，不替代引入新依赖时的逐项许可证/provenance 核验。
+> 最后基线校准：2026-07-18，`main@2a14b7e`；上游版本与许可证的实际核验日期见各表。`tools/dep-governance/`（PR #218/#229）已提供 Cargo + npm 依赖发现与 SPDX/CycloneDX SBOM 生成器，当前 SBOM 快照存于 `docs/sbom/`；该工具是手动离线运行，不替代引入新依赖时的逐项许可证/provenance 核验。
 
 本文区分 AIRP 作者自己的前序项目、第三方设计参考，以及未来可能发生的第三方资产复用。新增研究对象、实际采用外部资产或上游许可证变化时，必须同步更新本文。
 

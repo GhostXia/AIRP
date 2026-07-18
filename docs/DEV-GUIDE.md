@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-18，`main@63f1c5b`
+> 最后校准：2026-07-18，`main@2a14b7e`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -14,7 +14,7 @@
 4. 对任何“已实现”声明，先找到当前源码入口和测试；旧计划、issue 标题或 PR 描述不是运行时证据。
 5. 代码任务使用 `codex/` 分支和 PR；本地全绿只允许开 PR，不允许绕过审计 bot 或人工 review 合并。
 
-当前主线是 WebUI 单实例、自托管、单用户正式上线。每项产品能力优先纵向贯通：
+当前主线是 WebUI 单实例、自托管、单用户 P1 有限试用验证。每项产品能力优先纵向贯通：
 
 ```text
 engine shared service → HTTP/SSE → WebUI → production/browser tests
@@ -205,11 +205,11 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. Phase 2 (#115) 6 类 asset revision 合同与 `PromptAssemblyTrace` 收口已落地（PR #201/#202/#203/#206/#215），#114 统一有效配置摘要已交付（PR #217 Persona 激活来源 + 参数来源 chips），单资源持久化边界已加固（PR #219 高影响缺陷修复 + PR #227 审计遗留 L4 收口）；下一步是 #114 Persona/Preset 高级生命周期（base lock、drift/history/rollback、头像、导入导出/备份恢复、HTTP/UI 受控 dry-run、完整 provenance 审计），#220 deferred 项（character_lock poison 恢复、record_tokens spawn_blocking、resolve_param_sources 重构、temperature None 语义）按独立 PR 推进；
-2. #126 已关闭，Worldbook 只按新需求继续演进；#114 Persona effective/绑定能力与统一有效配置摘要已交付，剩余 P1 产品闭环按 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) Phase P1 推进；
-3. [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 的完整 session/revision/恢复分期；
+1. PR #232 已形成 P1 有限试用代码候选；当前第一优先级是继续开发首聊黄金路径，并用真实 provider、真实浏览器和生产拓扑建立可重复验收，分别覆盖页面刷新恢复与服务重启恢复；
+2. 优先修复首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏，同时继续补齐直接影响可用版本的产品缺口；自动化、agent 辅助检查和维护者人工验收都可以形成工程证据，但不得把局部测试冒充端到端通过；
+3. #114 Persona/Preset 高级生命周期、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 完整 session/revision/恢复分期和 #220 deferred 性能/重构项原则上进入 P2；若其中某项直接决定 P1 可用性、数据安全或可重复验收，可以按独立证据提前；
 4. P2 运维与恢复；
 5. P3 release candidate；
-6. 工程治理后续切片（#192 自动版本检测与去重 issue、release pipeline 强制 SBOM 度量、发布签名）按 #192 推进，不抢占产品主链。
+6. 工程治理后续切片（#192 自动版本检测与去重 issue、release pipeline 强制 SBOM 度量、发布签名）按 #192 推进，不抢占产品主线。
 
 动手前必须重新查询 issues 和 `main`，不要把本节当成永久队列。

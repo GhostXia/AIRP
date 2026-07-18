@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-12
 >
-> 实现基线：PR #124/#125；2026-07-18 在 `main@63f1c5b` 复核，合同未被后续 handler/session 身份拆分、Preset/trace、Persona/Worldbook、Phase 2 (#115) 6 类 asset revision、settings 一致性或 rustdoc 门禁改动改变；PR #219 加固了 `chat_store` 持久化（`replace_file` 原子替换 + `sync_data` + parent-dir fsync），强化了 durable history 的崩溃原子性，但合同语义未变。
+> 实现基线：PR #124/#125；2026-07-18 在 `main@2a14b7e` 复核，合同未被后续 handler/session 身份拆分、Preset/trace、Persona/Worldbook、Phase 2 (#115) 6 类 asset revision、settings 一致性或 rustdoc 门禁改动改变；PR #219 加固了 `chat_store` 持久化（`replace_file` 原子替换 + `sync_data` + parent-dir fsync），PR #232 进一步确保 user message 落盘后才推进时间线、关键 finalization 失败不发送虚假 `done`，强化了 durable history 的失败关闭语义，但本合同的 ID/cursor/rollback 语义未变。
 >
 > 关联 issue：#37（durable message-id contract）、#122（WebUI 窗口化）。
 >

@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-18 at `main@63f1c5b`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
+> Last reviewed: 2026-07-18 at `main@2a14b7e`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -16,7 +16,7 @@
 - **Status**: Mitigated in PR #111; keys are runtime-only and omitted from persisted settings.
 - **Surface**: `POST /v1/settings` accepts runtime-only `api_key` and `access_api_key`; only non-secret provider/model metadata is persisted to `data/settings.json`.
 - **Risk**: Process memory, environment variables, logs, support bundles, or a compromised local account can still expose runtime credentials.
-- **Current control**: API responses are redacted, serialization omits secrets, and legacy plaintext fields are ignored on load.
+- **Current control**: API responses are redacted, serialization omits secrets, and legacy plaintext fields are ignored on load. PR #232 additionally redacts WebUI diagnostic objects, quoted JSON credentials, URL userinfo and secret query parameters; `PathEscape`, upstream and internal failures expose only stable public messages to clients.
 - **Required direction**: Use the OS/service secret facility for durable non-interactive credentials and keep diagnostics redacted.
 
 ## RR-003 · Permissive local HTTP origin and optional authentication
@@ -29,10 +29,10 @@
 
 ## RR-004 · Divergent write paths and non-atomic persistence
 
-- **Status**: Partially mitigated in PR #111 through shared Chat/State/Lorebook services, atomic replacement, revision/schema validation, and shared locks. PR #219 further hardened single-resource durability (chat_store `replace_file` + `sync_data`, replace_file parent-dir fsync, character_lock serialization, quota Mutex, extract_card_assets lorebook preservation, next_volume_number saturating, append_to_current warning instead of silent swallow). Cross-resource transactions, `AIRP-TREE-SHA256-v1` integrity, full migration registry, backup/restore, lock-cache lifecycle and character_lock poison recovery remain tracked separately (see #220 deferred items).
+- **Status**: Partially mitigated in PR #111 through shared Chat/State/Lorebook services, atomic replacement, revision/schema validation, and shared locks. PR #219/#227 hardened single-resource durability (chat_store `replace_file` + `sync_data`, replace_file parent-dir fsync/extension handling, character_lock serialization, quota Mutex, lorebook preservation and volume saturation). PR #232 made user-message/timeline ordering and assistant finalization fail closed, added structured commit state, and validated Persona IDs before destructive cleanup. Cross-resource transactions, `AIRP-TREE-SHA256-v1` integrity, full migration registry, automated backup/restore, lock-cache lifecycle and character_lock poison recovery remain tracked separately (see #220 deferred items).
 - **Surface**: Chat/State/Lorebook use shared services with crash-atomic writes, but cross-resource operations and future session revisions still lack one transaction boundary.
 - **Risk**: Concurrent append/rollback/regen/state updates can lose ordering, overwrite a newer snapshot, or make live state disagree with history; a crash mid-write no longer leaves a 0-byte `chat.jsonl`, but cross-resource consistency is still best-effort.
-- **Current control**: Shared per-character/per-session locks, atomic replacement with parent-dir fsync, revision/schema validation, append-only history with `sync_data`, `character_lock` for `update_character_card`, `quota` Mutex, and `extract_card_assets` data-safety-first lorebook preservation cover current single-resource writes; cross-resource consistency remains incomplete.
+- **Current control**: Shared per-character/per-session locks, atomic replacement with parent-dir fsync, revision/schema validation, append-only history with `sync_data`, `character_lock` for `update_character_card`, `quota` Mutex, `extract_card_assets` data-safety-first lorebook preservation, user-message-before-timeline ordering and hard-fail assistant finalization cover current single-resource writes; cross-resource consistency remains incomplete. The P1 cold-backup/rollback runbook provides an operator escape hatch but is not an automated transaction or recovery guarantee.
 - **Required direction**: One versioned Chat/State service with shared locks, atomic replace, revisions/idempotency, schema validation, and concurrency tests; then `AIRP-TREE-SHA256-v1` integrity, versioned migration registry, backup/restore and `character_lock` poison recovery (Phase P2).
 
 ## RR-005 · State schema enforcement at the write boundary
