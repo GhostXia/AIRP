@@ -67,7 +67,7 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。旧 `gatewa
 - P1 人工冷备份/回滚逃生路径：归档哈希校验、独立回滚卷验证，以及只在只读核验通过后恢复公网监听；
 - 规范 session UUID、legacy metadata best-effort 修复，以及自包含 session/revision 的后续合同。
 
-P1 有限试用代码候选已经形成，但仍为“待真实用户验证”，不能称 P1 已通过或正式发布。Persona 高级生命周期、Preset 完整生命周期、Worldbook 完整资产生命周期、完整 session revision、版本化 migration、自动备份/恢复、可恢复删除、正式升级回滚、浏览器矩阵和长会话 soak 仍未完成。不要从本页推断细节；以 [CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md) 为准。
+P1 有限试用代码候选已经形成，但尚未达到正式发布条件。当前继续开发首聊黄金路径、恢复路径和高价值产品缺口，并用真实 provider、真实浏览器、生产拓扑及自动化/人工验收形成可重复证据。Persona 高级生命周期、Preset 完整生命周期、Worldbook 完整资产生命周期、完整 session revision、版本化 migration、自动备份/恢复、可恢复删除、正式升级回滚、浏览器矩阵和长会话 soak 仍未完成。不要从本页推断细节；以 [CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md) 为准。
 
 ## 开发环境
 

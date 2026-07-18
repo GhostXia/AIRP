@@ -81,7 +81,7 @@ node webui/serve.js
 
 - P2 的 Persona 高级生命周期、Preset 完整产品管理、Worldbook 完整资产生命周期和统一有效配置（Phase 2 6 类 revision 合同已落地，base lock/drift/rollback/dry-run/provenance 审计仍开放）；
 - 自包含 session revision manifest、migration、备份/恢复、可恢复删除与运维 runbook；
-- P1 onboarding wizard 真实用户验证（#207 首聊完成率；刷新恢复与服务重启恢复分别记录，#209 跟踪）；
+- P1 onboarding → 首聊黄金路径的可重复验收（真实 provider、真实浏览器、生产拓扑；刷新恢复与服务重启恢复分别记录，#207/#209 跟踪）；
 - branch/swipe/edit 的首发取舍；
 - 浏览器矩阵、移动端收口、长会话 soak、SBOM/notices、升级和回滚演练；
 - plugin/skills/MCP upstream、ChangeInbox、可配置多 Agent；

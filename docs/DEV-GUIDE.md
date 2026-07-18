@@ -205,9 +205,9 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. PR #232 已形成 P1 有限试用代码候选；当前第一优先级是用真实 provider、真实浏览器和生产拓扑执行真实用户首聊验证，并分别记录刷新恢复与服务重启恢复。mock、agent、维护者自测和 CI smoke 不能代替市场证据；
-2. 只修真实试用暴露的首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏；至少 5 名符合画像的自愿用户中首聊完成率须 ≥80%，不符合画像者单独报告、不计入分母；
-3. #114 Persona/Preset 高级生命周期、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 完整 session/revision/恢复分期和 #220 deferred 性能/重构项进入 P2，不得在没有 P1 底线证据时抢占当前验证主线；
+1. PR #232 已形成 P1 有限试用代码候选；当前第一优先级是继续开发首聊黄金路径，并用真实 provider、真实浏览器和生产拓扑建立可重复验收，分别覆盖页面刷新恢复与服务重启恢复；
+2. 优先修复首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏，同时继续补齐直接影响可用版本的产品缺口；自动化、agent 辅助检查和维护者人工验收都可以形成工程证据，但不得把局部测试冒充端到端通过；
+3. #114 Persona/Preset 高级生命周期、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 完整 session/revision/恢复分期和 #220 deferred 性能/重构项原则上进入 P2；若其中某项直接决定 P1 可用性、数据安全或可重复验收，可以按独立证据提前；
 4. P2 运维与恢复；
 5. P3 release candidate；
 6. 工程治理后续切片（#192 自动版本检测与去重 issue、release pipeline 强制 SBOM 度量、发布签名）按 #192 推进，不抢占产品主线。
