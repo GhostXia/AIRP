@@ -263,7 +263,10 @@ export function parseSpdxExpression(expr) {
       // are not legal SPDX; reject here so the caller falls back to
       // audit-required rather than emitting a semantically ambiguous
       // expression. The right operand (exception) must also be a simple id.
-      if (left.type !== "license") {
+      //
+      // `parseAtom` currently always returns a non-null node or throws, but
+      // guard against null defensively in case its contract changes later.
+      if (!left || left.type !== "license") {
         throw new Error(
           "WITH requires a simple-license operand; composite or parenthesized expressions before WITH are not allowed",
         );
