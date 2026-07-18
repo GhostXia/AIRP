@@ -1502,19 +1502,29 @@ mod tests_a1b_resolve {
     fn no_user_id_returns_none_and_is_backward_compatible() {
         let tmp = tempdir().unwrap();
         let req = base_request_with_user(None);
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap();
+        let (persona, source) = resolve_request_persona(&req, tmp.path()).unwrap();
         assert!(persona.is_none(), "user_id absent → no persona resolution");
+        assert_eq!(
+            source,
+            crate::orchestrator::trace::PersonaActivationSource::Absent
+        );
     }
 
     #[test]
     fn default_persona_is_returned_when_no_explicit_id_and_no_bindings() {
         let tmp = tempdir().unwrap();
         let req = base_request_with_user(Some("alice"));
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        let (persona, source) = resolve_request_persona(&req, tmp.path()).unwrap();
+        let persona = persona.unwrap();
         assert_eq!(persona.id, "default");
         assert_eq!(
             persona.revision, 0,
             "fresh default is initial, no disk write"
+        );
+        assert_eq!(
+            source,
+            crate::orchestrator::trace::PersonaActivationSource::Default,
+            "no explicit id + no binding → Default source"
         );
         // No persona file should have been written.
         assert!(!tmp
@@ -1545,10 +1555,16 @@ mod tests_a1b_resolve {
 
         let mut req = base_request_with_user(Some("alice"));
         req.persona_id = Some("writer".to_string());
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        let (persona, source) = resolve_request_persona(&req, tmp.path()).unwrap();
+        let persona = persona.unwrap();
         assert_eq!(persona.id, "writer");
         assert_eq!(persona.name, "Writer");
         assert_eq!(persona.variables.get("tone").unwrap(), "concise");
+        assert_eq!(
+            source,
+            crate::orchestrator::trace::PersonaActivationSource::Explicit,
+            "explicit persona_id → Explicit source"
+        );
     }
 
     #[test]
@@ -1561,7 +1577,10 @@ mod tests_a1b_resolve {
 
         let mut req = base_request_with_user(Some("alice"));
         req.persona_id = Some("DEFAULT".to_string());
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        let persona = resolve_request_persona(&req, tmp.path())
+            .unwrap()
+            .0
+            .unwrap();
         assert_eq!(persona.id, "default");
     }
 
@@ -1618,9 +1637,15 @@ mod tests_a1b_resolve {
 
         let mut req = base_request_with_user(Some("alice"));
         req.character_id = Some(CharacterId::new("hero").unwrap());
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        let (persona, source) = resolve_request_persona(&req, tmp.path()).unwrap();
+        let persona = persona.unwrap();
         assert_eq!(persona.id, "adventurer");
         assert_eq!(persona.name, "Adventurer");
+        assert_eq!(
+            source,
+            crate::orchestrator::trace::PersonaActivationSource::CharacterBinding,
+            "character-scoped generic binding → CharacterBinding source"
+        );
     }
 
     #[test]
@@ -1676,10 +1701,16 @@ mod tests_a1b_resolve {
         let mut req = base_request_with_user(Some("alice"));
         req.character_id = Some(CharacterId::new("hero").unwrap());
         req.session_id = Some(SessionId::parse("00000000-0000-0000-0000-00000000000a").unwrap());
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        let (persona, source) = resolve_request_persona(&req, tmp.path()).unwrap();
+        let persona = persona.unwrap();
         assert_eq!(
             persona.id, "scoped-hero",
             "session-scoped binding must win over generic"
+        );
+        assert_eq!(
+            source,
+            crate::orchestrator::trace::PersonaActivationSource::SessionBinding,
+            "session-scoped binding → SessionBinding source"
         );
     }
 
@@ -1714,12 +1745,18 @@ mod tests_a1b_resolve {
         let mut req = base_request_with_user(Some("alice"));
         req.scene_id = Some("scene-1".to_string());
         req.character_id = Some(CharacterId::new("hero").unwrap());
-        let persona = resolve_request_persona(&req, tmp.path()).unwrap().unwrap();
+        let (persona, source) = resolve_request_persona(&req, tmp.path()).unwrap();
+        let persona = persona.unwrap();
         assert_eq!(
             persona.id, "default",
             "scene mode must skip find_for_character"
         );
         assert_ne!(persona.name, "ShouldNotActivate");
+        assert_eq!(
+            source,
+            crate::orchestrator::trace::PersonaActivationSource::Default,
+            "scene mode skips binding → Default source"
+        );
     }
 }
 
@@ -1969,5 +2006,197 @@ mod tests_a1b_pipeline_e2e {
         let pipeline = prepare_pipeline(&req, &state).unwrap();
         assert!(pipeline.system_prompt.contains("A concise scene"));
         assert!(!pipeline.system_prompt.contains("{{tone}}"));
+    }
+
+    /// #114 e2e：验证 `prepare_pipeline` → `build_prompt_trace` → `EffectiveIds`
+    /// 正确填充 #114 新增的 8 个字段（`persona_activation_source`, `persona_name`,
+    /// `provider_source`, `model_source`, `temperature`, `temperature_source`,
+    /// `max_tokens`, `max_tokens_source`）。单元测试 `tests_effective_config_summary`
+    /// 只覆盖 `resolve_param_sources` 函数本身；此测试覆盖端到端传递。
+    #[test]
+    fn prepare_pipeline_populates_effective_config_summary_fields() {
+        let tmp = tempdir().unwrap();
+        crate::data_dir::ensure_data_dirs(tmp.path()).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+
+        let uid = UserId::new("alice").unwrap();
+        PersonaService::new(tmp.path())
+            .save(
+                &uid,
+                "writer",
+                0,
+                Persona {
+                    schema: Persona::SCHEMA,
+                    revision: 0,
+                    updated_at: String::new(),
+                    name: "Writer".to_string(),
+                    description: String::new(),
+                    variables: HashMap::new(),
+                    id: "writer".to_string(),
+                    bindings: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        // 请求带 persona_id="writer" → activation_source=Explicit；
+        // 所有 gen 参数 None → 从 snapshot 取 model/provider，temperature/max_tokens 无来源。
+        let req = base_chat_request(Some("alice"), Some("writer"));
+        let pipeline = prepare_pipeline(&req, &state).expect("pipeline should build");
+        let eff = &pipeline.prompt_trace.effective;
+
+        // persona 来源与名称
+        assert_eq!(
+            eff.persona_activation_source.as_deref(),
+            Some("explicit"),
+            "persona_id 在请求中显式指定 → Explicit"
+        );
+        assert_eq!(
+            eff.persona_name.as_deref(),
+            Some("Writer"),
+            "persona_name 应为 persona 的显示名"
+        );
+
+        // provider/model 从 snapshot 取（请求未带）
+        assert_eq!(
+            eff.provider_source.as_deref(),
+            Some("snapshot"),
+            "请求未带 provider → snapshot"
+        );
+        assert_eq!(
+            eff.model_source.as_deref(),
+            Some("snapshot"),
+            "请求未带 model 且无 preset → snapshot"
+        );
+
+        // temperature/max_tokens 无来源（请求与 preset 均未提供）
+        assert!(
+            eff.temperature_source.is_none(),
+            "请求与 preset 均未提供 temperature → None"
+        );
+        assert!(
+            eff.max_tokens_source.is_none(),
+            "请求与 preset 均未提供 max_tokens → None"
+        );
+        assert!(eff.temperature.is_none());
+        assert!(eff.max_tokens.is_none());
+    }
+}
+
+// ── #114 effective config summary：参数来源标签 ──────────────────────────────
+#[cfg(test)]
+mod tests_effective_config_summary {
+    use super::*;
+    use crate::adapter::Provider;
+    use crate::daemon::UserProfile;
+    use crate::orchestrator::TavernPreset;
+    use std::collections::HashMap;
+
+    fn req_with(
+        provider: Option<Provider>,
+        model: Option<&str>,
+        temp: Option<f32>,
+        mt: Option<u32>,
+    ) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            character_id: None,
+            character_card_id: None,
+            lorebook_path: None,
+            user_profile: UserProfile {
+                name: "U".to_string(),
+                variables: HashMap::new(),
+            },
+            message: "hi".to_string(),
+            messages_history: None,
+            regex_filters: None,
+            preset_id: None,
+            enabled_presets: None,
+            session_id: None,
+            provider,
+            endpoint: None,
+            api_key: None,
+            model: model.map(str::to_string),
+            temperature: temp,
+            max_tokens: mt,
+            scene_id: None,
+            user_id: None,
+            persona_id: None,
+        }
+    }
+
+    fn preset(temp: Option<f32>, mt: Option<u32>, model: Option<&str>) -> TavernPreset {
+        TavernPreset {
+            prompts: None,
+            temperature: temp,
+            max_tokens: mt,
+            model: model.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn provider_source_is_request_when_payload_overrides() {
+        let req = req_with(Some(Provider::OpenAI), None, None, None);
+        let sources = resolve_param_sources(&req, None);
+        assert_eq!(sources.provider_source, Some("request"));
+    }
+
+    #[test]
+    fn provider_source_is_snapshot_when_payload_omits() {
+        let req = req_with(None, None, None, None);
+        let sources = resolve_param_sources(&req, None);
+        assert_eq!(sources.provider_source, Some("snapshot"));
+    }
+
+    #[test]
+    fn model_source_resolves_request_preset_snapshot_priority() {
+        // request 显式 → request
+        let req = req_with(None, Some("req-model"), None, None);
+        let sources = resolve_param_sources(&req, Some(&preset(None, None, Some("preset-model"))));
+        assert_eq!(sources.model_source, Some("request"));
+
+        // request 缺，preset 有 → preset
+        let req = req_with(None, None, None, None);
+        let sources = resolve_param_sources(&req, Some(&preset(None, None, Some("preset-model"))));
+        assert_eq!(sources.model_source, Some("preset"));
+
+        // 都缺 → snapshot
+        let req = req_with(None, None, None, None);
+        let sources = resolve_param_sources(&req, None);
+        assert_eq!(sources.model_source, Some("snapshot"));
+    }
+
+    #[test]
+    fn temperature_source_resolves_request_over_preset() {
+        let req = req_with(None, None, Some(0.5), None);
+        let sources = resolve_param_sources(&req, Some(&preset(Some(0.9), None, None)));
+        assert_eq!(sources.temperature, Some(0.5));
+        assert_eq!(sources.temperature_source, Some("request"));
+
+        let req = req_with(None, None, None, None);
+        let sources = resolve_param_sources(&req, Some(&preset(Some(0.9), None, None)));
+        assert_eq!(sources.temperature, Some(0.9));
+        assert_eq!(sources.temperature_source, Some("preset"));
+
+        let req = req_with(None, None, None, None);
+        let sources = resolve_param_sources(&req, None);
+        assert_eq!(sources.temperature, None);
+        assert_eq!(sources.temperature_source, None);
+    }
+
+    #[test]
+    fn max_tokens_source_resolves_request_over_preset() {
+        let req = req_with(None, None, None, Some(123));
+        let sources = resolve_param_sources(&req, Some(&preset(None, Some(999), None)));
+        assert_eq!(sources.max_tokens, Some(123));
+        assert_eq!(sources.max_tokens_source, Some("request"));
+
+        let req = req_with(None, None, None, None);
+        let sources = resolve_param_sources(&req, Some(&preset(None, Some(999), None)));
+        assert_eq!(sources.max_tokens, Some(999));
+        assert_eq!(sources.max_tokens_source, Some("preset"));
+
+        let req = req_with(None, None, None, None);
+        let sources = resolve_param_sources(&req, None);
+        assert_eq!(sources.max_tokens, None);
+        assert_eq!(sources.max_tokens_source, None);
     }
 }

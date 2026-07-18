@@ -124,6 +124,14 @@ try {
           memory_revision: 9,
           model: injectionName,
           provider: 'test',
+          // #114 effective config summary：来源字段 + 新增参数
+          persona_activation_source: 'explicit',
+          provider_source: 'snapshot',
+          model_source: 'preset',
+          temperature: 0.8,
+          temperature_source: 'request',
+          max_tokens: 2048,
+          max_tokens_source: 'preset',
         },
         total_estimated_tokens: 1,
         segments: [{ source_kind: 'card', source_id: injectionName, chars: 1, estimated_tokens: 1, stable_or_volatile: 'stable' }],
@@ -149,6 +157,16 @@ try {
       && text.includes('世界书 · r5')
       && text.includes('状态 · r42')
       && text.includes('记忆 · r9');
+  }, null, { timeout: 5_000 });
+  // #114 effective config summary：模型 chip 应显示 · 预设（model_source=preset），
+  // 身份 chip 应显示 · 显式（persona_activation_source=explicit），温度 chip 应显示 0.8 · 请求。
+  // 用 substring 匹配避免与 Phase 2h revision 后缀的依赖耦合。
+  await page.waitForFunction(() => {
+    const text = document.querySelector('#assembly-summary')?.textContent || '';
+    return text.includes('· 预设')
+      && text.includes('· 显式')
+      && text.includes('0.8 · 请求')
+      && text.includes('2048 · 预设');
   }, null, { timeout: 5_000 });
   await page.unroute('**/v1/chat/preview');
 

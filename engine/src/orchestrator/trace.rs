@@ -6,6 +6,59 @@
 
 use serde::Serialize;
 
+/// #114 effective config summary：Persona 激活来源。
+///
+/// 反映 `resolve_request_persona` 实际命中 precedence。序列化为 snake_case 字符串，
+/// 旧客户端若不识别该字段可安全忽略（`EffectiveIds.persona_activation_source` 是 `Option<String>`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonaActivationSource {
+    /// 请求体显式指定 `persona_id`。
+    Explicit,
+    /// 命中 session 维度 persona 绑定（`find_for_character` 精确匹配 session）。
+    SessionBinding,
+    /// 命中 character 维度 generic persona 绑定（`find_for_character` 匹配该角色 generic 绑定）。
+    CharacterBinding,
+    /// 未命中显式/绑定，回退到 default persona。
+    Default,
+    /// 无 `user_id`（单用户向后兼容路径），persona 未参与本轮装配。
+    Absent,
+}
+
+impl PersonaActivationSource {
+    /// 稳定字符串标签，用于填充 `EffectiveIds.persona_activation_source`。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PersonaActivationSource::Explicit => "explicit",
+            PersonaActivationSource::SessionBinding => "session_binding",
+            PersonaActivationSource::CharacterBinding => "character_binding",
+            PersonaActivationSource::Default => "default",
+            PersonaActivationSource::Absent => "absent",
+        }
+    }
+}
+
+/// #114 effective config summary：本轮生效参数的来源标签。
+///
+/// 由 `resolve_param_sources` 在 `build_prompt_trace` 调用前一次性算好，
+/// 让 trace 能回答 "model 来自请求体 / preset / snapshot" 这类问题。
+/// 来源是 `&'static str` 而非 enum，便于将来增加新来源值时不破坏序列化兼容。
+#[derive(Debug, Clone, Default)]
+pub struct ParamSources {
+    /// `provider` 来自 `request` 还是 `snapshot`。
+    pub provider_source: Option<&'static str>,
+    /// `model` 来自 `request` / `preset` / `snapshot`。
+    pub model_source: Option<&'static str>,
+    /// 本轮生效 temperature（如有）。
+    pub temperature: Option<f32>,
+    /// `temperature` 来自 `request` / `preset`；None 表示两者均未指定。
+    pub temperature_source: Option<&'static str>,
+    /// 本轮生效 max_tokens（如有）。
+    pub max_tokens: Option<u32>,
+    /// `max_tokens` 来自 `request` / `preset`；None 表示两者均未指定。
+    pub max_tokens_source: Option<&'static str>,
+}
+
 /// Metadata describing one prepared prompt and its ordered source segments.
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptAssemblyTrace {
@@ -59,6 +112,25 @@ pub struct EffectiveIds {
     pub provider: String,
     pub endpoint: String,
     pub model: String,
+    // ── #114 effective config summary：本轮生效 Persona / 参数来源 ──────────
+    // 全部为 `Option<String>` / `Option<f32>` / `Option<u32>`，旧 trace 反序列化
+    // 不需要这些字段；新字段缺失时视为 "未提供"。WebUI 仅在字段非空时追加 source 后缀。
+    /// Persona 激活来源：`explicit` / `session_binding` / `character_binding` / `default` / `absent`。
+    pub persona_activation_source: Option<String>,
+    /// Persona 显示名（不暴露 variables / api_key 等敏感字段，只暴露 name）。
+    pub persona_name: Option<String>,
+    /// `provider` 来源：`request` / `snapshot`。
+    pub provider_source: Option<String>,
+    /// `model` 来源：`request` / `preset` / `snapshot`。
+    pub model_source: Option<String>,
+    /// 本轮生效 temperature（如有）。
+    pub temperature: Option<f32>,
+    /// `temperature` 来源：`request` / `preset`；None 表示两者均未指定。
+    pub temperature_source: Option<String>,
+    /// 本轮生效 max_tokens（如有）。
+    pub max_tokens: Option<u32>,
+    /// `max_tokens` 来源：`request` / `preset`；None 表示两者均未指定。
+    pub max_tokens_source: Option<String>,
 }
 
 /// A diagnostic produced while assembling or filtering segments.
