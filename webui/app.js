@@ -1283,6 +1283,7 @@
     const url = base + '/v1/chat/completions';
     const t0 = performance.now();
     let msgEl = null;
+    let acc = '';
 
     try {
       const res = await fetch(url, {
@@ -1298,7 +1299,6 @@
         return;
       }
       msgEl = appendMsg('assistant', '', true, new Date());
-      let acc = '';
       const seq = await streamSse(res, (chunk, seq) => {
         // A2: 只把 body_chunk 渲染到正文。think_chunk（心理独白，应折叠）和
         // action_options（选项数组，content 是对象不是 string）都不应混入 body。
@@ -1912,6 +1912,7 @@
     const url = base + '/v1/chat/completions';
     const t0 = performance.now();
     let msgEl = null;
+    let acc = '';
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -1924,7 +1925,6 @@
         return { ok: false, status: res.status, error: errBody };
       }
       msgEl = appendMsg('assistant', '', true, new Date());
-      let acc = '';
       const seq = await streamSse(res, (chunk) => {
         // A2: 同 doSend，只渲染 body_chunk；think_chunk / action_options 不混入 body。
         if (chunk.type === 'body_chunk' && chunk.text) {

@@ -81,6 +81,10 @@ try {
   const chatResponse = await chatResponsePromise;
   assert.equal(chatResponse.status(), 200);
   await page.waitForFunction(() => document.querySelector('#btn-stop')?.hidden === true, null, { timeout: 15_000 });
+  const transientErrors = await page.locator('#chat-log .msg.assistant .text').evaluateAll(nodes =>
+    nodes.map(node => node.textContent || '').filter(text => /^\[(?:fetch error|stream interrupted|HTTP )/.test(text))
+  );
+  assert.deepEqual(transientErrors, [], 'second turn must complete without a transient chat error');
 
   // Reload from the durable history endpoint instead of accepting the streamed
   // DOM as proof that the second turn survived the restarted stack.
