@@ -154,6 +154,210 @@ export function compareSemver(a, b) {
 }
 
 // ---------------------------------------------------------------------------
+// SPDX expression parser (independent implementation, per AGENTS.md).
+//
+// Grammar (subset of SPDX 2.1):
+//   expression := or_expr
+//   or_expr    := and_expr ("OR" and_expr)*
+//   and_expr   := with_expr ("AND" with_expr)*
+//   with_expr  := atom ("WITH" atom)?
+//   atom       := LICENSE_ID | "(" expression ")"
+//
+// AST nodes:
+//   {type: "license", id: "MIT"}
+//   {type: "with", license: <AST>, exception: "LLVM-exception"}
+//   {type: "or", left: <AST>, right: <AST>}
+//   {type: "and", left: <AST>, right: <AST>}
+//
+// The parser is permissive: it only validates structure (grammar), not
+// semantics (whether a license id is a real SPDX id). Semantic validation
+// is done by the classifier (which checks against config tier lists) and
+// by toSpdxExpression in generate-sbom.mjs (which checks against
+// KNOWN_SPDX_IDS / KNOWN_SPDX_EXCEPTION_IDS).
+//
+// Returns null for unparseable input.
+// ---------------------------------------------------------------------------
+
+/**
+ * Tokenize an SPDX expression string into a stream of tokens.
+ * Tokens: {type: "id", value}, {type: "op", value: "OR"|"AND"|"WITH"},
+ *         {type: "lparen"}, {type: "rparen"}.
+ *
+ * @param {string} expr
+ * @returns {Array<object>}
+ */
+function tokenizeSpdx(expr) {
+  const tokens = [];
+  let i = 0;
+  while (i < expr.length) {
+    const c = expr[i];
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === "(") { tokens.push({ type: "lparen" }); i++; continue; }
+    if (c === ")") { tokens.push({ type: "rparen" }); i++; continue; }
+    // Identifier or operator. SPDX identifiers are [A-Za-z0-9.-]+.
+    let j = i;
+    while (j < expr.length && /[A-Za-z0-9.-]/.test(expr[j])) j++;
+    if (j === i) {
+      // Unknown character; skip it (lenient parsing).
+      i++;
+      continue;
+    }
+    const word = expr.slice(i, j);
+    if (word === "OR" || word === "AND" || word === "WITH") {
+      tokens.push({ type: "op", value: word });
+    } else {
+      tokens.push({ type: "id", value: word });
+    }
+    i = j;
+  }
+  return tokens;
+}
+
+/**
+ * Parse an SPDX expression string into an AST. Returns null for empty or
+ * unparseable input. Throws internally are caught and converted to null.
+ *
+ * @param {string|null|undefined} expr
+ * @returns {object|null}
+ *   AST node, or null if unparseable.
+ */
+export function parseSpdxExpression(expr) {
+  if (!expr || typeof expr !== "string") return null;
+  const tokens = tokenizeSpdx(expr.trim());
+  if (tokens.length === 0) return null;
+
+  let pos = 0;
+  const peek = () => tokens[pos];
+  const consume = () => tokens[pos++];
+
+  function parseAtom() {
+    const t = peek();
+    if (!t) throw new Error("unexpected end of expression");
+    if (t.type === "lparen") {
+      consume();
+      const inner = parseOr();
+      const next = consume();
+      if (!next || next.type !== "rparen") throw new Error("expected )");
+      return inner;
+    }
+    if (t.type === "id") {
+      consume();
+      return { type: "license", id: t.value };
+    }
+    throw new Error(`unexpected token ${JSON.stringify(t)}`);
+  }
+
+  function parseWith() {
+    let left = parseAtom();
+    const t = peek();
+    if (t && t.type === "op" && t.value === "WITH") {
+      consume();
+      const exc = parseAtom();
+      if (!exc || exc.type !== "license") {
+        throw new Error("WITH requires a license-exception identifier");
+      }
+      left = { type: "with", license: left, exception: exc.id };
+    }
+    return left;
+  }
+
+  function parseAnd() {
+    let left = parseWith();
+    let t = peek();
+    while (t && t.type === "op" && t.value === "AND") {
+      consume();
+      const right = parseWith();
+      left = { type: "and", left, right };
+      t = peek();
+    }
+    return left;
+  }
+
+  function parseOr() {
+    let left = parseAnd();
+    let t = peek();
+    while (t && t.type === "op" && t.value === "OR") {
+      consume();
+      const right = parseAnd();
+      left = { type: "or", left, right };
+      t = peek();
+    }
+    return left;
+  }
+
+  try {
+    const ast = parseOr();
+    if (pos < tokens.length) {
+      // Trailing tokens — expression didn't fully parse.
+      return null;
+    }
+    return ast;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render an AST back to a canonical SPDX expression string. Used for SBOM
+ * output so the rendered expression is deterministic regardless of input
+ * whitespace/paren style.
+ *
+ * @param {object} ast
+ * @returns {string}
+ */
+export function renderSpdxAst(ast) {
+  if (!ast) return "";
+  switch (ast.type) {
+    case "license":
+      return ast.id;
+    case "with":
+      return `${renderSpdxAst(ast.license)} WITH ${ast.exception}`;
+    case "or":
+      return `${renderSpdxAst(ast.left)} OR ${renderSpdxAst(ast.right)}`;
+    case "and":
+      return `${renderSpdxAst(ast.left)} AND ${renderSpdxAst(ast.right)}`;
+    default:
+      return "";
+  }
+}
+
+/**
+ * Is the AST a composite expression (OR / AND / WITH)? Used by the SBOM
+ * generator to decide between `license.id` (single) and `license.expression`
+ * (composite) per CycloneDX 1.5 schema.
+ *
+ * @param {object} ast
+ * @returns {boolean}
+ */
+export function isCompositeSpdxAst(ast) {
+  return ast != null && ast.type !== "license";
+}
+
+/**
+ * Extract the flat set of license IDs from an AST, ignoring operators and
+ * exceptions. Used for backward-compatible component listing and for
+ * "does any component match a blocked license?" semantics where the caller
+ * explicitly wants the flat set (e.g. diagnostic output).
+ *
+ * @param {object|null} ast
+ * @returns {string[]}
+ */
+export function extractLicenseIds(ast) {
+  if (!ast) return [];
+  switch (ast.type) {
+    case "license":
+      return [ast.id];
+    case "with":
+      return extractLicenseIds(ast.license);
+    case "or":
+    case "and":
+      return [...extractLicenseIds(ast.left), ...extractLicenseIds(ast.right)];
+    default:
+      return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Inventory routing (current deps → audit class).
 // ---------------------------------------------------------------------------
 
@@ -185,22 +389,152 @@ export function normalizeLicense(license) {
 }
 
 /**
- * Split an SPDX license expression into its component license identifiers,
- * preserving the joiner for expression-tier matching. For example
- * "Apache-2.0 OR MIT" -> ["Apache-2.0", "MIT"]. We do not honor operator
- * precedence here — we only need "does this expression contain a blocked
- * license id?" semantics. The auto_pass.license_expressions list handles
- * the common two-clause OR cases exactly.
+ * Split an SPDX license expression into its component license identifiers.
+ *
+ * DEPRECATED: prefer `parseSpdxExpression` + `extractLicenseIds` for proper
+ * paren/WITH handling. This function is retained for backward compatibility
+ * with external callers; it now delegates to the AST-based implementation.
+ *
+ * Note: WITH clauses are preserved attached to their license (e.g.
+ * `"Apache-2.0 WITH LLVM-exception"` → `["Apache-2.0 WITH LLVM-exception"]`),
+ * and parentheses are honored so only top-level OR/AND operators split.
  *
  * @param {string} expr
  * @returns {string[]}
  */
 export function splitLicenseExpression(expr) {
   if (!expr) return [];
-  return String(expr)
-    .split(/\s+(?:OR|AND|WITH)\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const ast = parseSpdxExpression(expr);
+  if (!ast) {
+    // Fall back to whitespace splitting for unparseable input.
+    return String(expr).trim().split(/\s+/).filter((s) => s.length > 0);
+  }
+  // For a single license (no operators), return [rendered] to preserve WITH.
+  if (ast.type === "license" || ast.type === "with") {
+    return [renderSpdxAst(ast)];
+  }
+  // For composite expressions, extract individual license IDs (flattened).
+  // This loses structure info but is what the legacy contract promised.
+  return extractLicenseIds(ast);
+}
+
+/**
+ * Tier ranking for combining classifications across SPDX expression operators.
+ * Higher number = more permissive.
+ *   auto-pass = 3 (best for OR, best for AND requires all auto-pass)
+ *   audit-required = 2
+ *   block = 1 (worst)
+ */
+const TIER_RANK = { "auto-pass": 3, "audit-required": 2, "block": 1 };
+
+/**
+ * Classify a single license identifier (no operators) against the config
+ * tier lists. Honors the strong-copyleft-in-dev-scope downgrade: a strong
+ * copyleft license in non-runtime scope is downgraded from `block` to
+ * `audit-required` when `strong_copyleft_in_runtime_scope` and
+ * `copyleft_in_dev_scope_only` are both set.
+ *
+ * @param {string} id              SPDX license id (e.g. "MIT", "GPL-3.0")
+ * @param {Object} config          parsed audit-routing.config.json
+ * @param {string} scope           "runtime" | "build" | "dev"
+ * @returns {{class: string, reason: string}}
+ */
+function classifyLicenseId(id, config, scope) {
+  const block = config.inventory_routing?.block ?? { licenses: [] };
+  const audit = config.inventory_routing?.audit_required ?? { licenses: [] };
+  const pass = config.inventory_routing?.auto_pass ?? { licenses: [] };
+
+  if (block.licenses?.includes(id)) {
+    const isStrongCopyleft = /^(GPL|AGPL|SSPL|BUSL)/.test(id);
+    if (
+      isStrongCopyleft &&
+      scope !== "runtime" &&
+      block.strong_copyleft_in_runtime_scope &&
+      audit.copyleft_in_dev_scope_only
+    ) {
+      return {
+        class: "audit-required",
+        reason: `strong copyleft ${id} in ${scope} scope; file-level isolation audit required`,
+      };
+    }
+    return {
+      class: "block",
+      reason: `license ${id} incompatible with AIRP MIT OR Apache-2.0 distribution in ${scope} scope`,
+    };
+  }
+  if (audit.licenses?.includes(id)) {
+    return {
+      class: "audit-required",
+      reason: `license ${id} requires dedicated audit (weak copyleft / non-commercial / attribution)`,
+    };
+  }
+  if (pass.licenses?.includes(id)) {
+    return { class: "auto-pass", reason: `permissive license (${id})` };
+  }
+  return {
+    class: "audit-required",
+    reason: `license ${id} not in any configured tier; add to audit-routing.config.json or verify permissive`,
+  };
+}
+
+/**
+ * Classify an SPDX expression AST node against the config tier lists.
+ *
+ * Operator semantics (SPDX 2.1):
+ *   - `A OR B`: recipient may choose either. Classification is the BEST of
+ *     A and B (recipient can choose the more permissive option).
+ *   - `A AND B`: recipient must comply with both. Classification is the
+ *     WORST of A and B (recipient is bound by the stricter).
+ *   - `A WITH exception`: classification follows A (the exception may add
+ *     or remove obligations but does not change the license tier for our
+ *     routing purposes).
+ *
+ * Scope downgrade for strong copyleft in non-runtime scope is honored at
+ * the leaf level (per-license), so OR/AND combinations propagate the
+ * downgraded tier correctly.
+ *
+ * @param {Object} ast          AST node from parseSpdxExpression
+ * @param {Object} config       parsed audit-routing.config.json
+ * @param {string} scope        "runtime" | "build" | "dev"
+ * @returns {{class: string, reason: string}}
+ */
+export function classifySpdxAst(ast, config, scope) {
+  if (!ast) {
+    return { class: "audit-required", reason: "empty SPDX expression" };
+  }
+  switch (ast.type) {
+    case "license":
+      return classifyLicenseId(ast.id, config, scope);
+    case "with":
+      // License WITH exception: classify the license; exception does not
+      // change the tier. (We could refine this by recognizing specific
+      // exception IDs in the future, e.g. GCC-exception-3.1 transforms
+      // GPL-3.0 into a more permissive form, but that's out of scope.)
+      return classifyLicenseId(ast.license.id, config, scope);
+    case "or": {
+      const l = classifySpdxAst(ast.left, config, scope);
+      const r = classifySpdxAst(ast.right, config, scope);
+      const best = TIER_RANK[l.class] >= TIER_RANK[r.class] ? l : r;
+      return {
+        class: best.class,
+        reason: `OR (${l.class} | ${r.class}); recipient may choose ${best.class} branch`,
+      };
+    }
+    case "and": {
+      const l = classifySpdxAst(ast.left, config, scope);
+      const r = classifySpdxAst(ast.right, config, scope);
+      const worst = TIER_RANK[l.class] <= TIER_RANK[r.class] ? l : r;
+      return {
+        class: worst.class,
+        reason: `AND (${l.class} & ${r.class}); recipient bound by stricter`,
+      };
+    }
+    default:
+      return {
+        class: "audit-required",
+        reason: `unknown AST node type ${ast?.type}`,
+      };
+  }
 }
 
 /**
@@ -238,73 +572,22 @@ export function classifyInventory(record, config) {
     return { class: "audit-required", reason: "license field empty or null" };
   }
 
-  const block = config.inventory_routing?.block ?? { licenses: [] };
-  const audit = config.inventory_routing?.audit_required ?? { licenses: [] };
-  const pass = config.inventory_routing?.auto_pass ?? {
-    licenses: [],
-    license_expressions: [],
-  };
-
-  const components = splitLicenseExpression(norm);
-
-  // Block tier: any blocked license id appearing in the expression blocks
-  // the record. For strong copyleft (GPL/AGPL), runtime scope is a hard
-  // block; dev-scope-only copyleft is downgraded to audit-required (config
-  // flag strong_copyleft_in_runtime_scope).
-  for (const blocked of block.licenses ?? []) {
-    if (components.includes(blocked)) {
-      const isStrongCopyleft = /^(GPL|AGPL|SSPL|BUSL)/.test(blocked);
-      if (isStrongCopyleft && record.scope !== "runtime" && block.strong_copyleft_in_runtime_scope) {
-        // Dev-only strong copyleft: still needs audit, but does not block
-        // the release binary (not linked into runtime).
-        if (audit.copyleft_in_dev_scope_only) {
-          return {
-            class: "audit-required",
-            reason: `strong copyleft ${blocked} in ${record.scope} scope; file-level isolation audit required`,
-          };
-        }
-      }
-      return {
-        class: "block",
-        reason: `license ${blocked} incompatible with AIRP MIT OR Apache-2.0 distribution in ${record.scope} scope`,
-      };
-    }
+  // Parse the normalized expression to an AST. If parsing fails, fall back
+  // to audit-required (conservative: never silent auto-pass).
+  const ast = parseSpdxExpression(norm);
+  if (!ast) {
+    return {
+      class: "audit-required",
+      reason: `license "${norm}" could not be parsed as an SPDX expression; manual classification required`,
+    };
   }
 
-  // Audit-required tier (weak copyleft, non-commercial, etc.).
-  for (const audited of audit.licenses ?? []) {
-    if (components.includes(audited)) {
-      return {
-        class: "audit-required",
-        reason: `license ${audited} requires dedicated audit (weak copyleft / non-commercial / attribution)`,
-      };
-    }
-  }
-
-  // Auto-pass tier: exact license id match.
-  if (pass.licenses?.includes(norm)) {
-    return { class: "auto-pass", reason: `permissive license (${norm})` };
-  }
-  // Auto-pass tier: exact expression match (e.g. "MIT OR Apache-2.0").
-  if (pass.license_expressions?.includes(norm)) {
-    return { class: "auto-pass", reason: `permissive license expression (${norm})` };
-  }
-  // Auto-pass tier: every component is in the permissive list.
-  if (
-    components.length > 0 &&
-    components.every((c) => pass.licenses?.includes(c))
-  ) {
-    return { class: "auto-pass", reason: `all components permissive (${norm})` };
-  }
-
-  // License is present but not in any tier list. Conservative default:
-  // require audit. This catches SPDX ids the config doesn't recognize
-  // (e.g. a new permissive license) and forces a human to classify it,
-  // rather than silently auto-passing.
-  return {
-    class: "audit-required",
-    reason: `license ${norm} not in any configured tier; add to audit-routing.config.json or verify permissive`,
-  };
+  // Classify the AST. This handles OR/AND/WITH semantics correctly:
+  //   - "MIT OR GPL-3.0" → auto-pass (recipient chooses MIT)
+  //   - "MIT AND GPL-3.0" → block (recipient must comply with both)
+  //   - "(GPL-3.0)" → block (parens stripped by parser)
+  //   - "Apache-2.0 WITH LLVM-exception" → auto-pass (Apache-2.0 is permissive)
+  return classifySpdxAst(ast, config, record.scope);
 }
 
 // ---------------------------------------------------------------------------

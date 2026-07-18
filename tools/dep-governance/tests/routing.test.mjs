@@ -124,10 +124,14 @@ test("normalizeLicense: rewrites legacy '/' OR-separator to ' OR '", () => {
   assert.equal(normalizeLicense("MIT"), "MIT");
 });
 
-test("splitLicenseExpression: splits on OR/AND/WITH", () => {
+test("splitLicenseExpression: splits on OR/AND, preserves WITH", () => {
+  // DEPRECATED wrapper now delegates to AST parser. OR/AND composite
+  // expressions are flattened to their component license ids; WITH clauses
+  // are preserved attached to their license (the AST renderer re-emits
+  // "Apache-2.0 WITH LLVM-exception" as a single token).
   assert.deepEqual(splitLicenseExpression("MIT OR Apache-2.0"), ["MIT", "Apache-2.0"]);
   assert.deepEqual(splitLicenseExpression("MIT AND Apache-2.0"), ["MIT", "Apache-2.0"]);
-  assert.deepEqual(splitLicenseExpression("Apache-2.0 WITH LLVM-exception"), ["Apache-2.0", "LLVM-exception"]);
+  assert.deepEqual(splitLicenseExpression("Apache-2.0 WITH LLVM-exception"), ["Apache-2.0 WITH LLVM-exception"]);
   assert.deepEqual(splitLicenseExpression("MIT"), ["MIT"]);
   assert.deepEqual(splitLicenseExpression(""), []);
 });
@@ -171,7 +175,8 @@ test("classifyInventory: legacy '/' OR-separator auto-passes when both permissiv
     config,
   );
   assert.equal(r.class, "auto-pass");
-  assert.match(r.reason, /all components permissive/);
+  // The AST classifier produces an "OR (...) reason" for composite expressions.
+  assert.match(r.reason, /OR \(auto-pass \| auto-pass\)/);
 });
 
 test("classifyInventory: unknown license requires audit", () => {
@@ -229,6 +234,87 @@ test("classifyInventory: MPL-2.0 requires audit (weak copyleft)", () => {
   );
   assert.equal(r.class, "audit-required");
   assert.match(r.reason, /MPL-2.0/);
+});
+
+// ---------------------------------------------------------------------------
+// SPDX expression parser: parenthesized, WITH, OR/AND precedence.
+// These exercise the A1 fix (independent recursive-descent parser).
+// ---------------------------------------------------------------------------
+
+test("classifyInventory: parenthesized GPL-3.0 blocks (parens stripped by parser)", () => {
+  // Previously `(GPL-3.0)` bypassed the block list because the splitter
+  // didn't strip parens. The AST parser strips parens and classifies the
+  // inner license id.
+  const r = classifyInventory(
+    { name: "x", version: "1", ecosystem: "cargo", license: "(GPL-3.0)", scope: "runtime", tier: "third-party" },
+    config,
+  );
+  assert.equal(r.class, "block");
+  assert.match(r.reason, /GPL-3\.0/);
+});
+
+test("classifyInventory: MIT OR GPL-3.0 auto-passes (recipient chooses MIT)", () => {
+  // Previously this was over-blocked because the splitter naively checked
+  // each component and saw GPL-3.0. The AST classifier takes the BEST of
+  // the OR branches, so the recipient can choose MIT and avoid GPL-3.0.
+  const r = classifyInventory(
+    { name: "x", version: "1", ecosystem: "cargo", license: "MIT OR GPL-3.0", scope: "runtime", tier: "third-party" },
+    config,
+  );
+  assert.equal(r.class, "auto-pass");
+  assert.match(r.reason, /OR \(auto-pass \| block\)/);
+});
+
+test("classifyInventory: MIT AND GPL-3.0 blocks (recipient bound by stricter)", () => {
+  // AND takes the WORST of the branches. Recipient must comply with both,
+  // so GPL-3.0 dominates and the record blocks.
+  const r = classifyInventory(
+    { name: "x", version: "1", ecosystem: "cargo", license: "MIT AND GPL-3.0", scope: "runtime", tier: "third-party" },
+    config,
+  );
+  assert.equal(r.class, "block");
+  assert.match(r.reason, /AND \(auto-pass & block\)/);
+});
+
+test("classifyInventory: Apache-2.0 WITH LLVM-exception auto-passes", () => {
+  // The WITH clause attaches an exception but does not change the license
+  // tier. Apache-2.0 is permissive, so the record auto-passes.
+  const r = classifyInventory(
+    { name: "x", version: "1", ecosystem: "cargo", license: "Apache-2.0 WITH LLVM-exception", scope: "runtime", tier: "third-party" },
+    config,
+  );
+  assert.equal(r.class, "auto-pass");
+  assert.match(r.reason, /Apache-2\.0/);
+});
+
+test("classifyInventory: parenthesized OR expression with mixed tiers", () => {
+  // (MIT OR GPL-3.0) AND BSD-3-Clause
+  // Outer AND: worst of (MIT OR GPL-3.0 = auto-pass) and BSD-3-Clause (auto-pass) = auto-pass.
+  const r = classifyInventory(
+    { name: "x", version: "1", ecosystem: "cargo", license: "(MIT OR GPL-3.0) AND BSD-3-Clause", scope: "runtime", tier: "third-party" },
+    config,
+  );
+  assert.equal(r.class, "auto-pass");
+});
+
+test("classifyInventory: GPL-3.0 AND (MIT OR Apache-2.0) blocks", () => {
+  // Outer AND: worst of GPL-3.0 (block) and (MIT OR Apache-2.0 = auto-pass) = block.
+  const r = classifyInventory(
+    { name: "x", version: "1", ecosystem: "cargo", license: "GPL-3.0 AND (MIT OR Apache-2.0)", scope: "runtime", tier: "third-party" },
+    config,
+  );
+  assert.equal(r.class, "block");
+});
+
+test("classifyInventory: unparseable expression falls back to audit-required", () => {
+  // Mismatched parens or trailing tokens → null AST → audit-required
+  // (conservative: never silent auto-pass).
+  const r = classifyInventory(
+    { name: "x", version: "1", ecosystem: "cargo", license: "(MIT OR", scope: "runtime", tier: "third-party" },
+    config,
+  );
+  assert.equal(r.class, "audit-required");
+  assert.match(r.reason, /could not be parsed/);
 });
 
 // ---------------------------------------------------------------------------

@@ -90,15 +90,34 @@ export function parseCargoLockForChecksums(lockPath) {
   // Cargo.lock v4 is TOML-ish; we only need [[package]] blocks with
   // name/version/checksum. A line-oriented scan is sufficient and avoids a
   // TOML parser dependency.
+  //
+  // Cargo.lock may contain other top-level blocks besides [[package]]:
+  //   - [[patch.unused]] — patch sections that weren't applied
+  //   - [[patch.<source>]] — applied patches
+  //   - [[replace]]      — legacy replace sections
+  //   - [meta] / [metadata] / [root] — metadata
+  // These blocks can carry `name = `, `version = `, `checksum = ` lines too,
+  // which would pollute the previous [[package]] record if we don't reset
+  // `cur`. We flush + null `cur` on any non-`[[package]]` table header.
   const map = new Map();
   let cur = null;
+  const flush = () => {
+    if (cur && cur.name && cur.version) {
+      map.set(`${cur.name}@${cur.version}`, cur.checksum ?? null);
+    }
+    cur = null;
+  };
   for (const raw of text.split(/\r?\n/)) {
     const line = raw;
     if (line.startsWith("[[package]]")) {
-      if (cur && cur.name && cur.version) {
-        map.set(`${cur.name}@${cur.version}`, cur.checksum ?? null);
-      }
+      flush();
       cur = {};
+      continue;
+    }
+    // Any other TOML table / array-of-tables header ends the current block.
+    // Match `[[...]]` and `[...]` but NOT array values or keys named `[x]`.
+    if (/^\[\[[^\]]+\]\]/.test(line) || /^\[[^\]]+\]/.test(line)) {
+      flush();
       continue;
     }
     if (cur && line.startsWith("name = ")) {
@@ -109,9 +128,7 @@ export function parseCargoLockForChecksums(lockPath) {
       cur.checksum = stripTomlString(line.slice("checksum = ".length));
     }
   }
-  if (cur && cur.name && cur.version) {
-    map.set(`${cur.name}@${cur.version}`, cur.checksum ?? null);
-  }
+  flush();
   return map;
 }
 
@@ -344,7 +361,18 @@ export function parseNpmLockfile(lockPath, rootPackageName) {
     // Link deps (resolved starts with "git+") — include them with source=git.
     const isLink = info.link === true;
     const isGit = typeof info.resolved === "string" && info.resolved.startsWith("git+");
-    const sourceType = isGit ? "git" : isLink ? "link" : "npm";
+
+    // npm workspace links: `info.link === true` indicates the entry is a
+    // symlink to a local workspace package (npm workspaces). In AIRP's
+    // usage these are always first-party workspace members (airp-ui,
+    // @airp/* packages). We mark them as first-party with source=workspace
+    // so they carry AIRP's own license rather than being audited as
+    // third-party. Non-workspace `file:`-linked deps are rare and would
+    // need explicit handling if AIRP ever adopts one.
+    const isWorkspaceLink = isLink && !isGit;
+
+    const sourceType = isGit ? "git" : isWorkspaceLink ? "workspace" : "npm";
+    const tier = isWorkspaceLink ? "first-party" : "third-party";
 
     const scope = info.dev === true || info.optional === true ? "dev" : "runtime";
 
@@ -359,7 +387,7 @@ export function parseNpmLockfile(lockPath, rootPackageName) {
       resolved: info.resolved ?? null,
       integrity: info.integrity ?? null, // e.g. "sha512-..."
       scope,
-      tier: "third-party",
+      tier,
       manifest_path: "ui/package.json",
       homepage: null,
       description: null,

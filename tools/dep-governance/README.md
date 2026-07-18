@@ -111,8 +111,9 @@ record has an unresolvable license, AFTER writing the SBOM.
 ### `airp.cdx.json`
 
 CycloneDX 1.5 JSON BOM. Same component set as SPDX, with `bom-ref`, `purl`, and
-`hashes` (SHA-256 / SHA-512). OR-expressions split into multiple license
-entries (CycloneDX choice semantics).
+`hashes` (SHA-256 / SHA-512). License representation follows the CycloneDX 1.5
+schema: a single SPDX id uses `license.id`; a composite expression (OR/AND/WITH)
+uses `license.expression`; an unknown license uses `license.name`.
 
 ### `THIRD-PARTY-NOTICES.txt`
 
@@ -181,31 +182,23 @@ These are conservative behaviours that over-classify as `audit-required` or
 `NOASSERTION`. They are safe (never under-classify), but produce noise. Fixes
 are deferred to keep this slice reviewable:
 
-1. **SPDX expression parser is simplistic.** `splitLicenseExpression` splits on
-   ` OR ` / ` AND ` but does not honour parentheses or `WITH`-clause grouping.
-   Expressions like `(Apache-2.0 OR MIT) AND BSD-3-Clause` or
-   `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` are not recognized as
-   all-permissive, so they fall through to `audit-required` / `NOASSERTION`.
-   A proper SPDX expression parser (independent implementation, no third-party
-   code) is the fix.
+1. **`splitLicenseExpression` is deprecated.** It now delegates to the AST-based
+   SPDX parser (`parseSpdxExpression` + `extractLicenseIds`) for backward
+   compatibility, but new callers should use the parser directly so they get
+   the full AST (operators, exceptions, parentheses) rather than a flat list
+   of license ids.
 
 2. **`MIT-0` is not in `KNOWN_SPDX_IDS`** in `generate-sbom.mjs`. Add it when
    the parser is improved, or sooner if `dunce`'s license becomes a blocker.
 
-3. **`Apache-2.0 WITH LLVM-exception` is not in `auto_pass.license_expressions`.**
-   Same parser limitation — the splitter currently treats `WITH` as a separator,
-   which is incorrect (`WITH` attaches an exception, not a license). Fixing the
-   splitter to not split on `WITH` and adding this expression to the auto_pass
-   list would resolve 5 records.
-
-4. **Live upgrade detector is not wired.** `routing-dry-run.mjs` proves the
+3. **Live upgrade detector is not wired.** `routing-dry-run.mjs` proves the
    routing logic against fixtures; a live detector that queries upstream
    registries (crates.io, npmjs.org) for latest stable versions and feeds
    deltas into `classifyUpgrade` is a documented future step. Per
    `docs/DEV-GUIDE.md` §7.1, the live detector must not auto-merge and must
    dedup by `{ecosystem}:{name}@{target_version}`.
 
-5. **No OS-level package SBOM.** The Debian base image packages
+4. **No OS-level package SBOM.** The Debian base image packages
    (`deploy/production/Dockerfile.engine`) are not enumerated here. The final
    release SBOM must include OS packages (see `docs/ACKNOWLEDGEMENTS.md` §3
    "Debian Docker Official Image" row).

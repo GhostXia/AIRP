@@ -59,6 +59,32 @@ test("toSpdxExpression: expression with one unknown component -> NOASSERTION", (
   assert.equal(r.unknown, true);
 });
 
+test("toSpdxExpression: WITH clause (known license + known exception)", () => {
+  const r = toSpdxExpression("Apache-2.0 WITH LLVM-exception");
+  assert.equal(r.expression, "Apache-2.0 WITH LLVM-exception");
+  assert.equal(r.unknown, false);
+  assert.equal(r.isComposite, true); // WITH counts as composite per CycloneDX
+  assert.equal(r.ast.type, "with");
+});
+
+test("toSpdxExpression: WITH unknown exception -> NOASSERTION", () => {
+  const r = toSpdxExpression("Apache-2.0 WITH Made-Up-Exception");
+  assert.equal(r.expression, "NOASSERTION");
+  assert.equal(r.unknown, true);
+});
+
+test("toSpdxExpression: single id isComposite=false", () => {
+  const r = toSpdxExpression("MIT");
+  assert.equal(r.isComposite, false);
+  assert.equal(r.ast.type, "license");
+});
+
+test("toSpdxExpression: OR expression isComposite=true", () => {
+  const r = toSpdxExpression("MIT OR Apache-2.0");
+  assert.equal(r.isComposite, true);
+  assert.equal(r.ast.type, "or");
+});
+
 // ---------------------------------------------------------------------------
 // toPurl
 // ---------------------------------------------------------------------------
@@ -212,11 +238,20 @@ test("buildCycloneDxBom: unknown license -> name field, not id", () => {
   assert.equal(unknown.licenses[0].license.id, undefined);
 });
 
-test("buildCycloneDxBom: OR expression splits into multiple license entries", () => {
+test("buildCycloneDxBom: single SPDX id uses license.id (not expression)", () => {
+  // tokio's license is "MIT" (single SPDX id, no operators). Per CycloneDX
+  // 1.5 schema, this must be {license: {id: "MIT"}}, NOT {expression: "MIT"}.
   const bom = buildCycloneDxBom(inventory, { createdIso: "2026-07-18T00:00:00.000Z" });
-  // tokio's license is "MIT" (single). Use a record with OR expression.
-  // The fixture has no third-party OR-expression record, so we test the
-  // splitting logic directly via a synthetic inventory.
+  const tokio = bom.components.find((c) => c.name === "tokio");
+  assert.equal(tokio.licenses.length, 1);
+  assert.equal(tokio.licenses[0].license.id, "MIT");
+  assert.equal(tokio.licenses[0].expression, undefined);
+});
+
+test("buildCycloneDxBom: OR composite expression uses license.expression field", () => {
+  // Per CycloneDX 1.5 schema, composite SPDX expressions (OR/AND/WITH) must
+  // use the `expression` field, NOT be split into multiple `license.id`
+  // entries. Putting a composite expression in `license.id` is invalid.
   const synth = {
     meta: { generated_at: "2026-07-18T00:00:00.000Z", airp_version: "0.1.0" },
     records: [
@@ -231,9 +266,32 @@ test("buildCycloneDxBom: OR expression splits into multiple license entries", ()
   };
   const bom2 = buildCycloneDxBom(synth, { createdIso: "2026-07-18T00:00:00.000Z" });
   const dual = bom2.components.find((c) => c.name === "dual");
-  assert.equal(dual.licenses.length, 2);
-  assert.ok(dual.licenses.some((l) => l.license.id === "MIT"));
-  assert.ok(dual.licenses.some((l) => l.license.id === "Apache-2.0"));
+  assert.equal(dual.licenses.length, 1);
+  assert.equal(dual.licenses[0].expression, "MIT OR Apache-2.0");
+  assert.equal(dual.licenses[0].license, undefined);
+});
+
+test("buildCycloneDxBom: WITH expression uses license.expression field", () => {
+  // WITH clauses are composite per CycloneDX 1.5 (they modify the license
+  // with an exception, so they can't be a bare SPDX id in `license.id`).
+  const synth = {
+    meta: { generated_at: "2026-07-18T00:00:00.000Z", airp_version: "0.1.0" },
+    records: [
+      {
+        ecosystem: "cargo", name: "llvm-licensed", version: "1.0.0",
+        license: "Apache-2.0 WITH LLVM-exception",
+        license_normalized: "Apache-2.0 WITH LLVM-exception",
+        source: "crates.io", resolved: "https://crates.io/api/v1/crates/llvm-licensed/1.0.0/download",
+        integrity: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        scope: "runtime", tier: "third-party",
+      },
+    ],
+  };
+  const bom2 = buildCycloneDxBom(synth, { createdIso: "2026-07-18T00:00:00.000Z" });
+  const ll = bom2.components.find((c) => c.name === "llvm-licensed");
+  assert.equal(ll.licenses.length, 1);
+  assert.equal(ll.licenses[0].expression, "Apache-2.0 WITH LLVM-exception");
+  assert.equal(ll.licenses[0].license, undefined);
 });
 
 // ---------------------------------------------------------------------------

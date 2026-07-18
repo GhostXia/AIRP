@@ -36,7 +36,13 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLicense, validateConfig } from "./audit-routing.mjs";
+import {
+  isCompositeSpdxAst,
+  normalizeLicense,
+  parseSpdxExpression,
+  renderSpdxAst,
+  validateConfig,
+} from "./audit-routing.mjs";
 
 // ---------------------------------------------------------------------------
 // License handling.
@@ -61,36 +67,117 @@ const KNOWN_SPDX_IDS = new Set([
 ]);
 
 /**
+ * SPDX license exception identifiers that AIRP recognizes as valid
+ * attachments to a `WITH` clause. These are NOT licenses themselves; they
+ * attach to a license to modify its obligations (e.g. an exception that
+ * relaxes copyleft requirements in specific circumstances). When a
+ * `WITH` clause uses a known exception, the whole expression is
+ * considered valid (the license id is checked separately).
+ *
+ * Source: SPDX License Exceptions list (https://spdx.org/licenses/exceptions-index.html)
+ * Subset: only the exceptions AIRP actually encounters in its dependency
+ * graph, plus the common LLVM/GPL ones for forward compatibility.
+ */
+const KNOWN_SPDX_EXCEPTION_IDS = new Set([
+  "LLVM-exception",
+  "GCC-exception-2.0",
+  "GCC-exception-3.1",
+  "Bootloader-exception",
+  "Classpath-exception-2.0",
+  "font-exception-gpl",
+  "Linux-syscall-note",
+  "OCCT-exception-1.0",
+  "OpenJDK-assembly-exception-1.0",
+  "QPL-1.0-INRIA-2004-exception",
+  "Swift-exception",
+  "u-boot-exception-2.0",
+  "WxWindows-exception-3.1",
+]);
+
+/**
+ * Is the given string a known SPDX license identifier?
+ * @param {string} id
+ * @returns {boolean}
+ */
+function isKnownSpdxId(id) {
+  return KNOWN_SPDX_IDS.has(id);
+}
+
+/**
+ * Is the given string a known SPDX license exception identifier?
+ * @param {string} id
+ * @returns {boolean}
+ */
+function isKnownSpdxException(id) {
+  return KNOWN_SPDX_EXCEPTION_IDS.has(id);
+}
+
+/**
+ * Validate an SPDX expression AST against the known license/exception
+ * allowlists. Returns true if every license id and exception id in the
+ * AST is recognized; false otherwise.
+ *
+ * @param {object} ast
+ * @returns {boolean}
+ */
+function isAstFullyKnown(ast) {
+  if (!ast) return false;
+  switch (ast.type) {
+    case "license":
+      return isKnownSpdxId(ast.id);
+    case "with":
+      return isAstFullyKnown(ast.license) && isKnownSpdxException(ast.exception);
+    case "or":
+    case "and":
+      return isAstFullyKnown(ast.left) && isAstFullyKnown(ast.right);
+    default:
+      return false;
+  }
+}
+
+/**
  * Map a normalized license string to an SPDX license expression suitable
  * for the SBOM. Returns "NOASSERTION" if the license is empty or not
  * recognisable, and sets `unknown=true` on the result so the caller can
  * flag it.
  *
  * We accept:
- *   - exact SPDX IDs in the allowlist
- *   - SPDX expressions like "MIT OR Apache-2.0" where every component is a
- *     known SPDX ID
+ *   - exact SPDX IDs in the allowlist (e.g. "MIT", "Apache-2.0")
+ *   - `LICENSE WITH EXCEPTION` where both are known (e.g.
+ *     "Apache-2.0 WITH LLVM-exception")
+ *   - SPDX expressions like "MIT OR Apache-2.0" where every license id is
+ *     a known SPDX id (and every exception id is a known exception)
+ *
+ * The returned `expression` is the canonical rendered form (parentheses
+ * stripped, single-spaced operators). `ast` is exposed for downstream
+ * CycloneDX output (single vs composite license handling).
  *
  * @param {string|null|undefined} license
- * @returns {{expression: string, unknown: boolean}}
+ * @returns {{expression: string, unknown: boolean, ast: object|null, isComposite: boolean}}
  */
 export function toSpdxExpression(license) {
   const norm = normalizeLicense(license);
-  if (norm === "") return { expression: "NOASSERTION", unknown: true };
+  if (norm === "") {
+    return { expression: "NOASSERTION", unknown: true, ast: null, isComposite: false };
+  }
 
-  // Split on OR/AND/WITH and check every component is a known SPDX id.
-  const components = norm
-    .split(/\s+(?:OR|AND|WITH)\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  if (components.length === 0) return { expression: "NOASSERTION", unknown: true };
+  const ast = parseSpdxExpression(norm);
+  if (!ast) {
+    // Unparseable: be honest, do not guess.
+    return { expression: "NOASSERTION", unknown: true, ast: null, isComposite: false };
+  }
 
-  const allKnown = components.every((c) => KNOWN_SPDX_IDS.has(c));
-  if (allKnown) return { expression: norm, unknown: false };
+  if (!isAstFullyKnown(ast)) {
+    // At least one component is not in our allowlist.
+    return { expression: "NOASSERTION", unknown: true, ast, isComposite: isCompositeSpdxAst(ast) };
+  }
 
-  // License is present but not recognized. Be honest in the SBOM:
-  // NOASSERTION + unknown flag. Do NOT guess.
-  return { expression: "NOASSERTION", unknown: true };
+  return {
+    expression: renderSpdxAst(ast),
+    unknown: false,
+    ast,
+    isComposite: isCompositeSpdxAst(ast),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -295,14 +382,23 @@ export function buildCycloneDxBom(inventory, opts) {
     if (hashes) {
       component.hashes = [{ alg: hashAlgCdx(hashes.algorithm), content: hashes.value }];
     }
-    // CycloneDX license field: array of {license: {id}} or {license: {name}}
+    // CycloneDX 1.5 license representation:
+    //   - Single SPDX id (no operators) → {license: {id: "MIT"}}
+    //   - Composite expression (OR/AND/WITH) → {expression: "MIT OR Apache-2.0"}
+    //   - Unknown license → {license: {name: "<raw>"}} (no id; lets humans resolve)
+    //
+    // CycloneDX 1.5 schema: `licenses[]` items are oneOf
+    //   {license: {id|name}} or {expression: "..."}. Putting a composite
+    //   expression in `license.id` is invalid; using `expression` is the
+    //   spec-compliant way.
     if (spdx.unknown) {
       component.licenses = [{ license: { name: r.license_normalized || "UNKNOWN" } }];
+    } else if (spdx.isComposite) {
+      // Composite expression (OR / AND / WITH) → use license.expression.
+      component.licenses = [{ expression: spdx.expression }];
     } else {
-      // Split OR expressions into multiple license entries (CycloneDX
-      // represents OR as multiple entries with license choice semantics).
-      const ids = spdx.expression.split(/\s+OR\s+/);
-      component.licenses = ids.map((id) => ({ license: { id: id } }));
+      // Single SPDX id → use license.id.
+      component.licenses = [{ license: { id: spdx.expression } }];
     }
     components.push(component);
   }
