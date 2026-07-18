@@ -74,5 +74,4 @@ docs/audits/
 docs/smoke-evidence/
 
 # PR body 模板（本地起草用，不入库；避免误提交污染仓库根）
-.pr-body.md
 .pr-*.md
