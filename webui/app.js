@@ -1390,7 +1390,8 @@
 
   async function doSend() {
     const text = chatInput.value.trim();
-    // ST 校准：空消息发送 = 继续生成。
+    // AIRP 取舍：空消息发送 = 继续生成。论证：每条 assistant 消息已有显式“继续”按钮，
+    // 空发送是低摩擦快捷路径；即使误触发，rollback 可恢复，不会损坏用户资产。
     if (!text) { doContinue(); return; }
     if (!selectedChar) return;
     chatInput.value = '';
@@ -1713,7 +1714,8 @@
     const allMsgs = chatLog.querySelectorAll('.msg');
     const lastMsg = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
     if (!lastMsg || !lastMsg.classList.contains('assistant')) return;
-    // ST 校准：无确认弹窗，直接替换最后一条 assistant 消息。
+    // AIRP 取舍：无确认弹窗，直接替换。论证：AIRP 已有 rollback-by-ID 能力，
+    // 用户可回滚到任意历史消息，regen 的风险已被覆盖；确认弹窗只增加摩擦不提供额外安全。
     if (abortController) abortController.abort();
     const ac = new AbortController();
     abortController = ac;
