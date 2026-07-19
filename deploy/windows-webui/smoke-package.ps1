@@ -12,6 +12,7 @@ $data = Join-Path $package 'data'
 $config = Join-Path $package 'config.json'
 $origin = "http://127.0.0.1:$Port"
 $env:AIRP_DATA_DIR = $data
+$env:AIRP_PERSIST_PROVIDER_KEY = 'true'
 $env:AIRP_ALLOW_LOCAL_PATH = 'false'
 Remove-Item Env:AIRP_ACCESS_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:AIRP_DEPLOYMENT_MODE -ErrorAction SilentlyContinue
@@ -70,6 +71,57 @@ try {
         & node (Join-Path $repoRoot 'ui\local-webui-browser-smoke.mjs')
         if ($LASTEXITCODE -ne 0) { throw "Browser smoke failed with code $LASTEXITCODE." }
     }
+
+    $smokeKey = 'airp-smoke-provider-key-never-use'
+    $settingsBody = @{
+        provider = 'OpenAI'
+        endpoint = 'https://provider.invalid/v1/chat/completions'
+        api_key = $smokeKey
+        model = 'smoke-model'
+    } | ConvertTo-Json
+    Invoke-WebRequest -UseBasicParsing -Uri "$origin/v1/settings" -Method Post `
+        -ContentType 'application/json' -Body $settingsBody | Out-Null
+    $secretFile = Join-Path $data 'secrets.json'
+    if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
+        throw 'Provider secrets.json was not created.'
+    }
+    $secretState = Get-Content -LiteralPath $secretFile -Raw | ConvertFrom-Json
+    if ($secretState.version -ne 1 -or $secretState.provider_api_key -ne $smokeKey) {
+        throw 'Provider secrets.json does not match the versioned single-key contract.'
+    }
+    foreach ($nonSecretFile in @($config, (Join-Path $data 'settings.json'))) {
+        if ((Get-Content -LiteralPath $nonSecretFile -Raw).Contains($smokeKey)) {
+            throw "Provider key leaked into non-secret file: $nonSecretFile"
+        }
+    }
+
+    if (-not $process.HasExited) {
+        Stop-Process -Id $process.Id
+    }
+    if (-not $process.WaitForExit(5000)) {
+        throw 'Packaged AIRP did not stop before the provider-key restart check.'
+    }
+    $process = Start-Process -FilePath $engine -ArgumentList $arguments -PassThru -WindowStyle Hidden
+    $restartReady = $false
+    for ($attempt = 0; $attempt -lt 80; $attempt++) {
+        try {
+            $restartHealth = Invoke-WebRequest -UseBasicParsing -Uri "$origin/health" -TimeoutSec 1
+            $restartState = $restartHealth.Content | ConvertFrom-Json
+            if ($restartHealth.StatusCode -eq 200 -and $restartState.provider_configured) {
+                $restartReady = $true
+                break
+            }
+        } catch {
+            if ($process.HasExited) {
+                throw "Packaged AIRP exited after provider-key restart with code $($process.ExitCode)."
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    if (-not $restartReady) {
+        throw 'Provider key was not restored from secrets.json after engine restart.'
+    }
+    Write-Host "Provider-key restart smoke passed: $secretFile"
 } finally {
     if ($process -and -not $process.HasExited) {
         Stop-Process -Id $process.Id

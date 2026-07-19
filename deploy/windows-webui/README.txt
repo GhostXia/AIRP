@@ -11,8 +11,11 @@ All mutable AIRP files stay inside this extracted folder: user content is in
 data\ and process configuration is in config.json. Back up data\ before an
 upgrade, and copy the existing data\ into the new AIRP folder instead of
 deleting or overwriting it. Protect this folder and your provider credentials.
-Provider API keys intentionally remain process-only and must be entered again
-after AIRP is restarted; the package does not write them to config or data.
+Provider API keys are stored in data\secrets.json and are intentionally not
+returned by the API or shown again in the UI. This file is plaintext, matching
+the transparent local-user tradeoff used by projects such as SillyTavern.
+Anyone who can read this file can use the key, so do not share the AIRP folder,
+publish it, or include secrets.json in support bundles.
 
 Security boundary: this preview binds only to 127.0.0.1 and is for one user on
 one Windows machine. Do not expose or proxy port 8765 to a LAN or the Internet.

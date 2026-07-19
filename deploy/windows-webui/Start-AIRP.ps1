@@ -15,6 +15,7 @@ $configPath = Join-Path $packageRoot 'config.json'
 New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
 
 $env:AIRP_DATA_DIR = $dataRoot
+$env:AIRP_PERSIST_PROVIDER_KEY = 'true'
 # The portable browser topology is fixed: loopback, same-origin, and content
 # upload only. Do not inherit service/desktop topology privileges from a shell.
 $env:AIRP_ALLOW_LOCAL_PATH = 'false'

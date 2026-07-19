@@ -98,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut app_config = AppConfig::load_or_create(&cli.config)?;
     app_config.merge_data_settings(&data_root)?;
+    app_config.merge_persisted_provider_key(&data_root);
     app_config.override_with_env()?;
     // M0 F-12 / 5.0b：全部合并完成后 fast-fail 校验跨字段不变量
     app_config.validate()?;

@@ -8,7 +8,7 @@ AIRP defaults to a single-user local topology. The current priority artifact is 
 
 - `AIRP_API_KEY` supplies the upstream provider credential.
 - `AIRP_ACCESS_KEY` enables bearer authentication for `/v1/*`.
-- Provider and access keys are runtime-only. `config.json` and `data/settings.json` no longer serialize them, and legacy plaintext fields are ignored when loading.
+- Access keys remain runtime-only. `config.json` and `data/settings.json` never serialize provider/access keys, and legacy plaintext fields are ignored when loading. The portable Windows launcher explicitly enables one local-user exception: the provider key is saved in `data/secrets.json`, while API responses, UI, logs and diagnostics remain redacted.
 - In development, `POST /v1/settings` may replace a key for the current process, but its persisted settings omit secrets. In production, the engine bearer is immutable through this endpoint and must be rotated with the gateway secret followed by restart.
 - WebUI diagnostics recursively redact credential fields, quoted JSON credentials, URL userinfo and secret query parameters. HTTP/SSE clients receive stable public error messages; upstream bodies, internal persistence details and server paths such as `PathEscape` values remain server-side only.
 
@@ -23,6 +23,8 @@ Loopback plus CORS is not authentication. Before exposing the daemon through a r
 ## Portable Windows WebUI boundary
 
 The portable launcher binds `airp-core.exe` to `127.0.0.1:8765` and serves WebUI/API from one origin. It fixes mutable state to the extracted package (`data/` plus root `config.json`), explicitly disables `AIRP_ALLOW_LOCAL_PATH`, and clears inherited deployment/access/public-origin/CORS variables. The browser therefore imports card content rather than asking the engine to read arbitrary host paths. Static responses use a same-origin CSP, `nosniff`, frame denial, no referrer, and `no-store`; SSE uses `no-cache`.
+
+The launcher enables one versioned plaintext `data/secrets.json`, following the transparent local-user product tradeoff publicly documented by SillyTavern. AIRP does not expose the stored value back through settings APIs or UI. This is convenience, not encryption: any process or user that can read the package can recover the key. The folder must remain private, and `secrets.json` must be excluded from source control, shared archives, logs, diagnostics and support bundles.
 
 This is a local single-user boundary, not authentication against other processes running as the same Windows user. Do not expose port 8765, run the package from a shared/synchronized directory, or grant untrusted users write access to the package. Back up and carry forward `data/` before replacing the extracted directory.
 

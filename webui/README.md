@@ -11,7 +11,7 @@
 
 所有可变文件受限在解压目录：`data/` 保存角色、会话和 RP 资产，`config.json` 保存进程配置。升级或移动版本前先备份 `data/`，再将它迁移到新目录。不要将 8765 端口代理或暴露给其他机器。
 
-Provider API key 仍遵守 runtime-only 边界，不写入 `config.json` 或 `data/`；AIRP 重启后需要重新输入。持久化凭据需等待后续安全存储方案，不能为省一步而改回明文落盘。
+Provider API key 不写入 `config.json` 或普通 settings；Windows 便携包参考 SillyTavern 的公开产品行为，集中保存到包内明文 `data/secrets.json`，但 API/UI 默认永不回显。能读取该文件的进程或用户就能使用 key，因此不得共享 AIRP 目录、提交该文件或把它放进支持包。
 
 ## 本地启动
 
