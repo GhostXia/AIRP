@@ -439,7 +439,11 @@ impl ChatService {
                 })?;
             log.messages.remove(idx);
             log.message_ids.remove(idx);
-            log.message_timestamps.remove(idx);
+            // Legacy chat logs may have fewer timestamps than messages;
+            // defensively check bounds to avoid out-of-bounds panic.
+            if idx < log.message_timestamps.len() {
+                log.message_timestamps.remove(idx);
+            }
             log.save(&self.data_root)?;
             Ok(log)
         })
