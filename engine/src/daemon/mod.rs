@@ -33,11 +33,11 @@ use decompose_handlers::{
     get_character_analysis_file, list_character_analysis,
 };
 use handlers::{
-    add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion,
+    add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion, continue_chat,
     create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
-    delete_character_endpoint, delete_persona_multi_endpoint, delete_session_endpoint,
-    get_character_avatar, get_character_card, get_character_lorebook, get_character_state,
-    get_character_state_history, get_character_state_schema, get_chat_history,
+    delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
+    delete_session_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
+    get_character_state, get_character_state_history, get_character_state_schema, get_chat_history,
     get_effective_persona_endpoint, get_persona_endpoint, get_persona_multi_endpoint,
     get_preset_endpoint, get_scene_endpoint, get_settings, import_character,
     import_preset_endpoint, list_agent_tools, list_characters, list_models, list_personas_endpoint,
@@ -308,6 +308,8 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/v1/chat/history", post(get_chat_history))
         .route("/v1/chat/rollback", post(rollback_chat))
         .route("/v1/chat/regen", post(regen_chat))
+        .route("/v1/chat/continue", post(continue_chat))
+        .route("/v1/chat/delete", post(delete_message))
         .route("/v1/characters", get(list_characters))
         .route(
             "/v1/characters/import",

@@ -77,12 +77,23 @@ pub struct FinalizerCtx {
     pub volume_config: VolumeConfig,
     /// M0 F-01：封卷任务需要再次发起 HTTP 调用，仍复用同一连接池。
     pub http_client: reqwest::Client,
+    /// Continue mode: append generated text to the existing last assistant
+    /// message instead of creating a new one.
+    pub continue_mode: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrepareMode {
+pub enum PrepareMode {
     Chat,
     Preview,
+    /// Regen: delete last assistant message (done by caller) then generate a
+    /// new response from existing history. Does NOT append/persist a new user
+    /// message and does NOT advance timeline/checkpoint.
+    Regen,
+    /// Continue: generate a continuation of the last assistant message without
+    /// adding a new user message. Finalizer appends to the existing last
+    /// assistant message rather than creating a new one.
+    Continue,
 }
 
 fn effective_root_for_mode(
@@ -96,7 +107,7 @@ fn effective_root_for_mode(
     if matches!(user_id, None | Some("") | Some("default")) {
         return Ok(root.to_path_buf());
     }
-    if mode == PrepareMode::Chat {
+    if mode == PrepareMode::Chat || mode == PrepareMode::Regen || mode == PrepareMode::Continue {
         return data_dir::resolve_effective_root(root, user_id);
     }
     match user_id {
@@ -950,6 +961,7 @@ fn prepare_scene_pipeline(
             gen_params,
             volume_config: snapshot.volume_config.clone(),
             http_client: state.http_client.clone(),
+            continue_mode: false,
         },
         http_client: state.http_client.clone(),
     })
@@ -972,6 +984,25 @@ pub fn preview_pipeline(
     state: &Arc<DaemonState>,
 ) -> Result<PreparedPipeline, AirpError> {
     prepare_pipeline_with_mode(payload, state, PrepareMode::Preview)
+}
+
+/// Regen: caller has already deleted the last assistant message. Build a pipeline
+/// that generates a new response from existing history without appending/persisting
+/// a new user message.
+pub fn prepare_regen_pipeline(
+    payload: &ChatCompletionRequest,
+    state: &Arc<DaemonState>,
+) -> Result<PreparedPipeline, AirpError> {
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Regen)
+}
+
+/// Continue: build a pipeline that generates a continuation of the last assistant
+/// message. The finalizer appends generated text to the existing last message.
+pub fn prepare_continue_pipeline(
+    payload: &ChatCompletionRequest,
+    state: &Arc<DaemonState>,
+) -> Result<PreparedPipeline, AirpError> {
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Continue)
 }
 
 fn prepare_pipeline_with_mode(
@@ -1234,16 +1265,20 @@ fn prepare_pipeline_with_mode(
     // 12. Build message list
     // When client omits messages_history, fall back to auto_history (loaded before step 7).
     // auto_history does NOT include the current user message yet, so we append it here.
+    // Regen/Continue modes: history already contains the user message (or ends with
+    // assistant for continue); do NOT append a new user message.
     let messages = {
         let mut list = payload
             .messages_history
             .clone()
             .or(auto_history)
             .unwrap_or_default();
-        list.push(ChatMessage {
-            role: crate::adapter::MessageRole::User,
-            content: payload.message.clone(),
-        });
+        if mode == PrepareMode::Chat || mode == PrepareMode::Preview {
+            list.push(ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: payload.message.clone(),
+            });
+        }
         list
     };
     let prompt_trace = build_prompt_trace(
@@ -1274,6 +1309,7 @@ fn prepare_pipeline_with_mode(
     // Commit preparation side effects last. A non-2xx preparation response is
     // therefore guaranteed uncommitted and safe for the onboarding retry UI.
     // Persist first so an append failure cannot consume a timeline checkpoint.
+    // Regen/Continue: skip user message persistence and timeline advancement.
     if mode == PrepareMode::Chat {
         if let Some(ref cid) = payload.character_id {
             ChatService::new(&effective_root).append(
@@ -1306,6 +1342,7 @@ fn prepare_pipeline_with_mode(
             gen_params,
             volume_config: snapshot.volume_config.clone(),
             http_client: state.http_client.clone(),
+            continue_mode: mode == PrepareMode::Continue,
         },
         http_client: state.http_client.clone(),
     })
@@ -1464,14 +1501,23 @@ async fn run_finalize(
             persist_live_state(&ctx.data_root, cid.as_str(), state).await?;
         }
         if !stripped.trim().is_empty() {
-            ChatService::new(&ctx.data_root).append(
-                cid,
-                ctx.session_id.as_ref(),
-                ChatMessage {
-                    role: crate::adapter::MessageRole::Assistant,
-                    content: stripped,
-                },
-            )?;
+            if ctx.continue_mode {
+                // Continue: append generated text to the existing last assistant message.
+                ChatService::new(&ctx.data_root).append_to_last(
+                    cid,
+                    ctx.session_id.as_ref(),
+                    &stripped,
+                )?;
+            } else {
+                ChatService::new(&ctx.data_root).append(
+                    cid,
+                    ctx.session_id.as_ref(),
+                    ChatMessage {
+                        role: crate::adapter::MessageRole::Assistant,
+                        content: stripped,
+                    },
+                )?;
+            }
         }
     }
 
