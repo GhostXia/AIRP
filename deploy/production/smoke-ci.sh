@@ -68,18 +68,30 @@ wait_for_engine_ready() {
     probe_character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file" 2>/dev/null || true)
     probe_session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file" 2>/dev/null || true)
     if [ -n "$probe_character_id" ] && [ -n "$probe_session_id" ]; then
-      for _ in $(seq 1 8); do
-        probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
-        if $curl_tls --silent --show-error --no-buffer \
+      probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
+      probe_tmp=$(mktemp)
+      for attempt in $(seq 1 8); do
+        http_code=$($curl_tls --silent --show-error --no-buffer \
             --user "$admin_user:$admin_password" \
             --header 'Content-Type: application/json' \
             --data "$probe_body" \
             --max-time 10 \
-            "$origin/v1/chat/completions" 2>/dev/null | grep -q '\[DONE\]'; then
+            --output "$probe_tmp" \
+            --write-out '%{http_code}' \
+            "$origin/v1/chat/completions" 2>&1) && rc=0 || rc=$?
+        if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && grep -q '\[DONE\]' "$probe_tmp"; then
+          rm -f "$probe_tmp"
           return 0
         fi
+        echo "wait_for_engine_ready: SSE probe attempt $attempt failed (rc=$rc http=$http_code)" >&2
+        # Show first 300 bytes of the response body to expose engine error envelope
+        head -c 300 "$probe_tmp" 2>/dev/null | sed 's/^/  body: /' >&2 || true
+        echo "" >&2
+        rm -f "$probe_tmp"
+        probe_tmp=$(mktemp)
         sleep 2
       done
+      rm -f "$probe_tmp"
       echo "wait_for_engine_ready: SSE round-trip probe failed after 8 attempts" >&2
       return 1
     fi
