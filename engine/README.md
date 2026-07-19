@@ -86,7 +86,9 @@ cargo run -p airp-core -- run --message "hello"
 | POST | `/v1/agent/run` | 动态 structured tool-call Agent loop SSE |
 | POST | `/v1/chat/history` | 读取历史 |
 | POST | `/v1/chat/rollback` | 回滚到消息位置 |
-| POST | `/v1/chat/regen` | 删除最后 assistant 消息以便重生成 |
+| POST | `/v1/chat/regen` | 删除最后 assistant 消息并 SSE 流式生成新响应 |
+| POST | `/v1/chat/continue` | SSE 流式继续生成，追加到最后 assistant 消息 |
+| POST | `/v1/chat/delete` | 删除单条消息 |
 
 ### 角色、世界书与状态
 
