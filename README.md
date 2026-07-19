@@ -1,5 +1,7 @@
 # AIRP
 
+[English](README.en.md) | 中文
+
 AIRP 是一个专精 Role Play 的 AI Agent 客户端。产品采用“无头 engine + 可换 UI”结构：
 
 - **engine**（`airp-core`）：RP 数据、prompt 装配、LLM adapter、Agent loop 与 HTTP/SSE；
