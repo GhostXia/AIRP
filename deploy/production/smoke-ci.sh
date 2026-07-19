@@ -237,11 +237,22 @@ $compose restart engine gateway >/dev/null
 wait_for_engine_ready
 character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
 session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file")
+expected_count=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).final_message_count" "$result_file")
+expected_last_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).final_last_message_id" "$result_file")
 history=$($curl_tls --user "$admin_user:$admin_password" \
   --header 'Content-Type: application/json' \
   --data "{\"character_id\":\"$character_id\",\"session_id\":\"$session_id\"}" \
   "$origin/v1/chat/history")
-HISTORY_JSON="$history" node -e "const h=JSON.parse(process.env.HISTORY_JSON); if(h.messages?.length!==4) process.exit(1)"
+# 解耦：期望值由 smoke.mjs 写入 result_file（N-1），不再硬编码。
+# 守护消息身份：比对最后一条 message_id 确认 regen 真实替换而非 silently no-op（N-2）。
+HISTORY_JSON="$history" EXPECTED_COUNT="$expected_count" EXPECTED_LAST_ID="$expected_last_id" node -e '
+const h=JSON.parse(process.env.HISTORY_JSON);
+const c=Number(process.env.EXPECTED_COUNT);
+if(h.messages?.length!==c) process.exit(1);
+const ids=h.message_ids||[];
+const last=ids.length?ids[ids.length-1]:null;
+if(process.env.EXPECTED_LAST_ID && last!==process.env.EXPECTED_LAST_ID) process.exit(2);
+'
 
 AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
