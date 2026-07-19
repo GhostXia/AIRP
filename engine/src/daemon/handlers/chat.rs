@@ -78,9 +78,16 @@ pub(in crate::daemon) async fn regen_chat(
     Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, Infallible>>>,
     AirpError,
 > {
-    // 1. Delete the last assistant message.
+    // DX-3: quota check (same gate as chat_completion).
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let quota_config = {
+        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        cfg.quota.clone()
+    };
+    crate::quota::check_and_increment(&effective_root, &quota_config)?;
+
+    // 1. Delete the last assistant message.
     ChatService::new(&effective_root).regen(&req.character_id, req.session_id.as_ref())?;
 
     // 2. Build a regen pipeline (no new user message, no timeline advancement).
@@ -120,6 +127,15 @@ pub(in crate::daemon) async fn continue_chat(
     Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, Infallible>>>,
     AirpError,
 > {
+    // DX-3: quota check (same gate as chat_completion).
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let quota_config = {
+        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        cfg.quota.clone()
+    };
+    crate::quota::check_and_increment(&effective_root, &quota_config)?;
+
     let payload = ChatCompletionRequest {
         character_id: Some(req.character_id),
         character_card_id: None,
@@ -153,7 +169,9 @@ pub(in crate::daemon) async fn delete_message(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<DeleteMessageRequest>,
 ) -> Result<Json<ChatLog>, AirpError> {
-    let log = ChatService::new(&state.data_root).delete_message(
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let log = ChatService::new(&effective_root).delete_message(
         &req.character_id,
         req.session_id.as_ref(),
         &req.message_id,

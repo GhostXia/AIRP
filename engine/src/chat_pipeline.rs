@@ -1278,6 +1278,16 @@ fn prepare_pipeline_with_mode(
                 role: crate::adapter::MessageRole::User,
                 content: payload.message.clone(),
             });
+        } else if mode == PrepareMode::Continue {
+            // Pre-validate: last message must be assistant (fail before expensive LLM call).
+            let last_msg = list.last().ok_or_else(|| {
+                AirpError::BadRequest("cannot continue: chat history is empty".into())
+            })?;
+            if last_msg.role != crate::adapter::MessageRole::Assistant {
+                return Err(AirpError::BadRequest(
+                    "cannot continue: last message is not from assistant".into(),
+                ));
+            }
         }
         list
     };

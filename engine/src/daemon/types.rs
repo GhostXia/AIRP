@@ -150,6 +150,8 @@ pub struct DeleteMessageRequest {
     pub session_id: Option<SessionId>,
     /// 要删除的消息 durable ID。
     pub message_id: String,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。
+    pub user_id: Option<String>,
 }
 
 /// `POST /v1/chat/history` 请求体。

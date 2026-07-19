@@ -1290,23 +1290,21 @@
     textarea.value = original;
     textNode.replaceWith(textarea);
     textarea.focus();
+    let cancelled = false;
     const save = async () => {
+      if (cancelled) return;
       const newText = textarea.value;
       const restored = document.createElement('span');
       restored.className = 'text';
       restored.innerHTML = renderMarkdown(newText);
       textarea.replaceWith(restored);
       if (newText !== original) {
-        // Persist edit via rollback-to + re-append is complex; for now use
-        // delete + re-insert approach is not available. Simplest: call engine
-        // rollback to before this message then resend. But ST calibration says
-        // "save" should just persist without regen. Since engine doesn't have
-        // PUT /v1/chat/message yet, we do a local-only edit + warn.
         // TODO: engine PUT /v1/chat/message endpoint for true persistence.
         console.warn('Message edit is local-only until engine supports PUT /v1/chat/message');
       }
     };
     const cancel = () => {
+      cancelled = true;
       const restored = document.createElement('span');
       restored.className = 'text';
       restored.innerHTML = renderMarkdown(original);
@@ -1322,7 +1320,10 @@
   // ── per-message delete (ST: single message, not rollback) ───────────────
   async function deleteSingleMessage(messageId, div) {
     if (!window.confirm('删除这条消息？')) return;
-    const r = await api('POST', '/v1/chat/delete', buildSessionPayload({ message_id: messageId }));
+    const r = await api('POST', '/v1/chat/delete', buildSessionPayload({
+      message_id: messageId,
+      user_id: personaUserId.value.trim() || 'default',
+    }));
     if (r.ok) {
       div.remove();
       messageNodes.delete(messageId);
@@ -1708,14 +1709,17 @@
 
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
+    // Pre-validate: last message must be assistant.
+    const allMsgs = chatLog.querySelectorAll('.msg');
+    const lastMsg = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
+    if (!lastMsg || !lastMsg.classList.contains('assistant')) return;
     // ST 校准：无确认弹窗，直接替换最后一条 assistant 消息。
     if (abortController) abortController.abort();
     const ac = new AbortController();
     abortController = ac;
     if (btnStop) btnStop.hidden = false;
     // Remove last assistant message from DOM immediately.
-    const allMsgs = chatLog.querySelectorAll('.msg.assistant');
-    if (allMsgs.length) allMsgs[allMsgs.length - 1].remove();
+    lastMsg.remove();
     const url = base + '/v1/chat/regen';
     let msgEl = null;
     let acc = '';
