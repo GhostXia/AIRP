@@ -515,3 +515,24 @@ test('makeFetcher dev 模式回退默认 URL（spec §3.2）', async () => {
   await fetcher('/version', {});
   assert.equal(capturedUrl, 'http://127.0.0.1:8000/version');
 });
+
+test('makeFetcher local mode always uses same origin without bearer', async () => {
+  globalThis.window = globalThis.window || {};
+  globalThis.window.location = { origin: 'http://127.0.0.1:8765' };
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  if (!globalThis.window.AIRPShared) require('../shared.js');
+  const { makeFetcher } = globalThis.window.AIRPShared;
+  _ss.airp_engine_url = 'http://untrusted.invalid';
+  _ss.airp_bearer = 'must-not-leak';
+  let capturedUrl;
+  let capturedHeaders;
+  globalThis.fetch = async (url, opts) => {
+    capturedUrl = url;
+    capturedHeaders = opts.headers;
+    return { ok: true, status: 200, text: async () => '{}' };
+  };
+  await makeFetcher('local')('/health', {});
+  assert.equal(capturedUrl, 'http://127.0.0.1:8765/health');
+  assert.ok(!capturedHeaders.Authorization);
+});

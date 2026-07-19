@@ -1,0 +1,62 @@
+name: Windows WebUI package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "engine/**"
+      - "webui/**"
+      - "deploy/windows-webui/**"
+      - "ui/local-webui-browser-smoke.mjs"
+      - ".github/workflows/webui-windows-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Portable Windows WebUI
+    runs-on: windows-latest
+    env:
+      RUSTUP_HOME: ${{ github.workspace }}\.ci\.rustup
+      CARGO_HOME: ${{ github.workspace }}\.ci\.cargo
+      npm_config_prefix: ${{ github.workspace }}\.ci\npm-global
+      npm_config_cache: ${{ github.workspace }}\.ci\npm-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "20.19.0"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install browser smoke dependency
+        working-directory: ui
+        run: npm ci
+
+      - name: Build portable WebUI package
+        shell: pwsh
+        run: .\deploy\windows-webui\build.ps1
+
+      - name: Smoke packaged engine and real Chrome
+        shell: pwsh
+        run: .\deploy\windows-webui\smoke-package.ps1 -BrowserSmoke
+
+      - name: Upload portable WebUI package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: airp-webui-windows-x64
+          if-no-files-found: error
+          path: dist/airp-webui-windows-x64.zip

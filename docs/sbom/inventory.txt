@@ -1,15 +1,15 @@
 AIRP dependency inventory
 =========================
-Generated: 2026-07-18T06:03:13.164Z
-Repo root: D:\AIRP-Dev
-Total records: 688
+Generated: 2026-07-19T01:11:11.558Z
+Repo root: .
+Total records: 691
 
 Summary by audit class:
   audit-required: 17
-  auto-pass: 671
+  auto-pass: 674
 
 Summary by ecosystem:
-  cargo: 564
+  cargo: 567
   npm: 124
 
 Records requiring attention (block / audit-required)
@@ -232,6 +232,7 @@ cargo/html5ever@0.38.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  t
 cargo/http@1.4.2  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/http-body@1.0.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/http-body-util@0.1.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/http-range-header@0.4.2  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/httparse@1.10.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/httpdate@1.0.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/hyper@1.10.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
@@ -286,6 +287,7 @@ cargo/matchit@0.7.3  [auto-pass]  license=MIT AND BSD-3-Clause  scope=runtime  t
 cargo/memchr@2.8.2  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
 cargo/memoffset@0.9.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/mime@0.3.17  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/mime_guess@2.0.5  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/miniz_oxide@0.8.9  [auto-pass]  license=MIT OR Zlib OR Apache-2.0  scope=runtime  tier=third-party
 cargo/mio@1.2.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/muda@0.19.3  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
@@ -523,6 +525,7 @@ cargo/unic-char-range@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runti
 cargo/unic-common@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/unic-ucd-ident@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/unic-ucd-version@0.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/unicase@2.9.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/unicode-ident@1.0.24  [auto-pass]  license=(MIT OR Apache-2.0) AND Unicode-3.0  scope=runtime  tier=third-party
 cargo/unicode-normalization@0.1.25  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/unicode-segmentation@1.13.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party

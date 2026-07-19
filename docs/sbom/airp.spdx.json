@@ -1,7 +1,7 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-07-18T06:03:13.164Z",
+    "created": "2026-07-19T01:11:11.558Z",
     "creators": [
       "Tool: AIRP dep-governance generate-sbom.mjs",
       "Organization: GhostXia"
@@ -9,7 +9,7 @@
     "licenseListVersion": "3.21"
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://airp.local/spdx/AIRP-2026-07-18",
+  "documentNamespace": "https://airp.local/spdx/AIRP-2026-07-19",
   "name": "AIRP",
   "packages": [
     {
@@ -4115,6 +4115,32 @@
       "versionInfo": "0.1.3"
     },
     {
+      "SPDXID": "SPDXRef-cargo-http-range-header-0.4.2",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+        }
+      ],
+      "copyrightText": "NOASSERTION",
+      "description": "No-dep range header parser",
+      "downloadLocation": "https://crates.io/api/v1/crates/http-range-header/0.4.2/download",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:cargo/http-range-header@0.4.2",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/MarcusGrass/parse-range-headers",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "name": "http-range-header",
+      "supplier": "NOASSERTION",
+      "versionInfo": "0.4.2"
+    },
+    {
       "SPDXID": "SPDXRef-cargo-httparse-1.10.1",
       "checksums": [
         {
@@ -5480,6 +5506,31 @@
       "name": "mime",
       "supplier": "NOASSERTION",
       "versionInfo": "0.3.17"
+    },
+    {
+      "SPDXID": "SPDXRef-cargo-mime-guess-2.0.5",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+        }
+      ],
+      "copyrightText": "NOASSERTION",
+      "description": "A simple crate for detection of a file's MIME type by its extension.",
+      "downloadLocation": "https://crates.io/api/v1/crates/mime_guess/2.0.5/download",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:cargo/mime_guess@2.0.5",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "name": "mime_guess",
+      "supplier": "NOASSERTION",
+      "versionInfo": "2.0.5"
     },
     {
       "SPDXID": "SPDXRef-cargo-miniz-oxide-0.8.9",
@@ -11486,6 +11537,31 @@
       "name": "unic-ucd-version",
       "supplier": "NOASSERTION",
       "versionInfo": "0.9.0"
+    },
+    {
+      "SPDXID": "SPDXRef-cargo-unicase-2.9.0",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+        }
+      ],
+      "copyrightText": "NOASSERTION",
+      "description": "A case-insensitive wrapper around strings.",
+      "downloadLocation": "https://crates.io/api/v1/crates/unicase/2.9.0/download",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:cargo/unicase@2.9.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "name": "unicase",
+      "supplier": "NOASSERTION",
+      "versionInfo": "2.9.0"
     },
     {
       "SPDXID": "SPDXRef-cargo-unicode-ident-1.0.24",
@@ -17988,6 +18064,11 @@
       "spdxElementId": "SPDXRef-AIRP"
     },
     {
+      "relatedSpdxElement": "SPDXRef-cargo-http-range-header-0.4.2",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-AIRP"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-cargo-httparse-1.10.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-AIRP"
@@ -18254,6 +18335,11 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-cargo-mime-0.3.17",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-AIRP"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-cargo-mime-guess-2.0.5",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-AIRP"
     },
@@ -19439,6 +19525,11 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-cargo-unic-ucd-version-0.9.0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-AIRP"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-cargo-unicase-2.9.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-AIRP"
     },

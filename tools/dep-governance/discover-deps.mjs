@@ -33,6 +33,7 @@ import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   classifyInventory,
   normalizeLicense,
@@ -248,9 +249,10 @@ export function computeCargoScopes(metadata) {
  * @param {object} metadata
  * @param {Map<string, string|null>} checksums
  * @param {string[]} firstPartyMembers  // names of first-party workspace crates
+ * @param {string|null} repoRoot  // when set, redact machine-local manifest roots
  * @returns {Array<object>}
  */
-export function buildCargoRecords(metadata, checksums, firstPartyMembers) {
+export function buildCargoRecords(metadata, checksums, firstPartyMembers, repoRoot = null) {
   const scopes = computeCargoScopes(metadata);
   const firstPartyNames = new Set(firstPartyMembers);
   const records = [];
@@ -299,12 +301,38 @@ export function buildCargoRecords(metadata, checksums, firstPartyMembers) {
       integrity: checksum ? `sha256:${checksum}` : null,
       scope,
       tier,
-      manifest_path: p.manifest_path ?? null,
+      manifest_path: repoRoot
+        ? normalizeCargoManifestPath(p.manifest_path, repoRoot, sourceType, p.name, p.version)
+        : p.manifest_path ?? null,
       homepage: p.homepage ?? null,
       description: p.description ?? null,
     });
   }
   return records;
+}
+
+/**
+ * Keep committed provenance useful without recording a maintainer's checkout
+ * or Cargo cache location. Repository manifests stay repository-relative;
+ * external cache layouts become stable descriptive placeholders.
+ */
+export function normalizeCargoManifestPath(manifestPath, repoRoot, source, name, version) {
+  if (!manifestPath) return null;
+  const absoluteRoot = path.resolve(repoRoot);
+  const absoluteManifest = path.resolve(manifestPath);
+  const relative = path.relative(absoluteRoot, absoluteManifest);
+  if (relative && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)) {
+    return relative.split(path.sep).join("/");
+  }
+  if (source === "crates.io") return `<cargo-registry>/${name}-${version}/Cargo.toml`;
+  if (source === "git") return `<cargo-git-checkout>/${name}-${version}/Cargo.toml`;
+  return "<external-path-redacted>";
+}
+
+/** Replace the checkout prefix embedded in Cargo workspace package IDs. */
+export function normalizeWorkspaceMemberId(memberId, repoRoot) {
+  const rootUrl = pathToFileURL(path.resolve(repoRoot)).href.replace(/\/$/, "");
+  return String(memberId).replace(rootUrl, "file:///<repo>");
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +453,7 @@ export async function buildInventory(repoRoot, config) {
 
   const metadata = await runCargoMetadata(repoRoot);
   const checksums = parseCargoLockForChecksums(path.join(repoRoot, "Cargo.lock"));
-  const cargoRecords = buildCargoRecords(metadata, checksums, firstParty);
+  const cargoRecords = buildCargoRecords(metadata, checksums, firstParty, repoRoot);
 
   const npmLock = path.join(repoRoot, "ui", "package-lock.json");
   const npmRecords = fs.existsSync(npmLock)
@@ -452,9 +480,10 @@ export async function buildInventory(repoRoot, config) {
 
   const meta = {
     generated_at: new Date().toISOString(),
-    repo_root: path.resolve(repoRoot),
+    repo_root: ".",
     cargo_metadata_version: metadata.metadata?.version ?? null,
-    cargo_workspace_members: metadata.workspace_members ?? [],
+    cargo_workspace_members: (metadata.workspace_members ?? []).map((member) =>
+      normalizeWorkspaceMemberId(member, repoRoot)),
     cargo_lock_packages: checksums.size,
     npm_lockfile_version: 3,
     total_records: records.length,

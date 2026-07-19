@@ -2,8 +2,16 @@
 
 `webui/` 是当前 AIRP 产品交付主面：零构建、浏览器可运行的 RP 客户端。它已经具备基本日用闭环，但仍是 preview；正式发布前的 P1–P3 门禁见 [WebUI 正式上线计划](../docs/WEBUI-PRODUCTION-PLAN.md)。当前事实见 [开发基线](../docs/CURRENT-BASELINE.md)，P0 拓扑见 [production architecture](../docs/WEBUI-PRODUCTION-ARCHITECTURE.md)。
 
-> 本页最后在 2026-07-18 的 `main@2a14b7e` 复核。
-> `start.bat`、`serve.js`、`cargo run`、手填 engine URL 和可选 bearer 都是开发路径。不要把 8000/9001 端口或静态开发服务器直接暴露到公网。首方 P0 preview 位于 [deploy/production](../deploy/production/README.md)。
+> 本页最后在 2026-07-19 按 Windows 便携 WebUI 优先路线复核。
+> `start.bat`、`serve.js`、`cargo run`、手填 engine URL 和可选 bearer 都是开发路径。当前用户交付优先使用 [Windows 便携包](../deploy/windows-webui/README.txt)；既有自托管 P0 拓扑予以保留，但 Docker/WSL 不属于当前落地前置条件。
+
+## Windows 便携式 WebUI（当前优先）
+
+贡献者运行 `deploy/windows-webui/build.ps1` 生成 `dist/airp-webui-windows-x64.zip`。用户解压后双击 `Start-AIRP.cmd` 即可；包内 `airp-core.exe` 在 `127.0.0.1:8765` 同时提供 WebUI 与 API，不需要 Node、Cargo、Docker、WSL 或 Tauri。
+
+所有可变文件受限在解压目录：`data/` 保存角色、会话和 RP 资产，`config.json` 保存进程配置。升级或移动版本前先备份 `data/`，再将它迁移到新目录。不要将 8765 端口代理或暴露给其他机器。
+
+Provider API key 不写入 `config.json` 或普通 settings；Windows 便携包参考 SillyTavern 的公开产品行为，集中保存到包内明文 `data/secrets.json`，但 API/UI 默认永不回显。能读取该文件的进程或用户就能使用 key，因此不得共享 AIRP 目录、提交该文件或把它放进支持包。
 
 ## 本地启动
 

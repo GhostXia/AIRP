@@ -221,6 +221,20 @@ impl AppConfig {
         Ok(())
     }
 
+    /// Load the portable Windows WebUI provider credential when explicitly
+    /// enabled by its launcher. Environment configuration is applied later and
+    /// therefore retains the highest process-level precedence.
+    pub fn merge_persisted_provider_key(&mut self, data_root: &Path) {
+        match crate::secret_store::load_provider_key(data_root) {
+            Ok(Some(key)) => self.api_key = Some(key),
+            Ok(None) => {}
+            Err(error) => {
+                self.api_key = None;
+                tracing::warn!(%error, "stored provider key is unavailable; user must enter it again");
+            }
+        }
+    }
+
     /// M0 F-12 / 5.0b：在所有配置层合并完成后调用，验证跨字段不变量。
     /// 启动时 fast-fail，避免运行期才发现 soft >= hard 之类的静默错误。
     pub fn validate(&self) -> Result<(), String> {

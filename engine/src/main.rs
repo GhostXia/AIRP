@@ -1,14 +1,15 @@
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use airp_core::chat_pipeline;
 use airp_core::config::{AppConfig, DeploymentMode};
 use airp_core::daemon::{
-    create_router, ChatCompletionRequest, DaemonState, MutableConfig, UserProfile,
+    create_local_webui_router, create_router, ChatCompletionRequest, DaemonState, MutableConfig,
+    UserProfile,
 };
 use airp_core::error::AirpError;
 use airp_core::types::CharacterId;
@@ -40,6 +41,10 @@ enum Commands {
         /// 监听地址。默认仅 loopback；容器部署必须显式传入 0.0.0.0，且不得发布 engine 端口。
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+
+        /// Serve a WebUI directory from the same loopback origin.
+        #[arg(long)]
+        webui_dir: Option<PathBuf>,
     },
     /// 在终端控制台直接运行单次流式过滤
     Run {
@@ -63,6 +68,20 @@ enum Commands {
         #[arg(long, default_value = "User")]
         user_name: String,
     },
+}
+
+fn validate_local_webui_options(
+    webui_dir: Option<&Path>,
+    bind_ip: IpAddr,
+    access_api_key: Option<&str>,
+) -> Result<(), &'static str> {
+    if webui_dir.is_some() && !bind_ip.is_loopback() {
+        return Err("--webui-dir is restricted to a loopback --host");
+    }
+    if webui_dir.is_some() && access_api_key.is_some() {
+        return Err("--webui-dir cannot be used while access API key authentication is configured");
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -93,6 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut app_config = AppConfig::load_or_create(&cli.config)?;
     app_config.merge_data_settings(&data_root)?;
+    app_config.merge_persisted_provider_key(&data_root);
     app_config.override_with_env()?;
     // M0 F-12 / 5.0b：全部合并完成后 fast-fail 校验跨字段不变量
     app_config.validate()?;
@@ -116,7 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_client = airp_core::outbound::outbound_client();
 
     match cli.command {
-        Commands::Daemon { port, host } => {
+        Commands::Daemon {
+            port,
+            host,
+            webui_dir,
+        } => {
             let daemon_port = port.unwrap_or(app_config.daemon_port);
             let bind_ip = host
                 .parse::<IpAddr>()
@@ -124,6 +148,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !bind_ip.is_loopback() && app_config.deployment_mode != DeploymentMode::Production {
                 return Err("non-loopback --host is allowed only in production mode".into());
             }
+            validate_local_webui_options(
+                webui_dir.as_deref(),
+                bind_ip,
+                app_config.access_api_key.as_deref(),
+            )?;
 
             let state = Arc::new(DaemonState {
                 data_root,
@@ -143,7 +172,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }),
             });
 
-            let router = create_router(state);
+            let router = match webui_dir {
+                Some(dir) => {
+                    let dir = std::fs::canonicalize(&dir).map_err(|error| {
+                        format!("cannot open --webui-dir {}: {error}", dir.display())
+                    })?;
+                    if !dir.join("index.html").is_file() {
+                        return Err(format!(
+                            "--webui-dir {} does not contain index.html",
+                            dir.display()
+                        )
+                        .into());
+                    }
+                    create_local_webui_router(state, dir)
+                }
+                None => create_router(state),
+            };
             let addr = SocketAddr::new(bind_ip, daemon_port);
             let listener = TcpListener::bind(&addr).await?;
 
@@ -258,4 +302,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_webui_rejects_access_authentication() {
+        let dir = Path::new("webui");
+        let error = validate_local_webui_options(
+            Some(dir),
+            "127.0.0.1".parse().unwrap(),
+            Some("local-access-key"),
+        )
+        .unwrap_err();
+        assert!(error.contains("access API key"));
+    }
+
+    #[test]
+    fn local_webui_requires_loopback() {
+        let error = validate_local_webui_options(
+            Some(Path::new("webui")),
+            "0.0.0.0".parse().unwrap(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("loopback"));
+    }
 }

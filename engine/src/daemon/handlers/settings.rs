@@ -66,8 +66,9 @@ pub(in crate::daemon) async fn update_settings(
     if let Some(e) = patch.endpoint.filter(|s| !s.is_empty()) {
         candidate.endpoint = e;
     }
-    if let Some(k) = patch.api_key.filter(|s| !s.is_empty()) {
-        candidate.api_key = Some(k);
+    let provider_key_update = patch.api_key.filter(|key| !key.is_empty());
+    if let Some(key) = provider_key_update.as_ref() {
+        candidate.api_key = Some(key.clone());
     }
     if let Some(m) = patch.model.filter(|s| !s.is_empty()) {
         candidate.model = m;
@@ -85,8 +86,9 @@ pub(in crate::daemon) async fn update_settings(
         candidate.quota = q;
     }
 
-    // 3) Persist only non-secret settings. Provider and daemon credentials are
-    // runtime-only and must be supplied through AIRP_* env or this request.
+    // 3) settings.json remains non-secret. The portable launcher may opt into
+    // one separate data/secrets.json provider-key file; access keys are always
+    // runtime-only.
     let on_disk = serde_json::json!({
         "provider": candidate.provider,
         "endpoint": candidate.endpoint,
@@ -96,6 +98,7 @@ pub(in crate::daemon) async fn update_settings(
         "quota": candidate.quota,
     });
     let path = state.data_root.join("settings.json");
+    let data_root = state.data_root.clone();
     let bytes = serde_json::to_vec_pretty(&on_disk)?;
     #[cfg(test)]
     let persist_state = state.clone();
@@ -107,7 +110,23 @@ pub(in crate::daemon) async fn update_settings(
         {
             return result;
         }
-        crate::data_dir::replace_file(&path, &bytes)
+        let previous_settings = std::fs::read(&path).ok();
+        crate::data_dir::replace_file(&path, &bytes)?;
+        if let Some(key) = provider_key_update.as_deref() {
+            if let Err(secret_error) = crate::secret_store::persist_provider_key(&data_root, key) {
+                let rollback = match previous_settings {
+                    Some(previous) => crate::data_dir::replace_file(&path, &previous),
+                    None => std::fs::remove_file(&path).map_err(AirpError::Io),
+                };
+                return match rollback {
+                    Ok(()) => Err(secret_error),
+                    Err(rollback_error) => Err(AirpError::Internal(format!(
+                        "provider key persistence failed ({secret_error}); settings rollback also failed ({rollback_error})"
+                    ))),
+                };
+            }
+        }
+        Ok(())
     })
     .await
     .map_err(|error| AirpError::Internal(format!("settings persistence task failed: {error}")))??;
