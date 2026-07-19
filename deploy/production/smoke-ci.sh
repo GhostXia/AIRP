@@ -241,7 +241,7 @@ history=$($curl_tls --user "$admin_user:$admin_password" \
   --header 'Content-Type: application/json' \
   --data "{\"character_id\":\"$character_id\",\"session_id\":\"$session_id\"}" \
   "$origin/v1/chat/history")
-HISTORY_JSON="$history" node -e "const h=JSON.parse(process.env.HISTORY_JSON); if(h.messages?.length!==3) process.exit(1)"
+HISTORY_JSON="$history" node -e "const h=JSON.parse(process.env.HISTORY_JSON); if(h.messages?.length!==4) process.exit(1)"
 
 AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
