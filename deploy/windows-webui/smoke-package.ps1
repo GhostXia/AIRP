@@ -12,6 +12,89 @@ $data = Join-Path $package 'data'
 $config = Join-Path $package 'config.json'
 $launcher = Join-Path $package 'Start-AIRP.cmd'
 $origin = "http://127.0.0.1:$Port"
+
+if (-not (Test-Path -LiteralPath $engine -PathType Leaf)) {
+    throw 'Portable airp-core.exe is missing.'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $webui 'index.html') -PathType Leaf)) {
+    throw 'Portable webui/index.html is missing.'
+}
+if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+    throw 'Portable Start-AIRP.cmd is missing.'
+}
+if (Test-Path -LiteralPath (Join-Path $package 'Start-AIRP.ps1')) {
+    throw 'Portable package must not contain Start-AIRP.ps1.'
+}
+$launcherText = Get-Content -LiteralPath $launcher -Raw
+if ($launcherText -match '(?i)powershell|ExecutionPolicy|\.ps1') {
+    throw 'Portable launcher must not invoke PowerShell.'
+}
+if ($launcherText -notmatch '--open-browser') {
+    throw 'Portable launcher must ask the engine to open the browser.'
+}
+
+if ($Port -eq 8765) {
+    $launcherProcess = $null
+    $launcherEngineProcess = $null
+    $env:AIRP_LAUNCHER_SMOKE = '1'
+    $env:AIRP_ACCESS_KEY = 'inherited-access-key-must-be-cleared'
+    $env:AIRP_DEPLOYMENT_MODE = 'production'
+    $env:AIRP_PUBLIC_ORIGIN = 'http://inherited.invalid'
+    $env:AIRP_CORS_ORIGINS = 'https://inherited.invalid'
+    $env:AIRP_ALLOW_LOCAL_PATH = 'true'
+    try {
+        $launcherProcess = Start-Process -FilePath $env:ComSpec `
+            -ArgumentList @('/d', '/c', 'Start-AIRP.cmd') -WorkingDirectory $package `
+            -PassThru -WindowStyle Hidden
+        $launcherReady = $false
+        for ($attempt = 0; $attempt -lt 80; $attempt++) {
+            try {
+                $launcherHealth = Invoke-WebRequest -UseBasicParsing -Uri "$origin/health" -TimeoutSec 1
+                if ($launcherHealth.StatusCode -eq 200) { $launcherReady = $true; break }
+            } catch {
+                if ($launcherProcess.HasExited) {
+                    throw "Start-AIRP.cmd exited early with code $($launcherProcess.ExitCode)."
+                }
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        if (-not $launcherReady) { throw "Start-AIRP.cmd did not become ready at $origin." }
+
+        $launcherEngineProcess = Get-CimInstance Win32_Process `
+            -Filter "ParentProcessId = $($launcherProcess.Id)" | Where-Object {
+                $_.Name -eq 'airp-core.exe' -and
+                $_.ExecutablePath -eq $engine
+            }
+        if (-not $launcherEngineProcess) {
+            throw 'Start-AIRP.cmd did not launch the packaged airp-core.exe.'
+        }
+        Stop-Process -Id $launcherEngineProcess.ProcessId -Force
+        if (-not $launcherProcess.WaitForExit(5000)) {
+            throw 'Start-AIRP.cmd did not exit after its engine stopped.'
+        }
+        if ($launcherProcess.ExitCode -eq 0) {
+            throw 'Start-AIRP.cmd did not propagate the engine failure exit code.'
+        }
+        Write-Host 'Start-AIRP.cmd process smoke passed.'
+    } finally {
+        if ($launcherEngineProcess) {
+            Get-Process -Id $launcherEngineProcess.ProcessId -ErrorAction SilentlyContinue |
+                Stop-Process -Force
+        }
+        if ($launcherProcess -and -not $launcherProcess.HasExited) {
+            Stop-Process -Id $launcherProcess.Id -Force
+        }
+        Remove-Item Env:AIRP_LAUNCHER_SMOKE -ErrorAction SilentlyContinue
+        Remove-Item Env:AIRP_ACCESS_KEY -ErrorAction SilentlyContinue
+        Remove-Item Env:AIRP_DEPLOYMENT_MODE -ErrorAction SilentlyContinue
+        Remove-Item Env:AIRP_PUBLIC_ORIGIN -ErrorAction SilentlyContinue
+        Remove-Item Env:AIRP_CORS_ORIGINS -ErrorAction SilentlyContinue
+        Remove-Item Env:AIRP_ALLOW_LOCAL_PATH -ErrorAction SilentlyContinue
+    }
+} else {
+    Write-Warning 'Skipping Start-AIRP.cmd process smoke because the launcher contract uses port 8765.'
+}
+
 $env:AIRP_DATA_DIR = $data
 $env:AIRP_PERSIST_PROVIDER_KEY = 'true'
 $env:AIRP_ALLOW_LOCAL_PATH = 'false'
@@ -54,19 +137,6 @@ try {
     }
     if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
         throw 'Portable config.json was not created inside the package.'
-    }
-    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
-        throw 'Portable Start-AIRP.cmd is missing.'
-    }
-    if (Test-Path -LiteralPath (Join-Path $package 'Start-AIRP.ps1')) {
-        throw 'Portable package must not contain Start-AIRP.ps1.'
-    }
-    $launcherText = Get-Content -LiteralPath $launcher -Raw
-    if ($launcherText -match '(?i)powershell|ExecutionPolicy|\.ps1') {
-        throw 'Portable launcher must not invoke PowerShell.'
-    }
-    if ($launcherText -notmatch '--open-browser') {
-        throw 'Portable launcher must ask the engine to open the browser.'
     }
     Write-Host "Packaged WebUI smoke passed at $origin"
     Write-Host "Portable data boundary: $data"
@@ -142,4 +212,6 @@ try {
     }
     Remove-Item Env:AIRP_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:AIRP_SMOKE_ORIGIN -ErrorAction SilentlyContinue
+    Remove-Item Env:AIRP_PERSIST_PROVIDER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:AIRP_ALLOW_LOCAL_PATH -ErrorAction SilentlyContinue
 }

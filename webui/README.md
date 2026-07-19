@@ -7,7 +7,7 @@
 
 ## Windows 便携式 WebUI（当前优先）
 
-贡献者运行 `deploy/windows-webui/build.ps1` 生成 `dist/airp-webui-windows-x64.zip`。用户解压后双击 `Start-AIRP.cmd` 即可；该可读启动器直接运行 engine，不调用 PowerShell、不提权、也不安装任何内容。包内 `airp-core.exe` 在 `127.0.0.1:8765` 同时提供 WebUI 与 API，不需要 Node、Cargo、Docker、WSL 或 Tauri。
+贡献者运行 `deploy/windows-webui/build.ps1` 生成 `dist/airp-webui-windows-x64.zip`；发布 GitHub Release 时，工作流会在完整 smoke 通过后自动把该 ZIP 附加到 Release。用户解压后双击 `Start-AIRP.cmd` 即可；该可读启动器直接运行 engine，不调用 PowerShell、不提权、也不安装任何内容。包内 `airp-core.exe` 在 `127.0.0.1:8765` 同时提供 WebUI 与 API，不需要 Node、Cargo、Docker、WSL 或 Tauri。
 
 所有可变文件受限在解压目录：`data/` 保存角色、会话和 RP 资产，`config.json` 保存进程配置。升级或移动版本前先备份 `data/`，再将它迁移到新目录。不要将 8765 端口代理或暴露给其他机器。
 

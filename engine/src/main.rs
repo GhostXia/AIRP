@@ -214,8 +214,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("AIRP-Core Gateway running at http://{}", addr);
             if open_browser {
-                open_default_browser(&format!("http://{addr}"))?;
-                println!("Opened AIRP WebUI in the default browser.");
+                match open_default_browser(&format!("http://{addr}")) {
+                    Ok(()) => println!("Opened AIRP WebUI in the default browser."),
+                    Err(error) => eprintln!(
+                        "Could not open the browser ({error}); open http://{addr} manually."
+                    ),
+                }
             } else {
                 println!("Open your browser and visit the address above.");
             }
