@@ -1242,6 +1242,31 @@
     } else {
       textNode.innerHTML = renderMarkdown(text);
     }
+    // Per-message action buttons (ST calibration: hover to reveal).
+    if (messageId && !isStreaming) {
+      const actions = document.createElement('span');
+      actions.className = 'msg-actions';
+      if (safeRole === 'user') {
+        const editBtn = document.createElement('button');
+        editBtn.textContent = '✐';
+        editBtn.title = '编辑消息';
+        editBtn.onclick = (e) => { e.stopPropagation(); editMessageInline(div, messageId, textNode); };
+        actions.appendChild(editBtn);
+      }
+      if (safeRole === 'assistant') {
+        const contBtn = document.createElement('button');
+        contBtn.textContent = '▶';
+        contBtn.title = '继续生成';
+        contBtn.onclick = (e) => { e.stopPropagation(); doContinue(); };
+        actions.appendChild(contBtn);
+      }
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '✖';
+      delBtn.title = '删除消息';
+      delBtn.onclick = (e) => { e.stopPropagation(); deleteSingleMessage(messageId, div); };
+      actions.appendChild(delBtn);
+      div.appendChild(actions);
+    }
     if (isNew) {
       if (opts.prepend) chatLog.prepend(div);
       else chatLog.appendChild(div);
@@ -1256,9 +1281,119 @@
     messageNodes.get(messageId)?.classList.add('selected');
   }
 
+  // ── per-message edit (ST: save ≠ regen) ─────────────────────────────────
+  function editMessageInline(div, messageId, textNode) {
+    const original = textNode.textContent;
+    const textarea = document.createElement('textarea');
+    textarea.className = 'msg-edit-area';
+    textarea.rows = 3;
+    textarea.value = original;
+    textNode.replaceWith(textarea);
+    textarea.focus();
+    let cancelled = false;
+    const save = async () => {
+      if (cancelled) return;
+      const newText = textarea.value;
+      const restored = document.createElement('span');
+      restored.className = 'text';
+      restored.innerHTML = renderMarkdown(newText);
+      textarea.replaceWith(restored);
+      if (newText !== original) {
+        // TODO: engine PUT /v1/chat/message endpoint for true persistence.
+        console.warn('Message edit is local-only until engine supports PUT /v1/chat/message');
+      }
+    };
+    const cancel = () => {
+      cancelled = true;
+      const restored = document.createElement('span');
+      restored.className = 'text';
+      restored.innerHTML = renderMarkdown(original);
+      textarea.replaceWith(restored);
+    };
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); save(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    textarea.addEventListener('blur', save);
+  }
+
+  // ── per-message delete (ST: single message, not rollback) ───────────────
+  async function deleteSingleMessage(messageId, div) {
+    if (!window.confirm('删除这条消息？')) return;
+    const r = await api('POST', '/v1/chat/delete', buildSessionPayload({
+      message_id: messageId,
+      user_id: personaUserId.value.trim() || 'default',
+    }));
+    if (r.ok) {
+      div.remove();
+      messageNodes.delete(messageId);
+    } else {
+      window.alert('删除失败: ' + formatError(r.data, r.text));
+    }
+  }
+
+  // ── continue: extend last assistant message (ST: empty send = continue) ────
+  async function doContinue() {
+    if (!selectedChar) return;
+    if (abortController) abortController.abort();
+    const ac = new AbortController();
+    abortController = ac;
+    if (btnStop) btnStop.hidden = false;
+    const url = base + '/v1/chat/continue';
+    // Find last assistant message DOM node to append to.
+    const allAssistant = chatLog.querySelectorAll('.msg.assistant');
+    const lastEl = allAssistant.length ? allAssistant[allAssistant.length - 1] : null;
+    let textNode = lastEl ? lastEl.querySelector('.text') : null;
+    let existingText = textNode ? textNode.textContent : '';
+    let acc = '';
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(buildSessionPayload({ user_id: personaUserId.value.trim() || 'default' })),
+        signal: ac.signal,
+      });
+      if (!res.ok) {
+        const errBody = await res.text();
+        appendMsg('assistant', '[continue HTTP ' + res.status + '] ' + errBody, false, new Date());
+        return;
+      }
+      if (!textNode) {
+        textNode = appendMsg('assistant', '', true, new Date());
+        existingText = '';
+      } else {
+        textNode.classList.add('streaming');
+      }
+      await streamSse(res, (chunk, seq) => {
+        if (chunk.type === 'body_chunk' && chunk.text) {
+          acc += chunk.text;
+          textNode.textContent = existingText + acc;
+          if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
+        }
+        if (chunk.type === 'done') {
+          textNode.classList.remove('streaming');
+          textNode.innerHTML = renderMarkdown(existingText + acc);
+        }
+      });
+      if (textNode.classList.contains('streaming')) {
+        textNode.classList.remove('streaming');
+        textNode.innerHTML = renderMarkdown(existingText + acc);
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      if (textNode) { textNode.classList.remove('streaming'); textNode.innerHTML = renderMarkdown(existingText + acc); }
+    } finally {
+      if (abortController === ac) { abortController = null; if (btnStop) btnStop.hidden = true; }
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+  }
+
   async function doSend() {
     const text = chatInput.value.trim();
-    if (!text || !selectedChar) return;
+    // AIRP 取舍：空消息发送 = 继续生成。论证：每条 assistant 消息已有显式“继续”按钮，
+    // 空发送是低摩擦快捷路径；即使误触发，rollback 可恢复，不会损坏用户资产。
+    if (!text) { doContinue(); return; }
+    if (!selectedChar) return;
     chatInput.value = '';
     appendMsg('user', text, false, new Date());
 
@@ -1575,9 +1710,57 @@
 
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
-    if (!window.confirm('Regenerate 会重写/删除最后一条 assistant 消息，不可撤销。继续？')) return;
-    const r = await api('POST', '/v1/chat/regen', buildSessionPayload());
-    if (r.ok) loadHistory({ reset: true });
+    // Pre-validate: last message must be assistant.
+    const allMsgs = chatLog.querySelectorAll('.msg');
+    const lastMsg = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
+    if (!lastMsg || !lastMsg.classList.contains('assistant')) return;
+    // AIRP 取舍：无确认弹窗，直接替换。论证：AIRP 已有 rollback-by-ID 能力，
+    // 用户可回滚到任意历史消息，regen 的风险已被覆盖；确认弹窗只增加摩擦不提供额外安全。
+    if (abortController) abortController.abort();
+    const ac = new AbortController();
+    abortController = ac;
+    if (btnStop) btnStop.hidden = false;
+    // Remove last assistant message from DOM immediately.
+    lastMsg.remove();
+    const url = base + '/v1/chat/regen';
+    let msgEl = null;
+    let acc = '';
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(buildSessionPayload({ user_id: personaUserId.value.trim() || 'default' })),
+        signal: ac.signal,
+      });
+      if (!res.ok) {
+        const errBody = await res.text();
+        appendMsg('assistant', '[regen HTTP ' + res.status + '] ' + errBody, false, new Date());
+        return;
+      }
+      msgEl = appendMsg('assistant', '', true, new Date());
+      await streamSse(res, (chunk, seq) => {
+        if (chunk.type === 'body_chunk' && chunk.text) {
+          acc += chunk.text;
+          msgEl.textContent = acc;
+          if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
+        }
+        if (chunk.type === 'done') {
+          msgEl.classList.remove('streaming');
+          msgEl.innerHTML = renderMarkdown(acc);
+        }
+      });
+      if (msgEl.classList.contains('streaming')) {
+        msgEl.classList.remove('streaming');
+        msgEl.innerHTML = renderMarkdown(acc);
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      if (msgEl) { msgEl.classList.remove('streaming'); msgEl.innerHTML = renderMarkdown(acc || '[regen interrupted]'); }
+    } finally {
+      if (abortController === ac) { abortController = null; if (btnStop) btnStop.hidden = true; }
+      chatLog.scrollTop = chatLog.scrollHeight;
+      loadHistory({ reset: true });
+    }
   });
 
   btnRollback.addEventListener('click', async () => {

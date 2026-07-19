@@ -388,6 +388,9 @@ const presetId = 'smoke-preset-' + Date.now();
 
 // 判据 4：创建、选择和删除会话；session-scoped 操作不串流/串历史
 let sessionId = null;
+// 暴露给 production smoke-ci.sh 的最终状态：解耦硬编码期望值（N-1）+ 守护消息身份（N-2）
+let finalMessageCount = null;
+let finalLastMessageId = null;
 {
   const create = await api('POST', '/v1/sessions/' + characterId);
   ok(create.ok, 'create session 成功');
@@ -482,10 +485,28 @@ for (let i = 0; i < sentMessages.length; i++) {
   ok(rb.ok, 'rollback-by-ID 成功');
   eq((rb.data?.messages || []).length, 4, 'rollback 后剩 4 条消息');
 
-  // regen 删除最后一条（剩 4 条中的最后一条 assistant）
-  const rg = await api('POST', '/v1/chat/regen', { character_id: characterId, session_id: sessionId });
-  ok(rg.ok, 'regen 成功');
-  eq((rg.data?.messages || []).length, 3, 'regen 后剩 3 条消息');
+  // regen 删除最后一条并流式生成新响应（SSE）
+  const rgRes = await fetch(ENGINE + '/v1/chat/regen', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
+    },
+    body: JSON.stringify({ character_id: characterId, session_id: sessionId }),
+  });
+  ok(rgRes.ok, 'regen 成功');
+  // 消费 SSE 流直到完成
+  if (rgRes.body) {
+    const reader = rgRes.body.getReader();
+    while (true) { const { done } = await reader.read(); if (done) break; }
+  }
+  // 验证 history：regen 删除旧的 + 生成新的 = 仍 4 条（原 4 条 - 1 + 1 新）
+  const afterRegen = await api('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId });
+  eq((afterRegen.data?.messages || []).length, 4, 'regen 后仍 4 条消息（删旧+生新）');
+  // 捕获最终状态供 production smoke-ci.sh 比对（engine restart 后验证持久化 + 消息身份）
+  finalMessageCount = afterRegen.data?.messages?.length ?? null;
+  const regenIds = afterRegen.data?.message_ids || [];
+  finalLastMessageId = regenIds.length ? regenIds[regenIds.length - 1] : null;
 }
 
 // 判据 9：provider/HTTP/SSE 错误在 UI 中给可行动提示
@@ -511,7 +532,12 @@ for (let i = 0; i < sentMessages.length; i++) {
 }
 
 if (RESULT_FILE) {
-  writeFileSync(RESULT_FILE, JSON.stringify({ character_id: characterId, session_id: sessionId }) + '\n');
+  writeFileSync(RESULT_FILE, JSON.stringify({
+    character_id: characterId,
+    session_id: sessionId,
+    final_message_count: finalMessageCount,
+    final_last_message_id: finalLastMessageId,
+  }) + '\n');
 }
 
 // 判据 4 续：删除会话，且删除后不可再访问（确定性生命周期）。

@@ -124,6 +124,34 @@ pub struct RegenRequest {
     pub character_id: CharacterId,
     /// A6：可选 session ID（语义同 `RollbackRequest.session_id`）。
     pub session_id: Option<SessionId>,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。
+    pub user_id: Option<String>,
+}
+
+/// `POST /v1/chat/continue` 请求体。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinueRequest {
+    /// 目标角色 ID。
+    pub character_id: CharacterId,
+    /// 可选 session ID。
+    pub session_id: Option<SessionId>,
+    /// DX-1：可选用户 ID。
+    pub user_id: Option<String>,
+}
+
+/// `POST /v1/chat/delete` 请求体。删除单条消息。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteMessageRequest {
+    /// 目标角色 ID。
+    pub character_id: CharacterId,
+    /// 可选 session ID。
+    pub session_id: Option<SessionId>,
+    /// 要删除的消息 durable ID。
+    pub message_id: String,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。
+    pub user_id: Option<String>,
 }
 
 /// `POST /v1/chat/history` 请求体。

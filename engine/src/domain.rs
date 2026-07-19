@@ -380,6 +380,75 @@ impl ChatService {
         })
     }
 
+    /// Append text to the last assistant message's content (used by /v1/chat/continue).
+    ///
+    /// If the last message is not an assistant message or the log is empty,
+    /// returns `BadRequest`.
+    pub fn append_to_last(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        text: &str,
+    ) -> Result<ChatLog, AirpError> {
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let last = log.messages.last_mut().ok_or_else(|| {
+                AirpError::BadRequest("cannot continue: chat history is empty".into())
+            })?;
+            if last.role != crate::adapter::MessageRole::Assistant {
+                return Err(AirpError::BadRequest(
+                    "cannot continue: last message is not from assistant".into(),
+                ));
+            }
+            last.content.push_str(text);
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
+    /// Delete a single message by its durable ID, preserving the order of remaining messages.
+    ///
+    /// (ST calibration: SillyTavern deletes a single message, not rollback-to.)
+    pub fn delete_message(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message_id: &str,
+    ) -> Result<ChatLog, AirpError> {
+        if !crate::ulid::is_valid_id(message_id) {
+            return Err(AirpError::BadRequest(format!(
+                "message_id is not a valid durable message id: {message_id}"
+            )));
+        }
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let idx = log
+                .message_ids
+                .iter()
+                .position(|x| crate::ulid::matches(x, message_id))
+                .ok_or_else(|| {
+                    AirpError::BadRequest(format!("message_id {message_id} not in this session"))
+                })?;
+            log.messages.remove(idx);
+            log.message_ids.remove(idx);
+            // Legacy chat logs may have fewer timestamps than messages;
+            // defensively check bounds to avoid out-of-bounds panic.
+            if idx < log.message_timestamps.len() {
+                log.message_timestamps.remove(idx);
+            }
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
     pub fn list_sessions(&self, character_id: &CharacterId) -> Result<Vec<SessionId>, AirpError> {
         let character = character_lock(character_id.as_str());
         let _guard = character.read().expect("character lock poisoned");

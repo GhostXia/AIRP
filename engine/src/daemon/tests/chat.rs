@@ -193,6 +193,16 @@ async fn test_a6_chat_regen_accepts_session_id() {
         .unwrap();
     // 期望 200（A6 修复前会 422 unknown field session_id）
     assert_eq!(resp.status(), StatusCode::OK);
+    // 合同守护：regen 必须返回 SSE 流（而非旧 JSON）。
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("text/event-stream"),
+        "regen must return SSE stream, got content-type: {ct}"
+    );
 }
 
 #[tokio::test]
