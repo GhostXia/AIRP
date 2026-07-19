@@ -34,6 +34,91 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Wait for engine + gateway to be truly ready after `compose up` or `compose restart`.
+#
+# Three-stage probe:
+#   1. `/health` returns `engine:"ok"` — axum is listening.
+#   2. `GET /v1/models` returns 200 — gateway → engine → provider egress path
+#      can serve a real request, not just the health route.
+#   3. (optional) `POST /v1/chat/completions` completes a full SSE round-trip
+#      ending in `data: [DONE]` — the streaming path itself is stable, which
+#      is what the restart-continuity browser smoke actually exercises.
+#
+# Stage 3 only runs when `WAIT_FOR_ENGINE_READY_CHAT_PROBE` is set to a
+# non-empty value (the smoke callsite that has a valid character_id +
+# session_id). Stages 1–2 close the listener race from PR #243 run 29671033343;
+# stage 3 closes the mid-stream drop race from PR #246 run 29673388808, where
+# `/v1/models` returned 200 but the SSE stream still got reset mid-flight.
+#
+# On failure, dumps the last 400 lines of engine + gateway logs to stderr so
+# CI annotations show the real root cause instead of a bare node assertion.
+wait_for_engine_ready() {
+  health_ready=0
+  for _ in $(seq 1 60); do
+    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" 2>/dev/null | grep -q '"engine":"ok"'; then
+      health_ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$health_ready" -ne 1 ]; then
+    echo "wait_for_engine_ready: /health did not reach engine:\"ok\" within 60s" >&2
+    return 1
+  fi
+  models_ready=0
+  for _ in $(seq 1 30); do
+    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/v1/models" >/dev/null 2>&1; then
+      models_ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$models_ready" -ne 1 ]; then
+    echo "wait_for_engine_ready: /v1/models did not return 200 within 30s" >&2
+    return 1
+  fi
+
+  if [ -n "${WAIT_FOR_ENGINE_READY_CHAT_PROBE:-}" ]; then
+    probe_character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file" 2>/dev/null || true)
+    probe_session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file" 2>/dev/null || true)
+    if [ -n "$probe_character_id" ] && [ -n "$probe_session_id" ]; then
+      probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
+      probe_tmp=$(mktemp)
+      for attempt in $(seq 1 8); do
+        http_code=$($curl_tls --silent --show-error --no-buffer \
+            --user "$admin_user:$admin_password" \
+            --header 'Content-Type: application/json' \
+            --data "$probe_body" \
+            --max-time 10 \
+            --output "$probe_tmp" \
+            --write-out '%{http_code}' \
+            "$origin/v1/chat/completions" 2>&1) && rc=0 || rc=$?
+        if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && grep -q '"type":"done"' "$probe_tmp"; then
+          rm -f "$probe_tmp"
+          return 0
+        fi
+        echo "wait_for_engine_ready: SSE probe attempt $attempt failed (rc=$rc http=$http_code)" >&2
+        # Show first 300 bytes of the response body to expose engine error envelope
+        head -c 300 "$probe_tmp" 2>/dev/null | sed 's/^/  body: /' >&2 || true
+        echo "" >&2
+        rm -f "$probe_tmp"
+        probe_tmp=$(mktemp)
+        sleep 2
+      done
+      rm -f "$probe_tmp"
+      echo "wait_for_engine_ready: SSE round-trip probe failed after 8 attempts" >&2
+      return 1
+    fi
+  fi
+}
+
+dump_failure_logs() {
+  echo "----- engine logs (last 400 lines) -----" >&2
+  $compose logs --no-color --tail=400 engine >&2 2>&1 || true
+  echo "----- gateway logs (last 400 lines) -----" >&2
+  $compose logs --no-color --tail=400 gateway >&2 2>&1 || true
+}
+
 mkdir -p "$deploy/secrets" "$deploy/certs"
 umask 077
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -94,7 +179,7 @@ chrome_spki=$(openssl x509 -in "$gateway_leaf" -pubkey -noout \
 cat "$root_ca" "$mock_root" > "$trust_bundle"
 
 auth_header="Basic $(printf '%s' "$admin_user:$admin_password" | openssl base64 -A)"
-curl_tls="curl --silent --show-error --cacert $root_ca"
+curl_tls="curl --silent --show-error --connect-timeout 5 --max-time 30 --cacert $root_ca"
 
 anonymous_status=$($curl_tls --output /dev/null --write-out '%{http_code}' "$origin/")
 [ "$anonymous_status" = 401 ]
@@ -149,11 +234,7 @@ NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/webui/smoke.mjs"
 
 $compose restart engine gateway >/dev/null
-for _ in $(seq 1 60); do
-  if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
-  sleep 1
-done
-$curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
+wait_for_engine_ready
 character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
 session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file")
 history=$($curl_tls --user "$admin_user:$admin_password" \
@@ -173,11 +254,7 @@ NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-smoke.mjs"
 
 $compose restart engine gateway >/dev/null
-for _ in $(seq 1 60); do
-  if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
-  sleep 1
-done
-$curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
+WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
 AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
 AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
@@ -185,7 +262,7 @@ AIRP_SMOKE_BROWSER_STATE_FILE="$browser_state_file" \
 AIRP_SMOKE_BROWSER_RESULT_FILE="$browser_result_file" \
 AIRP_CHROME_SPKI="$chrome_spki" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
-node "$repo/ui/production-browser-restart-smoke.mjs"
+node "$repo/ui/production-browser-restart-smoke.mjs" || { dump_failure_logs; exit 1; }
 
 $curl_tls --user "$admin_user:$admin_password" "$origin/version?smoke_secret_query=marker" >/dev/null
 $compose logs --no-color > "$deploy/topology-smoke.log"
