@@ -34,6 +34,37 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Wait for engine + gateway to be truly ready after `compose up` or `compose restart`.
+#
+# `/health` returns ok as soon as axum is listening, which is too early: the
+# gateway upstream pool, provider HTTP client, and SSE path may still be
+# warming up. Probing `/v1/models` after `/health` forces a real round-trip
+# through the gateway → engine → provider egress path, closing the race that
+# caused transient `stream interrupted: engine disconnected` errors in the
+# restart-continuity browser smoke (PR #243 follow-up, run 29671033343).
+#
+# On failure, dumps the last 400 lines of engine + gateway logs to stderr so
+# CI annotations show the real root cause instead of a bare node assertion.
+wait_for_engine_ready() {
+  for _ in $(seq 1 60); do
+    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
+  $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
+  for _ in $(seq 1 30); do
+    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/v1/models" >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
+  $curl_tls --user "$admin_user:$admin_password" --fail "$origin/v1/models" >/dev/null
+}
+
+dump_failure_logs() {
+  echo "----- engine logs (last 400 lines) -----" >&2
+  $compose logs --no-color --tail=400 engine >&2 2>&1 || true
+  echo "----- gateway logs (last 400 lines) -----" >&2
+  $compose logs --no-color --tail=400 gateway >&2 2>&1 || true
+}
+
 mkdir -p "$deploy/secrets" "$deploy/certs"
 umask 077
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -149,11 +180,7 @@ NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/webui/smoke.mjs"
 
 $compose restart engine gateway >/dev/null
-for _ in $(seq 1 60); do
-  if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
-  sleep 1
-done
-$curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
+wait_for_engine_ready
 character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
 session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file")
 history=$($curl_tls --user "$admin_user:$admin_password" \
@@ -173,11 +200,7 @@ NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-smoke.mjs"
 
 $compose restart engine gateway >/dev/null
-for _ in $(seq 1 60); do
-  if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
-  sleep 1
-done
-$curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
+wait_for_engine_ready
 AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
 AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
@@ -185,7 +208,7 @@ AIRP_SMOKE_BROWSER_STATE_FILE="$browser_state_file" \
 AIRP_SMOKE_BROWSER_RESULT_FILE="$browser_result_file" \
 AIRP_CHROME_SPKI="$chrome_spki" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
-node "$repo/ui/production-browser-restart-smoke.mjs"
+node "$repo/ui/production-browser-restart-smoke.mjs" || { dump_failure_logs; exit 1; }
 
 $curl_tls --user "$admin_user:$admin_password" "$origin/version?smoke_secret_query=marker" >/dev/null
 $compose logs --no-color > "$deploy/topology-smoke.log"
