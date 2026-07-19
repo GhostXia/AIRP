@@ -79,7 +79,7 @@ wait_for_engine_ready() {
             --output "$probe_tmp" \
             --write-out '%{http_code}' \
             "$origin/v1/chat/completions" 2>&1) && rc=0 || rc=$?
-        if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && grep -q '\[DONE\]' "$probe_tmp"; then
+        if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && grep -q '"type":"done"' "$probe_tmp"; then
           rm -f "$probe_tmp"
           return 0
         fi
