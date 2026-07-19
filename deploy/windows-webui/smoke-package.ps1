@@ -10,6 +10,7 @@ $engine = Join-Path $package 'airp-core.exe'
 $webui = Join-Path $package 'webui'
 $data = Join-Path $package 'data'
 $config = Join-Path $package 'config.json'
+$launcher = Join-Path $package 'Start-AIRP.cmd'
 $origin = "http://127.0.0.1:$Port"
 $env:AIRP_DATA_DIR = $data
 $env:AIRP_PERSIST_PROVIDER_KEY = 'true'
@@ -53,6 +54,19 @@ try {
     }
     if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
         throw 'Portable config.json was not created inside the package.'
+    }
+    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+        throw 'Portable Start-AIRP.cmd is missing.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $package 'Start-AIRP.ps1')) {
+        throw 'Portable package must not contain Start-AIRP.ps1.'
+    }
+    $launcherText = Get-Content -LiteralPath $launcher -Raw
+    if ($launcherText -match '(?i)powershell|ExecutionPolicy|\.ps1') {
+        throw 'Portable launcher must not invoke PowerShell.'
+    }
+    if ($launcherText -notmatch '--open-browser') {
+        throw 'Portable launcher must ask the engine to open the browser.'
     }
     Write-Host "Packaged WebUI smoke passed at $origin"
     Write-Host "Portable data boundary: $data"

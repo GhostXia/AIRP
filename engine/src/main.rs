@@ -45,6 +45,10 @@ enum Commands {
         /// Serve a WebUI directory from the same loopback origin.
         #[arg(long)]
         webui_dir: Option<PathBuf>,
+
+        /// Open the local WebUI in the default Windows browser after binding.
+        #[arg(long, requires = "webui_dir")]
+        open_browser: bool,
     },
     /// 在终端控制台直接运行单次流式过滤
     Run {
@@ -82,6 +86,22 @@ fn validate_local_webui_options(
         return Err("--webui-dir cannot be used while access API key authentication is configured");
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn open_default_browser(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("explorer.exe")
+        .arg(url)
+        .spawn()?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_default_browser(_url: &str) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "--open-browser is supported only on Windows",
+    ))
 }
 
 #[tokio::main]
@@ -140,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             port,
             host,
             webui_dir,
+            open_browser,
         } => {
             let daemon_port = port.unwrap_or(app_config.daemon_port);
             let bind_ip = host
@@ -192,7 +213,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let listener = TcpListener::bind(&addr).await?;
 
             println!("AIRP-Core Gateway running at http://{}", addr);
-            println!("Open your browser and visit the address above.");
+            if open_browser {
+                open_default_browser(&format!("http://{addr}"))?;
+                println!("Opened AIRP WebUI in the default browser.");
+            } else {
+                println!("Open your browser and visit the address above.");
+            }
             // M6.4：限流层需要 `ConnectInfo<SocketAddr>` 来识别客户端 IP；
             // 用 `into_make_service_with_connect_info` 让 axum 把 peer 地址注入扩展。
             axum::serve(
@@ -329,5 +355,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("loopback"));
+    }
+
+    #[test]
+    fn daemon_cli_accepts_open_browser_with_webui_dir() {
+        let cli = Cli::try_parse_from([
+            "airp-core",
+            "daemon",
+            "--webui-dir",
+            "webui",
+            "--open-browser",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Daemon {
+                open_browser: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn daemon_cli_rejects_open_browser_without_webui_dir() {
+        assert!(Cli::try_parse_from(["airp-core", "daemon", "--open-browser"]).is_err());
     }
 }

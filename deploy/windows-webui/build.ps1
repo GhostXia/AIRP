@@ -36,7 +36,7 @@ foreach ($asset in @(
 )) {
     Copy-Item -LiteralPath (Join-Path $repoRoot "webui\$asset") -Destination (Join-Path $packageRoot 'webui')
 }
-foreach ($file in @('Start-AIRP.ps1', 'Start-AIRP.cmd', 'README.txt')) {
+foreach ($file in @('Start-AIRP.cmd', 'README.txt')) {
     Copy-Item -LiteralPath (Join-Path $deployRoot $file) -Destination $packageRoot
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE-MIT') -Destination $packageRoot
