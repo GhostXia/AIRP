@@ -93,7 +93,7 @@ node serve.js
 
 Windows 可使用 `webui/start.bat` 启动本地开发依赖。上述路径均不是用户交付包；不要把 8000 端口或静态开发服务器直接暴露到公网。
 
-当前最优先交付路径是便携式 Windows WebUI 包：运行 `deploy/windows-webui/build.ps1` 后解压 `dist/airp-webui-windows-x64.zip`，双击 `Start-AIRP.cmd`。用户侧不需要 Rust、Node、Docker、WSL 或 Tauri；`data/` 与 `config.json` 均留在解压目录内，provider key 集中保存在包内 `data/secrets.json`，默认不通过 API/UI 回显。升级前必须备份并迁移 `data/`。该包只监听 `127.0.0.1`，不得转发到局域网或公网。`deploy/production/` 自托管拓扑予以保留，但不是当前落地前置条件。
+当前最优先交付路径是便携式 Windows WebUI 包：维护者可运行 `deploy/windows-webui/build.ps1` 生成 `dist/airp-webui-windows-x64.zip`；发布 GitHub Release 时，同一发布包会在完整 smoke 通过后自动附加到 Release。用户下载解压后双击可读的 `Start-AIRP.cmd`；它直接启动 engine，不调用 PowerShell、不申请管理员权限、也不执行安装。用户侧不需要 Rust、Node、Docker、WSL 或 Tauri；`data/` 与 `config.json` 均留在解压目录内，provider key 集中保存在包内 `data/secrets.json`，默认不通过 API/UI 回显。升级前必须备份并迁移 `data/`。该包只监听 `127.0.0.1`，不得转发到局域网或公网。`deploy/production/` 自托管拓扑予以保留，但不是当前落地前置条件。
 
 Tauri 桌面开发：
 

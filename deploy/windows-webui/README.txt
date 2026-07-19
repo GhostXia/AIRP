@@ -1,7 +1,8 @@
 AIRP Windows WebUI preview
 ==========================
 
-1. Double-click Start-AIRP.cmd.
+1. Double-click Start-AIRP.cmd. It runs directly and does not use PowerShell,
+   request administrator access, or install anything.
 2. Your default browser opens http://127.0.0.1:8765.
 3. Complete onboarding and enter your own provider endpoint, API key, and model.
 4. Keep the launcher window open while using AIRP. Closing it stops AIRP.

@@ -2,6 +2,8 @@ name: Windows WebUI package
 
 on:
   workflow_dispatch:
+  release:
+    types: [published]
   pull_request:
     paths:
       - "Cargo.toml"
@@ -60,3 +62,24 @@ jobs:
           name: airp-webui-windows-x64
           if-no-files-found: error
           path: dist/airp-webui-windows-x64.zip
+
+  publish-release:
+    name: Attach portable WebUI to release
+    if: github.event_name == 'release'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified portable package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: airp-webui-windows-x64
+          path: release
+
+      - name: Attach ZIP to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" release/airp-webui-windows-x64.zip --clobber
