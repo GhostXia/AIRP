@@ -36,12 +36,19 @@ trap cleanup EXIT INT TERM
 
 # Wait for engine + gateway to be truly ready after `compose up` or `compose restart`.
 #
-# `/health` returns ok as soon as axum is listening, which is too early: the
-# gateway upstream pool, provider HTTP client, and SSE path may still be
-# warming up. Probing `/v1/models` after `/health` forces a real round-trip
-# through the gateway → engine → provider egress path, closing the race that
-# caused transient `stream interrupted: engine disconnected` errors in the
-# restart-continuity browser smoke (PR #243 follow-up, run 29671033343).
+# Three-stage probe:
+#   1. `/health` returns `engine:"ok"` — axum is listening.
+#   2. `GET /v1/models` returns 200 — gateway → engine → provider egress path
+#      can serve a real request, not just the health route.
+#   3. (optional) `POST /v1/chat/completions` completes a full SSE round-trip
+#      ending in `data: [DONE]` — the streaming path itself is stable, which
+#      is what the restart-continuity browser smoke actually exercises.
+#
+# Stage 3 only runs when `WAIT_FOR_ENGINE_READY_CHAT_PROBE` is set to a
+# non-empty value (the smoke callsite that has a valid character_id +
+# session_id). Stages 1–2 close the listener race from PR #243 run 29671033343;
+# stage 3 closes the mid-stream drop race from PR #246 run 29673388808, where
+# `/v1/models` returned 200 but the SSE stream still got reset mid-flight.
 #
 # On failure, dumps the last 400 lines of engine + gateway logs to stderr so
 # CI annotations show the real root cause instead of a bare node assertion.
@@ -56,6 +63,27 @@ wait_for_engine_ready() {
     sleep 1
   done
   $curl_tls --user "$admin_user:$admin_password" --fail "$origin/v1/models" >/dev/null
+
+  if [ -n "${WAIT_FOR_ENGINE_READY_CHAT_PROBE:-}" ]; then
+    probe_character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file" 2>/dev/null || true)
+    probe_session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file" 2>/dev/null || true)
+    if [ -n "$probe_character_id" ] && [ -n "$probe_session_id" ]; then
+      for _ in $(seq 1 8); do
+        probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
+        if $curl_tls --silent --show-error --no-buffer \
+            --user "$admin_user:$admin_password" \
+            --header 'Content-Type: application/json' \
+            --data "$probe_body" \
+            --max-time 10 \
+            "$origin/v1/chat/completions" 2>/dev/null | grep -q '\[DONE\]'; then
+          return 0
+        fi
+        sleep 2
+      done
+      echo "wait_for_engine_ready: SSE round-trip probe failed after 8 attempts" >&2
+      return 1
+    fi
+  fi
 }
 
 dump_failure_logs() {
@@ -200,7 +228,7 @@ NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-smoke.mjs"
 
 $compose restart engine gateway >/dev/null
-wait_for_engine_ready
+WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
 AIRP_SMOKE_ORIGIN="$origin" \
 AIRP_SMOKE_ADMIN_USER="$admin_user" \
 AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
