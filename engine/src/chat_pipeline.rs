@@ -80,6 +80,9 @@ pub struct FinalizerCtx {
     /// Continue mode: append generated text to the existing last assistant
     /// message instead of creating a new one.
     pub continue_mode: bool,
+    /// #249 Swipe：regen 时捕获的旧候选列表。非空时，finalizer 会将新生成
+    /// 的文本追加为最后一个候选，并将 swipe_index 指向新候选。
+    pub swipe_candidates: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -962,6 +965,7 @@ fn prepare_scene_pipeline(
             volume_config: snapshot.volume_config.clone(),
             http_client: state.http_client.clone(),
             continue_mode: false,
+            swipe_candidates: Vec::new(),
         },
         http_client: state.http_client.clone(),
     })
@@ -1353,6 +1357,7 @@ fn prepare_pipeline_with_mode(
             volume_config: snapshot.volume_config.clone(),
             http_client: state.http_client.clone(),
             continue_mode: mode == PrepareMode::Continue,
+            swipe_candidates: payload.swipe_candidates.clone(),
         },
         http_client: state.http_client.clone(),
     })
@@ -1517,6 +1522,15 @@ async fn run_finalize(
                     cid,
                     ctx.session_id.as_ref(),
                     &stripped,
+                )?;
+            } else if !ctx.swipe_candidates.is_empty() {
+                // #249 Swipe: regen 时捕获了旧候选，将新生成文本追加为最后一个候选。
+                let mut candidates = ctx.swipe_candidates.clone();
+                candidates.push(stripped);
+                ChatService::new(&ctx.data_root).append_with_candidates(
+                    cid,
+                    ctx.session_id.as_ref(),
+                    candidates,
                 )?;
             } else {
                 ChatService::new(&ctx.data_root).append(

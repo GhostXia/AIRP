@@ -42,7 +42,7 @@ use handlers::{
     get_preset_endpoint, get_scene_endpoint, get_settings, import_character,
     import_preset_endpoint, list_agent_tools, list_characters, list_models, list_personas_endpoint,
     list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
-    reextract_character_assets, regen_chat, rollback_chat, unbind_persona_endpoint,
+    reextract_character_assets, regen_chat, rollback_chat, swipe_chat, unbind_persona_endpoint,
     update_character_card, update_character_lorebook, update_persona_endpoint,
     update_persona_multi_endpoint, update_settings,
 };
@@ -310,6 +310,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/v1/chat/regen", post(regen_chat))
         .route("/v1/chat/continue", post(continue_chat))
         .route("/v1/chat/delete", post(delete_message))
+        .route("/v1/chat/swipe", post(swipe_chat))
         .route("/v1/characters", get(list_characters))
         .route(
             "/v1/characters/import",

@@ -1246,6 +1246,27 @@
     if (messageId && !isStreaming) {
       const actions = document.createElement('span');
       actions.className = 'msg-actions';
+      // #249 Swipe：assistant 消息且有多个候选时显示切换箭头和计数器。
+      const msgCands = opts.candidates || [];
+      if (safeRole === 'assistant' && msgCands.length > 1) {
+        const swipeWrap = document.createElement('span');
+        swipeWrap.className = 'swipe-controls';
+        const prevBtn = document.createElement('button');
+        prevBtn.textContent = '◀';
+        prevBtn.title = '上一个候选';
+        prevBtn.onclick = (e) => { e.stopPropagation(); swipeSwitch(messageId, -1, msgCands.length); };
+        const counter = document.createElement('span');
+        counter.className = 'swipe-counter';
+        counter.textContent = ((opts.swipeIndex || 0) + 1) + '/' + msgCands.length;
+        const nextBtn = document.createElement('button');
+        nextBtn.textContent = '▶';
+        nextBtn.title = '下一个候选';
+        nextBtn.onclick = (e) => { e.stopPropagation(); swipeSwitch(messageId, 1, msgCands.length); };
+        swipeWrap.appendChild(prevBtn);
+        swipeWrap.appendChild(counter);
+        swipeWrap.appendChild(nextBtn);
+        actions.appendChild(swipeWrap);
+      }
       if (safeRole === 'user') {
         const editBtn = document.createElement('button');
         editBtn.textContent = '✐';
@@ -1332,6 +1353,40 @@
     }
   }
 
+  // ── #249 Swipe：切换候选回复 ─────────────────────────────────────────────
+  // direction: -1 = 上一个, +1 = 下一个。循环切换（wrap around）。
+  async function swipeSwitch(messageId, direction, totalCandidates) {
+    const div = messageNodes.get(messageId);
+    if (!div) return;
+    const counter = div.querySelector('.swipe-counter');
+    if (!counter) return;
+    // 解析当前下标。
+    const match = counter.textContent.match(/^(\d+)\/(\d+)$/);
+    if (!match) return;
+    let current = parseInt(match[1], 10) - 1; // 0-based
+    let newIndex = (current + direction + totalCandidates) % totalCandidates;
+    // 调用 engine API 切换。
+    const r = await api('POST', '/v1/chat/swipe', buildSessionPayload({
+      message_id: messageId,
+      index: newIndex,
+      user_id: personaUserId.value.trim() || 'default',
+    }));
+    if (r.ok) {
+      // 更新 DOM：找到 messages 中对应消息的 content。
+      const data = r.data;
+      const msgs = data.messages || [];
+      const ids = data.message_ids || [];
+      const idx = ids.indexOf(messageId);
+      if (idx >= 0 && msgs[idx]) {
+        const textNode = div.querySelector('.text');
+        if (textNode) textNode.innerHTML = renderMarkdown(msgs[idx].content || '');
+      }
+      counter.textContent = (newIndex + 1) + '/' + totalCandidates;
+    } else {
+      window.alert('切换失败: ' + formatError(r.data, r.text));
+    }
+  }
+
   // ── continue: extend last assistant message (ST: empty send = continue) ────
   async function doContinue() {
     if (!selectedChar) return;
@@ -1364,18 +1419,28 @@
       } else {
         textNode.classList.add('streaming');
       }
+      // #249 Smooth Streaming：继续生成时也要平滑输出。
+      // 注意：continue 是追加到已有文本，所以 streamer 的 rendered 需要加上 existingText。
+      const streamer = new SmoothStreamer({ textContent: '' }, SMOOTH_STREAM_FPS);
+      // 自定义 el 代理：把 streamer 的输出加上 existingText 前缀。
+      const origPush = streamer.push.bind(streamer);
+      streamer.push = (t) => { origPush(t); textNode.textContent = existingText + streamer.getRendered(); };
       await streamSse(res, (chunk, seq) => {
         if (chunk.type === 'body_chunk' && chunk.text) {
           acc += chunk.text;
-          textNode.textContent = existingText + acc;
+          streamer.push(chunk.text);
           if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
         }
         if (chunk.type === 'done') {
+          streamer.finish();
+          acc = streamer.getRendered();
           textNode.classList.remove('streaming');
           textNode.innerHTML = renderMarkdown(existingText + acc);
         }
       });
       if (textNode.classList.contains('streaming')) {
+        streamer.finish();
+        acc = streamer.getRendered();
         textNode.classList.remove('streaming');
         textNode.innerHTML = renderMarkdown(existingText + acc);
       }
@@ -1436,17 +1501,21 @@
         return;
       }
       msgEl = appendMsg('assistant', '', true, new Date());
+      // #249 Smooth Streaming：用 rAF + 字符队列平滑输出。
+      const streamer = new SmoothStreamer(msgEl, SMOOTH_STREAM_FPS);
       const seq = await streamSse(res, (chunk, seq) => {
         // A2: 只把 body_chunk 渲染到正文。think_chunk（心理独白，应折叠）和
         // action_options（选项数组，content 是对象不是 string）都不应混入 body。
         if (chunk.type === 'body_chunk' && chunk.text) {
           acc += chunk.text;
-          msgEl.textContent = acc;
+          streamer.push(chunk.text);
           if (seq % 5 === 0) {
             logEvent('SSE', '/v1/chat/completions', 200, Math.round(performance.now() - t0), 'chunk#' + seq);
           }
         }
       });
+      streamer.finish();
+      acc = streamer.getRendered();
       msgEl.classList.remove('streaming');
       // 流式期间用 textContent（保 cursor 动画 + 性能），完成后切 markdown innerHTML。
       if (acc) msgEl.innerHTML = renderMarkdown(acc);
@@ -1566,6 +1635,57 @@
     if (assemblyStatus && selectedChar) assemblyStatus.textContent = '消息已变化；刷新预览可重新计算装配材料。';
   });
 
+  // ── #249 Smooth Streaming：rAF + 字符队列实现可配置 FPS 的平滑输出 ────────────
+  // 默认 30 字符/秒，可通过 settings 调整。纯前端改动，不触碰 SSE 协议。
+  const SMOOTH_STREAM_FPS = 30; // 字符/秒
+  class SmoothStreamer {
+    constructor(el, fps) {
+      this.el = el;
+      this.fps = fps || SMOOTH_STREAM_FPS;
+      this.queue = '';
+      this.rendered = '';
+      this.rafId = null;
+      this.lastTime = 0;
+      this.running = false;
+    }
+    push(text) {
+      this.queue += text;
+      if (!this.running) this.start();
+    }
+    start() {
+      this.running = true;
+      this.lastTime = performance.now();
+      const tick = (now) => {
+        if (!this.running) return;
+        const elapsed = now - this.lastTime;
+        // 计算本帧应渲染的字符数。
+        const charsToRender = Math.floor((elapsed / 1000) * this.fps);
+        if (charsToRender > 0 && this.queue.length > 0) {
+          const chunk = this.queue.slice(0, charsToRender);
+          this.queue = this.queue.slice(charsToRender);
+          this.rendered += chunk;
+          this.el.textContent = this.rendered;
+          this.lastTime = now;
+        }
+        if (this.queue.length > 0) {
+          this.rafId = requestAnimationFrame(tick);
+        } else {
+          this.running = false;
+        }
+      };
+      this.rafId = requestAnimationFrame(tick);
+    }
+    // 立即渲染所有剩余文本（流结束时调用）。
+    finish() {
+      this.running = false;
+      if (this.rafId) cancelAnimationFrame(this.rafId);
+      this.rendered += this.queue;
+      this.queue = '';
+      this.el.textContent = this.rendered;
+    }
+    getRendered() { return this.rendered; }
+  }
+
   async function streamSse(res, onChunk) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -1662,6 +1782,9 @@
       // #73 方案 B：消息级时间戳（与 messages 一一对应）。旧会话可能无 ts → null。
       const tss = Array.isArray(data.message_timestamps) ? data.message_timestamps : [];
       const ids = Array.isArray(data.message_ids) ? data.message_ids : [];
+      // #249 Swipe：候选列表和当前下标（与 messages 一一对应）。
+      const cands = Array.isArray(data.message_candidates) ? data.message_candidates : [];
+      const swidx = Array.isArray(data.message_swipe_index) ? data.message_swipe_index : [];
       // A-3：长度不匹配是 engine bug，显式 warn 暴露而非静默降级
       if (tss.length !== msgs.length || ids.length !== msgs.length) {
         console.warn('engine bug: history parallel arrays must have equal lengths');
@@ -1677,9 +1800,13 @@
         const m = msgs[i];
         const tsRaw = tss[i];
         const ts = tsRaw ? new Date(tsRaw) : null;
+        const msgCands = cands[i] || [];
+        const msgSwidx = swidx[i] || 0;
         appendMsg(m.role || 'assistant', m.text || m.content || '', false, ts, ids[i], {
           prepend: Boolean(before),
           scroll: false,
+          candidates: msgCands,
+          swipeIndex: msgSwidx,
         });
       });
       historyState.oldestId = data.oldest_id || historyState.oldestId;
@@ -1738,18 +1865,24 @@
         return;
       }
       msgEl = appendMsg('assistant', '', true, new Date());
+      // #249 Smooth Streaming。
+      const streamer = new SmoothStreamer(msgEl, SMOOTH_STREAM_FPS);
       await streamSse(res, (chunk, seq) => {
         if (chunk.type === 'body_chunk' && chunk.text) {
           acc += chunk.text;
-          msgEl.textContent = acc;
+          streamer.push(chunk.text);
           if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
         }
         if (chunk.type === 'done') {
+          streamer.finish();
+          acc = streamer.getRendered();
           msgEl.classList.remove('streaming');
           msgEl.innerHTML = renderMarkdown(acc);
         }
       });
       if (msgEl.classList.contains('streaming')) {
+        streamer.finish();
+        acc = streamer.getRendered();
         msgEl.classList.remove('streaming');
         msgEl.innerHTML = renderMarkdown(acc);
       }

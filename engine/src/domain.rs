@@ -111,6 +111,10 @@ pub struct HistoryWindow {
     pub messages: Vec<ChatMessage>,
     pub message_ids: Vec<String>,
     pub message_timestamps: Vec<Option<String>>,
+    /// #249 Swipe：每条消息的候选回复列表。空 Vec = 单候选（content 即唯一候选）。
+    pub message_candidates: Vec<Vec<String>>,
+    /// #249 Swipe：每条消息当前激活候选的下标（0-based）。
+    pub message_swipe_index: Vec<usize>,
     pub has_more: bool,
     pub oldest_id: Option<String>,
     pub total: usize,
@@ -208,6 +212,8 @@ impl ChatService {
         let window_messages = log.messages[start..end].to_vec();
         let window_ids = log.message_ids[start..end].to_vec();
         let window_ts = log.message_timestamps[start..end].to_vec();
+        let window_cands = log.message_candidates[start..end].to_vec();
+        let window_swidx = log.message_swipe_index[start..end].to_vec();
 
         // has_more = 切点之前还有消息（start > 0）。
         let has_more = start > 0;
@@ -218,6 +224,8 @@ impl ChatService {
             messages: window_messages,
             message_ids: window_ids,
             message_timestamps: window_ts,
+            message_candidates: window_cands,
+            message_swipe_index: window_swidx,
             has_more,
             oldest_id,
             total,
@@ -362,21 +370,40 @@ impl ChatService {
         })
     }
 
+    /// #249 Swipe：删除最后一条 assistant 消息并返回其候选列表。
+    ///
+    /// 返回值：`(ChatLog, Vec<String>)` —— 第二个元素是旧消息的全部候选
+    ///（含原始 content）。若旧消息无候选，则返回 `[old_content]`。
+    /// 调用方（regen handler）将此列表传入 pipeline，finalizer 会将新生成
+    /// 的文本追加为最后一个候选。
     pub fn regen(
         &self,
         character_id: &CharacterId,
         session_id: Option<&SessionId>,
-    ) -> Result<ChatLog, AirpError> {
+    ) -> Result<(ChatLog, Vec<String>), AirpError> {
         self.with_session(character_id, session_id, || {
             let mut log = ChatLog::load_or_create_for_session(
                 &self.data_root,
                 character_id.as_str(),
                 session_id,
             )?;
+            let mut old_candidates = Vec::new();
             if !log.messages.is_empty() {
+                let last_idx = log.messages.len() - 1;
+                // 捕获旧候选：有候选用候选，无候选用 content 本身。
+                let cands = log
+                    .message_candidates
+                    .get(last_idx)
+                    .cloned()
+                    .unwrap_or_default();
+                if cands.is_empty() {
+                    old_candidates.push(log.messages[last_idx].content.clone());
+                } else {
+                    old_candidates = cands;
+                }
                 log.delete_last_n(&self.data_root, 1)?;
             }
-            Ok(log)
+            Ok((log, old_candidates))
         })
     }
 
@@ -405,6 +432,95 @@ impl ChatService {
                 ));
             }
             last.content.push_str(text);
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
+    /// #249 Swipe：追加一条带候选的 assistant 消息。
+    ///
+    /// `candidates` 含全部候选（含旧 + 新），`content` 设为最后一个候选（新生成的），
+    /// `swipe_index` 指向最后一个候选。
+    pub fn append_with_candidates(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        candidates: Vec<String>,
+    ) -> Result<ChatLog, AirpError> {
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            if candidates.is_empty() {
+                return Err(AirpError::BadRequest(
+                    "append_with_candidates: candidates cannot be empty".into(),
+                ));
+            }
+            let swipe_index = candidates.len() - 1;
+            let content = candidates[swipe_index].clone();
+            log.messages.push(ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content,
+            });
+            log.message_ids.push(crate::ulid::new_id());
+            log.message_timestamps
+                .push(Some(chrono::Utc::now().to_rfc3339()));
+            log.message_candidates.push(candidates);
+            log.message_swipe_index.push(swipe_index);
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
+    /// #249 Swipe：切换指定消息的激活候选。
+    ///
+    /// `message_id` 是 durable ID，`new_index` 是候选下标（0-based）。
+    /// 切换后 `messages[i].content` 更新为 `candidates[new_index]`。
+    /// ID 不变（解耦优先：role 可变，ID 不应变）。
+    pub fn switch_swipe(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message_id: &str,
+        new_index: usize,
+    ) -> Result<ChatLog, AirpError> {
+        if !crate::ulid::is_valid_id(message_id) {
+            return Err(AirpError::BadRequest(format!(
+                "message_id is not a valid durable message id: {message_id}"
+            )));
+        }
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let idx = log
+                .message_ids
+                .iter()
+                .position(|x| crate::ulid::matches(x, message_id))
+                .ok_or_else(|| {
+                    AirpError::BadRequest(format!("message_id {message_id} not in this session"))
+                })?;
+            let cands = log.message_candidates.get(idx).ok_or_else(|| {
+                AirpError::BadRequest(format!("message {message_id} has no candidates"))
+            })?;
+            if cands.is_empty() {
+                return Err(AirpError::BadRequest(format!(
+                    "message {message_id} has no candidates to switch"
+                )));
+            }
+            if new_index >= cands.len() {
+                return Err(AirpError::BadRequest(format!(
+                    "swipe index {new_index} out of range (candidates: {})",
+                    cands.len()
+                )));
+            }
+            // 更新 content 和 swipe_index。
+            log.messages[idx].content = cands[new_index].clone();
+            log.message_swipe_index[idx] = new_index;
             log.save(&self.data_root)?;
             Ok(log)
         })
@@ -443,6 +559,13 @@ impl ChatService {
             // defensively check bounds to avoid out-of-bounds panic.
             if idx < log.message_timestamps.len() {
                 log.message_timestamps.remove(idx);
+            }
+            // #249：同步移除 candidates / swipe_index。
+            if idx < log.message_candidates.len() {
+                log.message_candidates.remove(idx);
+            }
+            if idx < log.message_swipe_index.len() {
+                log.message_swipe_index.remove(idx);
             }
             log.save(&self.data_root)?;
             Ok(log)

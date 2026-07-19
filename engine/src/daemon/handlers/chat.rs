@@ -15,7 +15,7 @@ use crate::chat_pipeline;
 use crate::chat_store::ChatLog;
 use crate::daemon::types::{
     ChatCompletionRequest, ContinueRequest, DeleteMessageRequest, HistoryQuery, RegenRequest,
-    RollbackRequest,
+    RollbackRequest, SwipeRequest,
 };
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
@@ -87,8 +87,9 @@ pub(in crate::daemon) async fn regen_chat(
     };
     crate::quota::check_and_increment(&effective_root, &quota_config)?;
 
-    // 1. Delete the last assistant message.
-    ChatService::new(&effective_root).regen(&req.character_id, req.session_id.as_ref())?;
+    // 1. Delete the last assistant message and capture its candidates.
+    let (_log, old_candidates) =
+        ChatService::new(&effective_root).regen(&req.character_id, req.session_id.as_ref())?;
 
     // 2. Build a regen pipeline (no new user message, no timeline advancement).
     let payload = ChatCompletionRequest {
@@ -114,6 +115,8 @@ pub(in crate::daemon) async fn regen_chat(
         scene_id: None,
         user_id: req.user_id,
         persona_id: None,
+        // #249 Swipe：将旧候选传入 pipeline，finalizer 会追加新候选。
+        swipe_candidates: old_candidates,
     };
     let pipeline = chat_pipeline::prepare_regen_pipeline(&payload, &state)?;
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
@@ -159,6 +162,7 @@ pub(in crate::daemon) async fn continue_chat(
         scene_id: None,
         user_id: req.user_id,
         persona_id: None,
+        swipe_candidates: Vec::new(),
     };
     let pipeline = chat_pipeline::prepare_continue_pipeline(&payload, &state)?;
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
@@ -175,6 +179,22 @@ pub(in crate::daemon) async fn delete_message(
         &req.character_id,
         req.session_id.as_ref(),
         &req.message_id,
+    )?;
+    Ok(Json(log))
+}
+
+/// POST /v1/chat/swipe — #249 Swipe：切换指定消息的激活候选。
+pub(in crate::daemon) async fn swipe_chat(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(req): Json<SwipeRequest>,
+) -> Result<Json<ChatLog>, AirpError> {
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let log = ChatService::new(&effective_root).switch_swipe(
+        &req.character_id,
+        req.session_id.as_ref(),
+        &req.message_id,
+        req.index,
     )?;
     Ok(Json(log))
 }
