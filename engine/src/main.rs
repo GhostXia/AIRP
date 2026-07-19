@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -70,6 +70,20 @@ enum Commands {
     },
 }
 
+fn validate_local_webui_options(
+    webui_dir: Option<&Path>,
+    bind_ip: IpAddr,
+    access_api_key: Option<&str>,
+) -> Result<(), &'static str> {
+    if webui_dir.is_some() && !bind_ip.is_loopback() {
+        return Err("--webui-dir is restricted to a loopback --host");
+    }
+    if webui_dir.is_some() && access_api_key.is_some() {
+        return Err("--webui-dir cannot be used while access API key authentication is configured");
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // M1.9 / M2 前置：初始化 tracing subscriber，让 daemon 里 warn/error/debug 可见。
@@ -134,9 +148,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !bind_ip.is_loopback() && app_config.deployment_mode != DeploymentMode::Production {
                 return Err("non-loopback --host is allowed only in production mode".into());
             }
-            if webui_dir.is_some() && !bind_ip.is_loopback() {
-                return Err("--webui-dir is restricted to a loopback --host".into());
-            }
+            validate_local_webui_options(
+                webui_dir.as_deref(),
+                bind_ip,
+                app_config.access_api_key.as_deref(),
+            )?;
 
             let state = Arc::new(DaemonState {
                 data_root,
@@ -286,4 +302,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_webui_rejects_access_authentication() {
+        let dir = Path::new("webui");
+        let error = validate_local_webui_options(
+            Some(dir),
+            "127.0.0.1".parse().unwrap(),
+            Some("local-access-key"),
+        )
+        .unwrap_err();
+        assert!(error.contains("access API key"));
+    }
+
+    #[test]
+    fn local_webui_requires_loopback() {
+        let error = validate_local_webui_options(
+            Some(Path::new("webui")),
+            "0.0.0.0".parse().unwrap(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("loopback"));
+    }
 }

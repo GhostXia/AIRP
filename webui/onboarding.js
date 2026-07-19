@@ -229,10 +229,10 @@ export function mountOnboarding(container, hostPort) {
       }, 'stage1-connect'));
       box.appendChild(btn);
     } else {
-      box.appendChild(el('p', 'onb-hint', '生产模式：同源安全连接，网关注入认证。正在检查部署健康…'));
-      if (hostPort.mode === 'local' && box.lastChild) {
-        box.lastChild.textContent = '本机模式：WebUI 与 Engine 使用同源回环连接。正在检查运行状态…';
-      }
+      const hintText = hostPort.mode === 'local'
+        ? '本机模式：WebUI 与 Engine 使用同源回环连接。正在检查运行状态…'
+        : '生产模式：同源安全连接，网关注入认证。正在检查部署健康…';
+      box.appendChild(el('p', 'onb-hint', hintText));
       setTimeout(() => { safeAsync(() => runHealthCheck(box), 'stage1-health-check-prod'); }, 0);
     }
     return box;

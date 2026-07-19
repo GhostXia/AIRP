@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   parseCargoLockForChecksums,
@@ -19,6 +19,8 @@ import {
   buildCargoRecords,
   atomicWrite,
   renderInventoryText,
+  normalizeCargoManifestPath,
+  normalizeWorkspaceMemberId,
 } from "../discover-deps.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -425,7 +427,7 @@ test("renderInventoryText: includes attention section for block/audit-required",
   ];
   const meta = {
     generated_at: "2026-07-18T00:00:00.000Z",
-    repo_root: "/workspace",
+    repo_root: ".",
     total_records: 2,
     summary: {
       by_audit_class: { "auto-pass": 1, block: 1 },
@@ -437,4 +439,30 @@ test("renderInventoryText: includes attention section for block/audit-required",
   assert.match(text, /Records requiring attention/);
   assert.match(text, /\[block\] cargo\/bad@2\.0\.0/);
   assert.match(text, /GPL-3\.0 in runtime/);
+  assert.match(text, /Repo root: \./);
+});
+
+test("local Cargo paths are normalized before inventory output", () => {
+  const repoRoot = path.resolve(FIXTURES, "..", "..", "..");
+  const localManifest = path.join(repoRoot, "engine", "Cargo.toml");
+  assert.equal(
+    normalizeCargoManifestPath(localManifest, repoRoot, "workspace", "airp-core", "0.1.0"),
+    "engine/Cargo.toml",
+  );
+  assert.equal(
+    normalizeCargoManifestPath(
+      path.resolve(repoRoot, "..", "cargo-cache", "serde", "Cargo.toml"),
+      repoRoot,
+      "crates.io",
+      "serde",
+      "1.0.0",
+    ),
+    "<cargo-registry>/serde-1.0.0/Cargo.toml",
+  );
+
+  const member = `path+${pathToFileURL(path.join(repoRoot, "engine")).href}#airp-core@0.1.0`;
+  assert.equal(
+    normalizeWorkspaceMemberId(member, repoRoot),
+    "path+file:///<repo>/engine#airp-core@0.1.0",
+  );
 });

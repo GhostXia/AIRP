@@ -17760,7 +17760,7 @@
       "type": "application",
       "version": "0.1.0"
     },
-    "timestamp": "2026-07-18T16:58:15.011Z",
+    "timestamp": "2026-07-19T01:11:11.558Z",
     "tools": [
       {
         "name": "AIRP dep-governance generate-sbom.mjs",
@@ -17769,7 +17769,7 @@
       }
     ]
   },
-  "serialNumber": "urn:uuid:b25f015b-747e-4b49-996b-bdaa90d8edf3",
+  "serialNumber": "urn:uuid:da04b107-e28e-42d7-8727-ce5a5f03d3f6",
   "specVersion": "1.5",
   "version": 1
 }

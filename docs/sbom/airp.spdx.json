@@ -1,7 +1,7 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-07-18T16:58:15.011Z",
+    "created": "2026-07-19T01:11:11.558Z",
     "creators": [
       "Tool: AIRP dep-governance generate-sbom.mjs",
       "Organization: GhostXia"
@@ -9,7 +9,7 @@
     "licenseListVersion": "3.21"
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://airp.local/spdx/AIRP-2026-07-18",
+  "documentNamespace": "https://airp.local/spdx/AIRP-2026-07-19",
   "name": "AIRP",
   "packages": [
     {
