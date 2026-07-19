@@ -53,16 +53,30 @@ trap cleanup EXIT INT TERM
 # On failure, dumps the last 400 lines of engine + gateway logs to stderr so
 # CI annotations show the real root cause instead of a bare node assertion.
 wait_for_engine_ready() {
+  health_ready=0
   for _ in $(seq 1 60); do
-    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" >/dev/null 2>&1; then break; fi
+    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" 2>/dev/null | grep -q '"engine":"ok"'; then
+      health_ready=1
+      break
+    fi
     sleep 1
   done
-  $curl_tls --user "$admin_user:$admin_password" --fail "$origin/health" | grep -q '"engine":"ok"'
+  if [ "$health_ready" -ne 1 ]; then
+    echo "wait_for_engine_ready: /health did not reach engine:\"ok\" within 60s" >&2
+    return 1
+  fi
+  models_ready=0
   for _ in $(seq 1 30); do
-    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/v1/models" >/dev/null 2>&1; then break; fi
+    if $curl_tls --user "$admin_user:$admin_password" --fail "$origin/v1/models" >/dev/null 2>&1; then
+      models_ready=1
+      break
+    fi
     sleep 1
   done
-  $curl_tls --user "$admin_user:$admin_password" --fail "$origin/v1/models" >/dev/null
+  if [ "$models_ready" -ne 1 ]; then
+    echo "wait_for_engine_ready: /v1/models did not return 200 within 30s" >&2
+    return 1
+  fi
 
   if [ -n "${WAIT_FOR_ENGINE_READY_CHAT_PROBE:-}" ]; then
     probe_character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file" 2>/dev/null || true)
@@ -165,7 +179,7 @@ chrome_spki=$(openssl x509 -in "$gateway_leaf" -pubkey -noout \
 cat "$root_ca" "$mock_root" > "$trust_bundle"
 
 auth_header="Basic $(printf '%s' "$admin_user:$admin_password" | openssl base64 -A)"
-curl_tls="curl --silent --show-error --cacert $root_ca"
+curl_tls="curl --silent --show-error --connect-timeout 5 --max-time 30 --cacert $root_ca"
 
 anonymous_status=$($curl_tls --output /dev/null --write-out '%{http_code}' "$origin/")
 [ "$anonymous_status" = 401 ]
