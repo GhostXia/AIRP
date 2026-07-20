@@ -199,6 +199,7 @@ Remove-Item Env:RUSTDOCFLAGS
 ## 8. 文档维护
 
 - 能力变化同步 `CURRENT-BASELINE.md`；执行顺序变化同步 `WEBUI-PRODUCTION-PLAN.md`；
+- baseline 测试计数按 test binary 分桶（engine lib / engine integration / 其他 workspace member lib+main / WebUI `node --test` / `ui/` Vitest / dep-governance `node --test`），禁止把跨 crate test binary 计数简单相加后贴 “integration” 标签；新增 binary 时同步更新分桶表；
 - 稳定合同写进已有专题文档，不为每个 PR 新建永久 Markdown；
 - “已实现”必须区分 domain/data、HTTP、Agent tool、WebUI、desktop 和 production evidence；
 - 研究/candidate 文档必须有状态声明，不得混入当前 capability inventory；
