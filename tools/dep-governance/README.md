@@ -97,6 +97,14 @@ Array of records, each with:
 - `audit_class`: `"auto-pass"` | `"audit-required"` | `"block"`
 - `audit_reason`: human-readable explanation
 
+The document also carries a `meta` block with a `repo_root` field. It is
+written as the literal `"."` and reflects the *relative* working directory
+passed via `--repo-root`, not an absolute path. The field is a diagnostic to
+identify which invocation produced the inventory; it is NOT part of any
+component's dependency identity. Earlier versions wrote `process.cwd()` which
+caused CI vs maintainer-machine drift (`/workspace` vs `D:\AIRP-Dev`); the
+relative form removes that drift without losing provenance.
+
 ### `airp.spdx.json`
 
 SPDX-2.3 JSON document. AIRP itself is the root package
