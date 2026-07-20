@@ -3,7 +3,7 @@
 //!   → `finalize` (persist + volume side-effects).
 //! FSM + Unpacker owned by stream task (no Arc/Mutex); oneshot channel to finalizer.
 //!
-//! 模块拆分（审计 §4.4）：
+//! 模块拆分（审计 §4.4，子模块均为私有，公开 API 由本文件 `pub use` 再导出）：
 //!   - [`types`]：跨阶段共享所有权边界类型（`PreparedPipeline` / `FinalizerCtx`
 //!     / `PrepareMode` / `SseMessage` / `GenerationStepResult`）。
 //!   - [`helpers`]：prepare / prepare_scene 共享的无状态工具（路径解析、param
@@ -18,10 +18,17 @@
 //!   - [`state_extract`]：`<state>…</state>` 块剥离与 JSON 解析。
 //!   - [`stdout_runner`]：CLI `run` 子命令路径，复用全部 daemon 改进。
 //!   - [`generation_step`]：M_AGENT-1 单步生成，供 AgentLoop 协调器复用。
-//!   - [`tests`]：`#[cfg(test)] mod tests;`，保留原测试结构不拆分。
+//!   - tests：`#[cfg(test)] mod tests;`，保留原测试结构不拆分。
+//!     （`tests` 是 `#[cfg(test)]` 模块，非测试构建下不存在，故不使用 intra-doc 链接。）
 //!
 //! 公开 API 表面由本文件 `pub use` 重新导出，外部调用方应使用
 //! `crate::chat_pipeline::*` 而非直接引用子模块。
+//!
+// `rustdoc::private_intra_doc_links`：上面的 [`types`] / [`helpers`] 等链接指向
+// 私有子模块，公开 docs 渲染时无法解析。这里有意保留链接——在
+// `cargo doc --document-private-items` 模式下能正确跳转，便于内部导航。
+// 抑制此 lint 比删除链接更符合"更开放、更透明"取向。
+#![allow(rustdoc::private_intra_doc_links)]
 
 mod finalize;
 mod generation_step;
