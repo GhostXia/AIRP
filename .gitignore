@@ -64,15 +64,20 @@ data/**/history/
 data/**/turn_counter*
 data/**/*.lock
 
-# AI agent 旁路产物（AtomCode/Claude 等会话元数据），不属本仓
+# 本地临时产物（CI 日志、agent 诊断输出等）
+.tmp/
+tmp/
+
+# AI agent 旁路产物（AtomCode/Claude/Qoder 等会话元数据），不属本仓
 .claude/
 .atomcode/
 .codex/
+.qoder/
 .test-data/
 .uploads/
 
-# 本地审计/烟测原始输出只作临时诊断；可重复证据由 CI run 与历史归档索引保存
-docs/audits/
+# 审计报告随 PR 同分支提交合并（见 AGENTS.md 审计文件归档规则）；
+# 本地烟测原始输出只作临时诊断，可重复证据由 CI run 与历史归档索引保存
 docs/smoke-evidence/
 
 # PR body 模板（本地起草用，不入库；避免误提交污染仓库根）
