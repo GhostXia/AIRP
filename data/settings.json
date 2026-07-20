@@ -1,13 +1,17 @@
 {
-  "api_key": "",
-  "endpoint": "https://api.openai.com/v1/chat/completions",
-  "model": "gpt-4o",
+  "endpoint": "https://api-ai.gitcode.com/v1/chat/completions",
+  "engine": "direct",
+  "model": "deepseek-ai/DeepSeek-V3",
   "provider": "OpenAI",
+  "quota": {
+    "max_requests_per_day": 0,
+    "max_tokens_per_day": 0
+  },
   "volume": {
     "hard_threshold_tokens": 3500,
     "maintenance_interval": 20,
     "seal_model": null,
-    "seal_temperature": 0.3,
+    "seal_temperature": 0.30000001192092896,
     "soft_threshold_tokens": 2500
   }
 }
