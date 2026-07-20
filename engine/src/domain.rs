@@ -111,12 +111,21 @@ pub struct HistoryWindow {
     pub messages: Vec<ChatMessage>,
     pub message_ids: Vec<String>,
     pub message_timestamps: Vec<Option<String>>,
+    /// #249 Swipe：每条消息的候选回复列表。空 Vec = 单候选（content 即唯一候选）。
+    pub message_candidates: Vec<Vec<String>>,
+    /// #249 Swipe：每条消息当前激活候选的下标（0-based）。
+    pub message_swipe_index: Vec<usize>,
     pub has_more: bool,
     pub oldest_id: Option<String>,
     pub total: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope_session_id: Option<String>,
 }
+
+/// #249 Swipe：每条消息候选数上限。审计 C4 修复。
+/// 超过时丢弃最旧的候选，保留最近 SWIPE_CANDIDATES_CAP 个。
+/// 20 足够覆盖 ST 用户"尝试几次找好回复"场景，且控制 jsonl 增长。
+pub const SWIPE_CANDIDATES_CAP: usize = 20;
 
 impl ChatService {
     pub fn new(data_root: impl AsRef<Path>) -> Self {
@@ -208,6 +217,8 @@ impl ChatService {
         let window_messages = log.messages[start..end].to_vec();
         let window_ids = log.message_ids[start..end].to_vec();
         let window_ts = log.message_timestamps[start..end].to_vec();
+        let window_cands = log.message_candidates[start..end].to_vec();
+        let window_swidx = log.message_swipe_index[start..end].to_vec();
 
         // has_more = 切点之前还有消息（start > 0）。
         let has_more = start > 0;
@@ -218,6 +229,8 @@ impl ChatService {
             messages: window_messages,
             message_ids: window_ids,
             message_timestamps: window_ts,
+            message_candidates: window_cands,
+            message_swipe_index: window_swidx,
             has_more,
             oldest_id,
             total,
@@ -362,21 +375,40 @@ impl ChatService {
         })
     }
 
+    /// #249 Swipe：删除最后一条 assistant 消息并返回其候选列表。
+    ///
+    /// 返回值：`(ChatLog, Vec<String>)` —— 第二个元素是旧消息的全部候选
+    ///（含原始 content）。若旧消息无候选，则返回 `[old_content]`。
+    /// 调用方（regen handler）将此列表传入 pipeline，finalizer 会将新生成
+    /// 的文本追加为最后一个候选。
     pub fn regen(
         &self,
         character_id: &CharacterId,
         session_id: Option<&SessionId>,
-    ) -> Result<ChatLog, AirpError> {
+    ) -> Result<(ChatLog, Vec<String>), AirpError> {
         self.with_session(character_id, session_id, || {
             let mut log = ChatLog::load_or_create_for_session(
                 &self.data_root,
                 character_id.as_str(),
                 session_id,
             )?;
+            let mut old_candidates = Vec::new();
             if !log.messages.is_empty() {
+                let last_idx = log.messages.len() - 1;
+                // 捕获旧候选：有候选用候选，无候选用 content 本身。
+                let cands = log
+                    .message_candidates
+                    .get(last_idx)
+                    .cloned()
+                    .unwrap_or_default();
+                if cands.is_empty() {
+                    old_candidates.push(log.messages[last_idx].content.clone());
+                } else {
+                    old_candidates = cands;
+                }
                 log.delete_last_n(&self.data_root, 1)?;
             }
-            Ok(log)
+            Ok((log, old_candidates))
         })
     }
 
@@ -405,6 +437,106 @@ impl ChatService {
                 ));
             }
             last.content.push_str(text);
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
+    /// #249 Swipe：追加一条带候选的 assistant 消息。
+    ///
+    /// `candidates` 含全部候选（含旧 + 新），`content` 设为最后一个候选（新生成的），
+    /// `swipe_index` 指向最后一个候选。
+    ///
+    /// 审计 C4 修复：候选数上限 `SWIPE_CANDIDATES_CAP`（20）。超过时丢弃最旧的候选，
+    /// 保留最近 20 个。swipe_index 指向最后一个（新候选）。cap 防止 jsonl 无界增长。
+    pub fn append_with_candidates(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        mut candidates: Vec<String>,
+    ) -> Result<ChatLog, AirpError> {
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            if candidates.is_empty() {
+                return Err(AirpError::BadRequest(
+                    "append_with_candidates: candidates cannot be empty".into(),
+                ));
+            }
+            // 审计 C4：候选 cap。超过时丢弃最旧的，保留最近 SWIPE_CANDIDATES_CAP 个。
+            if candidates.len() > SWIPE_CANDIDATES_CAP {
+                let drop_count = candidates.len() - SWIPE_CANDIDATES_CAP;
+                candidates.drain(0..drop_count);
+            }
+            let swipe_index = candidates.len() - 1;
+            let content = candidates[swipe_index].clone();
+            log.messages.push(ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content,
+            });
+            log.message_ids.push(crate::ulid::new_id());
+            log.message_timestamps
+                .push(Some(chrono::Utc::now().to_rfc3339()));
+            log.message_candidates.push(candidates);
+            log.message_swipe_index.push(swipe_index);
+            log.updated_at = chrono::Utc::now().to_rfc3339();
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
+    /// #249 Swipe：切换指定消息的激活候选。
+    ///
+    /// `message_id` 是 durable ID，`new_index` 是候选下标（0-based）。
+    /// 切换后 `messages[i].content` 更新为 `candidates[new_index]`。
+    /// ID 不变（解耦优先：role 可变，ID 不应变）。
+    pub fn switch_swipe(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message_id: &str,
+        new_index: usize,
+    ) -> Result<ChatLog, AirpError> {
+        if !crate::ulid::is_valid_id(message_id) {
+            return Err(AirpError::BadRequest(format!(
+                "message_id is not a valid durable message id: {message_id}"
+            )));
+        }
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let idx = log
+                .message_ids
+                .iter()
+                .position(|x| crate::ulid::matches(x, message_id))
+                .ok_or_else(|| {
+                    AirpError::BadRequest(format!("message_id {message_id} not in this session"))
+                })?;
+            let cands = log.message_candidates.get(idx).ok_or_else(|| {
+                AirpError::BadRequest(format!("message {message_id} has no candidates"))
+            })?;
+            if cands.is_empty() {
+                return Err(AirpError::BadRequest(format!(
+                    "message {message_id} has no candidates to switch"
+                )));
+            }
+            if new_index >= cands.len() {
+                return Err(AirpError::BadRequest(format!(
+                    "swipe index {new_index} out of range (candidates: {})",
+                    cands.len()
+                )));
+            }
+            // 更新 content 和 swipe_index。
+            log.messages[idx].content = cands[new_index].clone();
+            log.message_swipe_index[idx] = new_index;
+            // 审计 D1 修复：与其他 mutation 保持一致，更新 updated_at。
+            log.updated_at = chrono::Utc::now().to_rfc3339();
             log.save(&self.data_root)?;
             Ok(log)
         })
@@ -443,6 +575,13 @@ impl ChatService {
             // defensively check bounds to avoid out-of-bounds panic.
             if idx < log.message_timestamps.len() {
                 log.message_timestamps.remove(idx);
+            }
+            // #249：同步移除 candidates / swipe_index。
+            if idx < log.message_candidates.len() {
+                log.message_candidates.remove(idx);
+            }
+            if idx < log.message_swipe_index.len() {
+                log.message_swipe_index.remove(idx);
             }
             log.save(&self.data_root)?;
             Ok(log)
@@ -3056,5 +3195,180 @@ mod tests {
             world_dir.join("revisions").join("2").is_dir(),
             "orphan revisions/2/ 应保留不删除"
         );
+    }
+
+    // ── #249 Swipe 测试（审计 B3 修复）─────────────────────────────────────
+
+    /// 辅助：创建带 1 条 user 消息的 session，返回 service。
+    fn make_swipe_service() -> (tempfile::TempDir, ChatService, CharacterId) {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("swipe-char").unwrap();
+        service
+            .append(
+                &character,
+                None,
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "hello".into(),
+                },
+            )
+            .unwrap();
+        (tmp, service, character)
+    }
+
+    #[test]
+    fn append_with_candidates_basic() {
+        let (_tmp, service, character) = make_swipe_service();
+        let log = service
+            .append_with_candidates(
+                &character,
+                None,
+                vec!["reply-a".to_string(), "reply-b".to_string()],
+            )
+            .unwrap();
+        assert_eq!(log.messages.len(), 2);
+        assert_eq!(log.messages[1].content, "reply-b");
+        assert_eq!(log.message_candidates[1], vec!["reply-a", "reply-b"]);
+        assert_eq!(log.message_swipe_index[1], 1);
+    }
+
+    #[test]
+    fn append_with_candidates_empty_rejected() {
+        let (_tmp, service, character) = make_swipe_service();
+        let err = service
+            .append_with_candidates(&character, None, vec![])
+            .err();
+        assert!(err.is_some(), "empty candidates should be rejected");
+    }
+
+    #[test]
+    fn append_with_candidates_single_works() {
+        let (_tmp, service, character) = make_swipe_service();
+        let log = service
+            .append_with_candidates(&character, None, vec!["only".to_string()])
+            .unwrap();
+        assert_eq!(log.messages[1].content, "only");
+        assert_eq!(log.message_candidates[1], vec!["only"]);
+        assert_eq!(log.message_swipe_index[1], 0);
+    }
+
+    #[test]
+    fn append_with_candidates_cap_drops_oldest() {
+        let (_tmp, service, character) = make_swipe_service();
+        let mut cands: Vec<String> = (0..(SWIPE_CANDIDATES_CAP + 5))
+            .map(|i| format!("reply-{i}"))
+            .collect();
+        let expected_last = cands.last().unwrap().clone();
+        let expected_cands: Vec<String> = cands.drain(5..).collect();
+        let log = service
+            .append_with_candidates(
+                &character,
+                None,
+                (0..(SWIPE_CANDIDATES_CAP + 5))
+                    .map(|i| format!("reply-{i}"))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(log.message_candidates[1].len(), SWIPE_CANDIDATES_CAP);
+        assert_eq!(log.message_candidates[1], expected_cands);
+        assert_eq!(log.messages[1].content, expected_last);
+        assert_eq!(log.message_swipe_index[1], SWIPE_CANDIDATES_CAP - 1);
+    }
+
+    #[test]
+    fn switch_swipe_updates_content_and_index() {
+        let (_tmp, service, character) = make_swipe_service();
+        let log = service
+            .append_with_candidates(
+                &character,
+                None,
+                vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            )
+            .unwrap();
+        let msg_id = log.message_ids[1].clone();
+        let switched = service.switch_swipe(&character, None, &msg_id, 0).unwrap();
+        assert_eq!(switched.messages[1].content, "a");
+        assert_eq!(switched.message_swipe_index[1], 0);
+        let switched2 = service.switch_swipe(&character, None, &msg_id, 2).unwrap();
+        assert_eq!(switched2.messages[1].content, "c");
+        assert_eq!(switched2.message_swipe_index[1], 2);
+    }
+
+    #[test]
+    fn switch_swipe_invalid_id_rejected() {
+        let (_tmp, service, character) = make_swipe_service();
+        service
+            .append_with_candidates(&character, None, vec!["x".to_string()])
+            .unwrap();
+        let err = service
+            .switch_swipe(&character, None, "not-a-valid-id", 0)
+            .err();
+        assert!(err.is_some(), "invalid message_id should be rejected");
+    }
+
+    #[test]
+    fn switch_swipe_index_out_of_range_rejected() {
+        let (_tmp, service, character) = make_swipe_service();
+        let log = service
+            .append_with_candidates(&character, None, vec!["a".to_string(), "b".to_string()])
+            .unwrap();
+        let msg_id = log.message_ids[1].clone();
+        let err = service.switch_swipe(&character, None, &msg_id, 5).err();
+        assert!(err.is_some(), "out-of-range index should be rejected");
+    }
+
+    #[test]
+    fn switch_swipe_message_without_candidates_rejected() {
+        let (_tmp, service, character) = make_swipe_service();
+        // user 消息无候选
+        let msg_id = service.history(&character, None).unwrap().message_ids[0].clone();
+        let err = service.switch_swipe(&character, None, &msg_id, 0).err();
+        assert!(err.is_some(), "switch on no-candidate message should fail");
+    }
+
+    #[test]
+    fn regen_returns_old_candidates_when_present() {
+        let (_tmp, service, character) = make_swipe_service();
+        let log = service
+            .append_with_candidates(
+                &character,
+                None,
+                vec!["old-a".to_string(), "old-b".to_string()],
+            )
+            .unwrap();
+        assert_eq!(log.messages.len(), 2);
+        let (_new_log, old_candidates) = service.regen(&character, None).unwrap();
+        assert_eq!(old_candidates, vec!["old-a", "old-b"]);
+    }
+
+    #[test]
+    fn regen_on_empty_log_returns_empty_candidates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("empty-regen").unwrap();
+        let (_log, old_candidates) = service.regen(&character, None).unwrap();
+        assert!(
+            old_candidates.is_empty(),
+            "empty log regen should return empty candidates"
+        );
+    }
+
+    #[test]
+    fn regen_returns_content_as_single_candidate_for_legacy_message() {
+        let (_tmp, service, character) = make_swipe_service();
+        // 追加无候选的 assistant 消息（旧格式）
+        service
+            .append(
+                &character,
+                None,
+                ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: "legacy-reply".into(),
+                },
+            )
+            .unwrap();
+        let (_log, old_candidates) = service.regen(&character, None).unwrap();
+        assert_eq!(old_candidates, vec!["legacy-reply"]);
     }
 }

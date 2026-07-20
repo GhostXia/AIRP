@@ -95,6 +95,10 @@ wait_for_engine_ready() {
             "$origin/v1/chat/completions" 2>&1) && rc=0 || rc=$?
         if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && grep -q '"type":"done"' "$probe_tmp"; then
           rm -f "$probe_tmp"
+          # Grace period: SSE probe 成功不代表 Caddy upstream 连接池已稳定。
+          # engine 刚 restart 时第一个真实 chat 流仍可能被 reset（PR #251 重试记录）。
+          # 3 秒让 Caddy 保持并复用 upstream keepalive 连接，避免下一个 SSE 流中途断开。
+          sleep 3
           return 0
         fi
         echo "wait_for_engine_ready: SSE probe attempt $attempt failed (rc=$rc http=$http_code)" >&2

@@ -53,6 +53,21 @@ pub struct ChatLog {
     /// 长度始终等于 `messages.len()`（save/append/delete/rollback 同步维护）。
     #[serde(default)]
     pub message_timestamps: Vec<Option<String>>,
+    /// #249 Swipe：每条消息的候选回复列表，与 `messages` 一一对应。
+    ///
+    /// - user 消息或无候选的旧 assistant 消息 → 空 Vec（单候选 = content 本身）。
+    /// - 有候选的 assistant 消息 → `Vec<String>` 含全部候选（含原始）。
+    ///
+    /// 长度始终等于 `messages.len()`（save/append/delete/rollback 同步维护）。
+    /// 解耦：旧数据加载时补空 Vec，不强制迁移。
+    #[serde(default)]
+    pub message_candidates: Vec<Vec<String>>,
+    /// #249 Swipe：每条消息当前激活候选的下标（0-based），与 `messages` 一一对应。
+    ///
+    /// 无候选的消息 → 0。有候选的消息 → 指向 `message_candidates[i]` 中的某项。
+    /// `messages[i].content` 始终等于激活候选的文本（冗余但保持 OpenAI 协议兼容）。
+    #[serde(default)]
+    pub message_swipe_index: Vec<usize>,
     /// ISO 8601 creation timestamp
     pub created_at: String,
     /// ISO 8601 last update timestamp
@@ -89,6 +104,11 @@ struct ChatLogMeta {
 /// `ChatLog.messages` 仍是 `Vec<ChatMessage>`（保持 OpenAI 协议兼容，durable id 不进
 /// OpenAI 协议类型），`ts` / `id` 单独存在 `ChatLog.message_timestamps` /
 /// `ChatLog.message_ids` 中，与 messages 一一对应。
+///
+/// #249 Swipe（多候选）：`candidates` 存储 assistant 消息的全部候选回复文本。
+/// `None` = 旧消息或 user 消息（单候选，content 即唯一候选）。
+/// `swipe_index` = 当前激活候选的下标（0-based）；`None` = 无候选或默认 0。
+/// 解耦优先：旧 jsonl 无 candidates/swipe_index 字段仍可正常反序列化。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredMessage {
     #[serde(flatten)]
@@ -97,6 +117,10 @@ struct StoredMessage {
     id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ts: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    candidates: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    swipe_index: Option<usize>,
 }
 
 impl ChatLog {
@@ -109,6 +133,8 @@ impl ChatLog {
             messages: Vec::new(),
             message_ids: Vec::new(),
             message_timestamps: Vec::new(),
+            message_candidates: Vec::new(),
+            message_swipe_index: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
             scope_session_id: None,
@@ -272,6 +298,8 @@ impl ChatLog {
                     messages: parsed.messages,
                     message_ids: parsed.message_ids,
                     message_timestamps: parsed.message_timestamps,
+                    message_candidates: parsed.message_candidates,
+                    message_swipe_index: parsed.message_swipe_index,
                     created_at: m.created_at,
                     updated_at: m.updated_at,
                     scope_session_id: Some(scope_session_id),
@@ -306,6 +334,8 @@ impl ChatLog {
                 messages: parsed.messages,
                 message_ids: parsed.message_ids,
                 message_timestamps: parsed.message_timestamps,
+                message_candidates: parsed.message_candidates,
+                message_swipe_index: parsed.message_swipe_index,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
@@ -329,6 +359,8 @@ impl ChatLog {
                 messages: parsed.messages,
                 message_ids: parsed.message_ids,
                 message_timestamps: parsed.message_timestamps,
+                message_candidates: parsed.message_candidates,
+                message_swipe_index: parsed.message_swipe_index,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
@@ -370,6 +402,14 @@ impl ChatLog {
                     .enumerate()
                     .map(|(i, _)| ulid::derive_legacy_id(&salt, i))
                     .collect();
+            }
+            // #249：旧 ChatLog JSON 无 message_candidates / message_swipe_index 字段。
+            // 补齐为空 Vec / 0（单候选 = content 本身）。
+            if log.message_candidates.len() != log.messages.len() {
+                log.message_candidates = log.messages.iter().map(|_| Vec::new()).collect();
+            }
+            if log.message_swipe_index.len() != log.messages.len() {
+                log.message_swipe_index = log.messages.iter().map(|_| 0).collect();
             }
             // A-2：迁移后验证等长不变量
             debug_assert_eq!(
@@ -491,15 +531,20 @@ impl ChatLog {
             }
         }
 
-        // 写 jsonl：一行一条 StoredMessage（含 id + ts）
+        // 写 jsonl：一行一条 StoredMessage（含 id + ts + candidates + swipe_index）
         let mut buf = String::new();
         for (i, m) in self.messages.iter().enumerate() {
             let id = self.message_ids.get(i).cloned();
             let ts = self.message_timestamps.get(i).cloned().flatten();
+            let cands = self.message_candidates.get(i).cloned().unwrap_or_default();
+            let swidx = self.message_swipe_index.get(i).copied().unwrap_or(0);
+            let has_cands = !cands.is_empty();
             let stored = StoredMessage {
                 msg: m.clone(),
                 id,
                 ts,
+                candidates: if has_cands { Some(cands) } else { None },
+                swipe_index: if has_cands { Some(swidx) } else { None },
             };
             buf.push_str(&serde_json::to_string(&stored)?);
             buf.push('\n');
@@ -541,6 +586,8 @@ impl ChatLog {
         self.messages.push(msg.clone());
         self.message_ids.push(id.clone());
         self.message_timestamps.push(Some(now.clone()));
+        self.message_candidates.push(Vec::new());
+        self.message_swipe_index.push(0);
 
         // 常规追加：jsonl O(1) 写入 + meta 小文件刷新。
         let scope = self.scope_session_id.as_deref();
@@ -555,6 +602,8 @@ impl ChatLog {
             msg,
             id: Some(id),
             ts: Some(now),
+            candidates: None,
+            swipe_index: None,
         };
         let mut line = serde_json::to_string(&stored)?;
         line.push('\n');
@@ -588,16 +637,21 @@ impl ChatLog {
     /// Deletes the last N messages (for regen: delete last assistant message).
     ///
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
+    /// #249：同步截断 `message_candidates` / `message_swipe_index`。
     pub fn delete_last_n(&mut self, data_root: &Path, n: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if n > len {
             self.messages.clear();
             self.message_ids.clear();
             self.message_timestamps.clear();
+            self.message_candidates.clear();
+            self.message_swipe_index.clear();
         } else {
             self.messages.truncate(len - n);
             self.message_ids.truncate(len - n);
             self.message_timestamps.truncate(len - n);
+            self.message_candidates.truncate(len - n);
+            self.message_swipe_index.truncate(len - n);
         }
         self.updated_at = Utc::now().to_rfc3339();
         self.save(data_root)
@@ -606,6 +660,7 @@ impl ChatLog {
     /// Rolls back to a specific message index (keeps messages 0..=index).
     ///
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
+    /// #249：同步截断 `message_candidates` / `message_swipe_index`。
     pub fn rollback_to(&mut self, data_root: &Path, index: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if (len == 0 && index != 0) || (len > 0 && index >= len) {
@@ -617,6 +672,8 @@ impl ChatLog {
             self.messages.truncate(index + 1);
             self.message_ids.truncate(index + 1);
             self.message_timestamps.truncate(index + 1);
+            self.message_candidates.truncate(index + 1);
+            self.message_swipe_index.truncate(index + 1);
             self.updated_at = Utc::now().to_rfc3339();
             self.save(data_root)?;
         }
@@ -647,6 +704,8 @@ impl ChatLog {
         let mut msgs = Vec::new();
         let mut ids: Vec<String> = Vec::new();
         let mut tss = Vec::new();
+        let mut cands: Vec<Vec<String>> = Vec::new();
+        let mut swidx: Vec<usize> = Vec::new();
         for (i, line) in content.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
@@ -662,8 +721,11 @@ impl ChatLog {
             msgs.push(stored.msg);
             ids.push(id);
             tss.push(stored.ts);
+            // #249：旧行无 candidates/swipe_index → 空 Vec / 0（单候选 = content）。
+            cands.push(stored.candidates.unwrap_or_default());
+            swidx.push(stored.swipe_index.unwrap_or(0));
         }
-        // A-2：等长不变量防御。三 Vec 在同一循环中 push，理论上永远等长。
+        // A-2：等长不变量防御。各 Vec 在同一循环中 push，理论上永远等长。
         debug_assert_eq!(
             msgs.len(),
             tss.len(),
@@ -674,10 +736,17 @@ impl ChatLog {
             ids.len(),
             "read_messages_jsonl: msgs.len() != ids.len()"
         );
+        debug_assert_eq!(
+            msgs.len(),
+            cands.len(),
+            "read_messages_jsonl: msgs.len() != cands.len()"
+        );
         Ok(JsonlParseResult {
             messages: msgs,
             message_ids: ids,
             message_timestamps: tss,
+            message_candidates: cands,
+            message_swipe_index: swidx,
         })
     }
 
@@ -756,6 +825,8 @@ struct JsonlParseResult {
     messages: Vec<ChatMessage>,
     message_ids: Vec<String>,
     message_timestamps: Vec<Option<String>>,
+    message_candidates: Vec<Vec<String>>,
+    message_swipe_index: Vec<usize>,
 }
 
 #[cfg(test)]

@@ -321,6 +321,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 scene_id: None,
                 user_id: None,
                 persona_id: None,
+                swipe_candidates: Vec::new(),
             };
 
             // E. 走 pipeline（与 daemon 完全相同路径）

@@ -57,6 +57,10 @@ pub struct ChatCompletionRequest {
     /// （`find_for_character` 绑定 → `default` persona），详见
     /// [docs/PERSONA-HTTP-API-PLAN.md](../../../docs/PERSONA-HTTP-API-PLAN.md)。
     pub persona_id: Option<String>,
+    /// #249 Swipe：regen 时捕获的旧候选列表。内部使用，HTTP 请求不提供此字段
+    ///（serde(default) 给空 Vec）。非空时 finalizer 会将新生成文本追加为最后一个候选。
+    #[serde(default)]
+    pub swipe_candidates: Vec<String>,
 }
 
 /// 用户画像：用于 `{{user}}` 等变量替换。
@@ -150,6 +154,22 @@ pub struct DeleteMessageRequest {
     pub session_id: Option<SessionId>,
     /// 要删除的消息 durable ID。
     pub message_id: String,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。
+    pub user_id: Option<String>,
+}
+
+/// `POST /v1/chat/swipe` 请求体。#249 Swipe：切换指定消息的激活候选。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwipeRequest {
+    /// 目标角色 ID。
+    pub character_id: CharacterId,
+    /// 可选 session ID。
+    pub session_id: Option<SessionId>,
+    /// 要切换的消息 durable ID。
+    pub message_id: String,
+    /// 新激活候选的下标（0-based）。
+    pub index: usize,
     /// DX-1：可选用户 ID（per-user 数据隔离）。
     pub user_id: Option<String>,
 }

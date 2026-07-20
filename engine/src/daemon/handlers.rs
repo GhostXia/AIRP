@@ -28,7 +28,7 @@ pub(super) use characters::{
 };
 pub(super) use chat::{
     chat_completion, continue_chat, delete_message, get_chat_history, preview_chat_assembly,
-    regen_chat, rollback_chat,
+    regen_chat, rollback_chat, swipe_chat,
 };
 pub(super) use lorebook::{get_character_lorebook, update_character_lorebook};
 pub(super) use models::list_models;
