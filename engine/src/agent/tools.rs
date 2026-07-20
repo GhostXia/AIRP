@@ -35,13 +35,16 @@ use airp_state_protocol::Capability;
 
 mod analysis;
 mod character;
+mod npc;
 mod params;
+mod plot;
 mod session;
 mod state_lorebook;
 mod state_preset;
 #[cfg(test)]
 mod tests;
 mod volume_context;
+mod world_event;
 
 // #155 PR 3：analysis family 的共享资产经 facade 做最小 re-export，
 // 保持原 `pub` / `pub(crate)` 调用路径不变（daemon decompose_handlers 等复用）。
@@ -200,6 +203,13 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     // #155 PR 3：volume seal + context bundle export family 2 工具。
     volume_context::register(&mut reg, state.clone());
     // #155 PR 3：analysis enhance/apply family 2 工具。
-    analysis::register(&mut reg, state);
+    analysis::register(&mut reg, state.clone());
+    // 阶段三：Agent RP 差异化。
+    // 3.1 世界事件触发器 family 2 工具。
+    world_event::register(&mut reg, state.clone());
+    // 3.3 多角色编排增强 family 2 工具。
+    npc::register(&mut reg, state.clone());
+    // 3.4 Agent 驱动的剧情推进 family 2 工具。
+    plot::register(&mut reg, state);
     reg
 }
