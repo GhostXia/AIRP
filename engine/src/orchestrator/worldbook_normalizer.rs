@@ -1024,6 +1024,11 @@ mod tests {
         let (lb, report) = normalize_worldbook(&src);
         assert!(lb.entries.is_empty());
         assert_eq!(report.total_input, 0);
+        // #149 WB-01：`{}` 是 unsupported source shape，不是合法空世界书。
+        // 必须断言 source_error，否则 malformed replacement 可能被当作合法空导入，
+        // 弱化 "malformed replacement 不得被当作合法空世界书" 的回归保护。
+        assert!(report.source_error.is_some());
+        assert!(report.replacement_error().is_some());
     }
 
     #[test]
