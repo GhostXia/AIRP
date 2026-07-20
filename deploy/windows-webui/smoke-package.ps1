@@ -92,12 +92,16 @@ if ($Port -eq 8765) {
         Remove-Item Env:AIRP_ALLOW_LOCAL_PATH -ErrorAction SilentlyContinue
     }
 } else {
-    Write-Warning 'Skipping Start-AIRP.cmd process smoke because the launcher contract uses port 8765.'
+    Write-Warning "Skipping Start-AIRP.cmd process smoke because -Port was $Port but the launcher is hardcoded to 8765."
 }
 
 $env:AIRP_DATA_DIR = $data
 $env:AIRP_PERSIST_PROVIDER_KEY = 'true'
 $env:AIRP_ALLOW_LOCAL_PATH = 'false'
+# Defensive cleanup: these are also cleared in the launcher-smoke finally
+# block above, but that block only runs on the launcher-smoke path. This
+# cleanup is unconditional and also covers env leaked from a previous
+# smoke invocation when the launcher-smoke branch was skipped. Keep both.
 Remove-Item Env:AIRP_ACCESS_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:AIRP_DEPLOYMENT_MODE -ErrorAction SilentlyContinue
 Remove-Item Env:AIRP_PUBLIC_ORIGIN -ErrorAction SilentlyContinue
