@@ -2549,20 +2549,20 @@
       renderLoreEntries();
       loreStatus.textContent = '该角色尚无世界书（可新建条目后保存）';
     } else if (r.ok) {
+      // #186 W-02: 成功响应形状校验。
+      // 异常时（r.data 不是非 null 对象，或 entries 字段非数组）只显示错误并保留旧 loreData，
+      // 不用空数据覆盖旧渲染，让用户至少能看到上一次有效的世界书。
       if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data)) {
-        loreStatus.textContent = '加载失败: 响应格式异常';
-        loreData = { entries: [] };
-        renderLoreEntries();
+        loreStatus.textContent = '加载失败: 响应格式异常（保留旧数据）';
+        return;
+      }
+      if (r.data.entries !== undefined && !Array.isArray(r.data.entries)) {
+        loreStatus.textContent = '加载失败: entries 字段非数组（保留旧数据）';
         return;
       }
       loreData = r.data;
       if (loreData.entries === undefined) {
         loreData.entries = [];
-      } else if (!Array.isArray(loreData.entries)) {
-        loreStatus.textContent = '加载失败: 响应格式异常';
-        loreData = { entries: [] };
-        renderLoreEntries();
-        return;
       }
       renderLoreEntries();
       loreStatus.textContent = '已加载 ' + loreData.entries.length + ' 条条目';
@@ -2585,9 +2585,17 @@
   function renderLoreEntries() {
     if (!loreData) return;
     loreEntries.innerHTML = '';
-    loreData.entries.forEach((entry, i) => {
+    // #186 W-03: 单条 entry 形状校验，跳过 null/非对象/数组等坏条目并报告，
+    // 避免持久化脏数据让 forEach 中断、整份列表无法渲染。
+    const { valid, skipped } = AIRPLorebookUtils.sanitizeLoreEntries(loreData.entries);
+    valid.forEach((entry, i) => {
       loreEntries.appendChild(renderLoreEntry(entry, i));
     });
+    if (skipped.length > 0) {
+      // 跳过坏条目时通过状态栏报告，不静默崩溃；用户能看到具体哪几条损坏。
+      const indices = skipped.map(s => '#' + (s.index + 1)).join(', ');
+      loreStatus.textContent = '警告: 跳过 ' + skipped.length + ' 条损坏条目（' + indices + '）';
+    }
   }
 
   function renderLoreEntry(entry, index) {
