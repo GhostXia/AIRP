@@ -115,6 +115,13 @@ pub struct HistoryWindow {
     pub message_candidates: Vec<Vec<String>>,
     /// #249 Swipe：每条消息当前激活候选的下标（0-based）。
     pub message_swipe_index: Vec<usize>,
+    /// 分支对话树：每条消息的父消息 durable ID。
+    pub message_parents: Vec<Option<String>>,
+    /// 分支对话树：当前激活路径的叶节点 durable ID。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_leaf: Option<String>,
+    /// 分支对话树：当前激活路径（根 → 叶的 durable ID 列表）。
+    pub active_path: Vec<String>,
     pub has_more: bool,
     pub oldest_id: Option<String>,
     pub total: usize,
@@ -219,11 +226,14 @@ impl ChatService {
         let window_ts = log.message_timestamps[start..end].to_vec();
         let window_cands = log.message_candidates[start..end].to_vec();
         let window_swidx = log.message_swipe_index[start..end].to_vec();
+        let window_parents = log.message_parents[start..end].to_vec();
 
         // has_more = 切点之前还有消息（start > 0）。
         let has_more = start > 0;
         // oldest_id = 本窗口最老消息的 ID（窗口首条）。
         let oldest_id = window_ids.first().cloned();
+        // 分支对话树：计算当前激活路径。
+        let active_path = log.active_path();
 
         Ok(HistoryWindow {
             messages: window_messages,
@@ -231,6 +241,9 @@ impl ChatService {
             message_timestamps: window_ts,
             message_candidates: window_cands,
             message_swipe_index: window_swidx,
+            message_parents: window_parents,
+            active_leaf: log.active_leaf.clone(),
+            active_path,
             has_more,
             oldest_id,
             total,
@@ -311,6 +324,20 @@ impl ChatService {
         session_id: Option<&SessionId>,
         message: ChatMessage,
     ) -> Result<(ChatLog, usize), AirpError> {
+        self.append_with_branch(character_id, session_id, message, None)
+    }
+
+    /// 追加消息，支持分支对话树。
+    ///
+    /// `branch_from` = `Some(id)` 时，新消息的 parent = 该 ID（从任意消息分叉）。
+    /// `branch_from` = `None` 时，线性追加（parent = 当前 active_leaf）。
+    pub fn append_with_branch(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message: ChatMessage,
+        branch_from: Option<String>,
+    ) -> Result<(ChatLog, usize), AirpError> {
         self.with_session(character_id, session_id, || {
             let mut log = ChatLog::load_or_create_for_session(
                 &self.data_root,
@@ -318,8 +345,39 @@ impl ChatService {
                 session_id,
             )?;
             let total_before = log.messages.len();
-            log.append(&self.data_root, message)?;
+            match branch_from {
+                Some(parent_id) => {
+                    // 验证 branch_from ID 存在。
+                    if !log.message_ids.iter().any(|id| id == &parent_id) {
+                        return Err(AirpError::BadRequest(format!(
+                            "branch_from ID {parent_id} not found in session"
+                        )));
+                    }
+                    log.append_with_parent(&self.data_root, message, Some(parent_id))?;
+                }
+                None => {
+                    log.append(&self.data_root, message)?;
+                }
+            }
             Ok((log, total_before))
+        })
+    }
+
+    /// 切换激活分支。
+    pub fn switch_branch(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        target_leaf_id: &str,
+    ) -> Result<ChatLog, AirpError> {
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            log.switch_branch(&self.data_root, target_leaf_id)?;
+            Ok(log)
         })
     }
 
@@ -547,6 +605,50 @@ impl ChatService {
             log.messages[idx].content = cands[new_index].clone();
             log.message_swipe_index[idx] = new_index;
             // 审计 D1 修复：与其他 mutation 保持一致，更新 updated_at。
+            log.updated_at = chrono::Utc::now().to_rfc3339();
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
+    /// Edit a single user message's content by its durable ID.
+    ///
+    /// Only `role=user` messages can be edited (assistant editing = regen/swipe semantics).
+    /// ID, timestamp, and role are preserved; only `content` is replaced.
+    /// Persistence: full JSONL rewrite via `save()` under `with_session` serialization.
+    pub fn edit_message(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message_id: &str,
+        new_content: &str,
+    ) -> Result<ChatLog, AirpError> {
+        if !crate::ulid::is_valid_id(message_id) {
+            return Err(AirpError::BadRequest(format!(
+                "message_id is not a valid durable message id: {message_id}"
+            )));
+        }
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let idx = log
+                .message_ids
+                .iter()
+                .position(|x| crate::ulid::matches(x, message_id))
+                .ok_or_else(|| {
+                    AirpError::BadRequest(format!("message_id {message_id} not in this session"))
+                })?;
+            // Only user messages can be edited.
+            if log.messages[idx].role != crate::adapter::MessageRole::User {
+                return Err(AirpError::BadRequest(
+                    "only user messages can be edited; use regen/swipe for assistant messages"
+                        .to_string(),
+                ));
+            }
+            log.messages[idx].content = new_content.to_string();
             log.updated_at = chrono::Utc::now().to_rfc3339();
             log.save(&self.data_root)?;
             Ok(log)

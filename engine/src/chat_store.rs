@@ -68,6 +68,23 @@ pub struct ChatLog {
     /// `messages[i].content` 始终等于激活候选的文本（冗余但保持 OpenAI 协议兼容）。
     #[serde(default)]
     pub message_swipe_index: Vec<usize>,
+    /// 分支对话树：每条消息的父消息 durable ID，与 `messages` 一一对应。
+    ///
+    /// - 第一条消息 → `None`（根节点）。
+    /// - 常规追加 → `Some(前一条消息 ID)`（线性链）。
+    /// - 分支 → `Some(分叉点消息 ID)`（从任意消息分叉）。
+    ///
+    /// 旧数据加载时补 `None`（向后兼容，不强制迁移）。
+    /// 长度始终等于 `messages.len()`。
+    #[serde(default)]
+    pub message_parents: Vec<Option<String>>,
+    /// 当前激活路径的叶节点 durable ID。
+    ///
+    /// 线性对话中 = 最后一条消息 ID。分支后 = 当前激活分支的叶节点。
+    /// 切换分支 = 更新此字段（不删除其他分支数据）。
+    /// `None` = 空对话或旧数据（向后兼容）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_leaf: Option<String>,
     /// ISO 8601 creation timestamp
     pub created_at: String,
     /// ISO 8601 last update timestamp
@@ -91,6 +108,10 @@ struct ChatLogMeta {
     character_id: String,
     created_at: String,
     updated_at: String,
+    /// 分支对话树：当前激活路径的叶节点 durable ID。
+    /// 旧 meta 无此字段 → `None`（加载时回退为最后一条消息 ID）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_leaf: Option<String>,
 }
 
 /// #73 方案 B / #37 durable id：jsonl 行的持久化结构。
@@ -121,6 +142,9 @@ struct StoredMessage {
     candidates: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     swipe_index: Option<usize>,
+    /// 分支对话树：父消息 durable ID。`None` = 根节点或旧数据（向后兼容）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
 }
 
 impl ChatLog {
@@ -135,6 +159,8 @@ impl ChatLog {
             message_timestamps: Vec::new(),
             message_candidates: Vec::new(),
             message_swipe_index: Vec::new(),
+            message_parents: Vec::new(),
+            active_leaf: None,
             created_at: now.clone(),
             updated_at: now,
             scope_session_id: None,
@@ -300,6 +326,8 @@ impl ChatLog {
                     message_timestamps: parsed.message_timestamps,
                     message_candidates: parsed.message_candidates,
                     message_swipe_index: parsed.message_swipe_index,
+                    message_parents: parsed.message_parents,
+                    active_leaf: m.active_leaf,
                     created_at: m.created_at,
                     updated_at: m.updated_at,
                     scope_session_id: Some(scope_session_id),
@@ -336,6 +364,8 @@ impl ChatLog {
                 message_timestamps: parsed.message_timestamps,
                 message_candidates: parsed.message_candidates,
                 message_swipe_index: parsed.message_swipe_index,
+                message_parents: parsed.message_parents,
+                active_leaf: m.active_leaf,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
@@ -361,6 +391,8 @@ impl ChatLog {
                 message_timestamps: parsed.message_timestamps,
                 message_candidates: parsed.message_candidates,
                 message_swipe_index: parsed.message_swipe_index,
+                message_parents: parsed.message_parents,
+                active_leaf: m.active_leaf,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
                 scope_session_id: None,
@@ -410,6 +442,11 @@ impl ChatLog {
             }
             if log.message_swipe_index.len() != log.messages.len() {
                 log.message_swipe_index = log.messages.iter().map(|_| 0).collect();
+            }
+            // 分支对话树：旧 ChatLog JSON 无 message_parents 字段。
+            // 补齐为全 None（线性链，向后兼容）。
+            if log.message_parents.len() != log.messages.len() {
+                log.message_parents = log.messages.iter().map(|_| None).collect();
             }
             // A-2：迁移后验证等长不变量
             debug_assert_eq!(
@@ -504,6 +541,7 @@ impl ChatLog {
             character_id: character_id.to_string(),
             created_at: recovered_at.clone(),
             updated_at: recovered_at,
+            active_leaf: None,
         }
     }
 
@@ -531,7 +569,7 @@ impl ChatLog {
             }
         }
 
-        // 写 jsonl：一行一条 StoredMessage（含 id + ts + candidates + swipe_index）
+        // 写 jsonl：一行一条 StoredMessage（含 id + ts + candidates + swipe_index + parent）
         let mut buf = String::new();
         for (i, m) in self.messages.iter().enumerate() {
             let id = self.message_ids.get(i).cloned();
@@ -539,12 +577,14 @@ impl ChatLog {
             let cands = self.message_candidates.get(i).cloned().unwrap_or_default();
             let swidx = self.message_swipe_index.get(i).copied().unwrap_or(0);
             let has_cands = !cands.is_empty();
+            let par = self.message_parents.get(i).cloned().flatten();
             let stored = StoredMessage {
                 msg: m.clone(),
                 id,
                 ts,
                 candidates: if has_cands { Some(cands) } else { None },
                 swipe_index: if has_cands { Some(swidx) } else { None },
+                parent: par,
             };
             buf.push_str(&serde_json::to_string(&stored)?);
             buf.push('\n');
@@ -561,6 +601,7 @@ impl ChatLog {
             character_id: self.character_id.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            active_leaf: self.active_leaf.clone(),
         };
         let meta_content = serde_json::to_string_pretty(&m)?;
         crate::data_dir::replace_file(&meta, meta_content.as_bytes())?;
@@ -581,6 +622,24 @@ impl ChatLog {
     /// #73 方案 B：同时写入消息级 `ts`（ISO 8601 now），并同步 push 到
     /// `message_timestamps` 保持与 `messages` 等长。
     pub fn append(&mut self, data_root: &Path, msg: ChatMessage) -> Result<(), AirpError> {
+        // 分支对话树：默认 parent = 当前 active_leaf（线性链 = 前一条消息 ID）。
+        let parent = self.active_leaf.clone().or_else(|| self.message_ids.last().cloned());
+        self.append_with_parent(data_root, msg, parent)
+    }
+
+    /// 追加一条消息，显式指定父消息 durable ID。
+    ///
+    /// - 常规追加：`parent` = 前一条消息 ID（线性链）。
+    /// - 分支：`parent` = 分叉点消息 ID（从任意消息分叉）。
+    /// - 第一条消息：`parent` = `None`（根节点）。
+    ///
+    /// 追加后 `active_leaf` 更新为新消息 ID。
+    pub fn append_with_parent(
+        &mut self,
+        data_root: &Path,
+        msg: ChatMessage,
+        parent: Option<String>,
+    ) -> Result<(), AirpError> {
         let now = Utc::now().to_rfc3339();
         let id = ulid::new_id();
         self.messages.push(msg.clone());
@@ -588,14 +647,16 @@ impl ChatLog {
         self.message_timestamps.push(Some(now.clone()));
         self.message_candidates.push(Vec::new());
         self.message_swipe_index.push(0);
+        self.message_parents.push(parent.clone());
+        self.active_leaf = Some(id.clone());
 
         // 常规追加：jsonl O(1) 写入 + meta 小文件刷新。
         let scope = self.scope_session_id.as_deref();
         let jsonl = Self::scoped_jsonl_path(data_root, &self.character_id, scope);
         // 文件可能首次创建（迁移路径已 ensure，但保底处理）
-        if let Some(parent) = jsonl.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent)?;
+        if let Some(parent_dir) = jsonl.parent() {
+            if !parent_dir.exists() {
+                fs::create_dir_all(parent_dir)?;
             }
         }
         let stored = StoredMessage {
@@ -604,6 +665,7 @@ impl ChatLog {
             ts: Some(now),
             candidates: None,
             swipe_index: None,
+            parent,
         };
         let mut line = serde_json::to_string(&stored)?;
         line.push('\n');
@@ -626,6 +688,7 @@ impl ChatLog {
             character_id: self.character_id.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            active_leaf: self.active_leaf.clone(),
         };
         let meta_path = Self::scoped_meta_path(data_root, &self.character_id, scope);
         // meta 用 replace_file 原子写入，避免与 D1 同型的 0 字节窗口。
@@ -638,6 +701,7 @@ impl ChatLog {
     ///
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     /// #249：同步截断 `message_candidates` / `message_swipe_index`。
+    /// 分支对话树：同步截断 `message_parents`，更新 `active_leaf`。
     pub fn delete_last_n(&mut self, data_root: &Path, n: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if n > len {
@@ -646,12 +710,17 @@ impl ChatLog {
             self.message_timestamps.clear();
             self.message_candidates.clear();
             self.message_swipe_index.clear();
+            self.message_parents.clear();
+            self.active_leaf = None;
         } else {
             self.messages.truncate(len - n);
             self.message_ids.truncate(len - n);
             self.message_timestamps.truncate(len - n);
             self.message_candidates.truncate(len - n);
             self.message_swipe_index.truncate(len - n);
+            self.message_parents.truncate(len - n);
+            // active_leaf 更新为截断后的最后一条消息 ID。
+            self.active_leaf = self.message_ids.last().cloned();
         }
         self.updated_at = Utc::now().to_rfc3339();
         self.save(data_root)
@@ -661,6 +730,7 @@ impl ChatLog {
     ///
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     /// #249：同步截断 `message_candidates` / `message_swipe_index`。
+    /// 分支对话树：同步截断 `message_parents`，更新 `active_leaf`。
     pub fn rollback_to(&mut self, data_root: &Path, index: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if (len == 0 && index != 0) || (len > 0 && index >= len) {
@@ -674,6 +744,8 @@ impl ChatLog {
             self.message_timestamps.truncate(index + 1);
             self.message_candidates.truncate(index + 1);
             self.message_swipe_index.truncate(index + 1);
+            self.message_parents.truncate(index + 1);
+            self.active_leaf = self.message_ids.last().cloned();
             self.updated_at = Utc::now().to_rfc3339();
             self.save(data_root)?;
         }
@@ -688,6 +760,90 @@ impl ChatLog {
         } else {
             self.messages[len - n..].to_vec()
         }
+    }
+
+    /// 解析当前激活叶节点（向后兼容）。
+    ///
+    /// - `active_leaf` 为 `Some` 且命中某条消息 → 直接用。
+    /// - `active_leaf` 为 `None`（旧数据）→ 回退为最后一条消息 ID（线性链）。
+    pub fn resolve_active_leaf(&self) -> Option<&str> {
+        if let Some(leaf) = &self.active_leaf {
+            // 验证 leaf 确实存在于 message_ids 中。
+            if self.message_ids.iter().any(|id| id == leaf) {
+                return Some(leaf.as_str());
+            }
+        }
+        // 回退：线性链 = 最后一条消息。
+        self.message_ids.last().map(|s| s.as_str())
+    }
+
+    /// 计算当前激活路径（从 active_leaf 沿 parent 链走到根）。
+    ///
+    /// 返回按时间正序排列的消息 durable ID 列表（根 → 叶）。
+    /// 旧数据（无 parent）→ 返回全部 message_ids（线性链）。
+    pub fn active_path(&self) -> Vec<String> {
+        let leaf = match self.resolve_active_leaf() {
+            Some(l) => l.to_string(),
+            None => return Vec::new(),
+        };
+
+        // 建立 ID → index 映射（O(n) 一次性）。
+        let id_to_idx: std::collections::HashMap<&str, usize> = self
+            .message_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i))
+            .collect();
+
+        // 从 leaf 沿 parent 链走到根，收集路径。
+        let mut path = Vec::new();
+        let mut current = Some(leaf);
+        let mut guard = 0;
+        while let Some(id) = current {
+            guard += 1;
+            if guard > self.messages.len() + 1 {
+                break; // 防御环
+            }
+            path.push(id.clone());
+            // 查找当前消息的 parent。
+            current = id_to_idx
+                .get(id.as_str())
+                .and_then(|&idx| self.message_parents.get(idx))
+                .and_then(|p| p.clone());
+        }
+        path.reverse(); // 根 → 叶
+        path
+    }
+
+    /// 切换激活分支：将 `active_leaf` 设为指定的叶节点 durable ID。
+    ///
+    /// 不删除任何分支数据，仅更新 `active_leaf` 指针。
+    /// `target_leaf_id` 必须存在于 `message_ids` 中，否则返回 `BadRequest`。
+    pub fn switch_branch(
+        &mut self,
+        data_root: &Path,
+        target_leaf_id: &str,
+    ) -> Result<(), AirpError> {
+        if !self.message_ids.iter().any(|id| id == target_leaf_id) {
+            return Err(AirpError::BadRequest(format!(
+                "branch target {target_leaf_id} not found in message_ids"
+            )));
+        }
+        self.active_leaf = Some(target_leaf_id.to_string());
+        self.updated_at = Utc::now().to_rfc3339();
+        self.save(data_root)
+    }
+
+    /// 查找指定消息的所有子消息 durable ID（即 parent = 该 ID 的消息）。
+    ///
+    /// 用于前端显示分叉点指示器。
+    pub fn children_of(&self, message_id: &str) -> Vec<String> {
+        self.message_parents
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.as_deref() == Some(message_id))
+            .filter_map(|(i, _)| self.message_ids.get(i).cloned())
+            .collect()
     }
 
     /// 逐行解析 jsonl。空行忽略；非法行返回错误（不静默吞掉，避免历史丢失）。
@@ -706,6 +862,7 @@ impl ChatLog {
         let mut tss = Vec::new();
         let mut cands: Vec<Vec<String>> = Vec::new();
         let mut swidx: Vec<usize> = Vec::new();
+        let mut parents: Vec<Option<String>> = Vec::new();
         for (i, line) in content.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
@@ -724,6 +881,8 @@ impl ChatLog {
             // #249：旧行无 candidates/swipe_index → 空 Vec / 0（单候选 = content）。
             cands.push(stored.candidates.unwrap_or_default());
             swidx.push(stored.swipe_index.unwrap_or(0));
+            // 分支对话树：旧行无 parent → None（向后兼容）。
+            parents.push(stored.parent);
         }
         // A-2：等长不变量防御。各 Vec 在同一循环中 push，理论上永远等长。
         debug_assert_eq!(
@@ -741,12 +900,18 @@ impl ChatLog {
             cands.len(),
             "read_messages_jsonl: msgs.len() != cands.len()"
         );
+        debug_assert_eq!(
+            msgs.len(),
+            parents.len(),
+            "read_messages_jsonl: msgs.len() != parents.len()"
+        );
         Ok(JsonlParseResult {
             messages: msgs,
             message_ids: ids,
             message_timestamps: tss,
             message_candidates: cands,
             message_swipe_index: swidx,
+            message_parents: parents,
         })
     }
 
@@ -827,6 +992,7 @@ struct JsonlParseResult {
     message_timestamps: Vec<Option<String>>,
     message_candidates: Vec<Vec<String>>,
     message_swipe_index: Vec<usize>,
+    message_parents: Vec<Option<String>>,
 }
 
 #[cfg(test)]
@@ -1016,6 +1182,7 @@ mod tests {
                 character_id: "alice".to_string(),
                 created_at: "2025-01-01T00:00:00Z".to_string(),
                 updated_at: "2025-01-02T00:00:00Z".to_string(),
+                active_leaf: None,
             })
             .unwrap(),
         )
@@ -1058,6 +1225,7 @@ mod tests {
                 character_id: "alice".to_string(),
                 created_at: "2025-01-01T00:00:00Z".to_string(),
                 updated_at: "2025-01-02T00:00:00Z".to_string(),
+                active_leaf: None,
             })
             .unwrap(),
         )
@@ -1299,6 +1467,7 @@ mod tests {
                 character_id: "old_char".to_string(),
                 created_at: now.clone(),
                 updated_at: now,
+                active_leaf: None,
             })
             .unwrap(),
         )
@@ -1350,6 +1519,7 @@ mod tests {
                 character_id: "mixed_char".to_string(),
                 created_at: now.clone(),
                 updated_at: now,
+                active_leaf: None,
             })
             .unwrap(),
         )

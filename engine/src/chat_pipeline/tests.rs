@@ -117,6 +117,7 @@ mod tests {
             user_id: None,
             persona_id: None,
             swipe_candidates: Vec::new(),
+            branch_from: None,
         }
     }
 
@@ -959,6 +960,7 @@ mod tests_ms6 {
             user_id: None,
             persona_id: None,
             swipe_candidates: Vec::new(),
+            branch_from: None,
         }
     }
 
@@ -1181,6 +1183,7 @@ mod tests_issue27 {
             user_id: None,
             persona_id: None,
             swipe_candidates: Vec::new(),
+            branch_from: None,
         }
     }
 
@@ -1400,6 +1403,7 @@ mod tests_dx1 {
             user_id: Some("alice".to_string()),
             persona_id: None,
             swipe_candidates: Vec::new(),
+            branch_from: None,
         };
         // Pipeline should build without error; alice's user root is created
         let result = prepare_pipeline(&req, &state);
@@ -1512,6 +1516,7 @@ mod tests_a1b_resolve {
             user_id: user_id.map(str::to_string),
             persona_id: None,
             swipe_candidates: Vec::new(),
+            branch_from: None,
         }
     }
 
@@ -1843,6 +1848,7 @@ mod tests_a1b_pipeline_e2e {
             user_id: user_id.map(str::to_string),
             persona_id: persona_id.map(str::to_string),
             swipe_candidates: Vec::new(),
+            branch_from: None,
         }
     }
 
@@ -2159,6 +2165,7 @@ mod tests_effective_config_summary {
             user_id: None,
             persona_id: None,
             swipe_candidates: Vec::new(),
+            branch_from: None,
         }
     }
 

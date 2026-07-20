@@ -61,6 +61,13 @@ pub struct ChatCompletionRequest {
     ///（serde(default) 给空 Vec）。非空时 finalizer 会将新生成文本追加为最后一个候选。
     #[serde(default)]
     pub swipe_candidates: Vec<String>,
+    /// 分支对话树：从指定消息 durable ID 分叉。
+    ///
+    /// - `None`（默认）→ 线性追加（parent = 当前 active_leaf）。
+    /// - `Some(id)` → 新消息的 parent = 该 ID（从任意消息分叉）。
+    ///   ID 必须存在于当前 session 的 message_ids 中，否则 BadRequest。
+    #[serde(default)]
+    pub branch_from: Option<String>,
 }
 
 /// 用户画像：用于 `{{user}}` 等变量替换。
@@ -170,6 +177,41 @@ pub struct SwipeRequest {
     pub message_id: String,
     /// 新激活候选的下标（0-based）。
     pub index: usize,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。
+    pub user_id: Option<String>,
+}
+
+/// `PUT /v1/chat/message` 请求体。编辑指定 durable ID 消息的 content。
+///
+/// 约束：只允许编辑 `role=user` 消息（assistant 编辑 = regen/swipe 语义）。
+/// ID/timestamp/role 不变，仅替换 content。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditMessageRequest {
+    /// 目标角色 ID。
+    pub character_id: CharacterId,
+    /// 可选 session ID。
+    pub session_id: Option<SessionId>,
+    /// 要编辑的消息 durable ID。
+    pub message_id: String,
+    /// 新的消息内容。
+    pub content: String,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。
+    pub user_id: Option<String>,
+}
+
+/// `POST /v1/chat/branch/switch` 请求体。切换激活分支。
+///
+/// 将 `active_leaf` 设为指定的叶节点 durable ID，不删除其他分支数据。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwitchBranchRequest {
+    /// 目标角色 ID。
+    pub character_id: CharacterId,
+    /// 可选 session ID。
+    pub session_id: Option<SessionId>,
+    /// 目标叶节点的 durable ID（切换后成为 active_leaf）。
+    pub target_leaf_id: String,
     /// DX-1：可选用户 ID（per-user 数据隔离）。
     pub user_id: Option<String>,
 }
