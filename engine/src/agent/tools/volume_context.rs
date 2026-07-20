@@ -219,6 +219,24 @@ impl Tool for ExportContextBundleTool {
                 Err(error) => return Err(error.into()),
             };
 
+            // #160 A3：在任何 bundle 清理/写入前完成 preset 路径验证。
+            // 原顺序（先清理旧 sidecar → 再验证 preset）会在 preset 缺失时留下
+            // preset_raw.json 已删除、extensions.json 已删除、context.md 仍是旧
+            // 版本的不一致快照。验证前置后，preset 缺失直接返回 NotFound，bundle
+            // 目录不被修改。
+            let preset_raw_path = if let Some(preset) = preset_id.as_ref() {
+                let raw_path = data_dir::preset_json_path(&state.data_root, preset.as_str());
+                if !tokio::fs::try_exists(&raw_path).await? {
+                    return Err(AirpError::NotFound(format!(
+                        "preset {} has no preset.json",
+                        preset
+                    )));
+                }
+                Some(raw_path)
+            } else {
+                None
+            };
+
             let bundle_dir =
                 data_dir::ensure_context_bundle_dir(&state.data_root, character.as_str())?;
             for stale in ["preset_raw.json", "extensions.json"] {
@@ -229,14 +247,7 @@ impl Tool for ExportContextBundleTool {
             }
 
             let mut files = vec!["context.md".to_string()];
-            if let Some(preset) = preset_id.as_ref() {
-                let raw_path = data_dir::preset_json_path(&state.data_root, preset.as_str());
-                if !tokio::fs::try_exists(&raw_path).await? {
-                    return Err(AirpError::NotFound(format!(
-                        "preset {} has no preset.json",
-                        preset
-                    )));
-                }
+            if let Some(raw_path) = preset_raw_path.as_ref() {
                 tokio::fs::copy(raw_path, bundle_dir.join("preset_raw.json")).await?;
                 files.push("preset_raw.json".to_string());
                 context.push_str("\n> `preset_raw.json` is verbatim passthrough; AIRP does not interpret its prompts.\n");
