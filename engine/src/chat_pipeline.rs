@@ -1542,6 +1542,16 @@ async fn run_finalize(
                     },
                 )?;
             }
+        } else if !ctx.swipe_candidates.is_empty() {
+            // #249 审计 B1 修复：regen 时已预先 delete_last_n(1) 删除旧消息 + 候选。
+            // 若 stripped 为空（模型只输出 <state> 块或纯空白），不创建空 assistant 消息，
+            // 但必须把旧候选原样回灌，避免永久丢失用户资产。
+            // 触发条件现实性：模型输出纯 state 块或采样异常导致正文空，并非罕见。
+            ChatService::new(&ctx.data_root).append_with_candidates(
+                cid,
+                ctx.session_id.as_ref(),
+                ctx.swipe_candidates.clone(),
+            )?;
         }
     }
 
