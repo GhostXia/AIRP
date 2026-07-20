@@ -10,6 +10,21 @@ const browserResultFile = process.env.AIRP_SMOKE_BROWSER_RESULT_FILE;
 const executablePath = process.env.AIRP_CHROME_PATH || '/usr/bin/google-chrome';
 const chromeSpki = process.env.AIRP_CHROME_SPKI;
 
+// #262 N-2: Chrome 网络瞬时错误白名单（与 production-browser-smoke.mjs 同步）。
+// 不直接用 `ERR_` 前缀通配，避免把真实 4xx/5xx HTTP 错误也吞成"瞬时"而无限重试。
+// 只列 page.goto 时 compose restart 后真实出现过的瞬时网络层错误。
+const TRANSIENT_NETWORK_ERROR_PATTERNS = [
+  'ERR_NETWORK_CHANGED',
+  'ERR_CONNECTION_REFUSED',
+  'ERR_CONNECTION_RESET',
+  'ERR_CONNECTION_CLOSED',
+  'ERR_NAME_NOT_RESOLVED',
+  'ERR_NAME_RESOLUTION_FAILED',
+  'ERR_INTERNET_DISCONNECTED',
+  'ERR_NETWORK_IO_SUSPENDED',
+];
+const TRANSIENT_NETWORK_ERROR_RE = new RegExp(TRANSIENT_NETWORK_ERROR_PATTERNS.join('|'));
+
 for (const [name, value] of Object.entries({
   origin,
   username,
@@ -54,7 +69,24 @@ try {
     });
   });
 
-  const response = await page.goto(origin, { waitUntil: 'domcontentloaded' });
+  // compose restart 后 Caddy upstream 连接池/网络命名空间瞬间切换，首个 page.goto
+  // 可能撞上 Chrome 网络底层错误（ERR_NETWORK_CHANGED / ERR_CONNECTION_REFUSED 等）。
+  // 与 production-browser-smoke.mjs 的 transient retry 一致：3 attempts + 2s 间隔。
+  // 之前 restart-smoke 缺这一层，TimeoutError 偶发让 CI 一票否决（PR #268 CI run 29743276697）。
+  let response;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await page.goto(origin, { waitUntil: 'domcontentloaded' });
+      break;
+    } catch (err) {
+      if (attempt < 3 && TRANSIENT_NETWORK_ERROR_RE.test(err?.message || '')) {
+        console.log(`page.goto transient error (attempt ${attempt}/3): ${err.message}`);
+        await page.waitForTimeout(2_000);
+        continue;
+      }
+      throw err;
+    }
+  }
   assert.equal(response?.status(), 200);
   await page.waitForFunction(({ characterId, sessionId, firstMessage, firstAssistant }) => {
     const assistants = Array.from(document.querySelectorAll('#chat-log .msg.assistant[data-message-id]'));
