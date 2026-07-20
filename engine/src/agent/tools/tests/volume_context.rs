@@ -90,6 +90,94 @@ async fn export_context_bundle_output_directs_isolated_subagent() {
     assert!(bundle.join("extensions.json").exists());
 }
 
+// #160 A3：无效 preset 不得修改既有 bundle。
+// 顺序回归：原实现先清理 preset_raw.json/extensions.json，再验证 preset 路径。
+// preset 缺失时返回 NotFound，但 sidecar 已被删除、context.md 仍是旧版本，
+// 形成不一致快照。修复后 preset 验证前置，NotFound 时 bundle 目录不被触碰。
+#[tokio::test]
+async fn export_context_bundle_invalid_preset_does_not_modify_existing_bundle() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    let card_dir = state.data_root.join("characters/alice/card");
+    std::fs::create_dir_all(&card_dir).unwrap();
+    std::fs::write(
+        card_dir.join("card.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "Alice",
+                "description": "A test character",
+                "personality": "Curious",
+                "scenario": "An observatory",
+                "extensions": {"depth_prompt": "raw extension"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // 1) 先用合法 preset 导出一次，建立 baseline bundle。
+    let preset_dir = state.data_root.join("presets/story");
+    std::fs::create_dir_all(&preset_dir).unwrap();
+    std::fs::write(preset_dir.join("preset.json"), r#"{"prompts":[]}"#).unwrap();
+    let first = default_registry(state.clone())
+        .get("export_context_bundle")
+        .unwrap()
+        .call(
+            serde_json::json!({
+                "character_id": "alice",
+                "preset_id": "story",
+            }),
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(!first.dry_run);
+
+    let bundle = state.data_root.join("exports/context-bundles/alice");
+    let baseline_context = std::fs::read_to_string(bundle.join("context.md")).unwrap();
+    let baseline_preset_raw = std::fs::read_to_string(bundle.join("preset_raw.json")).unwrap();
+    let baseline_extensions = std::fs::read_to_string(bundle.join("extensions.json")).unwrap();
+
+    // 2) 用不存在 preset 再导出，必须返回 NotFound 且 bundle 文件保持 baseline。
+    let second = default_registry(state.clone())
+        .get("export_context_bundle")
+        .unwrap()
+        .call(
+            serde_json::json!({
+                "character_id": "alice",
+                "preset_id": "does-not-exist",
+            }),
+            false,
+        )
+        .await;
+    assert!(
+        matches!(second, Err(ref e) if matches!(e, crate::error::AirpError::NotFound(_))),
+        "expected NotFound for missing preset, got {:?}",
+        second
+    );
+
+    // 3) 既有 bundle 必须未被修改：context.md / preset_raw.json / extensions.json
+    //    三者都保持 baseline 字节。这是 #160 A3 回归保护的核心断言。
+    assert_eq!(
+        std::fs::read_to_string(bundle.join("context.md")).unwrap(),
+        baseline_context,
+        "context.md must not change when preset validation fails"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bundle.join("preset_raw.json")).unwrap(),
+        baseline_preset_raw,
+        "preset_raw.json must not be deleted when preset validation fails"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bundle.join("extensions.json")).unwrap(),
+        baseline_extensions,
+        "extensions.json must not be deleted when preset validation fails"
+    );
+}
+
 #[tokio::test]
 async fn seal_volume_dry_run_then_confirm() {
     use wiremock::matchers::{method, path};
