@@ -182,16 +182,32 @@ Remove-Item Env:RUSTDOCFLAGS
    public API 缺文档会进入 `cargo doc -W missing-docs` 维护清单；private helpers
    和 tests 不强制覆盖；
 2. **注释质量**：禁止"重述函数名"的注释（如 `fn parse_id()` 上的 `/// Parse the id`）。
-   只在能解释公共 API 合同、错误语义、副作用、并发或安全边界时才补注释；
+   只在能解释公共 API 合同、错误语义、副作用、并发或安全边界时才补注释；private helper
+   的非显然不变式（如安全边界、并发约束、复杂算法步骤）也建议补注释，即便不在
+   `cargo doc -W missing-docs` 维护清单 scope 内；
 3. **private helpers 决策**：内部可执行入口（如 `tools/dep-governance/` 下的 mjs
    scripts）、test helper、私有 helper 函数**默认不在 docstring 覆盖范围内**。若
    CodeRabbit 报警源于这些项，可在 PR review 中说明"private helper，不在覆盖范围"，
    不需要为提升覆盖率批量填充重述性注释；
 4. **门禁不变**：CI 的 `cargo doc --workspace --no-deps --locked` 必须无警告通过
-   （`-D warnings`），但不引入 docstring 覆盖率门禁。CodeRabbit 覆盖率警告**不阻塞
-   PR 合并**，除非覆盖率下降源于 public API 缺文档；
-5. **基线管理**：若未来决定把覆盖率纳入门禁，必须先记录当前基线（区分 public / private /
-   tests），明确稳定的公共扩展面，并按一次性基线迁移，不让既有缺口阻止无关修复。
+   （`RUSTDOCFLAGS=-D warnings`），但不引入 docstring 覆盖率门禁。CodeRabbit 覆盖率
+   警告**不阻塞 PR 合并**，除非覆盖率下降源于 public API 缺文档——判定方式为本地手动
+   执行 `RUSTDOCFLAGS="-W missing-docs" cargo doc --workspace --no-deps --locked`
+   是否报警。注意：CI 当前**未启用** `missing-docs` lint（既未在 RUSTDOCFLAGS 加
+   `-W missing-docs`，也未在 crate root 加 `#![warn(missing_docs)]`），因此 public
+   API 缺文档不会在 CI 阶段失败；若未来要把 public API 缺文档纳入 CI 门禁，需先在
+   crate root 显式声明 `#![warn(missing_docs)]` 或在 CI 中追加 `-W missing-docs`；
+5. **基线管理**：若未来决定把覆盖率纳入门禁，必须先记录当前基线，明确稳定的公共扩展面，
+   并按一次性基线迁移，不让既有缺口阻止无关修复。两条基线分别记录，不混用 scope：
+   - **rustdoc missing-docs 基线**（仅 public items）：2026-07-20 PR #261 合并时，
+     本地执行 `RUSTDOCFLAGS="-W missing-docs" cargo doc --workspace --no-deps --locked`
+     的实际输出条目数即为基线（既有缺口仅限 public items；private helper / test 不在
+     rustdoc scope 内，不会被该命令报告）。未来若纳入门禁，需重跑该命令并显式记录
+     条目数。
+   - **CodeRabbit docstring coverage 基线**（含 private helpers / tests / 内部可执行
+     入口）：2026-07-20 PR #261 合并时 ≈ 70%。既有缺口集中在 private helper / test
+     模块（已在原则 3 中说明默认不补）。未来若纳入门禁，需重跑并显式记录
+     public / private / tests 拆分。
 
 按范围补充：
 
