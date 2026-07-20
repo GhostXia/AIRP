@@ -461,10 +461,21 @@ impl ChatService {
                 character_id.as_str(),
                 session_id,
             )?;
+            // #252 D2：防御性过滤——丢弃 trim 后为空的候选（whitespace-only）。
+            // 上游 finalize.rs:39 已对新生成的 stripped 做 trim 检查；此处独立过滤
+            // 保证历史数据或异常上游传入的空白候选不会污染持久化状态。
+            let original_count = candidates.len();
+            candidates.retain(|c| !c.trim().is_empty());
             if candidates.is_empty() {
                 return Err(AirpError::BadRequest(
-                    "append_with_candidates: candidates cannot be empty".into(),
+                    "append_with_candidates: candidates cannot be empty or all whitespace".into(),
                 ));
+            }
+            if candidates.len() != original_count {
+                tracing::warn!(
+                    dropped = original_count - candidates.len(),
+                    "append_with_candidates: dropped whitespace-only candidates"
+                );
             }
             // 审计 C4：候选 cap。超过时丢弃最旧的，保留最近 SWIPE_CANDIDATES_CAP 个。
             if candidates.len() > SWIPE_CANDIDATES_CAP {
@@ -3240,6 +3251,83 @@ mod tests {
             .append_with_candidates(&character, None, vec![])
             .err();
         assert!(err.is_some(), "empty candidates should be rejected");
+    }
+
+    #[test]
+    fn append_with_candidates_all_whitespace_rejected() {
+        // #252 D2: 全部空白候选（whitespace-only）应被拒绝。
+        let (_tmp, service, character) = make_swipe_service();
+        let err = service
+            .append_with_candidates(
+                &character,
+                None,
+                vec!["   ".to_string(), "\t\n".to_string(), "".to_string()],
+            )
+            .err();
+        assert!(
+            err.is_some(),
+            "all-whitespace candidates should be rejected"
+        );
+        let msg = format!("{}", err.unwrap());
+        assert!(
+            msg.contains("all whitespace"),
+            "error message should mention 'all whitespace', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn append_with_candidates_partial_whitespace_filtered() {
+        // #252 D2: 部分空白候选应被过滤，保留有效候选。
+        // 场景：历史数据中旧候选含空白（理论上不应出现，但防御性处理）。
+        let (_tmp, service, character) = make_swipe_service();
+        let log = service
+            .append_with_candidates(
+                &character,
+                None,
+                vec![
+                    "valid-a".to_string(),
+                    "   ".to_string(),
+                    "valid-b".to_string(),
+                    "".to_string(),
+                    "\t\n".to_string(),
+                ],
+            )
+            .unwrap();
+        // 过滤后应保留 2 个有效候选
+        assert_eq!(
+            log.message_candidates[1],
+            vec!["valid-a".to_string(), "valid-b".to_string()],
+            "whitespace candidates should be filtered out"
+        );
+        // swipe_index 指向最后一个有效候选（valid-b，索引 1）
+        assert_eq!(log.message_swipe_index[1], 1);
+        assert_eq!(log.messages[1].content, "valid-b");
+    }
+
+    #[test]
+    fn append_with_candidates_single_whitespace_rejected() {
+        // #252 D2: 单个空白候选应被拒绝（过滤后等价于全空白）。
+        let (_tmp, service, character) = make_swipe_service();
+        let err = service
+            .append_with_candidates(&character, None, vec!["   ".to_string()])
+            .err();
+        assert!(
+            err.is_some(),
+            "single whitespace candidate should be rejected"
+        );
+    }
+
+    #[test]
+    fn append_with_candidates_preserves_non_trimmed_content() {
+        // #252 D2: 候选内容前后空格应被保留（只过滤 trim 后为空的）。
+        // 这是预期行为：候选可以含前后空格，只要 trim 后非空。
+        let (_tmp, service, character) = make_swipe_service();
+        let log = service
+            .append_with_candidates(&character, None, vec!["  padded content  ".to_string()])
+            .unwrap();
+        assert_eq!(log.messages[1].content, "  padded content  ");
+        assert_eq!(log.message_candidates[1][0], "  padded content  ");
+        assert_eq!(log.message_swipe_index[1], 0);
     }
 
     #[test]

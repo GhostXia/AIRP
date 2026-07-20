@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { parseSecondaryKeys, buildLoreEntryDefault, collectAdvisoryFields } = require('../lorebook-utils.js');
+const { parseSecondaryKeys, buildLoreEntryDefault, collectAdvisoryFields, sanitizeLoreEntries } = require('../lorebook-utils.js');
 
 // ── parseSecondaryKeys ─────────────────────────────────────────────────────
 
@@ -230,4 +230,118 @@ test('S3 round-trip: 保存 payload 序列化/反序列化后 extensions 与 cas
   assert.ok(labels.includes('depth'));
   assert.ok(labels.includes('probability'));
   assert.ok(!labels.includes('selective')); // 仍被跳过
+});
+
+// ── #186 W-03: sanitizeLoreEntries ─────────────────────────────────────────
+
+test('sanitizeLoreEntries: 正常数组 → 全部 valid，无 skipped', () => {
+  const entries = [
+    { keys: ['a'], content: 'alpha' },
+    { keys: ['b'], content: 'beta' },
+  ];
+  const result = sanitizeLoreEntries(entries);
+  assert.equal(result.valid.length, 2);
+  assert.deepEqual(result.skipped, []);
+});
+
+test('sanitizeLoreEntries: 空数组 → 空 valid，空 skipped', () => {
+  const result = sanitizeLoreEntries([]);
+  assert.deepEqual(result.valid, []);
+  assert.deepEqual(result.skipped, []);
+});
+
+test('sanitizeLoreEntries: null 输入 → 空 valid，空 skipped（不抛）', () => {
+  const result = sanitizeLoreEntries(null);
+  assert.deepEqual(result.valid, []);
+  assert.deepEqual(result.skipped, []);
+});
+
+test('sanitizeLoreEntries: undefined 输入 → 空 valid，空 skipped（不抛）', () => {
+  const result = sanitizeLoreEntries(undefined);
+  assert.deepEqual(result.valid, []);
+  assert.deepEqual(result.skipped, []);
+});
+
+test('sanitizeLoreEntries: 非数组输入（数字/字符串/对象）→ 空 valid，空 skipped', () => {
+  for (const bad of [42, 'foo', {}]) {
+    const result = sanitizeLoreEntries(bad);
+    assert.deepEqual(result.valid, []);
+    assert.deepEqual(result.skipped, []);
+  }
+});
+
+test('sanitizeLoreEntries: 数组含 null → 跳过并报告索引', () => {
+  const entries = [{ keys: ['a'] }, null, { keys: ['c'] }];
+  const result = sanitizeLoreEntries(entries);
+  assert.equal(result.valid.length, 2);
+  assert.equal(result.valid[0].keys[0], 'a');
+  assert.equal(result.valid[1].keys[0], 'c');
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].index, 1);
+  assert.match(result.skipped[0].reason, /不是对象/);
+});
+
+test('sanitizeLoreEntries: 数组含 undefined → 跳过并报告', () => {
+  const entries = [undefined, { keys: ['b'] }];
+  const result = sanitizeLoreEntries(entries);
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.skipped[0].index, 0);
+  assert.match(result.skipped[0].reason, /不是对象/);
+});
+
+test('sanitizeLoreEntries: 数组含原始类型（数字/字符串/布尔）→ 跳过', () => {
+  const entries = [42, 'foo', true, { keys: ['ok'] }];
+  const result = sanitizeLoreEntries(entries);
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.valid[0].keys[0], 'ok');
+  assert.equal(result.skipped.length, 3);
+  assert.deepEqual(result.skipped.map(s => s.index), [0, 1, 2]);
+});
+
+test('sanitizeLoreEntries: 数组元素为数组 → 跳过并标记为 "数组而非对象"', () => {
+  // 数组 typeof === 'object'，但显然不是合法 entry；必须显式拒绝以免污染渲染。
+  const entries = [['not', 'an', 'entry'], { keys: ['ok'] }];
+  const result = sanitizeLoreEntries(entries);
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].index, 0);
+  assert.match(result.skipped[0].reason, /数组而非对象/);
+});
+
+test('sanitizeLoreEntries: 混合正常 + 坏条目 → 只保留正常，按原索引报告坏条目', () => {
+  // 真实持久化脏数据场景：好条目 + null + 数组 + 字符串 + 又一个好条目
+  const entries = [
+    { keys: ['good1'], content: 'one' },
+    null,
+    ['bad', 'array'],
+    'string',
+    { keys: ['good2'], content: 'two' },
+  ];
+  const result = sanitizeLoreEntries(entries);
+  assert.equal(result.valid.length, 2);
+  assert.equal(result.valid[0].keys[0], 'good1');
+  assert.equal(result.valid[1].keys[0], 'good2');
+  assert.equal(result.skipped.length, 3);
+  assert.deepEqual(result.skipped.map(s => s.index), [1, 2, 3]);
+  // 每个跳过项都有可读原因
+  for (const s of result.skipped) {
+    assert.ok(typeof s.reason === 'string' && s.reason.length > 0);
+  }
+});
+
+test('sanitizeLoreEntries: 返回 valid 数组是新数组，不引用输入', () => {
+  const entries = [{ keys: ['a'] }, { keys: ['b'] }];
+  const result = sanitizeLoreEntries(entries);
+  // valid 是新数组，但 entry 引用保留（UI 仍按引用编辑 entry）
+  assert.notEqual(result.valid, entries);
+  assert.equal(result.valid.length, entries.length);
+});
+
+test('sanitizeLoreEntries: 空对象 {} 视为合法 entry（保守不崩）', () => {
+  // 空对象形状虽然缺 keys/content，但 renderLoreEntry 已用 || 兜底；
+  // 形状校验只拒绝"非对象"，不强制字段 schema，避免过度收紧。
+  const entries = [{}, { keys: ['ok'] }];
+  const result = sanitizeLoreEntries(entries);
+  assert.equal(result.valid.length, 2);
+  assert.deepEqual(result.skipped, []);
 });

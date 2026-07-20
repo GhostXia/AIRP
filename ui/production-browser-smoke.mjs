@@ -11,6 +11,22 @@ const browserResultFile = process.env.AIRP_SMOKE_BROWSER_RESULT_FILE;
 const executablePath = process.env.AIRP_CHROME_PATH || '/usr/bin/google-chrome';
 const chromeSpki = process.env.AIRP_CHROME_SPKI;
 
+// #262 N-2: Chrome 网络瞬时错误白名单。
+// 不直接用 `ERR_` 前缀通配，避免把真实 4xx/5xx HTTP 错误（如 ERR_HTTP_RESPONSE_CODE_FAILURE）
+// 也吞成"瞬时"而无限重试。只列 page.goto 时 compose restart 后真实出现过的瞬时网络层错误。
+// 未来 Chrome 升级若新增瞬时错误码，按需追加；这里保持显式以便审计可追溯。
+const TRANSIENT_NETWORK_ERROR_PATTERNS = [
+  'ERR_NETWORK_CHANGED',         // upstream 切换瞬间路由表抖动
+  'ERR_CONNECTION_REFUSED',      // Caddy upstream 池未热身
+  'ERR_CONNECTION_RESET',        // upstream 中断
+  'ERR_CONNECTION_CLOSED',       // upstream 主动关闭
+  'ERR_NAME_NOT_RESOLVED',       // DNS 瞬时抖动
+  'ERR_NAME_RESOLUTION_FAILED',  // DNS 解析失败（与上一项同族，新 Chrome 版本号下可能择一出现）
+  'ERR_INTERNET_DISCONNECTED',   // 主机瞬时断网（CI runner 偶发）
+  'ERR_NETWORK_IO_SUSPENDED',    // 网络 I/O 暂停（容器/CGroup 调度抖动）
+];
+const TRANSIENT_NETWORK_ERROR_RE = new RegExp(TRANSIENT_NETWORK_ERROR_PATTERNS.join('|'));
+
 for (const [name, value] of Object.entries({
   origin,
   username,
@@ -51,16 +67,17 @@ try {
   });
 
   // compose restart 后 Caddy upstream 连接池/网络命名空间瞬间切换，首个 page.goto
-  // 可能撞上 Chrome 网络底层错误（ERR_NETWORK_CHANGED / ERR_CONNECTION_REFUSED）。
+  // 可能撞上 Chrome 网络底层错误（ERR_NETWORK_CHANGED / ERR_CONNECTION_REFUSED 等）。
   // 与 PR #251 restart-smoke 的 transient retry 思路一致：捕获瞬时网络错误重试，
   // 让 wait_for_engine_ready stage 1-2 之外的时序抖动不再让 smoke 一票否决。
+  // 误吞 4xx/5xx 真实 HTTP 错误的风险由 TRANSIENT_NETWORK_ERROR_PATTERNS 显式白名单控制。
   let response;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       response = await page.goto(origin, { waitUntil: 'domcontentloaded' });
       break;
     } catch (err) {
-      if (attempt < 3 && /ERR_NETWORK_CHANGED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_NAME_NOT_RESOLVED/.test(err?.message || '')) {
+      if (attempt < 3 && TRANSIENT_NETWORK_ERROR_RE.test(err?.message || '')) {
         console.log(`page.goto transient error (attempt ${attempt}/3): ${err.message}`);
         await page.waitForTimeout(2_000);
         continue;
@@ -478,16 +495,20 @@ try {
   assert.ok(advText.includes('depth'), 'advisory 应含 depth');
   assert.ok(!advText.includes('selective'), 'advisory 不应含 selective');
 
-  // #186 W-02: 200 + non-JSON 响应不得触发 unhandled rejection，且必须清掉旧角色条目。
+  // #186 W-02: 200 + non-JSON 响应不得触发 unhandled rejection，且必须保留旧 loreData/渲染。
+  // 改动前会清空 entries；改动后错误响应只更新状态文案、保留上一次成功加载的数据。
   const pageErrorCountBeforeMalformedLorebook = pageErrors.length;
+  const loreEntryCountBeforeMalformed = await page.locator('#lore-entries .wb-lore-entry').count();
+  assert.ok(loreEntryCountBeforeMalformed > 0, 'malformed 响应前应有已加载的 lorebook 条目');
   await page.route('**/v1/characters/smoke-xss/lorebook', route => route.fulfill({
     status: 200,
     contentType: 'text/plain',
     body: 'not-json',
   }));
   await page.locator('#btn-refresh-lorebook').click();
-  await page.waitForFunction(() => document.querySelector('#lore-status')?.textContent === '加载失败: 响应格式异常');
-  assert.equal(await page.locator('#lore-entries .wb-lore-entry').count(), 0);
+  await page.waitForFunction(() => (document.querySelector('#lore-status')?.textContent || '').startsWith('加载失败: 响应格式异常'));
+  // W-02: 错误响应保留旧数据 → DOM 中的条目数量应与 malformed 响应前一致
+  assert.equal(await page.locator('#lore-entries .wb-lore-entry').count(), loreEntryCountBeforeMalformed);
   await page.waitForTimeout(50);
   assert.equal(pageErrors.length, pageErrorCountBeforeMalformedLorebook);
   await page.unroute('**/v1/characters/smoke-xss/lorebook');

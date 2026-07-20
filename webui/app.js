@@ -2549,23 +2549,33 @@
       renderLoreEntries();
       loreStatus.textContent = '该角色尚无世界书（可新建条目后保存）';
     } else if (r.ok) {
+      // #186 W-02: 成功响应形状校验。
+      // 异常时（r.data 不是非 null 对象，或 entries 字段非数组）只显示错误并保留旧 loreData，
+      // 不用空数据覆盖旧渲染，让用户至少能看到上一次有效的世界书。
       if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data)) {
-        loreStatus.textContent = '加载失败: 响应格式异常';
-        loreData = { entries: [] };
-        renderLoreEntries();
+        loreStatus.textContent = '加载失败: 响应格式异常（保留旧数据）';
+        return;
+      }
+      if (r.data.entries !== undefined && !Array.isArray(r.data.entries)) {
+        loreStatus.textContent = '加载失败: entries 字段非数组（保留旧数据）';
         return;
       }
       loreData = r.data;
       if (loreData.entries === undefined) {
         loreData.entries = [];
-      } else if (!Array.isArray(loreData.entries)) {
-        loreStatus.textContent = '加载失败: 响应格式异常';
-        loreData = { entries: [] };
-        renderLoreEntries();
-        return;
       }
-      renderLoreEntries();
-      loreStatus.textContent = '已加载 ' + loreData.entries.length + ' 条条目';
+      // #186 W-03 + Gemini review: renderLoreEntries 设置的 skipped 警告
+      // 不能被这里的"已加载 N 条"覆盖。先取 skipped count，组合消息。
+      const loadedCount = loreData.entries.length;
+      const skippedInfo = renderLoreEntries();
+      if (skippedInfo && skippedInfo.count > 0) {
+        const indices = skippedInfo.indices.join(', ');
+        loreStatus.textContent =
+          '已加载 ' + (loadedCount - skippedInfo.count) + ' 条条目；警告: 跳过 ' +
+          skippedInfo.count + ' 条损坏条目（' + indices + '）';
+      } else {
+        loreStatus.textContent = '已加载 ' + loadedCount + ' 条条目';
+      }
     } else {
       loreStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
     }
@@ -2583,11 +2593,23 @@
   }
 
   function renderLoreEntries() {
-    if (!loreData) return;
+    if (!loreData) return null;
     loreEntries.innerHTML = '';
-    loreData.entries.forEach((entry, i) => {
+    // #186 W-03: 单条 entry 形状校验，跳过 null/非对象/数组等坏条目并报告，
+    // 避免持久化脏数据让 forEach 中断、整份列表无法渲染。
+    // 返回 skipped 信息由调用方组合状态消息（避免覆盖）。
+    const { valid, skipped } = AIRPLorebookUtils.sanitizeLoreEntries(loreData.entries);
+    valid.forEach((entry, i) => {
       loreEntries.appendChild(renderLoreEntry(entry, i));
     });
+    if (skipped.length > 0) {
+      // 跳过坏条目时返回 indices 列表，让调用方组合消息（不再直接覆盖 loreStatus）。
+      return {
+        count: skipped.length,
+        indices: skipped.map(s => '#' + (s.index + 1)),
+      };
+    }
+    return { count: 0, indices: [] };
   }
 
   function renderLoreEntry(entry, index) {

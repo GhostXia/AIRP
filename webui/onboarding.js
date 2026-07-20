@@ -1,6 +1,7 @@
 // AIRP WebUI onboarding wizard — first-run引导 6-stage state machine.
 //
 // Exports: mountOnboarding(container, hostPort) → cleanup()
+//          generateOnbPresetIdFallback(now, randomStr) → string  (#264 N-2 抽出便于测试)
 //
 // 解耦契约（设计 spec §2.1, §3.6）：
 // - 本文件零 import 指向 app.js / shared.js；仅依赖浏览器 API + hostPort 注入。
@@ -12,6 +13,24 @@
 // - F3 Port 版本不匹配 → mountOnboarding 入口 throw（宿主 catch）
 // - F4 运行时崩溃 → 顶层 try/catch 渲染崩溃面板 + [重试向导]/[退回手动配置]
 // - F5 HTTP 失败 / F6 SSE 中断 → 向导内阶段错误 + 重试，不降级
+
+// #264 N-2: Stage 4 preset_id fallback 生成器（抽成纯函数便于单测）。
+//
+// 输入约定：
+//   now        — Date.now() 数值；生产调用传 Date.now()
+//   randomStr  — Math.random().toString(36) 的结果；生产调用传 Math.random().toString(36)
+// 之所以把 now/randomStr 作为参数注入而不是在函数内调用 Date.now/Math.random，
+// 是为了让单测可以固定这两个值断言输出格式；调用方负责注入真实源。
+//
+// 输出格式：'onb-' + now + '-' + random.slice(2, 6).padEnd(4, '0')
+// - slice(2, 6) 取 toString(36) 小数点后 4 位
+// - padEnd(4, '0') 兜底：toString(36) 理论上可能返回 "0"，slice 后是空串，
+//   padEnd 后是 "0000"；这是预期行为（4 字符零），不是 bug。
+export function generateOnbPresetIdFallback(now, randomStr) {
+  const safeRandom = typeof randomStr === 'string' ? randomStr : '';
+  const suffix = safeRandom.slice(2, 6).padEnd(4, '0');
+  return 'onb-' + now + '-' + suffix;
+}
 
 export function mountOnboarding(container, hostPort) {
   // F3: 单整数断言（spec §2.4 砍除项 #211：不做完整版本协商）
@@ -542,8 +561,9 @@ export function mountOnboarding(container, hostPort) {
   async function importPresetJson(box, presetObj) {
     // Preset 导入：POST /v1/presets/import，body = { preset_json: <stringified>, preset_id?: <id> }
     // preset_id 缺省时 engine 应生成；此处用文件名或 fallback 'onb-imported'
+    // #264 N-2: 抽出 generateOnbPresetIdFallback 便于单测覆盖随机后缀生成逻辑。
     const presetId = (presetObj && typeof presetObj.name === 'string' && presetObj.name)
-      || 'onb-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6).padEnd(4, '0');
+      || generateOnbPresetIdFallback(Date.now(), Math.random().toString(36));
     const r = await callApi('/v1/presets/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -72,5 +72,33 @@
     return fields;
   }
 
-  return { parseSecondaryKeys, buildLoreEntryDefault, collectAdvisoryFields };
+  // #186 W-03: 单条 entry 形状校验。
+  // 持久化脏数据中若含 null/非对象/数组，会让 renderLoreEntries 的 forEach 中断，
+  // 整份列表无法渲染。这里把校验提取为纯函数：跳过坏条目并报告其索引/原因，
+  // 调用方可据此在状态栏提示用户而不静默崩溃。
+  //
+  // 输入约定：调用方已经把 loreData.entries 校验为 Array（loadLorebook 中完成）；
+  // 但本函数仍防御性处理非数组输入，以便未来其他调用路径直接复用。
+  // 返回 { valid: Array, skipped: Array<{ index: number, reason: string }> }。
+  function sanitizeLoreEntries(entries) {
+    if (!Array.isArray(entries)) return { valid: [], skipped: [] };
+    const valid = [];
+    const skipped = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (entry === null || typeof entry !== 'object') {
+        skipped.push({ index: i, reason: 'entry 不是对象' });
+        continue;
+      }
+      if (Array.isArray(entry)) {
+        // 数组也是 object，但显然不是合法 entry
+        skipped.push({ index: i, reason: 'entry 是数组而非对象' });
+        continue;
+      }
+      valid.push(entry);
+    }
+    return { valid, skipped };
+  }
+
+  return { parseSecondaryKeys, buildLoreEntryDefault, collectAdvisoryFields, sanitizeLoreEntries };
 });
