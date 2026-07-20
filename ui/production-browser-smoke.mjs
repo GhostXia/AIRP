@@ -495,16 +495,20 @@ try {
   assert.ok(advText.includes('depth'), 'advisory 应含 depth');
   assert.ok(!advText.includes('selective'), 'advisory 不应含 selective');
 
-  // #186 W-02: 200 + non-JSON 响应不得触发 unhandled rejection，且必须清掉旧角色条目。
+  // #186 W-02: 200 + non-JSON 响应不得触发 unhandled rejection，且必须保留旧 loreData/渲染。
+  // 改动前会清空 entries；改动后错误响应只更新状态文案、保留上一次成功加载的数据。
   const pageErrorCountBeforeMalformedLorebook = pageErrors.length;
+  const loreEntryCountBeforeMalformed = await page.locator('#lore-entries .wb-lore-entry').count();
+  assert.ok(loreEntryCountBeforeMalformed > 0, 'malformed 响应前应有已加载的 lorebook 条目');
   await page.route('**/v1/characters/smoke-xss/lorebook', route => route.fulfill({
     status: 200,
     contentType: 'text/plain',
     body: 'not-json',
   }));
   await page.locator('#btn-refresh-lorebook').click();
-  await page.waitForFunction(() => document.querySelector('#lore-status')?.textContent === '加载失败: 响应格式异常');
-  assert.equal(await page.locator('#lore-entries .wb-lore-entry').count(), 0);
+  await page.waitForFunction(() => (document.querySelector('#lore-status')?.textContent || '').startsWith('加载失败: 响应格式异常'));
+  // W-02: 错误响应保留旧数据 → DOM 中的条目数量应与 malformed 响应前一致
+  assert.equal(await page.locator('#lore-entries .wb-lore-entry').count(), loreEntryCountBeforeMalformed);
   await page.waitForTimeout(50);
   assert.equal(pageErrors.length, pageErrorCountBeforeMalformedLorebook);
   await page.unroute('**/v1/characters/smoke-xss/lorebook');
