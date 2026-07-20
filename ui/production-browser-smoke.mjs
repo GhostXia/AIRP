@@ -50,7 +50,24 @@ try {
     });
   });
 
-  const response = await page.goto(origin, { waitUntil: 'domcontentloaded' });
+  // compose restart 后 Caddy upstream 连接池/网络命名空间瞬间切换，首个 page.goto
+  // 可能撞上 Chrome 网络底层错误（ERR_NETWORK_CHANGED / ERR_CONNECTION_REFUSED）。
+  // 与 PR #251 restart-smoke 的 transient retry 思路一致：捕获瞬时网络错误重试，
+  // 让 wait_for_engine_ready stage 1-2 之外的时序抖动不再让 smoke 一票否决。
+  let response;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await page.goto(origin, { waitUntil: 'domcontentloaded' });
+      break;
+    } catch (err) {
+      if (attempt < 3 && /ERR_NETWORK_CHANGED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_NAME_NOT_RESOLVED/.test(err?.message || '')) {
+        console.log(`page.goto transient error (attempt ${attempt}/3): ${err.message}`);
+        await page.waitForTimeout(2_000);
+        continue;
+      }
+      throw err;
+    }
+  }
   assert.equal(response?.status(), 200);
 
   const headers = response.headers();
