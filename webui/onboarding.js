@@ -33,6 +33,10 @@ export function mountOnboarding(container, hostPort) {
   let sendInFlight = false;  // Stage 6 sendFirstMessage 单飞保护（防双击/重试并发）
   let preMountFocus = null;  // dialog 打开前焦点，cleanup 时恢复（spec §4.2 a11y）
   let stage1ProdTimer = null; // Stage 1 prod 模式 setTimeout 句柄，cleanup 时清理（W-05）
+  // W-05 follow-up（CodeRabbit）：cleanup 后 pending /version 或 /health 异步
+  // continuation 仍可能更新已卸载 DOM。disposed 标志在 cleanup 入口置位，
+  // runHealthCheck 在每次 await 之后 DOM 更新之前检查，避免 stale mutation。
+  let disposed = false;
 
   // 焦点保存（spec §4.2 a11y）：mount 时记录当前焦点元素，cleanup 时恢复
   try {
@@ -247,12 +251,14 @@ export function mountOnboarding(container, hostPort) {
     box.appendChild(loading);
     try {
       const vr = await callApi('/version');
+      if (disposed) return;
       if (!vr.ok) {
         box.removeChild(loading);
         showError(box, 'Engine 连接失败：' + hostPort.formatError(vr.data, vr.text), () => { render(); });
         return;
       }
       const hr = await callApi('/health');
+      if (disposed) return;
       box.removeChild(loading);
       if (!hr.ok || !hr.data || hr.data.engine !== 'ok') {
         showError(box, 'Engine 健康检查失败：' + hostPort.formatError(hr.data, hr.text), () => { render(); });
@@ -272,6 +278,7 @@ export function mountOnboarding(container, hostPort) {
       on(next, 'click', safeSync(() => { stage = 2; render(); }, 'stage1-next'));
       box.appendChild(next);
     } catch (err) {
+      if (disposed) return;
       if (loading.parentNode) box.removeChild(loading);
       showError(box, '健康检查异常：' + String(err.message || err), () => { render(); });
     }
@@ -536,7 +543,7 @@ export function mountOnboarding(container, hostPort) {
     // Preset 导入：POST /v1/presets/import，body = { preset_json: <stringified>, preset_id?: <id> }
     // preset_id 缺省时 engine 应生成；此处用文件名或 fallback 'onb-imported'
     const presetId = (presetObj && typeof presetObj.name === 'string' && presetObj.name)
-      || 'onb-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+      || 'onb-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6).padEnd(4, '0');
     const r = await callApi('/v1/presets/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -921,6 +928,10 @@ export function mountOnboarding(container, hostPort) {
 
   // ── 返回 cleanup（spec §5.6）──────────────────────────────────────────────
   return function cleanup() {
+    // W-05 follow-up（CodeRabbit）：先标记 disposed，再清 timer。这样 pending
+    // runHealthCheck continuation 即使在 timer 清理的 race 中触发，也会在
+    // disposed 检查处提前 return，不会更新已卸载 DOM。
+    disposed = true;
     if (sseAbort) { try { sseAbort.abort(); } catch {} sseAbort = null; }
     if (stage1ProdTimer) { try { clearTimeout(stage1ProdTimer); } catch {} stage1ProdTimer = null; }
     sendInFlight = false;
