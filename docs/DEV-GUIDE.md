@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-18，`main@2a14b7e`
+> 最后校准：2026-07-20，`main@7895f8c`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -44,7 +44,7 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-MCP-Se
 - `domain.rs` 与各 shared service：数据和业务不变量；
 - `data_dir/`：路径、原子替换与数据根；
 - `chat_store.rs`：durable history 与 session metadata；
-- `chat_pipeline.rs` / `orchestrator/`：RP prompt 装配；
+- `chat_pipeline/`：RP prompt 装配（10 个子模块：finalize、generation_step、helpers、prepare、prepare_scene、state_extract、stdout_runner、stream、trace、types）；
 - `agent/`：bounded loop、registry、工具和控制平面；
 - `daemon/handlers/`：HTTP adapter，handler 不应重新实现 domain 规则；
 - `daemon/tests/`：route 合同与安全测试。
@@ -252,8 +252,8 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. PR #232 已形成 P1 有限试用代码候选；当前第一优先级是继续开发首聊黄金路径，并用真实 provider、真实浏览器和生产拓扑建立可重复验收，分别覆盖页面刷新恢复与服务重启恢复；
-2. 优先修复首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏，同时继续补齐直接影响可用版本的产品缺口；自动化、agent 辅助检查和维护者人工验收都可以形成工程证据，但不得把局部测试冒充端到端通过；
+1. PR #268 已合并 P1 审计跟进批次；当前第一优先级是继续开发首聊黄金路径，并用真实 provider、真实浏览器和生产拓扑建立可重复验收，分别覆盖页面刷新恢复与服务重启恢复；
+2. Swipe 多候选、Smooth Streaming、auto-regen/continue/per-message actions/单条删除已交付；优先修复首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏；
 3. #114 Persona/Preset 高级生命周期、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 完整 session/revision/恢复分期和 #220 deferred 性能/重构项原则上进入 P2；若其中某项直接决定 P1 可用性、数据安全或可重复验收，可以按独立证据提前；
 4. P2 运维与恢复；
 5. P3 release candidate；

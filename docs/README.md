@@ -1,6 +1,6 @@
 # AIRP 文档地图
 
-> 最后校准：2026-07-18，`main@2a14b7e`
+> 最后校准：2026-07-20，`main@7895f8c`
 >
 > 当前事实入口：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)
 
@@ -23,8 +23,8 @@
 | 产品与发布 | [PLAN.md](PLAN.md)、[WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) | 长期方向与近期 P1–P3 门禁 |
 | 生产架构 | [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)、[SECURITY.md](SECURITY.md)、[RISK-REGISTER.md](RISK-REGISTER.md) | 已接受 P0 边界、安全规则与开放风险 |
 | 会话与历史 | [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md) | 目标存档/revision 合同与已实现 durable history |
-| Persona | [PERSONA-HTTP-API-PLAN.md](PERSONA-HTTP-API-PLAN.md)、[Persona WebUI closure spec](superpowers/specs/2026-07-15-persona-webui-closure-design.md) | 已实现 HTTP/pipeline/effective/WebUI 绑定闭环；高级生命周期仍开放 |
-| Worldbook | [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)、[Worldbook closure spec](superpowers/specs/2026-07-15-worldbook-management-design.md) | 当前 canonical schema、normalizer、runtime 语义与已交付主面板闭环 |
+| Persona | [PERSONA-HTTP-API-PLAN.md](PERSONA-HTTP-API-PLAN.md)、[Persona WebUI closure spec](archive/2026-07-15-persona-webui-closure-design.md) | 已实现 HTTP/pipeline/effective/WebUI 绑定闭环；高级生命周期仍开放 |
+| Worldbook | [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)、[Worldbook closure spec](archive/2026-07-15-worldbook-management-design.md) | 当前 canonical schema、normalizer、runtime 语义与已交付主面板闭环 |
 | 资产策略 | [ASSET-SPEC.md](ASSET-SPEC.md) | 候选版本化资产规格；尚非已发布标准 |
 | Agent/扩展 | [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)、[UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md) | 待实现编排规范与已接受 UI/Widget 边界 |
 | 来源吸收 | [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)、[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | 第一方来源规则、第三方研究与 provenance |
@@ -55,7 +55,12 @@
 
 - [archive/PROJECT-HISTORY-2026-07.md](archive/PROJECT-HISTORY-2026-07.md)：项目审计与实施历史；
 - [archive/WEBUI-HISTORY-2026-07.md](archive/WEBUI-HISTORY-2026-07.md)：已完成 WebUI 计划和验证；
-- [archive/PR-AUDITS-2026-07.md](archive/PR-AUDITS-2026-07.md)：逐 PR 审计索引。
+- [archive/PR-AUDITS-2026-07.md](archive/PR-AUDITS-2026-07.md)：逐 PR 审计索引；
+- [archive/2026-07-15-persona-webui-closure-design.md](archive/2026-07-15-persona-webui-closure-design.md)：Persona WebUI 闭环设计；
+- [archive/2026-07-15-worldbook-management-design.md](archive/2026-07-15-worldbook-management-design.md)：Worldbook 管理设计；
+- [archive/2026-07-16-unified-revision-design.md](archive/2026-07-16-unified-revision-design.md)：统一 revision 设计；
+- [archive/2026-07-17-onboarding-wizard-design.md](archive/2026-07-17-onboarding-wizard-design.md)：Onboarding 向导设计；
+- [archive/2026-07-19-chat-experience-upgrade-design.md](archive/2026-07-19-chat-experience-upgrade-design.md)：聊天体验升级设计。
 
 归档不提供当前任务排序。被压缩的原文可按归档页记录的 commit 使用 `git show` 恢复。
 
