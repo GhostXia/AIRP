@@ -196,6 +196,16 @@ pub(in crate::daemon) async fn swipe_chat(
         &req.message_id,
         req.index,
     )?;
+    // #252 H.3：swipe 可审计性——记录 trace 事件。
+    // regen/continue 通过 quota::check_and_increment 间接留下审计痕迹；
+    // swipe 不走 quota，此处显式记录以保持 mutation 审计一致性。
+    tracing::info!(
+        character_id = %req.character_id,
+        session_id = ?req.session_id,
+        message_id = %req.message_id,
+        new_index = req.index,
+        "swipe switched"
+    );
     Ok(Json(log))
 }
 
