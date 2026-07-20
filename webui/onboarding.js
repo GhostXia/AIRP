@@ -32,6 +32,7 @@ export function mountOnboarding(container, hostPort) {
   let sseAbort = null;       // Stage 6 SSE 中断用
   let sendInFlight = false;  // Stage 6 sendFirstMessage 单飞保护（防双击/重试并发）
   let preMountFocus = null;  // dialog 打开前焦点，cleanup 时恢复（spec §4.2 a11y）
+  let stage1ProdTimer = null; // Stage 1 prod 模式 setTimeout 句柄，cleanup 时清理（W-05）
 
   // 焦点保存（spec §4.2 a11y）：mount 时记录当前焦点元素，cleanup 时恢复
   try {
@@ -233,7 +234,10 @@ export function mountOnboarding(container, hostPort) {
         ? '本机模式：WebUI 与 Engine 使用同源回环连接。正在检查运行状态…'
         : '生产模式：同源安全连接，网关注入认证。正在检查部署健康…';
       box.appendChild(el('p', 'onb-hint', hintText));
-      setTimeout(() => { safeAsync(() => runHealthCheck(box), 'stage1-health-check-prod'); }, 0);
+      stage1ProdTimer = setTimeout(() => {
+        stage1ProdTimer = null;
+        safeAsync(() => runHealthCheck(box), 'stage1-health-check-prod');
+      }, 0);
     }
     return box;
   }
@@ -532,7 +536,7 @@ export function mountOnboarding(container, hostPort) {
     // Preset 导入：POST /v1/presets/import，body = { preset_json: <stringified>, preset_id?: <id> }
     // preset_id 缺省时 engine 应生成；此处用文件名或 fallback 'onb-imported'
     const presetId = (presetObj && typeof presetObj.name === 'string' && presetObj.name)
-      || 'onb-' + Date.now();
+      || 'onb-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     const r = await callApi('/v1/presets/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -918,6 +922,7 @@ export function mountOnboarding(container, hostPort) {
   // ── 返回 cleanup（spec §5.6）──────────────────────────────────────────────
   return function cleanup() {
     if (sseAbort) { try { sseAbort.abort(); } catch {} sseAbort = null; }
+    if (stage1ProdTimer) { try { clearTimeout(stage1ProdTimer); } catch {} stage1ProdTimer = null; }
     sendInFlight = false;
     listeners.forEach(({ target, type, handler, opts }) => {
       try { target.removeEventListener(type, handler, opts); } catch {}
