@@ -97,13 +97,15 @@ Array of records, each with:
 - `audit_class`: `"auto-pass"` | `"audit-required"` | `"block"`
 - `audit_reason`: human-readable explanation
 
-The document also carries a `meta` block with a `repo_root` field. It is
-written as the literal `"."` and reflects the *relative* working directory
-passed via `--repo-root`, not an absolute path. The field is a diagnostic to
-identify which invocation produced the inventory; it is NOT part of any
-component's dependency identity. Earlier versions wrote `process.cwd()` which
-caused CI vs maintainer-machine drift (`/workspace` vs `D:\AIRP-Dev`); the
-relative form removes that drift without losing provenance.
+The document also carries a `meta` block with a `repo_root` field.
+`discover-deps.mjs` always writes the literal `"."` as an intentional
+environment-independent marker, regardless of the value supplied through
+`--repo-root`. It is NOT the relative working directory passed via
+`--repo-root`, nor an absolute path. The field is a diagnostic to identify
+which invocation produced the inventory; it is NOT part of any component's
+dependency identity. Earlier versions wrote `process.cwd()` which caused
+CI vs maintainer-machine drift (`/workspace` vs `D:\AIRP-Dev`); the hardcoded
+`"."` removes that drift without losing provenance.
 
 ### `airp.spdx.json`
 
