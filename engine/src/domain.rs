@@ -3262,9 +3262,13 @@ mod tests {
         let expected_last = cands.last().unwrap().clone();
         let expected_cands: Vec<String> = cands.drain(5..).collect();
         let log = service
-            .append_with_candidates(&character, None, (0..(SWIPE_CANDIDATES_CAP + 5))
-                .map(|i| format!("reply-{i}"))
-                .collect::<Vec<_>>())
+            .append_with_candidates(
+                &character,
+                None,
+                (0..(SWIPE_CANDIDATES_CAP + 5))
+                    .map(|i| format!("reply-{i}"))
+                    .collect::<Vec<_>>(),
+            )
             .unwrap();
         assert_eq!(log.message_candidates[1].len(), SWIPE_CANDIDATES_CAP);
         assert_eq!(log.message_candidates[1], expected_cands);
@@ -3283,14 +3287,10 @@ mod tests {
             )
             .unwrap();
         let msg_id = log.message_ids[1].clone();
-        let switched = service
-            .switch_swipe(&character, None, &msg_id, 0)
-            .unwrap();
+        let switched = service.switch_swipe(&character, None, &msg_id, 0).unwrap();
         assert_eq!(switched.messages[1].content, "a");
         assert_eq!(switched.message_swipe_index[1], 0);
-        let switched2 = service
-            .switch_swipe(&character, None, &msg_id, 2)
-            .unwrap();
+        let switched2 = service.switch_swipe(&character, None, &msg_id, 2).unwrap();
         assert_eq!(switched2.messages[1].content, "c");
         assert_eq!(switched2.message_swipe_index[1], 2);
     }
@@ -3311,11 +3311,7 @@ mod tests {
     fn switch_swipe_index_out_of_range_rejected() {
         let (_tmp, service, character) = make_swipe_service();
         let log = service
-            .append_with_candidates(
-                &character,
-                None,
-                vec!["a".to_string(), "b".to_string()],
-            )
+            .append_with_candidates(&character, None, vec!["a".to_string(), "b".to_string()])
             .unwrap();
         let msg_id = log.message_ids[1].clone();
         let err = service.switch_swipe(&character, None, &msg_id, 5).err();
@@ -3352,7 +3348,10 @@ mod tests {
         let service = ChatService::new(tmp.path());
         let character = CharacterId::new("empty-regen").unwrap();
         let (_log, old_candidates) = service.regen(&character, None).unwrap();
-        assert!(old_candidates.is_empty(), "empty log regen should return empty candidates");
+        assert!(
+            old_candidates.is_empty(),
+            "empty log regen should return empty candidates"
+        );
     }
 
     #[test]
