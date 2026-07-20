@@ -5,6 +5,8 @@
 //! current.md / 封卷 / 维护任一失败都硬失败，绝不向客户端发送虚假 `done`。
 //! #249 审计 B1 修复落点也在此：stripped 为空时回灌旧 swipe 候选，避免用户
 //! 资产永久丢失。
+//!
+//! 2.2 自动事实抽取：finalize 后异步触发，从本轮对话中抽取关键事实写入 resident.md。
 
 use crate::adapter::ChatMessage;
 use crate::domain::ChatService;
@@ -133,6 +135,36 @@ pub(super) async fn run_finalize(
             }
         }
 
+        // 2.2 自动事实抽取：异步触发，best-effort。
+        // 从本轮 user+assistant 对话中抽取关键事实写入 resident.md。
+        if let Some(ref cid) = ctx.character_id {
+            let sd_extract = sd.clone();
+            let data_root = ctx.data_root.clone();
+            let cid_clone = cid.clone();
+            let session_id = ctx.session_id.clone();
+            let provider_config = ctx.provider_config.clone();
+            let gen_params = ctx.gen_params.clone();
+            let http_client = ctx.http_client.clone();
+            let assistant_content = cleaned_acc.clone();
+
+            join_set.spawn(async move {
+                if let Err(e) = run_memory_extraction(
+                    &http_client,
+                    provider_config,
+                    gen_params,
+                    &data_root,
+                    &cid_clone,
+                    session_id.as_ref(),
+                    &sd_extract,
+                    &assistant_content,
+                )
+                .await
+                {
+                    tracing::warn!(err = %e, "记忆抽取失败（best-effort）");
+                }
+            });
+        }
+
         // 等待全部子任务结束；JoinError（panic / cancel）单独 tracing
         while let Some(res) = join_set.join_next().await {
             if let Err(je) = res {
@@ -167,4 +199,72 @@ pub async fn finalize_generation(finalizer: FinalizerCtx, raw_acc: String, clean
     if let Err(error) = run_finalize(finalizer, raw_acc, cleaned_acc).await {
         tracing::error!(%error, "agent generation finalization failed");
     }
+}
+
+/// 2.2 自动事实抽取：从本轮对话中抽取关键事实写入 resident.md。
+///
+/// Best-effort：失败不影响主流程。
+#[allow(clippy::too_many_arguments)]
+async fn run_memory_extraction(
+    client: &reqwest::Client,
+    provider_config: std::sync::Arc<crate::adapter::ProviderConfig>,
+    gen_params: crate::adapter::GenerationParams,
+    data_root: &std::path::Path,
+    character_id: &crate::types::CharacterId,
+    session_id: Option<&crate::types::SessionId>,
+    session_dir: &std::path::Path,
+    assistant_content: &str,
+) -> Result<(), AirpError> {
+    use crate::memory::{extract_facts, ExtractionConfig};
+
+    // 读取最后一条 user 消息
+    let history = ChatService::new(data_root).history(character_id, session_id)?;
+    let last_user_msg = history
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == crate::adapter::MessageRole::User)
+        .map(|m| m.content.as_str())
+        .unwrap_or("");
+
+    if last_user_msg.is_empty() || assistant_content.trim().is_empty() {
+        return Ok(());
+    }
+
+    // 抽取事实
+    let config = ExtractionConfig::default();
+    let facts = extract_facts(
+        client,
+        provider_config.clone(),
+        gen_params.clone(),
+        last_user_msg,
+        assistant_content,
+        &config,
+    )
+    .await?;
+
+    if facts.trim().is_empty() {
+        return Ok(());
+    }
+
+    // 追加到 resident.md
+    crate::memory::append_resident_memory(session_dir, &facts)?;
+
+    // 检查是否需要压缩
+    let resident_config = crate::memory::ResidentMemoryConfig::default();
+    if crate::memory::is_over_capacity(session_dir, &resident_config) {
+        tracing::info!("resident memory 超过容量上限，触发压缩");
+        let content = crate::memory::read_resident_memory(session_dir)?;
+        let compressed = crate::memory::compress_resident_memory(
+            client,
+            provider_config.clone(),
+            gen_params.clone(),
+            &content,
+            resident_config.capacity_chars,
+        )
+        .await?;
+        crate::memory::write_resident_memory(session_dir, &compressed)?;
+    }
+
+    Ok(())
 }

@@ -2536,6 +2536,58 @@
     }
   }
 
+  // ── 记忆 Tab（2.4 记忆可见性） ────────────────────────────────────────
+  const wbMemoryContent = $('#wb-memory-content');
+  const wbMemoryStats = $('#wb-memory-stats');
+  const wbMemoryStatus = $('#wb-memory-status');
+  const btnWbMemoryRefresh = $('#btn-wb-memory-refresh');
+  const btnWbMemorySave = $('#btn-wb-memory-save');
+
+  async function loadResidentMemory() {
+    if (!selectedChar) {
+      wbMemoryContent.value = '';
+      wbMemoryStats.textContent = '';
+      wbMemoryStatus.textContent = '请先选择角色';
+      return;
+    }
+    wbMemoryStatus.textContent = '加载中…';
+    let url = '/v1/memory/resident?character_id=' + encodeURIComponent(selectedChar);
+    if (selectedSess) url += '&session_id=' + encodeURIComponent(selectedSess);
+    const r = await api('GET', url);
+    if (r.ok && r.data) {
+      wbMemoryContent.value = r.data.content || '';
+      wbMemoryStats.textContent = '字符数: ' + r.data.char_count + ' / ' + r.data.capacity;
+      wbMemoryStatus.textContent = '—';
+    } else {
+      wbMemoryContent.value = '';
+      wbMemoryStats.textContent = '';
+      wbMemoryStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  async function saveResidentMemory() {
+    if (!selectedChar) return;
+    wbMemoryStatus.textContent = '保存中…';
+    btnWbMemorySave.disabled = true;
+    const payload = {
+      character_id: selectedChar,
+      session_id: selectedSess || null,
+      content: wbMemoryContent.value,
+    };
+    const r = await api('PUT', '/v1/memory/resident', payload);
+    btnWbMemorySave.disabled = false;
+    if (r.ok) {
+      wbMemoryStatus.textContent = '已保存 ✓';
+      // 更新统计
+      wbMemoryStats.textContent = '字符数: ' + wbMemoryContent.value.length;
+    } else {
+      wbMemoryStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  if (btnWbMemoryRefresh) btnWbMemoryRefresh.addEventListener('click', loadResidentMemory);
+  if (btnWbMemorySave) btnWbMemorySave.addEventListener('click', saveResidentMemory);
+
   async function loadLorebook() {
     if (!selectedChar) return;
     // CR#2: 自增 requestId 并在 response 回来时校验，避免快速切角色时旧响应覆盖新数据
@@ -3039,9 +3091,13 @@
       const target = tab.dataset.tab;
       $('#wb-tab-card').hidden = target !== 'card';
       $('#wb-tab-decompose').hidden = target !== 'decompose';
+      $('#wb-tab-memory').hidden = target !== 'memory';
       if (target === 'decompose') {
         loadAnalysisFileList();
         loadPresetOptions(); // L4：切到拆解 tab 时加载预设列表
+      }
+      if (target === 'memory') {
+        loadResidentMemory();
       }
     });
   });

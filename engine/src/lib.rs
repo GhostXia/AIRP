@@ -30,6 +30,7 @@ pub mod data_dir;
 pub mod decompose;
 pub mod domain;
 pub mod error;
+pub mod memory;
 pub mod orchestrator;
 pub mod outbound;
 pub mod png_parser;
