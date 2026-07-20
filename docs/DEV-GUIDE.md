@@ -165,6 +165,34 @@ Remove-Item Env:RUSTDOCFLAGS
 该结果是维护清单，不是 CI 门禁；若未来启用 `missing_docs` 门禁，必须先明确稳定的
 公共扩展面并一次性记录基线，不能让既有缺口阻止无关修复。
 
+#### Docstring 覆盖政策（#240）
+
+第三方审计工具（如 CodeRabbit docstring coverage）报告的覆盖率数字是**参考信号**，
+不是 CI 门禁，也不与上面的 `cargo doc -W missing-docs` 维护清单等价。两者的 scope
+不同，必须分别处理：
+
+| 指标 | Scope | 门禁状态 |
+|---|---|---|
+| `cargo doc -W missing-docs` | 仅 public item（默认 rustdoc 规则） | 维护清单，非门禁 |
+| CodeRabbit docstring coverage | 默认含 private helpers / tests / 内部可执行入口 | 参考信号，非门禁 |
+
+按以下原则处理 docstring 覆盖：
+
+1. **优先级**：public API 合同注释 > private helper 实现说明 > tests 注释。只有
+   public API 缺文档会进入 `cargo doc -W missing-docs` 维护清单；private helpers
+   和 tests 不强制覆盖；
+2. **注释质量**：禁止"重述函数名"的注释（如 `fn parse_id()` 上的 `/// Parse the id`）。
+   只在能解释公共 API 合同、错误语义、副作用、并发或安全边界时才补注释；
+3. **private helpers 决策**：内部可执行入口（如 `tools/dep-governance/` 下的 mjs
+   scripts）、test helper、私有 helper 函数**默认不在 docstring 覆盖范围内**。若
+   CodeRabbit 报警源于这些项，可在 PR review 中说明"private helper，不在覆盖范围"，
+   不需要为提升覆盖率批量填充重述性注释；
+4. **门禁不变**：CI 的 `cargo doc --workspace --no-deps --locked` 必须无警告通过
+   （`-D warnings`），但不引入 docstring 覆盖率门禁。CodeRabbit 覆盖率警告**不阻塞
+   PR 合并**，除非覆盖率下降源于 public API 缺文档；
+5. **基线管理**：若未来决定把覆盖率纳入门禁，必须先记录当前基线（区分 public / private /
+   tests），明确稳定的公共扩展面，并按一次性基线迁移，不让既有缺口阻止无关修复。
+
 按范围补充：
 
 - WebUI engine-truth smoke：`node webui/smoke.mjs`；
