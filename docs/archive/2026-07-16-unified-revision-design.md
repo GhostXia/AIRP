@@ -1,3 +1,51 @@
+# #115 Phase 2：统一 revision/provenance 设计（决策摘要）
+
+> 日期：2026-07-16
+>
+> 交付状态：已实现。Phase 2a（PR #201）底层模块；Phase 2b（PR #202）Preset 接入；Phase 2c-2g（PR #203）Character/Worldbook/State/Memory/Persona 接入；Phase 2h（本 PR）trace 填充 + WebUI 展示。
+>
+> 方向：#115 Phase 2
+>
+> 设计基线：`main@c38e7ec`
+>
+> 原始全文恢复：`git show c38e7ec:docs/archive/2026-07-16-unified-revision-design.md`
+
+## 目标
+
+补齐角色卡、Preset、Worldbook、State、Memory、Persona 的统一 revision/provenance；禁止用 mtime 伪造 revision。
+
+## 关键决策
+
+| 编号 | 决策 | 选择 |
+|---|---|---|
+| D1 | 基底选择 | 以 Preset 版本化 + SESSION-DATA-DESIGN §4 合同为基底，不以 Persona 覆写式为基底 |
+| D2 | revision 空间 | per-asset-id 独立 revision 计数器；session `content_revision` 是复合快照，引用 per-asset revision |
+| D3 | Preset generation | 保留 generation 字符串为 internal stable id，新增 `content_revision: u64` 对外 |
+| D4 | PromptSegment | 不加 revision 字段；revision 只在 `EffectiveIds` 暴露，粒度跟随 asset 不跟随 segment |
+| D5 | State 范围 | 仅 `state/` 目录；gating 暂不纳入（独立阶段） |
+| D6 | Persona 升级 | 保留 u64 形式，补不可变历史 + content hash；不实现 base lock/drift/rollback |
+| D7 | 乐观锁 | 统一为 `RevisionConflict { asset_kind, asset_id, current_revision }`；Persona 旧格式保留兼容窗口 |
+| D8 | Worldbook vs Card | 独立 revision，不嵌入 Character card revision |
+
+## 核心数据模型
+
+- 共享底层：`engine/src/revision/`（tree_hash + manifest + atomic）
+- `AIRP-TREE-SHA256-v1`：ASCII 域分隔 + 路径/文件长度前缀 + SHA-256
+- `RevisionManifest`：schema=1, content_revision u64, asset_kind, files[], tree_sha256
+- atomic commit：staging → sync → 校验 → rename → 更新 current_revision
+- 不变量：磁盘文件集合 == manifest files；每文件 hash 匹配；tree hash 匹配
+
+## EffectiveIds 填充规则
+
+6 个 `*_revision` 字段必须填充实际 u64 或推送 `*_revision_unavailable` 诊断；禁止静默留空、禁止用 mtime/0 冒充。Persona 缺失指针时回退 legacy `revision` 字段（>0）。
+
+## 不包含
+
+- session 自包含存档完整实现
+- Persona base lock / drift / rollback / 头像 / 导入导出（属 #114）
+- Preset import dry-run / collision preview（属 #115 Phase 1）
+- gating 版本化（独立阶段）
+- #199 card field 拆分（独立决策）
 # #115 Phase 2：统一 revision/provenance 设计
 
 > 日期：2026-07-16

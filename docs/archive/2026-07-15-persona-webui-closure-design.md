@@ -1,3 +1,29 @@
+# C-PR1：Persona WebUI 闭环（决策摘要）
+
+> 日期：2026-07-15
+>
+> 交付状态：已由 PR #180 合并，`main@13d07d7` 复核。C-PR2（Preset 生命周期）仍未交付。
+>
+> 方向：#114 Persona/Preset WebUI 闭环
+>
+> 原始全文恢复：`git show 13d07d7:docs/archive/2026-07-15-persona-webui-closure-design.md`
+
+## 目标
+
+让用户不编辑 JSON 即可完成 Persona 绑定、聊天时切换与生效可见性。
+
+## 关键决策
+
+1. **新端点 `GET /v1/users/:user_id/persona/effective`**：解析 binding→default 两层，返回 `{persona, source, bindings}`；同 scope 多 owner 时 fail-closed 返回 400。
+2. **下拉「自动」选项**：`selectedPersonaId=""` 表示跟随绑定/默认；`buildChatPayload` 此时不传 `persona_id`，pipeline 自行解析。
+3. **绑定按钮分别驱动**：character/session scope 各自独立，owner 不同时须先解绑再绑定，不允许 POST 替换。
+4. **domain 层统一 resolver**：`find_for_character` 和 chat pipeline 复用同一结构化 binding inspection 方法，HTTP 可观察结果与聊天激活使用同一真相。
+
+## 不包含
+
+- Preset 生命周期 / revision 合同 / dry-run（属 C-PR2）
+- Persona CRUD / 绑定 HTTP 端点（已交付）
+- chat_pipeline persona 激活逻辑（已交付，零改动）
 # C-PR1：Persona WebUI 闭环
 
 > 日期：2026-07-15

@@ -1,3 +1,49 @@
+# 对话体验升级：消息操作与流式生成（决策摘要）
+
+> 日期：2026-07-19
+>
+> 基线：AIRP v0.0.1 (`main@4ac03e3`)
+>
+> 参考来源：SillyTavern 公开文档（仅作为 RP 用户真实需求佐证，不作为 AIRP 产品目标）
+>
+> 原始全文恢复：`git show 4ac03e3:docs/archive/2026-07-19-chat-experience-upgrade-design.md`
+
+## 目标
+
+v0.0.1 首聊黄金路径已验证后，补齐日常 RP 对话基本操作：regen、continue、编辑、删除。
+
+## 本次 PR 范围
+
+### Engine
+
+1. **PrepareMode 扩展**：新增 `Regen`（不追加/不持久化用户消息，不推进 timeline）和 `Continue`（finalizer 追加到已有 assistant 消息）。
+2. **`/v1/chat/regen` 改为 SSE 流式**：删除最后 assistant 消息 → pipeline Regen 模式 → 流式返回。
+3. **新增 `/v1/chat/continue`**：确认末条为 assistant → Continue 模式 → 流式追加。
+4. **ChatService 新方法**：`append_to_last`（追加文本到末条 assistant）、`delete_message`（删除单条，非 rollback）。
+
+### WebUI
+
+5. **Per-message 操作栏**：hover 显示；user 消息可编辑/删除，assistant 末条可 regen/continue/删除。
+6. **Regen/Continue 交互**：复用 `streamSse()` 渲染；空消息发送 = 继续。
+7. **消息编辑**：保存（local-only）与"保存并重新生成"分离。
+8. **消息删除**：单条移除，保护已有上下文。
+
+## AIRP 取舍
+
+- Regen 用当前活跃配置，不在请求体暴露 provider/model 覆盖（单用户本地场景）
+- 删除是移除单条，不是 rollback 删除后续所有
+- 编辑保存与重新生成是分离操作
+- 移除 regen confirm 弹窗（rollback-by-ID 已覆盖误操作）
+
+## 后续 Issue（不在本 PR）
+
+- A: Swipe 多候选（高优先）
+- B: Smooth Streaming 平滑输出（高优先）
+- C: Auto-Continue（中优先）
+- D: Auto-load Last Chat（中优先）
+- E: Chat Export JSONL/TXT（中优先）
+- F: Impersonate（低优先）
+- G: Checkpoints/Branches（低优先）
 # 对话体验升级：消息操作与流式生成
 
 > **计划建立时间**：2026-07-19

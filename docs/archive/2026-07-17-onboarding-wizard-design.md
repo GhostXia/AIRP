@@ -1,3 +1,34 @@
+# Onboarding Wizard Design Spec（决策摘要）
+
+> 日期：2026-07-17
+>
+> 交付状态：Design approved（sections ①-⑤）
+>
+> Issue：#209 — webui: implement first-run onboarding wizard（解阻 #207 目标 1 首聊黄金路径）
+>
+> 方案：方案 4（裁剪版）= 函数注入契约 + 动态 import 边界 + fail-open 降级
+>
+> 原始全文恢复：`git show 4ac03e3:docs/archive/2026-07-17-onboarding-wizard-design.md`
+
+## 目标
+
+不读开发文档、不打开 dev tools，完成部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话全闭环。目标用户：自带 provider key 的 RP 重度玩家。
+
+## 关键决策
+
+1. **架构：函数注入 Port 契约**：`onboarding.js` 零 import 宿主模块，通过 `mountOnboarding(container, hostPort)` 注入 6 成员 Port（version/mode/fetcher/formatError/onComplete/onSkip）。动态 import 边界替代 iframe，已完成引导的用户永远不加载向导代码。
+2. **砍除项**：Shadow DOM 隔离 → #210；完整 Port 版本协商 → #211。
+3. **6 阶段状态机**：健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮对话。
+4. **first-run 检测**：标志 + 脱同步重触发（C 方案）。`airp_onboarded` + `airp_onboarding_skipped` 双标志区分"显式跳过"与"character 失效"。检测只用同步信号（localStorage），不发 HTTP。
+5. **fail-open 降级**：import 失败（F1-F3）→ 退回手动流程；运行时崩溃（F4）→ 崩溃面板；HTTP/SSE 失败（F5/F6）→ 向导内重试，不降级。
+6. **安全不变式**：api_key 永不作为 Port 成员、永不写浏览器存储、永不出现在 URL；GET settings 只返回 `api_key_set` 布尔。
+
+## 不包含
+
+- 不教 RP 基础概念
+- 不替代开发工作台
+- 不强制 Agent tool 调用
+- 不引入真实浏览器自动化测试（首版用 node:test + HTTP 烟雾）
 # Onboarding Wizard Design Spec
 
 **Issue**: [#209](https://github.com/GhostXia/AIRP/issues/209) — webui: implement first-run onboarding wizard (解阻 #207 目标 1 首聊黄金路径)

@@ -1,3 +1,29 @@
+# D：Worldbook 管理 + 高级字段裁定（决策摘要）
+
+> 日期：2026-07-15
+>
+> 交付状态：已完成。D-PR1（engine v4）PR #180，D-PR2（主面板管理）PR #182 + #188 加固，D-PR3（PNG/JSON 端到端回归）PR #185。
+>
+> 方向：#126 Worldbook 管理 + 高级字段裁定
+>
+> 原始全文恢复：`git show 13d07d7:docs/archive/2026-07-15-worldbook-management-design.md`
+
+## 目标
+
+闭合 #126：补普通用户可操作的 worldbook 管理，显式裁定高级 SillyTavern 字段为 runtime / advisory / unsupported。
+
+## 关键决策
+
+1. **字段裁定**：`selective` + `secondary_keys` 提升为 deterministic runtime（v4 合同）；`probability`/`case_sensitive`/`position`/`depth`/`recursion` 保持 advisory。
+2. **v4 trigger 规则**：`enabled && (constant || (primary_match && (!selective || no_valid_secondary_keys || any_secondary_match)))`。selective=true 且有效 secondary keys 非空时要求任一命中（OR）。
+3. **normalizer v4**：`selective` 从 extensions 提升到 canonical 字段；提取优先级 top-level → extensions → false。
+4. **WebUI 迁移**：lorebook 编辑器从 workbench 迁移到 character-scoped 主面板 section；advisory 字段只读显示。
+5. **裁定依据**：AIRP 的确定性、可测试与固定 prompt-placement 门禁，不以"上游常用"作为充分理由。
+
+## 不包含
+
+- `probability`/`case_sensitive`/`position`/`depth`/`recursion` 的 runtime 实现（未来合同版本）
+- prompt 装配结构改动（position/depth 需重写装配）
 # D：Worldbook 管理 + 高级字段裁定
 
 > 日期：2026-07-15
