@@ -1429,6 +1429,8 @@
       // #249 Smooth Streaming（审计 B2 修复）：continue 模式用 prefix=existingText。
       // 原实现用 dummy {textContent:''} + monkey-patch push，导致 rAF tick 写 dummy 不可见。
       // 现在直接把真实 textNode 作为 el，prefix=existingText，rAF tick 自动写完整文本。
+      // #252 D4：统一为 streamSse 返回后单次 finish()，与 doSend 一致；不再在 done 分支与
+      // 防御 if 中重复调用 finish + markdown 渲染。
       const streamer = new SmoothStreamer(textNode, SMOOTH_STREAM_CPS, existingText);
       await streamSse(res, (chunk, seq) => {
         if (chunk.type === 'body_chunk' && chunk.text) {
@@ -1436,19 +1438,11 @@
           streamer.push(chunk.text);
           if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
         }
-        if (chunk.type === 'done') {
-          streamer.finish();
-          acc = streamer.getRendered();
-          textNode.classList.remove('streaming');
-          textNode.innerHTML = renderMarkdown(existingText + acc);
-        }
       });
-      if (textNode.classList.contains('streaming')) {
-        streamer.finish();
-        acc = streamer.getRendered();
-        textNode.classList.remove('streaming');
-        textNode.innerHTML = renderMarkdown(existingText + acc);
-      }
+      streamer.finish();
+      acc = streamer.getRendered();
+      textNode.classList.remove('streaming');
+      textNode.innerHTML = renderMarkdown(existingText + acc);
     } catch (e) {
       if (e && e.name === 'AbortError') return;
       if (textNode) { textNode.classList.remove('streaming'); textNode.innerHTML = renderMarkdown(existingText + acc); }
@@ -1885,7 +1879,7 @@
         return;
       }
       msgEl = appendMsg('assistant', '', true, new Date());
-      // #249 Smooth Streaming。
+      // #249 Smooth Streaming。#252 D4：统一为 streamSse 返回后单次 finish()。
       const streamer = new SmoothStreamer(msgEl, SMOOTH_STREAM_CPS);
       await streamSse(res, (chunk, seq) => {
         if (chunk.type === 'body_chunk' && chunk.text) {
@@ -1893,19 +1887,11 @@
           streamer.push(chunk.text);
           if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
         }
-        if (chunk.type === 'done') {
-          streamer.finish();
-          acc = streamer.getRendered();
-          msgEl.classList.remove('streaming');
-          msgEl.innerHTML = renderMarkdown(acc);
-        }
       });
-      if (msgEl.classList.contains('streaming')) {
-        streamer.finish();
-        acc = streamer.getRendered();
-        msgEl.classList.remove('streaming');
-        msgEl.innerHTML = renderMarkdown(acc);
-      }
+      streamer.finish();
+      acc = streamer.getRendered();
+      msgEl.classList.remove('streaming');
+      msgEl.innerHTML = renderMarkdown(acc);
     } catch (e) {
       if (e && e.name === 'AbortError') return;
       if (msgEl) { msgEl.classList.remove('streaming'); msgEl.innerHTML = renderMarkdown(acc || '[regen interrupted]'); }
