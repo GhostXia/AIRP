@@ -3264,7 +3264,10 @@ mod tests {
                 vec!["   ".to_string(), "\t\n".to_string(), "".to_string()],
             )
             .err();
-        assert!(err.is_some(), "all-whitespace candidates should be rejected");
+        assert!(
+            err.is_some(),
+            "all-whitespace candidates should be rejected"
+        );
         let msg = format!("{}", err.unwrap());
         assert!(
             msg.contains("all whitespace"),
@@ -3320,11 +3323,7 @@ mod tests {
         // 这是预期行为：候选可以含前后空格，只要 trim 后非空。
         let (_tmp, service, character) = make_swipe_service();
         let log = service
-            .append_with_candidates(
-                &character,
-                None,
-                vec!["  padded content  ".to_string()],
-            )
+            .append_with_candidates(&character, None, vec!["  padded content  ".to_string()])
             .unwrap();
         assert_eq!(log.messages[1].content, "  padded content  ");
         assert_eq!(log.message_candidates[1][0], "  padded content  ");

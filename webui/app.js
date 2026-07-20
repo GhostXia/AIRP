@@ -2564,8 +2564,18 @@
       if (loreData.entries === undefined) {
         loreData.entries = [];
       }
-      renderLoreEntries();
-      loreStatus.textContent = '已加载 ' + loreData.entries.length + ' 条条目';
+      // #186 W-03 + Gemini review: renderLoreEntries 设置的 skipped 警告
+      // 不能被这里的"已加载 N 条"覆盖。先取 skipped count，组合消息。
+      const loadedCount = loreData.entries.length;
+      const skippedInfo = renderLoreEntries();
+      if (skippedInfo && skippedInfo.count > 0) {
+        const indices = skippedInfo.indices.join(', ');
+        loreStatus.textContent =
+          '已加载 ' + (loadedCount - skippedInfo.count) + ' 条条目；警告: 跳过 ' +
+          skippedInfo.count + ' 条损坏条目（' + indices + '）';
+      } else {
+        loreStatus.textContent = '已加载 ' + loadedCount + ' 条条目';
+      }
     } else {
       loreStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
     }
@@ -2583,19 +2593,23 @@
   }
 
   function renderLoreEntries() {
-    if (!loreData) return;
+    if (!loreData) return null;
     loreEntries.innerHTML = '';
     // #186 W-03: 单条 entry 形状校验，跳过 null/非对象/数组等坏条目并报告，
     // 避免持久化脏数据让 forEach 中断、整份列表无法渲染。
+    // 返回 skipped 信息由调用方组合状态消息（避免覆盖）。
     const { valid, skipped } = AIRPLorebookUtils.sanitizeLoreEntries(loreData.entries);
     valid.forEach((entry, i) => {
       loreEntries.appendChild(renderLoreEntry(entry, i));
     });
     if (skipped.length > 0) {
-      // 跳过坏条目时通过状态栏报告，不静默崩溃；用户能看到具体哪几条损坏。
-      const indices = skipped.map(s => '#' + (s.index + 1)).join(', ');
-      loreStatus.textContent = '警告: 跳过 ' + skipped.length + ' 条损坏条目（' + indices + '）';
+      // 跳过坏条目时返回 indices 列表，让调用方组合消息（不再直接覆盖 loreStatus）。
+      return {
+        count: skipped.length,
+        indices: skipped.map(s => '#' + (s.index + 1)),
+      };
     }
+    return { count: 0, indices: [] };
   }
 
   function renderLoreEntry(entry, index) {
