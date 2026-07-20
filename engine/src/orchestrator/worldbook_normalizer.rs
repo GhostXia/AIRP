@@ -1024,6 +1024,11 @@ mod tests {
         let (lb, report) = normalize_worldbook(&src);
         assert!(lb.entries.is_empty());
         assert_eq!(report.total_input, 0);
+        // `{}` is an unsupported source shape, not a legal empty worldbook.
+        // Asserting `source_error` here protects against malformed replacement
+        // requests silently clearing existing data (WB-01, PR #145 audit leftover).
+        assert!(report.source_error.is_some());
+        assert!(report.replacement_error().is_some());
     }
 
     #[test]
