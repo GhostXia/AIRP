@@ -44,7 +44,7 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-MCP-Se
 - `domain.rs` 与各 shared service：数据和业务不变量；
 - `data_dir/`：路径、原子替换与数据根；
 - `chat_store.rs`：durable history 与 session metadata；
-- `chat_pipeline/`：RP prompt 装配（10 个子模块：assembly、context、effective、history、lorebook、memory、persona、scene、stream、trace）；
+- `chat_pipeline/`：RP prompt 装配（10 个子模块：finalize、generation_step、helpers、prepare、prepare_scene、state_extract、stdout_runner、stream、trace、types）；
 - `agent/`：bounded loop、registry、工具和控制平面；
 - `daemon/handlers/`：HTTP adapter，handler 不应重新实现 domain 规则；
 - `daemon/tests/`：route 合同与安全测试。
