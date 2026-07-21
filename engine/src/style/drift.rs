@@ -9,22 +9,31 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 /// 默认容量上限（字符数）。
 pub const SOUL_DRIFT_DEFAULT_CAP: usize = 1500;
 
 /// 每角色串行化锁：防止并发 read-modify-write 互相覆盖（审计修复）。
-static DRIFT_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+///
+/// 审计再修复：用 Weak 引用持有锁，获取时清理已无持有者的 stale 条目，
+/// 防止长生命周期进程中注册表无界增长。
+static DRIFT_LOCKS: Lazy<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// 获取角色的串行化锁。
 fn drift_lock(character_id: &str) -> Arc<Mutex<()>> {
     let mut locks = DRIFT_LOCKS.lock().expect("drift locks poisoned");
-    locks
-        .entry(character_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
+    // 清理已无强引用的 stale 条目，保证注册表有界。
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(weak) = locks.get(character_id) {
+        if let Some(strong) = weak.upgrade() {
+            return strong;
+        }
+    }
+    let strong = Arc::new(Mutex::new(()));
+    locks.insert(character_id.to_string(), Arc::downgrade(&strong));
+    strong
 }
 
 /// Soul-Drift 配置。
@@ -80,6 +89,9 @@ pub fn write_soul_drift(
 }
 
 /// 截断到容量上限，尽量保留完整行。
+///
+/// 审计再修复：若首行单独就超过容量（逐行截断会得到空串），回退为按
+/// Unicode 字符边界截断，保证不会把超量单行输入清空。
 fn enforce_capacity(content: &str, capacity: usize) -> String {
     if content.chars().count() <= capacity {
         return content.to_string();
@@ -95,6 +107,10 @@ fn enforce_capacity(content: &str, capacity: usize) -> String {
         result.push_str(line);
         result.push('\n');
         count += line_len;
+    }
+    // 首行单独超容量时 result 为空：回退为按字符边界截断，避免清空内容。
+    if result.is_empty() {
+        return content.chars().take(capacity).collect();
     }
     result
 }
@@ -186,5 +202,16 @@ mod tests {
         write_soul_drift(tmp.path(), "hero", &long_content).unwrap();
         let content = read_soul_drift(tmp.path(), "hero").unwrap();
         assert!(content.chars().count() <= SOUL_DRIFT_DEFAULT_CAP);
+    }
+
+    #[test]
+    fn test_write_oversize_single_line_not_emptied() {
+        let tmp = tempdir().unwrap();
+        // 单行超过容量：不应被清空，应按字符边界截断。
+        let single_line = "长".repeat(SOUL_DRIFT_DEFAULT_CAP + 500);
+        write_soul_drift(tmp.path(), "hero", &single_line).unwrap();
+        let content = read_soul_drift(tmp.path(), "hero").unwrap();
+        assert!(!content.is_empty());
+        assert_eq!(content.chars().count(), SOUL_DRIFT_DEFAULT_CAP);
     }
 }
