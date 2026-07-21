@@ -79,8 +79,10 @@ pub async fn run_style_review(
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
 
-    let mut user_content =
-        format!("## 风格指南\n{}\n\n## 最近生成内容\n{}", style_profile, messages_text);
+    let mut user_content = format!(
+        "## 风格指南\n{}\n\n## 最近生成内容\n{}",
+        style_profile, messages_text
+    );
 
     if !current_drift.trim().is_empty() {
         user_content.push_str(&format!("\n\n## 当前 Soul Drift\n{}", current_drift));

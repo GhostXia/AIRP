@@ -43,9 +43,9 @@ use handlers::{
     get_scene_endpoint, get_settings, get_user_model, import_character, import_preset_endpoint,
     list_agent_tools, list_characters, list_models, list_personas_endpoint, list_presets_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
-    reextract_character_assets, regen_chat, rollback_chat, style_review, swipe_chat,
-    switch_branch, unbind_persona_endpoint, update_character_card, update_character_lorebook,
-    update_drift, update_persona_endpoint, update_persona_multi_endpoint, update_resident_memory,
+    reextract_character_assets, regen_chat, rollback_chat, style_review, swipe_chat, switch_branch,
+    unbind_persona_endpoint, update_character_card, update_character_lorebook, update_drift,
+    update_persona_endpoint, update_persona_multi_endpoint, update_resident_memory,
     update_settings, update_user_model,
 };
 

@@ -145,9 +145,7 @@ mod tests {
     #[test]
     fn test_is_over_capacity() {
         let tmp = tempdir().unwrap();
-        let config = SoulDriftConfig {
-            capacity_chars: 10,
-        };
+        let config = SoulDriftConfig { capacity_chars: 10 };
 
         write_soul_drift(tmp.path(), "hero", "短").unwrap();
         assert!(!is_over_capacity(tmp.path(), "hero", &config));

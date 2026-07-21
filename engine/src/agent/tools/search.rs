@@ -38,10 +38,7 @@ impl Tool for SessionSearchTool {
                 .get("query")
                 .and_then(Value::as_str)
                 .ok_or_else(|| AirpError::BadRequest("query is required".to_string()))?;
-            let limit = params
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(10) as usize;
+            let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
 
             let results = crate::memory::search(&state.data_root, cid.as_str(), query, limit)?;
 
