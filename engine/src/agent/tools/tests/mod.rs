@@ -20,6 +20,7 @@ use std::sync::Arc;
 // 从 production `tools::session` re-import，供 `tests::session` 边界断言。
 use super::session::MAX_RECENT_CONTEXT;
 
+mod agent_rp_phase3;
 mod analysis;
 mod character;
 mod registry;
