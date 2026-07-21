@@ -12,6 +12,7 @@ mod agent;
 mod characters;
 mod chat;
 mod lorebook;
+mod memory;
 mod models;
 mod personas;
 mod presets;
@@ -31,6 +32,9 @@ pub(super) use chat::{
     regen_chat, rollback_chat, swipe_chat,
 };
 pub(super) use lorebook::{get_character_lorebook, update_character_lorebook};
+pub(super) use memory::{
+    get_resident_memory, get_user_model, update_resident_memory, update_user_model,
+};
 pub(super) use models::list_models;
 pub(super) use personas::{
     bind_persona_endpoint, create_persona_endpoint, delete_persona_multi_endpoint,
