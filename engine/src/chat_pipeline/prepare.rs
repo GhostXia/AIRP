@@ -409,13 +409,14 @@ fn prepare_pipeline_with_mode(
     // Regen/Continue: skip user message persistence and timeline advancement.
     if mode == PrepareMode::Chat {
         if let Some(ref cid) = payload.character_id {
-            crate::domain::ChatService::new(&effective_root).append(
+            crate::domain::ChatService::new(&effective_root).append_with_branch(
                 cid,
                 payload.session_id.as_ref(),
                 ChatMessage {
                     role: crate::adapter::MessageRole::User,
                     content: payload.message.clone(),
                 },
+                payload.branch_from.clone(),
             )?;
             Orchestrator::advance_timeline_and_checkpoint(&effective_root, cid.as_str());
         }

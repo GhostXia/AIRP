@@ -14,8 +14,8 @@
 use crate::chat_pipeline;
 use crate::chat_store::ChatLog;
 use crate::daemon::types::{
-    ChatCompletionRequest, ContinueRequest, DeleteMessageRequest, HistoryQuery, RegenRequest,
-    RollbackRequest, SwipeRequest,
+    ChatCompletionRequest, ContinueRequest, DeleteMessageRequest, EditMessageRequest, HistoryQuery,
+    RegenRequest, RollbackRequest, SwipeRequest, SwitchBranchRequest,
 };
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
@@ -117,6 +117,7 @@ pub(in crate::daemon) async fn regen_chat(
         persona_id: None,
         // #249 Swipe：将旧候选传入 pipeline，finalizer 会追加新候选。
         swipe_candidates: old_candidates,
+        branch_from: None,
     };
     let pipeline = chat_pipeline::prepare_regen_pipeline(&payload, &state)?;
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
@@ -163,6 +164,7 @@ pub(in crate::daemon) async fn continue_chat(
         user_id: req.user_id,
         persona_id: None,
         swipe_candidates: Vec::new(),
+        branch_from: None,
     };
     let pipeline = chat_pipeline::prepare_continue_pipeline(&payload, &state)?;
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
@@ -211,6 +213,29 @@ pub(in crate::daemon) async fn swipe_chat(
     Ok(Json(log))
 }
 
+/// PUT /v1/chat/message — edit a user message's content by durable ID.
+pub(in crate::daemon) async fn edit_message(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(req): Json<EditMessageRequest>,
+) -> Result<Json<ChatLog>, AirpError> {
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let log = ChatService::new(&effective_root).edit_message(
+        &req.character_id,
+        req.session_id.as_ref(),
+        &req.message_id,
+        &req.content,
+    )?;
+    tracing::info!(
+        character_id = %req.character_id,
+        session_id = ?req.session_id,
+        message_id = %req.message_id,
+        user_id = ?req.user_id,
+        "message edited"
+    );
+    Ok(Json(log))
+}
+
 pub(in crate::daemon) async fn chat_completion(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(payload): Json<ChatCompletionRequest>,
@@ -239,4 +264,26 @@ pub(in crate::daemon) async fn preview_chat_assembly(
 ) -> Result<Json<crate::orchestrator::trace::PromptAssemblyTrace>, AirpError> {
     let pipeline = chat_pipeline::preview_pipeline(&payload, &state)?;
     Ok(Json(pipeline.prompt_trace))
+}
+
+/// POST /v1/chat/branch/switch — switch the active branch to a target leaf.
+pub(in crate::daemon) async fn switch_branch(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(req): Json<SwitchBranchRequest>,
+) -> Result<Json<ChatLog>, AirpError> {
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let log = ChatService::new(&effective_root).switch_branch(
+        &req.character_id,
+        req.session_id.as_ref(),
+        &req.target_leaf_id,
+    )?;
+    tracing::info!(
+        character_id = %req.character_id,
+        session_id = ?req.session_id,
+        target_leaf_id = %req.target_leaf_id,
+        user_id = ?req.user_id,
+        "branch switched"
+    );
+    Ok(Json(log))
 }

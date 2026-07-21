@@ -115,6 +115,13 @@ pub struct HistoryWindow {
     pub message_candidates: Vec<Vec<String>>,
     /// #249 Swipe：每条消息当前激活候选的下标（0-based）。
     pub message_swipe_index: Vec<usize>,
+    /// 分支对话树：每条消息的父消息 durable ID。
+    pub message_parents: Vec<Option<String>>,
+    /// 分支对话树：当前激活路径的叶节点 durable ID。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_leaf: Option<String>,
+    /// 分支对话树：当前激活路径（根 → 叶的 durable ID 列表）。
+    pub active_path: Vec<String>,
     pub has_more: bool,
     pub oldest_id: Option<String>,
     pub total: usize,
@@ -187,9 +194,19 @@ impl ChatService {
     ) -> Result<HistoryWindow, AirpError> {
         let limit = limit.unwrap_or(50).clamp(1, 200);
         let log = self.history(character_id, session_id)?;
-        let total = log.messages.len();
 
-        // 找 cursor 切点：before ID 在 message_ids 里的位置；返回该位置严格之前。
+        // PR #270 audit B5 修复：history_window 必须按**激活路径**返回消息。
+        // 旧实现返回物理 slice [start..end]，分支后会混入 sibling-branch 消息，
+        // WebUI 不做客户端过滤 → 用户看到其他分支的消息串在当前分支里。
+        // 新实现：用 `active_path_indices()` 拿到根→叶的物理 index 列表，
+        // 在其上做 cursor 分页，再 project 所有 parallel 数组。
+        //
+        // Legacy 兼容：无 parent 的旧 log，`active_path_indices()` 走线性回退，
+        // 返回 [0, 1, ..., n-1]，行为与旧实现一致。
+        let active_indices = log.active_path_indices();
+        let total = active_indices.len();
+
+        // 找 cursor 切点：before ID 在 active path 里的位置；返回该位置严格之前。
         let cut = match before {
             Some(id) => {
                 if !ulid::is_valid_id(id) {
@@ -197,33 +214,70 @@ impl ChatService {
                         "cursor is not a valid durable message id: {id}"
                     )));
                 }
-                let idx = log
-                    .message_ids
+                // 先验证 cursor 在本 session 中存在（cross-session 拒绝，保留原 contract）。
+                // 再验证它在 active path 上（cross-branch 拒绝，B5 新 contract）。
+                let in_session = log.message_ids.iter().any(|mid| ulid::matches(mid, id));
+                if !in_session {
+                    return Err(AirpError::BadRequest(format!(
+                        "cursor {id} not in this session (cursor cannot cross character/session)"
+                    )));
+                }
+                // cursor 必须在 active path 上，否则分页会跨分支。
+                let pos = active_indices
                     .iter()
-                    .position(|x| ulid::matches(x, id))
+                    .position(|&phys_idx| {
+                        log.message_ids
+                            .get(phys_idx)
+                            .map(|mid| ulid::matches(mid, id))
+                            .unwrap_or(false)
+                    })
                     .ok_or_else(|| {
                         AirpError::BadRequest(format!(
-                            "cursor {id} not in this session (cursor cannot cross character/session)"
+                            "cursor {id} not on active branch (cursor cannot cross branch)"
                         ))
                     })?;
-                idx // 返回 [0, idx) 即更早的
+                pos // 返回 [0, pos) 即更早的
             }
             None => total, // 无 cursor → 取最近 limit 条 = 尾部
         };
 
-        // 窗口 = [start, end)，按时间正序。
+        // 窗口 = active_indices[start..end)，按时间正序。
         let end = cut.min(total);
         let start = end.saturating_sub(limit);
-        let window_messages = log.messages[start..end].to_vec();
-        let window_ids = log.message_ids[start..end].to_vec();
-        let window_ts = log.message_timestamps[start..end].to_vec();
-        let window_cands = log.message_candidates[start..end].to_vec();
-        let window_swidx = log.message_swipe_index[start..end].to_vec();
+        let window_phys = &active_indices[start..end];
+
+        // Project 所有 parallel 数组到窗口。
+        let window_messages: Vec<ChatMessage> = window_phys
+            .iter()
+            .filter_map(|&i| log.messages.get(i).cloned())
+            .collect();
+        let window_ids: Vec<String> = window_phys
+            .iter()
+            .filter_map(|&i| log.message_ids.get(i).cloned())
+            .collect();
+        let window_ts: Vec<Option<String>> = window_phys
+            .iter()
+            .filter_map(|&i| log.message_timestamps.get(i).cloned())
+            .collect();
+        let window_cands: Vec<Vec<String>> = window_phys
+            .iter()
+            .filter_map(|&i| log.message_candidates.get(i).cloned())
+            .collect();
+        let window_swidx: Vec<usize> = window_phys
+            .iter()
+            .filter_map(|&i| log.message_swipe_index.get(i).copied())
+            .collect();
+        let window_parents: Vec<Option<String>> = window_phys
+            .iter()
+            .filter_map(|&i| log.message_parents.get(i).cloned())
+            .collect();
 
         // has_more = 切点之前还有消息（start > 0）。
         let has_more = start > 0;
         // oldest_id = 本窗口最老消息的 ID（窗口首条）。
         let oldest_id = window_ids.first().cloned();
+        // active_path = 当前激活路径的完整 ID 列表（与窗口无关，供前端 UI 标记分支点）。
+        let active_path = log.active_path();
 
         Ok(HistoryWindow {
             messages: window_messages,
@@ -231,6 +285,9 @@ impl ChatService {
             message_timestamps: window_ts,
             message_candidates: window_cands,
             message_swipe_index: window_swidx,
+            message_parents: window_parents,
+            active_leaf: log.active_leaf.clone(),
+            active_path,
             has_more,
             oldest_id,
             total,
@@ -311,6 +368,20 @@ impl ChatService {
         session_id: Option<&SessionId>,
         message: ChatMessage,
     ) -> Result<(ChatLog, usize), AirpError> {
+        self.append_with_branch(character_id, session_id, message, None)
+    }
+
+    /// 追加消息，支持分支对话树。
+    ///
+    /// `branch_from` = `Some(id)` 时，新消息的 parent = 该 ID（从任意消息分叉）。
+    /// `branch_from` = `None` 时，线性追加（parent = 当前 active_leaf）。
+    pub fn append_with_branch(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message: ChatMessage,
+        branch_from: Option<String>,
+    ) -> Result<(ChatLog, usize), AirpError> {
         self.with_session(character_id, session_id, || {
             let mut log = ChatLog::load_or_create_for_session(
                 &self.data_root,
@@ -318,8 +389,43 @@ impl ChatService {
                 session_id,
             )?;
             let total_before = log.messages.len();
-            log.append(&self.data_root, message)?;
+            match branch_from {
+                Some(parent_id) => {
+                    // 验证 branch_from ID 存在（case-insensitive，与 #37 contract 一致）。
+                    if !log
+                        .message_ids
+                        .iter()
+                        .any(|id| ulid::matches(id, &parent_id))
+                    {
+                        return Err(AirpError::BadRequest(format!(
+                            "branch_from ID {parent_id} not found in session"
+                        )));
+                    }
+                    log.append_with_parent(&self.data_root, message, Some(parent_id))?;
+                }
+                None => {
+                    log.append(&self.data_root, message)?;
+                }
+            }
             Ok((log, total_before))
+        })
+    }
+
+    /// 切换激活分支。
+    pub fn switch_branch(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        target_leaf_id: &str,
+    ) -> Result<ChatLog, AirpError> {
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            log.switch_branch(&self.data_root, target_leaf_id)?;
+            Ok(log)
         })
     }
 
@@ -484,15 +590,27 @@ impl ChatService {
             }
             let swipe_index = candidates.len() - 1;
             let content = candidates[swipe_index].clone();
+            // 分支对话树：parent = 当前 active_leaf（线性链 = 前一条消息 ID）。
+            // PR #270 audit B2 修复：regen 流程中 `regen()` 已 delete_last_n(1)
+            // 把 active_leaf 回退到 user 消息，此处 parent = 该 user 消息 ID。
+            // 旧实现漏写 `message_parents` / `active_leaf`，导致 regen 后的
+            // assistant 消息成为 orphan root，破坏分支树结构。
+            let parent = log
+                .active_leaf
+                .clone()
+                .or_else(|| log.message_ids.last().cloned());
+            let new_id = crate::ulid::new_id();
             log.messages.push(ChatMessage {
                 role: crate::adapter::MessageRole::Assistant,
                 content,
             });
-            log.message_ids.push(crate::ulid::new_id());
+            log.message_ids.push(new_id.clone());
             log.message_timestamps
                 .push(Some(chrono::Utc::now().to_rfc3339()));
             log.message_candidates.push(candidates);
             log.message_swipe_index.push(swipe_index);
+            log.message_parents.push(parent);
+            log.active_leaf = Some(new_id);
             log.updated_at = chrono::Utc::now().to_rfc3339();
             log.save(&self.data_root)?;
             Ok(log)
@@ -553,6 +671,50 @@ impl ChatService {
         })
     }
 
+    /// Edit a single user message's content by its durable ID.
+    ///
+    /// Only `role=user` messages can be edited (assistant editing = regen/swipe semantics).
+    /// ID, timestamp, and role are preserved; only `content` is replaced.
+    /// Persistence: full JSONL rewrite via `save()` under `with_session` serialization.
+    pub fn edit_message(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        message_id: &str,
+        new_content: &str,
+    ) -> Result<ChatLog, AirpError> {
+        if !crate::ulid::is_valid_id(message_id) {
+            return Err(AirpError::BadRequest(format!(
+                "message_id is not a valid durable message id: {message_id}"
+            )));
+        }
+        self.with_session(character_id, session_id, || {
+            let mut log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let idx = log
+                .message_ids
+                .iter()
+                .position(|x| crate::ulid::matches(x, message_id))
+                .ok_or_else(|| {
+                    AirpError::BadRequest(format!("message_id {message_id} not in this session"))
+                })?;
+            // Only user messages can be edited.
+            if log.messages[idx].role != crate::adapter::MessageRole::User {
+                return Err(AirpError::BadRequest(
+                    "only user messages can be edited; use regen/swipe for assistant messages"
+                        .to_string(),
+                ));
+            }
+            log.messages[idx].content = new_content.to_string();
+            log.updated_at = chrono::Utc::now().to_rfc3339();
+            log.save(&self.data_root)?;
+            Ok(log)
+        })
+    }
+
     /// Delete a single message by its durable ID, preserving the order of remaining messages.
     ///
     /// (ST calibration: SillyTavern deletes a single message, not rollback-to.)
@@ -580,6 +742,29 @@ impl ChatService {
                 .ok_or_else(|| {
                     AirpError::BadRequest(format!("message_id {message_id} not in this session"))
                 })?;
+            // PR #270 audit B3 修复：捕获被删消息的 parent，同步移除 message_parents，
+            // 并在被删消息是当前 active_leaf 时回退 active_leaf 到其 parent。
+            // 旧实现漏写 message_parents.remove + active_leaf 重置，导致：
+            // (1) message_parents 长度与 messages 不一致（不变式破坏）；
+            // (2) 删除 leaf 后 active_leaf 指向已不存在的 ID，后续 recent() /
+            //     active_path_indices() 找不到 leaf → 返回空，破坏 LLM 上下文。
+            let deleted_parent = log
+                .message_parents
+                .get(idx)
+                .and_then(|p| p.clone())
+                .or_else(|| {
+                    // Legacy 无 parent：线性链中删除中间消息，parent 回退为前一条消息 ID。
+                    if idx > 0 {
+                        log.message_ids.get(idx - 1).cloned()
+                    } else {
+                        None
+                    }
+                });
+            let was_active_leaf = log
+                .active_leaf
+                .as_ref()
+                .map(|leaf| crate::ulid::matches(leaf, message_id))
+                .unwrap_or(false);
             log.messages.remove(idx);
             log.message_ids.remove(idx);
             // Legacy chat logs may have fewer timestamps than messages;
@@ -593,6 +778,18 @@ impl ChatService {
             }
             if idx < log.message_swipe_index.len() {
                 log.message_swipe_index.remove(idx);
+            }
+            // PR #270 audit B3：同步移除 message_parents。
+            if idx < log.message_parents.len() {
+                log.message_parents.remove(idx);
+            }
+            // PR #270 audit B3：被删消息是 active_leaf 时回退。
+            if was_active_leaf {
+                log.active_leaf = if log.messages.is_empty() {
+                    None
+                } else {
+                    deleted_parent.or_else(|| log.message_ids.last().cloned())
+                };
             }
             log.save(&self.data_root)?;
             Ok(log)
@@ -3458,5 +3655,173 @@ mod tests {
             .unwrap();
         let (_log, old_candidates) = service.regen(&character, None).unwrap();
         assert_eq!(old_candidates, vec!["legacy-reply"]);
+    }
+
+    // ── PR #270 audit M2/M3: domain-level branch behavior ─────────────────
+
+    #[test]
+    fn append_with_branch_creates_branch_from_arbitrary_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (service, character, session_id) = seed_session_with_n(root, "br_char", None, 3);
+        // msg-0 (user), msg-1 (assistant), msg-2 (user). 主线 leaf = msg-2.
+
+        // 从 msg-0 分叉一条新 user 消息。
+        let log_before = service.history(&character, session_id.as_ref()).unwrap();
+        let fork_id = log_before.message_ids[0].clone();
+        service
+            .append_with_branch(
+                &character,
+                session_id.as_ref(),
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "branch-msg".into(),
+                },
+                Some(fork_id.clone()),
+            )
+            .unwrap();
+
+        // 验证：内存态多了 1 条消息，且 parent = fork_id。
+        let log_after = service.history(&character, session_id.as_ref()).unwrap();
+        assert_eq!(log_after.messages.len(), 4);
+        let branch_msg_idx = log_after
+            .messages
+            .iter()
+            .position(|m| m.content == "branch-msg")
+            .unwrap();
+        assert_eq!(
+            log_after.message_parents[branch_msg_idx].as_deref(),
+            Some(fork_id.as_str()),
+            "branch_from sets parent correctly"
+        );
+        assert_eq!(
+            log_after.active_leaf.as_deref(),
+            Some(log_after.message_ids[branch_msg_idx].as_str()),
+            "active_leaf moved to new branch leaf"
+        );
+    }
+
+    #[test]
+    fn append_with_branch_rejects_unknown_branch_from() {
+        // B6 修复：branch_from ID 不存在时必须 BadRequest。
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (service, character, session_id) = seed_session_with_n(root, "br_unknown", None, 2);
+        let fake = crate::ulid::derive_legacy_id("other-scope", 99);
+        let err = service
+            .append_with_branch(
+                &character,
+                session_id.as_ref(),
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "x".into(),
+                },
+                Some(fake),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref m) if m.contains("not found")),
+            "unknown branch_from must be BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn history_window_filters_to_active_branch() {
+        // B5 修复：history_window 必须按 active path 过滤，不能混入 sibling 分支消息。
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (service, character, session_id) = seed_session_with_n(root, "hw_branch", None, 3);
+        // 主线: msg-0, msg-1, msg-2. 现在从 msg-0 分叉。
+        let log_before = service.history(&character, session_id.as_ref()).unwrap();
+        let fork_id = log_before.message_ids[0].clone();
+        service
+            .append_with_branch(
+                &character,
+                session_id.as_ref(),
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "branch-B".into(),
+                },
+                Some(fork_id),
+            )
+            .unwrap();
+
+        // active_leaf 现在指向 branch-B（新分叉），active_path = [msg-0, branch-B]。
+        // history_window(limit=10) 应只返回 2 条，不能包含 msg-1 / msg-2。
+        let win = service
+            .history_window(&character, session_id.as_ref(), Some(10), None)
+            .unwrap();
+        let contents: Vec<_> = win.messages.iter().map(|m| m.content.clone()).collect();
+        assert_eq!(
+            contents,
+            vec!["msg-0", "branch-B"],
+            "history_window must filter to active branch"
+        );
+        assert_eq!(
+            win.total, 2,
+            "total counts active path length, not physical"
+        );
+    }
+
+    #[test]
+    fn history_window_cursor_rejects_id_on_inactive_branch() {
+        // B5 新 contract：cursor 在 session 中存在但不在 active path 上 → BadRequest。
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (service, character, session_id) = seed_session_with_n(root, "hw_cursor", None, 3);
+        // 主线: msg-0, msg-1, msg-2. 记下 msg-1 的 ID（之后会变成 inactive 分支）。
+        let log_before = service.history(&character, session_id.as_ref()).unwrap();
+        let msg1_id = log_before.message_ids[1].clone();
+        let fork_id = log_before.message_ids[0].clone();
+        // 从 msg-0 分叉，使 msg-1 / msg-2 变成 inactive 分支。
+        service
+            .append_with_branch(
+                &character,
+                session_id.as_ref(),
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "branch-B".into(),
+                },
+                Some(fork_id),
+            )
+            .unwrap();
+
+        // 用 msg1_id 当 cursor：它在 session 中存在，但不在 active path 上。
+        let err = service
+            .history_window(&character, session_id.as_ref(), Some(2), Some(&msg1_id))
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref m) if m.contains("not on active branch")),
+            "cursor on inactive branch must be BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn history_window_cursor_rejects_id_from_other_session_still_works() {
+        // B5 修复后，cross-session cursor 仍应被拒绝（保留原 contract）。
+        // 这条是回归测试，覆盖 B5 修复时引入的 in_session 检查。
+        let tmp = tempfile::tempdir().unwrap();
+        let (svc_a, char_a, sess_a) = seed_session_with_n(
+            tmp.path(),
+            "cross_a_v2",
+            Some(parse_sid("550e8400-e29b-41d4-a716-446655440001")),
+            3,
+        );
+        let log_a = svc_a.history(&char_a, sess_a.as_ref()).unwrap();
+        let id_a = log_a.message_ids[0].clone();
+
+        let (svc_b, char_b, sess_b) = seed_session_with_n(
+            tmp.path(),
+            "cross_b_v2",
+            Some(parse_sid("550e8400-e29b-41d4-a716-446655440002")),
+            3,
+        );
+        let err = svc_b
+            .history_window(&char_b, sess_b.as_ref(), Some(2), Some(&id_a))
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref m) if m.contains("not in this session")),
+            "cross-session cursor must be BadRequest with 'not in this session', got {err:?}"
+        );
     }
 }

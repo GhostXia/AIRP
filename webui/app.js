@@ -113,6 +113,7 @@
   let historyRequestSeq = 0;
   let historyState = { scope: '', oldestId: '', hasMore: false, total: 0, loading: false };
   let selectedMessageId = '';
+  let branchFromMessageId = null; // 分支对话树：当前分叉点消息 ID
   const messageNodes = new Map();
 
   // ── event log ────────────────────────────────────────────────────────────
@@ -1295,6 +1296,12 @@
       delBtn.title = '删除消息';
       delBtn.onclick = (e) => { e.stopPropagation(); deleteSingleMessage(messageId, div); };
       actions.appendChild(delBtn);
+      // 分支对话树：从此消息分叉。
+      const branchBtn = document.createElement('button');
+      branchBtn.textContent = '⑂';
+      branchBtn.title = '从此消息分支';
+      branchBtn.onclick = (e) => { e.stopPropagation(); setBranchFrom(messageId, div); };
+      actions.appendChild(branchBtn);
       div.appendChild(actions);
     }
     if (isNew) {
@@ -1309,6 +1316,45 @@
     if (selectedMessageId) messageNodes.get(selectedMessageId)?.classList.remove('selected');
     selectedMessageId = messageId;
     messageNodes.get(messageId)?.classList.add('selected');
+  }
+
+  // ── 分支对话树：设置分叉点 ───────────────────────────────────────
+  function setBranchFrom(messageId, div) {
+    // 切换：再次点击同一消息取消分支。
+    if (branchFromMessageId === messageId) {
+      branchFromMessageId = null;
+      div.classList.remove('branch-point');
+      updateBranchIndicator();
+      return;
+    }
+    // 清除旧分叉点高亮。
+    if (branchFromMessageId) {
+      messageNodes.get(branchFromMessageId)?.classList.remove('branch-point');
+    }
+    branchFromMessageId = messageId;
+    div.classList.add('branch-point');
+    updateBranchIndicator();
+  }
+
+  function updateBranchIndicator() {
+    let indicator = $('#branch-indicator');
+    if (branchFromMessageId) {
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'branch-indicator';
+        indicator.className = 'branch-indicator';
+        chatLog.parentNode.insertBefore(indicator, chatLog);
+      }
+      indicator.textContent = '⑂ 分支模式：下次发送将从此消息分叉 (点击取消)';
+      indicator.onclick = () => {
+        if (branchFromMessageId) messageNodes.get(branchFromMessageId)?.classList.remove('branch-point');
+        branchFromMessageId = null;
+        updateBranchIndicator();
+      };
+      indicator.hidden = false;
+    } else if (indicator) {
+      indicator.hidden = true;
+    }
   }
 
   // ── per-message edit (ST: save ≠ regen) ─────────────────────────────────
@@ -1329,8 +1375,15 @@
       restored.innerHTML = renderMarkdown(newText);
       textarea.replaceWith(restored);
       if (newText !== original) {
-        // TODO: engine PUT /v1/chat/message endpoint for true persistence.
-        console.warn('Message edit is local-only until engine supports PUT /v1/chat/message');
+        // 调用 engine PUT /v1/chat/message 持久化编辑。
+        const r = await api('PUT', '/v1/chat/message', buildSessionPayload({
+          message_id: messageId,
+          content: newText,
+        }));
+        if (!r.ok) {
+          console.error('Message edit failed:', r.status, r.data);
+          restored.innerHTML = renderMarkdown(original);
+        }
       }
     };
     const cancel = () => {
@@ -1463,7 +1516,35 @@
     if (!text) { doContinue(); return; }
     if (!selectedChar) return;
     chatInput.value = '';
+
+    // PR #270 audit B9 修复：从分叉点发新消息时，先移除 DOM 中分叉点之后的旧分支消息。
+    // 服务端 prepare_pipeline 会用 branch_from 创建新分支并把 active_leaf 切到新消息，
+    // 但 WebUI DOM 仍保留旧分支的子孙节点 → 用户看到新旧分支消息混在一起。
+    // 这里在 optimistic append 之前裁剪 DOM，使其与 server 的新 active_path 一致。
+    // 若 fetch 失败，server 已持久化新分支（prepare 先写盘），旧分支本就不再 active，
+    // 裁剪是正确的（用户可用 rollback 恢复）。
+    if (branchFromMessageId) {
+      const branchPoint = messageNodes.get(branchFromMessageId);
+      if (branchPoint) {
+        let next = branchPoint.nextElementSibling;
+        while (next) {
+          const toRemove = next;
+          next = next.nextElementSibling;
+          const mid = toRemove.dataset && toRemove.dataset.messageId;
+          if (mid) messageNodes.delete(mid);
+          toRemove.remove();
+        }
+      }
+    }
+
     appendMsg('user', text, false, new Date());
+
+    // 分支对话树：发送后清除分叉点状态（branch_from 已被 buildChatPayload 捕获）。
+    if (branchFromMessageId) {
+      messageNodes.get(branchFromMessageId)?.classList.remove('branch-point');
+      branchFromMessageId = null;
+      updateBranchIndicator();
+    }
 
     // create session if none
     if (!selectedSess) {
@@ -1555,12 +1636,17 @@
     // user_profile 改为非权威 override（空 name/空 variables），避免 WebUI 缓存的
     // 表单值覆盖 engine 刚解析出的 Persona；未来显式 override 需独立 UI 与合同。
     const userId = personaUserId.value.trim() || 'default';
-    return buildSessionPayload({
+    const payload = buildSessionPayload({
       ...buildPersonaPayload(userId, selectedPersonaId),
       user_profile: { name: '', variables: {} },
       preset_id: presetSelect.value || undefined,
       message: text,
     });
+    // 分支对话树：若设置了分叉点，传入 branch_from。
+    if (branchFromMessageId) {
+      payload.branch_from = branchFromMessageId;
+    }
+    return payload;
   }
 
   function buildSessionPayload(extra) {
@@ -1642,9 +1728,22 @@
   // cps = chars per second（字符/秒）。审计 B2/C3 修复：原名 SMOOTH_STREAM_FPS 误导
   //（FPS = frames per second，但本类是按字符限速，不是按帧），改为 SMOOTH_STREAM_CPS。
   // 默认 200 cps：典型 LLM 输出 100-500 cps，200 cps 让短回复流畅、长回复不严重堆积。
-  // 30 cps（原值）会让 1000 字符回复渲染 33 秒，体感为"卡顿"。
+  // 30 cps（原值）会让 1000 字符回复渲染 33 秒，体感为“卡顿”。
   // 纯前端改动，不触碰 SSE 协议。
   const SMOOTH_STREAM_CPS = 200;
+  // 打字机模式：用户设置（localStorage）。关闭时立即渲染（无动画）。
+  const TYPEWRITER_KEY = 'airp_typewriter_mode';
+  function isTypewriterEnabled() {
+    return localStorage.getItem(TYPEWRITER_KEY) !== 'off';
+  }
+  function setTypewriterMode(enabled) {
+    localStorage.setItem(TYPEWRITER_KEY, enabled ? 'on' : 'off');
+  }
+  // 句子边界检测：中文句号/叹号/问号/分号，英文句号/叹号/问号 + 空格，换行符。
+  const SENTENCE_END_RE = /[。！？；\n]|\.(\s|$)|[!?](\s|$)/;
+  // 最大无渲染时间（ms）：避免长段落中间 3s+ 无视觉反馈。
+  const MAX_RENDER_GAP_MS = 800;
+  
   class SmoothStreamer {
     // el: 真实 DOM 节点（textContent 会被设置为 prefix + rendered）。
     // cps: 字符/秒。
@@ -1659,26 +1758,74 @@
       this.rendered = '';
       this.rafId = null;
       this.lastTime = 0;
+      this.lastRenderTime = 0;
       this.running = false;
+      this.typewriter = isTypewriterEnabled();
+      this.inCodeBlock = false; // 代码块内跟踪
     }
     push(text) {
       this.queue += text;
+      // 跟踪代码块状态（``` 切换）。
+      const backtickCount = (text.match(/```/g) || []).length;
+      if (backtickCount % 2 === 1) this.inCodeBlock = !this.inCodeBlock;
       if (!this.running) this.start();
     }
     start() {
+      // 打字机模式关闭时立即渲染。
+      if (!this.typewriter) {
+        this.rendered += this.queue;
+        this.queue = '';
+        this._write();
+        return;
+      }
       this.running = true;
       this.lastTime = performance.now();
+      this.lastRenderTime = this.lastTime;
       const tick = (now) => {
         if (!this.running) return;
         const elapsed = now - this.lastTime;
+        const sinceLastRender = now - this.lastRenderTime;
         // 计算本帧应渲染的字符数。
-        const charsToRender = Math.floor((elapsed / 1000) * this.cps);
-        if (charsToRender > 0 && this.queue.length > 0) {
-          const chunk = this.queue.slice(0, charsToRender);
-          this.queue = this.queue.slice(charsToRender);
+        let charsToRender = Math.floor((elapsed / 1000) * this.cps);
+        // 强制刷新：避免长时间无视觉反馈。
+        const forceRender = sinceLastRender >= MAX_RENDER_GAP_MS && this.queue.length > 0;
+        if ((charsToRender > 0 || forceRender) && this.queue.length > 0) {
+          if (forceRender && charsToRender === 0) charsToRender = 1;
+          // 智能分句：尝试在句子边界截断（代码块内不分句）。
+          let chunk;
+          if (!this.inCodeBlock && charsToRender < this.queue.length) {
+            const candidate = this.queue.slice(0, charsToRender);
+            // 从后向前找句子边界。
+            // PR #270 audit M1 修复：SENTENCE_END_RE 含多字符模式 `\.(\s|$)` / `[!?](\s|$)`，
+            // 旧实现 `SENTENCE_END_RE.test(candidate[i])` 只测试单字符，`$` 永远匹配单字符
+            // 串末尾 → `.`/`!`/`?` 无论后接什么都被判为句子边界（如 "3.14" 会在 `.` 处断句）。
+            // 修复：测试 2 字符上下文 `this.queue[i] + this.queue[i+1]`，让正则看到真实后续字符。
+            // 必须用 `this.queue` 而非 `candidate` 取上下文，否则 candidate 末尾的 `.` 会因
+            // `candidate[i+1] === undefined` 被错误判为 end-of-string 边界（即使 queue 后面还有字符）。
+            let boundary = -1;
+            for (let i = candidate.length - 1; i >= 0; i--) {
+              const twoChar = this.queue[i] + (this.queue[i + 1] || '');
+              if (SENTENCE_END_RE.test(twoChar)) {
+                boundary = i + 1;
+                break;
+              }
+            }
+            // 找到边界且不会导致太少字符（至少渲染 1/4 的 charsToRender）。
+            if (boundary > charsToRender * 0.25) {
+              chunk = this.queue.slice(0, boundary);
+              this.queue = this.queue.slice(boundary);
+            } else {
+              chunk = candidate;
+              this.queue = this.queue.slice(charsToRender);
+            }
+          } else {
+            chunk = this.queue.slice(0, charsToRender);
+            this.queue = this.queue.slice(charsToRender);
+          }
           this.rendered += chunk;
           this._write();
           this.lastTime = now;
+          this.lastRenderTime = now;
         }
         if (this.queue.length > 0) {
           this.rafId = requestAnimationFrame(tick);
@@ -2582,10 +2729,24 @@
       setMemoryDirty(false);
       return;
     }
+    // CodeRabbit review fix 1: 切角色/会话/标签时若 memory 有未保存编辑，先警告。
+    // 静默丢弃用户编辑会破坏信任；这里用 confirm 给用户最后一次保存机会。
+    // 用户取消则保留当前编辑不变。
+    if (wbMemoryDirty && !confirm('当前记忆修改未保存，切换将丢失，是否继续？')) return;
     wbMemoryStatus.textContent = '加载中…';
     let url = '/v1/memory/resident?character_id=' + encodeURIComponent(selectedChar);
     if (selectedSess) url += '&session_id=' + encodeURIComponent(selectedSess);
+    // CodeRabbit review fix 2: 捕获请求发起时的 (char, sess) 快照，
+    // await 返回后比对 selectedChar/selectedSess 是否未变。若已切换到其它角色/会话，
+    // 该响应是 stale 的，直接丢弃——否则会把 A 的记忆写到 B 的 textarea，用户点 Save 会 PUT 到 B。
+    const reqChar = selectedChar;
+    const reqSess = selectedSess;
     const r = await api('GET', url);
+    if (reqChar !== selectedChar || reqSess !== selectedSess) {
+      // stale 响应：用户已切到其它角色/会话，丢弃本次结果。
+      // 注意：不修改 wbMemoryContent/value，让后续 loadResidentMemory 调用负责加载新值。
+      return;
+    }
     if (r.ok && r.data) {
       wbMemoryContent.value = r.data.content || '';
       wbMemoryStats.textContent = '字符数: ' + r.data.char_count + ' / ' + r.data.capacity;

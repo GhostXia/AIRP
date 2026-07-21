@@ -322,6 +322,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 user_id: None,
                 persona_id: None,
                 swipe_candidates: Vec::new(),
+                branch_from: None,
             };
 
             // E. 走 pipeline（与 daemon 完全相同路径）

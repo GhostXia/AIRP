@@ -17,7 +17,7 @@ use axum::{
     http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -36,13 +36,14 @@ use handlers::{
     add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion, continue_chat,
     create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
-    delete_session_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
-    get_character_state, get_character_state_history, get_character_state_schema, get_chat_history,
-    get_effective_persona_endpoint, get_persona_endpoint, get_persona_multi_endpoint,
-    get_preset_endpoint, get_resident_memory, get_scene_endpoint, get_settings, get_user_model,
-    import_character, import_preset_endpoint, list_agent_tools, list_characters, list_models,
-    list_personas_endpoint, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
-    preview_chat_assembly, reextract_character_assets, regen_chat, rollback_chat, swipe_chat,
+    delete_session_endpoint, edit_message, get_character_avatar, get_character_card,
+    get_character_lorebook, get_character_state, get_character_state_history,
+    get_character_state_schema, get_chat_history, get_effective_persona_endpoint,
+    get_persona_endpoint, get_persona_multi_endpoint, get_preset_endpoint, get_resident_memory,
+    get_scene_endpoint, get_settings, get_user_model, import_character, import_preset_endpoint,
+    list_agent_tools, list_characters, list_models, list_personas_endpoint, list_presets_endpoint,
+    list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
+    reextract_character_assets, regen_chat, rollback_chat, swipe_chat, switch_branch,
     unbind_persona_endpoint, update_character_card, update_character_lorebook,
     update_persona_endpoint, update_persona_multi_endpoint, update_resident_memory,
     update_settings, update_user_model,
@@ -311,7 +312,12 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/v1/chat/regen", post(regen_chat))
         .route("/v1/chat/continue", post(continue_chat))
         .route("/v1/chat/delete", post(delete_message))
+        .route(
+            "/v1/chat/message",
+            put(edit_message.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
+        )
         .route("/v1/chat/swipe", post(swipe_chat))
+        .route("/v1/chat/branch/switch", post(switch_branch))
         .route("/v1/characters", get(list_characters))
         .route(
             "/v1/characters/import",
