@@ -59,16 +59,10 @@ impl Tool for AdvancePlotTool {
             let sid = optional_session_id(&params)?;
 
             // 注入剧情推进到 session 的 current.md
-            let session_dir = crate::data_dir::resolve_session_dir(
-                &state.data_root,
-                cid.as_str(),
-                sid.as_ref(),
-            )?;
+            let session_dir =
+                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
 
-            let entry = format!(
-                "\n[剧情推进: {}] {}\n",
-                plot_type, development
-            );
+            let entry = format!("\n[剧情推进: {}] {}\n", plot_type, development);
 
             crate::volume_store::append_to_current(&session_dir, &entry)?;
 
@@ -139,11 +133,8 @@ impl Tool for GetPlotStatusTool {
 
             // 读取 index.md 中的悬挂线索
             let sid = optional_session_id(&params)?;
-            let session_dir = crate::data_dir::resolve_session_dir(
-                &state.data_root,
-                cid.as_str(),
-                sid.as_ref(),
-            )?;
+            let session_dir =
+                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
             let index_content = crate::volume_store::read_index(&session_dir).unwrap_or_default();
 
             // 提取悬挂线索段

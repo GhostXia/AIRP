@@ -143,11 +143,8 @@ impl Tool for TriggerWorldEventTool {
             let event = events[event_idx].clone();
 
             // 注入事件内容到 session 的 current.md
-            let session_dir = crate::data_dir::resolve_session_dir(
-                &state.data_root,
-                cid.as_str(),
-                sid.as_ref(),
-            )?;
+            let session_dir =
+                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
             crate::volume_store::append_to_current(
                 &session_dir,
                 &format!("\n[世界事件: {}]\n{}\n", event.name, event.content),

@@ -54,18 +54,12 @@ impl Tool for NpcActionTool {
                 .get("action")
                 .and_then(Value::as_str)
                 .ok_or_else(|| AirpError::BadRequest("action is required".to_string()))?;
-            let result = params
-                .get("result")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let result = params.get("result").and_then(Value::as_str).unwrap_or("");
             let sid = optional_session_id(&params)?;
 
             // 注入 NPC 行动到 session 的 current.md
-            let session_dir = crate::data_dir::resolve_session_dir(
-                &state.data_root,
-                cid.as_str(),
-                sid.as_ref(),
-            )?;
+            let session_dir =
+                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
 
             let mut entry = format!("\n[NPC行动: {}] {}\n", npc_name, action);
             if !result.is_empty() {

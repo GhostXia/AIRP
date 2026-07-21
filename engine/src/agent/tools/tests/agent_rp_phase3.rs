@@ -97,10 +97,7 @@ async fn advance_plot_appends_plot_history_under_revision_contract() {
 
     assert_eq!(result.output["success"], true);
     assert_eq!(result.output["type"], "progression");
-    assert_eq!(
-        result.output["development"],
-        "The tower doors swung open"
-    );
+    assert_eq!(result.output["development"], "The tower doors swung open");
     assert_eq!(result.output["revision"], 1);
 
     // current.md 应被注入剧情推进 entry。

@@ -805,8 +805,8 @@ impl StateService {
         let state_boundary = state_lock(character_id.as_str());
         let _state_guard = state_boundary.lock().expect("state lock poisoned");
 
-        let live_path = data_dir::char_state_dir(&self.data_root, character_id.as_str())
-            .join("live.json");
+        let live_path =
+            data_dir::char_state_dir(&self.data_root, character_id.as_str()).join("live.json");
         if !live_path.exists() {
             return Ok(serde_json::Value::Object(Default::default()));
         }
