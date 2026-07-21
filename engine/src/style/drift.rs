@@ -134,14 +134,6 @@ pub fn inject_soul_drift(data_root: &Path, character_id: &str, prompt: &mut Stri
     }
 }
 
-/// 检查 soul drift 是否超过容量上限。
-pub fn is_over_capacity(data_root: &Path, character_id: &str, config: &SoulDriftConfig) -> bool {
-    let Ok(content) = read_soul_drift(data_root, character_id) else {
-        return false;
-    };
-    content.chars().count() > config.capacity_chars
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,14 +179,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_over_capacity() {
+    fn test_write_enforces_capacity() {
         let tmp = tempdir().unwrap();
-        let config = SoulDriftConfig { capacity_chars: 10 };
-
-        write_soul_drift(tmp.path(), "hero", "短").unwrap();
-        assert!(!is_over_capacity(tmp.path(), "hero", &config));
-
-        write_soul_drift(tmp.path(), "hero", "这是一段超过十个字符的漂移内容").unwrap();
-        assert!(is_over_capacity(tmp.path(), "hero", &config));
+        // 默认容量 1500，写入超长内容应被截断。
+        let long_content = "- 条目\n".repeat(1000);
+        write_soul_drift(tmp.path(), "hero", &long_content).unwrap();
+        let content = read_soul_drift(tmp.path(), "hero").unwrap();
+        assert!(content.chars().count() <= SOUL_DRIFT_DEFAULT_CAP);
     }
 }

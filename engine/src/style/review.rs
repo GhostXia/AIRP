@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// 风格审查报告。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StyleReviewReport {
     /// 语气偏移描述。
     pub tone_drift: String,
@@ -25,18 +25,6 @@ pub struct StyleReviewReport {
     pub suggestions: Vec<String>,
     /// 建议追加到 soul_drift.md 的修正条目。
     pub drift_patch: String,
-}
-
-impl Default for StyleReviewReport {
-    fn default() -> Self {
-        Self {
-            tone_drift: String::new(),
-            perspective_issues: Vec::new(),
-            pacing_notes: String::new(),
-            suggestions: Vec::new(),
-            drift_patch: String::new(),
-        }
-    }
 }
 
 /// 审查 prompt 模板。
