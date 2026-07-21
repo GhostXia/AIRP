@@ -2246,3 +2246,210 @@ mod tests_effective_config_summary {
         assert_eq!(sources.max_tokens_source, None);
     }
 }
+
+/// #252 §2.B3：finalize 层端到端测试。
+///
+/// 验证 `run_finalize` 在 `stripped` 为空（模型只输出 `<state>` 块或纯空白）
+/// 且 `swipe_candidates` 非空时，会回灌旧候选而非丢失用户资产（§2.B1 回归）。
+/// 同时验证三条分支的完整契约：
+///   1. stripped 空 + candidates 非空 → 原样回灌旧候选
+///   2. stripped 非空 + candidates 非空 → 旧候选 + 新 stripped
+///   3. stripped 空 + candidates 空 → 不创建 assistant 消息
+///
+/// `session_dir = None` 跳过卷副作用（封卷 / 维护 / 记忆抽取），让测试聚焦于
+/// ChatLog 持久化分支。`provider_config` / `gen_params` / `http_client` 仍需构造
+/// （FinalizerCtx 字段非 Option），但不会实际发起 HTTP 调用。
+#[cfg(test)]
+mod tests_b1_finalize_empty_stripped {
+    use super::finalize::run_finalize;
+    use super::*;
+    use crate::adapter::{MessageRole, Provider};
+    use crate::types::CharacterId;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    /// 构造一份最小可用的 `FinalizerCtx`，`session_dir = None` 跳过卷副作用。
+    fn make_finalizer_ctx(
+        data_root: PathBuf,
+        character_id: Option<CharacterId>,
+        swipe_candidates: Vec<String>,
+    ) -> FinalizerCtx {
+        FinalizerCtx {
+            character_id,
+            session_id: None,
+            data_root,
+            session_dir: None,
+            provider_config: Arc::new(ProviderConfig {
+                provider: Provider::OpenAI,
+                endpoint: "https://example.test/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+            }),
+            gen_params: GenerationParams {
+                model: "test-model".to_string(),
+                temperature: None,
+                max_tokens: None,
+            },
+            volume_config: VolumeConfig::default(),
+            http_client: reqwest::Client::new(),
+            continue_mode: false,
+            swipe_candidates,
+        }
+    }
+
+    /// 准备一个临时数据根 + 一个角色，写入 1 条 user 消息。
+    /// 返回 (tempdir, data_root, character_id)——tempdir 必须存活到测试结束。
+    fn setup_character_with_user_msg() -> (tempfile::TempDir, PathBuf, CharacterId) {
+        let tmp = tempdir().unwrap();
+        let data_root = tmp.path().to_path_buf();
+        let character = CharacterId::new("finalize-char").unwrap();
+        ChatService::new(&data_root)
+            .append(
+                &character,
+                None,
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "hello".into(),
+                },
+            )
+            .unwrap();
+        (tmp, data_root, character)
+    }
+
+    /// §2.B1 回归核心：stripped 空 + swipe_candidates 非空 → 旧候选原样回灌。
+    ///
+    /// 场景：regen 时 `delete_last_n(1)` 已删除旧 assistant 消息 + 候选，
+    /// 旧候选被捕获到 `swipe_candidates`。模型再生失败（只输出 `<state>` 块，
+    /// stripped 后为空）。finalize 必须把旧候选写回，避免永久丢失。
+    #[tokio::test]
+    async fn finalize_empty_stripped_restores_old_candidates() {
+        let (_tmp, data_root, character) = setup_character_with_user_msg();
+        let ctx = make_finalizer_ctx(
+            data_root.clone(),
+            Some(character.clone()),
+            vec!["old-reply-a".to_string(), "old-reply-b".to_string()],
+        );
+        // raw_acc / cleaned_acc 只含 <state> 块；extract_state_content 后 stripped 为空。
+        let raw_acc = r#"<state>{"hp":100}</state>"#.to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        // 验证：chat log 有 1 条 user + 1 条 assistant，assistant 候选 = 旧候选原样回灌。
+        let log = ChatService::new(&data_root)
+            .history(&character, None)
+            .unwrap();
+        assert_eq!(log.messages.len(), 2, "should have user + assistant");
+        assert_eq!(log.messages[1].role, MessageRole::Assistant);
+        assert_eq!(
+            log.message_candidates[1],
+            vec!["old-reply-a".to_string(), "old-reply-b".to_string()],
+            "old candidates must be restored verbatim, not lost"
+        );
+        assert_eq!(
+            log.message_swipe_index[1], 1,
+            "swipe_index should point to last restored candidate"
+        );
+        assert_eq!(
+            log.messages[1].content, "old-reply-b",
+            "content must match active candidate"
+        );
+    }
+
+    /// 正向路径：stripped 非空 + swipe_candidates 非空 → 旧候选 + 新 stripped。
+    ///
+    /// 场景：regen 模型成功生成新回复，旧候选 + 新回复组成新候选列表。
+    #[tokio::test]
+    async fn finalize_non_empty_stripped_appends_to_candidates() {
+        let (_tmp, data_root, character) = setup_character_with_user_msg();
+        let ctx = make_finalizer_ctx(
+            data_root.clone(),
+            Some(character.clone()),
+            vec!["old-reply-a".to_string(), "old-reply-b".to_string()],
+        );
+        let raw_acc = "new generated reply".to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        let log = ChatService::new(&data_root)
+            .history(&character, None)
+            .unwrap();
+        assert_eq!(log.messages.len(), 2);
+        assert_eq!(
+            log.message_candidates[1],
+            vec![
+                "old-reply-a".to_string(),
+                "old-reply-b".to_string(),
+                "new generated reply".to_string()
+            ],
+            "new stripped should be appended as last candidate"
+        );
+        assert_eq!(
+            log.message_swipe_index[1], 2,
+            "swipe_index should point to newly generated candidate"
+        );
+        assert_eq!(
+            log.messages[1].content, "new generated reply",
+            "content must match newly generated candidate"
+        );
+    }
+
+    /// 防御性：stripped 空 + swipe_candidates 空 → 不创建 assistant 消息。
+    ///
+    /// 场景：普通 chat（非 regen），模型只输出 state 块，无旧候选可回灌。
+    /// finalize 不应创建空 assistant 消息。
+    #[tokio::test]
+    async fn finalize_empty_stripped_no_candidates_no_message() {
+        let (_tmp, data_root, character) = setup_character_with_user_msg();
+        let ctx = make_finalizer_ctx(
+            data_root.clone(),
+            Some(character.clone()),
+            Vec::new(), // 无旧候选
+        );
+        let raw_acc = r#"<state>{"hp":100}</state>"#.to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        let log = ChatService::new(&data_root)
+            .history(&character, None)
+            .unwrap();
+        assert_eq!(
+            log.messages.len(),
+            1,
+            "no assistant message should be created when stripped is empty and no candidates"
+        );
+    }
+
+    /// 防御性：stripped 是纯空白（whitespace-only）+ swipe_candidates 非空
+    /// → 应等同 stripped 空，走旧候选回灌分支。
+    ///
+    /// 场景：模型输出只含空白字符（"\n  \t"），extract_state_content 后 stripped 非空
+    /// 但 trim 后为空。finalize.rs 用 `stripped.trim().is_empty()` 判断，应走回灌分支。
+    #[tokio::test]
+    async fn finalize_whitespace_stripped_restores_old_candidates() {
+        let (_tmp, data_root, character) = setup_character_with_user_msg();
+        let ctx = make_finalizer_ctx(
+            data_root.clone(),
+            Some(character.clone()),
+            vec!["old-reply".to_string()],
+        );
+        // cleaned_acc 是纯空白，extract_state_content 不剥离任何内容，
+        // 但 finalize.rs 的 `stripped.trim().is_empty()` 会判其为空。
+        let raw_acc = "   \n\t  ".to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        let log = ChatService::new(&data_root)
+            .history(&character, None)
+            .unwrap();
+        assert_eq!(log.messages.len(), 2);
+        assert_eq!(
+            log.message_candidates[1],
+            vec!["old-reply".to_string()],
+            "whitespace-only stripped should restore old candidates, not create empty message"
+        );
+        assert_eq!(log.messages[1].content, "old-reply");
+    }
+}
