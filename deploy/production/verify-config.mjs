@@ -26,6 +26,7 @@ assert.doesNotMatch(gatewayImage, /COPY webui \/srv/);
 assert.match(gatewayImage, /webui\/onboarding\.js/, 'onboarding runtime must ship in gateway image');
 assert.match(gatewayImage, /webui\/shared\.js/, 'shared WebUI runtime must ship in gateway image');
 assert.match(gatewayImage, /webui\/assembly-utils\.js/, 'assembly preview helper must ship in gateway image');
+assert.match(gatewayImage, /webui\/smooth-streamer-utils\.js/, 'smooth-streamer sentence boundary util must ship in gateway image');
 assert.doesNotMatch(gatewayImage, /mock-provider|smoke\.mjs|serve\.js|start\.bat/);
 assert.doesNotMatch(smokeCompose, /^\s+ports:/m, 'smoke override must not publish engine ports');
 assert.match(smokeCompose, /airp-smoke-data-\$\{AIRP_SMOKE_ID/);

@@ -162,6 +162,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             webui_dir,
             open_browser,
         } => {
+            // #244 L1: --open-browser 在非 Windows 平台运行时拒绝（CLI parse 不区分平台，
+            // 否则需要把字段标 cfg，会破坏 struct layout）。原行为是 daemon 启动后
+            // open_default_browser 返回 Err(Unsupported)，被 eprintln! 吞掉继续运行，
+            // 用户以为 flag 生效但浏览器没开。改为提前 fail-fast + 明确错误信息。
+            //
+            // CodeRabbit #287 review: 此分支在 daemon bind 前就 return，daemon 不会启动，
+            // 不应告诉用户 "after the daemon starts"。改为明确指导：移除 flag → 重启 daemon
+            // → 看 daemon 打印的 URL 手动打开。
+            #[cfg(not(target_os = "windows"))]
+            if open_browser {
+                return Err("--open-browser is supported only on Windows; \
+                     remove this flag, restart the daemon, then open the printed WebUI URL manually"
+                    .into());
+            }
             let daemon_port = port.unwrap_or(app_config.daemon_port);
             let bind_ip = host
                 .parse::<IpAddr>()

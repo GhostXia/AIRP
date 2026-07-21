@@ -32,7 +32,7 @@ Copy-Item -LiteralPath $engine -Destination $packageRoot
 foreach ($asset in @(
     'index.html', 'style.css', 'runtime-config.js', 'app.js', 'shared.js',
     'onboarding.js', 'persona-utils.js', 'lorebook-utils.js',
-    'assembly-utils.js', 'history-utils.js'
+    'assembly-utils.js', 'history-utils.js', 'smooth-streamer-utils.js'
 )) {
     Copy-Item -LiteralPath (Join-Path $repoRoot "webui\$asset") -Destination (Join-Path $packageRoot 'webui')
 }

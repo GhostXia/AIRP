@@ -146,6 +146,27 @@ pub struct HistoryWindow {
 /// 20 足够覆盖 ST 用户"尝试几次找好回复"场景，且控制 jsonl 增长。
 pub const SWIPE_CANDIDATES_CAP: usize = 20;
 
+/// `POST /v1/chat/swipe` 响应体。#252 D3：swipe 增量返回，不再回完整 ChatLog。
+///
+/// 客户端只需受影响消息的新 content 与确认 index；返回完整 ChatLog 是过量传输
+/// （会话长时单条消息 JSON 体积膨胀）。`role` 与 `candidates_count` 便于 UI 显示
+/// （如 "1/3" 候选计数、确认角色不变）。
+///
+/// 字段：
+/// - `message_id`：受影响消息的 durable ID（与请求一致，便于客户端确认）。
+/// - `index`：新激活候选的下标（0-based，与请求一致）。
+/// - `content`：受影响消息切换后的 content。
+/// - `role`：受影响消息的角色（不变，便于客户端不重新拉取历史）。
+/// - `candidates_count`：候选总数（便于 UI 显示 "index+1/total"）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SwipeResponse {
+    pub message_id: String,
+    pub index: usize,
+    pub content: String,
+    pub role: crate::adapter::MessageRole,
+    pub candidates_count: usize,
+}
+
 impl ChatService {
     pub fn new(data_root: impl AsRef<Path>) -> Self {
         Self {
@@ -634,13 +655,15 @@ impl ChatService {
     /// `message_id` 是 durable ID，`new_index` 是候选下标（0-based）。
     /// 切换后 `messages[i].content` 更新为 `candidates[new_index]`。
     /// ID 不变（解耦优先：role 可变，ID 不应变）。
+    ///
+    /// #252 D3：返回 `SwipeResponse` 增量响应，不再回完整 `ChatLog`（性能优化）。
     pub fn switch_swipe(
         &self,
         character_id: &CharacterId,
         session_id: Option<&SessionId>,
         message_id: &str,
         new_index: usize,
-    ) -> Result<ChatLog, AirpError> {
+    ) -> Result<SwipeResponse, AirpError> {
         if !crate::ulid::is_valid_id(message_id) {
             return Err(AirpError::BadRequest(format!(
                 "message_id is not a valid durable message id: {message_id}"
@@ -679,7 +702,14 @@ impl ChatService {
             // 审计 D1 修复：与其他 mutation 保持一致，更新 updated_at。
             log.updated_at = chrono::Utc::now().to_rfc3339();
             log.save(&self.data_root)?;
-            Ok(log)
+            // #252 D3：增量返回，不再回完整 ChatLog。
+            Ok(SwipeResponse {
+                message_id: message_id.to_string(),
+                index: new_index,
+                content: log.messages[idx].content.clone(),
+                role: log.messages[idx].role,
+                candidates_count: cands.len(),
+            })
         })
     }
 
@@ -3674,12 +3704,16 @@ mod tests {
             )
             .unwrap();
         let msg_id = log.message_ids[1].clone();
+        // #252 D3：switch_swipe 返回 SwipeResponse 增量响应。
         let switched = service.switch_swipe(&character, None, &msg_id, 0).unwrap();
-        assert_eq!(switched.messages[1].content, "a");
-        assert_eq!(switched.message_swipe_index[1], 0);
+        assert_eq!(switched.content, "a");
+        assert_eq!(switched.index, 0);
+        assert_eq!(switched.candidates_count, 3);
+        assert_eq!(switched.message_id, msg_id);
         let switched2 = service.switch_swipe(&character, None, &msg_id, 2).unwrap();
-        assert_eq!(switched2.messages[1].content, "c");
-        assert_eq!(switched2.message_swipe_index[1], 2);
+        assert_eq!(switched2.content, "c");
+        assert_eq!(switched2.index, 2);
+        assert_eq!(switched2.candidates_count, 3);
     }
 
     #[test]

@@ -186,13 +186,15 @@ pub(in crate::daemon) async fn delete_message(
 }
 
 /// POST /v1/chat/swipe — #249 Swipe：切换指定消息的激活候选。
+///
+/// #252 D3：返回 `SwipeResponse` 增量响应，不再回完整 `ChatLog`。
 pub(in crate::daemon) async fn swipe_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<SwipeRequest>,
-) -> Result<Json<ChatLog>, AirpError> {
+) -> Result<Json<crate::domain::SwipeResponse>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
-    let log = ChatService::new(&effective_root).switch_swipe(
+    let resp = ChatService::new(&effective_root).switch_swipe(
         &req.character_id,
         req.session_id.as_ref(),
         &req.message_id,
@@ -210,7 +212,7 @@ pub(in crate::daemon) async fn swipe_chat(
         user_id = ?req.user_id,
         "swipe switched"
     );
-    Ok(Json(log))
+    Ok(Json(resp))
 }
 
 /// PUT /v1/chat/message — edit a user message's content by durable ID.

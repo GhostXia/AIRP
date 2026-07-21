@@ -908,7 +908,30 @@ impl ChatLog {
                         current_idx = pidx;
                     }
                     // dangling / backward parent → stop defensively.
-                    _ => break,
+                    // #276: dangling parent（指向已删除消息的 ID）或 backward edge
+                    // 会让 active path 在此处截断。不 panic、不修改数据，只发 warn
+                    // 让运维从日志发现拓扑异常（方案 2：显式检测 + warning）。
+                    other => {
+                        let reason = match other {
+                            Some(pidx) => format!(
+                                "backward parent edge (parent idx {} >= current idx {})",
+                                pidx, current_idx
+                            ),
+                            None => format!("dangling parent id `{pid}` not in message_ids"),
+                        };
+                        tracing::warn!(
+                            character_id = %self.character_id,
+                            session_id = %self.session_id,
+                            current_idx,
+                            active_leaf = ?self.active_leaf,
+                            reason = %reason,
+                            "active_path_indices: parent chain broken at idx {}; \
+                             path truncated to {} entries",
+                            current_idx,
+                            path.len()
+                        );
+                        break;
+                    }
                 },
                 None => {
                     // Legacy linear-chain fallback: implicit parent = current_idx - 1.

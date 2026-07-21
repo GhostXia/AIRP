@@ -9,6 +9,10 @@
 //! 独立成文件便于聚焦 trace 不变量与 revision 双源读取逻辑（Persona 双源：
 //! current_revision 优先，回退 Persona.revision）。
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+use std::collections::BTreeSet;
+
 use crate::adapter::{ChatMessage, GenerationParams, ProviderConfig};
 use crate::daemon::ChatCompletionRequest;
 use crate::domain::Persona;
@@ -21,6 +25,14 @@ use crate::orchestrator::SystemPromptPart;
 use super::helpers::{
     provider_label, read_only_session_dir, read_revision_or_diagnostic, trace_source_id,
 };
+
+// #214 ISSUE-1: 残留 `{{lowercase_var}}` 探测。`final_vars`（char/user/自定义变量）
+// 与 `render_macros`（getvar/setvar/lastUserMessage）都已在装配阶段完成替换；
+// 若 system prompt 仍有 `{{[a-z_]+}}` 残留，说明变量未定义或拼写错误。正则只匹配
+// 小写字母+下划线的 token，不会误报 `{{getvar::x}}`（含 `::`）或
+// `{{lastUserMessage}}`（含大写字母）。
+static UNDEFINED_VAR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\{\{([a-z_]+)\}\}").expect("UNDEFINED_VAR_RE"));
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_prompt_trace(
@@ -245,6 +257,31 @@ pub(super) fn build_prompt_trace(
             (None, None)
         }
     };
+
+    // #214 ISSUE-1: 扫描 system prompt 残留的 `{{lowercase_var}}`，检测未定义或拼写
+    // 错误的变量。仅扫描 prompt_parts（system prompt 各段），不扫描 messages
+    // （用户/历史消息中的 `{{var}}` 是用户自由输入，不应作为配置错误诊断）。
+    let mut undefined_vars: BTreeSet<String> = BTreeSet::new();
+    for part in prompt_parts {
+        for cap in UNDEFINED_VAR_RE.captures_iter(&part.content) {
+            undefined_vars.insert(cap[1].to_string());
+        }
+    }
+    if !undefined_vars.is_empty() {
+        let listed = undefined_vars
+            .iter()
+            .map(|v| format!("{{{{{v}}}}}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        diagnostics.push(PromptDiagnostic {
+            kind: "undefined_variable_placeholder".to_string(),
+            message: format!(
+                "System prompt contains unsubstituted variable placeholders: {listed}. \
+                 These were not defined in persona/state variables or the standard {{char}}/{{user}} \
+                 set; check for typos or missing variable definitions."
+            ),
+        });
+    }
 
     PromptAssemblyTrace::new(
         EffectiveIds {
