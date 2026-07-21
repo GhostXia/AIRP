@@ -37,6 +37,7 @@ pub mod png_parser;
 pub mod quota;
 pub mod scene;
 pub(crate) mod secret_store;
+pub mod style;
 pub mod types;
 pub mod ulid;
 

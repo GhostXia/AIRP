@@ -38,6 +38,7 @@ mod character;
 mod npc;
 mod params;
 mod plot;
+mod search;
 mod session;
 mod state_lorebook;
 mod state_preset;
@@ -210,6 +211,8 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     // 3.3 多角色编排增强 family 2 工具。
     npc::register(&mut reg, state.clone());
     // 3.4 Agent 驱动的剧情推进 family 2 工具。
-    plot::register(&mut reg, state);
+    plot::register(&mut reg, state.clone());
+    // 4.3 FTS5 历史检索 family 1 工具。
+    search::register(&mut reg, state);
     reg
 }

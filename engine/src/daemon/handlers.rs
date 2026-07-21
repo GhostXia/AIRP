@@ -17,9 +17,11 @@ mod models;
 mod personas;
 mod presets;
 mod scenes;
+mod search;
 mod sessions;
 mod settings;
 mod state;
+mod style;
 
 // #155 PR 4/5/6：re-export moved handlers 保持 `daemon/mod.rs` 的 `use handlers::{...}` 不变。
 pub(super) use agent::{agent_run, list_agent_tools};
@@ -54,6 +56,8 @@ pub(super) use state::{
     get_character_avatar, get_character_state, get_character_state_history,
     get_character_state_schema,
 };
+pub(super) use style::{get_drift, style_review, update_drift};
+pub(super) use search::chat_search;
 
 // M_MCP MCP-2：角色卡导入的 `pub(crate)` 共享实现，供未来 daemon HTTP handler 与
 // MCP tool 复用。facade 转发符号路径，保持 `crate::daemon::handlers::import_card_to_disk`
