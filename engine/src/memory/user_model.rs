@@ -1,22 +1,29 @@
-//! 用户模型自动学习：每用户一份偏好模型（`user_model.md`）。
+//! 用户模型手动编辑：每用户一份偏好模型（`user_model.md`）。
 //!
 //! 存储路径：`data/users/{uid}/user_model.md`
-//! 从对话中抽取用户偏好信号（"我喜欢/不喜欢"、纠正、风格反馈）。
+//!
+//! 注意：PR #271 的 MVP 范围只暴露 HTTP 手动编辑 API（GET / PUT）。
+//! 自动抽取 / 注入 System Prompt / 写入追加等能力未在 MVP 中接入，
+//! 故本模块只保留读 / 写 / 路径解析三件事；相关死代码已剔除（审计 B3）。
 
 use crate::error::AirpError;
+use crate::types::UserId;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 返回用户模型文件路径。
-fn user_model_path(data_root: &Path, user_id: &str) -> PathBuf {
+///
+/// `user_id` 必须由 `UserId` newtype 构造时校验过，保证不含路径遍历字符。
+/// 路径拼接不再做二次校验 —— 类型系统已强制 `&UserId` 入参（审计 B1 修复）。
+fn user_model_path(data_root: &Path, user_id: &UserId) -> PathBuf {
     data_root
         .join("users")
-        .join(user_id)
+        .join(user_id.as_str())
         .join("user_model.md")
 }
 
 /// 读取用户模型内容。文件不存在返回空字符串。
-pub fn read_user_model(data_root: &Path, user_id: &str) -> Result<String, AirpError> {
+pub fn read_user_model(data_root: &Path, user_id: &UserId) -> Result<String, AirpError> {
     let path = user_model_path(data_root, user_id);
     match fs::read_to_string(&path) {
         Ok(content) => Ok(content),
@@ -25,107 +32,76 @@ pub fn read_user_model(data_root: &Path, user_id: &str) -> Result<String, AirpEr
     }
 }
 
-/// 写入用户模型（覆盖）。
+/// 写入用户模型（覆盖）。使用原子写（temp + rename + parent sync）防止
+/// 半写状态被并发 reader 观察到（审计 W1 修复）。
 pub fn write_user_model(
     data_root: &Path,
-    user_id: &str,
+    user_id: &UserId,
     content: &str,
 ) -> Result<(), AirpError> {
     let path = user_model_path(data_root, user_id);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, content)?;
+    crate::data_dir::replace_file(&path, content.as_bytes())?;
     Ok(())
 }
-
-/// 追加内容到用户模型。
-pub fn append_user_model(
-    data_root: &Path,
-    user_id: &str,
-    content: &str,
-) -> Result<(), AirpError> {
-    let mut existing = read_user_model(data_root, user_id)?;
-    if !existing.is_empty() && !existing.ends_with('\n') {
-        existing.push('\n');
-    }
-    existing.push_str(content);
-    write_user_model(data_root, user_id, &existing)
-}
-
-/// 把用户模型注入到 System Prompt 的 `[User Preferences]` 段。
-pub fn inject_user_model(data_root: &Path, user_id: &str, prompt: &mut String) {
-    let Ok(content) = read_user_model(data_root, user_id) else {
-        return;
-    };
-    if content.trim().is_empty() {
-        return;
-    }
-    prompt.push_str("\n[User Preferences]\n");
-    prompt.push_str(&content);
-    if !content.ends_with('\n') {
-        prompt.push('\n');
-    }
-}
-
-/// 用户偏好抽取 prompt 模板。
-pub const USER_PREFERENCE_EXTRACTION_PROMPT: &str = r#"你是一个用户偏好抽取助手。从对话中抽取用户的写作偏好和习惯。
-
-抽取规则：
-1. 只抽取持久性偏好（文风喜好、雷点、习惯用语、纠正反馈）
-2. 忽略临时性内容（具体剧情讨论、角色扮演内容）
-3. 用简洁的条目格式输出，每条一行，以 "- " 开头
-4. 如果没有值得记录的偏好，输出空字符串
-
-输出格式示例：
-- 用户喜欢第三人称叙事
-- 用户不喜欢过多的心理描写
-- 用户偏好简洁的对话风格
-"#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn uid(s: &str) -> UserId {
+        UserId::new(s).unwrap()
+    }
+
     #[test]
     fn test_read_nonexistent_returns_empty() {
         let tmp = tempdir().unwrap();
-        let content = read_user_model(tmp.path(), "user1").unwrap();
+        let content = read_user_model(tmp.path(), &uid("user1")).unwrap();
         assert!(content.is_empty());
     }
 
     #[test]
     fn test_write_and_read() {
         let tmp = tempdir().unwrap();
-        write_user_model(tmp.path(), "user1", "- 喜欢简洁回复").unwrap();
-        let content = read_user_model(tmp.path(), "user1").unwrap();
+        let u = uid("user1");
+        write_user_model(tmp.path(), &u, "- 喜欢简洁回复").unwrap();
+        let content = read_user_model(tmp.path(), &u).unwrap();
         assert!(content.contains("喜欢简洁回复"));
     }
 
     #[test]
-    fn test_append() {
-        let tmp = tempdir().unwrap();
-        write_user_model(tmp.path(), "user1", "- 第一条").unwrap();
-        append_user_model(tmp.path(), "user1", "- 第二条").unwrap();
-        let content = read_user_model(tmp.path(), "user1").unwrap();
-        assert!(content.contains("第一条"));
-        assert!(content.contains("第二条"));
+    fn test_user_id_rejects_traversal() {
+        // 审计 B1：user_id 路径遍历必须在 UserId::new 时被拒绝，
+        // 而不是在路径拼接后才发现。
+        assert!(UserId::new("..").is_err());
+        assert!(UserId::new("../etc").is_err());
+        assert!(UserId::new("a/b").is_err());
+        assert!(UserId::new("").is_err());
+        assert!(UserId::new(".hidden").is_err());
+        assert!(UserId::new("a\\b").is_err());
+        assert!(UserId::new("a:b").is_err());
     }
 
     #[test]
-    fn test_inject_user_model() {
+    fn test_write_is_atomic_with_backup() {
+        // 审计 W1：原子写后，应只剩目标文件，无残留 .tmp / .bak。
         let tmp = tempdir().unwrap();
-        let mut prompt = String::from("Base prompt.");
-
-        // 空文件不注入
-        inject_user_model(tmp.path(), "user1", &mut prompt);
-        assert_eq!(prompt, "Base prompt.");
-
-        // 有内容时注入
-        write_user_model(tmp.path(), "user1", "- 偏好：简洁").unwrap();
-        inject_user_model(tmp.path(), "user1", &mut prompt);
-        assert!(prompt.contains("[User Preferences]"));
-        assert!(prompt.contains("偏好：简洁"));
+        let u = uid("user1");
+        write_user_model(tmp.path(), &u, "first").unwrap();
+        write_user_model(tmp.path(), &u, "second").unwrap();
+        let user_dir = tmp.path().join("users").join("user1");
+        let entries: Vec<_> = std::fs::read_dir(&user_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["user_model.md".to_string()]);
+        // 内容应为最后一次写入
+        assert_eq!(
+            std::fs::read_to_string(user_dir.join("user_model.md")).unwrap(),
+            "second"
+        );
     }
 }

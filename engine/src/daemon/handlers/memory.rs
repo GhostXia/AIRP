@@ -4,6 +4,9 @@
 //! - PUT /v1/memory/resident - 更新 resident memory
 //! - GET /v1/memory/user-model - 读取用户模型
 //! - PUT /v1/memory/user-model - 更新用户模型
+//!
+//! 安全：`character_id` 走 `CharacterId` newtype，`user_id` 走 `UserId` newtype，
+//! serde 反序列化路径自动 `validate_id_segment`，拒绝路径遍历（审计 B1 修复）。
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -14,7 +17,7 @@ use std::sync::Arc;
 
 use crate::daemon::DaemonState;
 use crate::error::AirpError;
-use crate::types::{CharacterId, SessionId};
+use crate::types::{CharacterId, SessionId, UserId};
 
 // ── Request/Response types ────────────────────────────────────────────────────
 
@@ -40,7 +43,9 @@ pub struct UpdateResidentMemoryRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UserModelQuery {
-    pub user_id: String,
+    /// 审计 B1 修复：UserId newtype 在 serde 反序列化时强制校验，
+    /// 拒绝 `..` / `a/b` / 含空字节等路径遍历字符。
+    pub user_id: UserId,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,7 +55,8 @@ pub struct UserModelResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserModelRequest {
-    pub user_id: String,
+    /// 审计 B1 修复：与 `UserModelQuery` 同源，使用 `UserId` newtype。
+    pub user_id: UserId,
     pub content: String,
 }
 
@@ -122,6 +128,7 @@ pub async fn get_user_model(
     State(state): State<Arc<DaemonState>>,
     axum::extract::Query(query): axum::extract::Query<UserModelQuery>,
 ) -> impl IntoResponse {
+    // 审计 B1：query.user_id 已是 UserId newtype，反序列化时已校验
     let content = crate::memory::read_user_model(&state.data_root, &query.user_id)
         .unwrap_or_default();
 
@@ -136,6 +143,7 @@ pub async fn update_user_model(
     State(state): State<Arc<DaemonState>>,
     Json(payload): Json<UpdateUserModelRequest>,
 ) -> impl IntoResponse {
+    // 审计 B1：payload.user_id 已是 UserId newtype，反序列化时已校验
     let result = crate::memory::write_user_model(&state.data_root, &payload.user_id, &payload.content);
 
     match result {

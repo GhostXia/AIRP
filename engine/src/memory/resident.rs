@@ -12,20 +12,17 @@ use std::path::Path;
 /// 默认容量上限（字符数）。
 pub const RESIDENT_MEMORY_DEFAULT_CAP: usize = 2000;
 
-///  resident memory 配置。
+/// resident memory 配置。
 #[derive(Debug, Clone)]
 pub struct ResidentMemoryConfig {
     /// 容量上限（字符数）。超限触发压缩。
     pub capacity_chars: usize,
-    /// 是否启用自动抽取。
-    pub auto_extract: bool,
 }
 
 impl Default for ResidentMemoryConfig {
     fn default() -> Self {
         Self {
             capacity_chars: RESIDENT_MEMORY_DEFAULT_CAP,
-            auto_extract: true,
         }
     }
 }
@@ -45,14 +42,15 @@ pub fn read_resident_memory(session_dir: &Path) -> Result<String, AirpError> {
     }
 }
 
-/// 写入 resident memory（覆盖）。
+/// 写入 resident memory（覆盖）。使用原子写（temp + rename + parent sync）
+/// 防止半写状态被并发 reader 观察到（审计 W1 修复）。
 pub fn write_resident_memory(session_dir: &Path, content: &str) -> Result<(), AirpError> {
     let path = resident_path(session_dir);
     // 确保目录存在
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, content)?;
+    crate::data_dir::replace_file(&path, content.as_bytes())?;
     Ok(())
 }
 
@@ -143,7 +141,6 @@ mod tests {
         let tmp = tempdir().unwrap();
         let config = ResidentMemoryConfig {
             capacity_chars: 10,
-            auto_extract: true,
         };
 
         write_resident_memory(tmp.path(), "短").unwrap();
@@ -151,5 +148,22 @@ mod tests {
 
         write_resident_memory(tmp.path(), "这是一段超过十个字符的记忆内容").unwrap();
         assert!(is_over_capacity(tmp.path(), &config));
+    }
+
+    #[test]
+    fn test_write_is_atomic_no_residue() {
+        // 审计 W1：原子写后目录中应只有 resident.md，无残留 .tmp / .bak。
+        let tmp = tempdir().unwrap();
+        write_resident_memory(tmp.path(), "first").unwrap();
+        write_resident_memory(tmp.path(), "second").unwrap();
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["resident.md".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("resident.md")).unwrap(),
+            "second"
+        );
     }
 }

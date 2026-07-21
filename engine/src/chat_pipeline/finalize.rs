@@ -141,7 +141,7 @@ pub(super) async fn run_finalize(
             let sd_extract = sd.clone();
             let data_root = ctx.data_root.clone();
             let cid_clone = cid.clone();
-            let session_id = ctx.session_id.clone();
+            let session_id = ctx.session_id;
             let provider_config = ctx.provider_config.clone();
             let gen_params = ctx.gen_params.clone();
             let http_client = ctx.http_client.clone();

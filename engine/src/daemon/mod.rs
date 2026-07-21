@@ -396,13 +396,17 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         )
         .route("/v1/settings", get(get_settings).post(update_settings))
         // ── Memory API（2.4 记忆可见性） ────────────────────────────────────
+        // 审计 B2 修复：PUT 路由配置 2MB body limit，与项目硬约束
+        // "PUT endpoints must have body limit configured (2MB) to prevent DoS attacks" 对齐。
         .route(
             "/v1/memory/resident",
-            get(get_resident_memory).put(update_resident_memory),
+            get(get_resident_memory)
+                .put(update_resident_memory.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
         )
         .route(
             "/v1/memory/user-model",
-            get(get_user_model).put(update_user_model),
+            get(get_user_model)
+                .put(update_user_model.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
         )
         // ── Decompose Agent Flow（Task 7） ──────────────────────────────────
         .route(
