@@ -1698,10 +1698,14 @@ mod tests_a1b_resolve {
     /// validate_id_segment）。原 `explicit_persona_id_rejects_path_traversal_at_pipeline_boundary`
     /// 测试覆盖的场景（pipeline 边界拒绝）不再可能——serde 阶段就拒绝，无法
     /// 构造出 Option<PersonaId> 含非法字符串的 ChatCompletionRequest。
-    /// 本测试改为验证 PersonaId::new 直接拒绝路径遍历，模拟反序列化路径。
+    ///
+    /// CodeRabbit #288 review: 本测试同时验证两条路径：
+    /// 1. `PersonaId::new` 直接构造拒绝（覆盖内部 Rust API 调用路径）
+    /// 2. `serde_json::from_str::<PersonaId>` 反序列化拒绝（覆盖 axum extractor
+    ///    实际路径，确保 Deserialize impl 把错误转成 serde::de::Error）
     #[test]
     fn explicit_persona_id_rejects_path_traversal_at_deserialize_boundary() {
-        // 模拟 serde 反序列化路径：PersonaId::new 内调 validate_id_segment
+        // 路径 1: PersonaId::new 直接拒绝
         let bad = crate::types::PersonaId::new("../escape");
         assert!(
             matches!(bad, Err(crate::error::AirpError::BadRequest(_))),
@@ -1724,6 +1728,31 @@ mod tests_a1b_resolve {
         // 合法 id 仍然通过
         let ok = crate::types::PersonaId::new("writer").unwrap();
         assert_eq!(ok.as_str(), "writer");
+
+        // 路径 2: serde_json 反序列化拒绝（axum extractor 实际路径）
+        let bad_serde: Result<crate::types::PersonaId, _> = serde_json::from_str(r#""../escape""#);
+        assert!(
+            bad_serde.is_err(),
+            "serde should reject path traversal, got {:?}",
+            bad_serde
+        );
+        let bad_nul_serde: Result<crate::types::PersonaId, _> = serde_json::from_str(r#""a\0b""#);
+        assert!(bad_nul_serde.is_err(), "serde should reject null byte");
+        let bad_slash_serde: Result<crate::types::PersonaId, _> = serde_json::from_str(r#""a/b""#);
+        assert!(bad_slash_serde.is_err(), "serde should reject slash");
+
+        // 合法 id 反序列化通过
+        let ok_serde: crate::types::PersonaId = serde_json::from_str(r#""writer""#).unwrap();
+        assert_eq!(ok_serde.as_str(), "writer");
+
+        // ChatCompletionRequest 反序列化路径也拒绝（端到端覆盖）
+        let bad_req: Result<ChatCompletionRequest, _> =
+            serde_json::from_str(r#"{"message":"hi","user_id":"alice","persona_id":"../escape"}"#);
+        assert!(
+            bad_req.is_err(),
+            "ChatCompletionRequest serde should reject path traversal persona_id, got {:?}",
+            bad_req
+        );
     }
 
     #[test]
@@ -1942,7 +1971,9 @@ mod tests_a1b_pipeline_e2e {
             max_tokens: None,
             scene_id: None,
             user_id: user_id.map(str::to_string),
-            persona_id: persona_id.and_then(|s| crate::types::PersonaId::new(s).ok()),
+            // CodeRabbit #288 review: 用 unwrap 而非 ok()，让 fixture 中的非法
+            // persona_id 立即 panic，避免静默回退到 None 掩盖测试编写错误。
+            persona_id: persona_id.map(|s| crate::types::PersonaId::new(s).unwrap()),
             swipe_candidates: Vec::new(),
             branch_from: None,
         }
