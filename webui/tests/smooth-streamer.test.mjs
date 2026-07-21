@@ -167,14 +167,13 @@ test('findSentenceBoundary: 边界过近（< 0.25 * charsToRender）时返回 -1
 });
 
 test('findSentenceBoundary: 边界刚好等于 0.25 阈值时返回 -1（严格大于）', () => {
-  // queue = "abc。efgh", charsToRender = 4
-  // candidate = "abc。"
-  // i=3 是 '。', twoChar="。e"，匹配，boundary = 4
-  // 4 > 4 * 0.25 = 1？是，返回 4
-  // 这个 case 验证 boundary > threshold（严格大于），不是 >=
-  const queue = 'abc。efgh';
+  // CodeRabbit #287 review: 旧 fixture `'abc。efgh'` 的 boundary=4、threshold=1，
+  // 4 > 1 在 > 和 >= 下都成立，并未真正测试"严格大于"。
+  // 改为 `'。abcd'`：boundary=1，threshold = 4 * 0.25 = 1，1 > 1 为 false，
+  // 严格大于比较下返回 -1；如果是 >= 则返回 1。这条用例才真正区分 > 与 >=。
+  const queue = '。abcd';
   const boundary = findSentenceBoundary(queue, 4);
-  assert.equal(boundary, 4, 'boundary > 0.25 * charsToRender 时应返回 boundary');
+  assert.equal(boundary, -1, 'boundary 刚好等于 0.25 * charsToRender 时应返回 -1（严格大于）');
 });
 
 // ══════════════════════════════════════════════════════════════════════════

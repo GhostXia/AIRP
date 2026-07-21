@@ -111,7 +111,8 @@ pub async fn compress_resident_memory(
             original_len = content.chars().count(),
             compressed_len = compressed.chars().count(),
             target_chars,
-            "compress_resident_memory: LLM 输出未达压缩目标，保留原内容"
+            persisted_len = final_result.chars().count(),
+            "compress_resident_memory: LLM 输出未达压缩目标；持久化缩短的输出以避免下一轮重复 LLM 压缩同样原文（CodeRabbit #287 review fix）"
         );
     }
     Ok(final_result)
@@ -120,13 +121,17 @@ pub async fn compress_resident_memory(
 /// 决定压缩结果：接受 compressed 还是回退到原内容。
 ///
 /// #274 F-1 抽出为独立函数便于单测。返回 `(最终结果, 回退原因)`；
-/// `回退原因 = None` 表示接受 compressed，`Some(reason)` 表示回退到原内容。
+/// `回退原因 = None` 表示接受 compressed 且达标；`Some(reason)` 表示非理想情况
+/// （但仍可能持久化缩短的输出，详见下方各条件说明）。
 ///
-/// 回退条件（任一满足即回退）：
-/// 1. `compressed` 为空（LLM 完全没产出有效输出）
-/// 2. `compressed_len >= original_len`（LLM 反而膨胀）
-/// 3. `compressed_len > target_chars`（LLM 没压到容量内，避免半压缩结果
-///    在下一轮再次触发压缩，形成"压缩-未达标-再压缩"循环）
+/// 处理规则：
+/// 1. `compressed` 为空 → 回退到原内容（LLM 完全没产出有效输出，无进步可言）
+/// 2. `compressed_len >= original_len` → 回退到原内容（LLM 反而膨胀，无进步）
+/// 3. `compressed_len > target_chars` → **持久化缩短的 compressed**（即使仍未达标）。
+///    CodeRabbit #287 review: 旧行为回退到原文会导致下一轮 finalize 重新压缩同一份
+///    原文，形成"压缩-未达标-保留原文-再压缩"死循环。持久化缩短的结果让下一轮至少
+///    从更短的起点开始，避免重复 LLM 调用。reason 仍标 `compressed_exceeds_target_capacity`
+///    便于上层 warn 日志区分。
 fn decide_compression_result(
     content: &str,
     compressed: &str,
@@ -145,7 +150,7 @@ fn decide_compression_result(
     }
     if compressed_len > target_chars {
         return (
-            content.to_string(),
+            compressed.to_string(),
             Some("compressed_exceeds_target_capacity"),
         );
     }
@@ -249,12 +254,16 @@ mod tests {
     }
 
     #[test]
-    fn decide_falls_back_when_compressed_exceeds_target_capacity() {
-        // compressed 比原文短，但仍超过 target_chars
+    fn decide_persists_shorter_output_when_over_target() {
+        // CodeRabbit #287 review: compressed 比原文短但仍超 target_chars 时，
+        // 持久化缩短的 compressed 而非回退到原文，避免下一轮重复 LLM 压缩同样原文。
         let content = "abcdefghij"; // 10 chars
         let compressed = "abcdefg"; // 7 chars
         let (result, reason) = decide_compression_result(content, compressed, 5);
-        assert_eq!(result, "abcdefghij");
+        assert_eq!(
+            result, "abcdefg",
+            "should persist shorter compressed output"
+        );
         assert_eq!(reason, Some("compressed_exceeds_target_capacity"));
     }
 
