@@ -558,7 +558,7 @@ mod tests {
         req.character_id = Some(cid.clone());
         req.preset_id = Some(crate::types::PresetId::new("phase2h-preset").unwrap());
         req.user_id = Some(uid.as_str().to_string());
-        req.persona_id = Some("default".to_string());
+        req.persona_id = Some(crate::types::PersonaId::new("default").unwrap());
 
         let pipeline = prepare_pipeline(&req, &state).unwrap();
 
@@ -1651,7 +1651,7 @@ mod tests_a1b_resolve {
         assert_eq!(saved.revision, 1);
 
         let mut req = base_request_with_user(Some("alice"));
-        req.persona_id = Some("writer".to_string());
+        req.persona_id = Some(crate::types::PersonaId::new("writer").unwrap());
         let (persona, source) = resolve_request_persona(&req, tmp.path()).unwrap();
         let persona = persona.unwrap();
         assert_eq!(persona.id, "writer");
@@ -1673,7 +1673,7 @@ mod tests_a1b_resolve {
         service.save_default(&uid, 0, stored).unwrap();
 
         let mut req = base_request_with_user(Some("alice"));
-        req.persona_id = Some("DEFAULT".to_string());
+        req.persona_id = Some(crate::types::PersonaId::new("DEFAULT").unwrap());
         let persona = resolve_request_persona(&req, tmp.path())
             .unwrap()
             .0
@@ -1685,7 +1685,7 @@ mod tests_a1b_resolve {
     fn explicit_nonexistent_persona_id_returns_not_found() {
         let tmp = tempdir().unwrap();
         let mut req = base_request_with_user(Some("alice"));
-        req.persona_id = Some("ghost".to_string());
+        req.persona_id = Some(crate::types::PersonaId::new("ghost").unwrap());
         let err = resolve_request_persona(&req, tmp.path()).unwrap_err();
         assert!(
             matches!(err, crate::error::AirpError::NotFound(_)),
@@ -1694,15 +1694,36 @@ mod tests_a1b_resolve {
         );
     }
 
+    /// #153 E1: 路径遍历拒绝现在前移到反序列化阶段（PersonaId::new 内调
+    /// validate_id_segment）。原 `explicit_persona_id_rejects_path_traversal_at_pipeline_boundary`
+    /// 测试覆盖的场景（pipeline 边界拒绝）不再可能——serde 阶段就拒绝，无法
+    /// 构造出 Option<PersonaId> 含非法字符串的 ChatCompletionRequest。
+    /// 本测试改为验证 PersonaId::new 直接拒绝路径遍历，模拟反序列化路径。
     #[test]
-    fn explicit_persona_id_rejects_path_traversal_at_pipeline_boundary() {
-        let tmp = tempdir().unwrap();
-        let mut req = base_request_with_user(Some("alice"));
-        req.persona_id = Some("../escape".to_string());
+    fn explicit_persona_id_rejects_path_traversal_at_deserialize_boundary() {
+        // 模拟 serde 反序列化路径：PersonaId::new 内调 validate_id_segment
+        let bad = crate::types::PersonaId::new("../escape");
+        assert!(
+            matches!(bad, Err(crate::error::AirpError::BadRequest(_))),
+            "expected BadRequest for path traversal, got {:?}",
+            bad
+        );
+
+        // 其他非法字符同样拒绝
+        let bad_nul = crate::types::PersonaId::new("a\0b");
         assert!(matches!(
-            resolve_request_persona(&req, tmp.path()),
+            bad_nul,
             Err(crate::error::AirpError::BadRequest(_))
         ));
+        let bad_slash = crate::types::PersonaId::new("a/b");
+        assert!(matches!(
+            bad_slash,
+            Err(crate::error::AirpError::BadRequest(_))
+        ));
+
+        // 合法 id 仍然通过
+        let ok = crate::types::PersonaId::new("writer").unwrap();
+        assert_eq!(ok.as_str(), "writer");
     }
 
     #[test]
@@ -1921,7 +1942,7 @@ mod tests_a1b_pipeline_e2e {
             max_tokens: None,
             scene_id: None,
             user_id: user_id.map(str::to_string),
-            persona_id: persona_id.map(str::to_string),
+            persona_id: persona_id.and_then(|s| crate::types::PersonaId::new(s).ok()),
             swipe_candidates: Vec::new(),
             branch_from: None,
         }

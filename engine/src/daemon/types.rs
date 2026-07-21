@@ -1,6 +1,6 @@
 //! Public request/response types for the daemon HTTP API.
 use crate::adapter::{ChatMessage, Provider};
-use crate::types::{CharacterId, PresetId, SessionId};
+use crate::types::{CharacterId, PersonaId, PresetId, SessionId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -56,7 +56,13 @@ pub struct ChatCompletionRequest {
     /// GET 契约一致。缺省时由 `chat_pipeline` 按 precedence contract 自动解析
     /// （`find_for_character` 绑定 → `default` persona），详见
     /// [docs/PERSONA-HTTP-API-PLAN.md](../../../docs/PERSONA-HTTP-API-PLAN.md)。
-    pub persona_id: Option<String>,
+    ///
+    /// #153 E1：用 `PersonaId` newtype 替代裸 `String`，反序列化时自动调
+    /// `validate_id_segment`，与 `character_id: Option<CharacterId>` /
+    /// `preset_id: Option<PresetId>` 一致。原 service 层兜底校验
+    /// （`PersonaService::get` 内调 `validate_persona_id`）保留作为
+    /// defense-in-depth。
+    pub persona_id: Option<PersonaId>,
     /// #249 Swipe：regen 时捕获的旧候选列表。内部使用，HTTP 请求不提供此字段
     ///（serde(default) 给空 Vec）。非空时 finalizer 会将新生成文本追加为最后一个候选。
     #[serde(default)]

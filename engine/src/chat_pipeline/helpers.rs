@@ -24,7 +24,7 @@ use crate::error::AirpError;
 use crate::fsm::RegexFilter;
 use crate::orchestrator::trace::{ParamSources, PersonaActivationSource, PromptDiagnostic};
 use crate::orchestrator::TavernPreset;
-use crate::types::UserId;
+use crate::types::{PersonaId, UserId};
 
 use super::types::PrepareMode;
 
@@ -246,8 +246,9 @@ pub(super) fn resolve_request_persona(
     let service = PersonaService::new(data_root);
 
     // precedence 1: 显式 persona_id
-    if let Some(persona_id) = payload.persona_id.as_deref() {
-        data_dir::validate_id_segment(persona_id)?;
+    // #153 E1: persona_id 现在是 Option<PersonaId>，反序列化阶段已校验，
+    // 此处不再需要重复 validate_id_segment。as_str() 取内部 &str 传给 service。
+    if let Some(persona_id) = payload.persona_id.as_ref().map(PersonaId::as_str) {
         let persona = service.get(&uid, persona_id, "User")?;
         return Ok((Some(persona), PersonaActivationSource::Explicit));
     }
