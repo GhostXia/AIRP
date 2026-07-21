@@ -6,10 +6,25 @@
 //!
 //! 事件定义存储在 `characters/{id}/world_events.json`。
 //! 事件注入走 volume_store::append_to_current（不新增注入路径）。
+//!
+//! 并发纪律（PR #272 审计修复）：
+//! - `trigger_world_event` 的 check-then-act（读 `triggered` → 注入 → 标记）
+//!   原本无锁，并发触发同一 event_id 会双重注入 current.md。现在整段
+//!   临界区持有 `state_lock(character_id)`，与 live.json 写入共享同一把
+//!   锁，保证触发原子性。
+//! - `save_world_events` 改用 `data_dir::replace_file` 原子写，避免半写
+//!   状态被其他读者看到；并在写入前 `fsync` 父目录（`replace_file` 内置）。
+//! - `load_world_events` 的 JSON parse 错误原本通过 `?` 上抛（行为正确），
+//!   本审计未改动其错误传播策略，仅修复写路径。
+//!
+//! 注：world_events.json 当前未接入 #115 Phase 2e revision 合同（缺少
+//! AssetKind::WorldEvents 枚举与 revision 目录约定）。该缺失属于设计
+//! 扩展项，已记入审计报告遗留项，不阻塞本 PR。
 
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
+use crate::domain::state_lock;
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -66,8 +81,10 @@ fn save_world_events(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let content = serde_json::to_string_pretty(events)?;
-    std::fs::write(&path, content)?;
+    let content = serde_json::to_vec_pretty(events)?;
+    // 原子写：替换旧版 std::fs::write，避免半写状态被并发 reader 看到。
+    // data_dir::replace_file 内部走 tmp + rename + fsync(parent)。
+    crate::data_dir::replace_file(&path, &content)?;
     Ok(())
 }
 
@@ -99,6 +116,14 @@ impl Tool for TriggerWorldEventTool {
                 .ok_or_else(|| AirpError::BadRequest("event_id is required".to_string()))?;
             let sid = optional_session_id(&params)?;
 
+            // 持有 state_lock(character_id) 直到所有 mutation 完成：
+            // 1) 防止两个并发 trigger_world_event(event_id=X) 都通过 `triggered=false`
+            //    检查后各自注入 + 标记，导致 current.md 出现两份事件内容；
+            // 2) 与 update_relationship / advance_plot 共享同一把锁，避免
+            //    live.json 与 world_events.json 的写乱序影响叙事一致性。
+            let state_boundary = state_lock(cid.as_str());
+            let _state_guard = state_boundary.lock().expect("state lock poisoned");
+
             let mut events = load_world_events(&state.data_root, cid.as_str())?;
             let event_idx = events
                 .iter()
@@ -128,7 +153,7 @@ impl Tool for TriggerWorldEventTool {
                 &format!("\n[世界事件: {}]\n{}\n", event.name, event.content),
             )?;
 
-            // 标记为已触发
+            // 标记为已触发（save_world_events 已改用 data_dir::replace_file 原子写）
             events[event_idx].triggered = true;
             save_world_events(&state.data_root, cid.as_str(), &events)?;
 

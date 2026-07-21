@@ -68,7 +68,12 @@ fn remove_deleted_session_lock(character_id: &str, session_id: &SessionId) {
     locks.remove(&key);
 }
 
-fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
+/// Per-character state lock. Keyed on `character_id`, used to serialize all
+/// mutations to `state/live.json` and other per-character state files
+/// (e.g. `world_events.json`). `pub(crate)` so sibling modules
+/// (agent::tools::world_event) can participate in the same serialization
+/// contract without re-implementing the lock map.
+pub(crate) fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
     let mut locks = STATE_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -787,6 +792,78 @@ impl StateService {
         }
     }
 
+    /// Read a character's current live state with proper locking.
+    ///
+    /// Returns `Value::Object(Default::default())` when `live.json` does not
+    /// exist yet (fresh character, no state committed). JSON parse failures
+    /// are propagated as `AirpError::Internal` rather than silently swallowed
+    /// — a corrupt `live.json` must not be overwritten with an empty object
+    /// by a subsequent write.
+    pub fn read(&self, character_id: &CharacterId) -> Result<serde_json::Value, AirpError> {
+        let character = character_lock(character_id.as_str());
+        let _character_guard = character.read().expect("character lock poisoned");
+        let state_boundary = state_lock(character_id.as_str());
+        let _state_guard = state_boundary.lock().expect("state lock poisoned");
+
+        let live_path = data_dir::char_state_dir(&self.data_root, character_id.as_str())
+            .join("live.json");
+        if !live_path.exists() {
+            return Ok(serde_json::Value::Object(Default::default()));
+        }
+        let bytes = fs::read(&live_path)?;
+        serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| {
+            AirpError::Internal(format!(
+                "failed to parse live.json for {}: {e}",
+                character_id.as_str()
+            ))
+        })
+    }
+
+    /// Atomically mutate a character's live state under the state lock.
+    ///
+    /// The closure receives the current state (or an empty object if
+    /// `live.json` does not exist yet) and may modify it in place. After the
+    /// closure returns `Ok(())`, the new state is validated against
+    /// `state/schema.json` (if present), written via `data_dir::replace_file`,
+    /// appended to `state/history.jsonl`, and a revision snapshot is
+    /// committed under `state/revisions/{revision}/` — exactly matching
+    /// [`StateService::write`] semantics. Locking is identical to `write`:
+    /// `character_lock` read guard + `state_lock` mutex guard held for the
+    /// entire read-modify-write critical section, so concurrent tool calls
+    /// (e.g. `update_relationship` + `advance_plot`) cannot lose updates.
+    pub fn mutate<F>(
+        &self,
+        character_id: &CharacterId,
+        mutate: F,
+    ) -> Result<StateSnapshot, AirpError>
+    where
+        F: FnOnce(&mut serde_json::Value) -> Result<(), AirpError>,
+    {
+        let character = character_lock(character_id.as_str());
+        let _character_guard = character.read().expect("character lock poisoned");
+        let state_boundary = state_lock(character_id.as_str());
+        let _state_guard = state_boundary.lock().expect("state lock poisoned");
+
+        let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        fs::create_dir_all(&state_dir)?;
+        let live_path = state_dir.join("live.json");
+
+        let mut value: serde_json::Value = if live_path.exists() {
+            let bytes = fs::read(&live_path)?;
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| {
+                AirpError::Internal(format!(
+                    "failed to parse live.json for {}: {e}",
+                    character_id.as_str()
+                ))
+            })?
+        } else {
+            serde_json::Value::Object(Default::default())
+        };
+
+        mutate(&mut value)?;
+        self.commit_state_under_lock(character_id, &state_dir, &value)
+    }
+
     pub fn write(
         &self,
         character_id: &CharacterId,
@@ -799,6 +876,21 @@ impl StateService {
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         fs::create_dir_all(&state_dir)?;
+        self.commit_state_under_lock(character_id, &state_dir, state)
+    }
+
+    /// Validate + atomically write + history.jsonl append + revision snapshot.
+    ///
+    /// Must be called with both `character_lock` (read) and `state_lock`
+    /// (mutex) already held by the caller. Extracted from `write` so that
+    /// `mutate` can reuse the exact same commit semantics after applying
+    /// its in-place mutation.
+    fn commit_state_under_lock(
+        &self,
+        character_id: &CharacterId,
+        state_dir: &Path,
+        state: &serde_json::Value,
+    ) -> Result<StateSnapshot, AirpError> {
         let schema_path = state_dir.join("schema.json");
         if schema_path.exists() {
             let schema: serde_json::Value = serde_json::from_slice(&fs::read(&schema_path)?)?;
@@ -856,7 +948,7 @@ impl StateService {
             },
             files: vec![("state.json".to_string(), state_bytes)],
         };
-        let commit_opts = CommitOptions::new(&state_dir);
+        let commit_opts = CommitOptions::new(state_dir);
         commit_revision(&staged, &commit_opts)?;
         Ok(snapshot)
     }

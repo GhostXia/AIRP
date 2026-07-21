@@ -5,10 +5,21 @@
 //! - `get_plot_status`：获取当前剧情进度和悬挂线索（readonly）
 //!
 //! 与封卷系统联动：封卷时评估剧情进度，生成"下卷悬念/方向"。
+//!
+//! 并发纪律（PR #272 审计修复）：
+//! - `advance_plot` 对 live.json 的 `plot_history` 写入走
+//!   [`StateService::mutate`]，与 `update_relationship` /
+//!   `update_character_state` 共享 `state_lock(character_id)`，
+//!   杜绝 read-modify-write 丢更新；并复用 #115 Phase 2e revision 合同
+//!   （原子写 + history.jsonl + revisions/{n}/ 快照）。
+//! - current.md 仍走 `volume_store::append_to_current`（session lock 串行化）。
+//! - `get_plot_status` 对 live.json 读取走 [`StateService::read`]，与写入
+//!   共享同一把 `state_lock`，避免读到半写状态。
 
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
+use crate::domain::StateService;
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -61,34 +72,30 @@ impl Tool for AdvancePlotTool {
 
             crate::volume_store::append_to_current(&session_dir, &entry)?;
 
-            // 更新 state 中的 plot_progress
-            let state_dir = crate::data_dir::char_state_dir(&state.data_root, cid.as_str());
-            let live_path = state_dir.join("live.json");
-            let mut live_state: Value = match std::fs::read_to_string(&live_path) {
-                Ok(content) => serde_json::from_str(&content).unwrap_or(Value::Object(Default::default())),
-                Err(_) => Value::Object(Default::default()),
-            };
-
-            // 记录剧情推进历史
-            if live_state.get("plot_history").is_none() {
-                live_state["plot_history"] = Value::Array(Vec::new());
-            }
-            if let Some(history) = live_state["plot_history"].as_array_mut() {
-                history.push(serde_json::json!({
-                    "type": plot_type,
-                    "development": development,
-                    "timestamp": chrono::Utc::now().to_rfc3339()
-                }));
-            }
-
-            std::fs::create_dir_all(&state_dir)?;
-            std::fs::write(&live_path, serde_json::to_string_pretty(&live_state)?)?;
+            // 通过 StateService::mutate 串行化 plot_history 写入：
+            // 1) 与 update_relationship / update_character_state 共享 state_lock(character_id)；
+            // 2) parse 失败返回 AirpError::Internal，而非静默吞错；
+            // 3) 复用 #115 Phase 2e revision 合同。
+            let snapshot = StateService::new(&state.data_root).mutate(&cid, |live| {
+                if live.get("plot_history").is_none() {
+                    live["plot_history"] = Value::Array(Vec::new());
+                }
+                if let Some(history) = live["plot_history"].as_array_mut() {
+                    history.push(serde_json::json!({
+                        "type": plot_type,
+                        "development": development,
+                        "timestamp": chrono::Utc::now().to_rfc3339()
+                    }));
+                }
+                Ok(())
+            })?;
 
             Ok(ToolResult {
                 output: serde_json::json!({
                     "success": true,
                     "type": plot_type,
-                    "development": development
+                    "development": development,
+                    "revision": snapshot.revision
                 }),
                 dry_run: false,
             })
@@ -119,13 +126,11 @@ impl Tool for GetPlotStatusTool {
         Box::pin(async move {
             let cid = required_character_id(&params)?;
 
-            // 读取 state
-            let state_dir = crate::data_dir::char_state_dir(&state.data_root, cid.as_str());
-            let live_path = state_dir.join("live.json");
-            let live_state: Value = match std::fs::read_to_string(&live_path) {
-                Ok(content) => serde_json::from_str(&content).unwrap_or(Value::Object(Default::default())),
-                Err(_) => Value::Object(Default::default()),
-            };
+            // 通过 StateService::read 读取 live.json：
+            // 1) 与写入共享 state_lock(character_id)，避免读到半写状态；
+            // 2) parse 失败返回 AirpError::Internal，而非旧版 unwrap_or(empty) 静默吞错；
+            // 3) 文件不存在时返回空对象，行为与原版一致。
+            let live_state = StateService::new(&state.data_root).read(&cid)?;
 
             let plot_history = live_state
                 .get("plot_history")

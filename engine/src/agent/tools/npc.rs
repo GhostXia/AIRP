@@ -5,10 +5,19 @@
 //! - `update_relationship`：更新角色间关系（mutate）
 //!
 //! NPC 行动结果写入 session 的 current.md，关系矩阵存储在 state/live.json。
+//!
+//! 并发纪律（PR #272 审计修复）：
+//! - `update_relationship` 走 [`StateService::mutate`]，复用 #115 Phase 2e
+//!   的 revision 合同（原子写 + history.jsonl + revisions/{n}/ 快照），
+//!   并与 `update_character_state` / `advance_plot` 共享同一把
+//!   `state_lock(character_id)`，杜绝 read-modify-write 丢更新。
+//! - `npc_action` 仅 append 到 session current.md，沿用 `volume_store` 的
+//!   session lock，无需 live.json 串行化。
 
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
+use crate::domain::StateService;
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -117,29 +126,23 @@ impl Tool for UpdateRelationshipTool {
                 .and_then(Value::as_f64)
                 .unwrap_or(0.5);
 
-            // 读取现有 state
-            let state_dir = crate::data_dir::char_state_dir(&state.data_root, cid.as_str());
-            let live_path = state_dir.join("live.json");
-            let mut live_state: Value = match std::fs::read_to_string(&live_path) {
-                Ok(content) => serde_json::from_str(&content).unwrap_or(Value::Object(Default::default())),
-                Err(_) => Value::Object(Default::default()),
-            };
-
-            // 确保 relationships 字段存在
-            if live_state.get("relationships").is_none() {
-                live_state["relationships"] = Value::Object(Default::default());
-            }
-
-            // 更新关系
-            let key = format!("{}->{}", from_char, to_char);
-            live_state["relationships"][&key] = serde_json::json!({
-                "type": relation_type,
-                "intensity": intensity
-            });
-
-            // 写回
-            std::fs::create_dir_all(&state_dir)?;
-            std::fs::write(&live_path, serde_json::to_string_pretty(&live_state)?)?;
+            // 通过 StateService::mutate 串行化 read-modify-write：
+            // 1) 与 advance_plot / update_character_state 共享 state_lock(character_id)，
+            //    避免互相覆盖；
+            // 2) parse 失败返回 AirpError::Internal，而非旧版 unwrap_or(empty) 静默吞错；
+            // 3) 复用 #115 Phase 2e revision 合同：data_dir::replace_file 原子写 +
+            //    history.jsonl append + revisions/{n}/ 不可变快照。
+            let snapshot = StateService::new(&state.data_root).mutate(&cid, |live| {
+                if live.get("relationships").is_none() {
+                    live["relationships"] = Value::Object(Default::default());
+                }
+                let key = format!("{}->{}", from_char, to_char);
+                live["relationships"][&key] = serde_json::json!({
+                    "type": relation_type,
+                    "intensity": intensity
+                });
+                Ok(())
+            })?;
 
             Ok(ToolResult {
                 output: serde_json::json!({
@@ -147,7 +150,8 @@ impl Tool for UpdateRelationshipTool {
                     "from": from_char,
                     "to": to_char,
                     "relation_type": relation_type,
-                    "intensity": intensity
+                    "intensity": intensity,
+                    "revision": snapshot.revision
                 }),
                 dry_run: false,
             })
