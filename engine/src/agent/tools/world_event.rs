@@ -7,11 +7,15 @@
 //! 事件定义存储在 `characters/{id}/world_events.json`。
 //! 事件注入走 volume_store::append_to_current（不新增注入路径）。
 //!
-//! 并发纪律（PR #272 审计修复）：
+//! 并发纪律（PR #272 审计修复 + CodeRabbit 跟进）：
 //! - `trigger_world_event` 的 check-then-act（读 `triggered` → 注入 → 标记）
 //!   原本无锁，并发触发同一 event_id 会双重注入 current.md。现在整段
 //!   临界区持有 `state_lock(character_id)`，与 live.json 写入共享同一把
 //!   锁，保证触发原子性。
+//! - 事件注入到 current.md 走 `volume_store::append_to_current`，调用前
+//!   显式持有 `session_lock(character_id, session_id)`，与 `npc_action` /
+//!   `advance_plot` / `seal_volume` 共享同一把 per-session 锁，防止并发
+//!   追加在 current.md 中交错混合叙事内容。
 //! - `save_world_events` 改用 `data_dir::replace_file` 原子写，避免半写
 //!   状态被其他读者看到；并在写入前 `fsync` 父目录（`replace_file` 内置）。
 //! - `load_world_events` 的 JSON parse 错误原本通过 `?` 上抛（行为正确），
@@ -24,7 +28,7 @@
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::state_lock;
+use crate::domain::{session_lock, state_lock};
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -145,6 +149,13 @@ impl Tool for TriggerWorldEventTool {
             // 注入事件内容到 session 的 current.md
             let session_dir =
                 crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
+
+            // 持有 session_lock 直到 append_to_current + memory revision commit
+            // 完成，与 npc_action / advance_plot / seal_volume 共享同一把
+            // per-session 锁，防止并发追加在 current.md 中交错混合叙事内容。
+            let session_boundary = session_lock(cid.as_str(), sid.as_ref());
+            let _session_guard = session_boundary.lock().expect("session lock poisoned");
+
             crate::volume_store::append_to_current(
                 &session_dir,
                 &format!("\n[世界事件: {}]\n{}\n", event.name, event.content),

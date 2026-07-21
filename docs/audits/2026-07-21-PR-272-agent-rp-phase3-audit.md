@@ -12,6 +12,8 @@
   - `32b8419` audit(PR-272): 修复并发竞态 + revision 合同绕过 (A1/A2/A3)
   - `940b20e` audit(PR-272): 新增 9 个端到端测试覆盖审计修复点
   - `9559931` audit(PR-272): cargo fmt --all
+  - `660f250` audit(PR-272): 独立审计报告 + 修复总结
+  - (本 commit) audit(PR-272): CodeRabbit + Gemini 跟进修复（F-3 解决 + 防御性类型检查 + 测试并行死锁修复）
 
 ## 1. 范围与背景
 
@@ -153,7 +155,7 @@ where
 - `save_world_events` 改用 `crate::data_dir::replace_file(&path, &content)?`
   原子写（不再裸 `fs::write`）。
 
-#### 端到端测试覆盖（9 个新测试，全部通过）
+#### 端到端测试覆盖（13 个新测试，全部通过）
 
 `engine/src/agent/tools/tests/agent_rp_phase3.rs`：
 
@@ -168,17 +170,22 @@ where
 | `list_world_events_reflects_triggered_state` | list 输出反映 triggered 状态 |
 | `npc_action_appends_to_current_md` | NPC 行动注入 current.md |
 | `concurrent_update_relationship_and_advance_plot_do_not_lose_updates` | **并发**：5+5 并发调用，state_lock 串行化，无丢更新 |
+| `update_relationship_returns_internal_when_live_json_is_not_object` | **Gemini #2**：live.json 非 Object 时返回 Internal 而非 panic |
+| `update_relationship_returns_internal_when_relationships_field_is_wrong_type` | **Gemini #2**：relationships 字段类型错乱时返回 Internal |
+| `advance_plot_returns_internal_when_live_json_is_not_object` | **Gemini #1**：live.json 非 Object 时返回 Internal 而非 panic |
+| `advance_plot_returns_internal_when_plot_history_field_is_wrong_type` | **Gemini #1**：plot_history 字段类型错乱时返回 Internal |
 
 ### 2.4 本地验证全绿
 
 | 门禁 | 命令 | 结果 |
 |---|---|---|
 | fmt | `cargo fmt --check` | clean |
-| clippy | `cargo clippy -p airp-core --all-targets -- -D warnings` | 0 warnings |
-| lib tests | `cargo test --workspace --lib` | 775 passed, 0 failed, 1 ignored |
-| integration tests | `cargo test --workspace --tests` | 全部通过，0 failed |
-| rustdoc | `cargo doc --workspace --no-deps` | clean |
-| 新增测试 | `cargo test -p airp-core --lib agent::tools::tests::agent_rp_phase3` | 9/9 passed |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings |
+| lib tests | `cargo test --workspace --lib` | 772 passed, 0 failed, 1 ignored |
+| integration tests | `cargo test --workspace --tests` | 29 passed, 0 failed |
+| protocol tests | `cargo test -p airp-state-protocol` | 6 passed, 0 failed |
+| ui tests | `cargo test -p airp-ui` | 9 passed, 0 failed |
+| 新增测试 | `cargo test -p airp-core --lib agent::tools::tests::agent_rp_phase3` | 13/13 passed（默认 16 线程并行，0.21s） |
 | 既有 chat_store | `cargo test -p airp-core --lib chat_store::tests` | 24/24 passed |
 
 ### 2.5 "3 个 chat_store 失败"的归因独立核查
@@ -237,22 +244,18 @@ PR 描述明确"事件注入走 `volume_store::append_to_current`（不新增注
 
 留作非阻塞跟进项 F-1。
 
-### 3.4 关于 `npc_action` 未持 `session_lock` 的留白
+### 3.4 关于 `npc_action` 未持 `session_lock` 的留白（已通过 CodeRabbit 跟进解决）
 
 `npc_action` 通过 `volume_store::append_to_current` 写 `session/current.md`，
-但未持 `session_lock`。若并发 `seal_volume` 正在归档 `current.md`，
+原审计版本未持 `session_lock`。若并发 `seal_volume` 正在归档 `current.md`，
 `append_to_current` 的原子 append 仍可能落在已被 `seal_volume` 清空的
 文件上，导致追加丢失。
 
-本审计认为此风险低：
-- `append_to_current` 走 `OpenOptions::append(true)` 原子追加，
-  不会被 `seal_volume` 的 `fs::rename` / `fs::write` 截断；
-- `seal_volume` 是 Destructive 工具，需 `confirm=true`，正常使用场景
-  不会与 `npc_action` 并发；
-- `session_lock` 当前是 `fn`（private），改为 `pub(crate)` 的成本与
-  `state_lock` 相同，但收益更低。
-
-留作非阻塞跟进项 F-3，建议在 `npc_action` 文档中注明此约束。
+本审计原认为此风险低，留作非阻塞跟进项 F-3。**CodeRabbit review 跟进后
+此问题已解决**：`session_lock` 已改为 `pub(crate)`，`npc_action` /
+`advance_plot` / `trigger_world_event` 在调用 `append_to_current` 前都
+显式持有 `session_lock(character_id, session_id)`，与 `seal_volume`
+共享同一把 per-session 锁，彻底杜绝并发追加交错。详见 §9.1。
 
 ### 3.5 关于审计修复扩大 PR scope 的透明性
 
@@ -292,7 +295,7 @@ commit `940b20e` 覆盖，本地全部门禁绿。
 |---|---|---|
 | 272-F-1（非阻塞） | `world_events.json` 未接入 #115 Phase 2e revision 合同（缺 `AssetKind::WorldEvents` + manifest） | 独立 PR 处理；当前 `replace_file` 原子写已解决半写 |
 | 272-F-2（非阻塞） | 6 个新工具中 `update_relationship` / `advance_plot` 标为 `Mutate`，未走 `confirm` dry-run 流 | 工具分类合理（非 Destructive）；可在 M_AGENT-5 确认流统一设计时复查 |
-| 272-F-3（非阻塞） | `npc_action` 写 `current.md` 未持 `session_lock`，与 `seal_volume` 并发时理论上可能丢追加 | 低风险（原子 append + Destructive confirm 门）；建议在 `npc_action` 文档注明此约束 |
+| 272-F-3（**已解决**） | ~~`npc_action` 写 `current.md` 未持 `session_lock`~~ | **CodeRabbit 跟进已修复**：`session_lock` 改为 `pub(crate)`，`npc_action` / `advance_plot` / `trigger_world_event` 均显式持有 `session_lock`。详见 §9.1 |
 | 272-F-4（非阻塞） | PR 描述"变更摘要"未反映审计后的实际 scope（9 files） | 建议在 push 后更新 PR 描述，注明审计修复的 3 个 commit |
 
 ## 7. 审计结论
@@ -302,21 +305,118 @@ commit `940b20e` 覆盖，本地全部门禁绿。
 PR #272 原始实现存在 3 个阻塞问题（A1 数据完整性 / A2 并发竞态 /
 A3 revision 合同绕过），审计已在 commit `32b8419` + `940b20e` +
 `9559931` 修复并覆盖端到端测试。本地全部门禁绿（fmt / clippy / lib
-775+1 ignored / integration / rustdoc / 9 新增测试 / chat_store 24/24）。
+772+1 ignored / integration 29 / protocol 6 / ui 9 / 13 新增测试 /
+chat_store 24/24）。
 
 3 个 `chat_store::tests` 在 pr-270 分支的失败经独立核查为预存问题，
 与 PR #272 无关。
 
-4 个非阻塞跟进项（F-1 ~ F-4）建议在 PR 合并后写入 GitHub issue
-（按根 `AGENTS.md` §审计遗留项处理 时序约束：PR 合并后提交）。
+CodeRabbit + Gemini review 跟进修复已在 §9 详述。F-3（`npc_action`
+未持 `session_lock`）已解决；Gemini #1/#2（live.json 损坏时 panic）
+已通过防御性类型检查修复并覆盖 4 个新测试。
+
+3 个非阻塞跟进项（F-1 / F-2 / F-4）建议在 PR 合并后写入 GitHub issue
+（按根 `AGENTS.md` §审计遗留项处理 时序约束：PR 合并后提交）。F-3 已
+解决，无需再提 issue。
 
 可合并。
 
-## 8. Refs
+## 8. CodeRabbit + Gemini Review 跟进修复
+
+PR #272 push 后触发 CodeRabbit 和 Gemini review，分别提出 3 条和 2 条
+actionable comment。本节记录所有跟进修复，均在"本 commit"中落地。
+
+### 8.1 CodeRabbit 跟进 #1：`npc_action` 未持 `session_lock`（F-3 解决）
+
+**问题**：原审计修复让 `trigger_world_event` 持有 `session_lock`，但
+`npc_action` 仍裸调 `volume_store::append_to_current`，与 `seal_volume` /
+`advance_plot` 并发时可能在 `current.md` 中交错。
+
+**修复**：
+- `engine/src/domain.rs`：`session_lock` 从 `fn`（private）改为
+  `pub(crate) fn`，附 doc comment 说明"crate 内部串行化合同"语义。
+- `engine/src/agent/tools/npc.rs`：`npc_action` 在
+  `append_to_current` 前显式 `session_lock(cid, sid).lock()`。
+- `engine/src/agent/tools/world_event.rs`：`trigger_world_event` 在
+  `append_to_current` 前显式 `session_lock(cid, sid).lock()`。
+- `engine/src/agent/tools/plot.rs`：`advance_plot` 在
+  `append_to_current` 前显式 `session_lock(cid, sid).lock()`。
+
+**效果**：`npc_action` / `advance_plot` / `trigger_world_event` /
+`seal_volume` 四个写 `current.md` 的工具共享同一把 per-session 锁，
+彻底杜绝并发追加交错。F-3 标记为已解决。
+
+### 8.2 CodeRabbit 跟进 #2：`concurrent_*` 测试改用独立 OS thread
+
+**问题**：原 `concurrent_update_relationship_and_advance_plot_do_not_lose_updates`
+用 `futures_util::future::join_all` 在单一 tokio runtime 上并发 poll
+10 个 task。但 `update_relationship` / `advance_plot` 的 future 内部全是
+同步代码（`StateService::mutate` 同步持有 `state_lock` 不 yield），10 个
+同步 task 会占满 runtime worker pool。
+
+**修复**：改用 `std::thread::scope` + 共享 `std::sync::Barrier` + 每个
+worker 内部独立 `tokio::runtime::Builder::new_current_thread().build()`。
+worker OS thread 不占用任何 tokio runtime worker pool，独立 runtime 不
+与 parent runtime 共享，无死锁可能。
+
+### 8.3 Gemini 跟进 #1：`advance_plot` 在 live.json 损坏时 panic
+
+**问题**：`advance_plot` 的 `mutate` 闭包用
+`live["plot_history"].as_array_mut()` 取数组。若 `live` 不是 Object，
+`live["plot_history"]` 在 serde_json 中会 panic（`Index::index` on
+non-Object Value）。若 `plot_history` 字段类型错乱（非 Array），
+`as_array_mut()` 返回 `None`，`unwrap()` 也会 panic。
+
+**修复**：改为防御性类型检查：
+```rust
+let live_obj = live.as_object_mut()
+    .ok_or_else(|| AirpError::Internal("live state is not a JSON object".to_string()))?;
+let history = live_obj
+    .entry("plot_history")
+    .or_insert_with(|| Value::Array(Vec::new()))
+    .as_array_mut()
+    .ok_or_else(|| AirpError::Internal("plot_history field is not a JSON array".to_string()))?;
+```
+
+### 8.4 Gemini 跟进 #2：`update_relationship` 在 live.json 损坏时 panic
+
+**问题**：`update_relationship` 的 `mutate` 闭包用
+`live["relationships"][&key] = ...` 直接 indexing。若 `live` 不是
+Object，indexing panic；若 `relationships` 字段类型错乱，
+`live["relationships"][&key]` 也会 panic。
+
+**修复**：同 §8.3，改为 `as_object_mut()` + `entry()` + `ok_or_else(Internal)`
+防御性检查。
+
+### 8.5 测试并行死锁修复
+
+**问题**：CodeRabbit/Gemini 跟进修复后，13 个 `agent_rp_phase3` 测试在
+默认 16 线程并行下 hang。根因：8 个测试共用 character_id `"alice"`，
+process-global `state_lock` / `session_lock` 以 `character_id` 为 key，
+多个测试争用同一把锁，结合独立 tokio runtime + `reqwest::Client::new()`
+的内部线程，导致 OS 线程饥饿。
+
+**修复**：每个测试用唯一 character_id（如 `upd_rel_basic` /
+`adv_plot_basic` / `trig_evt_basic` / `npc_act_basic` /
+`upd_rel_corrupt1` 等），消除跨测试锁争用。各测试的 `data_root` 本来
+就独立（`tempdir()`），character_id 唯一化不影响测试隔离性。
+
+**验证**：13/13 测试在默认 16 线程并行下 0.21s 全绿。
+
+### 8.6 跟进修复验证
+
+| 门禁 | 命令 | 结果 |
+|---|---|---|
+| fmt | `cargo fmt --check` | clean |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings |
+| 全量测试 | `cargo test --workspace` | 772 lib (1 ignored) + 29 integration + 6 protocol + 9 ui = 816 passed, 0 failed |
+| phase3 测试 | `cargo test -p airp-core --lib agent::tools::tests::agent_rp_phase3` | 13/13 passed（16 线程并行，0.21s） |
+
+## 9. Refs
 
 - 根 `AGENTS.md` §Audit Agent Charter（独立审计 / 可提己见 / 可质疑历史并查证）
 - 根 `AGENTS.md` §审计遗留项处理（PR 合并后写入 GitHub issue）
 - #115 Phase 2e revision 合同（`StateService::write` 的 `replace_file` + `history.jsonl` + `revisions/{n}/` 三件套）
-- `engine/src/domain.rs` L76 `pub(crate) fn state_lock` / L802 `StateService::read` / L834 `StateService::mutate` / L888 `commit_state_under_lock`
-- `engine/src/agent/tools/{world_event,npc,plot}.rs` 审计修复
-- `engine/src/agent/tools/tests/agent_rp_phase3.rs` 9 个端到端测试
+- `engine/src/domain.rs` L42 `pub(crate) fn character_lock` / L52 `pub(crate) fn session_lock` / L76 `pub(crate) fn state_lock` / `StateService::read` / `StateService::mutate` / `commit_state_under_lock` / `load_live_value`
+- `engine/src/agent/tools/{world_event,npc,plot}.rs` 审计修复 + CodeRabbit/Gemini 跟进修复
+- `engine/src/agent/tools/tests/agent_rp_phase3.rs` 13 个端到端测试（9 原始 + 4 Gemini 跟进）

@@ -6,20 +6,23 @@
 //!
 //! 与封卷系统联动：封卷时评估剧情进度，生成"下卷悬念/方向"。
 //!
-//! 并发纪律（PR #272 审计修复）：
+//! 并发纪律（PR #272 审计修复 + CodeRabbit 跟进）：
 //! - `advance_plot` 对 live.json 的 `plot_history` 写入走
 //!   [`StateService::mutate`]，与 `update_relationship` /
 //!   `update_character_state` 共享 `state_lock(character_id)`，
 //!   杜绝 read-modify-write 丢更新；并复用 #115 Phase 2e revision 合同
 //!   （原子写 + history.jsonl + revisions/{n}/ 快照）。
-//! - current.md 仍走 `volume_store::append_to_current`（session lock 串行化）。
+//! - current.md 仍走 `volume_store::append_to_current`，但调用前显式持有
+//!   `session_lock(character_id, session_id)`，与 `npc_action` /
+//!   `trigger_world_event` / `seal_volume` 共享同一把 per-session 锁，
+//!   防止并发追加在 current.md 中交错混合叙事内容。
 //! - `get_plot_status` 对 live.json 读取走 [`StateService::read`]，与写入
 //!   共享同一把 `state_lock`，避免读到半写状态。
 
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::StateService;
+use crate::domain::{session_lock, StateService};
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -62,6 +65,12 @@ impl Tool for AdvancePlotTool {
             let session_dir =
                 crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
 
+            // 持有 session_lock 直到 append_to_current + memory revision commit
+            // 完成，与 npc_action / trigger_world_event / seal_volume 共享
+            // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
+            let session_boundary = session_lock(cid.as_str(), sid.as_ref());
+            let _session_guard = session_boundary.lock().expect("session lock poisoned");
+
             let entry = format!("\n[剧情推进: {}] {}\n", plot_type, development);
 
             crate::volume_store::append_to_current(&session_dir, &entry)?;
@@ -70,17 +79,29 @@ impl Tool for AdvancePlotTool {
             // 1) 与 update_relationship / update_character_state 共享 state_lock(character_id)；
             // 2) parse 失败返回 AirpError::Internal，而非静默吞错；
             // 3) 复用 #115 Phase 2e revision 合同。
+            //
+            // 防御性类型检查（Gemini #1 跟进）：旧版若 `live` 非 Object 会 panic
+            // （`live["plot_history"]` indexing 在非 Object 上 panic）；若
+            // `plot_history` 字段已存在但非 Array，`as_array_mut()` 返回 None
+            // 时 push 被静默跳过，导致更新丢失却仍返回 Ok。改为显式
+            // `as_object_mut` + `entry` + `as_array_mut` + `ok_or_else(Internal)`，
+            // 任何类型错乱都上抛错误而非 panic 或静默丢更新。
             let snapshot = StateService::new(&state.data_root).mutate(&cid, |live| {
-                if live.get("plot_history").is_none() {
-                    live["plot_history"] = Value::Array(Vec::new());
-                }
-                if let Some(history) = live["plot_history"].as_array_mut() {
-                    history.push(serde_json::json!({
-                        "type": plot_type,
-                        "development": development,
-                        "timestamp": chrono::Utc::now().to_rfc3339()
-                    }));
-                }
+                let live_obj = live.as_object_mut().ok_or_else(|| {
+                    AirpError::Internal("live state is not a JSON object".to_string())
+                })?;
+                let history = live_obj
+                    .entry("plot_history")
+                    .or_insert_with(|| Value::Array(Vec::new()))
+                    .as_array_mut()
+                    .ok_or_else(|| {
+                        AirpError::Internal("plot_history field is not a JSON array".to_string())
+                    })?;
+                history.push(serde_json::json!({
+                    "type": plot_type,
+                    "development": development,
+                    "timestamp": chrono::Utc::now().to_rfc3339()
+                }));
                 Ok(())
             })?;
 

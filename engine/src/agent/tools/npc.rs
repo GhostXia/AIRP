@@ -6,18 +6,20 @@
 //!
 //! NPC 行动结果写入 session 的 current.md，关系矩阵存储在 state/live.json。
 //!
-//! 并发纪律（PR #272 审计修复）：
+//! 并发纪律（PR #272 审计修复 + CodeRabbit 跟进）：
 //! - `update_relationship` 走 [`StateService::mutate`]，复用 #115 Phase 2e
 //!   的 revision 合同（原子写 + history.jsonl + revisions/{n}/ 快照），
 //!   并与 `update_character_state` / `advance_plot` 共享同一把
 //!   `state_lock(character_id)`，杜绝 read-modify-write 丢更新。
-//! - `npc_action` 仅 append 到 session current.md，沿用 `volume_store` 的
-//!   session lock，无需 live.json 串行化。
+//! - `npc_action` 在调用 `volume_store::append_to_current` 前显式持有
+//!   `session_lock(character_id, session_id)`，与 `advance_plot` /
+//!   `trigger_world_event` / `seal_volume` 共享同一把 per-session 锁，
+//!   防止并发追加在 `current.md` 中交错混合叙事内容。
 
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::StateService;
+use crate::domain::{session_lock, StateService};
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -60,6 +62,12 @@ impl Tool for NpcActionTool {
             // 注入 NPC 行动到 session 的 current.md
             let session_dir =
                 crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
+
+            // 持有 session_lock 直到 append_to_current + memory revision commit
+            // 完成，与 advance_plot / trigger_world_event / seal_volume 共享
+            // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
+            let session_boundary = session_lock(cid.as_str(), sid.as_ref());
+            let _session_guard = session_boundary.lock().expect("session lock poisoned");
 
             let mut entry = format!("\n[NPC行动: {}] {}\n", npc_name, action);
             if !result.is_empty() {
@@ -126,15 +134,31 @@ impl Tool for UpdateRelationshipTool {
             // 2) parse 失败返回 AirpError::Internal，而非旧版 unwrap_or(empty) 静默吞错；
             // 3) 复用 #115 Phase 2e revision 合同：data_dir::replace_file 原子写 +
             //    history.jsonl append + revisions/{n}/ 不可变快照。
+            //
+            // 防御性类型检查（Gemini #2 跟进）：若 live.json 损坏（非 Object，
+            // 或 relationships 字段类型错乱），旧版 `live["relationships"][&key] =`
+            // 在 serde_json 中会 panic（非 Object 上 indexing panic）。改为
+            // `as_object_mut` + `entry` + `ok_or_else(Internal)`，让损坏 JSON
+            // 上抛错误而非 panic daemon。
             let snapshot = StateService::new(&state.data_root).mutate(&cid, |live| {
-                if live.get("relationships").is_none() {
-                    live["relationships"] = Value::Object(Default::default());
-                }
+                let live_obj = live.as_object_mut().ok_or_else(|| {
+                    AirpError::Internal("live state is not a JSON object".to_string())
+                })?;
+                let relationships = live_obj
+                    .entry("relationships")
+                    .or_insert_with(|| Value::Object(Default::default()))
+                    .as_object_mut()
+                    .ok_or_else(|| {
+                        AirpError::Internal("relationships field is not a JSON object".to_string())
+                    })?;
                 let key = format!("{}->{}", from_char, to_char);
-                live["relationships"][&key] = serde_json::json!({
-                    "type": relation_type,
-                    "intensity": intensity
-                });
+                relationships.insert(
+                    key,
+                    serde_json::json!({
+                        "type": relation_type,
+                        "intensity": intensity
+                    }),
+                );
                 Ok(())
             })?;
 

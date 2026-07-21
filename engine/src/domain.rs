@@ -42,7 +42,14 @@ pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
         .clone()
 }
 
-fn session_lock(character_id: &str, session_id: Option<&SessionId>) -> Arc<Mutex<()>> {
+/// Per-session state lock. Keyed on `character_id` (when `session_id` is
+/// `None`) or `character_id/session_id`, used to serialize all mutations to
+/// `session/current.md` and other per-session state files.
+/// `pub(crate)` so sibling modules (agent::tools::npc / plot / world_event)
+/// can participate in the same serialization contract when calling
+/// `volume_store::append_to_current`, preventing concurrent appends from
+/// interleaving narrative content in `current.md`.
+pub(crate) fn session_lock(character_id: &str, session_id: Option<&SessionId>) -> Arc<Mutex<()>> {
     let key = match session_id {
         Some(session_id) => format!("{character_id}/{session_id}"),
         None => character_id.to_string(),
@@ -805,18 +812,8 @@ impl StateService {
         let state_boundary = state_lock(character_id.as_str());
         let _state_guard = state_boundary.lock().expect("state lock poisoned");
 
-        let live_path =
-            data_dir::char_state_dir(&self.data_root, character_id.as_str()).join("live.json");
-        if !live_path.exists() {
-            return Ok(serde_json::Value::Object(Default::default()));
-        }
-        let bytes = fs::read(&live_path)?;
-        serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| {
-            AirpError::Internal(format!(
-                "failed to parse live.json for {}: {e}",
-                character_id.as_str()
-            ))
-        })
+        let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        Self::load_live_value(character_id, &state_dir)
     }
 
     /// Atomically mutate a character's live state under the state lock.
@@ -846,19 +843,8 @@ impl StateService {
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         fs::create_dir_all(&state_dir)?;
-        let live_path = state_dir.join("live.json");
 
-        let mut value: serde_json::Value = if live_path.exists() {
-            let bytes = fs::read(&live_path)?;
-            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| {
-                AirpError::Internal(format!(
-                    "failed to parse live.json for {}: {e}",
-                    character_id.as_str()
-                ))
-            })?
-        } else {
-            serde_json::Value::Object(Default::default())
-        };
+        let mut value: serde_json::Value = Self::load_live_value(character_id, &state_dir)?;
 
         mutate(&mut value)?;
         self.commit_state_under_lock(character_id, &state_dir, &value)
@@ -877,6 +863,30 @@ impl StateService {
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         fs::create_dir_all(&state_dir)?;
         self.commit_state_under_lock(character_id, &state_dir, state)
+    }
+
+    /// Load + parse `live.json` for a character. Shared by `read` and `mutate`
+    /// so the "missing file → empty object / corrupt file → `Internal` error"
+    /// contract can't drift between the two entry points.
+    ///
+    /// Must be called with both `character_lock` (read) and `state_lock`
+    /// (mutex) already held by the caller — both callers acquire them before
+    /// invoking this helper.
+    fn load_live_value(
+        character_id: &CharacterId,
+        state_dir: &Path,
+    ) -> Result<serde_json::Value, AirpError> {
+        let live_path = state_dir.join("live.json");
+        if !live_path.exists() {
+            return Ok(serde_json::Value::Object(Default::default()));
+        }
+        let bytes = fs::read(&live_path)?;
+        serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| {
+            AirpError::Internal(format!(
+                "failed to parse live.json for {}: {e}",
+                character_id.as_str()
+            ))
+        })
     }
 
     /// Validate + atomically write + history.jsonl append + revision snapshot.
