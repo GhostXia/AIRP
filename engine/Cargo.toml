@@ -50,6 +50,8 @@ flate2 = { workspace = true }
 tokio-util = { workspace = true }
 unicode-normalization = { workspace = true }
 airp-state-protocol = { workspace = true }
+# 4.3 FTS5 历史检索
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

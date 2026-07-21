@@ -81,6 +81,10 @@ pub enum AirpError {
     /// DX-3：用户每日配额已达上限。映射到 HTTP 429 Too Many Requests。
     #[error("配额超限: {0}")]
     QuotaExceeded(String),
+
+    /// 4.3 FTS5：SQLite 数据库操作失败。
+    #[error("SQLite 错误: {0}")]
+    Sqlite(#[from] rusqlite::Error),
 }
 
 /// 项目内约定的 Result 别名。
@@ -102,6 +106,7 @@ impl AirpError {
             | AirpError::Orchestrator(_)
             | AirpError::Volume(_)
             | AirpError::Fsm(_)
+            | AirpError::Sqlite(_)
             | AirpError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -125,6 +130,7 @@ impl AirpError {
             AirpError::Orchestrator(_) => "orchestrator_error",
             AirpError::Volume(_) => "volume_error",
             AirpError::Fsm(_) => "fsm_error",
+            AirpError::Sqlite(_) => "sqlite_error",
             AirpError::Internal(_) => "internal_error",
         }
     }

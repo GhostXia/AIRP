@@ -286,6 +286,21 @@ impl Orchestrator {
             });
         }
 
+        // 4.2 Soul-Drift 动态人格注入：card_details 之后、lorebook 之前。
+        if let Some(char_id) = character_id {
+            let mut drift_part = String::new();
+            crate::style::inject_soul_drift(data_root, char_id, &mut drift_part);
+            if !drift_part.is_empty() {
+                parts.push(SystemPromptPart {
+                    source_kind: "drift",
+                    source_id: Some(char_id.to_string()),
+                    item_id: None,
+                    display_name: "人格漂移",
+                    content: drift_part,
+                });
+            }
+        }
+
         if !triggered_lore.is_empty() {
             let mut lorebook_part = triggered_lore.to_string();
             lorebook_part.push('\n');

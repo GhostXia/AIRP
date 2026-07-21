@@ -37,6 +37,7 @@ pub(crate) enum AssetKind {
     State,
     Memory,
     Persona,
+    SoulDrift,
 }
 
 impl AssetKind {
@@ -48,6 +49,7 @@ impl AssetKind {
             AssetKind::State => "state",
             AssetKind::Memory => "memory",
             AssetKind::Persona => "persona",
+            AssetKind::SoulDrift => "soul_drift",
         }
     }
 }
