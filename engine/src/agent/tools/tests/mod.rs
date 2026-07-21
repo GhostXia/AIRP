@@ -21,6 +21,7 @@ use std::sync::Arc;
 use super::session::MAX_RECENT_CONTEXT;
 
 mod analysis;
+mod agent_rp_phase3;
 mod character;
 mod registry;
 mod session;
