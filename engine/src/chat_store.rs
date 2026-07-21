@@ -876,14 +876,17 @@ impl ChatLog {
             Some(l) => l.to_string(),
             None => return Vec::new(),
         };
-        let id_to_idx: std::collections::HashMap<&str, usize> = self
-            .message_ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (id.as_str(), i))
-            .collect();
-        let leaf_idx = match id_to_idx.get(leaf.as_str()) {
-            Some(&i) => i,
+        // CodeRabbit review fix: 原实现用 HashMap<&str, usize>::get 是大小写敏感的，
+        // 但 `active_leaf` / `message_parents` 中存储的 ID 大小写可能与 `message_ids`
+        // 不一致（#37 合同允许 hex 部分大小写混合）。改用 `ulid::matches` 线性查找
+        // 与 B6/B7 修复保持一致。消息数通常 < 100，O(n) 查找对热路径可接受。
+        let find_idx = |query: &str| -> Option<usize> {
+            self.message_ids
+                .iter()
+                .position(|id| crate::ulid::matches(id, query))
+        };
+        let leaf_idx = match find_idx(&leaf) {
+            Some(i) => i,
             None => return Vec::new(),
         };
 
@@ -897,10 +900,10 @@ impl ChatLog {
                 .get(current_idx)
                 .and_then(|p| p.as_ref());
             match parent_opt {
-                Some(pid) => match id_to_idx.get(pid.as_str()) {
+                Some(pid) => match find_idx(pid) {
                     // Defensive: only walk backward (parent idx < current) to catch
                     // any accidental cycle or forward-edge in corrupted data.
-                    Some(&pidx) if pidx < current_idx => {
+                    Some(pidx) if pidx < current_idx => {
                         path.push(pidx);
                         current_idx = pidx;
                     }
@@ -2269,6 +2272,49 @@ mod tests {
             resolved,
             Some(m3_id_mixed.as_str()),
             "resolve_active_leaf should find case-insensitive match"
+        );
+    }
+
+    #[test]
+    fn active_path_indices_case_insensitive_match() {
+        // CodeRabbit review fix regression test: `active_path_indices` 的原始实现
+        // 用 HashMap<&str, usize>::get 是大小写敏感的，当 `active_leaf` 或
+        // `message_parents` 中的 ID 与 `message_ids` 中的大小写不一致时会 miss。
+        // 修复后用 `ulid::matches` 线性查找，大小写不敏感。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let mut log = seed_branch_log(root, "apcis_char");
+        // active_leaf = m3 的 mixed-case 形式（'m' 小写，hex 大写）
+        let m3_id = log.message_ids[3].clone();
+        let m3_id_mixed = format!("m{}", m3_id[1..].to_uppercase());
+        log.active_leaf = Some(m3_id_mixed);
+        // active_path_indices 应仍能正确走完 parent 链：[0, 1, 2, 3]
+        let path = log.active_path_indices();
+        assert_eq!(
+            path,
+            vec![0, 1, 2, 3],
+            "active_path_indices should walk case-insensitive active_leaf correctly"
+        );
+    }
+
+    #[test]
+    fn active_path_indices_case_insensitive_parent() {
+        // CodeRabbit review fix regression test: `message_parents` 中存储的 parent ID
+        // 也可能与 `message_ids` 中的大小写不一致。验证修复后仍能找到正确 parent index。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let mut log = seed_branch_log(root, "apcip_char");
+        // 把 message_parents[3]（指向 m2）改成 mixed-case 形式
+        let m2_id = log.message_ids[2].clone();
+        let m2_id_mixed = format!("m{}", m2_id[1..].to_uppercase());
+        log.message_parents[3] = Some(m2_id_mixed);
+        // active_leaf = m3
+        let path = log.active_path_indices();
+        // 应仍能走 [0,1,2,3]，parent 大小写不敏感匹配
+        assert_eq!(
+            path,
+            vec![0, 1, 2, 3],
+            "active_path_indices should match case-insensitive parent IDs"
         );
     }
 

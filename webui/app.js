@@ -1799,10 +1799,12 @@
             // PR #270 audit M1 修复：SENTENCE_END_RE 含多字符模式 `\.(\s|$)` / `[!?](\s|$)`，
             // 旧实现 `SENTENCE_END_RE.test(candidate[i])` 只测试单字符，`$` 永远匹配单字符
             // 串末尾 → `.`/`!`/`?` 无论后接什么都被判为句子边界（如 "3.14" 会在 `.` 处断句）。
-            // 修复：测试 2 字符上下文 `candidate[i] + candidate[i+1]`，让正则看到真实后续字符。
+            // 修复：测试 2 字符上下文 `this.queue[i] + this.queue[i+1]`，让正则看到真实后续字符。
+            // 必须用 `this.queue` 而非 `candidate` 取上下文，否则 candidate 末尾的 `.` 会因
+            // `candidate[i+1] === undefined` 被错误判为 end-of-string 边界（即使 queue 后面还有字符）。
             let boundary = -1;
             for (let i = candidate.length - 1; i >= 0; i--) {
-              const twoChar = candidate[i] + (candidate[i + 1] || '');
+              const twoChar = this.queue[i] + (this.queue[i + 1] || '');
               if (SENTENCE_END_RE.test(twoChar)) {
                 boundary = i + 1;
                 break;
@@ -2727,10 +2729,24 @@
       setMemoryDirty(false);
       return;
     }
+    // CodeRabbit review fix 1: 切角色/会话/标签时若 memory 有未保存编辑，先警告。
+    // 静默丢弃用户编辑会破坏信任；这里用 confirm 给用户最后一次保存机会。
+    // 用户取消则保留当前编辑不变。
+    if (wbMemoryDirty && !confirm('当前记忆修改未保存，切换将丢失，是否继续？')) return;
     wbMemoryStatus.textContent = '加载中…';
     let url = '/v1/memory/resident?character_id=' + encodeURIComponent(selectedChar);
     if (selectedSess) url += '&session_id=' + encodeURIComponent(selectedSess);
+    // CodeRabbit review fix 2: 捕获请求发起时的 (char, sess) 快照，
+    // await 返回后比对 selectedChar/selectedSess 是否未变。若已切换到其它角色/会话，
+    // 该响应是 stale 的，直接丢弃——否则会把 A 的记忆写到 B 的 textarea，用户点 Save 会 PUT 到 B。
+    const reqChar = selectedChar;
+    const reqSess = selectedSess;
     const r = await api('GET', url);
+    if (reqChar !== selectedChar || reqSess !== selectedSess) {
+      // stale 响应：用户已切到其它角色/会话，丢弃本次结果。
+      // 注意：不修改 wbMemoryContent/value，让后续 loadResidentMemory 调用负责加载新值。
+      return;
+    }
     if (r.ok && r.data) {
       wbMemoryContent.value = r.data.content || '';
       wbMemoryStats.textContent = '字符数: ' + r.data.char_count + ' / ' + r.data.capacity;
