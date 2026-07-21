@@ -623,7 +623,10 @@ impl ChatLog {
     /// `message_timestamps` 保持与 `messages` 等长。
     pub fn append(&mut self, data_root: &Path, msg: ChatMessage) -> Result<(), AirpError> {
         // 分支对话树：默认 parent = 当前 active_leaf（线性链 = 前一条消息 ID）。
-        let parent = self.active_leaf.clone().or_else(|| self.message_ids.last().cloned());
+        let parent = self
+            .active_leaf
+            .clone()
+            .or_else(|| self.message_ids.last().cloned());
         self.append_with_parent(data_root, msg, parent)
     }
 
@@ -703,25 +706,48 @@ impl ChatLog {
     /// #249：同步截断 `message_candidates` / `message_swipe_index`。
     /// 分支对话树：同步截断 `message_parents`，更新 `active_leaf`。
     pub fn delete_last_n(&mut self, data_root: &Path, n: usize) -> Result<(), AirpError> {
-        let len = self.messages.len();
-        if n > len {
-            self.messages.clear();
-            self.message_ids.clear();
-            self.message_timestamps.clear();
-            self.message_candidates.clear();
-            self.message_swipe_index.clear();
-            self.message_parents.clear();
-            self.active_leaf = None;
-        } else {
-            self.messages.truncate(len - n);
-            self.message_ids.truncate(len - n);
-            self.message_timestamps.truncate(len - n);
-            self.message_candidates.truncate(len - n);
-            self.message_swipe_index.truncate(len - n);
-            self.message_parents.truncate(len - n);
-            // active_leaf 更新为截断后的最后一条消息 ID。
-            self.active_leaf = self.message_ids.last().cloned();
+        let active_indices = self.active_path_indices();
+        if active_indices.is_empty() || n == 0 {
+            self.updated_at = Utc::now().to_rfc3339();
+            return self.save(data_root);
         }
+        let n = n.min(active_indices.len());
+
+        // Compute new active_leaf BEFORE removal (removal shifts indices).
+        // New leaf = (n+1)-th-from-end on active path = active_indices[len - n - 1].
+        let new_leaf_id = if active_indices.len() > n {
+            self.message_ids
+                .get(active_indices[active_indices.len() - n - 1])
+                .cloned()
+        } else {
+            None
+        };
+
+        // Remove last n entries on active path. Sort descending so `Vec::remove(idx)`
+        // doesn't invalidate earlier-stashed indices.
+        let mut to_remove: Vec<usize> = active_indices[active_indices.len() - n..].to_vec();
+        to_remove.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in to_remove {
+            if idx < self.messages.len() {
+                self.messages.remove(idx);
+            }
+            if idx < self.message_ids.len() {
+                self.message_ids.remove(idx);
+            }
+            if idx < self.message_timestamps.len() {
+                self.message_timestamps.remove(idx);
+            }
+            if idx < self.message_candidates.len() {
+                self.message_candidates.remove(idx);
+            }
+            if idx < self.message_swipe_index.len() {
+                self.message_swipe_index.remove(idx);
+            }
+            if idx < self.message_parents.len() {
+                self.message_parents.remove(idx);
+            }
+        }
+        self.active_leaf = new_leaf_id;
         self.updated_at = Utc::now().to_rfc3339();
         self.save(data_root)
     }
@@ -738,38 +764,87 @@ impl ChatLog {
                 "rollback index {index} out of range (total messages: {len})"
             )));
         }
-        if len > 0 {
-            self.messages.truncate(index + 1);
-            self.message_ids.truncate(index + 1);
-            self.message_timestamps.truncate(index + 1);
-            self.message_candidates.truncate(index + 1);
-            self.message_swipe_index.truncate(index + 1);
-            self.message_parents.truncate(index + 1);
-            self.active_leaf = self.message_ids.last().cloned();
-            self.updated_at = Utc::now().to_rfc3339();
-            self.save(data_root)?;
+        if len == 0 {
+            return Ok(());
         }
+        let active_indices = self.active_path_indices();
+        let pos_on_path = active_indices
+            .iter()
+            .position(|&i| i == index)
+            .ok_or_else(|| {
+                AirpError::BadRequest(format!(
+                    "rollback target index {index} is not on the active branch; \
+                     use switch_branch first or specify an index on the active path"
+                ))
+            })?;
+
+        // New active_leaf = message at `index` (BEFORE removal).
+        let new_leaf_id = self.message_ids.get(index).cloned();
+
+        // Remove all active-path entries AFTER pos_on_path (descending order).
+        let mut to_remove: Vec<usize> = active_indices[pos_on_path + 1..].to_vec();
+        to_remove.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in to_remove {
+            if idx < self.messages.len() {
+                self.messages.remove(idx);
+            }
+            if idx < self.message_ids.len() {
+                self.message_ids.remove(idx);
+            }
+            if idx < self.message_timestamps.len() {
+                self.message_timestamps.remove(idx);
+            }
+            if idx < self.message_candidates.len() {
+                self.message_candidates.remove(idx);
+            }
+            if idx < self.message_swipe_index.len() {
+                self.message_swipe_index.remove(idx);
+            }
+            if idx < self.message_parents.len() {
+                self.message_parents.remove(idx);
+            }
+        }
+        self.active_leaf = new_leaf_id;
+        self.updated_at = Utc::now().to_rfc3339();
+        self.save(data_root)?;
         Ok(())
     }
 
-    /// Returns the N most recent messages for context building.
+    /// Returns the N most recent messages **on the active branch** for context building.
+    ///
+    /// **Branch-aware (PR #270 audit B4 fix)**: pre-fix this returned the physical tail of
+    /// `messages`, which polluted LLM context with sibling-branch messages after
+    /// `switch_branch`. Post-fix it walks the active path and returns its last N entries.
+    ///
+    /// For legacy linear logs, `active_path_indices()` returns the full range, so behavior
+    /// is identical to pre-fix.
     pub fn recent(&self, n: usize) -> Vec<ChatMessage> {
-        let len = self.messages.len();
-        if n >= len {
-            self.messages.clone()
-        } else {
-            self.messages[len - n..].to_vec()
+        let active_indices = self.active_path_indices();
+        if active_indices.is_empty() {
+            return Vec::new();
         }
+        let take = n.min(active_indices.len());
+        let start = active_indices.len() - take;
+        active_indices[start..]
+            .iter()
+            .filter_map(|&i| self.messages.get(i).cloned())
+            .collect()
     }
 
     /// 解析当前激活叶节点（向后兼容）。
     ///
     /// - `active_leaf` 为 `Some` 且命中某条消息 → 直接用。
     /// - `active_leaf` 为 `None`（旧数据）→ 回退为最后一条消息 ID（线性链）。
+    ///
+    /// #37 contract: case-insensitive 匹配（PR #270 audit B7 fix）。
     pub fn resolve_active_leaf(&self) -> Option<&str> {
         if let Some(leaf) = &self.active_leaf {
-            // 验证 leaf 确实存在于 message_ids 中。
-            if self.message_ids.iter().any(|id| id == leaf) {
+            // 验证 leaf 确实存在于 message_ids 中（case-insensitive）。
+            if self
+                .message_ids
+                .iter()
+                .any(|id| crate::ulid::matches(id, leaf))
+            {
                 return Some(leaf.as_str());
             }
         }
@@ -777,54 +852,99 @@ impl ChatLog {
         self.message_ids.last().map(|s| s.as_str())
     }
 
-    /// 计算当前激活路径（从 active_leaf 沿 parent 链走到根）。
+    /// 计算当前激活路径的**物理 index 列表**（根 → 叶）。
     ///
-    /// 返回按时间正序排列的消息 durable ID 列表（根 → 叶）。
-    /// 旧数据（无 parent）→ 返回全部 message_ids（线性链）。
-    pub fn active_path(&self) -> Vec<String> {
+    /// 这是分支对话树的核心 helper。所有 branch-aware 操作（`recent`、`delete_last_n`、
+    /// `rollback_to`、`history_window` 过滤）都基于它。
+    ///
+    /// 算法：从 `active_leaf` 沿 `message_parents` 链走到根，收集物理 index。
+    ///
+    /// **Legacy 兼容（PR #270 audit B4 fix）**：旧 log 的 `message_parents` 全为 `None`，
+    /// `active_leaf` 也为 `None`。若严格走 parent 链，路径会退化为单条 leaf，导致
+    /// `recent()` 只返回 1 条消息——破坏 LLM 上下文。因此：
+    /// - 当 `parent` 为 `None` 且当前 index > 0 时，**回退为线性链**：prev index = current - 1。
+    /// - 当 `parent` 为 `None` 且当前 index == 0 时，终止（根节点）。
+    ///
+    /// 这样新 PR #270 log（每条消息有显式 parent，根为 None）走显式链；
+    /// 旧 log（全 None）走隐式线性链，行为与 PR #270 前一致。
+    pub fn active_path_indices(&self) -> Vec<usize> {
+        let len = self.messages.len();
+        if len == 0 {
+            return Vec::new();
+        }
         let leaf = match self.resolve_active_leaf() {
             Some(l) => l.to_string(),
             None => return Vec::new(),
         };
-
-        // 建立 ID → index 映射（O(n) 一次性）。
         let id_to_idx: std::collections::HashMap<&str, usize> = self
             .message_ids
             .iter()
             .enumerate()
             .map(|(i, id)| (id.as_str(), i))
             .collect();
+        let leaf_idx = match id_to_idx.get(leaf.as_str()) {
+            Some(&i) => i,
+            None => return Vec::new(),
+        };
 
-        // 从 leaf 沿 parent 链走到根，收集路径。
-        let mut path = Vec::new();
-        let mut current = Some(leaf);
+        let mut path = vec![leaf_idx];
+        let mut current_idx = leaf_idx;
         let mut guard = 0;
-        while let Some(id) = current {
+        while current_idx > 0 && guard <= len + 1 {
             guard += 1;
-            if guard > self.messages.len() + 1 {
-                break; // 防御环
+            let parent_opt = self
+                .message_parents
+                .get(current_idx)
+                .and_then(|p| p.as_ref());
+            match parent_opt {
+                Some(pid) => match id_to_idx.get(pid.as_str()) {
+                    // Defensive: only walk backward (parent idx < current) to catch
+                    // any accidental cycle or forward-edge in corrupted data.
+                    Some(&pidx) if pidx < current_idx => {
+                        path.push(pidx);
+                        current_idx = pidx;
+                    }
+                    // dangling / backward parent → stop defensively.
+                    _ => break,
+                },
+                None => {
+                    // Legacy linear-chain fallback: implicit parent = current_idx - 1.
+                    let prev_idx = current_idx - 1;
+                    path.push(prev_idx);
+                    current_idx = prev_idx;
+                }
             }
-            path.push(id.clone());
-            // 查找当前消息的 parent。
-            current = id_to_idx
-                .get(id.as_str())
-                .and_then(|&idx| self.message_parents.get(idx))
-                .and_then(|p| p.clone());
         }
         path.reverse(); // 根 → 叶
         path
     }
 
+    /// 计算当前激活路径（从 active_leaf 沿 parent 链走到根）。
+    ///
+    /// 返回按时间正序排列的消息 durable ID 列表（根 → 叶）。
+    /// 旧数据（无 parent）→ 返回全部 message_ids（线性链，via `active_path_indices` fallback）。
+    pub fn active_path(&self) -> Vec<String> {
+        self.active_path_indices()
+            .into_iter()
+            .filter_map(|i| self.message_ids.get(i).cloned())
+            .collect()
+    }
+
     /// 切换激活分支：将 `active_leaf` 设为指定的叶节点 durable ID。
     ///
     /// 不删除任何分支数据，仅更新 `active_leaf` 指针。
-    /// `target_leaf_id` 必须存在于 `message_ids` 中，否则返回 `BadRequest`。
+    /// `target_leaf_id` 必须存在于 `message_ids` 中（#37 contract: case-insensitive），
+    /// 否则返回 `BadRequest`。
     pub fn switch_branch(
         &mut self,
         data_root: &Path,
         target_leaf_id: &str,
     ) -> Result<(), AirpError> {
-        if !self.message_ids.iter().any(|id| id == target_leaf_id) {
+        if !self
+            .message_ids
+            .iter()
+            .any(|id| crate::ulid::matches(id, target_leaf_id))
+        {
             return Err(AirpError::BadRequest(format!(
                 "branch target {target_leaf_id} not found in message_ids"
             )));
@@ -836,12 +956,15 @@ impl ChatLog {
 
     /// 查找指定消息的所有子消息 durable ID（即 parent = 该 ID 的消息）。
     ///
-    /// 用于前端显示分叉点指示器。
+    /// 用于前端显示分叉点指示器。#37 contract: case-insensitive 匹配。
     pub fn children_of(&self, message_id: &str) -> Vec<String> {
         self.message_parents
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.as_deref() == Some(message_id))
+            .filter(|(_, p)| {
+                p.as_deref()
+                    .is_some_and(|pid| crate::ulid::matches(pid, message_id))
+            })
             .filter_map(|(i, _)| self.message_ids.get(i).cloned())
             .collect()
     }
@@ -1880,5 +2003,315 @@ mod tests {
         let reloaded = ChatLog::load_or_create(root, cid).unwrap();
         assert_eq!(reloaded.messages.len(), MAX_MESSAGES + 5);
         assert_eq!(reloaded.messages[0].content, "msg0");
+    }
+
+    // ── PR #270 audit M2/M3: branch functionality tests ───────────────────
+    //
+    // 验证审计修复 B1/B4/B5/B6/B7 的关键不变式：
+    // - active_path_indices 在显式 parent 链与 legacy 线性链上均正确
+    // - delete_last_n / rollback_to 在分支场景下不破坏 sibling 分支数据
+    // - recent() 走激活路径而非物理 tail
+    // - switch_branch / children_of / resolve_active_leaf 行为正确
+    // - append_with_parent 持久化 parent + active_leaf
+
+    fn seed_branch_log(root: &Path, cid: &str) -> ChatLog {
+        // 构造如下分支拓扑：
+        //   m0 (user, root)
+        //   └─ m1 (assistant, parent=m0)
+        //      ├─ m2 (user, parent=m1)     ← 主线
+        //      │  └─ m3 (assistant, parent=m2)
+        //      └─ m4 (user, parent=m1)     ← 分支 B（m4 是 leaf，但 active_leaf 仍指向 m3）
+        make_char_dir(root, cid);
+        let mut log = ChatLog::new(cid);
+        // m0: 第一条消息，parent=None
+        log.append_with_parent(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "m0".to_string(),
+            },
+            None,
+        )
+        .unwrap();
+        // m1: parent=m0
+        let m1_parent = log.message_ids[0].clone();
+        log.append_with_parent(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content: "m1".to_string(),
+            },
+            Some(m1_parent),
+        )
+        .unwrap();
+        // m2: parent=m1（主线）
+        let m1_id = log.message_ids[1].clone();
+        log.append_with_parent(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "m2".to_string(),
+            },
+            Some(m1_id),
+        )
+        .unwrap();
+        // m3: parent=m2（主线 leaf）
+        let m2_id = log.message_ids[2].clone();
+        log.append_with_parent(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content: "m3".to_string(),
+            },
+            Some(m2_id),
+        )
+        .unwrap();
+        // m4: parent=m1（分支 B leaf；active_leaf 此时被改成 m4）
+        let m1_id_again = log.message_ids[1].clone();
+        log.append_with_parent(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "m4".to_string(),
+            },
+            Some(m1_id_again),
+        )
+        .unwrap();
+        // 把 active_leaf 切回 m3（主线），保留 m4 作为 sibling 分支。
+        let m3_id = log.message_ids[3].clone();
+        log.switch_branch(root, &m3_id).unwrap();
+        log
+    }
+
+    #[test]
+    fn active_path_indices_walks_explicit_parent_chain() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let log = seed_branch_log(root, "ap_char");
+        // active_leaf = m3 → active_path = [m0, m1, m2, m3] = 物理 indices [0, 1, 2, 3]
+        let path = log.active_path_indices();
+        assert_eq!(path, vec![0, 1, 2, 3]);
+        // m4 不在 active path 上。
+        assert!(!path.contains(&4));
+    }
+
+    #[test]
+    fn active_path_indices_legacy_linear_fallback() {
+        // 旧 log：无 message_parents（全 None）、无 active_leaf。
+        // active_path_indices 应退化成 [0, 1, ..., n-1]（线性链）。
+        //
+        // 注意：append() 现在走 append_with_parent，会写 parent + active_leaf。
+        // 要模拟真正的旧数据，必须手动构造 ChatLog（如从旧 jsonl 加载那样）。
+        let mut log = ChatLog::new("legacy_char");
+        for i in 0..4 {
+            log.messages.push(ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: format!("legacy-{i}"),
+            });
+            log.message_ids.push(crate::ulid::new_id());
+            log.message_timestamps.push(None);
+            log.message_candidates.push(Vec::new());
+            log.message_swipe_index.push(0);
+            log.message_parents.push(None); // 旧数据：无 parent
+        }
+        // 旧数据：active_leaf = None。
+        assert_eq!(log.active_leaf, None);
+        assert!(log.message_parents.iter().all(|p| p.is_none()));
+        let path = log.active_path_indices();
+        assert_eq!(path, vec![0, 1, 2, 3], "legacy linear fallback");
+    }
+
+    #[test]
+    fn delete_last_n_preserves_sibling_branch() {
+        // B1 修复核心场景：在主线 leaf m3 上 delete_last_n(1) 只应移除 m3，
+        // 不能破坏 m4（sibling 分支）。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let mut log = seed_branch_log(root, "del_branch_char");
+        let m4_id = log.message_ids[4].clone();
+        let m2_id = log.message_ids[2].clone();
+
+        log.delete_last_n(root, 1).unwrap();
+
+        // m3 (index 3) 被删；m4 (index 4) 必须保留。
+        assert_eq!(log.messages.len(), 4, "only m3 removed; m4 stays");
+        assert_eq!(log.messages[3].content, "m4");
+        assert!(log.message_ids.contains(&m4_id), "m4 id preserved");
+        // active_leaf 应回退到 m2（m3 的 parent）。
+        assert_eq!(log.active_leaf.as_deref(), Some(m2_id.as_str()));
+        // m4 的 parent 仍是 m1（未被破坏）。
+        let m4_idx = log.message_ids.iter().position(|id| *id == m4_id).unwrap();
+        let m1_id = log.message_ids[1].clone();
+        assert_eq!(log.message_parents[m4_idx].as_deref(), Some(m1_id.as_str()));
+    }
+
+    #[test]
+    fn rollback_to_preserves_sibling_branch() {
+        // B1 修复核心场景：rollback_to(1) 应只删 active path 上 index 1 之后的消息，
+        // 即 m2、m3 被删，但 m4（sibling of m2, parent=m1）必须保留。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let mut log = seed_branch_log(root, "rb_branch_char");
+        let m4_id = log.message_ids[4].clone();
+        let m1_id = log.message_ids[1].clone();
+
+        log.rollback_to(root, 1).unwrap();
+
+        // m0、m1、m4 保留；m2、m3 删除。
+        assert_eq!(log.messages.len(), 3);
+        assert_eq!(log.messages[0].content, "m0");
+        assert_eq!(log.messages[1].content, "m1");
+        assert_eq!(log.messages[2].content, "m4");
+        // m4 的 parent 仍是 m1。
+        assert!(log.message_ids.contains(&m4_id));
+        let m4_idx = log.message_ids.iter().position(|id| *id == m4_id).unwrap();
+        assert_eq!(log.message_parents[m4_idx].as_deref(), Some(m1_id.as_str()));
+        // active_leaf = m1（rollback target）。
+        assert_eq!(log.active_leaf.as_deref(), Some(m1_id.as_str()));
+    }
+
+    #[test]
+    fn recent_returns_active_branch_only() {
+        // B4 修复：recent(n) 应返回 active path 的尾部，而非物理 tail。
+        // 主线 active_leaf = m3，物理 tail 是 m4（sibling）。
+        // recent(2) 应返回 [m2, m3]，而非 [m3, m4] 或 [m4, ?]。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let log = seed_branch_log(root, "recent_char");
+        let recent = log.recent(2);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].content, "m2");
+        assert_eq!(recent[1].content, "m3");
+    }
+
+    #[test]
+    fn switch_branch_changes_active_path() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let mut log = seed_branch_log(root, "sw_char");
+        let m4_id = log.message_ids[4].clone();
+
+        // 切到分支 B（leaf = m4）
+        log.switch_branch(root, &m4_id).unwrap();
+        assert_eq!(log.active_leaf.as_deref(), Some(m4_id.as_str()));
+
+        // active_path 现在是 [m0, m1, m4]
+        let path = log.active_path_indices();
+        assert_eq!(path, vec![0, 1, 4]);
+
+        // recent(2) 现在返回 [m1, m4]（不是 [m2, m3]）
+        let recent = log.recent(2);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].content, "m1");
+        assert_eq!(recent[1].content, "m4");
+    }
+
+    #[test]
+    fn switch_branch_rejects_unknown_id() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let mut log = seed_branch_log(root, "sw_unknown_char");
+        let err = log
+            .switch_branch(root, "01BADID000000000000000000")
+            .unwrap_err();
+        assert!(
+            matches!(err, AirpError::BadRequest(ref m) if m.contains("not found")),
+            "unknown branch target must be BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn children_of_finds_all_descendants() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let log = seed_branch_log(root, "co_char");
+        let m1_id = log.message_ids[1].clone();
+        // m1 的子节点 = m2 (parent=m1) + m4 (parent=m1)
+        let mut children = log.children_of(&m1_id);
+        children.sort();
+        let mut expected = vec![log.message_ids[2].clone(), log.message_ids[4].clone()];
+        expected.sort();
+        assert_eq!(children, expected);
+    }
+
+    #[test]
+    fn children_of_case_insensitive_match() {
+        // B7 修复：ulid::matches 对 hex 部分大小写不敏感。
+        // 注意：is_valid_id 要求 'm' 前缀为小写，所以只 uppercase hex 部分。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let log = seed_branch_log(root, "ci_char");
+        let m1_id = &log.message_ids[1];
+        let m1_id_mixed_case = format!("m{}", m1_id[1..].to_uppercase());
+        let children = log.children_of(&m1_id_mixed_case);
+        assert_eq!(
+            children.len(),
+            2,
+            "case-insensitive match should find both children"
+        );
+    }
+
+    #[test]
+    fn resolve_active_leaf_case_insensitive_match() {
+        // B7 修复：active_leaf 查找对 hex 部分大小写不敏感。
+        // 注意：is_valid_id 要求 'm' 前缀为小写，所以只 uppercase hex 部分。
+        // resolve_active_leaf 返回存储的 active_leaf 值（不归一化），只要它命中 message_ids。
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let mut log = seed_branch_log(root, "ral_char");
+        let m3_id = log.message_ids[3].clone();
+        // 把 active_leaf 改成 m3 ID 的 mixed-case 形式（'m' 小写，hex 大写）。
+        let m3_id_mixed = format!("m{}", m3_id[1..].to_uppercase());
+        log.active_leaf = Some(m3_id_mixed.clone());
+        // resolve_active_leaf 应仍能命中（active_leaf 在 message_ids 中找到 case-insensitive 匹配）。
+        let resolved = log.resolve_active_leaf();
+        assert_eq!(
+            resolved,
+            Some(m3_id_mixed.as_str()),
+            "resolve_active_leaf should find case-insensitive match"
+        );
+    }
+
+    #[test]
+    fn append_with_parent_persists_parent_and_active_leaf() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "awp_char");
+        let mut log = ChatLog::new("awp_char");
+        log.append_with_parent(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "root".to_string(),
+            },
+            None,
+        )
+        .unwrap();
+        let parent_id = log.message_ids[0].clone();
+        log.append_with_parent(
+            root,
+            ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content: "child".to_string(),
+            },
+            Some(parent_id.clone()),
+        )
+        .unwrap();
+
+        // 重载验证持久化。
+        let reloaded = ChatLog::load_or_create(root, "awp_char").unwrap();
+        assert_eq!(reloaded.messages.len(), 2);
+        assert_eq!(reloaded.message_parents.len(), 2);
+        assert!(reloaded.message_parents[0].is_none(), "root has no parent");
+        assert_eq!(
+            reloaded.message_parents[1].as_deref(),
+            Some(parent_id.as_str()),
+            "child parent persisted"
+        );
+        assert_eq!(
+            reloaded.active_leaf.as_deref(),
+            Some(reloaded.message_ids[1].as_str()),
+            "active_leaf persisted as last appended id"
+        );
     }
 }

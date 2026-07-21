@@ -311,7 +311,10 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/v1/chat/regen", post(regen_chat))
         .route("/v1/chat/continue", post(continue_chat))
         .route("/v1/chat/delete", post(delete_message))
-        .route("/v1/chat/message", put(edit_message))
+        .route(
+            "/v1/chat/message",
+            put(edit_message.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
+        )
         .route("/v1/chat/swipe", post(swipe_chat))
         .route("/v1/chat/branch/switch", post(switch_branch))
         .route("/v1/characters", get(list_characters))

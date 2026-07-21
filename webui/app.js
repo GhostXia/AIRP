@@ -1512,6 +1512,27 @@
     if (!text) { doContinue(); return; }
     if (!selectedChar) return;
     chatInput.value = '';
+
+    // PR #270 audit B9 修复：从分叉点发新消息时，先移除 DOM 中分叉点之后的旧分支消息。
+    // 服务端 prepare_pipeline 会用 branch_from 创建新分支并把 active_leaf 切到新消息，
+    // 但 WebUI DOM 仍保留旧分支的子孙节点 → 用户看到新旧分支消息混在一起。
+    // 这里在 optimistic append 之前裁剪 DOM，使其与 server 的新 active_path 一致。
+    // 若 fetch 失败，server 已持久化新分支（prepare 先写盘），旧分支本就不再 active，
+    // 裁剪是正确的（用户可用 rollback 恢复）。
+    if (branchFromMessageId) {
+      const branchPoint = messageNodes.get(branchFromMessageId);
+      if (branchPoint) {
+        let next = branchPoint.nextElementSibling;
+        while (next) {
+          const toRemove = next;
+          next = next.nextElementSibling;
+          const mid = toRemove.dataset && toRemove.dataset.messageId;
+          if (mid) messageNodes.delete(mid);
+          toRemove.remove();
+        }
+      }
+    }
+
     appendMsg('user', text, false, new Date());
 
     // 分支对话树：发送后清除分叉点状态（branch_from 已被 buildChatPayload 捕获）。
@@ -1771,9 +1792,14 @@
           if (!this.inCodeBlock && charsToRender < this.queue.length) {
             const candidate = this.queue.slice(0, charsToRender);
             // 从后向前找句子边界。
+            // PR #270 audit M1 修复：SENTENCE_END_RE 含多字符模式 `\.(\s|$)` / `[!?](\s|$)`，
+            // 旧实现 `SENTENCE_END_RE.test(candidate[i])` 只测试单字符，`$` 永远匹配单字符
+            // 串末尾 → `.`/`!`/`?` 无论后接什么都被判为句子边界（如 "3.14" 会在 `.` 处断句）。
+            // 修复：测试 2 字符上下文 `candidate[i] + candidate[i+1]`，让正则看到真实后续字符。
             let boundary = -1;
             for (let i = candidate.length - 1; i >= 0; i--) {
-              if (SENTENCE_END_RE.test(candidate[i])) {
+              const twoChar = candidate[i] + (candidate[i + 1] || '');
+              if (SENTENCE_END_RE.test(twoChar)) {
                 boundary = i + 1;
                 break;
               }

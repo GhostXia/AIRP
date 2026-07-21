@@ -14,8 +14,8 @@
 use crate::chat_pipeline;
 use crate::chat_store::ChatLog;
 use crate::daemon::types::{
-    ChatCompletionRequest, ContinueRequest, DeleteMessageRequest, EditMessageRequest,
-    HistoryQuery, RegenRequest, RollbackRequest, SwipeRequest, SwitchBranchRequest,
+    ChatCompletionRequest, ContinueRequest, DeleteMessageRequest, EditMessageRequest, HistoryQuery,
+    RegenRequest, RollbackRequest, SwipeRequest, SwitchBranchRequest,
 };
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
