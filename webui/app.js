@@ -7,6 +7,9 @@
   const { describeEffectiveHint, buildBindAction, buildPersonaPayload } = window.AIRPPersonaUtils;
   const { buildAssemblyViewModel } = window.AIRPAssemblyUtils;
   const { computeHistoryToolbarState } = window.AIRPHistoryUtils;
+  // #252 §2.H.2 / #275 F-1: 从 smooth-streamer-utils.js 引入句子边界检测纯函数
+  // （抽到独立 UMD 模块以支持 node --test 单元测试覆盖 M1 + CR-3 修复的 2-char context 边界 bug）
+  const { findSentenceBoundary } = window.AIRPSmoothStreamerUtils;
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
   const $ = (s) => document.querySelector(s);
@@ -1435,15 +1438,11 @@
       user_id: personaUserId.value.trim() || 'default',
     }));
     if (r.ok) {
-      // 更新 DOM：找到 messages 中对应消息的 content。
+      // #252 D3：swipe 增量返回 {message_id, index, content, role, candidates_count}，
+      // 不再回完整 ChatLog。客户端只需 content + index 确认。
       const data = r.data;
-      const msgs = data.messages || [];
-      const ids = data.message_ids || [];
-      const idx = ids.indexOf(messageId);
-      if (idx >= 0 && msgs[idx]) {
-        const textNode = div.querySelector('.text');
-        if (textNode) textNode.innerHTML = renderMarkdown(msgs[idx].content || '');
-      }
+      const textNode = div.querySelector('.text');
+      if (textNode) textNode.innerHTML = renderMarkdown(data.content || '');
       counter.dataset.currentIndex = String(newIndex);
       counter.textContent = (newIndex + 1) + '/' + totalCandidates;
     } else {
@@ -1739,8 +1738,8 @@
   function setTypewriterMode(enabled) {
     localStorage.setItem(TYPEWRITER_KEY, enabled ? 'on' : 'off');
   }
-  // 句子边界检测：中文句号/叹号/问号/分号，英文句号/叹号/问号 + 空格，换行符。
-  const SENTENCE_END_RE = /[。！？；\n]|\.(\s|$)|[!?](\s|$)/;
+  // 句子边界检测正则已抽到 smooth-streamer-utils.js（#252 §2.H.2 / #275 F-1），
+  // 此处通过 findSentenceBoundary 纯函数调用，不再内联 SENTENCE_END_RE。
   // 最大无渲染时间（ms）：避免长段落中间 3s+ 无视觉反馈。
   const MAX_RENDER_GAP_MS = 800;
   
@@ -1792,32 +1791,16 @@
         if ((charsToRender > 0 || forceRender) && this.queue.length > 0) {
           if (forceRender && charsToRender === 0) charsToRender = 1;
           // 智能分句：尝试在句子边界截断（代码块内不分句）。
+          // #252 §2.H.2 / #275 F-1: 边界检测逻辑抽到 smooth-streamer-utils.js 的
+          // findSentenceBoundary 纯函数（含 M1 + CR-3 修复的 2-char context 检测），
+          // 此处只调用并按返回值选 chunk。返回 -1 表示无合适边界，走默认 charsToRender 路径。
           let chunk;
-          if (!this.inCodeBlock && charsToRender < this.queue.length) {
-            const candidate = this.queue.slice(0, charsToRender);
-            // 从后向前找句子边界。
-            // PR #270 audit M1 修复：SENTENCE_END_RE 含多字符模式 `\.(\s|$)` / `[!?](\s|$)`，
-            // 旧实现 `SENTENCE_END_RE.test(candidate[i])` 只测试单字符，`$` 永远匹配单字符
-            // 串末尾 → `.`/`!`/`?` 无论后接什么都被判为句子边界（如 "3.14" 会在 `.` 处断句）。
-            // 修复：测试 2 字符上下文 `this.queue[i] + this.queue[i+1]`，让正则看到真实后续字符。
-            // 必须用 `this.queue` 而非 `candidate` 取上下文，否则 candidate 末尾的 `.` 会因
-            // `candidate[i+1] === undefined` 被错误判为 end-of-string 边界（即使 queue 后面还有字符）。
-            let boundary = -1;
-            for (let i = candidate.length - 1; i >= 0; i--) {
-              const twoChar = this.queue[i] + (this.queue[i + 1] || '');
-              if (SENTENCE_END_RE.test(twoChar)) {
-                boundary = i + 1;
-                break;
-              }
-            }
-            // 找到边界且不会导致太少字符（至少渲染 1/4 的 charsToRender）。
-            if (boundary > charsToRender * 0.25) {
-              chunk = this.queue.slice(0, boundary);
-              this.queue = this.queue.slice(boundary);
-            } else {
-              chunk = candidate;
-              this.queue = this.queue.slice(charsToRender);
-            }
+          const boundary = (!this.inCodeBlock && charsToRender < this.queue.length)
+            ? findSentenceBoundary(this.queue, charsToRender)
+            : -1;
+          if (boundary > 0) {
+            chunk = this.queue.slice(0, boundary);
+            this.queue = this.queue.slice(boundary);
           } else {
             chunk = this.queue.slice(0, charsToRender);
             this.queue = this.queue.slice(charsToRender);
