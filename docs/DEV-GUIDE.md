@@ -257,6 +257,6 @@ Remove-Item Env:RUSTDOCFLAGS
 3. #114 Persona/Preset 高级生命周期、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 完整 session/revision/恢复分期和 #220 deferred 性能/重构项原则上进入 P2；若其中某项直接决定 P1 可用性、数据安全或可重复验收，可以按独立证据提前；
 4. P2 运维与恢复；
 5. P3 release candidate；
-6. 工程治理后续切片（#192 自动版本检测与去重 issue、release pipeline 强制 SBOM 度量、发布签名）按 #192 推进，不抢占产品主线。
+6. 工程治理后续切片（#192 自动版本检测与去重 issue、release pipeline 强制 SBOM 度量、发布签名）按 [#231](https://github.com/GhostXia/AIRP/issues/231)（#192 关闭状态与原验收项偏差的核对 umbrella）推进，不抢占产品主线。
 
 动手前必须重新查询 issues 和 `main`，不要把本节当成永久队列。
