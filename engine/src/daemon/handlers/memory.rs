@@ -114,11 +114,7 @@ pub async fn update_resident_memory(
     })();
 
     match result {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "success": true })),
-        )
-            .into_response(),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -129,8 +125,8 @@ pub async fn get_user_model(
     axum::extract::Query(query): axum::extract::Query<UserModelQuery>,
 ) -> impl IntoResponse {
     // 审计 B1：query.user_id 已是 UserId newtype，反序列化时已校验
-    let content = crate::memory::read_user_model(&state.data_root, &query.user_id)
-        .unwrap_or_default();
+    let content =
+        crate::memory::read_user_model(&state.data_root, &query.user_id).unwrap_or_default();
 
     (
         StatusCode::OK,
@@ -144,14 +140,11 @@ pub async fn update_user_model(
     Json(payload): Json<UpdateUserModelRequest>,
 ) -> impl IntoResponse {
     // 审计 B1：payload.user_id 已是 UserId newtype，反序列化时已校验
-    let result = crate::memory::write_user_model(&state.data_root, &payload.user_id, &payload.content);
+    let result =
+        crate::memory::write_user_model(&state.data_root, &payload.user_id, &payload.content);
 
     match result {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "success": true })),
-        )
-            .into_response(),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))).into_response(),
         Err(e) => e.into_response(),
     }
 }

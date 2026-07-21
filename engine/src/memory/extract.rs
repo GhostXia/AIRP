@@ -63,10 +63,7 @@ pub async fn extract_facts(
     }
 
     // 构建抽取请求
-    let conversation = format!(
-        "用户: {}\n\n角色: {}",
-        user_message, assistant_message
-    );
+    let conversation = format!("用户: {}\n\n角色: {}", user_message, assistant_message);
 
     let messages = vec![ChatMessage {
         role: MessageRole::User,

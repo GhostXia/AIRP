@@ -34,9 +34,7 @@ async fn get_resident_memory_returns_empty_when_absent() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 4096)
-        .await
-        .unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["content"], "");
     assert_eq!(v["char_count"], 0);
@@ -278,9 +276,7 @@ async fn get_user_model_returns_empty_when_absent() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 4096)
-        .await
-        .unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["content"], "");
 }
