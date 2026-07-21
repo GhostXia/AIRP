@@ -159,6 +159,65 @@ impl<'de> Deserialize<'de> for SceneId {
     }
 }
 
+/// #153 E1: `data/users/{uid}/personas/{pid}.json` 下的 Persona ID。
+///
+/// 与 [`CharacterId`] / [`PresetId`] / [`SceneId`] 同构：构造时调
+/// `validate_id_segment`，serde 反序列化路径自动校验，所以 axum 收到的
+/// `ChatCompletionRequest.persona_id` 一定合法。
+///
+/// **背景**：原 `ChatCompletionRequest.persona_id: Option<String>` 与
+/// `character_id: Option<CharacterId>` / `preset_id: Option<PresetId>` 不一致，
+/// persona_id 走 service 层兜底校验（`PersonaService::get` 内调
+/// `validate_persona_id`）。引入 newtype 把校验前移到反序列化阶段，让
+/// `Option<PersonaId>` 在类型层面拒绝非法输入。`default` 大小写不敏感由
+/// `PersonaService::canonical_persona_id` 处理，newtype 层不区分大小写。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PersonaId(String);
+
+impl PersonaId {
+    /// 构造时校验。校验失败返回 `AirpError::BadRequest`。
+    pub fn new(s: impl Into<String>) -> Result<Self, AirpError> {
+        let s = s.into();
+        validate_id_segment(&s)?;
+        Ok(Self(s))
+    }
+
+    /// 返回内部字符串的不可变引用。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// 消耗 newtype，取回内部字符串。
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl AsRef<str> for PersonaId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PersonaId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Serialize for PersonaId {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for PersonaId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        PersonaId::new(s).map_err(serde::de::Error::custom)
+    }
+}
+
 /// M_UP / P1: `data/users/{user_id}/` 下的用户 ID。
 ///
 /// 与 `CharacterId` / `PresetId` / `SceneId` 同构：构造时 `validate_id_segment`，
