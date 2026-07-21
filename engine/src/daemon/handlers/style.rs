@@ -43,7 +43,10 @@ pub async fn style_review(
 ) -> impl IntoResponse {
     let result = run_style_review_handler(&state, payload).await;
     match result {
-        Ok(resp) => (StatusCode::OK, Json(serde_json::to_value(resp).unwrap())).into_response(),
+        Ok(resp) => match serde_json::to_value(resp) {
+            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+            Err(e) => AirpError::from(e).into_response(),
+        },
         Err(e) => e.into_response(),
     }
 }
@@ -59,13 +62,29 @@ async fn run_style_review_handler(
         .map(|s| crate::types::SessionId::parse(s))
         .transpose()?;
 
+    // 审计修复：校验 profile_id 防止路径遍历，仅允许字母数字下划线连字符。
     let profile_id = payload.profile_id.as_deref().unwrap_or("default");
+    let profile_id = if profile_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        profile_id
+    } else {
+        "default"
+    };
     let profile_path = state
         .data_root
         .join("styles")
         .join("profiles")
         .join(format!("{}.md", profile_id));
-    let style_profile = std::fs::read_to_string(&profile_path).unwrap_or_default();
+    // 审计修复：NotFound 返回空 profile，其他 I/O 错误向上传播。
+    let style_profile = std::fs::read_to_string(&profile_path).or_else(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Ok(String::new())
+        } else {
+            Err(AirpError::from(e))
+        }
+    })?;
 
     let history = crate::domain::ChatService::new(&state.data_root).history(&cid, sid.as_ref())?;
     let recent_messages: Vec<String> = history
@@ -135,7 +154,10 @@ pub async fn get_drift(
         })
     })();
     match result {
-        Ok(resp) => (StatusCode::OK, Json(serde_json::to_value(resp).unwrap())).into_response(),
+        Ok(resp) => match serde_json::to_value(resp) {
+            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+            Err(e) => AirpError::from(e).into_response(),
+        },
         Err(e) => e.into_response(),
     }
 }

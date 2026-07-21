@@ -107,9 +107,9 @@ pub async fn run_style_review(
 
     let mut result = String::new();
     while let Some(chunk) = stream.next().await {
-        if let Ok(text) = chunk {
-            result.push_str(&text);
-        }
+        // 审计修复：传播流错误，而非静默丢弃导致空报告。
+        let text = chunk.map_err(|e| AirpError::Upstream { status: 0, body: e })?;
+        result.push_str(&text);
     }
 
     parse_review_report(&result)

@@ -5,11 +5,27 @@
 //! 容量上限：~1500 字符（可配置）；超限触发 LLM 合并压缩
 
 use crate::error::AirpError;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// 默认容量上限（字符数）。
 pub const SOUL_DRIFT_DEFAULT_CAP: usize = 1500;
+
+/// 每角色串行化锁：防止并发 read-modify-write 互相覆盖（审计修复）。
+static DRIFT_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// 获取角色的串行化锁。
+fn drift_lock(character_id: &str) -> Arc<Mutex<()>> {
+    let mut locks = DRIFT_LOCKS.lock().expect("drift locks poisoned");
+    locks
+        .entry(character_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 /// Soul-Drift 配置。
 #[derive(Debug, Clone)]
@@ -45,11 +61,16 @@ pub fn read_soul_drift(data_root: &Path, character_id: &str) -> Result<String, A
 }
 
 /// 写入 soul drift（覆盖）。
+///
+/// 审计修复：写入前强制容量上限，超限截断到最近完整行，防止超量内容被
+/// 整体注入后续 system prompt。
 pub fn write_soul_drift(
     data_root: &Path,
     character_id: &str,
     content: &str,
 ) -> Result<(), AirpError> {
+    let config = SoulDriftConfig::default();
+    let content = enforce_capacity(content, config.capacity_chars);
     let path = drift_path(data_root, character_id);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -58,12 +79,35 @@ pub fn write_soul_drift(
     Ok(())
 }
 
+/// 截断到容量上限，尽量保留完整行。
+fn enforce_capacity(content: &str, capacity: usize) -> String {
+    if content.chars().count() <= capacity {
+        return content.to_string();
+    }
+    // 逐行累加，直到超过容量，保留之前的完整行。
+    let mut result = String::new();
+    let mut count = 0;
+    for line in content.lines() {
+        let line_len = line.chars().count() + 1; // +1 for newline
+        if count + line_len > capacity {
+            break;
+        }
+        result.push_str(line);
+        result.push('\n');
+        count += line_len;
+    }
+    result
+}
+
 /// 追加内容到 soul drift。
+///
+/// 审计修复：整个 read-modify-write 过程持有每角色锁，防止并发丢失更新。
 pub fn append_soul_drift(
     data_root: &Path,
     character_id: &str,
     content: &str,
 ) -> Result<(), AirpError> {
+    let _guard = drift_lock(character_id);
     let mut existing = read_soul_drift(data_root, character_id)?;
     if !existing.is_empty() && !existing.ends_with('\n') {
         existing.push('\n');

@@ -37,6 +37,8 @@ fn open_db(data_root: &Path, character_id: &str) -> Result<Connection, AirpError
 }
 
 /// 初始化 FTS5 schema。
+///
+/// 审计修复：增加 UPDATE/DELETE 触发器，保证消息编辑/删除后 FTS 索引同步。
 fn init_schema(conn: &Connection) -> Result<(), AirpError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -53,6 +55,13 @@ fn init_schema(conn: &Connection) -> Result<(), AirpError> {
             content_rowid='id'
         );
         CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content, role) VALUES (new.id, new.content, new.role);
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content, role) VALUES ('delete', old.id, old.content, old.role);
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content, role) VALUES ('delete', old.id, old.content, old.role);
             INSERT INTO messages_fts(rowid, content, role) VALUES (new.id, new.content, new.role);
         END;",
     )?;
@@ -78,6 +87,10 @@ pub fn index_message(
 }
 
 /// 全文搜索。
+///
+/// 审计修复：
+/// - limit 钳制到 i64::MAX，防止溢出为负数（SQLite 负 LIMIT = 无限制）
+/// - 非法 FTS5 查询语法返回 BadRequest 而非 500
 pub fn search(
     data_root: &Path,
     character_id: &str,
@@ -94,8 +107,11 @@ pub fn search(
          LIMIT ?2",
     )?;
 
+    // 钳制 limit，防止 usize -> i64 溢出为负数。
+    let limit_i64 = limit.min(i64::MAX as usize) as i64;
+
     let results = stmt
-        .query_map(params![query, limit as i64], |row| {
+        .query_map(params![query, limit_i64], |row| {
             Ok(SearchResult {
                 session_id: row.get(0)?,
                 role: row.get(1)?,
@@ -103,10 +119,22 @@ pub fn search(
                 timestamp: row.get(3)?,
                 rank: row.get(4)?,
             })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+        })
+        .map_err(|e| map_fts_error(e, query))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| map_fts_error(e, query))?;
 
     Ok(results)
+}
+
+/// 把 FTS5 语法错误映射为 BadRequest，其他 SQLite 错误保持 Sqlite 变体。
+fn map_fts_error(e: rusqlite::Error, query: &str) -> AirpError {
+    let msg = e.to_string();
+    if msg.contains("fts5") || msg.contains("syntax error") || msg.contains("malformed") {
+        AirpError::BadRequest(format!("invalid search query: {}", query))
+    } else {
+        AirpError::Sqlite(e)
+    }
 }
 
 #[cfg(test)]
