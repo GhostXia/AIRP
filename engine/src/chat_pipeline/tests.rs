@@ -225,6 +225,81 @@ mod tests {
         assert!(!json.contains("A careful archivist"));
     }
 
+    /// #214 ISSUE-1: 未定义的 `{{lowercase_var}}` 残留在 system prompt 中时，
+    /// `build_prompt_trace` 必须推送 `undefined_variable_placeholder` 诊断。
+    /// 正则只匹配小写字母+下划线，不会误报 `{{getvar::x}}` / `{{lastUserMessage}}`。
+    #[test]
+    fn prompt_trace_flags_undefined_variable_placeholder() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let character = tmp.path().join("characters/alice");
+        std::fs::create_dir_all(character.join("history")).unwrap();
+        std::fs::create_dir_all(character.join("gating")).unwrap();
+        std::fs::create_dir_all(character.join("memory")).unwrap();
+        std::fs::write(
+            character.join("history/chat_log.jsonl"),
+            "{\"role\":\"assistant\",\"content\":\"Earlier reply\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            character.join("history/chat_log_meta.json"),
+            "{\"sentinel\":true}",
+        )
+        .unwrap();
+        std::fs::write(character.join("memory/current.md"), "existing context").unwrap();
+
+        let mut req = base_request();
+        req.character_id = Some(CharacterId::new("alice").unwrap());
+        // 描述中故意包含未定义的 {{weapon}} 和 {{armor_level}}；{{char}} 会被
+        // final_vars 替换，{{getvar::x}} 不应被匹配（含 `::`），{{lastUserMessage}}
+        // 不应被匹配（含大写字母）。
+        req.character_card_id = Some(
+            r#"{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Alice","description":"A careful archivist wielding {{weapon}} with {{armor_level}}. Macro test: {{getvar::x}} and {{lastUserMessage}} and {{char}}.","personality":"observant","scenario":"A quiet library","first_mes":"","mes_example":"","creator_notes":"","system_prompt":"","post_history_instructions":"","tags":[],"creator":"","character_version":"","alternate_greetings":[],"extensions":{}}}"#
+                .to_string(),
+        );
+
+        let pipeline = preview_pipeline(&req, &state).unwrap();
+
+        let undefined_diag = pipeline
+            .prompt_trace
+            .diagnostics
+            .iter()
+            .find(|d| d.kind == "undefined_variable_placeholder");
+        assert!(
+            undefined_diag.is_some(),
+            "expected undefined_variable_placeholder diagnostic; got diagnostics: {:?}",
+            pipeline
+                .prompt_trace
+                .diagnostics
+                .iter()
+                .map(|d| &d.kind)
+                .collect::<Vec<_>>()
+        );
+        let message = &undefined_diag.unwrap().message;
+        assert!(
+            message.contains("{{weapon}}"),
+            "diagnostic should list {{weapon}}: {message}"
+        );
+        assert!(
+            message.contains("{{armor_level}}"),
+            "diagnostic should list {{armor_level}}: {message}"
+        );
+        // `{{getvar::x}}` 含 `::` 不应被匹配；`{{lastUserMessage}}` 含大写字母不应被匹配；
+        // `{{char}}` 会被 final_vars 替换掉，也不应出现在诊断中。
+        assert!(
+            !message.contains("{{getvar::x}}"),
+            "diagnostic should not flag getvar macro: {message}"
+        );
+        assert!(
+            !message.contains("{{lastUserMessage}}"),
+            "diagnostic should not flag lastUserMessage macro: {message}"
+        );
+        assert!(
+            !message.contains("{{char}}"),
+            "diagnostic should not flag {{char}} (substituted by final_vars): {message}"
+        );
+    }
+
     #[test]
     fn prepare_rejects_traversal_in_character_card_id() {
         // character_card_id 是裸路径，必须拒绝 `..` 跨出 data_root。
