@@ -165,6 +165,34 @@ pub(super) async fn run_finalize(
             });
         }
 
+        // 阶段二补全 D1：用户模型自动抽取。仅当 user_id 存在时（此时
+        // data_root 已是该用户独立根），异步 best-effort 抽取用户偏好。
+        if ctx.user_id.is_some() {
+            let data_root = ctx.data_root.clone();
+            let session_id = ctx.session_id;
+            let character_id = ctx.character_id.clone();
+            let provider_config = ctx.provider_config.clone();
+            let gen_params = ctx.gen_params.clone();
+            let http_client = ctx.http_client.clone();
+            let assistant_content = cleaned_acc.clone();
+
+            join_set.spawn(async move {
+                if let Err(e) = run_user_model_extraction(
+                    &http_client,
+                    provider_config,
+                    gen_params,
+                    &data_root,
+                    character_id.as_ref(),
+                    session_id.as_ref(),
+                    &assistant_content,
+                )
+                .await
+                {
+                    tracing::warn!(err = %e, "用户模型抽取失败（best-effort）");
+                }
+            });
+        }
+
         // 等待全部子任务结束；JoinError（panic / cancel）单独 tracing
         while let Some(res) = join_set.join_next().await {
             if let Err(je) = res {
@@ -265,6 +293,64 @@ async fn run_memory_extraction(
         .await?;
         crate::memory::write_resident_memory(session_dir, &compressed)?;
     }
+
+    Ok(())
+}
+
+/// 阶段二补全 D1：用户模型自动抽取。从本轮对话中抽取用户偏好，
+/// 写入用户主目录（effective root）下的 user_model.md。
+///
+/// Best-effort：失败不影响主流程。`data_root` 必须是用户独立根
+/// （`data/users/{uid}/`），调用前已由 `ctx.user_id.is_some()` 保证。
+#[allow(clippy::too_many_arguments)]
+async fn run_user_model_extraction(
+    client: &reqwest::Client,
+    provider_config: std::sync::Arc<crate::adapter::ProviderConfig>,
+    gen_params: crate::adapter::GenerationParams,
+    data_root: &std::path::Path,
+    character_id: Option<&crate::types::CharacterId>,
+    session_id: Option<&crate::types::SessionId>,
+    assistant_content: &str,
+) -> Result<(), AirpError> {
+    use crate::memory::{extract_user_preferences, ExtractionConfig};
+
+    // scene 模式下 character_id 为 None，无法读取历史，跳过。
+    let Some(cid) = character_id else {
+        return Ok(());
+    };
+
+    // 读取最后一条 user 消息
+    let history = ChatService::new(data_root).history(cid, session_id)?;
+    let last_user_msg = history
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == crate::adapter::MessageRole::User)
+        .map(|m| m.content.as_str())
+        .unwrap_or("");
+
+    if last_user_msg.is_empty() || assistant_content.trim().is_empty() {
+        return Ok(());
+    }
+
+    // 抽取用户偏好
+    let config = ExtractionConfig::default();
+    let prefs = extract_user_preferences(
+        client,
+        provider_config,
+        gen_params,
+        last_user_msg,
+        assistant_content,
+        &config,
+    )
+    .await?;
+
+    if prefs.trim().is_empty() {
+        return Ok(());
+    }
+
+    // 追加到用户模型（data_root 即用户主目录，容量强制在内部完成）。
+    crate::memory::append_user_model_in_home(data_root, &prefs)?;
 
     Ok(())
 }

@@ -17,7 +17,8 @@ use crate::data_dir;
 use crate::error::AirpError;
 use crate::fsm::{RegexFilter, StreamingFsm};
 use crate::orchestrator::{
-    inject_current_context, inject_volume_context, SystemPromptPart, TavernPreset,
+    inject_current_context, inject_plot_direction, inject_volume_context, SystemPromptPart,
+    TavernPreset,
 };
 use crate::volume_manager;
 use crate::xml_unpacker::StreamingXmlUnpacker;
@@ -182,6 +183,19 @@ pub(super) fn prepare_scene_pipeline(
                 content: resident_memory,
             });
         }
+        // 阶段三补全 D3：封卷时生成的剧情方向注入。
+        let mut plot_direction = String::new();
+        inject_plot_direction(sd, &mut plot_direction);
+        if !plot_direction.is_empty() {
+            system_prompt.push_str(&plot_direction);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
+                display_name: "剧情方向",
+                content: plot_direction,
+            });
+        }
         let mut related_history = String::new();
         inject_volume_context(sd, &payload.message, &mut related_history);
         if !related_history.is_empty() {
@@ -294,6 +308,11 @@ pub(super) fn prepare_scene_pipeline(
         finalizer: FinalizerCtx {
             character_id: None,
             session_id: None,
+            user_id: payload
+                .user_id
+                .as_deref()
+                .map(crate::types::UserId::new)
+                .transpose()?,
             data_root: effective_root.clone(),
             session_dir: session_dir_opt,
             provider_config,

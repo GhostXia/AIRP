@@ -47,6 +47,67 @@ pub fn write_user_model(
     Ok(())
 }
 
+/// 用户模型容量上限（字符数）。超限截断到最近完整行（阶段二补全 D1）。
+pub const USER_MODEL_CAP: usize = 1500;
+
+/// 返回用户主目录（effective root）下的 user_model.md 路径。
+///
+/// finalize 路径中 `data_root` 已是该用户的独立根（`data/users/{uid}/`），
+/// 用户模型直接落在其下，无需再拼 `users/{uid}` 前缀。
+fn user_model_path_in_home(home: &Path) -> PathBuf {
+    home.join("user_model.md")
+}
+
+/// 追加用户偏好到用户模型（阶段二补全 D1）。
+///
+/// 整个 read-modify-write 串行执行，并在写入前强制容量上限（超限截断到
+/// 最近完整行）。仅由 finalize 异步抽取调用，`home` 为用户独立数据根。
+pub fn append_user_model_in_home(home: &Path, content: &str) -> Result<(), AirpError> {
+    let path = user_model_path_in_home(home);
+    let existing = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(AirpError::from(e)),
+    };
+
+    let mut merged = existing;
+    if !merged.is_empty() && !merged.ends_with('\n') {
+        merged.push('\n');
+    }
+    merged.push_str(content);
+
+    // 容量强制：超限截断到最近完整行，首行单独超容量时按字符边界截断。
+    let merged = enforce_user_model_capacity(&merged, USER_MODEL_CAP);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::data_dir::replace_file(&path, merged.as_bytes())?;
+    Ok(())
+}
+
+/// 截断到容量上限，尽量保留完整行。
+fn enforce_user_model_capacity(content: &str, capacity: usize) -> String {
+    if content.chars().count() <= capacity {
+        return content.to_string();
+    }
+    let mut result = String::new();
+    let mut count = 0;
+    for line in content.lines() {
+        let line_len = line.chars().count() + 1;
+        if count + line_len > capacity {
+            break;
+        }
+        result.push_str(line);
+        result.push('\n');
+        count += line_len;
+    }
+    if result.is_empty() {
+        return content.chars().take(capacity).collect();
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

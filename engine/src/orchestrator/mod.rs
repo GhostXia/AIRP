@@ -12,7 +12,7 @@ pub use lorebook::{merge_lorebooks, Lorebook, LorebookEntry};
 pub use preset::{
     normalize_preset, PresetImportReport, PresetPromptDiagnostic, PRESET_CONVERTER_VERSION,
 };
-pub use volume_inject::{inject_current_context, inject_volume_context};
+pub use volume_inject::{inject_current_context, inject_plot_direction, inject_volume_context};
 pub use worldbook_normalizer::{normalize_worldbook, WorldbookImportReport};
 
 use crate::error::AirpError;

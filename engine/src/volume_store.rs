@@ -50,6 +50,26 @@ fn volume_path(session_dir: &Path, number: u32) -> PathBuf {
     volumes_dir(session_dir).join(format!("vol_{:03}.md", number))
 }
 
+/// 返回 session 目录下 plot_direction.md 的完整路径（阶段三补全 D3）。
+fn plot_direction_path(session_dir: &Path) -> PathBuf {
+    session_dir.join("plot_direction.md")
+}
+
+/// 读取剧情方向（封卷时生成的下卷悬念/方向）。不存在返回空串。
+pub fn read_plot_direction(session_dir: &Path) -> Result<String, AirpError> {
+    match fs::read_to_string(plot_direction_path(session_dir)) {
+        Ok(c) => Ok(c),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(AirpError::from(e)),
+    }
+}
+
+/// 写入剧情方向（覆盖）。
+pub fn write_plot_direction(session_dir: &Path, content: &str) -> Result<(), AirpError> {
+    fs::write(plot_direction_path(session_dir), content)?;
+    Ok(())
+}
+
 /// 确保 session 目录及其 volumes 子目录存在，并初始化空的 current.md 与 index.md（如果不存在）。
 pub fn ensure_session_dirs(session_dir: &Path) -> Result<(), AirpError> {
     fs::create_dir_all(session_dir)?;

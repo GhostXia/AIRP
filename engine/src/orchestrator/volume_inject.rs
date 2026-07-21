@@ -38,6 +38,22 @@ pub fn inject_current_context(session_dir: &Path, prompt: &mut String) {
     }
 }
 
+/// 把 plot_direction.md（封卷时生成的下卷方向）追加到 System Prompt。
+/// 阶段三补全 D3。
+pub fn inject_plot_direction(session_dir: &Path, prompt: &mut String) {
+    let Ok(content) = volume_store::read_plot_direction(session_dir) else {
+        return;
+    };
+    if content.trim().is_empty() {
+        return;
+    }
+    prompt.push_str("\n[Plot Direction]\n");
+    prompt.push_str(&content);
+    if !content.ends_with('\n') {
+        prompt.push('\n');
+    }
+}
+
 /// 根据 user_message 中出现的关键词，扫描全局 index 找到相关卷，
 /// 注入对应卷的 \[卷索引\] 头部到 System Prompt 的 \[Related History\] 段。
 ///
