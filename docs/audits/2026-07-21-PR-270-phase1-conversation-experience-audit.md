@@ -3,7 +3,7 @@
 - **审计日期**：2026-07-21
 - **审计 agent 模型**：GLM-5.2（本会话模型）
 - **PR**：[#270](https://github.com/GhostXia/AIRP/pull/270) — `feat/phase1-conversation-experience` @ commit `dbe67ef`
-- **修复 commit**：`b8a0a02`（9 BLOCKING + 3 MINOR 修复）+ `3a56f43`（与 main 合并冲突解决）+ 本轮 CodeRabbit follow-up 修复（commit 待提交）
+- **修复 commit**：`b8a0a02`（9 BLOCKING + 3 MINOR 修复）+ `3a56f43`（与 main 合并冲突解决）+ `d335128`（§9.1~9.3 CodeRabbit follow-up：CR-1~CR-4 修复 + CR-5/CR-6 拒绝）+ 本轮 §9.4 CodeRabbit follow-up 修复（CR-7 MD038 残留 + CR-8 maintainer-local file URI，commit 待提交）
 - **修复后状态**：所有 9 个 BLOCKING（B1–B9）+ 3 个 MINOR（M1–M3）已修复，并已闭环处理 CodeRabbit 遗留 review 意见（§9 CodeRabbit follow-up）。本地 `cargo test --workspace`（804 lib + 4 bin engine main + 11 openai_compat + 5 agent_run + 5 production_startup + 6 sse_wiremock + 6 protocol lib + 9 ui bin 全绿）/ `npm run test -- --run` (ui/, 98 passed) / `cargo clippy --workspace --all-targets --all-features -- -D warnings` / `cargo fmt --all -- --check` 全绿。
 - **审计范围**：12 个文件 / +526 −28（engine 数据模型 + domain 方法 + HTTP 端点 + chat_pipeline 字段；WebUI Edit/Branch UI + SmoothStreamer 增强）
 - **审计原则**：按 `AGENTS.md` §"Audit Agent Charter" 三原则独立审计。本 PR 引入分支对话树（branching conversation tree）+ 消息编辑 API + 流式输出优化，是 issue 阶段一 4 个子任务的整体落地。需独立核验：(1) `message_parents` + `active_leaf` 数据模型对历史 jsonl 的兼容性是否如 PR 声称"向后兼容"；(2) 分支树核心不变量（并行数组等长、active_path 正确性、cross-branch 隔离）在 append / append_with_branch / switch_branch / delete_last_n / rollback_to / delete_message / recent / history_window 全路径上是否成立；(3) `PUT /v1/chat/message` 编辑端点的安全边界（body limit、role 限制、ID 不变）是否完备；(4) WebUI 分支 UI 的 DOM 一致性在 branch-from → doSend 路径上是否正确；(5) 测试覆盖是否匹配新增 public API 的范围。
@@ -556,7 +556,7 @@ $ cargo fmt --all -- --check
 
 ## 9. CodeRabbit follow-up 闭环（合并 main 后第二轮 review）
 
-PR #270 合并 origin/main（PR #271 memory MVP）后重新触发 CodeRabbit review，新提交的 unresolved comments 经独立核验后处理如下。本轮所有修复均纳入与原审计同一份修复序列（commit 待提交）。
+PR #270 合并 origin/main（PR #271 memory MVP）后重新触发 CodeRabbit review，新提交的 unresolved comments 经独立核验后处理如下。§9.1~9.3 已在 commit `d335128` 修复推送；§9.4 记录 `d335128` 推送后 CodeRabbit 又提的 2 条 actionable comments（CR-7 / CR-8）闭环。
 
 ### 9.1 已修复项
 
@@ -588,7 +588,7 @@ PR #270 合并 origin/main（PR #271 memory MVP）后重新触发 CodeRabbit rev
 
 #### CR-4 audit md 文档 markdownlint 问题（Minor） — ✅ RESOLVED
 
-- **MD018 (line 423)**：`#73 引入...` 被误判为 heading。改为 `Issue `#73` 引入...`。
+- **MD018 (line 423)**：含 `#73` 引入... 的行被误判为 heading。改为 `Issue #73 引入...`。
 - **MD040 (line 96, 483)**：fenced code block 缺 language tag。加 `text` 标识。
 - **§8.3 总计可复现性 (line 529-533)**：原 "4 bin (engine main)" 在 §8.2 测试输出 transcript 中缺失。在 transcript 中补上 `running 4 tests (engine main bin) ... test result: ok. 4 passed`。
 
@@ -598,7 +598,7 @@ PR #270 合并 origin/main（PR #271 memory MVP）后重新触发 CodeRabbit rev
 
 **CodeRabbit 意见**：`doSend`/`appendMsg` 始终把新消息追加到 chatLog DOM 末尾，不按 server 返回的 `active_path` 过滤。
 
-**核验**：该意见在审计修复 commit `b8a0a02` 之前提出（2026-07-20T16:26:12Z vs `b8a0a02` 2026-07-21 09:53:28 +0800）。审计 B9 修复已在 [webui/app.js:1526-1538](file:///d:/AIRP-Dev/webui/app.js#L1526-L1538) 添加 branch-aware DOM pruning：从 `branchFromMessageId` 节点开始，移除其所有 `nextElementSibling`，使 DOM 与 server 的新 active_path 一致。`loadHistory` 调用 `/v1/chat/history`，server 端 `history_window`（审计 B5 修复）已按 active_path 过滤。CodeRabbit 意见已过时。
+**核验**：该意见在审计修复 commit `b8a0a02` 之前提出（2026-07-20T16:26:12Z vs `b8a0a02` 2026-07-21 09:53:28 +0800）。审计 B9 修复已在 `webui/app.js:1526-1538` 添加 branch-aware DOM pruning：从 `branchFromMessageId` 节点开始，移除其所有 `nextElementSibling`，使 DOM 与 server 的新 active_path 一致。`loadHistory` 调用 `/v1/chat/history`，server 端 `history_window`（审计 B5 修复）已按 active_path 过滤。CodeRabbit 意见已过时。
 
 #### CR-6 gemini `SmoothStreamer` 动态计算 inCodeBlock（high priority） — REJECTED
 
@@ -631,6 +631,15 @@ $ cargo fmt --all -- --check
 ```
 
 新增 2 个回归测试（`active_path_indices_case_insensitive_match` + `active_path_indices_case_insensitive_parent`），engine lib 总数从 802 → 804。
+
+### 9.4 第三轮 CodeRabbit follow-up 闭环（d335128 后 review）
+
+推送 d335128（§9.1~9.3 修复）后 CodeRabbit 在 audit md 上又提了 2 条 actionable comments，独立核验后均成立并修复（commit 待提交）：
+
+- **CR-7（line 591，MD038 残留）**：上一轮 CR-4 把 `` `#73 引入...` `` 改为 `` `Issue `#73` 引入...` `` 时，CommonMark 把 4 个 backtick 配对成 3 个 code span，其中 `` `Issue ` ``（末尾空格）和 `` ` 引入...` ``（首字符空格）触发 MD038。改写为不含嵌套 backtick 的描述：`含 \`#73\` 引入... 的行被误判为 heading。改为 \`Issue #73 引入...\`。`。
+- **CR-8（line 601，maintainer-local file URI）**：上一轮 CR-5 核验段落用了 `[webui/app.js:1526-1538](file:///d:/AIRP-Dev/webui/app.js#L1526-L1538)`，`file:///d:/...` 是 maintainer-specific 路径，在其他 checkout 上 broken，也违反项目"代码引用使用 plain path:line 文本"惯例（§2.B9 / §2.M1 等其他段落都用 plain text）。改为 `webui/app.js:1526-1538` plain text，与 §2.B9 / §2.M1 一致。
+
+本轮仅改 audit md，Rust/JS 代码无改动，§9.3 测试结果保持有效。
 
 - **审计 agent 模型**：GLM-5.2（本会话模型）
 - **审计原则**：按 `AGENTS.md` §"Audit Agent Charter" 三原则独立审计：(1) 不附和开发者结论；(2) 自由提出自己的想法；(3) 质疑历史决策并查证。
