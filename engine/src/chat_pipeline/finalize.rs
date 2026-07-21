@@ -16,6 +16,16 @@ use crate::{volume_manager, volume_store};
 use super::state_extract::extract_state_content;
 use super::types::FinalizerCtx;
 
+/// #290 F-2：风格审查自动触发间隔（轮数）。读 env `AIRP_STYLE_REVIEW_INTERVAL`，
+/// 默认 10；0 = 禁用自动审查。与 adapter 的 `AIRP_CHAT_REQUEST_TIMEOUT_MS` 同模式。
+fn style_review_interval() -> u64 {
+    const DEFAULT: u64 = 10;
+    std::env::var("AIRP_STYLE_REVIEW_INTERVAL")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT)
+}
+
 // ── finalize ──────────────────────────────────────────────────────────────────
 
 pub(super) async fn run_finalize(
@@ -132,6 +142,36 @@ pub(super) async fn run_finalize(
                         tracing::error!(err = %e, "维护任务失败");
                     }
                 });
+            }
+
+            // #290 F-2：风格审查自动触发。每 N 轮一次（N 由 env
+            // AIRP_STYLE_REVIEW_INTERVAL 控制，默认 10，0 = 禁用）。best-effort。
+            let review_interval = style_review_interval();
+            if review_interval > 0 && turn_count > 0 && turn_count % review_interval == 0 {
+                if let Some(ref cid) = ctx.character_id {
+                    let data_root = ctx.data_root.clone();
+                    let cid_clone = cid.clone();
+                    let session_id = ctx.session_id;
+                    let provider_config = ctx.provider_config.clone();
+                    let gen_params = ctx.gen_params.clone();
+                    let http_client = ctx.http_client.clone();
+                    join_set.spawn(async move {
+                        match crate::style::run_style_review_for_character(
+                            &http_client,
+                            provider_config,
+                            gen_params,
+                            &data_root,
+                            &cid_clone,
+                            session_id.as_ref(),
+                        )
+                        .await
+                        {
+                            Ok(true) => tracing::info!("风格审查已应用 drift"),
+                            Ok(false) => {}
+                            Err(e) => tracing::warn!(err = %e, "风格审查失败（best-effort）"),
+                        }
+                    });
+                }
             }
         }
 

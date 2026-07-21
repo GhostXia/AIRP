@@ -169,6 +169,38 @@ pub fn inject_soul_drift(data_root: &Path, character_id: &str, prompt: &mut Stri
     }
 }
 
+/// #290 F-3：Soul-Drift 超容量时调用 LLM 合并压缩。
+///
+/// 复用 `memory::compress_resident_memory` 的压缩 prompt。压缩结果必须真的
+/// 变小才落盘，否则保留原内容（enforce_capacity 已在写入时截断兜底）。
+pub async fn compress_soul_drift_if_needed(
+    client: &reqwest::Client,
+    provider_config: Arc<crate::adapter::ProviderConfig>,
+    gen_params: crate::adapter::GenerationParams,
+    data_root: &Path,
+    character_id: &str,
+) -> Result<bool, AirpError> {
+    let config = SoulDriftConfig::default();
+    let content = read_soul_drift(data_root, character_id)?;
+    if content.chars().count() <= config.capacity_chars {
+        return Ok(false);
+    }
+    let compressed = crate::memory::compress_resident_memory(
+        client,
+        provider_config,
+        gen_params,
+        &content,
+        config.capacity_chars,
+    )
+    .await?;
+    if !compressed.is_empty() && compressed.chars().count() < content.chars().count() {
+        write_soul_drift(data_root, character_id, &compressed)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

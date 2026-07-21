@@ -124,6 +124,68 @@ fn parse_review_report(text: &str) -> Result<StyleReviewReport, AirpError> {
     Ok(StyleReviewReport::default())
 }
 
+/// #290 F-2：对单个角色运行一次完整风格审查并应用 drift（可复用）。
+///
+/// 供 finalize 自动触发与 HTTP handler 共用。`data_root` 为 effective root；
+/// 风格 profile 从 `{data_root}/styles/profiles/default.md` best-effort 读取
+/// （per-user root 下不存在时用空 profile，审查仍基于一般一致性进行）。
+/// 返回是否应用了 drift patch。
+pub async fn run_style_review_for_character(
+    client: &reqwest::Client,
+    provider_config: Arc<ProviderConfig>,
+    gen_params: GenerationParams,
+    data_root: &std::path::Path,
+    character_id: &crate::types::CharacterId,
+    session_id: Option<&crate::types::SessionId>,
+) -> Result<bool, AirpError> {
+    // best-effort 读取风格 profile（per-user root 下可能不存在）。
+    let profile_path = data_root.join("styles").join("profiles").join("default.md");
+    let style_profile = std::fs::read_to_string(&profile_path).unwrap_or_default();
+
+    // 读取最近 10 条 assistant 消息。
+    let history = crate::domain::ChatService::new(data_root).history(character_id, session_id)?;
+    let recent_messages: Vec<String> = history
+        .messages
+        .iter()
+        .filter(|m| m.role == crate::adapter::MessageRole::Assistant)
+        .rev()
+        .take(10)
+        .map(|m| m.content.clone())
+        .collect();
+
+    if recent_messages.is_empty() {
+        return Ok(false);
+    }
+
+    let current_drift = crate::style::read_soul_drift(data_root, character_id.as_str())?;
+
+    let report = run_style_review(
+        client,
+        provider_config.clone(),
+        gen_params.clone(),
+        &style_profile,
+        &recent_messages,
+        &current_drift,
+    )
+    .await?;
+
+    if report.drift_patch.trim().is_empty() {
+        return Ok(false);
+    }
+
+    crate::style::append_soul_drift(data_root, character_id.as_str(), &report.drift_patch)?;
+    // F-3：超容量时 LLM 压缩（best-effort）。
+    let _ = crate::style::compress_soul_drift_if_needed(
+        client,
+        provider_config,
+        gen_params,
+        data_root,
+        character_id.as_str(),
+    )
+    .await;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
