@@ -102,12 +102,54 @@ pub async fn compress_resident_memory(
 
     let compressed = cleanup_compression_output(&result);
 
-    // 若压缩结果为空或比原文更长，返回原文
-    if compressed.trim().is_empty() || compressed.chars().count() >= content.chars().count() {
-        Ok(content.to_string())
-    } else {
-        Ok(compressed)
+    // #274 F-1: 膨胀校验 + warn
+    let (final_result, fallback_reason) =
+        decide_compression_result(content, &compressed, target_chars);
+    if let Some(reason) = fallback_reason {
+        tracing::warn!(
+            reason = reason,
+            original_len = content.chars().count(),
+            compressed_len = compressed.chars().count(),
+            target_chars,
+            "compress_resident_memory: LLM 输出未达压缩目标，保留原内容"
+        );
     }
+    Ok(final_result)
+}
+
+/// 决定压缩结果：接受 compressed 还是回退到原内容。
+///
+/// #274 F-1 抽出为独立函数便于单测。返回 `(最终结果, 回退原因)`；
+/// `回退原因 = None` 表示接受 compressed，`Some(reason)` 表示回退到原内容。
+///
+/// 回退条件（任一满足即回退）：
+/// 1. `compressed` 为空（LLM 完全没产出有效输出）
+/// 2. `compressed_len >= original_len`（LLM 反而膨胀）
+/// 3. `compressed_len > target_chars`（LLM 没压到容量内，避免半压缩结果
+///    在下一轮再次触发压缩，形成"压缩-未达标-再压缩"循环）
+fn decide_compression_result(
+    content: &str,
+    compressed: &str,
+    target_chars: usize,
+) -> (String, Option<&'static str>) {
+    if compressed.trim().is_empty() {
+        return (content.to_string(), Some("empty_compressed_output"));
+    }
+    let compressed_len = compressed.chars().count();
+    let original_len = content.chars().count();
+    if compressed_len >= original_len {
+        return (
+            content.to_string(),
+            Some("compressed_not_shorter_than_original"),
+        );
+    }
+    if compressed_len > target_chars {
+        return (
+            content.to_string(),
+            Some("compressed_exceeds_target_capacity"),
+        );
+    }
+    (compressed.to_string(), None)
 }
 
 #[cfg(test)]
@@ -159,5 +201,80 @@ mod tests {
         let cleaned = cleanup_compression_output(raw);
         assert!(cleaned.contains("- 第一条"));
         assert!(cleaned.contains("\n\n- 第二条"));
+    }
+
+    // #274 F-1: decide_compression_result 单测
+    #[test]
+    fn decide_accepts_compressed_within_capacity() {
+        let content = "abcdefghij"; // 10 chars
+        let compressed = "abcde"; // 5 chars
+        let (result, reason) = decide_compression_result(content, compressed, 8);
+        assert_eq!(result, "abcde");
+        assert!(reason.is_none(), "expected accept, got {:?}", reason);
+    }
+
+    #[test]
+    fn decide_falls_back_when_compressed_is_empty() {
+        let content = "abcdefghij";
+        let (result, reason) = decide_compression_result(content, "", 8);
+        assert_eq!(result, "abcdefghij");
+        assert_eq!(reason, Some("empty_compressed_output"));
+    }
+
+    #[test]
+    fn decide_falls_back_when_compressed_is_whitespace_only() {
+        let content = "abcdefghij";
+        let (result, reason) = decide_compression_result(content, "   \n  ", 8);
+        assert_eq!(result, "abcdefghij");
+        assert_eq!(reason, Some("empty_compressed_output"));
+    }
+
+    #[test]
+    fn decide_falls_back_when_compressed_not_shorter_than_original() {
+        let content = "abcde"; // 5 chars
+        let compressed = "abcdef"; // 6 chars（比原文长）
+        let (result, reason) = decide_compression_result(content, compressed, 100);
+        assert_eq!(result, "abcde");
+        assert_eq!(reason, Some("compressed_not_shorter_than_original"));
+    }
+
+    #[test]
+    fn decide_falls_back_when_compressed_equals_original_length() {
+        // 等长也算未压缩（>= 而不是 >）
+        let content = "abcde";
+        let compressed = "edcba";
+        let (result, reason) = decide_compression_result(content, compressed, 100);
+        assert_eq!(result, "abcde");
+        assert_eq!(reason, Some("compressed_not_shorter_than_original"));
+    }
+
+    #[test]
+    fn decide_falls_back_when_compressed_exceeds_target_capacity() {
+        // compressed 比原文短，但仍超过 target_chars
+        let content = "abcdefghij"; // 10 chars
+        let compressed = "abcdefg"; // 7 chars
+        let (result, reason) = decide_compression_result(content, compressed, 5);
+        assert_eq!(result, "abcdefghij");
+        assert_eq!(reason, Some("compressed_exceeds_target_capacity"));
+    }
+
+    #[test]
+    fn decide_accepts_compressed_equal_to_target_capacity() {
+        // compressed_len == target_chars：边界条件，接受
+        let content = "abcdefghij"; // 10 chars
+        let compressed = "abcde"; // 5 chars
+        let (result, reason) = decide_compression_result(content, compressed, 5);
+        assert_eq!(result, "abcde");
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn decide_handles_multibyte_chars_correctly() {
+        // 中文字符：chars().count() 按 Unicode 标量值计数，不是字节
+        let content = "用户喜欢猫和狗"; // 7 chars
+        let compressed = "爱猫狗"; // 3 chars
+        let (result, reason) = decide_compression_result(content, compressed, 5);
+        assert_eq!(result, "爱猫狗");
+        assert!(reason.is_none());
     }
 }
