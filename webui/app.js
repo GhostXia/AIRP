@@ -1096,6 +1096,8 @@
     refreshEffectivePersona();
     // #126 D-PR2：切角色后加载主面板 lorebook-section。
     loadLorebook();
+    // 审计 W2：切角色时若 memory tab 可见则自动重载，避免显示旧角色记忆
+    if (memoryTabVisible()) loadResidentMemory();
     rememberWorkspace();
     refreshAssemblyPreview();
   });
@@ -1105,6 +1107,8 @@
     loadHistory();
     // #114 C-PR1：切会话后刷新 effective persona + 绑定按钮。
     refreshEffectivePersona();
+    // 审计 W2：切会话时若 memory tab 可见则自动重载（resident memory 按 session 分文件存储）
+    if (memoryTabVisible()) loadResidentMemory();
     rememberWorkspace();
     refreshAssemblyPreview();
   });
@@ -2681,6 +2685,95 @@
     }
   }
 
+  // ── 记忆 Tab（2.4 记忆可见性） ────────────────────────────────────────
+  // 审计 W2 修复：
+  //  - dirty 跟踪：编辑未保存时状态栏显示 ●，保存成功清除
+  //  - char_count 用 Array.from(str).length 计算码点数，与 Rust chars().count() 对齐
+  //  - 角色卡/会话切换时若 memory tab 可见则自动重载
+  const wbMemoryContent = $('#wb-memory-content');
+  const wbMemoryStats = $('#wb-memory-stats');
+  const wbMemoryStatus = $('#wb-memory-status');
+  const btnWbMemoryRefresh = $('#btn-wb-memory-refresh');
+  const btnWbMemorySave = $('#btn-wb-memory-save');
+  let wbMemoryDirty = false;
+
+  function setMemoryDirty(dirty) {
+    wbMemoryDirty = dirty;
+    if (wbMemoryStatus) {
+      // 状态文字保留，只在前面加 ● 标记
+      const text = wbMemoryStatus.textContent || '';
+      const cleaned = text.replace(/^●\s*/, '');
+      wbMemoryStatus.textContent = dirty ? '● ' + cleaned : cleaned;
+    }
+  }
+
+  function memoryTabVisible() {
+    const tab = $('#wb-tab-memory');
+    return tab && !tab.hidden;
+  }
+
+  // 计算字符串的 Unicode 码点数（与 Rust `str::chars().count()` 对齐）。
+  // JS string length 是 UTF-16 code unit 数，对辅助平面字符（如部分 emoji）
+  // 会多算一倍，导致 PUT 后服务端 char_count 与前端显示不一致。
+  function codePointCount(s) {
+    return Array.from(s).length;
+  }
+
+  async function loadResidentMemory() {
+    if (!selectedChar) {
+      wbMemoryContent.value = '';
+      wbMemoryStats.textContent = '';
+      wbMemoryStatus.textContent = '请先选择角色';
+      setMemoryDirty(false);
+      return;
+    }
+    wbMemoryStatus.textContent = '加载中…';
+    let url = '/v1/memory/resident?character_id=' + encodeURIComponent(selectedChar);
+    if (selectedSess) url += '&session_id=' + encodeURIComponent(selectedSess);
+    const r = await api('GET', url);
+    if (r.ok && r.data) {
+      wbMemoryContent.value = r.data.content || '';
+      wbMemoryStats.textContent = '字符数: ' + r.data.char_count + ' / ' + r.data.capacity;
+      wbMemoryStatus.textContent = '—';
+      setMemoryDirty(false);
+    } else {
+      wbMemoryContent.value = '';
+      wbMemoryStats.textContent = '';
+      wbMemoryStatus.textContent = '加载失败: ' + formatError(r.data, r.text);
+      setMemoryDirty(false);
+    }
+  }
+
+  async function saveResidentMemory() {
+    if (!selectedChar) return;
+    wbMemoryStatus.textContent = '保存中…';
+    btnWbMemorySave.disabled = true;
+    const payload = {
+      character_id: selectedChar,
+      session_id: selectedSess || null,
+      content: wbMemoryContent.value,
+    };
+    const r = await api('PUT', '/v1/memory/resident', payload);
+    btnWbMemorySave.disabled = false;
+    if (r.ok) {
+      wbMemoryStatus.textContent = '已保存 ✓';
+      setMemoryDirty(false);
+      // 审计 W2：用码点数而非 UTF-16 code unit 数，与服务端 char_count 一致
+      const cap = wbMemoryStats.textContent.split('/').pop().trim() || '';
+      wbMemoryStats.textContent = '字符数: ' + codePointCount(wbMemoryContent.value) + ' / ' + cap;
+    } else {
+      wbMemoryStatus.textContent = '保存失败: ' + formatError(r.data, r.text);
+    }
+  }
+
+  if (btnWbMemoryRefresh) btnWbMemoryRefresh.addEventListener('click', loadResidentMemory);
+  if (btnWbMemorySave) btnWbMemorySave.addEventListener('click', saveResidentMemory);
+  if (wbMemoryContent) {
+    wbMemoryContent.addEventListener('input', () => {
+      if (!wbMemoryDirty) setMemoryDirty(true);
+    });
+  }
+
   async function loadLorebook() {
     if (!selectedChar) return;
     // CR#2: 自增 requestId 并在 response 回来时校验，避免快速切角色时旧响应覆盖新数据
@@ -3184,9 +3277,13 @@
       const target = tab.dataset.tab;
       $('#wb-tab-card').hidden = target !== 'card';
       $('#wb-tab-decompose').hidden = target !== 'decompose';
+      $('#wb-tab-memory').hidden = target !== 'memory';
       if (target === 'decompose') {
         loadAnalysisFileList();
         loadPresetOptions(); // L4：切到拆解 tab 时加载预设列表
+      }
+      if (target === 'memory') {
+        loadResidentMemory();
       }
     });
   });

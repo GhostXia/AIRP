@@ -169,6 +169,19 @@ pub(super) fn prepare_scene_pipeline(
                 content: recent_context,
             });
         }
+        // 2.1 常驻有界记忆注入
+        let mut resident_memory = String::new();
+        crate::memory::inject_resident_memory(sd, &mut resident_memory);
+        if !resident_memory.is_empty() {
+            system_prompt.push_str(&resident_memory);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "memory",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
+                display_name: "常驻记忆",
+                content: resident_memory,
+            });
+        }
         let mut related_history = String::new();
         inject_volume_context(sd, &payload.message, &mut related_history);
         if !related_history.is_empty() {

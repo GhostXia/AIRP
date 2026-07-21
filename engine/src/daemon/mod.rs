@@ -39,13 +39,14 @@ use handlers::{
     delete_session_endpoint, edit_message, get_character_avatar, get_character_card,
     get_character_lorebook, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_effective_persona_endpoint,
-    get_persona_endpoint, get_persona_multi_endpoint, get_preset_endpoint, get_scene_endpoint,
-    get_settings, import_character, import_preset_endpoint, list_agent_tools, list_characters,
-    list_models, list_personas_endpoint, list_presets_endpoint, list_scenes_endpoint,
-    list_sessions_endpoint, preview_chat_assembly, reextract_character_assets, regen_chat,
-    rollback_chat, swipe_chat, switch_branch, unbind_persona_endpoint, update_character_card,
-    update_character_lorebook, update_persona_endpoint, update_persona_multi_endpoint,
-    update_settings,
+    get_persona_endpoint, get_persona_multi_endpoint, get_preset_endpoint, get_resident_memory,
+    get_scene_endpoint, get_settings, get_user_model, import_character, import_preset_endpoint,
+    list_agent_tools, list_characters, list_models, list_personas_endpoint, list_presets_endpoint,
+    list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
+    reextract_character_assets, regen_chat, rollback_chat, swipe_chat, switch_branch,
+    unbind_persona_endpoint, update_character_card, update_character_lorebook,
+    update_persona_endpoint, update_persona_multi_endpoint, update_resident_memory,
+    update_settings, update_user_model,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -400,6 +401,19 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             axum::routing::delete(delete_session_endpoint),
         )
         .route("/v1/settings", get(get_settings).post(update_settings))
+        // ── Memory API（2.4 记忆可见性） ────────────────────────────────────
+        // 审计 B2 修复：PUT 路由配置 2MB body limit，与项目硬约束
+        // "PUT endpoints must have body limit configured (2MB) to prevent DoS attacks" 对齐。
+        .route(
+            "/v1/memory/resident",
+            get(get_resident_memory)
+                .put(update_resident_memory.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
+        )
+        .route(
+            "/v1/memory/user-model",
+            get(get_user_model)
+                .put(update_user_model.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
+        )
         // ── Decompose Agent Flow（Task 7） ──────────────────────────────────
         .route(
             "/v1/characters/:character_id/decompose",
