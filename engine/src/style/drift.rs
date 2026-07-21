@@ -73,7 +73,21 @@ pub fn read_soul_drift(data_root: &Path, character_id: &str) -> Result<String, A
 ///
 /// 审计修复：写入前强制容量上限，超限截断到最近完整行，防止超量内容被
 /// 整体注入后续 system prompt。
+///
+/// 审计再修复（CodeRabbit 22:26）：直接写入也持有每角色锁，与 append
+/// 互斥，防止 write-vs-append 竞态。
 pub fn write_soul_drift(
+    data_root: &Path,
+    character_id: &str,
+    content: &str,
+) -> Result<(), AirpError> {
+    let lock = drift_lock(character_id);
+    let _guard = lock.lock().expect("drift lock poisoned");
+    write_soul_drift_unlocked(data_root, character_id, content)
+}
+
+/// 内部写入实现（不加锁）。调用方必须已持有每角色锁。
+fn write_soul_drift_unlocked(
     data_root: &Path,
     character_id: &str,
     content: &str,
@@ -118,18 +132,23 @@ fn enforce_capacity(content: &str, capacity: usize) -> String {
 /// 追加内容到 soul drift。
 ///
 /// 审计修复：整个 read-modify-write 过程持有每角色锁，防止并发丢失更新。
+///
+/// 审计再修复（CodeRabbit 22:26）：原实现 `let _guard = drift_lock(...)` 只持有
+/// Arc 而未调用 `.lock()`，锁从未生效。现在真正获取 MutexGuard，且内部
+/// 调用无锁版写入避免重入死锁。
 pub fn append_soul_drift(
     data_root: &Path,
     character_id: &str,
     content: &str,
 ) -> Result<(), AirpError> {
-    let _guard = drift_lock(character_id);
+    let lock = drift_lock(character_id);
+    let _guard = lock.lock().expect("drift lock poisoned");
     let mut existing = read_soul_drift(data_root, character_id)?;
     if !existing.is_empty() && !existing.ends_with('\n') {
         existing.push('\n');
     }
     existing.push_str(content);
-    write_soul_drift(data_root, character_id, &existing)
+    write_soul_drift_unlocked(data_root, character_id, &existing)
 }
 
 /// 把 soul_drift.md 注入到 System Prompt 的 `[Soul Drift]` 段。
