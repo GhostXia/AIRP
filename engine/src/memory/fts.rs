@@ -196,6 +196,10 @@ impl FtsStore {
             changed.push((key, revision, log));
         }
 
+        if changed.is_empty() && indexed.keys().all(|session_id| seen.contains(session_id)) {
+            return Ok(());
+        }
+
         let mut conn = connection
             .lock()
             .map_err(|e| AirpError::Internal(format!("FTS connection poisoned: {e}")))?;

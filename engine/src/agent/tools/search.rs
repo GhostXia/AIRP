@@ -39,10 +39,15 @@ impl Tool for SessionSearchTool {
                 .and_then(Value::as_str)
                 .ok_or_else(|| AirpError::BadRequest("query is required".to_string()))?;
             let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
+            let query = query.to_string();
 
-            let results = state
-                .fts
-                .search_history(&state.data_root, &cid, query, limit)?;
+            let results = tokio::task::spawn_blocking(move || {
+                state
+                    .fts
+                    .search_history(&state.data_root, &cid, &query, limit)
+            })
+            .await
+            .map_err(|error| AirpError::Internal(format!("FTS search task failed: {error}")))??;
 
             let out: Vec<Value> = results
                 .iter()
