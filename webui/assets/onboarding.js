@@ -309,8 +309,17 @@
           location.href = '02-chat-space.html?character=' + encodeURIComponent(state.characterId) + '&session=' + encodeURIComponent(state.sessionId);
         }, 'btn-primary'));
       } catch (error) {
-        result.textContent = result.textContent || '未收到完整回复。';
+        const uncertain = error && ['partially_committed', 'unknown'].includes(error.commitState);
+        result.textContent = result.textContent || (uncertain
+          ? '写入状态不确定；请先刷新历史确认，不要直接重发。'
+          : '未收到完整回复。');
         setStatus('首轮对话失败：' + errorMessage(error), true);
+        if (uncertain) {
+          message.control.disabled = true;
+          send.replaceWith(button('打开对话历史确认 →', () => {
+            location.href = '02-chat-space.html?character=' + encodeURIComponent(state.characterId) + '&session=' + encodeURIComponent(state.sessionId);
+          }, 'btn-primary'));
+        }
       } finally { if (send.isConnected) setBusy(send, false, '正在生成…'); }
     }, 'btn-primary');
     card.appendChild(footer({ actions: [send] }));

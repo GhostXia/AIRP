@@ -1,8 +1,8 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-07-20（PR #268 合并后校准）
+> 基线日期：2026-07-22（`main@88bef3e`；PR #294 为待合并候选证据）
 >
-> 前置实现基线：`main@7895f8c`；本次校准吸收 PR #233–#268 的全部变更
+> 已合并实现基线：`main@88bef3e`；PR #294 能力在合并前均按“候选”记录，以该 PR 最新 head 的 `UI and WebUI`、`Production topology`、`Portable Windows WebUI` 与 `Rust workspace` required checks 为自动化证据
 >
 > 用途：新开发 session 的第一事实入口。源码、manifest、测试和可重复运行证据高于本文；GitHub issues 是未完成工作的实时追踪面。
 

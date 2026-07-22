@@ -51,7 +51,7 @@ Browser
   - **失败分类法**：按阶段（部署健康检查 / provider 配置 / 模型验证 / 角色导入 / Persona/Preset 选择 / 首轮对话）× 类型（UX 混淆 / 错误信息不可行动 / 资产格式不兼容 / provider 特定 / 网络 / 崩溃）记录失败并补回归覆盖；
   - **恢复边界**：页面刷新后继续与服务重启后继续分别验收，不能把其中一项通过写成两项都通过。
 - **ST 格式资产兼容性**：使用 AIRP 自有或合成的代表性 fixture 覆盖 PNG 角色卡、`character_book` 与 preset JSON 的导入、可见配置和首聊使用；不得复制第三方测试、数据集或资产。
-- **当前缺口**：PR #294 候选已用权威样板壳重建独立 6-stage onboarding，并把完整首轮流式对话纳入 production browser smoke；旧 PR #212 的 Port/dynamic-import 宿主实现已被替换。仍需用真实 provider、目标浏览器/设备记录刷新与重启恢复，并根据真实用户首聊补实际阻塞。Shadow DOM 与 Port 版本协商只适用于已淘汰宿主边界，合并后应重新评估 #210/#211，而不是机械移植。
+- **当前缺口**：PR #294 候选已用权威样板壳重建独立 6-stage onboarding，并把完整首轮流式对话纳入 production browser smoke；PR #294 自身的 mock-provider production topology、页面刷新、服务重启和 Windows 真 Chrome 候选验证已通过。尚未完成的是通用发布验收：用真实 provider 在目标浏览器/设备复核首聊、刷新与重启恢复，并根据真实用户首聊补实际阻塞；不应把这项缺口写成 PR #294 的 CI 未验证。旧 PR #212 的 Port/dynamic-import 宿主实现已被替换；Shadow DOM 与 Port 版本协商只适用于已淘汰宿主边界，合并后应重新评估 #210/#211，而不是机械移植。
 - Persona/Preset 具备可理解的管理、选择和有效配置摘要；角色/会话切换不会静默改变或丢失绑定。
 - 角色卡、世界书、Preset、Persona、会话和聊天历史的关键 CRUD 不依赖开发工作台或手写 JSON。
 - 连续流式聊天、停止、重试、regen、rollback、历史分页、刷新恢复、Swipe 多候选切换、Smooth Streaming、auto-regen、continue、per-message actions 和单条删除可稳定日用；branch/edit 若首发不交付，UI 必须诚实隐藏或标明不可用。

@@ -8,6 +8,7 @@ const chatPage = await readFile(new URL('../screens/02-chat-space.html', import.
 const onboardingPage = await readFile(new URL('../screens/16-onboarding.html', import.meta.url), 'utf8');
 const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
+const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
 
 test('runtime entry redirects through an external CSP-compatible script', () => {
   assert.match(entryPage, /assets\/entry\.js/);
@@ -22,6 +23,12 @@ test('first-run onboarding uses a dedicated real-backend runtime', () => {
   assert.match(onboardingPage, /assets\/api-client\.js/);
   assert.match(onboardingPage, /assets\/onboarding\.js/);
   assert.doesNotMatch(onboardingPage, /assets\/console-runtime\.js/);
+});
+
+test('first-run onboarding blocks blind resend after an uncertain commit', () => {
+  assert.match(onboardingScript, /\['partially_committed', 'unknown'\]\.includes\(error\.commitState\)/);
+  assert.match(onboardingScript, /message\.control\.disabled = true/);
+  assert.match(onboardingScript, /打开对话历史确认/);
 });
 
 for (const [name, html] of [['role list', rolePage], ['chat space', chatPage]]) {
