@@ -17,10 +17,11 @@ test('role list wires DELETE /v1/characters/:id with confirmation', () => {
   assert.match(roleScript, /此操作不可撤销/);
 });
 
-test('role list renders a per-card delete button with stopPropagation', () => {
+test('role list renders a per-card delete button as sibling control', () => {
   assert.match(roleScript, /cc-delete/);
-  assert.match(roleScript, /event\.stopPropagation\(\)/);
+  assert.match(roleScript, /cc-open/);
   assert.match(roleScript, /aria-label.*删除角色/);
+  assert.doesNotMatch(roleScript, /role', 'button'/);
 });
 
 // ── B12: Delete session ────────────────────────────────────────────────────

@@ -30,7 +30,7 @@
 .session-row.active { background: var(--primary-tint); }
 .session-btn { flex: 1; min-width: 0; }
 .session-delete { flex: none; border: 0; background: transparent; color: var(--text-tertiary); font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-input); opacity: 0; transition: opacity 0.15s; }
-.session-row:hover .session-delete { opacity: 1; }
+.session-row:hover .session-delete, .session-row:focus-within .session-delete { opacity: 1; }
 .session-delete:hover { color: var(--danger); background: var(--bg-subtle); }
 .search-group { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .search-input { width: 160px; font-size: 11px; padding: 4px 8px; }

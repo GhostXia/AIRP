@@ -23,8 +23,9 @@
 .side-actions { margin-top: auto; padding-top: 16px; }
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .char-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.char-card { text-align: left; cursor: pointer; position: relative; }
-.char-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.char-card { text-align: left; cursor: pointer; position: relative; display: flex; flex-direction: column; }
+.char-card:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cc-open { flex: 1; border: 0; background: transparent; text-align: left; cursor: pointer; padding: 0; font: inherit; color: inherit; display: flex; flex-direction: column; gap: inherit; }
 .cc-delete { position: absolute; top: 8px; right: 8px; border: 0; background: transparent; color: var(--text-tertiary); font-size: 11px; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-input); opacity: 0; transition: opacity 0.15s; }
 .char-card:hover .cc-delete, .char-card:focus-within .cc-delete { opacity: 1; }
 .cc-delete:hover { color: var(--danger); background: var(--bg-subtle); }

@@ -395,7 +395,7 @@
     try {
       const data = await client.request('POST', '/v1/chat/search', { character_id: characterId, session_id: sessionId || null, query, limit: 20 });
       const results = Array.isArray(data && data.results) ? data.results : [];
-      if (!results.length) { log('chat.search.empty', '无匹配结果'); return; }
+      if (!results.length) { log('chat.search.empty', '无匹配结果'); emptyState('无匹配结果', '没有找到包含“' + query + '”的历史消息。'); return; }
       flow.replaceChildren();
       const heading = document.createElement('div');
       heading.className = 'search-heading';

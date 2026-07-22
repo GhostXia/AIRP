@@ -87,10 +87,11 @@
     for (const item of visible) {
       const card = document.createElement('div');
       card.className = 'char-card';
-      card.setAttribute('role', 'button');
-      card.tabIndex = 0;
-      card.addEventListener('click', () => openCharacter(item.id));
-      card.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openCharacter(item.id); } });
+
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'cc-open';
+      open.addEventListener('click', () => openCharacter(item.id));
 
       const head = document.createElement('span');
       head.className = 'cc-head';
@@ -119,15 +120,16 @@
       action.className = 'cc-model';
       action.textContent = '打开对话 →';
       foot.append(state, action);
+      open.append(head, description, foot);
 
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'cc-delete';
       del.textContent = '删除';
       del.setAttribute('aria-label', '删除角色 ' + item.name);
-      del.addEventListener('click', event => { event.stopPropagation(); deleteCharacter(item.id, item.name); });
+      del.addEventListener('click', () => deleteCharacter(item.id, item.name));
 
-      card.append(head, description, foot, del);
+      card.append(open, del);
       grid.appendChild(card);
     }
   }
