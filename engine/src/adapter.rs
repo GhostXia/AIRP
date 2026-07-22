@@ -12,7 +12,8 @@ use std::time::Duration;
 /// upstream 接受连接但不响应时，`request.send().await` 会一直 hang（直到 OS/TCP keepalive
 /// 超时，可能数分钟）。本 timeout 用 `tokio::time::timeout` 包 `request.send().await`——
 /// `send()` 收到响应头即返回，body streaming 在 `send` 返回后才由 `bytes_stream()` 消费，
-/// 故 timeout 仅覆盖"建连到响应头"阶段，对流式 SSE 慢 token 不误杀，恰挡"建连后挂死"。
+/// 故 timeout 仅覆盖"建连到响应头"阶段；response body 的挂死由
+/// `stream_idle_timeout` 单独保护，不限制持续产生 chunk 的总时长。
 ///
 /// ⚠️ 不用 `RequestBuilder::timeout`：reqwest 文档明确它套到**整个 response body 接收完成**
 /// （含 streaming body），长文本生成超阈值会被截断。审计 G1/G2 曾误用，已改。
@@ -27,6 +28,37 @@ fn chat_request_timeout() -> Duration {
         .filter(|n| *n > 0)
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT)
+}
+
+/// Maximum time allowed between two upstream response body chunks.
+///
+/// Unlike a request-wide timeout, this only fires while the provider is idle,
+/// so a long generation remains valid as long as bytes continue to arrive.
+fn stream_idle_timeout() -> Duration {
+    const DEFAULT: Duration = Duration::from_secs(60);
+    std::env::var("AIRP_STREAM_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT)
+}
+
+async fn next_stream_item_with_idle_timeout<S>(
+    stream: &mut S,
+    idle_timeout: Duration,
+) -> Result<Option<S::Item>, String>
+where
+    S: Stream + Unpin,
+{
+    tokio::time::timeout(idle_timeout, stream.next())
+        .await
+        .map_err(|_| {
+            format!(
+                "流式响应空闲超时: 连续 {} 秒未收到数据",
+                idle_timeout.as_secs()
+            )
+        })
 }
 
 /// DX-6：后端引擎选择。控制 AIRP 如何调用上游 LLM 服务。
@@ -148,7 +180,7 @@ pub fn call_streaming_api(
 
         // #67 #7 / 审计 G1：用 tokio::time::timeout 包 request.send().await，仅保护
         // "建连到响应头"阶段。send() 收到响应头即返回，body streaming 在 send 返回后
-        // 才由 bytes_stream() 消费——故慢 token 不误杀，恰挡"建连后挂死"。
+        // 才由 bytes_stream() 消费；body 的挂死由下方 per-chunk idle timeout 保护。
         // ⚠️ 不用 RequestBuilder::timeout（套到整个 response body 接收完成，会误杀长文本流式）。
         //
         // #117 A：outbound client 已设 `redirect::Policy::none()`，provider 任何 3xx 都会
@@ -176,7 +208,10 @@ pub fn call_streaming_api(
         };
         let mut line_buffer = Vec::new();
 
-        while let Some(chunk_result) = byte_stream.next().await {
+        let idle_timeout = stream_idle_timeout();
+        while let Some(chunk_result) =
+            next_stream_item_with_idle_timeout(&mut byte_stream, idle_timeout).await?
+        {
             let chunk: Bytes = chunk_result.map_err(|e| format!("读取流数据包失败: {}", e))?;
             for &b in chunk.iter() {
                 if b == b'\n' {
@@ -281,7 +316,10 @@ pub fn call_streaming_api_anthropic(
         let mut current_event: Option<String> = None;
         let mut line_buffer = Vec::new();
 
-        while let Some(chunk_result) = byte_stream.next().await {
+        let idle_timeout = stream_idle_timeout();
+        while let Some(chunk_result) =
+            next_stream_item_with_idle_timeout(&mut byte_stream, idle_timeout).await?
+        {
             let chunk: Bytes = chunk_result.map_err(|e| format!("读取流数据包失败: {}", e))?;
             for &b in chunk.iter() {
                 if b == b'\n' {
@@ -391,6 +429,7 @@ fn parse_openai_sse_line(line: &str) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::stream;
 
     #[test]
     fn test_message_role_serde_lowercase() {
@@ -503,5 +542,38 @@ mod tests {
     #[test]
     fn test_parse_anthropic_delta_line_invalid_json_returns_none() {
         assert_eq!(parse_anthropic_delta_line("data: notjson"), None);
+    }
+
+    #[tokio::test]
+    async fn stream_item_times_out_when_upstream_stays_idle() {
+        let mut stalled = stream::pending::<u8>();
+
+        let error = next_stream_item_with_idle_timeout(&mut stalled, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("流式响应空闲超时"));
+    }
+
+    #[tokio::test]
+    async fn stream_idle_timeout_resets_after_each_item() {
+        let mut items = Box::pin(stream::unfold(0_u8, |item| async move {
+            if item == 6 {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Some((item, item + 1))
+        }));
+
+        let idle_timeout = Duration::from_millis(80);
+        let mut received = Vec::new();
+        while let Some(item) = next_stream_item_with_idle_timeout(&mut items, idle_timeout)
+            .await
+            .unwrap()
+        {
+            received.push(item);
+        }
+
+        assert_eq!(received, vec![0, 1, 2, 3, 4, 5]);
     }
 }

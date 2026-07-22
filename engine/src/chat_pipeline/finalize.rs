@@ -26,19 +26,6 @@ fn style_review_interval() -> u64 {
         .unwrap_or(DEFAULT)
 }
 
-/// CodeRabbit PR #291 follow-up：风格审查任务整体超时秒数。
-/// best-effort，防止 stalled provider 阻塞 run_finalize 的 join_set 等待。
-/// 读 env `AIRP_STYLE_REVIEW_TIMEOUT_SECS`，默认 180；0 视为 180（不允许禁用）。
-/// 比 user_model 抽取（120s）略长，因 style review 可能触发 soul drift 压缩。
-fn style_review_timeout() -> u64 {
-    const DEFAULT: u64 = 180;
-    std::env::var("AIRP_STYLE_REVIEW_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(DEFAULT)
-}
-
 // ── finalize ──────────────────────────────────────────────────────────────────
 
 pub(super) async fn run_finalize(
@@ -169,26 +156,21 @@ pub(super) async fn run_finalize(
                     let gen_params = ctx.gen_params.clone();
                     let http_client = ctx.http_client.clone();
                     join_set.spawn(async move {
-                        let timeout_secs = style_review_timeout();
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(timeout_secs),
-                            crate::style::run_style_review_for_character(
-                                &http_client,
-                                provider_config,
-                                gen_params,
-                                &data_root,
-                                &cid_clone,
-                                session_id.as_ref(),
-                            ),
+                        match crate::style::run_style_review_for_character(
+                            &http_client,
+                            provider_config,
+                            gen_params,
+                            &data_root,
+                            &cid_clone,
+                            session_id.as_ref(),
                         )
                         .await
                         {
-                            Ok(Ok(true)) => tracing::info!("风格审查已应用 drift"),
-                            Ok(Ok(false)) => {}
-                            Ok(Err(e)) => {
+                            Ok(true) => tracing::info!("风格审查已应用 drift"),
+                            Ok(false) => {}
+                            Err(e) => {
                                 tracing::warn!(err = %e, "风格审查失败（best-effort）")
                             }
-                            Err(_) => tracing::warn!(timeout_secs, "风格审查超时（best-effort）"),
                         }
                     });
                 }
@@ -242,9 +224,8 @@ pub(super) async fn run_finalize(
     //
     // CodeRabbit #1+#2：此任务不依赖 session_dir（只用 data_root /
     // character_id / session_id），故移出 volume side-effects 块。
-    // 改为 fire-and-forget + timeout，防止 stalled provider 阻塞
-    // run_finalize（join_set 已等待封卷/维护/记忆抽取，不应再被用户
-    // 模型抽取拖住）。best-effort：失败/超时只 tracing，不影响主流程。
+    // 保持 fire-and-forget，避免用户模型抽取拖住 run_finalize。
+    // best-effort：失败只 tracing，不影响主流程。
     if ctx.user_id.is_some() {
         let data_root = ctx.data_root.clone();
         let session_id = ctx.session_id;
@@ -255,40 +236,23 @@ pub(super) async fn run_finalize(
         let assistant_content = cleaned_acc.clone();
 
         tokio::spawn(async move {
-            let timeout_secs = user_model_extraction_timeout();
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(timeout_secs),
-                run_user_model_extraction(
-                    &http_client,
-                    provider_config,
-                    gen_params,
-                    &data_root,
-                    character_id.as_ref(),
-                    session_id.as_ref(),
-                    &assistant_content,
-                ),
+            if let Err(e) = run_user_model_extraction(
+                &http_client,
+                provider_config,
+                gen_params,
+                &data_root,
+                character_id.as_ref(),
+                session_id.as_ref(),
+                &assistant_content,
             )
             .await
             {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::warn!(err = %e, "用户模型抽取失败（best-effort）"),
-                Err(_) => tracing::warn!(timeout_secs, "用户模型抽取超时（best-effort）"),
+                tracing::warn!(err = %e, "用户模型抽取失败（best-effort）");
             }
         });
     }
 
     Ok(())
-}
-
-/// 用户模型抽取的超时秒数。读 env `AIRP_USER_MODEL_EXTRACT_TIMEOUT_SECS`，
-/// 默认 120；0 视为 120（不允许禁用超时）。与 `style_review_interval` 同模式。
-fn user_model_extraction_timeout() -> u64 {
-    const DEFAULT: u64 = 120;
-    std::env::var("AIRP_USER_MODEL_EXTRACT_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(DEFAULT)
 }
 
 /// Writes `state` to `characters/{character_id}/state/live.json` (overwrite).
