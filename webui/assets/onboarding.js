@@ -49,7 +49,7 @@
     wrap.appendChild(node('span', 'field-label', label));
     const control = document.createElement(options && options.multiline ? 'textarea' : options && options.select ? 'select' : 'input');
     control.className = options && options.multiline ? 'textarea' : options && options.select ? 'select' : 'input';
-    if (options && options.type) control.type = options.type;
+    if (options && options.type && !options.select) control.type = options.type;
     if (options && options.placeholder) control.placeholder = options.placeholder;
     if (options && options.autocomplete) control.autocomplete = options.autocomplete;
     if (options && options.select) {

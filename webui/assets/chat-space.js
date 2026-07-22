@@ -143,9 +143,11 @@
       return;
     }
     for (const item of sessions) {
+      const row = document.createElement('div');
+      row.className = 'session-row' + (item.id === sessionId ? ' active' : '');
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'pane-item' + (item.id === sessionId ? ' active' : '');
+      button.className = 'pane-item session-btn';
       const title = document.createElement('span');
       title.className = 'pi-title';
       title.textContent = '会话 ' + item.id.slice(0, 8);
@@ -154,7 +156,14 @@
       sub.textContent = item.total == null ? item.id : item.total + ' 条消息';
       button.append(title, sub);
       button.addEventListener('click', () => selectSession(item.id));
-      sessionList.appendChild(button);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'session-delete';
+      del.textContent = '×';
+      del.setAttribute('aria-label', '删除会话 ' + item.id.slice(0, 8));
+      del.addEventListener('click', event => { event.stopPropagation(); deleteSession(item.id, del); });
+      row.append(button, del);
+      sessionList.appendChild(row);
     }
   }
 
@@ -238,6 +247,18 @@
     } catch (error) {
       if (error.name !== 'AbortError') { assistant.content.textContent = text || AIRPApi.errorMessage(error.data, error.message); assistant.row.querySelector('.bubble').classList.add('runtime-error'); log(label + '.error', AIRPApi.errorMessage(error.data, error.message)); }
     } finally { streamController = null; setStreamState(false); }
+  }
+
+  async function deleteSession(id, btn) {
+    if (streamController || !window.confirm('确定删除会话 ' + id.slice(0, 8) + '？\n全部消息将不可恢复。')) return;
+    if (btn) btn.disabled = true;
+    try {
+      await client.request('DELETE', '/v1/sessions/' + encodeURIComponent(characterId) + '/' + encodeURIComponent(id));
+      log('session.delete', id);
+      if (sessionId === id) { sessionId = ''; sessionStorage.removeItem('airp_session_id'); }
+      await loadSessions();
+      await loadHistory();
+    } catch (error) { log('session.delete.error', AIRPApi.errorMessage(error.data, error.message)); if (btn) btn.disabled = false; }
   }
 
   async function selectSession(id) {
@@ -368,6 +389,25 @@
     }
   }
 
+  async function searchHistory() {
+    const query = ($('#search-input') && $('#search-input').value || '').trim();
+    if (!query || !characterId) return;
+    log('chat.search', query);
+    try {
+      const data = await client.request('POST', '/v1/chat/search', { character_id: characterId, session_id: sessionId || null, query, limit: 20 });
+      const results = Array.isArray(data && data.results) ? data.results : [];
+      if (!results.length) { log('chat.search.empty', '无匹配结果'); emptyState('无匹配结果', '没有找到包含“' + query + '”的历史消息。'); return; }
+      flow.replaceChildren();
+      const heading = document.createElement('div');
+      heading.className = 'search-heading';
+      heading.textContent = '搜索“' + query + '”—— ' + results.length + ' 条结果';
+      flow.appendChild(heading);
+      for (const item of results) {
+        appendMessage(String(item.role || 'assistant').toLocaleLowerCase() === 'user' ? 'user' : 'assistant', item.content || item.text || '', { timestamp: item.timestamp, messageId: item.message_id || null });
+      }
+    } catch (error) { log('chat.search.error', AIRPApi.errorMessage(error.data, error.message)); }
+  }
+
   $('#new-session').addEventListener('click', createSession);
   $('#refresh-history').addEventListener('click', loadHistory);
   $('#continue-message').addEventListener('click', () => streamMutation('/v1/chat/continue', 'chat.continue'));
@@ -381,5 +421,11 @@
   });
   $('#clear-log').addEventListener('click', () => eventLog.replaceChildren());
   $('#toggle-log').addEventListener('click', () => { $('.pane-right').hidden = !$('.pane-right').hidden; });
+  const searchInput = $('#search-input');
+  if (searchInput) {
+    searchInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); searchHistory(); } });
+    const searchBtn = $('#search-button');
+    if (searchBtn) searchBtn.addEventListener('click', searchHistory);
+  }
   boot();
 })();

@@ -52,7 +52,7 @@
     wrap.appendChild(node('span', 'field-label', label));
     const control = document.createElement(options && options.multiline ? 'textarea' : options && options.select ? 'select' : 'input');
     control.className = options && options.multiline ? 'textarea runtime-textarea' + (options.code ? ' code' : '') : options && options.select ? 'select runtime-select' : 'input runtime-input';
-    if (options && options.type) control.type = options.type;
+    if (options && options.type && !options.select) control.type = options.type;
     if (options && options.placeholder) control.placeholder = options.placeholder;
     if (options && options.select) {
       for (const item of options.select) {
@@ -235,6 +235,16 @@
     bar.append(button('绑定到角色', async () => {
       current = await task('绑定 Persona', () => client.request('POST', '/v1/users/' + encodeURIComponent(state.userId) + '/personas/' + encodeURIComponent(active) + '/bindings', { character_id: binding.control.value }));
     }));
+    bar.append(button('解绑角色', async () => {
+      if (!binding.control.value) { setStatus('请先选择要解绑的角色', true); return; }
+      await task('解绑 Persona', () => client.request('DELETE', '/v1/users/' + encodeURIComponent(state.userId) + '/personas/' + encodeURIComponent(active) + '/bindings', { character_id: binding.control.value }));
+    }));
+    bar.append(button('删除 Persona', async () => {
+      if (active === 'default') { setStatus('不能删除 default Persona', true); return; }
+      if (!window.confirm('确定删除 Persona「' + active + '」？此操作不可撤销。')) return;
+      await task('删除 Persona', () => client.request('DELETE', '/v1/users/' + encodeURIComponent(state.userId) + '/personas/' + encodeURIComponent(active)));
+      renderPersona();
+    }));
     bar.append(button('新建 Persona', async () => {
       const personaId = window.prompt('新 Persona ID'); if (!personaId) return;
       await task('新建 Persona', () => client.request('POST', '/v1/users/' + encodeURIComponent(state.userId) + '/personas', { persona_id: personaId, name: personaId, description: '', variables: {} }));
@@ -282,6 +292,8 @@
     const re = input('内容（' + (memory.char_count || 0) + ' / ' + (memory.capacity || 0) + ' 字符）', memory.content || '', { multiline: true, code: true }); rf.append(re.wrap, button('保存常驻记忆', () => task('保存常驻记忆', () => client.request('PUT', '/v1/memory/resident', { character_id: state.characterId, session_id: state.sessionId || null, content: re.control.value })), 'btn-primary'));
     const user = card('用户模型', false); const uf = node('div', 'runtime-form'); user.appendChild(uf); view.appendChild(user); const uid = input('用户 ID', state.userId); const um = await client.request('GET', '/v1/memory/user-model?user_id=' + encodeURIComponent(state.userId)); const ue = input('内容', um.content || '', { multiline: true, code: true }); uf.append(uid.wrap, ue.wrap, button('保存用户模型', () => task('保存用户模型', () => client.request('PUT', '/v1/memory/user-model', { user_id: uid.control.value.trim(), content: ue.control.value })), 'btn-primary'));
     const stateCard = card('角色实时状态', true); if (state.characterId) { const live = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/state').catch(error => ({ unavailable: message(error) })); stateCard.appendChild(output(json(live), true)); } view.appendChild(stateCard);
+    const historyCard = card('状态变更历史', true); if (state.characterId) { const history = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/state/history').catch(error => ({ unavailable: message(error) })); historyCard.appendChild(output(json(history), true)); } view.appendChild(historyCard);
+    const schemaCard = card('状态 JSON Schema', true); if (state.characterId) { const schema = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/state/schema').catch(error => ({ unavailable: message(error) })); schemaCard.appendChild(output(json(schema), true)); } view.appendChild(schemaCard);
   }
 
   async function renderScenes() {
