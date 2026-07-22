@@ -1,0 +1,460 @@
+/* ============================================================
+ * AIRP 控制台 · 组件库（components.css）
+ * 全部界面的共享组件类。派生实现按本文件逐类映射。
+ * 依赖：tokens.css
+ * ============================================================ */
+
+/* ============ 1. 顶栏（框架 B） ============ */
+.topbar {
+  min-height: var(--topbar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 20px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-default);
+}
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 12px; }
+
+.logo-block {
+  width: 30px; height: 30px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--primary); color: #fff;
+  font-size: 15px; font-weight: 700; border-radius: 8px;
+}
+.product-name { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.topbar-divider { width: 1px; height: 18px; background: var(--border-default); }
+.crumb { font-size: 12px; color: var(--text-secondary); }
+.topbar-mono { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+
+/* 顶栏状态点（行内裸文字态：16 向导页等） */
+.status-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
+.status-dot::before { content: ""; width: 7px; height: 7px; border-radius: var(--radius-pill); background: currentColor; }
+.status-dot.ok      { color: var(--success); }
+.status-dot.warn    { color: var(--warning); }
+.status-dot.danger  { color: var(--danger); }
+
+/* 顶栏状态 pill（画布「连接状态」组件：tint 底胶囊，顶栏右侧标准件） */
+.status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 19px; padding: 0 8px;
+  font-size: 11px; font-weight: 500;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.status-pill .dot { width: 5px; height: 5px; border-radius: var(--radius-pill); background: currentColor; }
+.status-pill.ok     { background: var(--success-tint); color: var(--success); }
+.status-pill.warn   { background: var(--warning-tint); color: var(--warning); }
+.status-pill.danger { background: var(--danger-tint);  color: var(--danger); }
+
+/* 顶栏图标按钮（32×32 白底边框，如 01 设置齿轮） */
+.icon-btn {
+  width: 32px; height: 32px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-input); color: var(--text-secondary);
+}
+
+/* ============ 2. 侧边栏（框架 A，仅 01 使用） ============ */
+.sidebar-app {
+  width: 260px; flex: none;
+  display: flex; flex-direction: column;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-default);
+  padding: 16px;
+  gap: 4px;
+}
+.sidebar-app .search-row { margin-bottom: 10px; }
+
+.nav-group { display: flex; flex-direction: column; gap: 4px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-input);
+  font-size: 13px; color: var(--text-secondary);
+}
+.nav-item:hover { background: var(--bg-subtle); }
+.nav-item.active { background: var(--primary-tint); color: var(--primary-strong); font-weight: 500; }
+.nav-item .nav-ico { width: 16px; height: 16px; flex: none; opacity: 0.85; }
+
+/* 侧栏底部小卡（LLM 配置） */
+.side-card {
+  margin-top: auto;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-card);
+  padding: 10px 12px;
+  font-size: 11px; color: var(--text-secondary);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.side-card .row { display: flex; justify-content: space-between; }
+.side-card .k { color: var(--text-tertiary); }
+.side-card .v { font-family: var(--font-mono); color: var(--text-primary); }
+
+/* ============ 3. 内容侧栏（框架 B 左栏：列表/文件树） ============ */
+.pane-side {
+  width: 240px; flex: none;
+  display: flex; flex-direction: column;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-default);
+  padding: 16px;
+  gap: 4px;
+  overflow-y: auto;
+}
+.pane-side.wide { width: 260px; }
+.pane-label {
+  font-size: 11px; font-weight: 500; letter-spacing: 1px;
+  color: var(--text-tertiary); padding: 2px 4px 4px;
+}
+.pane-item {
+  padding: 8px 10px; border-radius: var(--radius-input);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.pane-item:hover { background: var(--bg-subtle); }
+.pane-item.active { background: var(--primary-tint); }
+.pane-item .pi-title { font-size: 12px; font-weight: 500; color: var(--text-primary); display: flex; align-items: center; gap: 6px; }
+.pane-item.active .pi-title { color: var(--primary-strong); }
+.pane-item .pi-sub { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+
+/* ============ 4. 主区与右栏 ============ */
+.pane-main { flex: 1; min-width: 0; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+.pane-right {
+  width: 300px; flex: none;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-default);
+  padding: 14px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.pane-right.wide { width: 320px; }
+
+/* ============ 5. 按钮 ============ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 14px;
+  font-size: 12px; font-weight: 600;
+  border-radius: var(--radius-input);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-strong); }
+.btn-secondary { background: var(--bg-surface); color: var(--text-primary); border-color: var(--border-default); }
+.btn-secondary:hover { background: var(--bg-subtle); }
+.btn-danger { background: var(--danger-tint); color: var(--danger); border-color: var(--danger); }
+.btn-danger:hover { background: var(--danger); color: #fff; }
+.btn-danger-solid { background: var(--danger); color: #fff; }
+.btn-danger-solid:hover { filter: brightness(0.92); }
+.btn.block { width: 100%; }
+.btn:disabled, .btn.disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ============ 6. 标签 / 状态徽标 ============ */
+.tag {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px; padding: 0 8px;
+  font-size: 10px; font-weight: 500;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.tag .dot { width: 5px; height: 5px; border-radius: var(--radius-pill); background: currentColor; }
+.tag-success { background: var(--success-tint); color: var(--success); }
+.tag-warning { background: var(--warning-tint); color: var(--warning); }
+.tag-danger  { background: var(--danger-tint);  color: var(--danger); }
+.tag-primary { background: var(--primary-tint); color: var(--primary-strong); }
+.tag-neutral { background: var(--bg-subtle); color: var(--text-tertiary); }
+.tag.mono { font-family: var(--font-mono); font-weight: 400; }
+
+/* ============ 7. 卡片 ============ */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  padding: 16px;
+}
+.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.card-title { font-size: 13px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+.card.danger-zone { border-color: var(--danger); }
+
+/* 统计卡（01 屏） */
+.stat-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.stat-card .label { font-size: 11px; color: var(--text-tertiary); }
+
+/* 角色卡（01 屏） */
+.char-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.char-card .cc-head { display: flex; align-items: center; gap: 10px; }
+.char-card .cc-name { font-size: 13px; font-weight: 600; }
+.char-card .cc-meta { font-size: 10px; color: var(--text-tertiary); }
+.char-card .cc-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.6; }
+.char-card .cc-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+.char-card .cc-model { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+.char-card.dashed {
+  border-style: dashed; align-items: center; justify-content: center;
+  color: var(--text-tertiary); font-size: 12px; min-height: 120px; gap: 6px;
+}
+
+/* ============ 8. 表单 ============ */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.input, .select, .textarea {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-input);
+  padding: 8px 10px;
+  font-size: 12px; color: var(--text-primary);
+  outline: none;
+}
+.input:focus, .select:focus, .textarea:focus { border-color: var(--primary); }
+.input::placeholder, .textarea::placeholder { color: var(--text-tertiary); }
+.textarea { resize: none; line-height: 1.7; }
+.select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-tertiary) 50%), linear-gradient(135deg, var(--text-tertiary) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+.field-note { font-size: 10px; color: var(--text-tertiary); display: flex; justify-content: space-between; }
+
+/* ============ 9. 滑杆 ============ */
+.slider { position: relative; height: 4px; background: var(--bg-subtle); border-radius: var(--radius-pill); }
+.slider > i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--primary); border-radius: var(--radius-pill); display: block; }
+.slider-scale { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-tertiary); margin-top: 6px; }
+
+/* ============ 10. 表格 ============ */
+.table { width: 100%; border-collapse: collapse; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); overflow: hidden; }
+.table th {
+  text-align: left; font-size: 10px; font-weight: 500; color: var(--text-tertiary);
+  padding: 10px 14px; border-bottom: 1px solid var(--border-default); background: var(--bg-surface);
+}
+.table td { font-size: 12px; color: var(--text-primary); padding: 12px 14px; border-bottom: 1px solid var(--border-default); vertical-align: top; }
+.table tr:last-child td { border-bottom: none; }
+.table td .sub { font-size: 10px; color: var(--text-tertiary); }
+
+/* ============ 11. 消息气泡（对话） ============ */
+.msg-row { display: flex; gap: 10px; }
+.msg-row.user { justify-content: flex-end; }
+.avatar {
+  width: 32px; height: 32px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--primary-tint); color: var(--primary-strong);
+  font-size: 13px; font-weight: 600; border-radius: 8px;
+}
+.bubble {
+  max-width: 78%;
+  border-radius: var(--radius-card);
+  padding: 12px;
+  font-size: 13px; line-height: 1.65;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.bubble.user { background: var(--primary); color: #fff; }
+.bubble.user .meta { color: #F3D9CC; }
+.bubble.ai { background: var(--bg-surface); border: 1px solid var(--border-default); color: var(--text-primary); }
+.bubble.ai.warn { border-color: var(--warning); }
+.bubble .meta { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bubble .caret { display: inline-block; width: 7px; height: 14px; background: var(--primary); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* reasoning 折叠块 / 动作块 / state 变更卡 / 世界书行（31 屏） */
+.reason-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg-subtle); border-radius: var(--radius-input);
+  padding: 6px 10px; font-size: 11px; color: var(--text-tertiary);
+}
+.action-block {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-subtle); border-radius: var(--radius-input);
+  padding: 10px; font-size: 12px; font-style: italic; color: var(--text-secondary);
+}
+.state-change {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--warning-tint); border-radius: var(--radius-input);
+  padding: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--warning);
+}
+.scene-divider { display: flex; align-items: center; gap: 12px; color: var(--text-tertiary); font-size: 12px; font-style: italic; padding: 12px 16px; }
+.scene-divider::before, .scene-divider::after { content: ""; width: 120px; height: 1px; background: var(--border-default); }
+
+/* 输入区（composer） */
+.composer {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-input);
+  padding: 12px;
+}
+.composer.locked { background: var(--bg-subtle); opacity: 0.7; }
+.composer .placeholder { flex: 1; font-size: 13px; color: var(--text-tertiary); }
+.composer .send-btn {
+  width: 38px; height: 38px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--primary); border: none; border-radius: var(--radius-input);
+}
+.composer.locked .send-btn { background: var(--bg-subtle); border: 1px solid var(--border-default); }
+.composer-hint { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-tertiary); padding: 6px 2px 0; }
+
+/* 头像色相变体（角色专属 pastel 色板） */
+.avatar.hue-violet { background: #F0EBFA; color: #6B5CA5; }
+.avatar.hue-green  { background: var(--success-tint); color: var(--success); }
+.avatar.hue-blue   { background: #EAF1F8; color: #4A6FA5; }
+.avatar.hue-red    { background: var(--danger-tint); color: var(--danger); }
+.avatar.hue-amber  { background: var(--warning-tint); color: var(--warning); }
+
+/* ============ 12. 事件日志（02 右栏） ============ */
+.log-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border-default); }
+.log-item:last-child { border-bottom: none; }
+.log-item .t { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+.log-item .e { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-primary); }
+.log-item .d { font-size: 11px; color: var(--text-secondary); }
+
+/* ============ 13. 开关 ============ */
+.switch { position: relative; width: 36px; height: 20px; flex: none; border-radius: var(--radius-pill); background: var(--bg-subtle); border: 1px solid var(--border-default); cursor: pointer; transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: var(--radius-pill); background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: left .15s; }
+.switch.on { background: var(--primary); border-color: var(--primary); }
+.switch.on::after { left: 18px; }
+.switch.disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 覆盖项行（11 LLM 参数） */
+.override-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
+.override-row + .override-row { border-top: 1px solid var(--border-default); }
+.override-row .or-t { font-size: 12px; font-weight: 600; }
+.override-row .or-d { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+
+/* ============ 14. 标签页（工作台） ============ */
+.tabbar { display: flex; gap: 4px; border-bottom: 1px solid var(--border-default); background: var(--bg-surface); padding: 0 20px; }
+.tab {
+  padding: 10px 14px; font-size: 12px; font-weight: 500; color: var(--text-secondary);
+  border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-input) var(--radius-input) 0 0;
+  margin-bottom: -1px; background: transparent;
+}
+.tab.active { color: var(--primary-strong); background: var(--bg-base); border-color: var(--border-default); font-weight: 600; }
+
+/* ============ 14. 横幅与提示条 ============ */
+.banner {
+  display: flex; align-items: center; gap: 10px;
+  border-radius: var(--radius-card);
+  padding: 12px;
+  font-size: 12px;
+}
+.banner .grow { flex: 1; }
+.banner.warn { background: var(--warning-tint); border: 1px solid var(--warning); color: var(--warning); font-weight: 500; }
+.banner.neutral { background: var(--bg-subtle); color: var(--text-secondary); }
+.banner .spinner {
+  width: 14px; height: 14px; flex: none;
+  border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: var(--radius-pill);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 错误卡 / 配额卡（28 屏） */
+.alert-card { border-radius: var(--radius-card); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.alert-card.danger { background: var(--danger-tint); border: 1px solid var(--danger); }
+.alert-card.warn { background: var(--warning-tint); border: 1px solid var(--warning); }
+.alert-card .ac-head { display: flex; align-items: center; justify-content: space-between; }
+.alert-card .ac-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.alert-card.danger .ac-title, .alert-card.danger .ac-code { color: var(--danger); }
+.alert-card.warn .ac-title, .alert-card.warn .ac-code { color: var(--warning); }
+.alert-card .ac-code { font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+.alert-card .ac-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.alert-card .ac-actions { display: flex; gap: 8px; }
+.alert-icon {
+  width: 28px; height: 28px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill); color: #fff; font-size: 14px; font-weight: 700;
+}
+.alert-icon.danger { background: var(--danger); }
+.alert-icon.warn { background: var(--warning); }
+
+/* 进度条 */
+.progress { height: 8px; background: var(--bg-surface); border-radius: var(--radius-pill); overflow: hidden; }
+.progress > i { display: block; height: 100%; background: var(--primary); border-radius: var(--radius-pill); }
+.progress.warn > i { background: var(--warning); }
+
+/* ============ 15. 空状态与骨架屏 ============ */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 24px; text-align: center;
+}
+.empty-icon {
+  width: 64px; height: 64px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--primary-tint); border-radius: var(--radius-modal);
+}
+.empty-title { font-size: 20px; font-weight: 600; color: var(--text-primary); margin: 0; }
+.empty-desc { font-size: 13px; color: var(--text-tertiary); margin: 0; }
+.empty-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+.skeleton { background: var(--bg-subtle); border-radius: 3px; }
+.skeleton.card-sk { border-radius: var(--radius-card); }
+@keyframes shimmer { 0% { opacity: 1; } 50% { opacity: 0.55; } 100% { opacity: 1; } }
+.skeleton { animation: shimmer 1.6s ease-in-out infinite; }
+
+/* ============ 16. 通知与 Toast ============ */
+.notification {
+  width: 420px;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-card);
+  padding: 14px;
+  box-shadow: var(--shadow-card);
+}
+.notification.success { border: 1px solid var(--success); }
+.notification.warn { border: 1px solid var(--warning); }
+.notification.danger { border: 1px solid var(--danger); }
+.notification .n-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.notification .n-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.notification .n-desc { font-size: 11px; color: var(--text-secondary); }
+.notification .n-close { color: var(--text-tertiary); font-size: 14px; }
+.round-ico {
+  width: 18px; height: 18px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill); font-size: 11px; font-weight: 700;
+}
+.round-ico.ok { background: var(--success-tint); color: var(--success); }
+.round-ico.warn { background: var(--warning-tint); color: var(--warning); }
+.round-ico.danger { background: var(--danger-tint); color: var(--danger); }
+
+.toast {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--ink); color: #fff;
+  border-radius: var(--radius-pill);
+  padding: 10px 16px;
+  font-size: 12px; font-weight: 500;
+  box-shadow: var(--shadow-pop);
+}
+
+/* ============ 17. 模态 ============ */
+.modal-mask {
+  position: absolute; inset: 0;
+  background: rgba(26, 23, 20, 0.45);   /* 画布遮罩：rgb(26,23,20) a=0.45 */
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  background: var(--bg-surface);
+  border-radius: var(--radius-modal);
+  box-shadow: var(--shadow-modal);
+  padding: 20px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.modal .m-title { font-size: 15px; font-weight: 600; }
+.modal .m-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.modal .m-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ============ 18. 工具调用卡（07 Agent） ============ */
+.tool-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.tool-card.pending { border-color: var(--warning); background: var(--warning-tint); }
+.tool-card .tc-head { display: flex; align-items: center; justify-content: space-between; }
+.tool-card .tc-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.tool-card .tc-code { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.tool-card .tc-result { font-size: 11px; color: var(--text-secondary); }
+
+/* ============ 19. 图标字（样板内通用，生产应替换为图标库） ============ */
+.ico { display: inline-flex; align-items: center; justify-content: center; font-style: normal; }
+
+/* ============ 20. 页面标题行（主区通用） ============ */
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.page-head .ph-actions { display: flex; gap: 8px; }

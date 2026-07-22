@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>25 笔记与连接 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .note-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 12px; }
+  .note-cell { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 10px 12px; }
+  .note-cell .k { font-size: 10px; color: var(--text-tertiary); }
+  .note-cell .v { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .conn-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border: 1px solid var(--border-default); border-radius: var(--radius-card); background: var(--bg-surface); }
+  .conn-row.active { background: var(--primary-tint); border-color: transparent; }
+  .conn-row .c-t { font-size: 12px; font-weight: 600; }
+  .conn-row.active .c-t { color: var(--primary-strong); }
+  .conn-row .c-d { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); margin-top: 2px; }
+  .conn-list { display: flex; flex-direction: column; gap: 10px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">预设与模型 / 笔记与连接配置</span>
+    </div>
+    <div class="topbar-right">
+      <span class="tag tag-warning"><i class="dot"></i>部分规划中</span>
+    </div>
+  </header>
+
+  <main class="pane-main">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Author's Note（用户级注入）</span>
+        <span class="tag tag-warning"><i class="dot"></i>规划中</span>
+      </div>
+      <textarea class="textarea" rows="4">保持故事节奏紧凑；每一次航行决定都要有代价。不要让艾拉轻易谈论第七舰队的结局。</textarea>
+      <div class="note-grid">
+        <div class="note-cell"><div class="k">注入深度 <span class="t-mono">depth</span></div><div class="v">4</div></div>
+        <div class="note-cell"><div class="k">间隔 <span class="t-mono">interval</span></div><div class="v">每 3 轮</div></div>
+        <div class="note-cell"><div class="k">位置 <span class="t-mono">position</span></div><div class="v">历史之后</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Connection Profiles（一键切换）</span>
+        <span style="font-size:10px;color:var(--text-tertiary)">API + 模型 + 模板 + 参数打包</span>
+      </div>
+      <div class="conn-list">
+        <div class="conn-row active">
+          <div>
+            <div class="c-t">主力 · Anthropic Sonnet</div>
+            <div class="c-d">claude-sonnet-4 · 叙事沉浸型预设</div>
+          </div>
+          <span class="tag tag-success"><i class="dot"></i>使用中</span>
+        </div>
+        <div class="conn-row">
+          <div>
+            <div class="c-t">备用 · DeepSeek V3</div>
+            <div class="c-d">deepseek-v3 · 精确工具型预设</div>
+          </div>
+          <button class="btn btn-secondary">切换</button>
+        </div>
+        <div class="conn-row">
+          <div>
+            <div class="c-t">本地 · Ollama（预留）</div>
+            <div class="c-d">未配置</div>
+          </div>
+          <button class="btn btn-secondary">配置…</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

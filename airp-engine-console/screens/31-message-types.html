@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>31 RP 消息类型 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .chat-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .msg-flow { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .legend-bar { display: flex; align-items: center; gap: 14px; background: var(--bg-subtle); border-radius: var(--radius-input); padding: 12px; }
+  .legend-bar span { font-size: 10px; color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间 / 艾拉 · 消息类型</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="chat-col">
+    <div class="msg-flow">
+      <!-- 场景叙述 -->
+      <div class="scene-divider" style="justify-content:center">
+        <span>【舰桥 · 接近星图档案馆外环 · 引力 0.3G】</span>
+      </div>
+
+      <!-- AI 消息（完整类型） -->
+      <div class="msg-row" style="align-items:flex-start">
+        <span class="avatar">艾</span>
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <!-- reasoning 折叠块 -->
+          <div class="reason-chip">
+            <span class="ico" style="font-size:12px">⬡</span>
+            <span>思维过程 · 已折叠 340 tokens</span>
+            <span class="ico" style="font-size:10px">▸</span>
+          </div>
+          <div class="bubble ai" style="max-width:none">
+            <div>泊位导引灯还亮着——三百年了，它的备用电源居然还在工作。舰长，我请求允许直连档案馆的泊位系统。这会暴露我们的舰籍识别码，但能换来完整的航迹数据库权限。</div>
+            <!-- 动作块 -->
+            <div class="action-block">
+              <span class="ico" style="font-size:12px">✋</span>
+              <span>*艾拉的手停在确认键上方，没有落下——她在等你下令。</span>
+            </div>
+            <!-- 世界书命中 -->
+            <div>
+              <span class="tag tag-primary mono">世界书命中: 星图档案馆</span>
+            </div>
+            <!-- state 变更卡 -->
+            <div class="state-change">
+              <span class="ico" style="font-size:13px">♥</span>
+              <span style="flex:1">state 变更：警戒等级 1 → 2 · 位置 巡航 → 档案馆外环</span>
+              <span style="font-family:var(--font-body);font-size:10px;font-weight:500">查看</span>
+            </div>
+          </div>
+          <div class="meta" style="font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)">21:47 · 1,562 tokens · 4.1s · 平滑流式</div>
+        </div>
+      </div>
+
+      <!-- 类型图例 -->
+      <div class="legend-bar">
+        <span>场景叙述（斜体分隔）</span>
+        <span>reasoning 折叠块</span>
+        <span>*动作块</span>
+        <span>世界书命中标记</span>
+        <span>state 变更卡</span>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

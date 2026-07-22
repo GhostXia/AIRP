@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>26 对话·空状态 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .chat-empty-wrap { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .side-empty { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .side-empty .se-t { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+  .side-empty .se-d { font-size: 10px; color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <aside class="pane-side" style="width:260px">
+      <div class="pane-label">会话列表</div>
+      <div class="side-empty">
+        <span class="se-t">还没有会话</span>
+        <span class="se-d">从下方新建，或在角色卡片上点开始</span>
+      </div>
+      <button class="btn btn-primary block">＋ 新建会话</button>
+    </aside>
+
+    <main class="chat-empty-wrap">
+      <div class="empty-state">
+        <span class="empty-icon"><span class="ico" style="font-size:26px;color:var(--primary)">◔</span></span>
+        <h1 class="empty-title">开始第一段对话</h1>
+        <p class="empty-desc">选择一个角色，或先完成首次启动向导——只需 2 分钟。</p>
+        <div class="empty-actions">
+          <button class="btn btn-primary">＋ 选择角色开始</button>
+          <button class="btn btn-secondary">运行启动向导</button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

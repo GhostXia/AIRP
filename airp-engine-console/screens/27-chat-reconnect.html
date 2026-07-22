@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>27 对话·断流恢复 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .chat-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .msg-flow { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .cut-mark { display: flex; align-items: center; gap: 6px; }
+  .cut-mark .mono { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+  .resume-bar { display: flex; align-items: center; gap: 10px; background: var(--bg-subtle); border-radius: var(--radius-card); padding: 12px; }
+  .resume-bar .rb-t { flex: 1; font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+  .composer-zone { flex: none; padding: 0 24px 20px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间 / 艾拉</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill danger"><i class="dot"></i>连接中断</span>
+    </div>
+  </header>
+
+  <div class="chat-col">
+    <div style="padding:16px 24px 0">
+      <div class="banner warn">
+        <span class="spinner"></span>
+        <span class="grow">连接中断，正在自动重连（第 2 次尝试）…</span>
+        <span style="font-weight:600">立即重试</span>
+      </div>
+    </div>
+
+    <div class="msg-flow">
+      <div class="msg-row user">
+        <div class="bubble user">
+          <div>艾拉，把航线切到信标方向。</div>
+          <div class="meta">21:40 · 已保存</div>
+        </div>
+      </div>
+      <div class="msg-row">
+        <span class="avatar">艾</span>
+        <div class="bubble ai warn" style="flex:1;max-width:none">
+          <div>收到。正在计算切入向量，需要先修正三号姿态喷口的—</div>
+          <div class="cut-mark">
+            <span class="tag tag-warning">输出中断</span>
+            <span class="mono">partially_committed</span>
+          </div>
+        </div>
+      </div>
+      <div class="resume-bar">
+        <span class="rb-t">你的消息已安全保存。连接恢复后可以从断点「继续生成」——为避免重复，不能直接重发整条。</span>
+        <button class="btn btn-secondary">继续生成</button>
+      </div>
+    </div>
+
+    <div class="composer-zone">
+      <div class="composer locked">
+        <span class="placeholder">连接恢复后可继续输入…</span>
+        <button class="send-btn"><span class="ico" style="color:var(--text-tertiary);font-size:15px">➤</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

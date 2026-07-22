@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>12 条目编辑 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .edit-col { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .field-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .switch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .switch-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 12px 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .switch-card .sc-t { font-size: 12px; font-weight: 600; font-family: var(--font-mono); }
+  .switch-card .sc-d { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+  .advisory { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 12px 14px; }
+  .advisory .a-t { font-size: 10px; color: var(--text-tertiary); font-weight: 600; margin-bottom: 4px; }
+  .advisory .a-v { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">世界书 / 星港地图 / 编辑条目</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="edit-col">
+    <div class="page-head">
+      <div>
+        <h1 class="t-title">编辑条目：导航核心</h1>
+        <p class="t-sub">世界书 v4 条目 · 保存后写入 rev 19</p>
+      </div>
+      <div class="ph-actions">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-primary">＋ 保存条目</button>
+      </div>
+    </div>
+
+    <div class="field-2col">
+      <div class="field">
+        <label class="field-label">主关键词（逗号分隔）</label>
+        <input class="input" type="text" value="导航核心，nav core，跃迁引擎">
+      </div>
+      <div class="field">
+        <label class="field-label">次级关键词 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">secondary_keys（selective 时生效）</span></label>
+        <input class="input" type="text" value="故障，维修，漂移">
+      </div>
+    </div>
+
+    <div class="switch-grid">
+      <div class="switch-card">
+        <div>
+          <div class="sc-t">enabled · 启用条目</div>
+          <div class="sc-d">停用后不参与关键词扫描</div>
+        </div>
+        <span class="switch on"></span>
+      </div>
+      <div class="switch-card">
+        <div>
+          <div class="sc-t">constant · 常驻注入</div>
+          <div class="sc-d">开启后跳过关键词匹配，每轮必注入</div>
+        </div>
+        <span class="switch"></span>
+      </div>
+      <div class="switch-card">
+        <div>
+          <div class="sc-t">selective · 双键触发</div>
+          <div class="sc-d">主键 + 任一次级词同时命中才注入</div>
+        </div>
+        <span class="switch on"></span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="field-label">条目内容（命中后注入 prompt）</label>
+      <textarea class="textarea" rows="6">导航核心是舰队级跃迁引擎的控制中枢。第三次维修后留下间歇性相位漂移：每次跃迁有 3% 概率偏航 0.1–0.4 光秒。艾拉对它既依赖又警惕——她的前任导航官正是在一次漂移事故中失踪的。</textarea>
+    </div>
+
+    <div class="advisory">
+      <div class="a-t">advisory 字段（只读 · 运行时暂不执行）</div>
+      <div class="a-v">position: before_char&nbsp;&nbsp;&nbsp;depth: 4&nbsp;&nbsp;&nbsp;probability: 100&nbsp;&nbsp;&nbsp;case_sensitive: false</div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

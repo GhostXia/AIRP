@@ -11,6 +11,7 @@
 AIRP 是专精 Role Play 的 AI Agent 客户端，当前采用“无头 engine + 可换 UI”结构：
 
 - `engine/`（`airp-core`）：唯一 RP/Agent 内核，负责数据、prompt 装配、LLM adapter、Agent loop 与 HTTP/SSE；
+- `airp-engine-console/`：UI 权威样板；后续 WebUI 与桌面端临时 UI 均以该样板为开发基础；
 - `webui/`：当前正式产品交付主面；
 - `ui/` + `ui/src-tauri/`（`airp-ui`）：保留的 Tauri/Vue 桌面客户端，属于长期开发线，不是近期交付载体；
 - `protocol/`（`airp-state-protocol`）：UI/engine 共用线协议类型；

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>18 群聊编排 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .char3-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .scene-char { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .scene-char .sc-head { display: flex; align-items: center; gap: 10px; }
+  .scene-char .sc-name { font-size: 13px; font-weight: 600; }
+  .scene-char .sc-role { font-size: 10px; color: var(--text-tertiary); }
+  .scene-char .sc-slider-row { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--text-secondary); }
+  .scene-char .slider { flex: 1; }
+  .strategy-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .strategy { border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 14px 16px; background: var(--bg-surface); }
+  .strategy.on { border-color: var(--primary); background: var(--primary-tint); }
+  .strategy .s-t { font-size: 13px; font-weight: 600; }
+  .strategy .s-d { font-size: 10px; color: var(--text-tertiary); margin-top: 4px; }
+  .merge-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; font-size: 12px; }
+  .merge-note { font-size: 10px; color: var(--text-tertiary); border-top: 1px solid var(--border-default); padding-top: 8px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">场景编排 / 舰桥会议</span>
+    </div>
+    <div class="topbar-right">
+      <span class="tag tag-warning"><i class="dot"></i>规划中 · 预留</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <main class="pane-main">
+      <div>
+        <h1 class="t-title">舰桥会议 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">scene</span></h1>
+        <p class="t-sub">多角色同场对话 · 角色与场景 worldbook 合并后按命中条目保留逻辑来源</p>
+      </div>
+
+      <div class="char3-grid">
+        <div class="scene-char">
+          <div class="sc-head">
+            <span class="avatar">艾</span>
+            <div><div class="sc-name">艾拉</div><div class="sc-role">导航官 · 顺序 1</div></div>
+          </div>
+          <div class="sc-slider-row"><span>发言积极性</span><div class="slider"><i style="width:70%"></i></div><span class="t-mono">70%</span></div>
+        </div>
+        <div class="scene-char">
+          <div class="sc-head">
+            <span class="avatar hue-violet">祁</span>
+            <div><div class="sc-name">祁夜</div><div class="sc-role">侦察顾问 · 顺序 2</div></div>
+          </div>
+          <div class="sc-slider-row"><span>发言积极性</span><div class="slider"><i style="width:35%"></i></div><span class="t-mono">35%</span></div>
+        </div>
+        <div class="scene-char">
+          <div class="sc-head">
+            <span class="avatar hue-green">白</span>
+            <div><div class="sc-name">白泽</div><div class="sc-role">博物顾问 · 顺序 3</div></div>
+          </div>
+          <div class="sc-slider-row"><span>发言积极性</span><div class="slider"><i style="width:50%"></i></div><span class="t-mono">50%</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">轮转策略</div>
+        <div class="strategy-grid">
+          <div class="strategy on">
+            <div class="s-t">顺序轮转</div>
+            <div class="s-d">按设定顺序依次发言</div>
+          </div>
+          <div class="strategy">
+            <div class="s-t">积极性加权</div>
+            <div class="s-d">按 talkativeness 概率抽取</div>
+          </div>
+          <div class="strategy">
+            <div class="s-t">点名触发</div>
+            <div class="s-d">被 @ 或关键词命中者优先</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:8px">场景世界书合并</div>
+        <div class="merge-row">
+          <span>场景书「舰桥协议」 · 6 条</span>
+          <span class="tag tag-neutral">场景级</span>
+        </div>
+        <div class="merge-row">
+          <span>角色书合并：星港地图（艾拉）＋ 雨城档案（祁夜）</span>
+          <span class="tag tag-neutral">角色级</span>
+        </div>
+        <div class="merge-note">命中条目保留逻辑来源与源文档条目序号，不暴露本机路径；scene 模式下无单一 revision，不推送诊断。</div>
+      </div>
+    </main>
+
+    <aside class="pane-right" style="width:280px">
+      <div class="pane-label">场景列表</div>
+      <div class="pane-item active">
+        <div class="pi-title">舰桥会议</div>
+        <div class="pi-sub">3 角色 · 进行中</div>
+      </div>
+      <div class="pane-item">
+        <div class="pi-title">雨城案卷讨论</div>
+        <div class="pi-sub">2 角色 · 已暂停</div>
+      </div>
+      <div class="pane-item">
+        <div class="pi-title">山海异闻夜话</div>
+        <div class="pi-sub">2 角色 · 草稿</div>
+      </div>
+      <button class="btn btn-secondary block">＋ 新建场景</button>
+    </aside>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

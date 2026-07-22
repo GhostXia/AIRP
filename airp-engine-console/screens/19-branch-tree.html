@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>19 分支树 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .timeline { position: relative; padding-left: 26px; display: flex; flex-direction: column; gap: 10px; width: 420px; }
+  .timeline::before { content: ""; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 1px; background: var(--border-default); }
+  .tl-node { position: relative; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 10px 12px; }
+  .tl-node::before { content: ""; position: absolute; left: -25px; top: 14px; width: 9px; height: 9px; border-radius: var(--radius-pill); background: var(--primary); border: 2px solid var(--bg-base); }
+  .tl-node .tl-t { font-size: 12px; font-weight: 600; }
+  .tl-node .tl-d { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+  .tl-node.checkpoint { background: var(--warning-tint); border-color: var(--warning); }
+  .tl-node.checkpoint::before { border-radius: 2px; background: var(--warning); }
+  .branch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 6px; }
+  .branch-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .branch-card.now { border-color: var(--primary); background: var(--primary-tint); }
+  .branch-card .b-head { display: flex; align-items: center; justify-content: space-between; }
+  .branch-card .b-t { font-size: 13px; font-weight: 600; color: var(--primary-strong); }
+  .branch-card:not(.now) .b-t { color: var(--text-primary); }
+  .branch-card .b-d { font-size: 11px; color: var(--text-secondary); line-height: 1.7; }
+  .branch-card .b-m { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .legend { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 10px 14px; font-size: 10px; color: var(--text-tertiary); display: flex; gap: 16px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间 / 分支与检查点</span>
+    </div>
+    <div class="topbar-right">
+      <span class="tag tag-warning"><i class="dot"></i>规划中 · 预留</span>
+    </div>
+  </header>
+
+  <main class="pane-main">
+    <div>
+      <h1 class="t-title">星港的第三次日出 · 对话树</h1>
+      <p class="t-sub">从任意消息分叉平行剧情线 <span class="t-mono">branch</span> · 检查点可回滚</p>
+    </div>
+
+    <div class="timeline">
+      <div class="tl-node">
+        <div class="tl-t">#44 用户：决定靠近信标</div>
+        <div class="tl-d">今天 20:58</div>
+      </div>
+      <div class="tl-node checkpoint">
+        <div class="tl-t">#47 检查点：信标回复前 · 可从此分叉</div>
+        <div class="tl-d">2 条分支从这里出发</div>
+      </div>
+      <div class="tl-node">
+        <div class="tl-t">#48 艾拉：识别出第七舰队校验码</div>
+        <div class="tl-d">主线 · 当前</div>
+      </div>
+    </div>
+
+    <div class="branch-grid">
+      <div class="branch-card now">
+        <div class="b-head">
+          <span class="b-t">分支 A · 回应校验码</span>
+          <span class="tag tag-success"><i class="dot"></i>当前分支</span>
+        </div>
+        <div class="b-d">用户选择回应信标 → 艾拉确认第七舰队编码 → 前往星图档案馆</div>
+        <div class="b-m">8 条消息 · 活跃中</div>
+      </div>
+      <div class="branch-card">
+        <div class="b-head">
+          <span class="b-t">分支 B · 保持静默</span>
+          <button class="btn btn-secondary">切换到此分支</button>
+        </div>
+        <div class="b-d">用户选择不回应 → 信标持续广播 → 艾拉提议远程破解校验码</div>
+        <div class="b-m">5 条消息 · 已暂停</div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span>● 消息节点</span>
+      <span>◆ 检查点（可回滚/分支）</span>
+      <span>蓝框 = 当前活跃分支</span>
+      <span>分支删除需确认</span>
+    </div>
+  </main>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

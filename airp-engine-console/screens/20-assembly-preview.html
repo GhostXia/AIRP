@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>20 装配预览 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  /* 堆叠条辅助色（图表专用，非语义 token） */
+  :root { --chart-history: #8A94A6; }
+  .stack-bar { display: flex; height: 10px; border-radius: var(--radius-pill); overflow: hidden; background: var(--bg-subtle); }
+  .stack-bar > i { display: block; height: 100%; }
+  .stack-legend { display: flex; align-items: center; gap: 14px; font-size: 10px; color: var(--text-tertiary); margin-top: 8px; }
+  .stack-legend .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 4px; }
+  .occ-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+  .occ-head .v { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+  .st-ok { color: var(--success); font-family: var(--font-mono); font-size: 11px; }
+  .st-mid { color: var(--warning); font-family: var(--font-mono); font-size: 11px; }
+  .st-vol { color: var(--danger); font-family: var(--font-mono); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间 / 装配预览（脱敏）</span>
+    </div>
+    <div class="topbar-right">
+      <span class="tag tag-success"><i class="dot"></i>预览模式 · 不落盘</span>
+    </div>
+  </header>
+
+  <main class="pane-main">
+    <div>
+      <h1 class="t-title">本轮 Prompt 装配</h1>
+      <p class="t-sub">按 provider payload 顺序排列 · 不返回 prompt 正文 · API key 或 endpoint</p>
+    </div>
+
+    <div class="card">
+      <div class="occ-head">
+        <span class="card-title">上下文占用估算</span>
+        <span class="v">3,240 / 8,192 tokens&nbsp;&nbsp;40%</span>
+      </div>
+      <div class="stack-bar">
+        <i style="width:27.5%;background:var(--primary)"></i>
+        <i style="width:6.5%;background:var(--warning)"></i>
+        <i style="width:19.8%;background:var(--chart-history)"></i>
+        <i style="width:11.7%;background:var(--success)"></i>
+      </div>
+      <div class="stack-legend">
+        <span><i class="sw" style="background:var(--primary)"></i>角色卡</span>
+        <span><i class="sw" style="background:var(--warning)"></i>世界书</span>
+        <span><i class="sw" style="background:var(--chart-history)"></i>历史</span>
+        <span><i class="sw" style="background:var(--success)"></i>其他</span>
+        <span style="margin-left:auto">稳定前缀 → 命中缓存</span>
+      </div>
+    </div>
+
+    <table class="table">
+      <thead>
+        <tr><th style="width:170px">装配块（顺序）</th><th>来源 provenance</th><th style="width:110px">估算 tokens</th><th style="width:80px">稳定性</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="t-mono">1 · card</td><td>艾拉.character.json · rev 18</td><td class="t-mono">890</td><td><span class="st-ok">稳定</span></td></tr>
+        <tr><td class="t-mono">2 · persona</td><td>舰长·雷恩 · rev 5 · 角色绑定</td><td class="t-mono">210</td><td><span class="st-ok">稳定</span></td></tr>
+        <tr><td class="t-mono">3 · lorebook</td><td>星港地图 · 命中 2 条（#4 废弃航道 / #9 导航核心）</td><td class="t-mono">640</td><td><span class="st-mid">半稳</span></td></tr>
+        <tr><td class="t-mono">4 · state+memory</td><td>警戒 2 · 卷 7（6 条进行中）</td><td class="t-mono">380</td><td><span class="st-vol">易变</span></td></tr>
+        <tr><td class="t-mono">5 · history+user</td><td>最近 12 条消息 + 本轮用户输入</td><td class="t-mono">1,120</td><td><span class="st-vol">易变</span></td></tr>
+      </tbody>
+    </table>
+  </main>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

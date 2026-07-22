@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>16 启动向导 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .wizard-body { flex: 1; overflow-y: auto; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 24px; }
+  .steps { display: flex; align-items: center; gap: 28px; }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-tertiary); }
+  .step .no { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-pill); border: 1.5px solid var(--border-default); font-size: 11px; font-family: var(--font-mono); }
+  .step.done { color: var(--success); }
+  .step.done .no { background: var(--success); border-color: var(--success); color: #fff; }
+  .step.now { color: var(--primary-strong); font-weight: 600; }
+  .step.now .no { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .wizard-card { width: 1200px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-modal); padding: 28px 32px; display: flex; flex-direction: column; gap: 16px; }
+  .pick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .pick { border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 14px 16px; }
+  .pick .p-t { font-size: 13px; font-weight: 600; }
+  .pick .p-d { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+  .pick.on { border-color: var(--primary); background: var(--primary-tint); }
+  .wizard-foot { display: flex; align-items: center; justify-content: space-between; }
+  .wizard-note { font-size: 11px; color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">首次启动向导</span>
+    </div>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text-tertiary)">跳过向导</span>
+    </div>
+  </header>
+
+  <div class="wizard-body">
+    <div class="steps">
+      <div class="step done"><span class="no">✓</span>部署检查</div>
+      <div class="step now"><span class="no">2</span>Provider 配置</div>
+      <div class="step"><span class="no">3</span>模型验证</div>
+      <div class="step"><span class="no">4</span>角色导入</div>
+      <div class="step"><span class="no">5</span>人设与预设</div>
+      <div class="step"><span class="no">6</span>首轮对话</div>
+    </div>
+
+    <div class="wizard-card">
+      <div>
+        <h1 class="t-title" style="font-size:17px">第 2 步 · 配置 LLM Provider</h1>
+        <p class="t-sub">选择服务商并填入 API Key。密钥只写入本地 secrets，永不回显；配置后可立即验证模型连通性。</p>
+      </div>
+      <div class="pick-grid">
+        <div class="pick on">
+          <div class="p-t">Anthropic</div>
+          <div class="p-d">推荐 · Claude 系列</div>
+        </div>
+        <div class="pick">
+          <div class="p-t">OpenAI 兼容</div>
+          <div class="p-d">GPT / DeepSeek / 国产模型</div>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">API Key</label>
+        <input class="input t-mono" type="text" value="sk-ant-••••••••••••••••••••">
+      </div>
+      <div class="status-dot ok t-mono" style="font-size:11px">engine: ok · data_root_writable: true</div>
+      <div class="wizard-foot">
+        <button class="btn btn-secondary">← 上一步</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-secondary">验证连接</button>
+          <button class="btn btn-primary">＋ 下一步 →</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="wizard-note">向导可中断：状态机支持 desync 重触发；第 1–4 步失败可降级跳过，第 5–6 步向导内重试。</p>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

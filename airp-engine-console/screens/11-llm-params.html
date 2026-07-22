@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>11 LLM 参数 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .work-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .form-zone { flex: 1; overflow-y: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 16px; }
+  .chain-note { display: flex; gap: 8px; align-items: baseline; background: var(--warning-tint); border-radius: var(--radius-input); padding: 10px 12px; font-size: 11px; color: var(--warning); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">工作台 / 角色卡编辑 / LLM 参数</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>自动保存已开启</span>
+    </div>
+  </header>
+
+  <div class="work-col">
+    <nav class="tabbar">
+      <button class="tab">基础信息</button>
+      <button class="tab">人格设定</button>
+      <button class="tab">开场白</button>
+      <button class="tab active">LLM 参数</button>
+    </nav>
+    <div class="form-zone">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:4px">引用预设</div>
+        <p class="t-sub" style="margin-bottom:10px">角色卡默认跟随预设；下方的覆盖项优先于预设</p>
+        <select class="select"><option>叙事沉浸型</option><option>精确工具型</option><option>自由发散型</option></select>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">角色级覆盖</span>
+          <span style="font-size:10px;color:var(--text-tertiary)">开启后覆盖预设对应项</span>
+        </div>
+        <div class="override-row">
+          <div>
+            <div class="or-t">System Prompt 覆盖</div>
+            <div class="or-d">{{original}} 占位符将被预设原文替换</div>
+          </div>
+          <span class="switch on"></span>
+        </div>
+        <div class="override-row">
+          <div>
+            <div class="or-t">Post-History 指令</div>
+            <div class="or-d">在历史消息之后注入的角色级指令</div>
+          </div>
+          <span class="switch on"></span>
+        </div>
+        <div class="override-row">
+          <div>
+            <div class="or-t">温度覆盖</div>
+            <div class="or-d">当前跟随预设 0.80</div>
+          </div>
+          <span class="switch"></span>
+        </div>
+        <div class="override-row">
+          <div>
+            <div class="or-t">Character's Note <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">（深度注入）</span></div>
+            <div class="or-d">按 depth + role 注入的角色级笔记 · 未交付</div>
+          </div>
+          <span class="tag tag-neutral">规划中</span>
+        </div>
+      </div>
+
+      <div class="chain-note">
+        <span class="ico">⚡</span>
+        <span>生效链：请求参数 → 角色覆盖 → 预设 → 全局默认。本轮实际生效值会显示在对话页的「装配详情」面板中，并标注来源。</span>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

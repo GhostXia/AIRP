@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>22 备份恢复 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .bk-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
+  .bk-row + .bk-row { border-top: 1px solid var(--border-default); }
+  .bk-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+  .bk-meta { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+  .bk-right { display: flex; align-items: center; gap: 12px; }
+  .flow-steps { display: flex; align-items: stretch; gap: 8px; }
+  .flow-step { flex: 1; background: var(--bg-subtle); border-radius: var(--radius-input); padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .flow-step.final { background: var(--success-tint); }
+  .flow-step .fs-no { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .flow-step .fs-t { font-size: 12px; font-weight: 500; }
+  .flow-arrow { align-self: center; color: var(--text-tertiary); }
+  .flow-note { font-size: 10px; color: var(--text-tertiary); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">设置 / 备份与恢复</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn btn-primary">＋ 立即备份</button>
+    </div>
+  </header>
+
+  <main class="pane-main">
+    <div>
+      <h1 class="t-title">备份与恢复</h1>
+      <p class="t-sub">冷备份归档带 SHA-256 sidecar · 恢复前强制校验哈希 · 回滚使用独立卷</p>
+    </div>
+
+    <div class="card">
+      <div class="bk-row">
+        <div>
+          <div class="bk-name">backup-20260718-2200.tar.gz</div>
+          <div class="bk-meta">86 MB · 3 角色 / 12 会话 / 4 世界书</div>
+        </div>
+        <div class="bk-right">
+          <span class="tag tag-success"><i class="dot"></i>SHA-256 通过</span>
+          <button class="btn btn-secondary">恢复…</button>
+        </div>
+      </div>
+      <div class="bk-row">
+        <div>
+          <div class="bk-name">backup-20260711-2200.tar.gz</div>
+          <div class="bk-meta">79 MB · 3 角色 / 10 会话 / 4 世界书</div>
+        </div>
+        <div class="bk-right">
+          <span class="tag tag-success"><i class="dot"></i>SHA-256 通过</span>
+          <button class="btn btn-secondary">恢复…</button>
+        </div>
+      </div>
+      <div class="bk-row">
+        <div>
+          <div class="bk-name">backup-20260704-2200.tar.gz</div>
+          <div class="bk-meta">71 MB · 2 角色 / 7 会话 / 3 世界书</div>
+        </div>
+        <div class="bk-right">
+          <span class="tag tag-warning"><i class="dot"></i>缺少 sidecar</span>
+          <button class="btn btn-secondary">恢复…</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">恢复演练流程 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">P1 逃生路径</span></div>
+      <div class="flow-steps">
+        <div class="flow-step"><span class="fs-no">STEP 1</span><span class="fs-t">选择归档 gateway 只绑定 loopback</span></div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step"><span class="fs-no">STEP 2</span><span class="fs-t">校验 SHA-256 sidecar</span></div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step"><span class="fs-no">STEP 3</span><span class="fs-t">只读校验健康/资产/会话/历史</span></div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step final"><span class="fs-no">STEP 4</span><span class="fs-t">通过后重新开放监听</span></div>
+      </div>
+      <div class="flow-note">回滚使用独立卷：启动前验证 .env 指向已存在的目标卷。自动备份/恢复与完整演练属于 P2。当前为人工冷备份流程。</div>
+    </div>
+  </main>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

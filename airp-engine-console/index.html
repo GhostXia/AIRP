@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIRP 控制台 · 权威样板导航</title>
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/base.css">
+<link rel="stylesheet" href="assets/components.css">
+<style>
+  body { overflow: auto; }
+  .page { max-width: 1440px; margin: 0 auto; padding: 32px; display: flex; flex-direction: column; gap: 24px; }
+  .hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+  .hero h1 { font-size: 24px; font-weight: 600; margin: 0 0 6px; }
+  .hero p { margin: 0; font-size: 12px; color: var(--text-secondary); line-height: 1.8; }
+  .hero .links { display: flex; gap: 8px; flex: none; }
+
+  .flow-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-modal); padding: 20px 24px; }
+  .flow-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .flow-legend { font-size: 11px; color: var(--text-tertiary); margin-bottom: 12px; }
+  .flow-stage { position: relative; width: 100%; aspect-ratio: 1600 / 560; }
+  .flow-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .fnode {
+    position: absolute; width: 10.625%; height: 9.2857%;  /* 170/1600, 52/560 */
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; font-size: 12px; font-weight: 500;
+    background: var(--bg-surface); border: 1px solid var(--border-default); color: var(--text-primary);
+    transition: transform .12s, box-shadow .12s;
+  }
+  .fnode:hover { transform: translateY(-2px); box-shadow: var(--shadow-card); z-index: 2; }
+  .fnode.fn-core { border-color: var(--primary); color: var(--primary-strong); font-weight: 600; }
+  .fnode.fn-modal { background: var(--primary-tint); border-color: var(--primary); color: var(--primary-strong); }
+  .fnode.fn-planned { background: var(--warning-tint); }
+  .fnode.fn-state { background: var(--bg-subtle); color: var(--text-secondary); font-weight: 400; }
+  .flane { position: absolute; left: 1.5%; font-size: 12px; font-weight: 600; color: var(--text-secondary); transform: translateY(-50%); }
+
+  .group-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .group-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 16px; }
+  .group-card h3 { margin: 0 0 2px; font-size: 13px; }
+  .group-card .g-desc { font-size: 11px; color: var(--text-tertiary); margin-bottom: 10px; }
+  .screen-list { display: flex; flex-direction: column; }
+  .screen-link { display: flex; align-items: baseline; gap: 10px; padding: 7px 8px; border-radius: var(--radius-input); font-size: 12px; }
+  .screen-link:hover { background: var(--primary-tint); }
+  .screen-link .no { font-family: var(--font-mono); color: var(--text-tertiary); width: 22px; flex: none; }
+  .screen-link .tt { font-weight: 500; }
+  .screen-link .fn { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+  .screen-link .pb { font-size: 10px; color: var(--warning); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <div>
+      <h1>AIRP 控制台 · 权威样板</h1>
+      <p>31 屏静态实现，与 Ardot 设计稿逐屏对应。视觉令牌见 <b>assets/tokens.css</b>，组件类见 <b>assets/components.css</b>。<br>
+      本样板是派生 WebUI 与桌面端 UI 的视觉母本；增删屏只需维护 <b>assets/screens.js</b> 与 <b>screens/</b> 目录。</p>
+    </div>
+    <div class="links">
+      <a class="btn btn-secondary" href="STYLEGUIDE.md" target="_blank">样板规范</a>
+      <a class="btn btn-secondary" href="exports/AIRP%20Engine%20Console.pdf" target="_blank">设计稿 PDF</a>
+    </div>
+  </div>
+
+  <div class="flow-card">
+    <div class="flow-title">页面流转图</div>
+    <div class="flow-legend">实线 = 主导航跳转 · 虚线 = 模态/状态覆盖 · 橙底 = 模态 · 黄底 = 规划预留 · 灰底 = 状态变体（节点可点击）</div>
+    <div class="flow-stage" id="flowStage">
+      <svg id="flowSvg" viewBox="0 0 1600 560" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+
+  <div class="group-grid" id="groupGrid"></div>
+</div>
+
+<script src="assets/screens.js"></script>
+<script>
+(function () {
+  /* 流转图布局：与画布第 32 屏一致（1600×560 坐标系） */
+  const LANES = [
+    { name: "主流程",   y: 88,  items: ["16","01","03","02"] },
+    { name: "子页面",   y: 170, items: ["13","09","10","11","12","14","15"] },
+    { name: "扩展 A",   y: 252, items: ["04","05","06","07","08","17","18"] },
+    { name: "扩展 B",   y: 334, items: ["19","20","21","22","23","24","25"] },
+    { name: "状态变体", y: 416, items: ["26","27","28","29","30","31"] },
+  ];
+  const XS = [160, 346, 532, 718, 904, 1090, 1276];
+  const NW = 170, NH = 52;
+  const byId = Object.fromEntries(AIRP_SCREENS.map(s => [s.id, s]));
+
+  /* 节点坐标表 */
+  const pos = {};
+  LANES.forEach(lane => lane.items.forEach((id, i) => { pos[id] = { x: XS[i], y: lane.y }; }));
+
+  const stage = document.getElementById("flowStage");
+  const svg = document.getElementById("flowSvg");
+
+  /* 泳道标签 + 节点 */
+  LANES.forEach(lane => {
+    const lb = document.createElement("div");
+    lb.className = "flane";
+    lb.textContent = lane.name;
+    lb.style.top = `calc(${(lane.y + NH / 2) / 560 * 100}% )`;
+    stage.appendChild(lb);
+
+    lane.items.forEach((id, i) => {
+      const s = byId[id];
+      const a = document.createElement("a");
+      a.className = "fnode";
+      if (["01","02","03"].includes(id)) a.classList.add("fn-core");
+      if (["13","15"].includes(id)) a.classList.add("fn-modal");
+      if (s.planned) a.classList.add("fn-planned");
+      if (s.group === "state") a.classList.add("fn-state");
+      a.href = s.file;
+      a.textContent = `${id} ${s.title}`;
+      a.style.left = `${XS[i] / 1600 * 100}%`;
+      a.style.top = `${lane.y / 560 * 100}%`;
+      stage.appendChild(a);
+    });
+  });
+
+  /* 连线 */
+  const NS = "http://www.w3.org/2000/svg";
+  svg.innerHTML = `
+    <defs>
+      <marker id="arw" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0 0 L6 3 L0 6 Z" fill="#C4663B"/>
+      </marker>
+      <marker id="arwG" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0 0 L6 3 L0 6 Z" fill="#9E998F"/>
+      </marker>
+    </defs>`;
+  AIRP_FLOWS.forEach(([from, to, type]) => {
+    const A = pos[from], B = pos[to];
+    if (!A || !B) return;
+    let d;
+    if (A.y === B.y) {                       // 同排：右→左 或 左→右
+      if (B.x > A.x) d = `M ${A.x + NW} ${A.y + NH / 2} H ${B.x - 4}`;
+      else           d = `M ${A.x} ${A.y + NH / 2} H ${B.x + NW + 4}`;
+    } else if (B.y > A.y) {                  // 目标在下方：底→顶 贝塞尔
+      const x1 = A.x + NW / 2, y1 = A.y + NH, x2 = B.x + NW / 2, y2 = B.y;
+      const my = (y1 + y2) / 2;
+      d = `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2 - 4}`;
+    } else {                                 // 目标在上方：顶→底 贝塞尔
+      const x1 = A.x + NW / 2, y1 = A.y, x2 = B.x + NW / 2, y2 = B.y + NH;
+      const my = (y1 + y2) / 2;
+      d = `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2 + 4}`;
+    }
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", d);
+    p.setAttribute("fill", "none");
+    p.setAttribute("stroke", type === "solid" ? "#C4663B" : "#9E998F");
+    p.setAttribute("stroke-width", "1.5");
+    if (type === "dashed") p.setAttribute("stroke-dasharray", "5 4");
+    p.setAttribute("marker-end", type === "solid" ? "url(#arw)" : "url(#arwG)");
+    svg.appendChild(p);
+  });
+
+  /* 分组清单 */
+  const grid = document.getElementById("groupGrid");
+  AIRP_GROUPS.forEach(g => {
+    const card = document.createElement("div");
+    card.className = "group-card";
+    card.innerHTML = `<h3>${g.name} <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">${g.range}</span></h3>
+      <div class="g-desc">${g.desc}</div>
+      <div class="screen-list"></div>`;
+    const list = card.querySelector(".screen-list");
+    AIRP_SCREENS.filter(s => s.group === g.key).forEach(s => {
+      const a = document.createElement("a");
+      a.className = "screen-link";
+      a.href = s.file;
+      a.innerHTML = `<span class="no">${s.id}</span><span class="tt">${s.title}</span>
+        ${s.planned ? '<span class="pb">规划预留</span>' : ''}
+        <span class="fn">${s.file.split("/").pop()}</span>`;
+      list.appendChild(a);
+    });
+    grid.appendChild(card);
+  });
+})();
+</script>
+</body>
+</html>

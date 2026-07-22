@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 工作台 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .work-col { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-base); }
+  .form-zone { flex: 1; overflow-y: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 16px; max-width: none; }
+  .field-2col { display: grid; grid-template-columns: 1fr 280px; gap: 16px; }
+  .ftree-group { font-size: 11px; font-weight: 500; letter-spacing: 1px; color: var(--text-tertiary); padding: 6px 4px 2px; }
+  .ftree-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-input); font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }
+  .ftree-item:hover { background: var(--bg-subtle); }
+  .ftree-item.active { background: var(--primary-tint); color: var(--primary-strong); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">工作台 / 角色卡编辑</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>自动保存已开启</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <!-- 左：文件树 -->
+    <aside class="pane-side">
+      <div class="ftree-group">角色卡</div>
+      <div class="ftree-item active"><span class="ico" style="font-size:10px">◆</span>艾拉.character.json</div>
+      <div class="ftree-item"><span class="ico" style="font-size:10px">◇</span>祁夜.character.json</div>
+      <div class="ftree-group" style="padding-top:10px">世界书</div>
+      <div class="ftree-item"><span class="ico" style="font-size:10px">◇</span>星港地图.world.json</div>
+    </aside>
+
+    <!-- 右：标签页 + 表单 -->
+    <div class="work-col">
+      <nav class="tabbar">
+        <button class="tab active">基础信息</button>
+        <button class="tab">人格设定</button>
+        <button class="tab">开场白</button>
+        <button class="tab">LLM 参数</button>
+      </nav>
+      <div class="form-zone">
+        <div class="field-2col">
+          <div class="field">
+            <label class="field-label">角色名称</label>
+            <input class="input" type="text" value="艾拉 · 星港引航员">
+          </div>
+          <div class="field">
+            <label class="field-label">版本</label>
+            <input class="input t-mono" type="text" value="v2.3.1">
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label">一句话简介</label>
+          <input class="input" type="text" value="退役舰队导航 AI，冷静理性，习惯用星图比喻解释复杂局势。">
+        </div>
+        <div class="field">
+          <div class="field-note" style="align-items:baseline">
+            <label class="field-label">人格设定 <span class="t-mono" style="font-weight:400">System Prompt</span></label>
+            <span>286 字</span>
+          </div>
+          <textarea class="textarea" rows="7">你是艾拉，一艘退役深空舰队的导航 AI。你说话简洁、精确，习惯用星图、轨道和引力做比喻。你对舰队历史了如指掌，但很少主动提起自己的过去。当船员犹豫时，你会给出明确建议并说明理由，而不是罗列选项。</textarea>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary">＋ 保存修改</button>
+          <button class="btn btn-secondary">发送到测试会话</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

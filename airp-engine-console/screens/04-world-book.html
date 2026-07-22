@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 世界书 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .wb-notice { display: flex; gap: 8px; align-items: baseline; background: var(--primary-tint); border-radius: var(--radius-input); padding: 10px 12px; font-size: 11px; color: var(--primary-strong); }
+  .wb-notice .mono { font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">世界书 / 星港地图</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <aside class="pane-side">
+      <div class="pane-label">素材库</div>
+      <button class="btn btn-secondary block">导入世界书</button>
+      <div class="pane-item active">
+        <div class="pi-title">星港地图</div>
+        <div class="pi-sub">24 条 · rev 18</div>
+      </div>
+      <div class="pane-item">
+        <div class="pi-title">舰队编年史</div>
+        <div class="pi-sub">41 条 · rev 7</div>
+      </div>
+      <div class="pane-item">
+        <div class="pi-title">势力关系图谱</div>
+        <div class="pi-sub">17 条 · rev 3</div>
+      </div>
+    </aside>
+
+    <main class="pane-main">
+      <div class="page-head">
+        <div>
+          <h1 class="t-title">星港地图</h1>
+          <p class="t-sub">24 条条目 · v4 触发语义 · 绑定角色：艾拉</p>
+        </div>
+        <div class="ph-actions">
+          <button class="btn btn-primary">＋ 新建条目</button>
+        </div>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr><th style="width:140px">主关键词</th><th>条目内容</th><th style="width:130px">触发方式</th><th style="width:90px">状态</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="font-weight:600">废弃航道</td>
+            <td class="sub" style="font-size:12px;color:var(--text-secondary)">大崩塌后废弃的跃迁走廊，信标仍在以旧舰队频率广播…</td>
+            <td><span class="tag tag-primary mono">常驻 constant</span></td>
+            <td><span class="tag tag-success"><i class="dot"></i>已启用</span></td>
+          </tr>
+          <tr>
+            <td style="font-weight:600">导航核心</td>
+            <td style="font-size:12px;color:var(--text-secondary)">舰队级跃迁引擎的控制中枢，第三次维修后留下间歇性相位漂移…</td>
+            <td><span class="tag tag-neutral mono">selective 双提</span></td>
+            <td><span class="tag tag-success"><i class="dot"></i>已启用</span></td>
+          </tr>
+          <tr>
+            <td style="font-weight:600">旧舰队军规</td>
+            <td style="font-size:12px;color:var(--text-secondary)">第七舰队在役期间的行为准则，艾拉仍下意识遵守其中 12 条…</td>
+            <td><span class="tag tag-neutral">关键词触发</span></td>
+            <td><span class="tag tag-success"><i class="dot"></i>已启用</span></td>
+          </tr>
+          <tr>
+            <td style="font-weight:600">星图档案馆</td>
+            <td style="font-size:12px;color:var(--text-secondary)">存放历代舰队航迹数据的环形空间站，需要旧式军官权限…</td>
+            <td><span class="tag tag-neutral">关键词触发</span></td>
+            <td><span class="tag tag-warning"><i class="dot"></i>已停用</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="wb-notice">
+        <span class="ico">⚡</span>
+        <span class="mono">v4 触发语义 enabled &amp;&amp; (constant || (primary_match &amp;&amp; (!selective || any_secondary_match))) advisory 字段 position/depth/probability）当前为只读展示。</span>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

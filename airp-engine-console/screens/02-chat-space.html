@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 对话空间 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .chat-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .msg-flow { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .composer-zone { flex: none; padding: 12px 24px 14px; background: var(--bg-surface); border-top: 1px solid var(--border-default); }
+  .char-head { display: flex; gap: 10px; align-items: center; padding: 10px; background: var(--primary-tint); border-radius: var(--radius-input); }
+  .char-head .nm { font-size: 12px; font-weight: 600; }
+  .char-head .md { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .wb-card { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 10px; font-size: 11px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px; }
+  .wb-card .t { font-weight: 600; color: var(--text-primary); font-size: 11px; }
+  .log-head { display: flex; align-items: center; justify-content: space-between; }
+  .log-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .log-close { color: var(--text-tertiary); font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间 / 艾拉 · 星港引航员</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+      <button class="btn btn-secondary">☰ 事件日志</button>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <!-- 左：会话栏 -->
+    <aside class="pane-side wide">
+      <div class="char-head">
+        <span class="avatar">艾</span>
+        <div>
+          <div class="nm">艾拉</div>
+          <div class="md">claude-sonnet-4 · T0.8</div>
+        </div>
+      </div>
+      <div class="pane-label" style="padding-top:6px">会话列表</div>
+      <button class="btn btn-secondary block">＋ 新建会话</button>
+      <div class="pane-item active">
+        <div class="pi-title">星港的第三次日出</div>
+        <div class="pi-sub">12 条消息 · 刚刚活跃</div>
+      </div>
+      <div class="pane-item">
+        <div class="pi-title">废弃航道的信标</div>
+        <div class="pi-sub">47 条消息 · 昨天</div>
+      </div>
+      <div class="pane-item">
+        <div class="pi-title">导航核心的旧故障</div>
+        <div class="pi-sub">128 条消息 · 3 天前</div>
+      </div>
+      <div style="margin-top:auto" class="wb-card">
+        <div class="t">本会话世界书</div>
+        <div>星港地图 · 已触发 4 次</div>
+        <div>舰队编年史 · 已触发 2 次</div>
+      </div>
+    </aside>
+
+    <!-- 中：消息流 -->
+    <div class="chat-col">
+      <div class="msg-flow">
+        <div class="msg-row user">
+          <div class="bubble user">
+            <div>艾拉，前方扫描到未知信号，像是从废弃航道传来的。</div>
+            <div class="meta">21:12</div>
+          </div>
+        </div>
+        <div class="msg-row">
+          <span class="avatar">艾</span>
+          <div class="bubble ai">
+            <div>收到。信号频段 117.4MHz，脉冲间隔 2.7 秒——这不是自然噪声，是旧式舰队求救信标的节奏。建议把航线向西北偏 3°，我在星图上标出了一条可以并行侦察的走廊。</div>
+            <div class="meta">21:13 · 1,842 tokens · 3.2s <span class="tag tag-primary mono">世界书: 星港地图</span></div>
+          </div>
+        </div>
+        <div class="msg-row">
+          <span class="avatar">艾</span>
+          <div class="bubble ai">
+            <div>航线已修正，正在监听信标回复<span class="caret"></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="composer-zone">
+        <div class="composer">
+          <span class="placeholder">向艾拉发送消息…（Enter 发送 / Shift+Enter 换行）</span>
+          <button class="send-btn"><span class="ico" style="color:#fff;font-size:15px">➤</span></button>
+        </div>
+        <div class="composer-hint">
+          <span>上下文 12 条 / 预算 8,192 tokens</span>
+          <span>重新生成 · 停止流式</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右：事件日志 -->
+    <aside class="pane-right wide">
+      <div class="log-head">
+        <h3>事件日志</h3>
+        <span class="log-close ico">✕</span>
+      </div>
+      <div class="log-item">
+        <span class="t">21:13:04</span>
+        <span class="e">worldbook.trigger</span>
+        <span class="d">星港地图命中关键词「废弃航道」</span>
+      </div>
+      <div class="log-item">
+        <span class="t">21:13:07</span>
+        <span class="e">llm.request</span>
+        <span class="d">sonnet-4 · 3.2k tok</span>
+      </div>
+      <div class="log-item">
+        <span class="t">21:13:10</span>
+        <span class="e">llm.stream.complete</span>
+        <span class="d">1,842 tokens · 3.2s</span>
+      </div>
+      <div class="log-item">
+        <span class="t">21:13:11</span>
+        <span class="e">session.persist</span>
+        <span class="d">已写入 12 条消息</span>
+      </div>
+      <div class="log-item">
+        <span class="t">21:14:02</span>
+        <span class="e">engine.heartbeat</span>
+        <span class="d">延迟 18ms</span>
+      </div>
+    </aside>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>
