@@ -308,6 +308,8 @@
         onDone: () => log('llm.stream.complete', text.length + ' 字符'),
       });
       try { localStorage.setItem('airp_onboarded', 'true'); } catch {}
+      sessionStorage.removeItem('airp_onboarding_session_id');
+      sessionStorage.removeItem('airp_onboarding_commit_uncertain');
       await loadSessions();
       await loadHistory();
     } catch (error) {

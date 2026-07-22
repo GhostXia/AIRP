@@ -11,14 +11,21 @@
   const card = $('#onboarding-card');
   const status = $('#onboarding-status');
   const engineStatus = $('#engine-status');
+  const firstChatSessionKey = 'airp_onboarding_session_id';
+  const firstChatUncertainKey = 'airp_onboarding_commit_uncertain';
+  let uncertainFirstChat = null;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(firstChatUncertainKey) || 'null');
+    if (saved && saved.characterId && saved.sessionId) uncertainFirstChat = saved;
+  } catch {}
   const state = {
     stage: 1,
     health: null,
     version: null,
     settings: null,
     characters: [],
-    characterId: sessionStorage.getItem('airp_character_id') || '',
-    sessionId: '',
+    characterId: uncertainFirstChat && uncertainFirstChat.characterId || sessionStorage.getItem('airp_character_id') || '',
+    sessionId: uncertainFirstChat && uncertainFirstChat.sessionId || sessionStorage.getItem(firstChatSessionKey) || '',
     userProfile: { name: 'User', variables: {} },
     presetId: sessionStorage.getItem('airp_preset_id') || '',
   };
@@ -284,6 +291,15 @@
     const message = field('给角色的第一句话', '', { multiline: true, placeholder: '输入第一条消息…' });
     const result = node('pre', 'wizard-output', '等待发送。');
     content.append(message.wrap, result);
+    if (uncertainFirstChat && state.sessionId) {
+      message.control.disabled = true;
+      result.textContent = '上次首轮对话的写入状态不确定；请先打开历史确认，不要重发。';
+      setStatus('首轮对话可能已写入，已阻止重复发送。', true);
+      card.appendChild(footer({ actions: [button('打开对话历史确认 →', () => {
+        location.href = '02-chat-space.html?character=' + encodeURIComponent(uncertainFirstChat.characterId) + '&session=' + encodeURIComponent(uncertainFirstChat.sessionId);
+      }, 'btn-primary')] }));
+      return;
+    }
     const send = button('发送首轮消息', async () => {
       const text = message.control.value.trim();
       if (!text) { setStatus('先输入一条消息。', true); message.control.focus(); return; }
@@ -294,6 +310,9 @@
           state.sessionId = typeof created === 'string' ? created : String(created && (created.session_id || created.id) || '');
           if (!state.sessionId) throw new Error('创建会话的响应缺少 session_id');
         }
+        sessionStorage.setItem(firstChatSessionKey, state.sessionId);
+        uncertainFirstChat = { characterId: state.characterId, sessionId: state.sessionId };
+        sessionStorage.setItem(firstChatUncertainKey, JSON.stringify(uncertainFirstChat));
         const request = { character_id: state.characterId, session_id: state.sessionId, user_profile: state.userProfile, message: text };
         if (state.presetId) request.preset_id = state.presetId;
         await client.stream('/v1/chat/completions', request, {
@@ -301,6 +320,9 @@
         });
         sessionStorage.setItem('airp_character_id', state.characterId);
         sessionStorage.setItem('airp_session_id', state.sessionId);
+        sessionStorage.removeItem(firstChatSessionKey);
+        sessionStorage.removeItem(firstChatUncertainKey);
+        uncertainFirstChat = null;
         localStorage.setItem('airp_onboarded', 'true');
         setStatus('首次配置与首轮对话已完成。');
         setEngine('ok', 'AIRP 已就绪');
@@ -315,10 +337,15 @@
           : '未收到完整回复。');
         setStatus('首轮对话失败：' + errorMessage(error), true);
         if (uncertain) {
+          uncertainFirstChat = { characterId: state.characterId, sessionId: state.sessionId };
+          sessionStorage.setItem(firstChatUncertainKey, JSON.stringify(uncertainFirstChat));
           message.control.disabled = true;
           send.replaceWith(button('打开对话历史确认 →', () => {
             location.href = '02-chat-space.html?character=' + encodeURIComponent(state.characterId) + '&session=' + encodeURIComponent(state.sessionId);
           }, 'btn-primary'));
+        } else {
+          uncertainFirstChat = null;
+          sessionStorage.removeItem(firstChatUncertainKey);
         }
       } finally { if (send.isConnected) setBusy(send, false, '正在生成…'); }
     }, 'btn-primary');

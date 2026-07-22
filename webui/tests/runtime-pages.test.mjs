@@ -9,6 +9,7 @@ const onboardingPage = await readFile(new URL('../screens/16-onboarding.html', i
 const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
+const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
 
 test('runtime entry redirects through an external CSP-compatible script', () => {
   assert.match(entryPage, /assets\/entry\.js/);
@@ -27,8 +28,16 @@ test('first-run onboarding uses a dedicated real-backend runtime', () => {
 
 test('first-run onboarding blocks blind resend after an uncertain commit', () => {
   assert.match(onboardingScript, /\['partially_committed', 'unknown'\]\.includes\(error\.commitState\)/);
+  assert.match(onboardingScript, /sessionStorage\.setItem\(firstChatSessionKey, state\.sessionId\)/);
+  assert.match(onboardingScript, /sessionStorage\.setItem\(firstChatUncertainKey, JSON\.stringify\(uncertainFirstChat\)\)/);
+  assert.ok(
+    onboardingScript.indexOf('sessionStorage.setItem(firstChatUncertainKey') < onboardingScript.indexOf("await client.stream('/v1/chat/completions'"),
+    'the reload safeguard must be persisted before streaming begins',
+  );
+  assert.match(onboardingScript, /if \(uncertainFirstChat && state\.sessionId\)/);
   assert.match(onboardingScript, /message\.control\.disabled = true/);
   assert.match(onboardingScript, /打开对话历史确认/);
+  assert.match(chatScript, /sessionStorage\.removeItem\('airp_onboarding_commit_uncertain'\)/);
 });
 
 for (const [name, html] of [['role list', rolePage], ['chat space', chatPage]]) {
