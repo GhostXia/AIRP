@@ -205,34 +205,6 @@ pub(super) async fn run_finalize(
             });
         }
 
-        // 阶段二补全 D1：用户模型自动抽取。仅当 user_id 存在时（此时
-        // data_root 已是该用户独立根），异步 best-effort 抽取用户偏好。
-        if ctx.user_id.is_some() {
-            let data_root = ctx.data_root.clone();
-            let session_id = ctx.session_id;
-            let character_id = ctx.character_id.clone();
-            let provider_config = ctx.provider_config.clone();
-            let gen_params = ctx.gen_params.clone();
-            let http_client = ctx.http_client.clone();
-            let assistant_content = cleaned_acc.clone();
-
-            join_set.spawn(async move {
-                if let Err(e) = run_user_model_extraction(
-                    &http_client,
-                    provider_config,
-                    gen_params,
-                    &data_root,
-                    character_id.as_ref(),
-                    session_id.as_ref(),
-                    &assistant_content,
-                )
-                .await
-                {
-                    tracing::warn!(err = %e, "用户模型抽取失败（best-effort）");
-                }
-            });
-        }
-
         // 等待全部子任务结束；JoinError（panic / cancel）单独 tracing
         while let Some(res) = join_set.join_next().await {
             if let Err(je) = res {
@@ -244,7 +216,59 @@ pub(super) async fn run_finalize(
             }
         }
     }
+
+    // 阶段二补全 D1：用户模型自动抽取。仅当 user_id 存在时（此时
+    // data_root 已是该用户独立根），异步 best-effort 抽取用户偏好。
+    //
+    // CodeRabbit #1+#2：此任务不依赖 session_dir（只用 data_root /
+    // character_id / session_id），故移出 volume side-effects 块。
+    // 改为 fire-and-forget + timeout，防止 stalled provider 阻塞
+    // run_finalize（join_set 已等待封卷/维护/记忆抽取，不应再被用户
+    // 模型抽取拖住）。best-effort：失败/超时只 tracing，不影响主流程。
+    if ctx.user_id.is_some() {
+        let data_root = ctx.data_root.clone();
+        let session_id = ctx.session_id;
+        let character_id = ctx.character_id.clone();
+        let provider_config = ctx.provider_config.clone();
+        let gen_params = ctx.gen_params.clone();
+        let http_client = ctx.http_client.clone();
+        let assistant_content = cleaned_acc.clone();
+
+        tokio::spawn(async move {
+            let timeout_secs = user_model_extraction_timeout();
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                run_user_model_extraction(
+                    &http_client,
+                    provider_config,
+                    gen_params,
+                    &data_root,
+                    character_id.as_ref(),
+                    session_id.as_ref(),
+                    &assistant_content,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!(err = %e, "用户模型抽取失败（best-effort）"),
+                Err(_) => tracing::warn!(timeout_secs, "用户模型抽取超时（best-effort）"),
+            }
+        });
+    }
+
     Ok(())
+}
+
+/// 用户模型抽取的超时秒数。读 env `AIRP_USER_MODEL_EXTRACT_TIMEOUT_SECS`，
+/// 默认 120；0 视为 120（不允许禁用超时）。与 `style_review_interval` 同模式。
+fn user_model_extraction_timeout() -> u64 {
+    const DEFAULT: u64 = 120;
+    std::env::var("AIRP_USER_MODEL_EXTRACT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT)
 }
 
 /// Writes `state` to `characters/{character_id}/state/live.json` (overwrite).

@@ -173,6 +173,11 @@ pub fn inject_soul_drift(data_root: &Path, character_id: &str, prompt: &mut Stri
 ///
 /// 复用 `memory::compress_resident_memory` 的压缩 prompt。压缩结果必须真的
 /// 变小才落盘，否则保留原内容（enforce_capacity 已在写入时截断兜底）。
+///
+/// CodeRabbit #9：LLM 压缩是耗时 async 操作，读取与写入之间可能有并发
+/// `append_soul_drift` 修改了文件。写入前持有 per-character 锁并重新读取
+/// 验证内容未变（CAS），若已变则放弃本次压缩（避免陈旧压缩结果覆盖
+/// 更新的 drift）。
 pub async fn compress_soul_drift_if_needed(
     client: &reqwest::Client,
     provider_config: Arc<crate::adapter::ProviderConfig>,
@@ -193,12 +198,19 @@ pub async fn compress_soul_drift_if_needed(
         config.capacity_chars,
     )
     .await?;
-    if !compressed.is_empty() && compressed.chars().count() < content.chars().count() {
-        write_soul_drift(data_root, character_id, &compressed)?;
-        Ok(true)
-    } else {
-        Ok(false)
+    if compressed.is_empty() || compressed.chars().count() >= content.chars().count() {
+        return Ok(false);
     }
+    // CAS 验证：持有锁后重新读取，确保内容未被并发修改。
+    let lock = drift_lock(character_id);
+    let _guard = lock.lock().expect("drift lock poisoned");
+    let current = read_soul_drift(data_root, character_id)?;
+    if current != content {
+        tracing::info!("soul drift 在压缩期间被并发修改，跳过写入");
+        return Ok(false);
+    }
+    write_soul_drift_unlocked(data_root, character_id, &compressed)?;
+    Ok(true)
 }
 
 #[cfg(test)]

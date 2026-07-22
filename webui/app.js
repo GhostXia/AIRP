@@ -1215,6 +1215,13 @@
   // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
   // W-06 fix: 加可选 ts 参数（Date 或省略）。流式新消息传 new Date() 显示 HH:MM:SS；
   // loadHistory 不传（engine 的 chat_log.jsonl 不存消息时间戳，避免用加载时刻误导用户）。
+
+  // CodeRabbit #8: 返回 chatLog 中最后一条 .msg 元素（无则 null）。
+  function getLastMsgEl() {
+    const all = chatLog.querySelectorAll('.msg');
+    return all.length ? all[all.length - 1] : null;
+  }
+
   function appendMsg(role, text, isStreaming, ts, messageId, options) {
     const opts = options || {};
     let div = messageId ? messageNodes.get(messageId) : null;
@@ -1415,8 +1422,7 @@
     const next = div.nextElementSibling;
     if (!next || !next.classList.contains('assistant')) return;
     // 确保该 assistant 是最后一条消息（编辑的是最后一条 user 消息）。
-    const allMsgs = chatLog.querySelectorAll('.msg');
-    const lastMsg = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
+    const lastMsg = getLastMsgEl();
     if (lastMsg !== next) return;
     if (window.confirm('消息已编辑。是否重新生成后续回复？')) {
       runRegen();
@@ -2011,8 +2017,7 @@
     abortController = ac;
     if (btnStop) btnStop.hidden = false;
     // Remove last assistant message from DOM immediately.
-    const allMsgs = chatLog.querySelectorAll('.msg');
-    const lastMsg = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
+    const lastMsg = getLastMsgEl();
     if (lastMsg && lastMsg.classList.contains('assistant')) lastMsg.remove();
     const url = base + '/v1/chat/regen';
     let msgEl = null;
@@ -2058,8 +2063,7 @@
   btnRegen.addEventListener('click', async () => {
     if (!selectedChar) return;
     // Pre-validate: last message must be assistant.
-    const allMsgs = chatLog.querySelectorAll('.msg');
-    const lastMsg = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
+    const lastMsg = getLastMsgEl();
     if (!lastMsg || !lastMsg.classList.contains('assistant')) return;
     // AIRP 取舍：无确认弹窗，直接替换。论证：AIRP 已有 rollback-by-ID 能力，
     // 用户可回滚到任意历史消息，regen 的风险已被覆盖；确认弹窗只增加摩擦不提供额外安全。

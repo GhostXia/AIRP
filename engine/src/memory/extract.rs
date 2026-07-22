@@ -87,12 +87,12 @@ pub async fn extract_facts(
         messages,
     ));
 
-    // 收集完整响应
+    // 收集完整响应。CodeRabbit #3：传播流的第一个错误，而非静默丢弃，
+    // 避免部分偏好被持久化且调用方误以为成功。
     let mut result = String::new();
     while let Some(chunk) = stream.next().await {
-        if let Ok(text) = chunk {
-            result.push_str(&text);
-        }
+        let text = chunk.map_err(|e| AirpError::Upstream { status: 0, body: e })?;
+        result.push_str(&text);
     }
 
     // 清理输出：只保留以 "- " 开头的行
@@ -158,9 +158,8 @@ pub async fn extract_user_preferences(
 
     let mut result = String::new();
     while let Some(chunk) = stream.next().await {
-        if let Ok(text) = chunk {
-            result.push_str(&text);
-        }
+        let text = chunk.map_err(|e| AirpError::Upstream { status: 0, body: e })?;
+        result.push_str(&text);
     }
 
     let cleaned: Vec<&str> = result

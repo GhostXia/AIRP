@@ -19,6 +19,12 @@ use crate::volume_store;
 /// 跨卷实体提升阈值：实体在多少个不同卷的 `[卷索引]` 中出现后自动晋升 index.md。
 const PROMOTE_THRESHOLD: usize = 3;
 
+/// CodeRabbit #6：plot 评估整体超时秒数（best-effort，防止 stalled provider）。
+const PLOT_EVALUATION_TIMEOUT_SECS: u64 = 120;
+
+/// CodeRabbit #6：plot 评估累积输出上限（字符数），防止 LLM 输出爆炸。
+const PLOT_EVALUATION_MAX_CHARS: usize = 4000;
+
 // M2.5：所有 Regex 预编译为静态，避免每次调用 chat_completion 重新 compile。
 static SEAL_TAG_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"<卷评估(?:\s+([^/>]*?))?\s*/>"#).expect("SEAL_TAG_RE compiles"));
@@ -280,16 +286,31 @@ pub async fn run_seal_flow(
     volume_store::clear_current(session_dir)?;
 
     // 阶段三补全 D3：封卷后评估剧情进度，生成下卷悬念/方向（best-effort）。
-    // 失败不影响封卷主流程，仅记日志。
-    match run_plot_evaluation(client, provider, params, &volume_md, &new_index).await {
-        Ok(direction) => {
+    // CodeRabbit #7：先清除旧 plot_direction，防止评估失败时残留上卷方向
+    // 被误注入新卷的 prepare。
+    if let Err(e) = volume_store::write_plot_direction(session_dir, "") {
+        tracing::warn!(err = %e, "清除旧 plot_direction 失败（best-effort）");
+    }
+    // CodeRabbit #6：用 timeout 包裹整个评估，防止 stalled provider 阻塞
+    // 封卷主流程（plot 评估是 best-effort，不应无限等待）。
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(PLOT_EVALUATION_TIMEOUT_SECS),
+        run_plot_evaluation(client, provider, params, &volume_md, &new_index),
+    )
+    .await
+    {
+        Ok(Ok(direction)) => {
             if !direction.trim().is_empty() {
                 if let Err(e) = volume_store::write_plot_direction(session_dir, &direction) {
                     tracing::warn!(err = %e, "剧情方向写入失败（best-effort）");
                 }
             }
         }
-        Err(e) => tracing::warn!(err = %e, "剧情进度评估失败（best-effort）"),
+        Ok(Err(e)) => tracing::warn!(err = %e, "剧情进度评估失败（best-effort）"),
+        Err(_) => tracing::warn!(
+            timeout_secs = PLOT_EVALUATION_TIMEOUT_SECS,
+            "剧情进度评估超时（best-effort）"
+        ),
     }
 
     Ok(Some(next_n))
@@ -330,7 +351,17 @@ async fn run_plot_evaluation(
     let mut full = String::new();
     while let Some(item) = stream.next().await {
         match item {
-            Ok(tok) => full.push_str(&tok),
+            Ok(tok) => {
+                full.push_str(&tok);
+                // CodeRabbit #6：累积输出超上限时停止，防止 LLM 输出爆炸。
+                if full.chars().count() > PLOT_EVALUATION_MAX_CHARS {
+                    tracing::warn!(
+                        max_chars = PLOT_EVALUATION_MAX_CHARS,
+                        "plot 评估输出超上限，截断"
+                    );
+                    break;
+                }
+            }
             Err(e) => return Err(AirpError::Volume(format!("剧情评估 API 调用失败: {}", e))),
         }
     }
