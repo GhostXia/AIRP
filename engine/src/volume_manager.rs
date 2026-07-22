@@ -288,17 +288,26 @@ pub async fn run_seal_flow(
     if let Err(e) = volume_store::write_plot_direction(session_dir, "") {
         tracing::warn!(err = %e, "清除旧 plot_direction 失败（best-effort）");
     }
-    // plot 评估的流式空闲由 adapter 统一限时，不再限制正常长任务的总时长。
-    match run_plot_evaluation(client, provider, params, &volume_md, &new_index).await {
-        Ok(direction) => {
-            if !direction.trim().is_empty() {
-                if let Err(e) = volume_store::write_plot_direction(session_dir, &direction) {
-                    tracing::warn!(err = %e, "剧情方向写入失败（best-effort）");
+    // plot 评估是 best-effort：detach 后不阻塞封卷与响应最终化。
+    // 流式空闲仍由 adapter 统一限时，输出大小仍由评估函数限制。
+    let evaluation_client = client.clone();
+    let evaluation_session_dir = session_dir.to_path_buf();
+    tokio::spawn(async move {
+        match run_plot_evaluation(&evaluation_client, provider, params, &volume_md, &new_index)
+            .await
+        {
+            Ok(direction) => {
+                if !direction.trim().is_empty() {
+                    if let Err(e) =
+                        volume_store::write_plot_direction(&evaluation_session_dir, &direction)
+                    {
+                        tracing::warn!(err = %e, "剧情方向写入失败（best-effort）");
+                    }
                 }
             }
+            Err(e) => tracing::warn!(err = %e, "剧情进度评估失败（best-effort）"),
         }
-        Err(e) => tracing::warn!(err = %e, "剧情进度评估失败（best-effort）"),
-    }
+    });
 
     Ok(Some(next_n))
 }
