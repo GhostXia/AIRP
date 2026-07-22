@@ -26,6 +26,19 @@ fn style_review_interval() -> u64 {
         .unwrap_or(DEFAULT)
 }
 
+/// CodeRabbit PR #291 follow-up：风格审查任务整体超时秒数。
+/// best-effort，防止 stalled provider 阻塞 run_finalize 的 join_set 等待。
+/// 读 env `AIRP_STYLE_REVIEW_TIMEOUT_SECS`，默认 180；0 视为 180（不允许禁用）。
+/// 比 user_model 抽取（120s）略长，因 style review 可能触发 soul drift 压缩。
+fn style_review_timeout() -> u64 {
+    const DEFAULT: u64 = 180;
+    std::env::var("AIRP_STYLE_REVIEW_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT)
+}
+
 // ── finalize ──────────────────────────────────────────────────────────────────
 
 pub(super) async fn run_finalize(
@@ -156,19 +169,26 @@ pub(super) async fn run_finalize(
                     let gen_params = ctx.gen_params.clone();
                     let http_client = ctx.http_client.clone();
                     join_set.spawn(async move {
-                        match crate::style::run_style_review_for_character(
-                            &http_client,
-                            provider_config,
-                            gen_params,
-                            &data_root,
-                            &cid_clone,
-                            session_id.as_ref(),
+                        let timeout_secs = style_review_timeout();
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(timeout_secs),
+                            crate::style::run_style_review_for_character(
+                                &http_client,
+                                provider_config,
+                                gen_params,
+                                &data_root,
+                                &cid_clone,
+                                session_id.as_ref(),
+                            ),
                         )
                         .await
                         {
-                            Ok(true) => tracing::info!("风格审查已应用 drift"),
-                            Ok(false) => {}
-                            Err(e) => tracing::warn!(err = %e, "风格审查失败（best-effort）"),
+                            Ok(Ok(true)) => tracing::info!("风格审查已应用 drift"),
+                            Ok(Ok(false)) => {}
+                            Ok(Err(e)) => {
+                                tracing::warn!(err = %e, "风格审查失败（best-effort）")
+                            }
+                            Err(_) => tracing::warn!(timeout_secs, "风格审查超时（best-effort）"),
                         }
                     });
                 }
