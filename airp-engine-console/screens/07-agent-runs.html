@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 Agent 运行 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .run-head { display: flex; align-items: flex-end; justify-content: space-between; }
+  .run-head .stat { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+  .plan-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .plan-title { font-size: 12px; font-weight: 600; color: var(--primary-strong); display: flex; align-items: center; gap: 8px; }
+  .plan-step { display: flex; gap: 8px; font-size: 12px; color: var(--text-secondary); align-items: baseline; }
+  .plan-step .mk { flex: none; width: 14px; text-align: center; }
+  .plan-step.done .mk { color: var(--success); }
+  .plan-step.doing { color: var(--text-primary); font-weight: 500; }
+  .plan-step.doing .mk { color: var(--warning); }
+  .catalog h4 { margin: 0 0 2px; font-size: 13px; font-weight: 600; }
+  .catalog .cat-group { margin-top: 8px; }
+  .catalog .cat-label { font-size: 11px; color: var(--text-tertiary); margin-bottom: 4px; }
+  .catalog .cat-items { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">Agent 运行 / run-20260721-0042</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn btn-secondary">取消运行</button>
+      <span class="status-pill ok"><i class="dot"></i>运行中</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <main class="pane-main">
+      <div class="run-head">
+        <div>
+          <h1 class="t-title">让艾拉巡查三个信标并汇报</h1>
+          <p class="t-sub">plan-act-observe · 预算：12 步 / 20k tokens / 5 分钟</p>
+        </div>
+        <span class="stat">6,214 tok · 38.2s</span>
+      </div>
+
+      <div class="plan-card">
+        <div class="plan-title"><span class="ico">⚡</span> plan · 执行计划</div>
+        <div class="plan-step done"><span class="mk">✓</span>读取当前星图与三个信标的最后已知坐标</div>
+        <div class="plan-step done"><span class="mk">✓</span>逐个查询信标状态 <span class="t-mono" style="font-size:10px;color:var(--text-tertiary)">worldbook 命中 + state 读取</span></div>
+        <div class="plan-step doing"><span class="mk">●</span>汇总巡查报告并写入会话</div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tc-head">
+          <span class="tc-name"><span class="ico" style="color:var(--text-tertiary)">🔧</span> tool_call · search_worldbook</span>
+          <span class="tag tag-success"><i class="dot"></i>成功 · 0.4s</span>
+        </div>
+        <div class="tc-code">{ "query": "信标: 废弃航道", "character_id": "aila" }</div>
+        <div class="tc-result">→ 命中 2 条：「废弃航道」「导航核心」，已注入观察上下文</div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tc-head">
+          <span class="tc-name"><span class="ico" style="color:var(--text-tertiary)">🔧</span> tool_call · read_character_state</span>
+          <span class="tag tag-success"><i class="dot"></i>成功 · 0.1s</span>
+        </div>
+        <div class="tc-result">→ 艾拉当前状态：警戒等级 2 · 位置 舰桥 · 体力 87%</div>
+      </div>
+
+      <div class="tool-card pending">
+        <div class="tc-head">
+          <span class="tc-name"><span class="ico" style="color:var(--warning)">🔧</span> tool_call · append_session_message</span>
+          <span class="tag tag-warning"><i class="dot"></i>需确认 · 写入操作</span>
+        </div>
+        <div class="tc-result" style="color:var(--warning)">destructive confirmation：写入会话前需要用户在控制台确认</div>
+      </div>
+    </main>
+
+    <aside class="pane-right catalog">
+      <h4>工具目录（21 个）</h4>
+      <div class="cat-group">
+        <div class="cat-label">会话与角色</div>
+        <div class="cat-items">get_character · list_sessions · append_session_message</div>
+      </div>
+      <div class="cat-group">
+        <div class="cat-label">世界书与状态</div>
+        <div class="cat-items">search_worldbook · read_character_state · update_lorebook_entry</div>
+      </div>
+      <div class="cat-group">
+        <div class="cat-label">预设与分析</div>
+        <div class="cat-items">get_preset · update_preset（dry-run） · decompose_preset</div>
+      </div>
+    </aside>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09 人格设定 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .work-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .form-zone { flex: 1; overflow-y: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 16px; }
+  .ftree-group { font-size: 11px; font-weight: 500; letter-spacing: 1px; color: var(--text-tertiary); padding: 6px 4px 2px; }
+  .ftree-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-input); font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }
+  .ftree-item.active { background: var(--primary-tint); color: var(--primary-strong); font-weight: 600; }
+  .kw-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .kw { padding: 4px 10px; border-radius: var(--radius-pill); background: var(--bg-subtle); font-size: 11px; color: var(--text-secondary); }
+  .kw.add { background: transparent; border: 1px dashed var(--border-default); color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">工作台 / 角色卡编辑 / 人格设定</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>自动保存已开启</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <aside class="pane-side">
+      <div class="ftree-group">角色卡</div>
+      <div class="ftree-item active"><span class="ico" style="font-size:10px">◆</span>艾拉.character.json</div>
+      <div class="ftree-item"><span class="ico" style="font-size:10px">◇</span>祁夜.character.json</div>
+    </aside>
+
+    <div class="work-col">
+      <nav class="tabbar">
+        <button class="tab">基础信息</button>
+        <button class="tab active">人格设定</button>
+        <button class="tab">开场白</button>
+        <button class="tab">LLM 参数</button>
+      </nav>
+      <div class="form-zone">
+        <div class="field">
+          <label class="field-label">性格关键词</label>
+          <div class="kw-row">
+            <span class="kw">冷静</span><span class="kw">精确</span><span class="kw">念旧</span><span class="kw">护短</span>
+            <span class="kw add">＋ 添加</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">说话风格</span>
+            <span style="font-size:11px;color:var(--primary-strong);font-weight:600">偏简洁</span>
+          </div>
+          <div class="slider"><i style="width:30%"></i></div>
+          <div class="slider-scale"><span>简洁克制</span><span>华丽铺陈</span></div>
+        </div>
+
+        <div class="field">
+          <label class="field-label">行为习惯与口癖</label>
+          <textarea class="textarea" rows="4">会在句尾加上坐标式的补充（「方位 230，距离 4 光秒」）；紧张时会不自觉地报出剩余电量；从不主动谈论第七舰队的最后一战。</textarea>
+        </div>
+
+        <div class="field">
+          <label class="field-label">深层背景 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">（角色卡 personality 字段）</span></label>
+          <textarea class="textarea" rows="5">艾拉的核心记忆锚点有三处：第一次独立领航穿越碎石带、第七舰队解散仪式上被摘下军衔徽章、以及她在休眠舱里反复播放的一段旧通讯录音。这些记忆影响她对「回家」这个词的反应。</textarea>
+        </div>
+
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary">＋ 保存修改</button>
+          <button class="btn btn-secondary">发送到测试会话</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

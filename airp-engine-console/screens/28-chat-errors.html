@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>28 对话·错误与配额 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .chat-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .msg-flow { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .composer-zone { flex: none; padding: 0 24px 20px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间 / 艾拉 · 错误态</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="chat-col">
+    <div class="msg-flow">
+      <!-- upstream 错误卡 -->
+      <div class="alert-card danger">
+        <div class="ac-head">
+          <span class="ac-title"><span class="alert-icon danger">!</span> 回复生成失败</span>
+          <span class="ac-code">code: upstream</span>
+        </div>
+        <div class="ac-desc">上游 provider 连接失败。你的消息已保存（partially_committed → 请继续生成，禁止整条重试）；详细原因已记录在诊断中心，敏感信息不回显。</div>
+        <div class="ac-actions">
+          <button class="btn btn-primary">继续生成</button>
+          <button class="btn btn-secondary">查看诊断</button>
+        </div>
+      </div>
+
+      <!-- 配额锁定卡 -->
+      <div class="alert-card warn">
+        <div class="ac-head">
+          <span class="ac-title">今日配额已用完</span>
+          <span class="ac-code">code: quota_exceeded</span>
+        </div>
+        <div class="progress warn"><i style="width:100%"></i></div>
+        <div class="ac-desc">已用 100k / 100k tokens · 明日 00:00 重置。历史对话仍可正常浏览。</div>
+        <div class="ac-actions">
+          <button class="btn btn-secondary">调整配额</button>
+          <button class="btn btn-secondary">查看用量</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer-zone">
+      <div class="composer locked">
+        <span class="placeholder">配额重置后可继续对话…</span>
+        <button class="send-btn"><span class="ico" style="color:var(--text-tertiary);font-size:15px">➤</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

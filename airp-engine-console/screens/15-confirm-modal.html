@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>15 确认弹窗 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .confirm-ico { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: var(--danger-tint); color: var(--danger); border-radius: var(--radius-pill); font-size: 17px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">设置 / 危险操作确认</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="modal-mask">
+    <div class="modal" style="width:440px">
+      <span class="confirm-ico">!</span>
+      <span class="m-title">清空全部会话历史？</span>
+      <span class="m-desc">将删除 3 个角色的 12 个会话共 412 条消息。此操作不可撤销；最近一次冷备份是 3 天前，备份之后的消息将永久丢失。</span>
+      <div class="field">
+        <label class="field-note">输入 DELETE 以确认</label>
+        <input id="delete-confirmation" class="input t-mono" type="text" value="DELET" autocomplete="off">
+      </div>
+      <div class="m-actions">
+        <button class="btn btn-secondary">取消</button>
+        <button id="delete-permanently" class="btn btn-danger-solid" disabled>永久删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  const confirmation = document.getElementById("delete-confirmation");
+  const deleteButton = document.getElementById("delete-permanently");
+  const syncDeleteState = () => { deleteButton.disabled = confirmation.value !== "DELETE"; };
+  confirmation.addEventListener("input", syncDeleteState);
+  syncDeleteState();
+</script>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>14 消息操作·Swipe · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .swipe-wrap { flex: 1; padding: 24px; display: flex; flex-direction: column; }
+  .swipe-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .swipe-row .arr { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); color: var(--text-secondary); font-size: 10px; }
+  .msg-ops { display: flex; gap: 12px; font-size: 11px; color: var(--text-secondary); }
+  .msg-ops a:hover { color: var(--primary-strong); }
+  .msg-ops a.danger { color: var(--danger); }
+  .kv-list { display: flex; flex-direction: column; }
+  .kv-list .kv { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border-default); font-size: 11px; }
+  .kv-list .kv:last-child { border-bottom: none; }
+  .kv-list .k { font-family: var(--font-mono); color: var(--text-tertiary); }
+  .kv-list .v { text-align: right; color: var(--text-primary); }
+  .asm-note { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 10px 12px; font-size: 10px; color: var(--text-tertiary); line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">对话空间 / 艾拉 · 装配详情</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <main class="swipe-wrap">
+      <div class="msg-row" style="align-items:flex-start">
+        <span class="avatar">艾</span>
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <div class="bubble ai" style="max-width:none">
+            <div>信标回复了。是一组坐标——指向星图档案馆的外环泊位。它用的校验码格式……舰长，那是第七舰队内部通讯的校验格式。</div>
+          </div>
+          <div class="swipe-row">
+            <span class="arr ico">‹</span>
+            <span>2 / 3 候选</span>
+            <span class="arr ico">›</span>
+          </div>
+          <div class="msg-ops">
+            <a href="#">复制</a><a href="#">重试</a><a href="#">编辑</a><a href="#">继续生成</a><a href="#" class="danger">删除</a>
+          </div>
+          <div class="meta" style="font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)">21:31 · 候选 2 由「重试」生成 · 1,204 tokens · 2.8s</div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="pane-right" style="width:340px">
+      <div class="log-head" style="display:flex;align-items:center;justify-content:space-between">
+        <h3 style="margin:0;font-size:13px">本轮装配详情</h3>
+        <span class="ico" style="color:var(--text-tertiary)">✕</span>
+      </div>
+      <div class="kv-list">
+        <div class="kv"><span class="k">card</span><span class="v">艾拉 · rev 18</span></div>
+        <div class="kv"><span class="k">persona</span><span class="v">舰长·雷恩 · rev 5 · 角色绑定</span></div>
+        <div class="kv"><span class="k">preset</span><span class="v">叙事沉浸型 · rev 12</span></div>
+        <div class="kv"><span class="k">lorebook</span><span class="v">星港地图 · rev 18 · 命中 2 条</span></div>
+        <div class="kv"><span class="k">state</span><span class="v">警戒等级 2 · rev 31</span></div>
+        <div class="kv"><span class="k">memory</span><span class="v">卷 7 · 归档 3 卷</span></div>
+        <div class="kv"><span class="k">model</span><span class="v">claude-sonnet-4 · 预设</span></div>
+        <div class="kv"><span class="k">temperature</span><span class="v">0.80 · 预设</span></div>
+        <div class="kv"><span class="k">est_tokens</span><span class="v">~3,240 / 8,192</span></div>
+      </div>
+      <div class="asm-note">来源标注：· 显式 / · 预设 / · 请求。未激活 asset 显示「未启用」；revision 缺失时显示 unavailable。</div>
+    </aside>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

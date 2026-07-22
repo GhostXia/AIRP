@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>24 插件技能 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .widget-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .widget-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .widget-card .w-t { font-size: 13px; font-weight: 600; }
+  .widget-card .w-s { font-size: 10px; }
+  .skill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .skill-line { display: flex; align-items: baseline; justify-content: space-between; padding: 6px 0; font-size: 12px; }
+  .skill-line .sl-v { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .cap-line { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); line-height: 2; }
+  .cap-line b { color: var(--text-primary); }
+  .cap-line .need { color: var(--warning); }
+  .card .foot { font-size: 10px; color: var(--text-tertiary); border-top: 1px solid var(--border-default); padding-top: 8px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">插件与技能（预留）</span>
+    </div>
+    <div class="topbar-right">
+      <span class="tag tag-warning"><i class="dot"></i>未交付 · 占位</span>
+    </div>
+  </header>
+
+  <main class="pane-main">
+    <div class="banner warn">
+      <span class="ico">⚡</span>
+      <span class="grow">Widget / Blueprint 渲染合同与技能运行时规划中　UI 只渲染声明式 Blueprint 或已审查的 widget 模块——不运行 agent 生成的前端代码。</span>
+    </div>
+
+    <div class="widget-grid">
+      <div class="widget-card"><span class="w-t">聊天流 Widget</span><span class="w-s" style="color:var(--success)">首方 · 已内建</span></div>
+      <div class="widget-card"><span class="w-t">状态/情绪 Widget</span><span class="w-s" style="color:var(--warning)">首方 · 规划中</span></div>
+      <div class="widget-card"><span class="w-t">地图 Widget</span><span class="w-s" style="color:var(--warning)">首方 · 规划中</span></div>
+      <div class="widget-card"><span class="w-t">第三方 Widget</span><span class="w-s" style="color:var(--text-tertiary)">iframe 沙箱 + capability 强制 · 后置</span></div>
+    </div>
+
+    <div class="skill-grid">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:8px">RP 技能 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">md + YAML · progressive disclosure</span></div>
+        <div class="skill-line"><span>怎么写艾拉</span><span class="sl-v">从 40+ 会话沉淀 · v3</span></div>
+        <div class="skill-line"><span>太空歌剧场景套路</span><span class="sl-v">用户确认创建 · v2</span></div>
+        <div class="foot">agent 从可重复工作流沉淀技能，用户反频则更新技能。占位待 skills runtime。</div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:8px">capability 声明 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">engine 侧强制</span></div>
+        <div class="cap-line"><b>read:chat</b> · 读取当前会话</div>
+        <div class="cap-line"><b>render:blueprint</b> · 渲染声明式 UI</div>
+        <div class="cap-line"><b class="need">intent:send_message</b> · <span class="need">需用户确认</span></div>
+        <div class="foot">不可信 widget 接触敏感数据或特权动作前，必须有 engine 侧 capability 强制；UI 检查只是纵深防御。</div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>29 列表·空态与骨架 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .sec-label { font-size: 11px; font-family: var(--font-mono); color: var(--text-tertiary); text-align: left; }
+  .sk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .sk-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .sk-head { display: flex; align-items: center; gap: 12px; }
+  .sk-lines { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">角色列表 / 空态与加载</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <main class="pane-main" style="gap:28px">
+    <!-- 空状态 -->
+    <section style="display:flex;flex-direction:column;gap:12px">
+      <div class="sec-label">— 空状态 —</div>
+      <div class="empty-state">
+        <span class="empty-icon"><span class="ico" style="font-size:26px;color:var(--primary)">▦</span></span>
+        <h1 class="empty-title">还没有角色</h1>
+        <p class="empty-desc">导入一张 TavernCardV2 角色卡（PNG 或 JSON），或从零开始创建。</p>
+        <div class="empty-actions">
+          <button class="btn btn-primary">导入角色卡</button>
+          <button class="btn btn-secondary">从零创建</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 骨架屏 -->
+    <section style="display:flex;flex-direction:column;gap:12px">
+      <div class="sec-label">— 加载骨架屏 —</div>
+      <div class="sk-grid">
+        <div class="sk-card">
+          <div class="sk-head">
+            <div class="skeleton" style="width:44px;height:44px;border-radius:var(--radius-card)"></div>
+            <div class="sk-lines">
+              <div class="skeleton" style="width:120px;height:12px"></div>
+              <div class="skeleton" style="width:80px;height:8px"></div>
+            </div>
+          </div>
+          <div class="skeleton" style="width:220px;height:10px"></div>
+          <div class="skeleton" style="width:180px;height:10px"></div>
+        </div>
+        <div class="sk-card">
+          <div class="sk-head">
+            <div class="skeleton" style="width:44px;height:44px;border-radius:var(--radius-card)"></div>
+            <div class="sk-lines">
+              <div class="skeleton" style="width:100px;height:12px"></div>
+              <div class="skeleton" style="width:90px;height:8px"></div>
+            </div>
+          </div>
+          <div class="skeleton" style="width:200px;height:10px"></div>
+          <div class="skeleton" style="width:160px;height:10px"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>17 记忆与状态 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .state-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .state-cell { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .state-cell .k { font-size: 11px; color: var(--text-tertiary); }
+  .state-cell .v { font-size: 16px; font-weight: 600; font-family: var(--font-mono); }
+  .vol-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 12px 14px; background: var(--bg-surface); }
+  .vol-row.active { background: var(--primary-tint); border-color: transparent; }
+  .vol-badge { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-input); font-size: 11px; font-weight: 700; font-family: var(--font-mono); }
+  .vol-row.active .vol-badge { background: var(--primary); color: #fff; }
+  .vol-badge.rest { background: var(--bg-subtle); color: var(--text-tertiary); }
+  .vol-body { flex: 1; }
+  .vol-t { font-size: 12px; font-weight: 600; }
+  .vol-d { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+  .plan-note { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 12px 14px; font-size: 11px; color: var(--text-tertiary); display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">记忆与状态 / 艾拉</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <aside class="pane-side">
+      <div class="pane-label">选择角色</div>
+      <div class="pane-item active"><div class="pi-title">艾拉</div></div>
+      <div class="pane-item"><div class="pi-title">祁夜</div></div>
+    </aside>
+
+    <main class="pane-main">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">角色状态 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">state · rev 31</span></span>
+          <span class="tag tag-success"><i class="dot"></i>实时同步</span>
+        </div>
+        <div class="state-grid">
+          <div class="state-cell"><span class="k">警戒等级</span><span class="v" style="color:var(--warning)">2 / 5</span></div>
+          <div class="state-cell"><span class="k">当前位置</span><span class="v">舰桥</span></div>
+          <div class="state-cell"><span class="k">体力</span><span class="v" style="color:var(--success)">87%</span></div>
+          <div class="state-cell"><span class="k">情绪基线</span><span class="v" style="font-size:14px">平稳 · 警觉</span></div>
+        </div>
+      </div>
+
+      <div class="card" style="display:flex;flex-direction:column;gap:10px">
+        <div class="card-head" style="margin-bottom:2px">
+          <span class="card-title">记忆卷 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">volumes</span></span>
+          <span style="font-size:10px;color:var(--text-tertiary)">超出上下文预算的旧记忆自动封卷归档</span>
+        </div>
+        <div class="vol-row active">
+          <span class="vol-badge">卷7</span>
+          <div class="vol-body">
+            <div class="vol-t">信标事件 · 第七舰队校验码重现 · 前往星图档案馆的决定</div>
+            <div class="vol-d">进行中 · 已记录 6 条 · 本轮参与装配</div>
+          </div>
+          <span class="tag tag-success"><i class="dot"></i>活跃</span>
+        </div>
+        <div class="vol-row">
+          <span class="vol-badge rest">卷6</span>
+          <div class="vol-body">
+            <div class="vol-t">废弃航道初探 · 艾拉的相位漂移担忧 · 导航核心旧故障档案</div>
+            <div class="vol-d">已封卷 · 14 条 · 可按需检索</div>
+          </div>
+          <button class="btn btn-secondary">查看</button>
+        </div>
+        <div class="vol-row">
+          <span class="vol-badge rest">卷5</span>
+          <div class="vol-body">
+            <div class="vol-t">与雷恩的重逢 · 旧舰队军规的十二条 · 第一次跃迁演练</div>
+            <div class="vol-d">已封卷 · 22 条 · 可按需检索</div>
+          </div>
+          <button class="btn btn-secondary">查看</button>
+        </div>
+      </div>
+
+      <div class="plan-note">
+        <span class="ico">ⓘ</span>
+        <span><b>规划方向（预留）</b>：有界常驻记忆 + frozen snapshot 注入 + 超 80% 容量自动整理 + 跨会话 FTS 检索——「越用越懂你」的自进化闭环。</span>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

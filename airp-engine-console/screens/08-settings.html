@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 设置 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .settings-col { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .field-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .health-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .health-cell { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .health-cell .k { font-size: 11px; color: var(--text-tertiary); }
+  .health-cell .v { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+  .health-cell .v.ok { color: var(--success); }
+  .op-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
+  .op-row + .op-row { border-top: 1px solid var(--border-default); }
+  .op-row .op-t { font-size: 12px; font-weight: 600; }
+  .op-row .op-d { font-size: 11px; color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">设置 / Provider 与引擎</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+    </div>
+  </header>
+
+  <div class="settings-col">
+    <div>
+      <h1 class="t-title">设置</h1>
+      <p class="t-sub">Provider 连接、引擎状态与数据根。密钥只写入本地 secrets，永不回显。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title"><span class="ico" style="color:var(--text-tertiary)">🔗</span> LLM Provider</span>
+        <span class="tag tag-success"><i class="dot"></i>已配置</span>
+      </div>
+      <div class="field-2col" style="margin-bottom:12px">
+        <div class="field">
+          <label class="field-label">服务商</label>
+          <select class="select"><option>Anthropic</option><option>OpenAI</option><option>DeepSeek</option></select>
+        </div>
+        <div class="field">
+          <label class="field-label">模型</label>
+          <select class="select t-mono"><option>claude-sonnet-4</option><option>claude-opus-4</option></select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="replacement-api-key">API Key（不回显）</label>
+        <span class="tag tag-success" style="align-self:flex-start"><i class="dot"></i>密钥已保存</span>
+        <div style="display:flex;gap:8px">
+          <input id="replacement-api-key" class="input t-mono" type="password" value="" placeholder="输入新密钥以替换已保存密钥" autocomplete="new-password" style="flex:1">
+          <button class="btn btn-secondary">测试连接</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title"><span class="ico" style="color:var(--text-tertiary)">✦</span> 引擎健康</span>
+        <span class="tag tag-success"><i class="dot"></i>全部正常</span>
+      </div>
+      <div class="health-grid">
+        <div class="health-cell"><span class="k">引擎版本</span><span class="v">airp-core 0.9.4</span></div>
+        <div class="health-cell"><span class="k">运行时长</span><span class="v">6h 42m</span></div>
+        <div class="health-cell"><span class="k">今日请求</span><span class="v">217</span></div>
+        <div class="health-cell"><span class="k">数据根可写</span><span class="v ok">D:/AIRP-Dev/data ✓</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:4px">数据与备份</div>
+      <div class="op-row">
+        <div>
+          <div class="op-t">冷备份 <span class="t-mono" style="font-weight:400;font-size:10px;color:var(--text-tertiary)">SHA-256 校验</span></div>
+          <div class="op-d">上次备份 3 天前 · 恢复前会先校验归档哈希</div>
+        </div>
+        <button class="btn btn-secondary">立即备份</button>
+      </div>
+      <div class="op-row">
+        <div>
+          <div class="op-t">导出会话存档</div>
+          <div class="op-d">聊天 + 记忆 + 状态 + 本世界书打包导出</div>
+        </div>
+        <button class="btn btn-secondary">导出存档</button>
+      </div>
+    </div>
+
+    <div class="card danger-zone">
+      <div class="card-title" style="margin-bottom:4px;color:var(--danger)">危险操作</div>
+      <div class="op-row">
+        <div>
+          <div class="op-t">清空会话历史</div>
+          <div class="op-d">删除所有会话聊天记录，不可恢复（备份除外）</div>
+        </div>
+        <button class="btn btn-danger">清空历史…</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

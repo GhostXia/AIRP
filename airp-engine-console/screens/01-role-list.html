@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 角色列表 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  /* 本屏私有：顶栏引擎地址框 / 侧栏搜索框 / 角色网格 */
+  .ws-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-subtle); border-radius: var(--radius-input);
+    padding: 5px 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);
+  }
+  .side-search {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg-subtle); border-radius: var(--radius-input);
+    padding: 8px 10px; font-size: 12px; color: var(--text-tertiary);
+  }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .char-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .char-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="ws-chip">ws://127.0.0.1:8787/engine</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>引擎已连接</span>
+      <span class="icon-btn ico">⚙</span>
+    </div>
+  </header>
+
+  <div class="screen-body">
+    <!-- 应用侧边栏 -->
+    <aside class="sidebar-app">
+      <div class="side-search search-row">
+        <span class="ico" style="font-size:12px">⌕</span>
+        <span>搜索角色…</span>
+      </div>
+      <div class="pane-label">我的角色</div>
+      <button class="btn btn-primary block">＋ 新建角色</button>
+      <nav class="nav-group">
+        <a class="nav-item active" href="#"><span class="nav-ico ico">▦</span>角色列表</a>
+        <a class="nav-item" href="02-chat-space.html"><span class="nav-ico ico">◱</span>对话空间</a>
+        <a class="nav-item" href="04-world-book.html"><span class="nav-ico ico">▤</span>世界书</a>
+        <a class="nav-item" href="03-workbench.html"><span class="nav-ico ico">⌂</span>工作台</a>
+      </nav>
+      <div class="side-card">
+        <div class="row"><span style="font-weight:600;color:var(--text-primary)">LLM 配置</span><span class="tag tag-success"><i class="dot"></i>已就绪</span></div>
+        <div class="row"><span class="k">模型</span><span class="v">claude-sonnet-4</span></div>
+        <div class="row"><span class="k">温度</span><span class="v">0.8</span></div>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="pane-main" style="gap:20px">
+      <div class="page-head">
+        <div>
+          <h1 class="t-title">角色列表</h1>
+          <p class="t-sub">管理引擎中的角色卡与其 LLM 行为配置</p>
+        </div>
+        <div class="ph-actions">
+          <button class="btn btn-secondary">导入角色卡</button>
+          <button class="btn btn-primary">＋ 新建角色</button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card"><span class="label">角色总数</span><span class="t-stat">12</span></div>
+        <div class="stat-card"><span class="label">活跃会话</span><span class="t-stat">3</span></div>
+        <div class="stat-card"><span class="label">今日 Token 消耗</span><span class="t-stat">48.2k</span></div>
+        <div class="stat-card"><span class="label">世界书条目</span><span class="t-stat">86</span></div>
+      </div>
+
+      <div class="char-grid">
+        <div class="char-card">
+          <div class="cc-head">
+            <span class="avatar">艾</span>
+            <div>
+              <div class="cc-name">艾拉 · 星港引航员</div>
+              <div class="cc-meta">更新于 2 小时前 · 3 个会话</div>
+            </div>
+          </div>
+          <div class="cc-desc">退役舰队导航 AI，冷静理性，习惯用星图比喻解释复杂局势。</div>
+          <div class="cc-foot">
+            <span class="tag tag-success"><i class="dot"></i>运行中</span>
+            <span class="cc-model">claude-sonnet-4</span>
+          </div>
+        </div>
+
+        <div class="char-card">
+          <div class="cc-head">
+            <span class="avatar hue-violet">祁</span>
+            <div>
+              <div class="cc-name">祁夜 · 雨城侦探</div>
+              <div class="cc-meta">更新于昨天 · 1 个会话</div>
+            </div>
+          </div>
+          <div class="cc-desc">永不放晴的城市里追查记忆失窃案的私家侦探，话少但句句锋利。</div>
+          <div class="cc-foot">
+            <span class="tag tag-neutral">空闲</span>
+            <span class="cc-model">deepseek-v3</span>
+          </div>
+        </div>
+
+        <div class="char-card">
+          <div class="cc-head">
+            <span class="avatar hue-green">白</span>
+            <div>
+              <div class="cc-name">白泽 · 山海博物员</div>
+              <div class="cc-meta">更新于 3 天前 · 草稿</div>
+            </div>
+          </div>
+          <div class="cc-desc">通晓万物的上古神兽化身，喜欢考据，说话带点老学究的温柔。</div>
+          <div class="cc-foot">
+            <span class="tag tag-neutral">空闲</span>
+            <span class="cc-model">qwen-max</span>
+          </div>
+        </div>
+
+        <a class="char-card dashed" href="#">
+          <span style="font-size:18px">＋</span>
+          <span>创建新角色</span>
+        </a>
+      </div>
+
+      <div class="char-grid-2">
+        <div class="char-card">
+          <div class="cc-head">
+            <span class="avatar hue-blue">洛</span>
+            <div>
+              <div class="cc-name">洛恩 · 废墟拾荒者</div>
+              <div class="cc-meta">更新于 5 天前 · 2 个会话</div>
+            </div>
+          </div>
+          <div class="cc-desc">在大崩塌后的都市废墟里收集旧时代遗物，乐观得近乎固执。</div>
+          <div class="cc-foot">
+            <span class="tag tag-success"><i class="dot"></i>运行中</span>
+            <span class="cc-model">claude-sonnet-4</span>
+          </div>
+        </div>
+
+        <div class="char-card">
+          <div class="cc-head">
+            <span class="avatar hue-red">新</span>
+            <div>
+              <div class="cc-name">新雪 · 雪原巫祝</div>
+              <div class="cc-meta">更新于 1 周前 · 草稿</div>
+            </div>
+          </div>
+          <div class="cc-desc">极北聚落里为旅人祈福的年轻巫祝，听得懂风雪的预言。</div>
+          <div class="cc-foot">
+            <span class="tag tag-neutral">空闲</span>
+            <span class="cc-model">glm-4-plus</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>21 用量配额 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .stat-card .delta { font-size: 10px; }
+  .delta.down { color: var(--success); }
+  .delta.flat { color: var(--text-tertiary); }
+  .chart-card { padding: 16px; }
+  .chart { display: flex; align-items: flex-end; justify-content: space-around; height: 180px; padding: 16px 40px 0; }
+  .bar-col { display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+  .bar { width: 16px; border-radius: 3px 3px 0 0; background: var(--primary); }
+  .bar.today { background: var(--warning); }
+  .bar-x { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .quota-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
+  .quota-row + .quota-row { border-top: 1px solid var(--border-default); }
+  .quota-row .q-t { font-size: 12px; font-weight: 500; }
+  .quota-row .q-v { font-family: var(--font-mono); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">用量与配额</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill ok"><i class="dot"></i>计量正常</span>
+    </div>
+  </header>
+
+  <main class="pane-main">
+    <div class="stat-grid">
+      <div class="stat-card"><span class="label">今日 tokens</span><span class="t-stat">48.2k</span><span class="delta down">较昨日 -12%</span></div>
+      <div class="stat-card"><span class="label">本周 tokens</span><span class="t-stat">312k</span><span class="delta flat">日均 44.6k</span></div>
+      <div class="stat-card"><span class="label">本月 tokens</span><span class="t-stat">1.24M</span><span class="delta flat" style="color:var(--success)">缓存命中率 61%</span></div>
+      <div class="stat-card"><span class="label">本月费用估算</span><span class="t-stat">¥ 26.4</span><span class="delta flat">按 provider 刊例价</span></div>
+    </div>
+
+    <div class="card chart-card">
+      <div class="card-title">近 7 天用量 <span class="t-mono" style="font-weight:400;color:var(--text-tertiary)">k tokens/日</span></div>
+      <div class="chart">
+        <div class="bar-col"><div class="bar" style="height:40%"></div><span class="bar-x">8</span></div>
+        <div class="bar-col"><div class="bar" style="height:62%"></div><span class="bar-x">9</span></div>
+        <div class="bar-col"><div class="bar" style="height:45%"></div><span class="bar-x">10</span></div>
+        <div class="bar-col"><div class="bar" style="height:70%"></div><span class="bar-x">11</span></div>
+        <div class="bar-col"><div class="bar" style="height:32%"></div><span class="bar-x">12</span></div>
+        <div class="bar-col"><div class="bar" style="height:80%"></div><span class="bar-x">13</span></div>
+        <div class="bar-col"><div class="bar today" style="height:65%"></div><span class="bar-x">今</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">配额限制</span>
+        <span style="font-size:10px;color:var(--text-tertiary)">达到上限后新请求被拒绝并提示</span>
+      </div>
+      <div class="quota-row">
+        <span class="q-t">每日总 tokens 上限</span>
+        <span class="q-v">100k · <span style="color:var(--success)">已用 48%</span></span>
+      </div>
+      <div class="quota-row">
+        <span class="q-t">单次 Agent 运行预算</span>
+        <span class="q-v">20k tokens / 12 步 / 5 分钟</span>
+      </div>
+      <div class="quota-row">
+        <span class="q-t">每月费用告警线</span>
+        <span class="q-v">¥ 50 · <span style="color:var(--warning)">当前 53%</span></span>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>
