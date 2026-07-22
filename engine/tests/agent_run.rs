@@ -96,6 +96,7 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
     let state = Arc::new(DaemonState {
         data_root,
         http_client: reqwest::Client::new(),
+        fts: Default::default(),
         settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,

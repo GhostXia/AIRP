@@ -43,10 +43,10 @@ use handlers::{
     get_scene_endpoint, get_settings, get_user_model, import_character, import_preset_endpoint,
     list_agent_tools, list_characters, list_models, list_personas_endpoint, list_presets_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
-    reextract_character_assets, regen_chat, rollback_chat, style_review, swipe_chat, switch_branch,
-    unbind_persona_endpoint, update_character_card, update_character_lorebook, update_drift,
-    update_persona_endpoint, update_persona_multi_endpoint, update_resident_memory,
-    update_settings, update_user_model,
+    reextract_character_assets, regen_chat, rollback_chat, rollback_drift, style_review,
+    swipe_chat, switch_branch, unbind_persona_endpoint, update_character_card,
+    update_character_lorebook, update_drift, update_persona_endpoint,
+    update_persona_multi_endpoint, update_resident_memory, update_settings, update_user_model,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -55,6 +55,8 @@ pub struct DaemonState {
     pub data_root: PathBuf,
     /// M0 F-01：共享 HTTP 客户端（内部 `Arc<ConnectionPool>`，clone 廉价）。
     pub http_client: reqwest::Client,
+    /// #290 F-1：daemon 级有界 SQLite FTS 连接缓存。
+    pub fts: crate::memory::FtsStore,
     /// M4.4：热重载窗口。`GET /v1/settings` 读、`POST /v1/settings` 写。
     pub config: std::sync::RwLock<MutableConfig>,
     /// 串行 settings 候选构造、持久化与 live config 提交，不阻塞其他 config readers。
@@ -406,6 +408,10 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/characters/:character_id/drift",
             get(get_drift).put(update_drift),
+        )
+        .route(
+            "/v1/characters/:character_id/drift/rollback",
+            post(rollback_drift),
         )
         // ── Search API（4.3 FTS5 历史检索） ─────────────────────────────────
         .route("/v1/chat/search", post(chat_search))

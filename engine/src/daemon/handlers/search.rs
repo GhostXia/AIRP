@@ -23,11 +23,18 @@ pub async fn chat_search(
     State(state): State<Arc<DaemonState>>,
     Json(payload): Json<SearchRequest>,
 ) -> impl IntoResponse {
-    let result = (|| -> Result<Vec<crate::memory::SearchResult>, AirpError> {
+    let result = async move {
         let cid = CharacterId::new(&payload.character_id)?;
         let limit = payload.limit.unwrap_or(10);
-        crate::memory::search(&state.data_root, cid.as_str(), &payload.query, limit)
-    })();
+        tokio::task::spawn_blocking(move || {
+            state
+                .fts
+                .search_history(&state.data_root, &cid, &payload.query, limit)
+        })
+        .await
+        .map_err(|error| AirpError::Internal(format!("FTS search task failed: {error}")))?
+    }
+    .await;
 
     match result {
         Ok(results) => (

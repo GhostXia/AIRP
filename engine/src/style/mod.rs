@@ -14,7 +14,8 @@ mod drift;
 mod review;
 
 pub use drift::{
-    append_soul_drift, compress_soul_drift_if_needed, inject_soul_drift, read_soul_drift,
+    append_soul_drift, append_soul_drift_with_compression, compress_soul_drift_if_needed,
+    inject_soul_drift, read_soul_drift, read_soul_drift_with_revision, rollback_soul_drift,
     write_soul_drift, SoulDriftConfig, SOUL_DRIFT_DEFAULT_CAP,
 };
 pub use review::{run_style_review, run_style_review_for_character, StyleReviewReport};

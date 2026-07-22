@@ -54,6 +54,7 @@ async fn test_health_endpoint_returns_status() {
     let state = Arc::new(DaemonState {
         data_root: tmp.path().to_path_buf(),
         http_client: reqwest::Client::new(),
+        fts: Default::default(),
         settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
@@ -110,6 +111,7 @@ async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
     let state = Arc::new(DaemonState {
         data_root: tmp.path().to_path_buf(),
         http_client: reqwest::Client::new(),
+        fts: Default::default(),
         settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,

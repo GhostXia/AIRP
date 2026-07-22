@@ -173,16 +173,15 @@ pub async fn run_style_review_for_character(
         return Ok(false);
     }
 
-    crate::style::append_soul_drift(data_root, character_id.as_str(), &report.drift_patch)?;
-    // F-3：超容量时 LLM 压缩（best-effort）。
-    let _ = crate::style::compress_soul_drift_if_needed(
+    crate::style::append_soul_drift_with_compression(
         client,
         provider_config,
         gen_params,
         data_root,
         character_id.as_str(),
+        &report.drift_patch,
     )
-    .await;
+    .await?;
     Ok(true)
 }
 

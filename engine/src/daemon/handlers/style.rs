@@ -29,11 +29,17 @@ pub struct DriftResponse {
     pub content: String,
     pub char_count: usize,
     pub capacity: usize,
+    pub revision: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateDriftRequest {
     pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RollbackDriftRequest {
+    pub revision: u64,
 }
 
 /// POST /v1/style/review
@@ -128,17 +134,16 @@ async fn run_style_review_handler(
 
     let mut drift_applied = false;
     if !report.drift_patch.trim().is_empty() {
-        crate::style::append_soul_drift(&state.data_root, cid.as_str(), &report.drift_patch)?;
-        drift_applied = true;
-        // #290 F-3：drift 追加后若超容量，调用 LLM 合并压缩（best-effort）。
-        let _ = crate::style::compress_soul_drift_if_needed(
+        crate::style::append_soul_drift_with_compression(
             &state.http_client,
             provider_config,
             gen_params,
             &state.data_root,
             cid.as_str(),
+            &report.drift_patch,
         )
-        .await;
+        .await?;
+        drift_applied = true;
     }
 
     Ok(StyleReviewResponse {
@@ -154,12 +159,14 @@ pub async fn get_drift(
 ) -> impl IntoResponse {
     let result = (|| -> Result<DriftResponse, AirpError> {
         let cid = CharacterId::new(&character_id)?;
-        let content = crate::style::read_soul_drift(&state.data_root, cid.as_str())?;
+        let (content, revision) =
+            crate::style::read_soul_drift_with_revision(&state.data_root, cid.as_str())?;
         let config = crate::style::SoulDriftConfig::default();
         Ok(DriftResponse {
             char_count: content.chars().count(),
             content,
             capacity: config.capacity_chars,
+            revision,
         })
     })();
     match result {
@@ -177,12 +184,36 @@ pub async fn update_drift(
     Path(character_id): Path<String>,
     Json(payload): Json<UpdateDriftRequest>,
 ) -> impl IntoResponse {
-    let result = (|| -> Result<(), AirpError> {
+    let result = (|| -> Result<u64, AirpError> {
         let cid = CharacterId::new(&character_id)?;
         crate::style::write_soul_drift(&state.data_root, cid.as_str(), &payload.content)
     })();
     match result {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))).into_response(),
+        Ok(revision) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "success": true, "revision": revision })),
+        )
+            .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// POST /v1/characters/:character_id/drift/rollback
+pub async fn rollback_drift(
+    State(state): State<Arc<DaemonState>>,
+    Path(character_id): Path<String>,
+    Json(payload): Json<RollbackDriftRequest>,
+) -> impl IntoResponse {
+    let result = (|| -> Result<u64, AirpError> {
+        let cid = CharacterId::new(&character_id)?;
+        crate::style::rollback_soul_drift(&state.data_root, cid.as_str(), payload.revision)
+    })();
+    match result {
+        Ok(revision) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "success": true, "revision": revision })),
+        )
+            .into_response(),
         Err(e) => e.into_response(),
     }
 }

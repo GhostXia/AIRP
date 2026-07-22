@@ -23,7 +23,7 @@ mod user_model;
 
 pub use compress::compress_resident_memory;
 pub use extract::{extract_facts, extract_user_preferences, ExtractionConfig};
-pub use fts::{index_message, search, SearchResult};
+pub use fts::{FtsStore, SearchResult};
 pub use resident::{
     append_resident_memory, inject_resident_memory, is_over_capacity, read_resident_memory,
     write_resident_memory, ResidentMemoryConfig, RESIDENT_MEMORY_DEFAULT_CAP,
