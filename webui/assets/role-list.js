@@ -55,8 +55,9 @@
     location.href = target.href;
   }
 
-  async function deleteCharacter(id, name) {
+  async function deleteCharacter(id, name, btn) {
     if (!window.confirm('确定删除角色「' + name + '」？\n此操作不可撤销，角色卡、世界书、会话历史将全部移除。')) return;
+    if (btn) btn.disabled = true;
     setPageStatus('正在删除 ' + name + '…');
     try {
       await client.request('DELETE', '/v1/characters/' + encodeURIComponent(id));
@@ -64,6 +65,7 @@
       await load();
     } catch (error) {
       setPageStatus('删除失败：' + AIRPApi.errorMessage(error.data, error.message), true);
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -127,7 +129,7 @@
       del.className = 'cc-delete';
       del.textContent = '删除';
       del.setAttribute('aria-label', '删除角色 ' + item.name);
-      del.addEventListener('click', () => deleteCharacter(item.id, item.name));
+      del.addEventListener('click', () => deleteCharacter(item.id, item.name, del));
 
       card.append(open, del);
       grid.appendChild(card);

@@ -161,7 +161,7 @@
       del.className = 'session-delete';
       del.textContent = '×';
       del.setAttribute('aria-label', '删除会话 ' + item.id.slice(0, 8));
-      del.addEventListener('click', event => { event.stopPropagation(); deleteSession(item.id); });
+      del.addEventListener('click', event => { event.stopPropagation(); deleteSession(item.id, del); });
       row.append(button, del);
       sessionList.appendChild(row);
     }
@@ -249,15 +249,16 @@
     } finally { streamController = null; setStreamState(false); }
   }
 
-  async function deleteSession(id) {
+  async function deleteSession(id, btn) {
     if (streamController || !window.confirm('确定删除会话 ' + id.slice(0, 8) + '？\n全部消息将不可恢复。')) return;
+    if (btn) btn.disabled = true;
     try {
       await client.request('DELETE', '/v1/sessions/' + encodeURIComponent(characterId) + '/' + encodeURIComponent(id));
       log('session.delete', id);
       if (sessionId === id) { sessionId = ''; sessionStorage.removeItem('airp_session_id'); }
       await loadSessions();
       await loadHistory();
-    } catch (error) { log('session.delete.error', AIRPApi.errorMessage(error.data, error.message)); }
+    } catch (error) { log('session.delete.error', AIRPApi.errorMessage(error.data, error.message)); if (btn) btn.disabled = false; }
   }
 
   async function selectSession(id) {
