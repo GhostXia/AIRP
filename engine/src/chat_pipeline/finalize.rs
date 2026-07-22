@@ -155,7 +155,7 @@ pub(super) async fn run_finalize(
                     let provider_config = ctx.provider_config.clone();
                     let gen_params = ctx.gen_params.clone();
                     let http_client = ctx.http_client.clone();
-                    join_set.spawn(async move {
+                    tokio::spawn(async move {
                         match crate::style::run_style_review_for_character(
                             &http_client,
                             provider_config,
