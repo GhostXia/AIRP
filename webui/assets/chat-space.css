@@ -1,0 +1,28 @@
+/* 02 对话空间：从权威样板迁出的页面私有样式，满足生产 CSP。 */
+.chat-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.msg-flow { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+.composer-zone { flex: none; padding: 12px 24px 14px; background: var(--bg-surface); border-top: 1px solid var(--border-default); }
+.char-head { display: flex; gap: 10px; align-items: center; padding: 10px; background: var(--primary-tint); border-radius: var(--radius-input); }
+.char-head .nm { font-size: 12px; font-weight: 600; }
+.char-head .md { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+.wb-card { background: var(--bg-subtle); border-radius: var(--radius-input); padding: 10px; font-size: 11px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px; }
+.wb-card .t { font-weight: 600; color: var(--text-primary); font-size: 11px; }
+.log-head { display: flex; align-items: center; justify-content: space-between; }
+.log-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.log-close { color: var(--text-tertiary); font-size: 11px; }
+.session-label { padding-top: 6px; }
+.session-list { display: flex; flex-direction: column; gap: 4px; }
+.pane-item { width: 100%; min-height: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.connection-card { margin-top: auto; }
+.composer textarea { flex: 1; min-height: 38px; max-height: 130px; padding: 8px 2px; border: 0; outline: 0; resize: vertical; background: transparent; color: var(--text-primary); font: 13px/1.6 var(--font-body); }
+.composer .send-btn.stop { background: var(--danger); }
+.send-icon { color: var(--text-inverse); font-size: 15px; }
+.bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.runtime-empty { margin: auto; }
+.runtime-error { border-color: var(--danger); background: var(--danger-tint); }
+.event-log-list { display: flex; flex-direction: column; }
+.chat-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
+.message-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; opacity: 0; transition: opacity .15s ease; }
+.bubble:hover .message-actions, .bubble:focus-within .message-actions { opacity: 1; }
+.message-action { border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; font: 10px/1.3 var(--font-mono); padding: 2px 4px; }
+.message-action:hover { color: var(--primary-strong); }

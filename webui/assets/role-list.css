@@ -1,0 +1,27 @@
+/* 01 角色列表：从权威样板迁出的页面私有样式，满足生产 CSP。 */
+.ws-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-subtle); border-radius: var(--radius-input);
+  padding: 5px 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);
+}
+.side-search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-subtle); border-radius: var(--radius-input);
+  padding: 8px 10px; font-size: 12px; color: var(--text-tertiary);
+}
+.side-search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; }
+.search-icon { font-size: 12px; }
+.side-card-title { color: var(--text-primary); font-weight: 600; }
+.role-main { gap: 20px; }
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.char-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.char-card { text-align: left; cursor: pointer; }
+.char-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.runtime-status { min-height: 20px; margin: -8px 0 0; color: var(--text-tertiary); font-size: 11px; }
+.runtime-status.error { color: var(--danger); }
+.runtime-empty { grid-column: 1 / -1; min-height: 180px; }
+.import-input { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.skeleton-role-title { width: 180px; height: 14px; }
+.skeleton-role-copy { width: 240px; height: 10px; }
+@media (max-width: 1100px) { .stat-grid, .char-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 680px) { .stat-grid, .char-grid { grid-template-columns: 1fr; } }

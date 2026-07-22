@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<link rel="stylesheet" href="../assets/console.css">
+</head>
+<body data-screen="worldbook">
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">正在加载</span></div>
+    <div class="topbar-right"><span class="runtime-status" id="runtime-status" role="status"></span><span class="status-pill" id="engine-status"><i class="dot"></i>正在连接</span></div>
+  </header>
+  <div class="screen-body console-body">
+    <nav class="console-nav" id="console-nav" aria-label="控制台主导航"></nav>
+    <main class="console-main"><div class="page-heading"><div><h1 id="heading-title"></h1><p>所有可操作状态均来自当前 Engine。</p></div></div><div class="runtime-grid" id="view"></div></main>
+    <aside class="console-context">
+      <div class="context-block"><h2 class="context-title">当前作用域</h2><dl class="runtime-kv"><dt>Engine</dt><dd id="engine-address">—</dd><dt>角色</dt><dd id="scope-character">—</dd><dt>会话</dt><dd id="scope-session">—</dd><dt>用户</dt><dd id="scope-user">—</dd></dl></div>
+      <div class="context-block"><h2 class="context-title">相关入口</h2><div id="related-links"></div></div>
+    </aside>
+  </div>
+</div>
+<script src="../assets/api-client.js"></script>
+<script src="../assets/console-runtime.js"></script>
+</body>
+</html>

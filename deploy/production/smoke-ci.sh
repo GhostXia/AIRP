@@ -162,7 +162,7 @@ EOF
 MOCK_PROVIDER_HOST=0.0.0.0 \
 MOCK_PROVIDER_TLS_CERT_FILE="$mock_cert" \
 MOCK_PROVIDER_TLS_KEY_FILE="$mock_key" \
-node "$repo/webui/mock-provider.js" > "$mock_log" 2>&1 &
+node "$repo/deploy/production/mock-provider.js" > "$mock_log" 2>&1 &
 mock_pid=$!
 
 $compose up -d --no-build
@@ -235,7 +235,7 @@ AIRP_AUTH_HEADER="$auth_header" \
 AIRP_SMOKE_KEEP_SESSION=1 \
 AIRP_SMOKE_RESULT_FILE="$result_file" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
-node "$repo/webui/smoke.mjs"
+node "$repo/deploy/production/api-smoke.mjs"
 
 $compose restart engine gateway >/dev/null
 wait_for_engine_ready

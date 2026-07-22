@@ -29,13 +29,9 @@ if (Test-Path -LiteralPath $packageRoot) {
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot 'webui') | Out-Null
 Copy-Item -LiteralPath $engine -Destination $packageRoot
-foreach ($asset in @(
-    'index.html', 'style.css', 'runtime-config.js', 'app.js', 'shared.js',
-    'onboarding.js', 'persona-utils.js', 'lorebook-utils.js',
-    'assembly-utils.js', 'history-utils.js', 'smooth-streamer-utils.js'
-)) {
-    Copy-Item -LiteralPath (Join-Path $repoRoot "webui\$asset") -Destination (Join-Path $packageRoot 'webui')
-}
+Copy-Item -LiteralPath (Join-Path $repoRoot 'webui\index.html') -Destination (Join-Path $packageRoot 'webui')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'webui\assets') -Destination (Join-Path $packageRoot 'webui') -Recurse
+Copy-Item -LiteralPath (Join-Path $repoRoot 'webui\screens') -Destination (Join-Path $packageRoot 'webui') -Recurse
 foreach ($file in @('Start-AIRP.cmd', 'README.txt')) {
     Copy-Item -LiteralPath (Join-Path $deployRoot $file) -Destination $packageRoot
 }

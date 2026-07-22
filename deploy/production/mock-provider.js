@@ -8,7 +8,7 @@
 // engine adapter 的 OpenAI 兼容路径（engine/src/adapter.rs::parse_openai_sse_line）
 // 逐帧解析 `choices[0].delta.content`，遇到 `data: [DONE]` 结束。本 mock 严格对齐该契约。
 //
-// 启动：node webui/mock-provider.js   默认监听 127.0.0.1:8889
+// 启动：node deploy/production/mock-provider.js，默认监听 127.0.0.1:8889
 // 可用 env：MOCK_PROVIDER_PORT / MOCK_PROVIDER_HOST / MOCK_PROVIDER_MODEL
 //
 // 故意不依赖任何外部包：验收环境零安装、可复现，且不污染调用者的本地工具链。

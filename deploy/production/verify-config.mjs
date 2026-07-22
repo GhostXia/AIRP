@@ -22,12 +22,10 @@ assert.match(compose, /AIRP_BIND_ADDRESS:-0\.0\.0\.0}:\$\{AIRP_HTTPS_PORT:-443}:
 assert.match(compose, /engine_access_key:\s*\n\s+file: \.\/secrets\/engine_access_key/);
 assert.doesNotMatch(compose, /AIRP_ACCESS_KEY:\s*\$/);
 assert.doesNotMatch(compose, /latest/);
-assert.doesNotMatch(gatewayImage, /COPY webui \/srv/);
-assert.match(gatewayImage, /webui\/onboarding\.js/, 'onboarding runtime must ship in gateway image');
-assert.match(gatewayImage, /webui\/shared\.js/, 'shared WebUI runtime must ship in gateway image');
-assert.match(gatewayImage, /webui\/assembly-utils\.js/, 'assembly preview helper must ship in gateway image');
-assert.match(gatewayImage, /webui\/smooth-streamer-utils\.js/, 'smooth-streamer sentence boundary util must ship in gateway image');
-assert.doesNotMatch(gatewayImage, /mock-provider|smoke\.mjs|serve\.js|start\.bat/);
+assert.match(gatewayImage, /COPY webui\/assets \/srv\/assets/, 'runtime assets must ship in gateway image');
+assert.match(gatewayImage, /COPY webui\/screens \/srv\/screens/, 'screen routes must ship in gateway image');
+assert.match(gatewayImage, /COPY webui\/index\.html \/srv\/index\.html/, 'root entry must ship in gateway image');
+assert.doesNotMatch(gatewayImage, /mock-provider|smoke\.mjs|serve\.js|start\.bat|webui\/tests/);
 assert.doesNotMatch(smokeCompose, /^\s+ports:/m, 'smoke override must not publish engine ports');
 assert.match(smokeCompose, /airp-smoke-data-\$\{AIRP_SMOKE_ID/);
 assert.match(smokeScript, /AIRP_ENDPOINT=https:\/\/host\.docker\.internal/);

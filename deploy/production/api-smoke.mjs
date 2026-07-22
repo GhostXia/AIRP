@@ -8,8 +8,8 @@
 //   错误类型 → 跨 session 无串扰。
 //
 // 运行前置：engine（:8000）+ mock provider（:8889）已起。
-//   完整一键：双击 webui/start.bat（它会起 mock + engine + webui，再单独跑 node webui/smoke.mjs）
-//   只跑 smoke：先起 mock 与 engine，再 node webui/smoke.mjs
+//   生产拓扑 smoke-ci.sh 会启动 mock + engine + gateway，再运行本文件。
+//   本地单跑时需先启动 mock 与 engine，并提供下方环境变量。
 //
 // 退出码：0 = 全绿；1 = 有断言失败（含详细 diff）。非零即验收未过。
 
