@@ -135,8 +135,8 @@
   border: 1px solid transparent;
   white-space: nowrap;
 }
-.btn-primary { background: var(--primary); color: var(--text-inverse); }
-.btn-primary:hover { background: var(--primary-strong); }
+.btn-primary { background: var(--primary-action); color: var(--text-inverse); }
+.btn-primary:hover, .btn-primary:focus-visible { background: var(--primary-action-hover); }
 .btn-secondary { background: var(--bg-surface); color: var(--text-primary); border-color: var(--border-default); }
 .btn-secondary:hover { background: var(--bg-subtle); }
 .btn-danger { background: var(--danger-tint); color: var(--danger); border-color: var(--danger); }

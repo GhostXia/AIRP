@@ -22,6 +22,8 @@
   /* ---- 品牌主色（暖陶土橙） ---- */
   --primary: #C4663B;
   --primary-strong: #A85430;   /* hover / 强调文字 */
+  --primary-action: #A85430;   /* 主按钮底色：对白字 5.28:1 */
+  --primary-action-hover: #8E4528; /* 主按钮 hover/focus：对白字 6.93:1 */
   --primary-tint: #FAEDE6;     /* 浅橙底：选中态、图标底 */
   --primary-muted-text: #F3D9CC; /* 主色表面上的次要文字 */
 

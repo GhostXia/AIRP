@@ -34,7 +34,7 @@ airp-engine-console/
 | 表面 | `--bg-base` / `--bg-surface` / `--bg-subtle` | `#FAFAF7` / `#FFFFFF` / `#F5F2F0` |
 | 描边 | `--border-default` | `#E0DBD9` |
 | 文本 | `--text-primary` / `--text-secondary` / `--text-tertiary` | `#1A1A1F` / `#73706E` / `#9E998F` |
-| 品牌 | `--primary` / `--primary-strong` / `--primary-tint` | `#C4663B` / `#A85430` / `#FAEDE6` |
+| 品牌 | `--primary` / `--primary-strong` / `--primary-action` / `--primary-action-hover` / `--primary-tint` | `#C4663B` / `#A85430` / `#A85430` / `#8E4528` / `#FAEDE6` |
 | 语义 | `--success` `--warning` `--danger` + `-tint` | `#3D9E70` `#D98C21` `#CC4559`（tint 见文件） |
 | 深色表面 | `--ink` | `#2A2927`（Toast） |
 | 圆角 | `--radius-input/card/modal/pill` | `6 / 10 / 14 / 9999 px` |
