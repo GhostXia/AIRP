@@ -21,7 +21,7 @@
 
   const connection = resolveConnection();
   const client = AIRPApi.createClient({ base: connection.base, bearer: connection.bearer });
-  address.textContent = client.base === location.origin ? 'ͬԴ Engine' : client.base;
+  address.textContent = client.base === location.origin ? '同源 Engine' : client.base;
 
   function setConnection(kind, text) {
     status.className = 'status-pill' + (kind ? ' ' + kind : '');
@@ -135,18 +135,27 @@
       $('#stat-version').textContent = asVersion(version);
       $('#stat-characters').textContent = Array.isArray(ids) ? String(ids.length) : '0';
 
-      const summaries = await Promise.all((Array.isArray(ids) ? ids : []).map(async id => {
-        const [raw, sessions] = await Promise.all([
-          client.request('GET', '/v1/characters/' + encodeURIComponent(id)),
-          client.request('GET', '/v1/sessions/' + encodeURIComponent(id)).catch(() => []),
-        ]);
-        return cardData(raw, String(id), Array.isArray(sessions) ? sessions.length : 0);
-      }));
+      const requestedIds = Array.isArray(ids) ? ids : [];
+      const summaries = (await Promise.all(requestedIds.map(async id => {
+        try {
+          const [raw, sessions] = await Promise.all([
+            client.request('GET', '/v1/characters/' + encodeURIComponent(id)),
+            client.request('GET', '/v1/sessions/' + encodeURIComponent(id)).catch(() => []),
+          ]);
+          return cardData(raw, String(id), Array.isArray(sessions) ? sessions.length : 0);
+        } catch (error) {
+          console.warn('Skipping unreadable character', id, error);
+          return null;
+        }
+      }))).filter(Boolean);
       characters = summaries;
       const sessionTotal = summaries.reduce((total, item) => total + item.sessions, 0);
       $('#stat-sessions').textContent = String(sessionTotal);
       setConnection('ok', configured ? 'Engine 已连接' : '已连接 · Provider 待配置');
-      setPageStatus(summaries.length ? '已加载 ' + summaries.length + ' 个角色。' : 'Engine 已连接；导入第一张角色卡开始使用。');
+      const skipped = requestedIds.length - summaries.length;
+      setPageStatus(summaries.length
+        ? '已加载 ' + summaries.length + ' 个角色。' + (skipped ? ' 跳过 ' + skipped + ' 个无法读取的角色。' : '')
+        : (skipped ? '角色列表存在，但均无法读取。' : 'Engine 已连接；导入第一张角色卡开始使用。'), skipped > 0);
       renderCards();
     } catch (error) {
       setConnection('danger', '连接失败');

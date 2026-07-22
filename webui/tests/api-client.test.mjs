@@ -37,6 +37,43 @@ test('bearer is only added as an Authorization header', async () => {
   assert.ok(!call.url.includes('secret-value'));
 });
 
+test('request applies its configurable default timeout', async () => {
+  const client = createClient({
+    base: 'http://engine.test',
+    requestTimeoutMs: 5,
+    fetchImpl: async (_url, init) => new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    }),
+  });
+  await assert.rejects(client.request('GET', '/health'), error => error && error.name === 'TimeoutError');
+});
+
+test('stream applies its separately configurable default timeout', async () => {
+  const client = createClient({
+    base: 'http://engine.test',
+    streamTimeoutMs: 5,
+    fetchImpl: async (_url, init) => new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    }),
+  });
+  await assert.rejects(client.stream('/v1/chat/completions', {}, {}), error => error && error.name === 'TimeoutError');
+});
+
+test('caller signal takes precedence over the default timeout', async () => {
+  const controller = new AbortController();
+  let receivedSignal;
+  const client = createClient({
+    base: 'http://engine.test',
+    requestTimeoutMs: 5,
+    fetchImpl: async (_url, init) => {
+      receivedSignal = init.signal;
+      return response('{}');
+    },
+  });
+  await client.request('GET', '/health', undefined, { signal: controller.signal });
+  assert.equal(receivedSignal, controller.signal);
+});
+
 test('non-2xx JSON becomes a structured AirpHttpError', async () => {
   const client = createClient({
     base: 'http://engine.test',

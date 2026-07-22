@@ -28,6 +28,21 @@
     return String(value || '').replace(/\/+$/, '');
   }
 
+  function normalizeTimeout(value, fallback) {
+    if (value === undefined) return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function timedSignal(signal, timeoutMs) {
+    if (signal || !timeoutMs) return { signal, cleanup: function () {} };
+    const controller = new AbortController();
+    const timer = setTimeout(function () {
+      controller.abort(new DOMException('Request timed out', 'TimeoutError'));
+    }, timeoutMs);
+    return { signal: controller.signal, cleanup: function () { clearTimeout(timer); } };
+  }
+
   function errorMessage(data, fallback) {
     if (typeof data === 'string' && data.trim()) return data.trim();
     if (data && typeof data === 'object') {
@@ -111,6 +126,8 @@
     const base = trimBase(opts.base || (globalThis.location && globalThis.location.origin));
     const bearer = String(opts.bearer || '');
     const onRequest = typeof opts.onRequest === 'function' ? opts.onRequest : function () {};
+    const requestTimeoutMs = normalizeTimeout(opts.requestTimeoutMs, 30_000);
+    const streamTimeoutMs = normalizeTimeout(opts.streamTimeoutMs, 300_000);
     if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
 
     function headers(extra) {
@@ -121,51 +138,62 @@
 
     async function request(method, path, body, requestOptions) {
       const started = Date.now();
+      const timed = timedSignal(requestOptions && requestOptions.signal, requestTimeoutMs);
       const init = {
         method,
         headers: headers(body === undefined ? undefined : { 'Content-Type': 'application/json' }),
-        signal: requestOptions && requestOptions.signal,
+        signal: timed.signal,
       };
       if (body !== undefined) init.body = JSON.stringify(body);
-      let response;
       try {
-        response = await fetchImpl(base + path, init);
-      } catch (error) {
-        onRequest({ method, path, status: 0, ms: Date.now() - started });
-        throw error;
+        let response;
+        try {
+          response = await fetchImpl(base + path, init);
+        } catch (error) {
+          onRequest({ method, path, status: 0, ms: Date.now() - started });
+          throw error;
+        }
+        const text = await response.text();
+        let data = null;
+        if (text) {
+          try { data = JSON.parse(text); } catch { data = text; }
+        }
+        onRequest({ method, path, status: response.status, ms: Date.now() - started });
+        if (!response.ok) throw new AirpHttpError(errorMessage(data, response.statusText), response.status, data);
+        return data;
+      } finally {
+        timed.cleanup();
       }
-      const text = await response.text();
-      let data = null;
-      if (text) {
-        try { data = JSON.parse(text); } catch { data = text; }
-      }
-      onRequest({ method, path, status: response.status, ms: Date.now() - started });
-      if (!response.ok) throw new AirpHttpError(errorMessage(data, response.statusText), response.status, data);
-      return data;
     }
 
     async function stream(path, body, handlers) {
       const started = Date.now();
-      let response;
+      const callbacks = handlers || {};
+      const timed = timedSignal(callbacks.signal, streamTimeoutMs);
       try {
-        response = await fetchImpl(base + path, {
-          method: 'POST',
-          headers: headers({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
-          body: JSON.stringify(body),
-          signal: handlers && handlers.signal,
-        });
-      } catch (error) {
-        onRequest({ method: 'POST', path, status: 0, ms: Date.now() - started });
-        throw error;
+        let response;
+        try {
+          response = await fetchImpl(base + path, {
+            method: 'POST',
+            headers: headers({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
+            body: JSON.stringify(body),
+            signal: timed.signal,
+          });
+        } catch (error) {
+          onRequest({ method: 'POST', path, status: 0, ms: Date.now() - started });
+          throw error;
+        }
+        onRequest({ method: 'POST', path, status: response.status, ms: Date.now() - started });
+        if (!response.ok) {
+          const text = await response.text();
+          let data = text;
+          try { data = JSON.parse(text); } catch {}
+          throw new AirpHttpError(errorMessage(data, response.statusText), response.status, data);
+        }
+        return consumeSse(response, callbacks);
+      } finally {
+        timed.cleanup();
       }
-      onRequest({ method: 'POST', path, status: response.status, ms: Date.now() - started });
-      if (!response.ok) {
-        const text = await response.text();
-        let data = text;
-        try { data = JSON.parse(text); } catch {}
-        throw new AirpHttpError(errorMessage(data, response.statusText), response.status, data);
-      }
-      return consumeSse(response, handlers || {});
     }
 
     return { base, request, stream };

@@ -52,10 +52,11 @@ test('every shipped screen is compatible with the Engine CSP', async () => {
 });
 
 test('operational console pages load the shared real-backend runtime', async () => {
-  for (const file of ['03-workbench.html', '04-world-book.html', '05-presets-models.html', '06-user-persona.html', '07-agent-runs.html', '08-settings.html', '17-memory-state.html', '18-group-chat.html', '19-branch-tree.html', '20-assembly-preview.html', '21-usage-quota.html', '23-diagnostics.html']) {
+  for (const file of ['03-workbench.html', '04-world-book.html', '05-presets-models.html', '06-user-persona.html', '07-agent-runs.html', '08-settings.html', '16-onboarding.html', '17-memory-state.html', '18-group-chat.html', '19-branch-tree.html', '20-assembly-preview.html', '21-usage-quota.html', '22-backup-restore.html', '23-diagnostics.html', '24-plugins.html', '25-notes-connections.html']) {
     const html = await readFile(new URL('../screens/' + file, import.meta.url), 'utf8');
     assert.match(html, /assets\/api-client\.js/);
     assert.match(html, /assets\/console-runtime\.js/);
+    assert.match(html, /id="engine-status" role="status"/);
     assert.doesNotMatch(html, /assets\/app\.js/);
   }
 });

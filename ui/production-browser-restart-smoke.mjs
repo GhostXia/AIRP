@@ -12,6 +12,19 @@ for (const [name, value] of Object.entries({ origin, username, password, browser
 assert.match(chromeSpki, /^[A-Za-z0-9+/]{43}=$/);
 const expected = JSON.parse(readFileSync(browserResultFile, 'utf8'));
 
+async function waitForHistory(context, payload, predicate, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let latest;
+  while (Date.now() < deadline) {
+    const response = await context.request.post(origin + '/v1/chat/history', { data: payload });
+    assert.equal(response.status(), 200);
+    latest = await response.json();
+    if (predicate(latest)) return latest;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw new Error(`history did not reach the expected state within ${timeoutMs}ms; latest total=${latest?.total ?? 'unknown'}`);
+}
+
 const browser = await chromium.launch({ headless: true, executablePath, args: [`--ignore-certificate-errors-spki-list=${chromeSpki}`] });
 try {
   const context = await browser.newContext({ httpCredentials: { username, password }, ignoreHTTPSErrors: false });
@@ -29,21 +42,23 @@ try {
   await page.waitForFunction(() => document.querySelector('#message-input')?.disabled === false, null, { timeout: 15_000 });
   await page.waitForFunction(message => document.querySelector('#message-flow')?.textContent?.includes(message), expected.message, { timeout: 10_000 });
 
-  const persisted = await context.request.post(origin + '/v1/chat/history', { data: { character_id: expected.characterId, session_id: expected.sessionId, limit: 200 } });
-  assert.equal(persisted.status(), 200);
-  const before = await persisted.json();
+  const before = await waitForHistory(
+    context,
+    { character_id: expected.characterId, session_id: expected.sessionId, limit: 200 },
+    history => history.total >= expected.total && history.messages.some(item => item.role === 'user' && item.content === expected.message),
+  );
   assert.equal(before.total, expected.total, 'history must survive the production restart');
 
   const secondMessage = 'restart browser continuity ' + Date.now();
   await page.locator('#message-input').fill(secondMessage);
   await page.locator('#send-message').click();
-  await page.waitForFunction(() => document.querySelector('#stream-status')?.textContent?.includes('Enter'), null, { timeout: 20_000 });
-  await page.waitForTimeout(1_000);
-  const updated = await context.request.post(origin + '/v1/chat/history', { data: { character_id: expected.characterId, session_id: expected.sessionId, limit: 200 } });
-  assert.equal(updated.status(), 200);
-  const after = await updated.json();
-  assert.ok(after.total >= before.total + 2, 'chat must remain writable after restart');
-  assert.ok(after.messages.some(item => item.role === 'user' && item.content === secondMessage));
+  await page.waitForFunction(() => document.querySelector('#send-message')?.classList.contains('stop'), null, { timeout: 5_000 });
+  await page.waitForFunction(() => !document.querySelector('#send-message')?.classList.contains('stop'), null, { timeout: 20_000 });
+  await waitForHistory(
+    context,
+    { character_id: expected.characterId, session_id: expected.sessionId, limit: 200 },
+    history => history.total >= before.total + 2 && history.messages.some(item => item.role === 'user' && item.content === secondMessage),
+  );
   assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), []);
   assert.deepEqual(pageErrors, []);
   await context.close();

@@ -18,6 +18,19 @@ const characterId = apiResult.character_id;
 const sessionId = apiResult.session_id;
 assert.ok(characterId && sessionId, 'API smoke must provide a durable character/session');
 
+async function waitForHistory(context, payload, predicate, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let latest;
+  while (Date.now() < deadline) {
+    const response = await context.request.post(origin + '/v1/chat/history', { data: payload });
+    assert.equal(response.status(), 200);
+    latest = await response.json();
+    if (predicate(latest)) return latest;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw new Error(`history did not reach the expected state within ${timeoutMs}ms; latest total=${latest?.total ?? 'unknown'}`);
+}
+
 const browser = await chromium.launch({ headless: true, executablePath, args: [`--ignore-certificate-errors-spki-list=${chromeSpki}`] });
 try {
   const context = await browser.newContext({ httpCredentials: { username, password }, ignoreHTTPSErrors: false });
@@ -48,13 +61,13 @@ try {
   const message = 'production browser continuity ' + Date.now();
   await page.locator('#message-input').fill(message);
   await page.locator('#send-message').click();
-  await page.waitForFunction(() => document.querySelector('#stream-status')?.textContent?.includes('Enter'), null, { timeout: 20_000 });
-  await page.waitForTimeout(1_000);
-  const after = await context.request.post(origin + '/v1/chat/history', { data: { character_id: characterId, session_id: sessionId, limit: 200 } });
-  assert.equal(after.status(), 200);
-  const afterHistory = await after.json();
-  assert.ok(afterHistory.total >= beforeHistory.total + 2, 'visible chat must persist user and assistant turns');
-  assert.ok(afterHistory.messages.some(item => item.role === 'user' && item.content === message));
+  await page.waitForFunction(() => document.querySelector('#send-message')?.classList.contains('stop'), null, { timeout: 5_000 });
+  await page.waitForFunction(() => !document.querySelector('#send-message')?.classList.contains('stop'), null, { timeout: 20_000 });
+  const afterHistory = await waitForHistory(
+    context,
+    { character_id: characterId, session_id: sessionId, limit: 200 },
+    history => history.total >= beforeHistory.total + 2 && history.messages.some(item => item.role === 'user' && item.content === message),
+  );
 
   await page.goto(origin + '/screens/23-diagnostics.html?character=' + encodeURIComponent(characterId), { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('#view pre')?.textContent?.includes('version'));

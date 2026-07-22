@@ -42,7 +42,7 @@
     bearer,
     onRequest: entry => log('http.' + entry.method.toLocaleLowerCase(), entry.path + ' · ' + (entry.status || 'network') + ' · ' + entry.ms + 'ms'),
   });
-  $('#connection-address').textContent = client.base === location.origin ? 'ͬԴ Engine' : client.base;
+  $('#connection-address').textContent = client.base === location.origin ? '同源 Engine' : client.base;
 
   function setConnection(kind, text) {
     engineStatus.className = 'status-pill' + (kind ? ' ' + kind : '');
@@ -158,17 +158,10 @@
     }
   }
 
-  async function historySummary(id) {
-    try {
-      const history = await client.request('POST', '/v1/chat/history', { character_id: characterId, session_id: id, limit: 1 });
-      return Number(history && history.total) || 0;
-    } catch { return 0; }
-  }
-
   async function loadSessions() {
     const ids = await client.request('GET', '/v1/sessions/' + encodeURIComponent(characterId));
     const values = Array.isArray(ids) ? ids.map(String) : [];
-    sessions = await Promise.all(values.map(async id => ({ id, total: await historySummary(id) })));
+    sessions = values.map(id => ({ id, total: null }));
     if (!values.includes(sessionId)) sessionId = values[0] || '';
     if (sessionId) sessionStorage.setItem('airp_session_id', sessionId);
     else sessionStorage.removeItem('airp_session_id');
@@ -192,6 +185,9 @@
       const timestamps = Array.isArray(data && data.message_timestamps) ? data.message_timestamps : [];
       flow.replaceChildren();
       messageCount = Number(data && data.total) || messages.length;
+      const activeSession = sessions.find(item => item.id === sessionId);
+      if (activeSession) activeSession.total = messageCount;
+      renderSessions();
       $('#context-count').textContent = '上下文 ' + messageCount + ' 条';
       if (!messages.length) emptyState('会话已就绪', '发送第一条消息，开始这段对话。');
       const ids = Array.isArray(data && data.message_ids) ? data.message_ids : [];
