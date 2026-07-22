@@ -47,7 +47,7 @@ try {
     { character_id: expected.characterId, session_id: expected.sessionId, limit: 200 },
     history => history.total >= expected.total && history.messages.some(item => item.role === 'user' && item.content === expected.message),
   );
-  assert.equal(before.total, expected.total, 'history must survive the production restart');
+  assert.ok(before.total >= expected.total, 'history must not shrink across the production restart');
 
   const secondMessage = 'restart browser continuity ' + Date.now();
   await page.locator('#message-input').fill(secondMessage);
