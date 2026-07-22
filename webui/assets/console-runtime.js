@@ -261,8 +261,8 @@
     const catalog = card('工具目录', true); for (const item of tools) catalog.appendChild(node('span', 'tool-badge', item.name || String(item))); view.appendChild(catalog);
   }
 
-  async function renderSettings(onboarding) {
-    const view = $('#view'); view.replaceChildren(); view.appendChild(connectionCard()); const box = card(onboarding ? '首次 Provider 配置' : 'Engine 设置', true); const form = node('div', 'runtime-form'); box.appendChild(form); view.appendChild(box);
+  async function renderSettings() {
+    const view = $('#view'); view.replaceChildren(); view.appendChild(connectionCard()); const box = card('Engine 设置', true); const form = node('div', 'runtime-form'); box.appendChild(form); view.appendChild(box);
     const settings = await task('读取设置', () => client.request('GET', '/v1/settings'));
     const endpoint = input('Provider Endpoint', settings.endpoint || ''); const model = input('模型', settings.model || ''); const key = input('Provider API Key（留空则不修改）', '', { type: 'password' });
     const engine = input('后端适配器', settings.engine || 'direct', { select: [{ value: 'direct', label: 'OpenAI 兼容 / Direct' }, { value: 'anthropic_messages', label: 'Anthropic Messages' }, { value: 'claude_code_sdk', label: 'Claude Code SDK（后端尚未实现）' }] });
@@ -352,7 +352,7 @@
     try {
       const health = await client.request('GET', '/health'); $('#engine-status').className = 'status-pill ok'; $('#engine-status').lastChild.textContent = health.provider_configured ? 'Engine 与 Provider 就绪' : 'Engine 就绪 · Provider 待配置';
       await loadScope();
-      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: () => renderSettings(false), onboarding: () => renderSettings(true), memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes };
+      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes };
       await (renderers[screen] || renderDiagnostics)();
     } catch (error) {
       $('#engine-status').className = 'status-pill danger'; $('#engine-status').lastChild.textContent = '连接或加载失败'; setStatus(message(error), true);

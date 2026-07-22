@@ -129,6 +129,7 @@
       const configured = Boolean(health && health.provider_configured);
       $('#provider-state').className = 'tag ' + (configured ? 'tag-success' : 'tag-warning');
       $('#provider-state').textContent = configured ? '已就绪' : '待配置';
+      $('#provider-action').hidden = configured;
       $('#provider-model').textContent = firstText(provider.model || (settings && settings.model), '—');
       $('#provider-temperature').textContent = settings.temperature == null ? '—' : String(settings.temperature);
       $('#stat-provider').textContent = configured ? '就绪' : '待配置';

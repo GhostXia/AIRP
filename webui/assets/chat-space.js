@@ -229,7 +229,7 @@
     const assistant = appendMessage('assistant', '', { streaming: true }); let text = '';
     streamController = new AbortController(); setStreamState(true);
     try {
-      await client.stream(path, { character_id: characterId, session_id: sessionId, user_id: 'default' }, {
+      await client.stream(path, { character_id: characterId, session_id: sessionId }, {
         signal: streamController.signal,
         onChunk: chunk => { if (chunk.type === 'body_chunk') { text += chunk.text || ''; assistant.content.textContent = text; } },
         onDone: () => log(label + '.complete', text.length + ' 字符'),
@@ -279,12 +279,20 @@
     setStreamState(true);
     let text = '';
     try {
-      await client.stream('/v1/chat/completions', {
+      let userProfile = { name: 'User', variables: {} };
+      try {
+        const savedProfile = JSON.parse(sessionStorage.getItem('airp_user_profile') || 'null');
+        if (savedProfile && typeof savedProfile.name === 'string' && savedProfile.variables && typeof savedProfile.variables === 'object') userProfile = savedProfile;
+      } catch {}
+      const request = {
         character_id: characterId,
         session_id: sessionId,
-        user_profile: { name: 'User', variables: {} },
+        user_profile: userProfile,
         message,
-      }, {
+      };
+      const presetId = sessionStorage.getItem('airp_preset_id');
+      if (presetId) request.preset_id = presetId;
+      await client.stream('/v1/chat/completions', request, {
         signal: streamController.signal,
         onChunk: chunk => {
           if (chunk.type === 'body_chunk') {
@@ -299,6 +307,7 @@
         },
         onDone: () => log('llm.stream.complete', text.length + ' 字符'),
       });
+      try { localStorage.setItem('airp_onboarded', 'true'); } catch {}
       await loadSessions();
       await loadHistory();
     } catch (error) {
@@ -306,10 +315,10 @@
         assistant.meta.textContent = '已停止；用户消息可能已写入';
         log('llm.stream.cancel', '用户停止生成');
       } else {
-        const partial = error && error.commitState === 'partially_committed';
-        assistant.content.textContent = text || (partial ? '生成失败，但本轮可能已部分写入。请刷新历史确认，不要直接重发。' : AIRPApi.errorMessage(error.data, error.message));
+        const uncertain = error && ['partially_committed', 'unknown'].includes(error.commitState);
+        assistant.content.textContent = text || (uncertain ? '生成中断，本轮写入状态不确定。请刷新历史确认，不要直接重发。' : AIRPApi.errorMessage(error.data, error.message));
         assistant.row.querySelector('.bubble').classList.add('runtime-error');
-        assistant.meta.textContent = partial ? '状态不确定 · 请刷新历史' : '生成失败';
+        assistant.meta.textContent = uncertain ? '状态不确定 · 请刷新历史' : '生成失败';
         log('llm.stream.error', AIRPApi.errorMessage(error.data, error.message));
       }
     } finally {

@@ -114,6 +114,28 @@ test('SSE error preserves commit_state so UI never suggests blind retry', async 
   );
 });
 
+test('SSE ending without a done event is an uncertain non-retryable failure', async () => {
+  const body = 'event: message\ndata: {"type":"body_chunk","text":"partial"}\n\n';
+  await assert.rejects(
+    consumeSse(response(body), {}),
+    error => error instanceof AirpStreamError && error.code === 'stream_incomplete' && error.commitState === 'unknown' && error.retryable === false,
+  );
+});
+
+test('stream transport failure is reported with unknown commit state', async () => {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('event: message\ndata: {"type":"body_chunk","text":"partial"}\n\n'));
+      controller.error(new Error('connection reset'));
+    },
+  });
+  const client = createClient({ base: 'http://engine.test', fetchImpl: async () => response(body) });
+  await assert.rejects(
+    client.stream('/v1/chat/completions', {}, {}),
+    error => error instanceof AirpStreamError && error.code === 'stream_transport' && error.commitState === 'unknown' && error.retryable === false,
+  );
+});
+
 test('errorMessage exposes only a useful public string', () => {
   assert.equal(errorMessage({ message: '失败', api_key: 'secret' }), '失败');
   assert.equal(errorMessage(null, '请求失败'), '请求失败');

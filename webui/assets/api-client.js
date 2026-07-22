@@ -117,7 +117,12 @@
     }
     buffer += decoder.decode();
     if (!finished && buffer.trim()) dispatch(buffer);
-    return { completed: finished };
+    if (!finished) {
+      throw new AirpStreamError('流式响应在完成事件前中断；请刷新历史确认写入状态', {
+        code: 'stream_incomplete', retryable: false, commit_state: 'unknown',
+      });
+    }
+    return { completed: true };
   }
 
   function createClient(options) {
@@ -190,7 +195,14 @@
           try { data = JSON.parse(text); } catch {}
           throw new AirpHttpError(errorMessage(data, response.statusText), response.status, data);
         }
-        return consumeSse(response, callbacks);
+        try {
+          return await consumeSse(response, callbacks);
+        } catch (error) {
+          if (error instanceof AirpStreamError || (error && error.name === 'AbortError' && callbacks.signal && callbacks.signal.aborted)) throw error;
+          throw new AirpStreamError('流式连接中断；请刷新历史确认写入状态', {
+            code: 'stream_transport', retryable: false, commit_state: 'unknown',
+          });
+        }
       } finally {
         timed.cleanup();
       }

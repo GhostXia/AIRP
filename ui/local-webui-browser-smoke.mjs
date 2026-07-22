@@ -22,6 +22,11 @@ try {
   assert.equal(headers['x-frame-options'], 'DENY');
   assert.equal(headers['x-content-type-options'], 'nosniff');
   assert.equal(headers['cache-control'], 'no-store');
+  await page.waitForURL('**/screens/16-onboarding.html');
+  await page.waitForFunction(() => document.querySelector('#onboarding-card')?.textContent?.includes('检查 AIRP Engine'));
+  assert.equal(await page.locator('#onboarding-steps .step').count(), 6);
+  assert.equal(await page.locator('#engine-status').evaluate(node => node.classList.contains('danger')), false);
+  await page.locator('#skip-onboarding').click();
   await page.waitForURL('**/screens/01-role-list.html');
   await page.waitForFunction(() => document.querySelector('#engine-status')?.textContent?.includes('连接'));
   assert.equal(await page.locator('#character-grid').count(), 1);

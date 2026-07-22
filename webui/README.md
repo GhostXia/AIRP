@@ -10,7 +10,7 @@
 airp-core daemon --host 127.0.0.1 --port 8765 --webui-dir webui
 ```
 
-打开 `http://127.0.0.1:8765/`。入口会跳转到 `screens/01-role-list.html`。WebUI 默认同源调用 Engine；开发联调也可在 URL 上使用 `?engine=http://127.0.0.1:PORT`，该地址只保存在当前浏览器会话。
+打开 `http://127.0.0.1:8765/`。首次运行进入 `screens/16-onboarding.html`，完成或明确跳过后进入 `screens/01-role-list.html`。WebUI 默认同源调用 Engine；开发联调也可在 URL 上使用 `?engine=http://127.0.0.1:PORT`，该地址只保存在当前浏览器会话。
 
 ## 结构
 

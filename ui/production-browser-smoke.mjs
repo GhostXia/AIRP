@@ -43,6 +43,22 @@ try {
     document.addEventListener('securitypolicyviolation', event => window.__airpCspViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI }));
   });
 
+  await page.goto(origin + '/screens/16-onboarding.html', { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => document.querySelector('#onboarding-card')?.textContent?.includes('检查 AIRP Engine'));
+  assert.equal(await page.locator('#onboarding-steps .step').count(), 6);
+  await page.getByRole('button', { name: '下一步 →' }).click();
+  await page.getByRole('button', { name: '保存并下一步 →' }).click();
+  await page.getByRole('button', { name: '下一步 →' }).waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.querySelector('#onboarding-card .btn-primary')?.disabled === false);
+  await page.getByRole('button', { name: '下一步 →' }).click();
+  const characterChoice = page.getByRole('button', { name: characterId, exact: true });
+  if (await characterChoice.count()) await characterChoice.click();
+  await page.getByRole('button', { name: '下一步 →' }).click();
+  await page.getByRole('button', { name: '下一步 →' }).click();
+  await page.getByLabel('给角色的第一句话').fill('onboarding production smoke ' + Date.now());
+  await page.getByRole('button', { name: '发送首轮消息' }).click();
+  await page.getByRole('button', { name: '进入对话空间 →' }).waitFor({ state: 'visible', timeout: 20_000 });
+
   const chatUrl = origin + '/screens/02-chat-space.html?character=' + encodeURIComponent(characterId) + '&session=' + encodeURIComponent(sessionId);
   const response = await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
   assert.equal(response?.status(), 200);
