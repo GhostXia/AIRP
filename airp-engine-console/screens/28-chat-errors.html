@@ -35,9 +35,9 @@
           <span class="ac-title"><span class="alert-icon danger">!</span> 回复生成失败</span>
           <span class="ac-code">code: upstream</span>
         </div>
-        <div class="ac-desc">上游 provider 连接失败。你的消息已保存（not_committed → 可安全重试）；详细原因已记录在诊断中心，敏感信息不回显。</div>
+        <div class="ac-desc">上游 provider 连接失败。你的消息已保存（partially_committed → 请继续生成，禁止整条重试）；详细原因已记录在诊断中心，敏感信息不回显。</div>
         <div class="ac-actions">
-          <button class="btn btn-primary">重试生成</button>
+          <button class="btn btn-primary">继续生成</button>
           <button class="btn btn-secondary">查看诊断</button>
         </div>
       </div>

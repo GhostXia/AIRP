@@ -57,9 +57,10 @@
         </div>
       </div>
       <div class="field">
-        <label class="field-label">API Key（不回显）</label>
+        <label class="field-label" for="replacement-api-key">API Key（不回显）</label>
+        <span class="tag tag-success" style="align-self:flex-start"><i class="dot"></i>密钥已保存</span>
         <div style="display:flex;gap:8px">
-          <input class="input t-mono" type="text" value="sk-ant-••••••••••••••••••••（已保存）" readonly style="flex:1">
+          <input id="replacement-api-key" class="input t-mono" type="password" value="" placeholder="输入新密钥以替换已保存密钥" autocomplete="new-password" style="flex:1">
           <button class="btn btn-secondary">测试连接</button>
         </div>
       </div>

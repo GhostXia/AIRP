@@ -32,15 +32,22 @@
       <span class="m-desc">将删除 3 个角色的 12 个会话共 412 条消息。此操作不可撤销；最近一次冷备份是 3 天前，备份之后的消息将永久丢失。</span>
       <div class="field">
         <label class="field-note">输入 DELETE 以确认</label>
-        <input class="input t-mono" type="text" value="DELET">
+        <input id="delete-confirmation" class="input t-mono" type="text" value="DELET" autocomplete="off">
       </div>
       <div class="m-actions">
         <button class="btn btn-secondary">取消</button>
-        <button class="btn btn-danger-solid">永久删除</button>
+        <button id="delete-permanently" class="btn btn-danger-solid" disabled>永久删除</button>
       </div>
     </div>
   </div>
 </div>
+<script>
+  const confirmation = document.getElementById("delete-confirmation");
+  const deleteButton = document.getElementById("delete-permanently");
+  const syncDeleteState = () => { deleteButton.disabled = confirmation.value !== "DELETE"; };
+  confirmation.addEventListener("input", syncDeleteState);
+  syncDeleteState();
+</script>
 <script src="../assets/screens.js"></script>
 <script src="../assets/app.js"></script>
 </body>

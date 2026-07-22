@@ -17,11 +17,13 @@
   --text-primary: #1A1A1F;     /* 主文本 */
   --text-secondary: #73706E;   /* 次要文本/说明 */
   --text-tertiary: #9E998F;    /* 弱化文本/占位/分组标签 */
+  --text-inverse: #FFFFFF;      /* 强色/深色表面上的文本 */
 
   /* ---- 品牌主色（暖陶土橙） ---- */
   --primary: #C4663B;
   --primary-strong: #A85430;   /* hover / 强调文字 */
   --primary-tint: #FAEDE6;     /* 浅橙底：选中态、图标底 */
+  --primary-muted-text: #F3D9CC; /* 主色表面上的次要文字 */
 
   /* ---- 语义色 ---- */
   --success: #3D9E70;
@@ -30,6 +32,12 @@
   --warning-tint: #FCF5E6;
   --danger: #CC4559;
   --danger-tint: #FCEDF0;
+
+  /* ---- 头像辅助色 ---- */
+  --avatar-violet-bg: #F0EBFA;
+  --avatar-violet-text: #6B5CA5;
+  --avatar-blue-bg: #EAF1F8;
+  --avatar-blue-text: #4A6FA5;
 
   /* ---- 深色表面（Toast 等，画布字面值，非变量） ---- */
   --ink: #2A2927;
@@ -49,15 +57,17 @@
 
   /* ---- 字体 ---- */
   --font-body: "Inter", "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", consolas, monospace;
 
   /* ---- 阴影（画布效果值） ---- */
   --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.08);        /* 浮层卡/通知 */
   --shadow-pop: 0 6px 16px -2px rgba(0, 0, 0, 0.16);    /* Toast/弹窗 */
+  --shadow-control: 0 1px 3px rgba(0, 0, 0, 0.2);       /* 开关滑块 */
+  --overlay-modal: rgba(26, 23, 20, 0.45);              /* 模态遮罩 */
 
   /* ---- 画布基准 ---- */
   --canvas-w: 1440px;
   --canvas-h: 900px;
-  --topbar-h: 54px;            /* 顶栏高度（画布 54；含 32px 高内容时为 56） */
+  --topbar-h: 54px;            /* 顶栏精确高度（含底部描边） */
   --shadow-modal: 0 12px 40px -8px rgba(0, 0, 0, 0.18);    /* 模态（画布效果值） */
 }

@@ -9,7 +9,7 @@
 
 ## 1. 目录结构
 
-```
+```text
 airp-engine-console/
 ├── index.html            # 导航首页：可点击页面流转图 + 分组屏清单（数据驱动）
 ├── STYLEGUIDE.md         # 本文件
