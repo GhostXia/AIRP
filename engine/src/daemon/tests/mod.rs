@@ -24,6 +24,7 @@ mod persona;
 mod security;
 mod sessions;
 mod state_scene;
+mod style;
 
 /// Build a `DaemonState` rooted at a fresh tempdir, optionally with an
 /// `access_api_key`. The returned guard must stay alive for the test lifetime.
@@ -32,6 +33,7 @@ pub(super) fn make_state_with_key(key: Option<&str>) -> (Arc<DaemonState>, tempf
     let state = Arc::new(DaemonState {
         data_root: tmp.path().to_path_buf(),
         http_client: reqwest::Client::new(),
+        fts: Default::default(),
         settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
@@ -78,6 +80,7 @@ pub(super) fn make_state_no_key() -> (Arc<DaemonState>, tempfile::TempDir) {
     let state = Arc::new(DaemonState {
         data_root: tmp.path().to_path_buf(),
         http_client: reqwest::Client::new(),
+        fts: Default::default(),
         settings_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,

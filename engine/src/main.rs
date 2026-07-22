@@ -192,6 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let state = Arc::new(DaemonState {
                 data_root,
                 http_client: http_client.clone(),
+                fts: Default::default(),
                 settings_update: Default::default(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
@@ -292,6 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let state = Arc::new(DaemonState {
                 data_root,
                 http_client: http_client.clone(),
+                fts: Default::default(),
                 settings_update: Default::default(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,

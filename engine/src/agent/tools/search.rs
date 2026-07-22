@@ -40,7 +40,9 @@ impl Tool for SessionSearchTool {
                 .ok_or_else(|| AirpError::BadRequest("query is required".to_string()))?;
             let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
 
-            let results = crate::memory::search(&state.data_root, cid.as_str(), query, limit)?;
+            let results = state
+                .fts
+                .search_history(&state.data_root, &cid, query, limit)?;
 
             let out: Vec<Value> = results
                 .iter()

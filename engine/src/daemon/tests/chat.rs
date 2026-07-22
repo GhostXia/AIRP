@@ -15,6 +15,48 @@
 
 use super::*;
 
+#[tokio::test]
+async fn chat_search_backfills_persisted_history() {
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    crate::domain::ChatService::new(&state.data_root)
+        .append(
+            &character,
+            None,
+            crate::adapter::ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: "runtime-index amethyst phrase".into(),
+            },
+        )
+        .unwrap();
+    let app = create_router(state);
+
+    let request = serde_json::json!({
+        "character_id": "alice",
+        "query": "amethyst",
+        "limit": 10
+    });
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["results"].as_array().unwrap().len(), 1);
+    assert_eq!(value["results"][0]["session_id"], "default");
+}
+
 fn snapshot_tree(
     root: &std::path::Path,
 ) -> std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> {
