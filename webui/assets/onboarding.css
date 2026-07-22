@@ -1,0 +1,37 @@
+/* 16 首次启动：沿用权威样板的六阶段轨道，运行态样式保持 CSP 兼容。 */
+.wizard-body { flex: 1; overflow-y: auto; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 24px; }
+.steps { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px 28px; }
+.step { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-tertiary); }
+.step .no { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-pill); border: 1.5px solid var(--border-default); font: 11px/1 var(--font-mono); }
+.step.done { color: var(--success); }
+.step.done .no { background: var(--success); border-color: var(--success); color: var(--text-inverse); }
+.step.now { color: var(--primary-strong); font-weight: 600; }
+.step.now .no { background: var(--primary); border-color: var(--primary); color: var(--text-inverse); }
+.wizard-card { width: 100%; max-width: 960px; min-height: 390px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-modal); padding: 28px 32px; display: flex; flex-direction: column; gap: 18px; }
+.wizard-head h1 { margin: 0; font-size: 17px; }
+.wizard-head p { margin: 5px 0 0; color: var(--text-secondary); font-size: 12px; }
+.wizard-content { display: flex; flex: 1; flex-direction: column; gap: 14px; }
+.wizard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.wizard-choice { min-height: 68px; padding: 12px 14px; border: 1px solid var(--border-default); border-radius: var(--radius-card); background: var(--bg-surface); color: var(--text-primary); text-align: left; }
+.wizard-choice:hover { background: var(--bg-subtle); }
+.wizard-choice.selected { border-color: var(--primary); background: var(--primary-tint); }
+.wizard-choice strong, .wizard-choice span { display: block; }
+.wizard-choice span { margin-top: 3px; color: var(--text-tertiary); font-size: 10px; }
+.wizard-checks { display: flex; flex-direction: column; gap: 8px; }
+.wizard-check { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); font-size: 12px; }
+.wizard-check code { color: var(--text-secondary); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.wizard-check.ok { border-color: var(--success); background: var(--success-tint); }
+.wizard-check.warn { border-color: var(--warning); background: var(--warning-tint); }
+.wizard-error { padding: 10px 12px; border-radius: var(--radius-input); background: var(--danger-tint); color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.wizard-success { padding: 10px 12px; border-radius: var(--radius-input); background: var(--success-tint); color: var(--success); font-size: 12px; }
+.wizard-muted { margin: 0; color: var(--text-tertiary); font-size: 11px; }
+.wizard-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }
+.wizard-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.wizard-output { min-height: 110px; margin: 0; padding: 12px; border-radius: var(--radius-input); background: var(--bg-subtle); color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 var(--font-mono); }
+.wizard-status { min-height: 18px; margin: -12px 0 0; color: var(--text-secondary); font-size: 11px; }
+.wizard-status.error { color: var(--danger); }
+.wizard-note { margin: -12px 0 0; color: var(--text-tertiary); font-size: 11px; text-align: center; }
+.wizard-file { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.wizard-links { display: flex; flex-wrap: wrap; gap: 12px; }
+.wizard-links a { color: var(--primary-strong); font-size: 11px; }
+@media (max-width: 760px) { .wizard-body { align-items: stretch; padding: 22px 16px; } .steps { justify-content: flex-start; } .wizard-card { padding: 20px; } .wizard-grid { grid-template-columns: 1fr; } .wizard-foot { align-items: stretch; flex-direction: column; } .wizard-actions { margin-left: 0; flex-wrap: wrap; } }

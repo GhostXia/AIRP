@@ -5,165 +5,59 @@ import { chromium } from 'playwright-core';
 const origin = process.env.AIRP_SMOKE_ORIGIN;
 const username = process.env.AIRP_SMOKE_ADMIN_USER;
 const password = process.env.AIRP_SMOKE_ADMIN_PASSWORD;
-const browserStateFile = process.env.AIRP_SMOKE_BROWSER_STATE_FILE;
 const browserResultFile = process.env.AIRP_SMOKE_BROWSER_RESULT_FILE;
 const executablePath = process.env.AIRP_CHROME_PATH || '/usr/bin/google-chrome';
 const chromeSpki = process.env.AIRP_CHROME_SPKI;
-
-// #262 N-2: Chrome 网络瞬时错误白名单（与 production-browser-smoke.mjs 同步）。
-// 不直接用 `ERR_` 前缀通配，避免把真实 4xx/5xx HTTP 错误也吞成"瞬时"而无限重试。
-// 只列 page.goto 时 compose restart 后真实出现过的瞬时网络层错误。
-const TRANSIENT_NETWORK_ERROR_PATTERNS = [
-  'ERR_NETWORK_CHANGED',
-  'ERR_CONNECTION_REFUSED',
-  'ERR_CONNECTION_RESET',
-  'ERR_CONNECTION_CLOSED',
-  'ERR_NAME_NOT_RESOLVED',
-  'ERR_NAME_RESOLUTION_FAILED',
-  'ERR_INTERNET_DISCONNECTED',
-  'ERR_NETWORK_IO_SUSPENDED',
-];
-const TRANSIENT_NETWORK_ERROR_RE = new RegExp(TRANSIENT_NETWORK_ERROR_PATTERNS.join('|'));
-
-for (const [name, value] of Object.entries({
-  origin,
-  username,
-  password,
-  browserStateFile,
-  browserResultFile,
-  chromeSpki,
-})) {
-  assert.ok(value, `${name} is required`);
-}
-assert.match(chromeSpki, /^[A-Za-z0-9+/]{43}=$/, 'chromeSpki must be one SHA-256 hash');
-
+for (const [name, value] of Object.entries({ origin, username, password, browserResultFile, chromeSpki })) assert.ok(value, `${name} is required`);
+assert.match(chromeSpki, /^[A-Za-z0-9+/]{43}=$/);
 const expected = JSON.parse(readFileSync(browserResultFile, 'utf8'));
-for (const field of ['firstMessage', 'characterId', 'sessionId']) {
-  assert.ok(expected[field], `${field} is required in the browser result`);
-}
-assert.ok(expected.firstAssistant?.messageId, 'firstAssistant.messageId is required');
-assert.ok(expected.firstAssistant?.text?.trim(), 'firstAssistant.text is required');
 
-const browser = await chromium.launch({
-  headless: true,
-  executablePath,
-  // Trust only the disposable Caddy leaf key; never disable TLS verification globally.
-  args: [`--ignore-certificate-errors-spki-list=${chromeSpki}`],
-});
+async function waitForHistory(context, payload, predicate, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let latest;
+  while (Date.now() < deadline) {
+    const response = await context.request.post(origin + '/v1/chat/history', { data: payload });
+    assert.equal(response.status(), 200);
+    latest = await response.json();
+    if (predicate(latest)) return latest;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw new Error(`history did not reach the expected state within ${timeoutMs}ms; latest total=${latest?.total ?? 'unknown'}`);
+}
+
+const browser = await chromium.launch({ headless: true, executablePath, args: [`--ignore-certificate-errors-spki-list=${chromeSpki}`] });
 try {
-  const context = await browser.newContext({
-    httpCredentials: { username, password },
-    ignoreHTTPSErrors: false,
-    storageState: browserStateFile,
-  });
+  const context = await browser.newContext({ httpCredentials: { username, password }, ignoreHTTPSErrors: false });
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   await page.addInitScript(() => {
     window.__airpCspViolations = [];
-    document.addEventListener('securitypolicyviolation', event => {
-      window.__airpCspViolations.push({
-        directive: event.effectiveDirective,
-        blocked: event.blockedURI,
-      });
-    });
+    document.addEventListener('securitypolicyviolation', event => window.__airpCspViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI }));
   });
 
-  // compose restart 后 Caddy upstream 连接池/网络命名空间瞬间切换，首个 page.goto
-  // 可能撞上 Chrome 网络底层错误（ERR_NETWORK_CHANGED / ERR_CONNECTION_REFUSED 等）。
-  // 与 production-browser-smoke.mjs 的 transient retry 一致：3 attempts + 2s 间隔。
-  // 之前 restart-smoke 缺这一层，TimeoutError 偶发让 CI 一票否决（PR #268 CI run 29743276697）。
-  let response;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      response = await page.goto(origin, { waitUntil: 'domcontentloaded' });
-      break;
-    } catch (err) {
-      if (attempt < 3 && TRANSIENT_NETWORK_ERROR_RE.test(err?.message || '')) {
-        console.log(`page.goto transient error (attempt ${attempt}/3): ${err.message}`);
-        await page.waitForTimeout(2_000);
-        continue;
-      }
-      throw err;
-    }
-  }
+  const chatUrl = origin + '/screens/02-chat-space.html?character=' + encodeURIComponent(expected.characterId) + '&session=' + encodeURIComponent(expected.sessionId);
+  const response = await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
   assert.equal(response?.status(), 200);
-  await page.waitForFunction(({ characterId, sessionId, firstMessage, firstAssistant }) => {
-    const assistants = Array.from(document.querySelectorAll('#chat-log .msg.assistant[data-message-id]'));
-    return document.querySelector('#char-select')?.value === characterId
-      && document.querySelector('#sess-select')?.value === sessionId
-      && document.querySelector('#chat-log')?.textContent?.includes(firstMessage)
-      && assistants.some(node => node.dataset.messageId === firstAssistant.messageId
-        && node.querySelector('.text')?.textContent === firstAssistant.text);
-  }, expected, { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelector('#message-input')?.disabled === false, null, { timeout: 15_000 });
+  await page.waitForFunction(message => document.querySelector('#message-flow')?.textContent?.includes(message), expected.message, { timeout: 10_000 });
 
-  assert.equal(await page.locator('#char-select').inputValue(), expected.characterId);
-  assert.equal(await page.locator('#sess-select').inputValue(), expected.sessionId);
-  const durableIdsBefore = await page.locator('#chat-log .msg.assistant[data-message-id]').evaluateAll(nodes =>
-    nodes.map(node => node.dataset.messageId)
+  const before = await waitForHistory(
+    context,
+    { character_id: expected.characterId, session_id: expected.sessionId, limit: 200 },
+    history => history.total >= expected.total && history.messages.some(item => item.role === 'user' && item.content === expected.message),
   );
+  assert.ok(before.total >= expected.total, 'history must not shrink across the production restart');
 
-  // engine restart 后第一个真实 SSE 流仍可能被 Caddy upstream reset（PR #251 重试记录）。
-  // transient error（fetch error / stream interrupted / HTTP 5xx）允许重试一次：
-  // - 重试前清掉错误消息 DOM，避免污染下一轮 transientErrors 收集
-  // - 重试消息用新 timestamp 防止去重
-  // - 最多 2 次尝试，全失败才断言失败
-  const sendSecondTurn = async (messageText) => {
-    await page.locator('[data-view="session"]').first().click();
-    await page.locator('#chat-input').fill(messageText);
-    const chatResponsePromise = page.waitForResponse(response =>
-      response.url().endsWith('/v1/chat/completions') && response.request().method() === 'POST'
-    );
-    await page.locator('#btn-send').click();
-    const chatResponse = await chatResponsePromise;
-    assert.equal(chatResponse.status(), 200);
-    await page.waitForFunction(() => document.querySelector('#btn-stop')?.hidden === true, null, { timeout: 15_000 });
-    return page.locator('#chat-log .msg.assistant .text').evaluateAll(nodes =>
-      nodes.map(node => node.textContent || '').filter(text => /^\[(?:fetch error|stream interrupted|HTTP )/.test(text))
-    );
-  };
-
-  const clearTransientErrorMessages = async () => {
-    // 删除 .msg.assistant 节点中只含 transient error 标记的（保留真实消息）
-    await page.evaluate(() => {
-      const nodes = document.querySelectorAll('#chat-log .msg.assistant .text');
-      nodes.forEach(node => {
-        if (/^\[(?:fetch error|stream interrupted|HTTP )/.test(node.textContent || '')) {
-          node.closest('.msg.assistant')?.remove();
-        }
-      });
-    });
-  };
-
-  let secondMessage = `restart continuity ${Date.now()}`;
-  let transientErrors = await sendSecondTurn(secondMessage);
-  if (transientErrors.length > 0) {
-    console.log(`second turn transient error (will retry once): ${JSON.stringify(transientErrors)}`);
-    await clearTransientErrorMessages();
-    await page.waitForTimeout(1_000);
-    secondMessage = `restart continuity retry ${Date.now()}`;
-    transientErrors = await sendSecondTurn(secondMessage);
-  }
-  assert.deepEqual(transientErrors, [], 'second turn must complete without a transient chat error');
-
-  // Reload from the durable history endpoint instead of accepting the streamed
-  // DOM as proof that the second turn survived the restarted stack.
-  await page.waitForTimeout(2_500);
-  await page.locator('#btn-history').click();
-  await page.waitForFunction(({ secondMessage, durableIdsBefore }) => {
-    const log = document.querySelector('#chat-log');
-    const assistants = Array.from(document.querySelectorAll('#chat-log .msg.assistant[data-message-id]'));
-    return log?.textContent?.includes(secondMessage)
-      && assistants.some(node => !durableIdsBefore.includes(node.dataset.messageId)
-        && node.querySelector('.text')?.textContent?.trim());
-  }, { secondMessage, durableIdsBefore }, { timeout: 10_000 });
-
-  const durableIdsAfter = await page.locator('#chat-log .msg.assistant[data-message-id]').evaluateAll(nodes =>
-    nodes.map(node => node.dataset.messageId)
-  );
-  assert.ok(
-    durableIdsAfter.some(messageId => !durableIdsBefore.includes(messageId)),
-    'second turn must create a durable assistant message',
+  const secondMessage = 'restart browser continuity ' + Date.now();
+  await page.locator('#message-input').fill(secondMessage);
+  await page.locator('#send-message').click();
+  await page.waitForFunction(() => document.querySelector('#send-message')?.classList.contains('stop'), null, { timeout: 5_000 });
+  await page.waitForFunction(() => !document.querySelector('#send-message')?.classList.contains('stop'), null, { timeout: 20_000 });
+  await waitForHistory(
+    context,
+    { character_id: expected.characterId, session_id: expected.sessionId, limit: 200 },
+    history => history.total >= before.total + 2 && history.messages.some(item => item.role === 'user' && item.content === secondMessage),
   );
   assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), []);
   assert.deepEqual(pageErrors, []);

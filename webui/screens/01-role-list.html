@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色列表 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/role-list.css">
+</head>
+<body>
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb">角色与会话</span></div><div class="topbar-right"><span id="engine-address" class="t-mono">正在定位 Engine…</span><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span><button class="btn btn-secondary" id="refresh-engine" type="button">刷新</button></div></header>
+<div class="screen-body">
+<aside class="pane-side">
+<div class="pane-label">工作区</div>
+<a class="pane-item active" href="01-role-list.html"><span class="pi-title">角色列表</span><span class="pi-sub">导入与打开角色</span></a>
+<a class="pane-item" href="16-onboarding.html"><span class="pi-title">首次启动向导</span><span class="pi-sub">从连接到首轮对话</span></a><a class="pane-item" href="03-workbench.html"><span class="pi-title">控制台</span><span class="pi-sub">编辑与后端能力</span></a><a class="pane-item" href="08-settings.html"><span class="pi-title">连接与设置</span><span class="pi-sub">Engine / Provider</span></a>
+<div class="side-actions"><button class="btn btn-primary block" id="side-import" type="button">导入角色卡</button></div>
+<input id="character-file" type="file" accept=".png,.json,application/json,image/png" hidden>
+</aside>
+<main class="pane-main role-main">
+<div class="role-hero"><div><h1>角色</h1><p id="page-status" role="status">正在从 Engine 读取角色…</p></div><div class="runtime-actions"><input class="input role-search" id="character-search" type="search" placeholder="搜索角色名或 ID"><button class="btn btn-primary" id="main-import" type="button">导入 PNG / JSON</button></div></div>
+<div class="stat-grid"><div class="stat-card"><span class="label">角色</span><strong id="stat-characters">—</strong></div><div class="stat-card"><span class="label">会话</span><strong id="stat-sessions">—</strong></div><div class="stat-card"><span class="label">Provider</span><strong id="stat-provider">—</strong></div><div class="stat-card"><span class="label">Engine</span><strong id="stat-version">—</strong></div></div>
+<section class="provider-strip"><span class="tag tag-neutral" id="provider-state">读取中</span><span>模型 <b id="provider-model">—</b></span><span>温度 <b id="provider-temperature">—</b></span><a class="provider-action" id="provider-action" href="16-onboarding.html" hidden>完成首次配置 →</a></section>
+<div class="char-grid" id="character-grid" aria-live="polite"></div>
+</main>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/role-list.js"></script>
+</body></html>

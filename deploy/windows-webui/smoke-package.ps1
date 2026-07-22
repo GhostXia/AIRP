@@ -129,9 +129,12 @@ try {
     if (-not $ready) { throw "Packaged AIRP did not become ready at $origin." }
 
     $root = Invoke-WebRequest -UseBasicParsing -Uri "$origin/"
-    $runtime = Invoke-WebRequest -UseBasicParsing -Uri "$origin/runtime-config.js"
+    $rolePage = Invoke-WebRequest -UseBasicParsing -Uri "$origin/screens/01-role-list.html"
+    $runtimeAsset = Invoke-WebRequest -UseBasicParsing -Uri "$origin/assets/role-list.js"
     if ($root.StatusCode -ne 200) { throw "WebUI returned $($root.StatusCode)." }
-    if ($runtime.Content -notmatch "mode: 'local'") { throw 'Local runtime mode was not injected.' }
+    if ($rolePage.StatusCode -ne 200 -or $runtimeAsset.StatusCode -ne 200) {
+        throw 'Nested WebUI screens/assets were not packaged.'
+    }
     if ($root.Headers['Cache-Control'] -ne 'no-store') { throw 'WebUI cache policy is not no-store.' }
     if ($root.Headers['Content-Security-Policy'] -notmatch "script-src 'self'") {
         throw 'WebUI CSP is missing the same-origin script boundary.'

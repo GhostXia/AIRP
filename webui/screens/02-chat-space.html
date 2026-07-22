@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>对话空间 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/chat-space.css">
+</head>
+<body>
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="chat-crumb">对话空间</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span><a class="btn btn-secondary" href="19-branch-tree.html">分支 / Swipe</a><button class="btn btn-secondary" id="toggle-log" type="button">事件日志</button></div></header>
+<div class="screen-body">
+<aside class="pane-side wide"><div class="char-head"><span class="avatar" id="character-avatar">A</span><div><div class="nm" id="character-name">正在加载…</div><div class="md" id="character-model">—</div></div></div><div class="pane-label session-label">会话列表</div><button class="btn btn-secondary block" id="new-session" type="button">新建会话</button><div class="session-list" id="session-list" aria-live="polite"></div><div class="wb-card connection-card"><div class="t">当前连接</div><div id="connection-address">正在定位 Engine…</div><a href="01-role-list.html">返回角色列表</a><a href="20-assembly-preview.html">装配预览</a></div></aside>
+<main class="chat-col"><div class="msg-flow" id="message-flow" aria-live="polite"><div class="empty-state runtime-empty"><p class="empty-desc">正在加载会话…</p></div></div><div class="composer-zone"><div class="chat-actions"><button class="btn btn-secondary" id="refresh-history" type="button">刷新历史</button><button class="btn btn-secondary" id="continue-message" type="button" disabled>续写</button><button class="btn btn-secondary" id="regen-message" type="button" disabled>重新生成末条回复</button></div><div class="composer"><textarea id="message-input" rows="1" placeholder="选择或新建会话后发送消息…" disabled></textarea><button class="send-btn" id="send-message" type="button" disabled aria-label="发送消息"><span class="ico send-icon">➜</span></button></div><div class="composer-hint"><span id="context-count">上下文 0 条</span><span id="stream-status">Enter 发送 · Shift+Enter 换行</span></div></div></main>
+<aside class="pane-right wide"><div class="log-head"><h3>事件日志</h3><button class="log-close ico" id="clear-log" type="button" title="清空事件日志">清空</button></div><div class="event-log-list" id="event-log" aria-live="polite"></div></aside>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/chat-space.js"></script>
+</body></html>

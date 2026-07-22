@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>首次启动向导 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<link rel="stylesheet" href="../assets/onboarding.css">
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb">首次启动向导</span></div>
+    <div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span><button class="btn btn-secondary" id="skip-onboarding" type="button">跳过向导</button></div>
+  </header>
+  <main class="wizard-body">
+    <nav class="steps" id="onboarding-steps" aria-label="首次启动进度"></nav>
+    <section class="wizard-card" id="onboarding-card" aria-live="polite"></section>
+    <p class="wizard-status" id="onboarding-status" role="status"></p>
+    <p class="wizard-note">密钥只写入 Engine 的本地 secrets；页面不会回显，也不会写入 URL 或浏览器存储。</p>
+  </main>
+</div>
+<script src="../assets/api-client.js"></script>
+<script src="../assets/onboarding.js"></script>
+</body>
+</html>
