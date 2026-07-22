@@ -55,6 +55,18 @@
     location.href = target.href;
   }
 
+  async function deleteCharacter(id, name) {
+    if (!window.confirm('确定删除角色「' + name + '」？\n此操作不可撤销，角色卡、世界书、会话历史将全部移除。')) return;
+    setPageStatus('正在删除 ' + name + '…');
+    try {
+      await client.request('DELETE', '/v1/characters/' + encodeURIComponent(id));
+      setPageStatus('已删除角色 ' + name + '。');
+      await load();
+    } catch (error) {
+      setPageStatus('删除失败：' + AIRPApi.errorMessage(error.data, error.message), true);
+    }
+  }
+
   function renderCards() {
     const query = search.value.trim().toLocaleLowerCase();
     const visible = characters.filter(item => (item.name + '\n' + item.id + '\n' + item.description).toLocaleLowerCase().includes(query));
@@ -73,10 +85,12 @@
       return;
     }
     for (const item of visible) {
-      const card = document.createElement('button');
-      card.type = 'button';
+      const card = document.createElement('div');
       card.className = 'char-card';
+      card.setAttribute('role', 'button');
+      card.tabIndex = 0;
       card.addEventListener('click', () => openCharacter(item.id));
+      card.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openCharacter(item.id); } });
 
       const head = document.createElement('span');
       head.className = 'cc-head';
@@ -105,7 +119,15 @@
       action.className = 'cc-model';
       action.textContent = '打开对话 →';
       foot.append(state, action);
-      card.append(head, description, foot);
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'cc-delete';
+      del.textContent = '删除';
+      del.setAttribute('aria-label', '删除角色 ' + item.name);
+      del.addEventListener('click', event => { event.stopPropagation(); deleteCharacter(item.id, item.name); });
+
+      card.append(head, description, foot, del);
       grid.appendChild(card);
     }
   }
