@@ -2404,6 +2404,7 @@ mod tests_b1_finalize_empty_stripped {
         FinalizerCtx {
             character_id,
             session_id: None,
+            user_id: None,
             data_root,
             session_dir: None,
             provider_config: Arc::new(ProviderConfig {

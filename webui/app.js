@@ -1215,6 +1215,13 @@
   // appendMsg: 流式中用 textContent（保 cursor 动画 + 性能），完成后切 innerHTML 跑 markdown。
   // W-06 fix: 加可选 ts 参数（Date 或省略）。流式新消息传 new Date() 显示 HH:MM:SS；
   // loadHistory 不传（engine 的 chat_log.jsonl 不存消息时间戳，避免用加载时刻误导用户）。
+
+  // CodeRabbit #8: 返回 chatLog 中最后一条 .msg 元素（无则 null）。
+  function getLastMsgEl() {
+    const all = chatLog.querySelectorAll('.msg');
+    return all.length ? all[all.length - 1] : null;
+  }
+
   function appendMsg(role, text, isStreaming, ts, messageId, options) {
     const opts = options || {};
     let div = messageId ? messageNodes.get(messageId) : null;
@@ -1386,7 +1393,11 @@
         if (!r.ok) {
           console.error('Message edit failed:', r.status, r.data);
           restored.innerHTML = renderMarkdown(original);
+          return;
         }
+        // 阶段一补全 D2：编辑成功后，若这是最后一条 user 消息（其后紧跟
+        // assistant 回复），询问是否重新生成后续回复。
+        maybeAutoRegenAfterEdit(div);
       }
     };
     const cancel = () => {
@@ -1401,6 +1412,21 @@
       if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     });
     textarea.addEventListener('blur', save);
+  }
+
+  // 阶段一补全 D2：编辑 user 消息成功后，若其后紧跟的是最后一条 assistant
+  // 回复，询问用户是否重新生成。只有“编辑最后一条 user 消息”这个常见场景
+  // 才触发，避免对中间消息编辑产生意外的 regen。
+  function maybeAutoRegenAfterEdit(div) {
+    if (!div.classList.contains('user')) return;
+    const next = div.nextElementSibling;
+    if (!next || !next.classList.contains('assistant')) return;
+    // 确保该 assistant 是最后一条消息（编辑的是最后一条 user 消息）。
+    const lastMsg = getLastMsgEl();
+    if (lastMsg !== next) return;
+    if (window.confirm('消息已编辑。是否重新生成后续回复？')) {
+      runRegen();
+    }
   }
 
   // ── per-message delete (ST: single message, not rollback) ───────────────
@@ -1983,57 +2009,65 @@
     if (historyState.hasMore && historyState.oldestId) loadHistory({ before: historyState.oldestId, scroll: false });
   });
 
-  btnRegen.addEventListener('click', async () => {
-    if (!selectedChar) return;
-    // Pre-validate: last message must be assistant.
-    const allMsgs = chatLog.querySelectorAll('.msg');
-    const lastMsg = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
-    if (!lastMsg || !lastMsg.classList.contains('assistant')) return;
-    // AIRP 取舍：无确认弹窗，直接替换。论证：AIRP 已有 rollback-by-ID 能力，
-    // 用户可回滚到任意历史消息，regen 的风险已被覆盖；确认弹窗只增加摩擦不提供额外安全。
+  // 阶段一补全 D2：把 regen 核心逻辑抽出为可复用函数，供按钮与
+  // “编辑后自动重新生成”共用。
+  function runRegen() {
     if (abortController) abortController.abort();
     const ac = new AbortController();
     abortController = ac;
     if (btnStop) btnStop.hidden = false;
     // Remove last assistant message from DOM immediately.
-    lastMsg.remove();
+    const lastMsg = getLastMsgEl();
+    if (lastMsg && lastMsg.classList.contains('assistant')) lastMsg.remove();
     const url = base + '/v1/chat/regen';
     let msgEl = null;
     let acc = '';
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify(buildSessionPayload({ user_id: personaUserId.value.trim() || 'default' })),
-        signal: ac.signal,
-      });
-      if (!res.ok) {
-        const errBody = await res.text();
-        appendMsg('assistant', '[regen HTTP ' + res.status + '] ' + errBody, false, new Date());
-        return;
-      }
-      msgEl = appendMsg('assistant', '', true, new Date());
-      // #249 Smooth Streaming。#252 D4：统一为 streamSse 返回后单次 finish()。
-      const streamer = new SmoothStreamer(msgEl, SMOOTH_STREAM_CPS);
-      await streamSse(res, (chunk, seq) => {
-        if (chunk.type === 'body_chunk' && chunk.text) {
-          acc += chunk.text;
-          streamer.push(chunk.text);
-          if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
+    (async () => {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify(buildSessionPayload({ user_id: personaUserId.value.trim() || 'default' })),
+          signal: ac.signal,
+        });
+        if (!res.ok) {
+          const errBody = await res.text();
+          appendMsg('assistant', '[regen HTTP ' + res.status + '] ' + errBody, false, new Date());
+          return;
         }
-      });
-      streamer.finish();
-      acc = streamer.getRendered();
-      msgEl.classList.remove('streaming');
-      msgEl.innerHTML = renderMarkdown(acc);
-    } catch (e) {
-      if (e && e.name === 'AbortError') return;
-      if (msgEl) { msgEl.classList.remove('streaming'); msgEl.innerHTML = renderMarkdown(acc || '[regen interrupted]'); }
-    } finally {
-      if (abortController === ac) { abortController = null; if (btnStop) btnStop.hidden = true; }
-      chatLog.scrollTop = chatLog.scrollHeight;
-      loadHistory({ reset: true });
-    }
+        msgEl = appendMsg('assistant', '', true, new Date());
+        // #249 Smooth Streaming。#252 D4：统一为 streamSse 返回后单次 finish()。
+        const streamer = new SmoothStreamer(msgEl, SMOOTH_STREAM_CPS);
+        await streamSse(res, (chunk, seq) => {
+          if (chunk.type === 'body_chunk' && chunk.text) {
+            acc += chunk.text;
+            streamer.push(chunk.text);
+            if (seq % 5 === 0) chatLog.scrollTop = chatLog.scrollHeight;
+          }
+        });
+        streamer.finish();
+        acc = streamer.getRendered();
+        msgEl.classList.remove('streaming');
+        msgEl.innerHTML = renderMarkdown(acc);
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+        if (msgEl) { msgEl.classList.remove('streaming'); msgEl.innerHTML = renderMarkdown(acc || '[regen interrupted]'); }
+      } finally {
+        if (abortController === ac) { abortController = null; if (btnStop) btnStop.hidden = true; }
+        chatLog.scrollTop = chatLog.scrollHeight;
+        loadHistory({ reset: true });
+      }
+    })();
+  }
+
+  btnRegen.addEventListener('click', async () => {
+    if (!selectedChar) return;
+    // Pre-validate: last message must be assistant.
+    const lastMsg = getLastMsgEl();
+    if (!lastMsg || !lastMsg.classList.contains('assistant')) return;
+    // AIRP 取舍：无确认弹窗，直接替换。论证：AIRP 已有 rollback-by-ID 能力，
+    // 用户可回滚到任意历史消息，regen 的风险已被覆盖；确认弹窗只增加摩擦不提供额外安全。
+    runRegen();
   });
 
   btnRollback.addEventListener('click', async () => {

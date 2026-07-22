@@ -19,6 +19,9 @@ use crate::volume_store;
 /// 跨卷实体提升阈值：实体在多少个不同卷的 `[卷索引]` 中出现后自动晋升 index.md。
 const PROMOTE_THRESHOLD: usize = 3;
 
+/// CodeRabbit #6：plot 评估累积输出上限（字符数），防止 LLM 输出爆炸。
+const PLOT_EVALUATION_MAX_CHARS: usize = 4000;
+
 // M2.5：所有 Regex 预编译为静态，避免每次调用 chat_completion 重新 compile。
 static SEAL_TAG_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"<卷评估(?:\s+([^/>]*?))?\s*/>"#).expect("SEAL_TAG_RE compiles"));
@@ -229,8 +232,8 @@ pub async fn run_seal_flow(
 
     let stream = adapter::call_streaming_api(
         client.clone(),
-        provider,
-        params,
+        provider.clone(),
+        params.clone(),
         system_prompt,
         vec![user_message],
     );
@@ -279,7 +282,92 @@ pub async fn run_seal_flow(
     // 清空 current.md
     volume_store::clear_current(session_dir)?;
 
+    // 阶段三补全 D3：封卷后评估剧情进度，生成下卷悬念/方向（best-effort）。
+    // CodeRabbit #7：先清除旧 plot_direction，防止评估失败时残留上卷方向
+    // 被误注入新卷的 prepare。
+    if let Err(e) = volume_store::write_plot_direction(session_dir, "") {
+        tracing::warn!(err = %e, "清除旧 plot_direction 失败（best-effort）");
+    }
+    // plot 评估是 best-effort：detach 后不阻塞封卷与响应最终化。
+    // 流式空闲仍由 adapter 统一限时，输出大小仍由评估函数限制。
+    let evaluation_client = client.clone();
+    let evaluation_session_dir = session_dir.to_path_buf();
+    tokio::spawn(async move {
+        match run_plot_evaluation(&evaluation_client, provider, params, &volume_md, &new_index)
+            .await
+        {
+            Ok(direction) => {
+                if !direction.trim().is_empty() {
+                    if let Err(e) =
+                        volume_store::write_plot_direction(&evaluation_session_dir, &direction)
+                    {
+                        tracing::warn!(err = %e, "剧情方向写入失败（best-effort）");
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(err = %e, "剧情进度评估失败（best-effort）"),
+        }
+    });
+
     Ok(Some(next_n))
+}
+
+/// 阶段三补全 D3：封卷后评估剧情进度，生成下卷悬念/方向。
+///
+/// 读取刚封存的卷与全局索引，调用 LLM 评估剧情进度并输出下卷方向，
+/// 写入 `plot_direction.md`（下轮 prepare 注入 prompt）。与 `advance_plot`
+/// 工具联动：封卷时的宏观方向为后续 `advance_plot` 提供指引。
+async fn run_plot_evaluation(
+    client: &reqwest::Client,
+    provider: Arc<ProviderConfig>,
+    params: GenerationParams,
+    sealed_volume: &str,
+    index: &str,
+) -> Result<String, AirpError> {
+    let system_prompt = "你是 RP 剧情编排助手。基于刚封存的卷和全局索引，评估当前剧情进度，\
+并为下一卷生成悬念/方向指引。输出简洁的 markdown 条目（以 \"- \" 开头），\
+包括：当前剧情阶段、未解决的伏笔、下一卷建议推进的方向。不要输出其他内容。";
+
+    let user_input = format!("[全局索引]\n{}\n\n[刚封存的卷]\n{}", index, sealed_volume);
+
+    let user_message = ChatMessage {
+        role: crate::adapter::MessageRole::User,
+        content: user_input,
+    };
+
+    let stream = adapter::call_streaming_api(
+        client.clone(),
+        provider,
+        params,
+        system_prompt.to_string(),
+        vec![user_message],
+    );
+
+    futures_util::pin_mut!(stream);
+    let mut full = String::new();
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(tok) => {
+                full.push_str(&tok);
+                // CodeRabbit #6：累积输出超上限时停止，防止 LLM 输出爆炸。
+                if full.chars().count() > PLOT_EVALUATION_MAX_CHARS {
+                    tracing::warn!(
+                        max_chars = PLOT_EVALUATION_MAX_CHARS,
+                        "plot 评估输出超上限，截断"
+                    );
+                    break;
+                }
+            }
+            Err(e) => return Err(AirpError::Volume(format!("剧情评估 API 调用失败: {}", e))),
+        }
+    }
+
+    // 只保留以 "- " 开头的条目行。
+    let cleaned: Vec<&str> = full
+        .lines()
+        .filter(|l| l.trim().starts_with("- "))
+        .collect();
+    Ok(cleaned.join("\n"))
 }
 
 /// 从某一卷 `[卷索引]` 头部的 `- 登场: ...` 行解析角色名列表。

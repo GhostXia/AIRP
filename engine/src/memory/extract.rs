@@ -87,15 +87,81 @@ pub async fn extract_facts(
         messages,
     ));
 
-    // 收集完整响应
+    // 收集完整响应。CodeRabbit #3：传播流的第一个错误，而非静默丢弃，
+    // 避免部分偏好被持久化且调用方误以为成功。
     let mut result = String::new();
     while let Some(chunk) = stream.next().await {
-        if let Ok(text) = chunk {
-            result.push_str(&text);
-        }
+        let text = chunk.map_err(|e| AirpError::Upstream { status: 0, body: e })?;
+        result.push_str(&text);
     }
 
     // 清理输出：只保留以 "- " 开头的行
+    let cleaned: Vec<&str> = result
+        .lines()
+        .filter(|line| line.trim().starts_with("- "))
+        .collect();
+
+    Ok(cleaned.join("\n"))
+}
+
+/// 用户偏好抽取 prompt 模板（阶段二补全 D1）。
+const USER_PREFERENCE_SYSTEM_PROMPT: &str = r#"你是一个用户偏好抽取助手。从对话中抽取用户的写作偏好和习惯，用于用户模型。
+
+抽取规则：
+1. 只抽取持久性偏好（文风喜好、雷点、习惯用语、纠正反馈）
+2. 忽略临时性内容（具体剧情讨论、角色扮演内容本身）
+3. 用简洁的条目格式输出，每条一行，以 "- " 开头
+4. 如果没有值得记录的偏好，输出空字符串
+
+输出格式示例：
+- 用户喜欢第三人称叙事
+- 用户不喜欢过多的心理描写
+- 用户偏好简洁的对话风格
+"#;
+
+/// 从对话中抽取用户偏好（阶段二补全 D1）。
+///
+/// 返回抽取到的偏好条目（markdown 列表格式），无值得记录的内容则返回空字符串。
+pub async fn extract_user_preferences(
+    client: &reqwest::Client,
+    provider_config: Arc<ProviderConfig>,
+    gen_params: GenerationParams,
+    user_message: &str,
+    assistant_message: &str,
+    config: &ExtractionConfig,
+) -> Result<String, AirpError> {
+    if !config.enabled {
+        return Ok(String::new());
+    }
+
+    let conversation = format!("用户: {}\n\n角色: {}", user_message, assistant_message);
+
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: format!("请从以下对话中抽取用户偏好：\n\n{}", conversation),
+    }];
+
+    let mut extract_params = gen_params;
+    if let Some(ref model) = config.model {
+        extract_params.model = model.clone();
+    }
+    extract_params.temperature = Some(config.temperature);
+    extract_params.max_tokens = Some(config.max_tokens);
+
+    let mut stream = Box::pin(crate::adapter::call_streaming_api(
+        client.clone(),
+        provider_config,
+        extract_params,
+        USER_PREFERENCE_SYSTEM_PROMPT.to_string(),
+        messages,
+    ));
+
+    let mut result = String::new();
+    while let Some(chunk) = stream.next().await {
+        let text = chunk.map_err(|e| AirpError::Upstream { status: 0, body: e })?;
+        result.push_str(&text);
+    }
+
     let cleaned: Vec<&str> = result
         .lines()
         .filter(|line| line.trim().starts_with("- "))

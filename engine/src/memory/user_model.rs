@@ -8,8 +8,32 @@
 
 use crate::error::AirpError;
 use crate::types::UserId;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
+
+/// 每用户串行化锁：防止并发 read-modify-write 互相覆盖（CodeRabbit #5）。
+/// 与 `style::drift::drift_lock` 同模式：用 Weak 引用持有锁，获取时清理
+/// stale 条目，保证注册表有界。
+static USER_MODEL_LOCKS: Lazy<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// 获取用户模型的串行化锁。key 为用户主目录路径字符串。
+fn user_model_lock(home: &Path) -> Arc<Mutex<()>> {
+    let key = home.to_string_lossy().into_owned();
+    let mut locks = USER_MODEL_LOCKS.lock().expect("user model locks poisoned");
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(weak) = locks.get(&key) {
+        if let Some(strong) = weak.upgrade() {
+            return strong;
+        }
+    }
+    let strong = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&strong));
+    strong
+}
 
 /// 返回用户模型文件路径。
 ///
@@ -45,6 +69,85 @@ pub fn write_user_model(
     }
     crate::data_dir::replace_file(&path, content.as_bytes())?;
     Ok(())
+}
+
+/// 用户模型容量上限（字符数）。超限截断到最近完整行（阶段二补全 D1）。
+pub const USER_MODEL_CAP: usize = 1500;
+
+/// 返回用户主目录（effective root）下的 user_model.md 路径。
+///
+/// finalize 路径中 `data_root` 已是该用户的独立根（`data/users/{uid}/`），
+/// 用户模型直接落在其下，无需再拼 `users/{uid}` 前缀。
+fn user_model_path_in_home(home: &Path) -> PathBuf {
+    home.join("user_model.md")
+}
+
+/// 追加用户偏好到用户模型（阶段二补全 D1）。
+///
+/// 整个 read-modify-write 串行执行，并在写入前强制容量上限（超限保留
+/// 最新完整行）。仅由 finalize 异步抽取调用，`home` 为用户独立数据根。
+///
+/// CodeRabbit #5：持有 per-user 锁贯穿 read-modify-write，防止同一用户
+/// 多 session 并发 finalize 时丢失更新（与 `style::drift::append_soul_drift`
+/// 同模式）。
+pub fn append_user_model_in_home(home: &Path, content: &str) -> Result<(), AirpError> {
+    let lock = user_model_lock(home);
+    let _guard = lock.lock().expect("user model lock poisoned");
+
+    let path = user_model_path_in_home(home);
+    let existing = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(AirpError::from(e)),
+    };
+
+    let mut merged = existing;
+    if !merged.is_empty() && !merged.ends_with('\n') {
+        merged.push('\n');
+    }
+    merged.push_str(content);
+
+    // 容量强制：超限保留最新完整行，首行单独超容量时按字符边界截断。
+    let merged = enforce_user_model_capacity(&merged, USER_MODEL_CAP);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::data_dir::replace_file(&path, merged.as_bytes())?;
+    Ok(())
+}
+
+/// 截断到容量上限，保留最新的完整行。
+///
+/// CodeRabbit #4：用户偏好会随时间演变（用户可能改变喜好），最新条目
+/// 比旧条目更有代表性。因此超限时从头丢弃旧行，保留尾部新行；若单行
+/// 就超过容量，按 Unicode 字符边界截断该行。
+fn enforce_user_model_capacity(content: &str, capacity: usize) -> String {
+    if content.chars().count() <= capacity {
+        return content.to_string();
+    }
+    // 从尾部向前累加，保留最新的完整行。
+    let lines: Vec<&str> = content.lines().collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut count = 0;
+    for line in lines.iter().rev() {
+        let line_len = line.chars().count() + 1; // +1 for newline
+        if count + line_len > capacity {
+            break;
+        }
+        kept.push(line);
+        count += line_len;
+    }
+    if kept.is_empty() {
+        // 没有任何完整行能放下：取最后一行的前 capacity 个字符。
+        return content
+            .lines()
+            .last()
+            .map(|l| l.chars().take(capacity).collect())
+            .unwrap_or_else(|| content.chars().take(capacity).collect());
+    }
+    kept.reverse();
+    kept.join("\n") + "\n"
 }
 
 #[cfg(test)]
@@ -103,5 +206,45 @@ mod tests {
             std::fs::read_to_string(user_dir.join("user_model.md")).unwrap(),
             "second"
         );
+    }
+
+    #[test]
+    fn test_enforce_capacity_keeps_newest_lines() {
+        // CodeRabbit #4：超限时应保留最新的完整行，丢弃旧行。
+        let content = "- 旧偏好1\n- 旧偏好2\n- 新偏好1\n- 新偏好2\n";
+        // capacity 设为只放得下最后 2 行（每行 7 chars + 1 newline = 8）
+        let result = enforce_user_model_capacity(content, 16);
+        assert!(result.contains("新偏好1"));
+        assert!(result.contains("新偏好2"));
+        assert!(!result.contains("旧偏好1"));
+        assert!(!result.contains("旧偏好2"));
+    }
+
+    #[test]
+    fn test_enforce_capacity_single_oversize_line() {
+        // 单行超过容量：按字符边界截断该行。
+        let single_line = "长".repeat(USER_MODEL_CAP + 100);
+        let result = enforce_user_model_capacity(&single_line, USER_MODEL_CAP);
+        assert_eq!(result.chars().count(), USER_MODEL_CAP);
+    }
+
+    #[test]
+    fn test_enforce_capacity_under_limit_unchanged() {
+        let content = "- 短\n";
+        let result = enforce_user_model_capacity(content, 100);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_append_user_model_in_home_concurrent_safe() {
+        // CodeRabbit #5：验证 append 不会因并发丢失更新。
+        // 串行调用两次，两次的内容都应存在。
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        append_user_model_in_home(home, "- 偏好A").unwrap();
+        append_user_model_in_home(home, "- 偏好B").unwrap();
+        let content = std::fs::read_to_string(home.join("user_model.md")).unwrap();
+        assert!(content.contains("偏好A"));
+        assert!(content.contains("偏好B"));
     }
 }

@@ -12,7 +12,7 @@ use crate::adapter::{BackendEngine, ChatMessage, GenerationParams, ProviderConfi
 use crate::config::VolumeConfig;
 use crate::fsm::StreamingFsm;
 use crate::orchestrator::trace::PromptAssemblyTrace;
-use crate::types::{CharacterId, SessionId};
+use crate::types::{CharacterId, SessionId, UserId};
 use crate::xml_unpacker::{StreamingXmlUnpacker, UnpackedChunk};
 
 // ── Prepared pipeline ─────────────────────────────────────────────────────────
@@ -50,6 +50,10 @@ pub struct FinalizerCtx {
     pub character_id: Option<CharacterId>,
     /// Named session scope; `None` keeps the legacy per-character log.
     pub session_id: Option<SessionId>,
+    /// DX-1：用户 ID；为 `Some` 时 `data_root` 已是该用户的独立根，
+    /// 用户模型（user_model.md）直接落在 `data_root` 下。为 `None` 时
+    /// 跳过用户模型抽取（单用户向后兼容模式）。
+    pub user_id: Option<UserId>,
     /// 数据根目录。
     pub data_root: PathBuf,
     /// 卷系统 session 目录；为 `None` 时跳过卷副作用。

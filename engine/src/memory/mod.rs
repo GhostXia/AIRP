@@ -4,7 +4,8 @@
 //! - `resident`: 每角色/每 session 一份有界 markdown（`resident.md`）
 //! - `extract`: 从对话中异步抽取关键事实（控制平面 LLM 调用）
 //! - `compress`: 超限时 LLM 合并压缩
-//! - `user_model`: 每用户一份偏好模型（`user_model.md`），MVP 仅支持手动编辑
+//! - `user_model`: 每用户一份偏好模型（`user_model.md`）。HTTP 手动编辑 +
+//!   finalize 异步抽取（阶段二补全 D1 已接入）。
 //!
 //! ## Frozen Snapshot 语义
 //! 本轮抽取落盘 → 下轮 prepare 阶段才注入 prompt（防模型自反应）。
@@ -21,10 +22,12 @@ mod resident;
 mod user_model;
 
 pub use compress::compress_resident_memory;
-pub use extract::{extract_facts, ExtractionConfig};
+pub use extract::{extract_facts, extract_user_preferences, ExtractionConfig};
 pub use fts::{index_message, search, SearchResult};
 pub use resident::{
     append_resident_memory, inject_resident_memory, is_over_capacity, read_resident_memory,
     write_resident_memory, ResidentMemoryConfig, RESIDENT_MEMORY_DEFAULT_CAP,
 };
-pub use user_model::{read_user_model, write_user_model};
+pub use user_model::{
+    append_user_model_in_home, read_user_model, write_user_model, USER_MODEL_CAP,
+};

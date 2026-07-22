@@ -118,8 +118,8 @@ async fn run_style_review_handler(
 
     let report = crate::style::run_style_review(
         &state.http_client,
-        provider_config,
-        gen_params,
+        provider_config.clone(),
+        gen_params.clone(),
         &style_profile,
         &recent_messages,
         &current_drift,
@@ -130,6 +130,15 @@ async fn run_style_review_handler(
     if !report.drift_patch.trim().is_empty() {
         crate::style::append_soul_drift(&state.data_root, cid.as_str(), &report.drift_patch)?;
         drift_applied = true;
+        // #290 F-3：drift 追加后若超容量，调用 LLM 合并压缩（best-effort）。
+        let _ = crate::style::compress_soul_drift_if_needed(
+            &state.http_client,
+            provider_config,
+            gen_params,
+            &state.data_root,
+            cid.as_str(),
+        )
+        .await;
     }
 
     Ok(StyleReviewResponse {
