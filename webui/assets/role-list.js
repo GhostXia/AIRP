@@ -61,8 +61,9 @@
     setPageStatus('正在删除 ' + name + '…');
     try {
       await client.request('DELETE', '/v1/characters/' + encodeURIComponent(id));
+      characters = characters.filter(item => item.id !== id);
       setPageStatus('已删除角色 ' + name + '。');
-      await load();
+      renderCards();
     } catch (error) {
       setPageStatus('删除失败：' + AIRPApi.errorMessage(error.data, error.message), true);
       if (btn) btn.disabled = false;
