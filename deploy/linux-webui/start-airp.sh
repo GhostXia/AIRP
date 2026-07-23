@@ -4,7 +4,7 @@
 set -euo pipefail
 
 AIRP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AIRP_DATA_DIR="$AIRP_ROOT/data"
+export AIRP_DATA_DIR="$AIRP_ROOT/data"
 export AIRP_PERSIST_PROVIDER_KEY=true
 export AIRP_ALLOW_LOCAL_PATH=false
 
