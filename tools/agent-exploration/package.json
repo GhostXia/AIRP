@@ -1,0 +1,14 @@
+{
+  "name": "airp-agent-exploration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent-driven browser exploratory testing for AIRP WebUI (#273)",
+  "scripts": {
+    "test": "node --test classifier.test.mjs",
+    "run": "node runner.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.40.0"
+  }
+}
