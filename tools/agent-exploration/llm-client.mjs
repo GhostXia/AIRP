@@ -6,7 +6,20 @@ const API_KEY = process.env.OPENAI_API_KEY;
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 if (!API_KEY) {
-  console.error('[llm-client] OPENAI_API_KEY is required for agent exploration');
+  console.error([
+    '[llm-client] OPENAI_API_KEY is required for agent exploration.',
+    '',
+    'Local run:',
+    '  $env:OPENAI_API_KEY = "sk-..."      # PowerShell',
+    '  export OPENAI_API_KEY="sk-..."      # bash',
+    '',
+    'CI (this workflow): repo owner must add repo secret',
+    '  AGENT_EXPLORATION_OPENAI_KEY = sk-...',
+    '  at: https://github.com/<owner>/<repo>/settings/secrets/actions',
+    '',
+    'Workflow is continue-on-error: true, so merge is NOT blocked by this.',
+    'But the exploration report will be missing until the key is configured.',
+  ].join('\n'));
   process.exit(2);
 }
 

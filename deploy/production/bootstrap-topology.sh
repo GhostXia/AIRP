@@ -125,6 +125,14 @@ wait_for_engine_ready() {
 }
 
 mkdir -p "$deploy/secrets" "$deploy/certs"
+
+# B8 修复（方案 C 临时 umask）：
+# smoke-ci.sh 也有 umask 077，但 pr-gate.yml 在 smoke 前会先跑
+# `Create synthetic deployment inputs` step 预创建 secrets（默认 umask 022 = 0644）。
+# smoke-ci.sh 用 `>` 覆盖这些文件时 shell 保留原 0644 权限，engine uid 65532 能读。
+# 但 bootstrap-topology.sh 是独立调用，没有这个隐性前置，secrets 会是 0600，
+# engine entrypoint 报 "missing required secret" 并无限重启。
+# 用临时 umask 切换：TLS 私钥段保留 077（与 smoke-ci.sh 对齐），secrets 段切回 022。
 umask 077
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -subj '/CN=AIRP smoke mock root' \
@@ -139,22 +147,14 @@ openssl x509 -req -days 1 -sha256 \
 # The engine runs as uid 65532 and must be able to read only the public CA certificate.
 # Private CA/provider keys retain the restrictive umask.
 chmod 0644 "$mock_root"
+
+# secrets 段切回默认 umask：engine 容器 uid 65532 需要读取 bind-mount 的 secret。
+umask 022
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$deploy/secrets/engine_access_key"
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$deploy/secrets/provider_api_key"
 docker run --rm --entrypoint caddy airp-gateway:0.1.0 \
   hash-password --algorithm argon2id --plaintext "$admin_password" \
   > "$deploy/secrets/admin_password_hash"
-
-# B8 修复：engine 容器以 uid 65532 运行（Dockerfile.engine USER 65532:65532），
-# 而上面 umask 077 导致 secrets 文件权限 0600（属主 runner），容器内 uid 65532
-# 无法读取 bind-mount 的 secret，entrypoint 报
-# "missing required secret: /run/secrets/engine_access_key" 并无限重启。
-# smoke-ci.sh 没有显式 umask 077（默认 022），所以 pr-gate.yml 能过。
-# 将需要被非 root 容器读取的 secret 显式设为 0644；admin_password_hash 由 root
-# 运行的 gateway 读取，保持 0644 亦可。
-chmod 0644 "$deploy/secrets/engine_access_key" \
-  "$deploy/secrets/provider_api_key" \
-  "$deploy/secrets/admin_password_hash"
 
 cat > "$deploy/.env" <<EOF
 AIRP_VERSION=0.1.0
