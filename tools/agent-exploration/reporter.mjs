@@ -18,6 +18,8 @@ export async function writeReport(reportDir, run) {
 
 function renderMarkdown(run) {
   const lines = [];
+  lines.push('> ⚠️ **Non-blocking** (阶段 2 MVP): 此报告不阻塞 PR 合并。崩溃/数据损坏/安全问题需人工确认；可用性问题仅记录。');
+  lines.push('');
   lines.push('# Agent Browser Exploration Report');
   lines.push('');
   lines.push('**Run ID:** ' + run.runId);
