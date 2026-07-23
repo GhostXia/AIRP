@@ -1,6 +1,6 @@
 # AIRP 文档地图
 
-> 最后校准：2026-07-20，`main@7895f8c`
+> 最后校准：2026-07-23，`main@03ffaf6`
 >
 > 当前事实入口：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)
 
@@ -39,6 +39,7 @@
 - [TAVERN-PARITY.md](TAVERN-PARITY.md)：SillyTavern 功能/互操作性对标；
 - [HERMES-MEMORY.md](HERMES-MEMORY.md)：长期记忆、skills、Soul 候选方向；
 - [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md)：长篇 RP/authoring 研究参考。
+- [AGENT-BROWSER-EXPLORATION-PLAN.md](AGENT-BROWSER-EXPLORATION-PLAN.md)：Agent 驱动浏览器探索测试层 MVP 实施计划（#273）。
 
 这些文档中的状态图例通常描述“来源有无”或“候选价值”，不证明 AIRP 的 domain、HTTP、Agent tool 或 UI 已交付。
 

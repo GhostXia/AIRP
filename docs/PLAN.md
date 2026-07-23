@@ -2,7 +2,7 @@
 
 > 状态：长期产品原则与目标架构
 >
-> 最后校准：2026-07-20
+> 最后校准：2026-07-23
 >
 > 当前事实与近期顺序分别以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 和 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) 为准。本文不证明任何功能已经交付。
 
