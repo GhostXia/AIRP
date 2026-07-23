@@ -237,7 +237,10 @@
     }));
     bar.append(button('解绑角色', async () => {
       if (!binding.control.value) { setStatus('请先选择要解绑的角色', true); return; }
-      await task('解绑 Persona', () => client.request('DELETE', '/v1/users/' + encodeURIComponent(state.userId) + '/personas/' + encodeURIComponent(active) + '/bindings', { character_id: binding.control.value }));
+      // daemon `unbind_persona_endpoint` 通过 axum::extract::Query<UnbindPersonaQuery> 读取
+      // character_id（必填）与 session_id（可选）；DELETE 不解析 JSON body，
+      // 因此必须以 query string 形式传递，否则 400 BadRequest。
+      await task('解绑 Persona', () => client.request('DELETE', '/v1/users/' + encodeURIComponent(state.userId) + '/personas/' + encodeURIComponent(active) + '/bindings?character_id=' + encodeURIComponent(binding.control.value)));
     }));
     bar.append(button('删除 Persona', async () => {
       if (active === 'default') { setStatus('不能删除 default Persona', true); return; }

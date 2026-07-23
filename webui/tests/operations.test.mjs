@@ -60,9 +60,14 @@ test('chat space search handles empty results gracefully', () => {
 
 test('console persona page wires DELETE persona and DELETE bindings', () => {
   assert.match(consoleScript, /删除 Persona/);
-  assert.match(consoleScript, /client\.request\('DELETE', '\/v1\/users\/' \+ encodeURIComponent\(state\.userId\) \+ '\/personas\/' \+ encodeURIComponent\(active\)\)/);
+  // DELETE persona（无 body、无额外路径）。
+  assert.match(consoleScript, /client\.request\('DELETE', '\/v1\/users\/' \+ encodeURIComponent\(state\.userId\) \+ '\/personas\/' \+ encodeURIComponent\(active\)\)\)/);
   assert.match(consoleScript, /解绑 Persona/);
-  assert.match(consoleScript, /client\.request\('DELETE', '\/v1\/users\/' \+ encodeURIComponent\(state\.userId\) \+ '\/personas\/' \+ encodeURIComponent\(active\) \+ '\/bindings'/);
+  // daemon `unbind_persona_endpoint` 用 axum::extract::Query 读取 character_id（必填），
+  // DELETE 不解析 JSON body——必须以 query string 传递，否则 400 BadRequest。
+  assert.match(consoleScript, /\/bindings\?character_id=' \+ encodeURIComponent\(binding\.control\.value\)\)/);
+  // 反向断言：DELETE bindings 不能再带 JSON body（POST bind 仍然带 body，需区分 method）。
+  assert.doesNotMatch(consoleScript, /client\.request\('DELETE', '\/v1\/users\/' \+ encodeURIComponent\(state\.userId\) \+ '\/personas\/' \+ encodeURIComponent\(active\) \+ '\/bindings', \{/);
 });
 
 test('console persona delete guards the default persona', () => {
