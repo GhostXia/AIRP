@@ -110,6 +110,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-doc-
 
+      - name: Prepare Tauri engine sidecar
+        shell: pwsh
+        run: |
+          cargo build -p airp-core --bin airp-core --locked
+          New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
+          Copy-Item target/debug/airp-core.exe ui/src-tauri/binaries/airp-core-x86_64-pc-windows-msvc.exe
+
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings
