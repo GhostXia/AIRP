@@ -1,6 +1,6 @@
 # AIRP 文档地图
 
-> 最后校准：2026-07-23，`main@03ffaf6`
+> 最后校准：2026-07-24，`main@bc72c48`
 >
 > 当前事实入口：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)
 
@@ -35,11 +35,9 @@
 
 - [CAPABILITY-ABSORPTION.md](CAPABILITY-ABSORPTION.md)：四个第一方前序项目的能力筛选；
 - [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)：源 MCP-Server catalog 与 AIRP 落点；
-- [PARTS.md](PARTS.md)：源项目零件索引；
 - [TAVERN-PARITY.md](TAVERN-PARITY.md)：SillyTavern 功能/互操作性对标；
 - [HERMES-MEMORY.md](HERMES-MEMORY.md)：长期记忆、skills、Soul 候选方向；
 - [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md)：长篇 RP/authoring 研究参考。
-- [AGENT-BROWSER-EXPLORATION-PLAN.md](AGENT-BROWSER-EXPLORATION-PLAN.md)：Agent 驱动浏览器探索测试层 MVP 实施计划（#273）。
 
 这些文档中的状态图例通常描述“来源有无”或“候选价值”，不证明 AIRP 的 domain、HTTP、Agent tool 或 UI 已交付。
 
@@ -61,7 +59,8 @@
 - [archive/2026-07-15-worldbook-management-design.md](archive/2026-07-15-worldbook-management-design.md)：Worldbook 管理设计；
 - [archive/2026-07-16-unified-revision-design.md](archive/2026-07-16-unified-revision-design.md)：统一 revision 设计；
 - [archive/2026-07-17-onboarding-wizard-design.md](archive/2026-07-17-onboarding-wizard-design.md)：Onboarding 向导设计；
-- [archive/2026-07-19-chat-experience-upgrade-design.md](archive/2026-07-19-chat-experience-upgrade-design.md)：聊天体验升级设计。
+- [archive/2026-07-19-chat-experience-upgrade-design.md](archive/2026-07-19-chat-experience-upgrade-design.md)：聊天体验升级设计；
+- [archive/2026-07-23-agent-browser-exploration-plan.md](archive/2026-07-23-agent-browser-exploration-plan.md)：Agent 浏览器探索测试层 MVP 实施计划（已实现，PR #300）。
 
 归档不提供当前任务排序。被压缩的原文可按归档页记录的 commit 使用 `git show` 恢复。
 

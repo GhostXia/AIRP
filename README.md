@@ -70,7 +70,8 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。旧 `gatewa
 - 单实例自托管 WebUI 的 production P0：同源 HTTPS、私有 engine、secret mounts、fail-closed 配置和真实 topology CI；
 - P1 首聊失败关闭与安全边界：关键持久化失败不返回虚假成功，SSE 保留 commit state，提交状态不明时不盲目重发，客户端错误与诊断脱敏；
 - P1 人工冷备份/回滚逃生路径：归档哈希校验、独立回滚卷验证，以及只在只读核验通过后恢复公网监听；
-- 规范 session UUID、legacy metadata best-effort 修复，以及自包含 session/revision 的后续合同。
+- 规范 session UUID、legacy metadata best-effort 修复，以及自包含 session/revision 的后续合同；
+- Agent 驱动浏览器探索测试层 MVP（`tools/agent-exploration/` + CI workflow + WebUI test harness），无 LLM key 时 fallback 模式仍可验证端到端 pipeline。
 
 P1 有限试用代码候选已经形成，但尚未达到正式发布条件。当前继续开发首聊黄金路径、恢复路径和高价值产品缺口，并用真实 provider、真实浏览器、生产拓扑及自动化/人工验收形成可重复证据。Persona 高级生命周期、Preset 完整生命周期、Worldbook 完整资产生命周期、完整 session revision、版本化 migration、自动备份/恢复、可恢复删除、正式升级回滚、浏览器矩阵和长会话 soak 仍未完成。不要从本页推断细节；以 [CURRENT-BASELINE.md](docs/CURRENT-BASELINE.md) 为准。
 

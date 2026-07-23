@@ -1,6 +1,8 @@
-# Agent 浏览器探索测试层 实施计划
+# Agent 浏览器探索测试层 实施计划（已归档）
 
-> 状态：MVP 实施计划
+> 状态：MVP 已实现并合并（PR #300，2026-07-23）
+>
+> 归档原因：实施计划已完成，实际实现见 `tools/agent-exploration/` 源码和 `.github/workflows/agent-browser-exploration.yml`。本文保留供后续阶段 2 参考。
 >
 > 来源 issue：[#273 test: 引入 Agent 驱动的浏览器探索测试层](https://github.com/GhostXia/AIRP/issues/273)
 >

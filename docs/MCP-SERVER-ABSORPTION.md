@@ -69,5 +69,5 @@ characters（列表/card/greetings/world·lorebook/state·live/memory·{current,
 - 12 工作流提示词 → engine 内置技能（agentskills.io 兼容）。
 - **保留方向**：engine 作 MCP client 接第三方 MCP；内化自有能力不妨碍未来生态接入。
 
-## 6. 仍要修的解析 bug（局部，不影响"融入"定调）
-来源项目的角色卡 zTXt-only、世界书 Vec 结构、Preset RegexScript 冲突、state 不 clamp、list 排序、import_preset 绕沙箱、错误码过度归类等问题见 [PARTS.md](PARTS.md) §M。吸收需求时不得继承这些实现缺陷。
+## 6. 仍要修的解析 bug（局部，不影响“融入”定调）
+来源项目的角色卡 zTXt-only、世界书 Vec 结构、Preset RegexScript 冲突、state 不 clamp、list 排序、import_preset 绕沙箱、错误码过度归类等问题见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)。吸收需求时不得继承这些实现缺陷。
