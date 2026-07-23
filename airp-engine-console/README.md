@@ -6,6 +6,17 @@
 
 详细规范见 [STYLEGUIDE.md](STYLEGUIDE.md)。
 
+## 基线定义
+
+**v0.0.2 release（2026-07-22）的 webui 版本是基线。** 后续所有样板/WebUI 变更
+均以此为起点衡量。基线包含的核心能力：
+
+- PR #294 重建的无构建、多页面、CSP 兼容同源客户端
+- 角色导入/搜索、Provider 设置、Preset/Persona 管理、命名 session、流式聊天
+- continue/regen、durable-ID rollback/edit/delete、Swipe/branch 管理
+- Agent Run、装配预览、诊断、5-stage onboarding 向导
+- PR #297/#296 的删除角色/会话、FTS5 搜索、Persona 删除解绑、状态历史
+
 ## 溯源与回退
 
 样板与派生 WebUI 同处一个仓库，共享 commit 历史。每次同步后在此记录对应的
