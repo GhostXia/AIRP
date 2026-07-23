@@ -763,7 +763,7 @@ function renderMarkdown(run) {
 //   AIRP_AUTH_USER, AIRP_AUTH_PASSWORD              — production topology basic auth
 
 import { chromium } from 'playwright-core';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { chatCompletion, getModel } from './llm-client.mjs';
 import { HarnessClient } from './harness-client.mjs';
@@ -788,7 +788,13 @@ let taskNames;
 if (args.task) {
   taskNames = [args.task];
 } else if (args.pr) {
-  const diff = await fetchPrDiff(args.pr);
+  // 优先从 --diff-file 读 (workflow 用单独 step 取 diff, runner 不持有 GITHUB_TOKEN)
+  let diff;
+  if (args['diff-file']) {
+    diff = await readFile(args['diff-file'], 'utf8');
+  } else {
+    diff = await fetchPrDiff(args.pr);
+  }
   taskNames = classifyPrDiff(diff);
 } else {
   // 默认跑全部 4 个任务集
@@ -845,6 +851,12 @@ async function runTask(browser, mod, name) {
   const page = await context.newPage();
   // 传 origin 给 HarnessClient，让 navigate() 用 page.goto() 而不是 in-page href
   const harness = new HarnessClient(page, ORIGIN);
+  // 关键：page 创建后停留在 about:blank, harness 未安装。必须先 goto 一个会加载
+  // harness 的 screen 并等待 async <script> 把 window.__AIRP_AGENT_TEST__ 装好,
+  // 否则 generateAndRunScript() 里第一次 harness.getDomSnapshot() 会 evaluate 到 undefined。
+  // 用 role-list 作为初始 screen (它是 home 页, 所有任务都可以从这里导航)。
+  await page.goto(ORIGIN + '/screens/01-role-list.html?airp_agent_test=1', { waitUntil: 'load' });
+  await harness.waitForReady();
 
   const taskDir = join(resolve(REPORT_DIR), name);
   await mkdir(taskDir, { recursive: true });
@@ -1002,9 +1014,21 @@ function extractCodeBlock(content) {
 async function runTempScript(scriptPath, ctx) {
   // LLM 生成的脚本是不可信代码。Prompt 里的"不要读写文件"不是安全边界：
   // 脚本能访问 process.env、fs、network、process.exit。
-  // MVP（方案 A）至少先在导入前清空 process.env 中的 secret，避免 OPENAI_API_KEY /
-  // GITHUB_TOKEN 被生成的脚本 exfiltrate。真正文件系统/网络隔离要等方案 B
-  // action-protocol 把执行迁到受限 child process / container（见 Task 3 Step 4）。
+  //
+  // MVP（方案 A）安全策略——多层防御，但承认非完美隔离：
+  // 1. **Secret scrub**: 调用前清空 process.env 中匹配 SECRET_PATTERNS 的 key,
+  //    避免 OPENAI_API_KEY 等被生成的脚本 exfiltrate。finally 恢复。
+  // 2. **process.exit override**: 临时把 process.exit 替换为 throw, 防止脚本
+  //    偷偷 exit(0) 中断 runner 后清场。finally 恢复。
+  // 3. **GITHUB_TOKEN 不进 runner env**: workflow 用单独 step 取 PR diff 写到
+  //    文件, runner 从 --diff-file 读, 不直接持有 repo write token。runner env
+  //    只剩 OPENAI_API_KEY (agent 自己的低价值 key)。
+  //
+  // 真正的文件系统/网络/进程隔离要等方案 B action-protocol 把执行迁到受限
+  // child process / container (见 Task 3 Step 4)。方案 A 接受"脚本理论上仍能
+  // fs.readFile 本机文件"的风险, 因为: (a) CI runner 是临时 VM; (b) 无持久
+  // secret 在磁盘; (c) workflow 已拆分 GITHUB_TOKEN; (d) Plan B 是已规划的
+  // 收敛路径。此风险接受点须在 issue #273 评论中显式记录。
   const SECRET_PATTERNS = [/OPENAI_API_KEY/i, /GITHUB_TOKEN/i, /API_KEY/i, /SECRET/i, /PASSWORD/i, /TOKEN/i, /_KEY$/i];
   const savedSecrets = {};
   for (const key of Object.keys(process.env)) {
@@ -1013,12 +1037,17 @@ async function runTempScript(scriptPath, ctx) {
       delete process.env[key];
     }
   }
+  const savedExit = process.exit;
+  process.exit = (code) => {
+    throw new Error('agent script attempted process.exit(' + code + '); blocked by runner sandbox');
+  };
   try {
     const mod = await import('file://' + scriptPath + '?t=' + Date.now());
     if (typeof mod.run !== 'function') throw new Error('agent script must export async function run(ctx)');
     await mod.run(ctx);
     return 0;
   } finally {
+    process.exit = savedExit;
     for (const [key, value] of Object.entries(savedSecrets)) {
       process.env[key] = value;
     }
@@ -1615,6 +1644,16 @@ jobs:
           ./bootstrap-topology.sh
           echo "TOPOLOGY_BOOTSTRAPPED=1" >> $GITHUB_ENV
 
+      - name: Fetch PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 单独 step 取 PR diff 到文件, runner 不需要 GITHUB_TOKEN (减少 secret 暴露面)
+          mkdir -p artifacts/agent-exploration
+          gh api repos/GhostXia/AIRP/pulls/${{ github.event.pull_request.number }} \
+            -H "Accept: application/vnd.github.v3.diff" \
+            > artifacts/agent-exploration/pr-diff.patch
+
       - name: Run agent exploration
         env:
           AIRP_SMOKE_ORIGIN: https://localhost:9443
@@ -1625,12 +1664,14 @@ jobs:
           AIRP_AUTH_PASSWORD: synthetic-smoke-password
           OPENAI_API_KEY: ${{ secrets.AGENT_EXPLORATION_OPENAI_KEY }}
           OPENAI_MODEL: ${{ secrets.AGENT_EXPLORATION_MODEL || 'gpt-4o-mini' }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 故意不传 GITHUB_TOKEN: runner 不需要它 (diff 已在上一步取到文件),
+          # 避免生成的临时脚本 exfiltrate repo write token。PR 评论用单独 step 的 GH_TOKEN。
         working-directory: tools/agent-exploration
         run: |
           node runner.mjs \
             --origin $AIRP_SMOKE_ORIGIN \
             --pr ${{ github.event.pull_request.number }} \
+            --diff-file ../../artifacts/agent-exploration/pr-diff.patch \
             --report-dir ../../artifacts/agent-exploration \
             --chrome-path $AIRP_CHROME_PATH
 
