@@ -84,10 +84,15 @@ run.endedAt = new Date().toISOString();
 const { jsonPath, mdPath } = await writeReport(resolve(REPORT_DIR), run);
 console.log('[runner] report: ' + mdPath);
 
-// 阶段 2: 任何 task Failed 即 exit 1（CI 标记不稳定，但 workflow 本身 non-blocking）
+// 阶段 2: 任何 task Failed 即 exit 1（让 workflow step 失败，触发 if: failure() 占位评论步骤）。
+// workflow job 级 continue-on-error: true 仍然 non-blocking（不会阻塞 PR 合并），
+// 但 exit 1 让 CI 红 + 触发 workflow 中的 failure 步骤，确保失败信号不会因
+// PR 评论 step 自身失败（report 未生成 / gh 不可用）而完全消失。
 if (run.tasks.some(t => t.result === 'Failed')) {
-  console.log('[runner] ' + run.tasks.filter(t => t.result === 'Failed').length + ' task(s) failed; see report');
-  // 不 exit 1；MVP workflow 是 non-blocking，只在 PR 评论里提示
+  const failed = run.tasks.filter(t => t.result === 'Failed');
+  console.log('[runner] ' + failed.length + ' task(s) failed: ' + failed.map(t => t.name).join(', '));
+  console.log('[runner] report: ' + mdPath);
+  process.exit(1);
 }
 
 async function runTask(browser, mod, name) {
@@ -95,19 +100,12 @@ async function runTask(browser, mod, name) {
     httpCredentials: process.env.AIRP_AUTH_USER ? { username: process.env.AIRP_AUTH_USER, password: process.env.AIRP_AUTH_PASSWORD } : undefined,
   });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-  const page = await context.newPage();
-  // 传 origin 给 HarnessClient，让 navigate() 用 page.goto() 而不是 in-page href
-  const harness = new HarnessClient(page, ORIGIN);
-  // 关键：page 创建后停留在 about:blank, harness 未安装。必须先 goto 一个会加载
-  // harness 的 screen 并等待 async <script> 把 window.__AIRP_AGENT_TEST__ 装好,
-  // 否则 generateAndRunScript() 里第一次 harness.getDomSnapshot() 会 evaluate 到 undefined。
-  // 用 role-list 作为初始 screen (它是 home 页, 所有任务都可以从这里导航)。
-  await page.goto(ORIGIN + '/screens/01-role-list.html?airp_agent_test=1', { waitUntil: 'load' });
-  await harness.waitForReady();
 
   const taskDir = join(resolve(REPORT_DIR), name);
   await mkdir(taskDir, { recursive: true });
 
+  // B3 修复：result 提前初始化，保证 page.goto/waitForReady 失败时 catch/finally
+  // 仍能访问 result，避免异常冒泡出 runTask 导致外层 for 循环整批跳过。
   const result = {
     name,
     description: mod.DESCRIPTION,
@@ -122,7 +120,22 @@ async function runTask(browser, mod, name) {
     reproducibility: null,
   };
 
+  let tracingStopped = false;
+  let page = null;
+  let harness = null;
   try {
+    page = await context.newPage();
+    // 传 origin 给 HarnessClient，让 navigate() 用 page.goto() 而不是 in-page href
+    harness = new HarnessClient(page, ORIGIN);
+    // 关键：page 创建后停留在 about:blank, harness 未安装。必须先 goto 一个会加载
+    // harness 的 screen 并等待 async <script> 把 window.__AIRP_AGENT_TEST__ 装好,
+    // 否则 generateAndRunScript() 里第一次 harness.getDomSnapshot() 会 evaluate 到 undefined。
+    // 用 role-list 作为初始 screen (它是 home 页, 所有任务都可以从这里导航)。
+    // B3: page.goto + waitForReady 移入 try 块——origin 不可达 / harness 未装好等
+    // 失败不应冒泡到外层 for 循环导致剩余任务整批跳过。
+    await page.goto(ORIGIN + '/screens/01-role-list.html?airp_agent_test=1', { waitUntil: 'load' });
+    await harness.waitForReady();
+
     // 让 Agent 生成临时 Playwright 脚本（方案 A）
     // ctx 合并 fixtures：任务模块通过 mod.FIXTURES 提供解析好的 fixture JSON，
     // Agent 脚本通过 ctx.fixtures 直接取用，不需要读 runner 文件系统。
@@ -143,6 +156,7 @@ async function runTask(browser, mod, name) {
     const tracePath = join(taskDir, 'trace.zip');
     await context.tracing.stop({ path: tracePath });
     result.evidence.trace = tracePath;
+    tracingStopped = true;
 
     // 任务模块自检
     const checkResult = await mod.check(harness, result);
@@ -154,15 +168,27 @@ async function runTask(browser, mod, name) {
   } catch (err) {
     result.result = 'Failed';
     result.actual = String(err && err.stack || err);
-    try { result.consoleErrors = await harness.getConsoleErrors(); } catch {}
-    try { result.failedRequests = await harness.getFailedRequests(); } catch {}
-    try {
-      const tracePath = join(taskDir, 'trace.zip');
-      await context.tracing.stop({ path: tracePath });
-      result.evidence.trace = tracePath;
-    } catch {}
+    if (harness) {
+      try { result.consoleErrors = await harness.getConsoleErrors(); } catch {}
+      try { result.failedRequests = await harness.getFailedRequests(); } catch {}
+    }
+    if (!tracingStopped) {
+      try {
+        const tracePath = join(taskDir, 'trace.zip');
+        await context.tracing.stop({ path: tracePath });
+        result.evidence.trace = tracePath;
+        tracingStopped = true;
+      } catch {}
+    }
   } finally {
-    await context.close();
+    // B3 修复：tracing 未停或停失败时，先强制 stop 再关 context，避免
+    // context.close() 因 tracing 仍活跃而抛错跳过 finally 后续逻辑。
+    // try/catch 包裹 stop 保证即使第二次 stop 也安全（Playwright 对已停的 tracing
+    // 调 stop 会抛错，try/catch 吞掉即可）。
+    if (!tracingStopped) {
+      try { await context.tracing.stop(); } catch {}
+    }
+    try { await context.close(); } catch {}
   }
 
   return result;

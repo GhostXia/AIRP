@@ -837,10 +837,15 @@ run.endedAt = new Date().toISOString();
 const { jsonPath, mdPath } = await writeReport(resolve(REPORT_DIR), run);
 console.log('[runner] report: ' + mdPath);
 
-// 阶段 2: 任何 task Failed 即 exit 1（CI 标记不稳定，但 workflow 本身 non-blocking）
+// 阶段 2: 任何 task Failed 即 exit 1（让 workflow step 失败，触发 if: failure() 占位评论步骤）。
+// workflow job 级 continue-on-error: true 仍然 non-blocking（不会阻塞 PR 合并），
+// 但 exit 1 让 CI 红 + 触发 workflow 中的 failure 步骤，确保失败信号不会因
+// PR 评论 step 自身失败（report 未生成 / gh 不可用）而完全消失。
 if (run.tasks.some(t => t.result === 'Failed')) {
-  console.log('[runner] ' + run.tasks.filter(t => t.result === 'Failed').length + ' task(s) failed; see report');
-  // 不 exit 1；MVP workflow 是 non-blocking，只在 PR 评论里提示
+  const failed = run.tasks.filter(t => t.result === 'Failed');
+  console.log('[runner] ' + failed.length + ' task(s) failed: ' + failed.map(t => t.name).join(', '));
+  console.log('[runner] report: ' + mdPath);
+  process.exit(1);
 }
 
 async function runTask(browser, mod, name) {
@@ -848,19 +853,12 @@ async function runTask(browser, mod, name) {
     httpCredentials: process.env.AIRP_AUTH_USER ? { username: process.env.AIRP_AUTH_USER, password: process.env.AIRP_AUTH_PASSWORD } : undefined,
   });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-  const page = await context.newPage();
-  // 传 origin 给 HarnessClient，让 navigate() 用 page.goto() 而不是 in-page href
-  const harness = new HarnessClient(page, ORIGIN);
-  // 关键：page 创建后停留在 about:blank, harness 未安装。必须先 goto 一个会加载
-  // harness 的 screen 并等待 async <script> 把 window.__AIRP_AGENT_TEST__ 装好,
-  // 否则 generateAndRunScript() 里第一次 harness.getDomSnapshot() 会 evaluate 到 undefined。
-  // 用 role-list 作为初始 screen (它是 home 页, 所有任务都可以从这里导航)。
-  await page.goto(ORIGIN + '/screens/01-role-list.html?airp_agent_test=1', { waitUntil: 'load' });
-  await harness.waitForReady();
 
   const taskDir = join(resolve(REPORT_DIR), name);
   await mkdir(taskDir, { recursive: true });
 
+  // B3 修复：result 提前初始化，保证 page.goto/waitForReady 失败时 catch/finally
+  // 仍能访问 result，避免异常冒泡出 runTask 导致外层 for 循环整批跳过。
   const result = {
     name,
     description: mod.DESCRIPTION,
@@ -875,7 +873,22 @@ async function runTask(browser, mod, name) {
     reproducibility: null,
   };
 
+  let tracingStopped = false;
+  let page = null;
+  let harness = null;
   try {
+    page = await context.newPage();
+    // 传 origin 给 HarnessClient，让 navigate() 用 page.goto() 而不是 in-page href
+    harness = new HarnessClient(page, ORIGIN);
+    // 关键：page 创建后停留在 about:blank, harness 未安装。必须先 goto 一个会加载
+    // harness 的 screen 并等待 async <script> 把 window.__AIRP_AGENT_TEST__ 装好,
+    // 否则 generateAndRunScript() 里第一次 harness.getDomSnapshot() 会 evaluate 到 undefined。
+    // 用 role-list 作为初始 screen (它是 home 页, 所有任务都可以从这里导航)。
+    // B3: page.goto + waitForReady 移入 try 块——origin 不可达 / harness 未装好等
+    // 失败不应冒泡到外层 for 循环导致剩余任务整批跳过。
+    await page.goto(ORIGIN + '/screens/01-role-list.html?airp_agent_test=1', { waitUntil: 'load' });
+    await harness.waitForReady();
+
     // 让 Agent 生成临时 Playwright 脚本（方案 A）
     const scriptPath = await generateAndRunScript(mod, page, harness, taskDir, context);
     result.evidence.script = scriptPath;
@@ -893,6 +906,7 @@ async function runTask(browser, mod, name) {
     const tracePath = join(taskDir, 'trace.zip');
     await context.tracing.stop({ path: tracePath });
     result.evidence.trace = tracePath;
+    tracingStopped = true;
 
     // 任务模块自检
     const checkResult = await mod.check(harness, result);
@@ -904,15 +918,27 @@ async function runTask(browser, mod, name) {
   } catch (err) {
     result.result = 'Failed';
     result.actual = String(err && err.stack || err);
-    try { result.consoleErrors = await harness.getConsoleErrors(); } catch {}
-    try { result.failedRequests = await harness.getFailedRequests(); } catch {}
-    try {
-      const tracePath = join(taskDir, 'trace.zip');
-      await context.tracing.stop({ path: tracePath });
-      result.evidence.trace = tracePath;
-    } catch {}
+    if (harness) {
+      try { result.consoleErrors = await harness.getConsoleErrors(); } catch {}
+      try { result.failedRequests = await harness.getFailedRequests(); } catch {}
+    }
+    if (!tracingStopped) {
+      try {
+        const tracePath = join(taskDir, 'trace.zip');
+        await context.tracing.stop({ path: tracePath });
+        result.evidence.trace = tracePath;
+        tracingStopped = true;
+      } catch {}
+    }
   } finally {
-    await context.close();
+    // B3 修复：tracing 未停或停失败时，先强制 stop 再关 context，避免
+    // context.close() 因 tracing 仍活跃而抛错跳过 finally 后续逻辑。
+    // try/catch 包裹 stop 保证即使第二次 stop 也安全（Playwright 对已停的 tracing
+    // 调 stop 会抛错，try/catch 吞掉即可）。
+    if (!tracingStopped) {
+      try { await context.tracing.stop(); } catch {}
+    }
+    try { await context.close(); } catch {}
   }
 
   return result;
@@ -1142,6 +1168,36 @@ test('Multi-area PR deduplicates tasks', () => {
   assert.ok(tasks.length >= 2);
   assert.equal(new Set(tasks).size, tasks.length);
 });
+
+// B1 regression: path-only (no keyword) must NOT trigger a task set.
+// 改 chat.rs 但内容与 swipe/edit/memory 无关时，不应启动 LLM+Chrome 探索。
+test('Path-only diff without matching keywords returns empty', () => {
+  const diff = 'diff --git a/engine/src/daemon/handlers/chat.rs b/engine/src/daemon/handlers/chat.rs\n+pub fn unrelated_refactor() {}';
+  const tasks = classifyPrDiff(diff);
+  assert.deepEqual(tasks, [], 'path-only hit must not trigger; got ' + JSON.stringify(tasks));
+});
+
+// B1 regression: keyword-only (no path) must NOT trigger a task set.
+// 防止 README/docs 提到 swipe/onboarding 等关键字但未改对应代码时误触发。
+test('Keyword-only diff without matching paths returns empty', () => {
+  const diff = 'diff --git a/README.md b/README.md\n+Documentation about onboarding flow and swipe behavior';
+  const tasks = classifyPrDiff(diff);
+  assert.deepEqual(tasks, [], 'keyword-only hit must not trigger; got ' + JSON.stringify(tasks));
+});
+
+// B1 regression: 任意路径单行无关改动，覆盖所有任务集的 paths。
+test('Any single path change without keywords returns empty', () => {
+  const cases = [
+    'diff --git a/webui/assets/onboarding.js b/webui/assets/onboarding.js\n+export const unrelated = 1;',
+    'diff --git a/webui/screens/14-message-swipe.html b/webui/screens/14-message-swipe.html\n+<div>layout tweak</div>',
+    'diff --git a/engine/src/chat_store.rs b/engine/src/chat_store.rs\n+fn internal_helper() {}',
+    'diff --git a/engine/src/memory/store.rs b/engine/src/memory/store.rs\n+fn internal_helper() {}',
+  ];
+  for (const diff of cases) {
+    const tasks = classifyPrDiff(diff);
+    assert.deepEqual(tasks, [], 'path-only should not trigger for diff: ' + diff + '; got ' + JSON.stringify(tasks));
+  }
+});
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -1158,7 +1214,8 @@ Expected: FAIL（`classifier.mjs` 不存在）
 
 ```javascript
 // PR diff → 任务集映射
-// 命中规则按"文件路径模式 + 内容关键字"组合；只看 +/- 行。
+// 命中规则：文件路径模式 AND 内容关键字同时命中才触发任务集；只看 +/- 行。
+// 单独路径命中（如 chat.rs 改一行无关代码）不触发，避免高频文件引发不可控成本。
 
 export const DIFF_TASK_MAP = {
   'onboarding-firstchat-refresh': {
@@ -1171,7 +1228,10 @@ export const DIFF_TASK_MAP = {
   },
   'edit-branch-switch-refresh': {
     paths: [/engine\/src\/chat_store\.rs/, /engine\/src\/daemon\/handlers\/chat\.rs/, /webui\/screens\/19-branch-tree\.html/],
-    keywords: [/\bedit\b.*message/i, /branch/i, /switch_branch/i, /active_leaf/i, /rollback/i],
+    // 注意：原 /\bedit\b.*message/i 的尾部 \b 不会匹配 "edit_message"（_ 是 word char，无边界），
+    // 导致纯路径命中下 keyword 永远失效。改用 \bedit.*message/i 让 "edit_message"、"edit message"
+    // 等都能匹配，同时保留起始 \b 避免误匹配 "credit_message" 等无关词。
+    keywords: [/\bedit.*message/i, /branch/i, /switch_branch/i, /active_leaf/i, /rollback/i],
   },
   'memory-roundtrip': {
     paths: [/engine\/src\/daemon\/handlers\/memory\.rs/, /engine\/src\/memory/, /webui\/screens\/17-memory-state\.html/],
@@ -1192,8 +1252,10 @@ export function classifyPrDiff(diff) {
   for (const [taskName, rule] of Object.entries(DIFF_TASK_MAP)) {
     const pathHit = rule.paths.some(p => paths.some(pp => p.test(pp)));
     const keywordHit = rule.keywords.some(k => k.test(changedLines));
+    // path AND keyword：两者必须同时命中。
+    // 单独 path 命中（例如改 chat.rs 但内容与 swipe/edit/memory 无关）不触发，
+    // 否则 engine 最高频文件每次改动都会启动 2+ 任务集的 LLM+Chrome 探索，CI 成本不可控。
     if (pathHit && keywordHit) hits.add(taskName);
-    else if (pathHit) hits.add(taskName); // 路径命中即触发，关键字仅作加权（此处简化为 OR）
   }
   return [...hits];
 }
@@ -1205,7 +1267,7 @@ export function classifyPrDiff(diff) {
 cd tools\agent-exploration
 node --test classifier.test.mjs
 ```
-Expected: PASS（6 tests）
+Expected: PASS（9 tests，含 3 个 B1 regression: path-only / keyword-only / 多路径不触发）
 
 - [ ] **Step 5: Commit**
 
@@ -1689,6 +1751,27 @@ jobs:
           name: agent-exploration-${{ github.event.pull_request.number }}
           path: artifacts/agent-exploration/
           retention-days: 14
+
+      # B2 修复：runner 失败时 exit 1（虽然 job continue-on-error: true 不阻塞合并，
+      # 但 step failure 会触发本步骤），先发占位评论确保失败信号不会因下游
+      # Publish PR comment 自身失败（report.md 未生成 / gh 不可用）而完全丢失。
+      - name: Publish failure placeholder comment
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # 用 --body-file - 通过 stdin 传 body，避免引号转义 / 长度限制
+          gh pr comment "$PR_NUMBER" --body-file - <<'EOF'
+          ## ⚠️ Agent exploration runner failed
+
+          The exploration runner exited with a non-zero status. The actual report comment may be missing or partial.
+
+          - See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for logs.
+          - Download the `agent-exploration-${{ github.event.pull_request.number }}` artifact for any partial report/trace files.
+
+          This is a non-blocking placeholder (workflow has `continue-on-error: true`); merge is not blocked. Investigate the failure if it persists.
+          EOF
 
       - name: Publish PR comment
         if: always()

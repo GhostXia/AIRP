@@ -103,6 +103,27 @@ jobs:
           path: artifacts/agent-exploration/
           retention-days: 14
 
+      # B2 修复：runner 失败时 exit 1（虽然 job continue-on-error: true 不阻塞合并，
+      # 但 step failure 会触发本步骤），先发占位评论确保失败信号不会因下游
+      # Publish PR comment 自身失败（report.md 未生成 / gh 不可用）而完全丢失。
+      - name: Publish failure placeholder comment
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # 用 --body-file - 通过 stdin 传 body，避免引号转义 / 长度限制
+          gh pr comment "$PR_NUMBER" --body-file - <<'EOF'
+          ## ⚠️ Agent exploration runner failed
+
+          The exploration runner exited with a non-zero status. The actual report comment may be missing or partial.
+
+          - See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for logs.
+          - Download the `agent-exploration-${{ github.event.pull_request.number }}` artifact for any partial report/trace files.
+
+          This is a non-blocking placeholder (workflow has `continue-on-error: true`); merge is not blocked. Investigate the failure if it persists.
+          EOF
+
       - name: Publish PR comment
         if: always()
         env:
