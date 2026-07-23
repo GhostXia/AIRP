@@ -1,0 +1,160 @@
+name: Agent Browser Exploration
+
+# 阶段 2: 重大功能 PR 自动运行。Non-blocking (continue-on-error at job level).
+# 触发条件: PR opened/synchronized/reopened, 且 diff 命中 Edit/Branch/Swipe/Memory/onboarding 任一区域。
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'engine/src/daemon/handlers/chat.rs'
+      - 'engine/src/daemon/handlers/memory.rs'
+      - 'engine/src/chat_store.rs'
+      - 'engine/src/memory/**'
+      - 'webui/assets/onboarding.js'
+      - 'webui/assets/chat-space.js'
+      - 'webui/screens/16-onboarding.html'
+      - 'webui/screens/02-chat-space.html'
+      - 'webui/screens/14-message-swipe.html'
+      - 'webui/screens/17-memory-state.html'
+      - 'webui/screens/19-branch-tree.html'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true  # MVP: non-blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # B9 方案 3：不再做 LLM key 预检 + skip 整 job。
+      # OPENAI_API_KEY 未配时，runner.mjs + llm-client.mjs 自动进入 fallback 模式：
+      # 跑内置 minimal smoke 脚本（只 navigate + snapshot，不做业务断言），
+      # 验证 topology + harness + runner + reporter + commenter 全链路可达。
+      # secret 已配时走真 LLM 路径。两种模式都跑同一个 workflow，省一份配置。
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install runner deps
+        working-directory: tools/agent-exploration
+        run: npm install
+
+      # B6 修复：bootstrap-topology.sh 内部 `docker run airp-gateway:0.1.0 hash-password`
+      # 要求本地已 build 该镜像。pr-gate.yml 调用 smoke-ci.sh 前会先跑
+      # `docker compose build --pull`，本 workflow 也必须先 build 镜像，否则
+      # `docker run` 会因镜像不存在去 pull，触发 pull access denied (exit 125)。
+      # build 需要 .env 存在 (compose.yaml 引用 $AIRP_VERSION 等)，但 bootstrap-topology.sh
+      # 内部生成 .env 是在 docker run 之后，存在 chicken-and-egg。所以先用 .env.example
+      # 临时 .env 让 build 通过；bootstrap-topology.sh 会再覆盖 .env 用于实际 topology。
+      - name: Prepare .env for image build
+        working-directory: deploy/production
+        run: cp .env.example .env
+
+      - name: Build pinned production images
+        working-directory: deploy/production
+        run: docker compose --env-file .env -f compose.yaml build --pull
+
+      - name: Bootstrap production smoke topology
+        working-directory: deploy/production
+        run: |
+          # 用 bootstrap-topology.sh 只启 mock provider + TLS + 临时数据拓扑,
+          # 不跑 smoke-ci.sh 自身（避免重复跑现有 smoke）
+          # 脚本会启 docker compose 后台拓扑, 等待 health ready 后返回, 不阻塞
+          ./bootstrap-topology.sh
+          echo "TOPOLOGY_BOOTSTRAPPED=1" >> $GITHUB_ENV
+
+      - name: Fetch PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 单独 step 取 PR diff 到文件, runner 不需要 GITHUB_TOKEN (减少 secret 暴露面)
+          mkdir -p artifacts/agent-exploration
+          gh api repos/GhostXia/AIRP/pulls/${{ github.event.pull_request.number }} \
+            -H "Accept: application/vnd.github.v3.diff" \
+            > artifacts/agent-exploration/pr-diff.patch
+
+      - name: Run agent exploration
+        env:
+          AIRP_SMOKE_ORIGIN: https://localhost:9443
+          AIRP_SMOKE_ADMIN_USER: airp-smoke
+          AIRP_SMOKE_ADMIN_PASSWORD: synthetic-smoke-password
+          AIRP_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          AIRP_AUTH_USER: airp-smoke
+          AIRP_AUTH_PASSWORD: synthetic-smoke-password
+          # B9 方案 3：未配 secret 时 GitHub 传空串, runner 自动进 fallback 模式
+          # (跑内置 smoke 脚本验证管线); 已配时走真 LLM 路径
+          OPENAI_API_KEY: ${{ secrets.AGENT_EXPLORATION_OPENAI_KEY }}
+          OPENAI_MODEL: ${{ secrets.AGENT_EXPLORATION_MODEL || 'gpt-4o-mini' }}
+          # 故意不传 GITHUB_TOKEN: runner 不需要它 (diff 已在上一步取到文件),
+          # 避免生成的临时脚本 exfiltrate repo write token。PR 评论用单独 step 的 GH_TOKEN。
+        working-directory: tools/agent-exploration
+        run: |
+          node runner.mjs \
+            --origin $AIRP_SMOKE_ORIGIN \
+            --pr ${{ github.event.pull_request.number }} \
+            --diff-file ../../artifacts/agent-exploration/pr-diff.patch \
+            --report-dir ../../artifacts/agent-exploration \
+            --chrome-path $AIRP_CHROME_PATH
+
+      - name: Teardown topology
+        if: always()
+        working-directory: deploy/production
+        run: |
+          # 用同一脚本 teardown, 保证 mock provider + 临时数据卷在 job 结束前清理
+          ./bootstrap-topology.sh --teardown
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-exploration-${{ github.event.pull_request.number }}
+          # 包含 deploy/production/*.log 用于 bootstrap 失败诊断（B7）：
+          # topology-bootstrap.log, mock-provider.log 等
+          path: |
+            artifacts/agent-exploration/
+            deploy/production/*.log
+          retention-days: 14
+
+      # B2 修复：runner 失败时 exit 1（虽然 job continue-on-error: true 不阻塞合并，
+      # 但 step failure 会触发本步骤），先发占位评论确保失败信号不会因下游
+      # Publish PR comment 自身失败（report.md 未生成 / gh 不可用）而完全丢失。
+      - name: Publish failure placeholder comment
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # 用 --body-file - 通过 stdin 传 body，避免引号转义 / 长度限制
+          gh pr comment "$PR_NUMBER" --body-file - <<'EOF'
+          ## ⚠️ Agent exploration runner failed
+
+          The exploration runner exited with a non-zero status. The actual report comment may be missing or partial.
+
+          - See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for logs.
+          - Download the `agent-exploration-${{ github.event.pull_request.number }}` artifact for any partial report/trace files.
+
+          This is a non-blocking placeholder (workflow has `continue-on-error: true`); merge is not blocked. Investigate the failure if it persists.
+          EOF
+
+      - name: Publish PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          node tools/agent-exploration/post-pr-comment.mjs artifacts/agent-exploration/report.md
