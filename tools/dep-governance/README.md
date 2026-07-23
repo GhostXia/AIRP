@@ -155,7 +155,7 @@ Per `docs/DEV-GUIDE.md` §7.1:
 
 | Class | Trigger | Routing |
 |---|---|---|
-| `patch` | major>=1, patch bump (e.g. 1.2.3 → 1.2.4) | `auto-pr` (still subject to audit bot + human review) |
+| `patch` | major>=1, patch bump (e.g. 1.2.3 → 1.2.4) | `auto-pr` (still subject to CodeRabbit audit + human review) |
 | `patch-sensitive` | patch bump on a sensitive area (crypto/network/auth/serialization/release-chain) | `issue` |
 | `minor` | major>=1, minor bump (e.g. 1.2.3 → 1.3.0) | `issue` |
 | `major` | major bump (e.g. 1.2.3 → 2.0.0) | `issue` |

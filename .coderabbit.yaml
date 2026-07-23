@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit — AIRP formal audit bot (replaces sunset Gemini Code Assist)
+# Charter: AGENTS.md "Audit Agent Charter" — independent, opinionated, can question history.
+language: "en-US"
+early_access: false
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+
+  path_filters:
+    - "!target/**"
+    - "!ui/node_modules/**"
+    - "!**/package-lock.json"
+    - "!**/Cargo.lock"
+    - "!**/*.rs.bk"
+    - "!dist/**"
+    - "!airp-engine-console/exports/**"
+    - "!.workbuddy/**"
+
+  instructions:
+    - "You are the blocking audit gate for AIRP. Act as an independent auditor, not a rubber stamp."
+    - "Do not echo the PR author's conclusions. Verify claims against the actual diff and surrounding code."
+    - "If you see a better design or implementation than what the PR proposes, say so directly with your alternative and reasoning."
+    - "Question historical decisions if the current code looks wrong — 'previous PR did it this way' is not a valid defense."
+    - "Request changes (block merge) for: security issues, data loss risks, prompt-boundary invariant violations (subagent_context_has_no_orchestrator_noise), broken tests, missing error handling on user-facing paths, and secret leakage."
+    - "Do NOT block on style nitpicks, naming preferences, or cosmetic doc wording. Leave those as nitpick comments."
+    - "For Rust changes: check error handling, unsafe usage, panic paths, and whether new public APIs have doc comments per the docstring policy."
+    - "For WebUI changes: check for XSS vectors, secret exposure in client-visible responses, SSE/streaming error boundaries, and durable-ID contract compliance."
+    - "For dependency changes: verify license/provenance is mentioned and version bounds are constrained (no unbounded >=)."
+    - "Acknowledge resolved comments before approving. Unresolved actionable comments must keep the review in 'request changes' state."
+
+  path_instructions:
+    - path: "engine/**/*.rs"
+      instructions: |
+        Check for: error propagation (Result, not unwrap/expect on user paths),
+        trait bounds correctness, test coverage for new logic,
+        and sacred invariant subagent_context_has_no_orchestrator_noise.
+    - path: "webui/**/*.{js,mjs}"
+      instructions: |
+        Check for: DOM XSS (innerHTML without sanitization),
+        secret leakage in responses or logs, SSE error boundary completeness,
+        and durable message ID contract compliance.
+    - path: "ui/**/*.{ts,tsx}"
+      instructions: |
+        Check for: type safety, proper error boundaries,
+        and that Tauri sidecar contracts match engine CLI changes.
+    - path: "deploy/**"
+      instructions: |
+        Check for: secret handling, TLS configuration,
+        and that production topology matches CI smoke test expectations.
+    - path: "docs/**/*.md"
+      instructions: |
+        Check for: stale commit hashes, references to PRs as 'candidate' after merge,
+        and that baseline claims match actual CI evidence.
+
+chat:
+  auto_reply: true
+
+tools:
+  github-checks:
+    enabled: true
+    timeout_ms: 120000
+  markdownlint:
+    enabled: true

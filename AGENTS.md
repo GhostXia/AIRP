@@ -62,9 +62,9 @@
 - 若任务确实需要引入普通第三方依赖库，必须单独核验许可证、锁定版本并记录 provenance；这不属于“思维吸收后重构”，不得借本条绕过依赖合规
 - AIRP-Core/AIRPCLI、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 均为作者自己的第一方前序项目，不适用“第三方代码不得复用”的限制，但仍须按 `docs/SOURCE-PROJECT-DECISIONS.md` 复核后吸收
 
-### 流程现状（2026-07-14 更新）
+### 流程现状（2026-07-23 更新）
 
-审计 bot 已恢复，并重新作为 §11.1「PR → 审计 → 合并」的**阻塞门禁**。本地测试全绿（含神圣不变式 `subagent_context_has_no_orchestrator_noise`）后可以开 PR，但不得在审计 bot pending、失败或仍有阻塞意见时合并；必须等待审计完成、修复全部阻塞意见并取得通过状态，再由人工 review 决定是否合并。审计 bot 与任何临时审计 agent 均须遵守本守则的独立审计、可提己见、可质疑历史并查证三原则。
+审计 bot 当前为 **CodeRabbit**（`.coderabbit.yaml` 配置 `request_changes_workflow: true`），作为「PR → 审计 → 合并」的**阻塞门禁**。Gemini Code Assist 已被 Google 下线（consumer sunset），不再提供审查，已从仓库 GitHub App 卸载。本地测试全绿（含神圣不变式 `subagent_context_has_no_orchestrator_noise`）后可以开 PR，但不得在 CodeRabbit 审计 pending、request changes 或仍有阻塞意见时合并；必须等待审计完成、修复全部阻塞意见并取得通过状态，再由人工 review 决定是否合并。CodeRabbit 与任何临时审计 agent 均须遵守本守则的独立审计、可提己见、可质疑历史并查证三原则。
 
 ### 审计遗留项处理（2026-07-06 用户立）
 

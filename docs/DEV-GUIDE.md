@@ -12,7 +12,7 @@
 2. 运行 `git status --short --branch`，保留用户已有改动；不要把 ignored runtime data 当成仓库文档或清理目标。
 3. 阅读 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 和与任务直接相关的合同；用 `gh issue view <id>` 复核实时范围。
 4. 对任何“已实现”声明，先找到当前源码入口和测试；旧计划、issue 标题或 PR 描述不是运行时证据。
-5. 代码任务使用 `codex/` 分支和 PR；本地全绿只允许开 PR，不允许绕过审计 bot 或人工 review 合并。
+5. 代码任务使用 `codex/` 分支和 PR；本地全绿只允许开 PR，不允许绕过 CodeRabbit 审计或人工 review 合并。
 
 当前主线是 WebUI 单实例、自托管、单用户 P1 有限试用验证。每项产品能力优先纵向贯通：
 
@@ -220,9 +220,9 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 7. 工作流与审计
 
-- 代码改动：`codex/<scope>` 分支 → 相关本地测试 → PR → 审计 bot → 修复全部阻塞意见 → 人工 review 决定是否合并；
+- 代码改动：`codex/<scope>` 分支 → 相关本地测试 → PR → CodeRabbit 审计（`.coderabbit.yaml` 配置 `request_changes_workflow: true`） → 修复全部阻塞意见 → 人工 review 决定是否合并；
 - 审计必须独立判断，可提出不同设计并质疑历史；详细 charter 见根 `AGENTS.md`；
-- 审计 bot pending、失败或有阻塞意见时不得合并；
+- CodeRabbit 审计 pending、request changes 或有阻塞意见时不得合并；（Gemini Code Assist 已 sunset，已卸载）
 - PR 合并后，审计中未修的意见去重、分类并写入 GitHub issue；合并前不得提前创建最终遗留清单；
 - 只暂存明确文件，禁止 `git add .` / `git add -A`；
 - 不提交真实角色卡、聊天、Persona、世界书、API key、日志、缓存或本地路径；
@@ -233,7 +233,7 @@ Remove-Item Env:RUSTDOCFLAGS
 - manifest 使用有上界的兼容范围，lockfile 记录实际解析版本，CI 使用锁定安装；不要用无上界的 `>=` 让普通安装静默跨入未来主版本。
 - 自动检测器只比较当前锁定版本与上游最新稳定版本，不直接修改主分支，也不自动采用 prerelease。相同依赖和目标版本必须去重，避免重复 issue。
 - 新增普通第三方依赖或改变任何已解析版本（包括补丁版本）都必须核验上游来源、许可证、用途和分发义务；manifest 记录有界兼容范围，lockfile 固定实际版本与完整性，当前 provenance 同步到 [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)。
-- 补丁版本可由自动化创建 PR；PR 必须附上版本差异、上游 release/security 链接、依赖审计结果和按影响范围选择的门禁。自动 PR 仍受审计 bot 与人工 review 约束。
+- 补丁版本可由自动化创建 PR；PR 必须附上版本差异、上游 release/security 链接、依赖审计结果和按影响范围选择的门禁。自动 PR 仍受 CodeRabbit 审计与人工 review 约束。
 - 次版本或主版本变化（例如 `7.0 → 7.1`、`8 → 9`）必须先创建或更新 GitHub issue，审计 changelog、迁移/弃用、Node/Rust/平台下限、插件与运行时兼容性、许可证/provenance、安全公告、数据或构建产物变化，以及回滚路径；审计结论明确后再用独立 PR 升级。
 - `0.x` 依赖的次版本按主版本风险处理。即使只是补丁版本，只要涉及数据格式、网络/权限边界、密码学、构建/发布链或已知行为变化，也升级为 issue + 专项审计。
 - “发现有新版本”不是升级理由；升级 PR 要说明用户价值、风险、验证证据和不升级的后果。安全修复可提高优先级，但不得跳过兼容性验证。

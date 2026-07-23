@@ -17,7 +17,7 @@
 | 零件 | 来源 | 状态 | 说明 |
 |---|---|---|---|
 | 两平面物理隔离机制 | C `AGENT_BACKEND_PLAN.md:187-201` + `chat_pipeline.rs` | ✅ | 角色平面(RP数据)/控制平面(结构化 tool-calling)分离；orchestrator 只装 RP 数据，工具走 API 原生字段 |
-| 戒律#6 本地/PR CI 不变式 | C `tests::subagent_context_has_no_orchestrator_noise` | ✅ | 断言角色平面 prompt 无脚手架标记，违反即红。**必须随内核一起保留**；自动 PR gate + 审计 bot 阻塞复核 + 人工 review 承接 |
+| 戒律#6 本地/PR CI 不变式 | C `tests::subagent_context_has_no_orchestrator_noise` | ✅ | 断言角色平面 prompt 无脚手架标记，违反即红。**必须随内核一起保留**；自动 PR gate + CodeRabbit 审计阻塞复核 + 人工 review 承接 |
 | 六条有界 Agent 戒律 | C `README.md:39-46` | 📖 | 有界/可取消/可观测/最小授权/幂等隔离/上下文纯净。作我们引擎的设计律采纳 |
 | orchestrator 装配 | C `orchestrator/mod.rs` | ✅ | card→preset→gating→known→卷→lorebook 默认序；多角色 `build_multi_char_system_prompt`；schema min/max 渲染 `:289-302` |
 | chat_pipeline 三段式 | C `chat_pipeline.rs`（prepare `:296`/stream `:596`/finalize `:694`） | ✅ | 单回合流水线，被 agent loop 当库复用。AGENT_CLIENT_ASSESSMENT 认证"80% 后端已在此" |

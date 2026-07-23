@@ -125,7 +125,7 @@ npm run typecheck
 npm run test -- --run
 ```
 
-`.github/workflows/pr-gate.yml` 自动执行 Rust workspace、UI/WebUI 和既有 production topology 回归门禁。`.github/workflows/webui-windows-build.yml` 负责当前便携式 Windows WebUI artifact 与真实 Chrome 验收；`.github/workflows/manual-build.yml` 仅保留长期 Tauri 桌面构建。审计 bot 是合并前阻塞门禁：本地全绿只允许开 PR，必须等待审计通过并由人工 review 决定是否合并。
+`.github/workflows/pr-gate.yml` 自动执行 Rust workspace、UI/WebUI 和既有 production topology 回归门禁。`.github/workflows/webui-windows-build.yml` 负责当前便携式 Windows WebUI artifact 与真实 Chrome 验收；`.github/workflows/manual-build.yml` 仅保留长期 Tauri 桌面构建。CodeRabbit 审计（`.coderabbit.yaml` 配置 `request_changes_workflow: true`）是合并前阻塞门禁：本地全绿只允许开 PR，必须等待审计通过并由人工 review 决定是否合并。（Gemini Code Assist 已 sunset，已卸载）
 
 PR #232 最终 head `29b52fa` 的 [PR gate run 29645599733](https://github.com/GhostXia/AIRP/actions/runs/29645599733) 已通过 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 与 CodeRabbit，随后以代码树等价的 merge commit `main@2a14b7e` 合入。远端证据为 756 lib（740 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests、WebUI 97 tests、ui Vitest 98 tests、production topology 104 checks / 0 failures；本次校准本地复算 dep-governance 90 tests。证据只证明该 PR head 与对应合入代码树，不自动证明后续改动。
 
