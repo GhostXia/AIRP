@@ -1783,8 +1783,8 @@ jobs:
 ```
 
 注意：
-1. `bootstrap-topology.sh` 必须在 Task 9 Step 1 实施前从 `deploy/production/smoke-ci.sh` 抽取并落地为独立脚本：仅启 mock provider + TLS + 临时数据拓扑、等待 health ready 后返回（不阻塞、不跑 smoke），并支持 `--teardown` 子命令做幂等清理。本计划不展开其代码（避免文档过长），但 workflow 中已直接调用该脚本，缺失会导致 Step 1 失败。
-2. `post-pr-comment.mjs` 需在 Task 9 Step 2 创建。
+1. `bootstrap-topology.sh` 必须在 Task 9 Step 1 实施前从 `deploy/production/smoke-ci.sh` 抽取并落地为独立脚本：仅启 mock provider + TLS + 临时数据拓扑、等待 health ready 后返回（不阻塞、不跑 smoke），并支持 `--teardown` 子命令做幂等清理。本计划不展开其代码（避免文档过长），但 workflow 中已直接调用该脚本，缺失会导致 Step 1 失败。**B4 修复**：脚本必须以 git 可执行权限（100755）提交，否则 workflow `./bootstrap-topology.sh` 会因 Permission denied (exit 126) 失败。命令：`git update-index --chmod=+x deploy/production/bootstrap-topology.sh`。
+2. `post-pr-comment.mjs` 需在 Task 9 Step 2 创建。**B5 修复**：脚本必须先用 `fs.access` 检查 report 是否存在，不存在时优雅退出（exit 0 + 警告），不要让 `readFile` 抛 ENOENT 导致 step 失败——topology bootstrap 失败时 runner 不跑，report 不会生成，failure() placeholder step 已发占位评论。
 
 - [ ] **Step 2: 写 PR 评论发布脚本**
 
