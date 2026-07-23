@@ -249,3 +249,82 @@ if (run.tasks.some(t => t.result === 'Failed')) {
 
 **审计员**：M3.2（用户当前会话模型）
 **审计独立性声明**：本审计未阅读 PR #298 的审计报告，独立基于代码、测试运行结果和计划文件原文判断。
+
+---
+
+## 6. 复审裁决（2026-07-23，B1-B9 修复后）
+
+**复审模型**：GLM-5.2
+**复审范围**：PR #300 当前 HEAD `ca0452e`（含 B1-B9 全部修复 commits）
+**复审方法**：独立读源码验证 + CI 全绿证据 + CodeRabbit review 状态
+
+### 6.1 阻塞项修复独立验证
+
+| 阻塞项 | 修复 commit | 独立验证证据 | 结论 |
+|---|---|---|---|
+| B1 classifier path OR keyword | `f939631` | `classifier.mjs:43` `if (pathHit && keywordHit) hits.add(taskName);` — path AND keyword；`classifier.mjs:16-18` 注释说明 `/\bedit.*message/i` 为何去掉尾部 `\b`（避免不匹配 `edit_message`）；`classifier.test.mjs` 新增 3 个回归测试（path-only 不触发 / keyword-only 不触发 / 单 path 不触发），9/9 pass | ✓ 修复 |
+| B2 runner 永远 exit 0 | `f939631` | `runner.mjs:91-96` Failed 时 `process.exit(1)`；workflow `Publish failure placeholder comment` step `if: failure()` 接住并发占位评论 | ✓ 修复 |
+| B3 tracing 资源泄漏 | `f939631` | `runner.mjs:109-121` result 预初始化（保证 page.goto 失败时 catch/finally 仍可访问）；`runner.mjs:123` `tracingStopped` 标志；`runner.mjs:168-192` catch + finally 完整 try/catch 防御（tracing.stop 二次调用安全，context.close 失败不冒泡） | ✓ 修复 |
+
+### 6.2 后续 CI 修复独立验证（B4-B9，本审计首次记录）
+
+| 项 | 修复 commit | 独立验证证据 | 结论 |
+|---|---|---|---|
+| B4 bootstrap-topology.sh Permission denied | `af51749` | `git ls-files --stage` → `100755 ca08456 ...` — 可执行位已设 | ✓ 修复 |
+| B5 post-pr-comment.mjs ENOENT | `af51749` | `post-pr-comment.mjs:24-29` `fs.access` 预检 + 优雅 `process.exit(0)` + 警告说明 placeholder 已处理 | ✓ 修复 |
+| B6 docker pull access denied | `aaaf901` | workflow `Prepare .env for image build` + `Build pinned production images` step 在 Bootstrap 之前；bootstrap-topology.sh `docker run airp-gateway:0.1.0 hash-password` 可成功执行 | ✓ 修复 |
+| B7 /health not ready 无诊断 | `551b196` | `bootstrap-topology.sh:86-125` `wait_for_engine_ready` 失败时 dump engine + gateway + mock_provider 日志到 stderr；workflow Upload artifacts 包含 `deploy/production/*.log` | ✓ 修复 |
+| B8 secrets 权限 0600 致 engine 重启 | `4c460df` (方案 C) | `bootstrap-topology.sh:136` TLS 段 `umask 077`（保护私钥）；`bootstrap-topology.sh:152` secrets 段 `umask 022`（让 engine uid 65532 可读 bind-mount 的 secret） | ✓ 修复 |
+| B9 OPENAI_API_KEY 缺失 | `ca0452e` (方案 1+3 组合) | `llm-client.mjs:23` `FALLBACK_MODE = !API_KEY`（不再 exit 2）；`llm-client.mjs:47-70` 内置 minimal smoke 脚本；`runner.mjs:202-209` fallback 模式跳过 chatCompletion 与重试；workflow 移除 LLM key 预检 step 与所有 `if: configured == '1'` gate | ✓ 修复 |
+
+### 6.3 CI 全绿证据（独立来源）
+
+PR #300 最新 push (`ca0452e`) 触发的 statusCheckRollup：
+- `Agent Browser Exploration / explore` — **SUCCESS**（fallback 模式跑通完整链路：topology → runner → reporter → commenter）
+- `PR gate / Rust workspace` — SUCCESS
+- `PR gate / UI and WebUI` — SUCCESS
+- `PR gate / Production topology` — SUCCESS
+- `Windows WebUI package / Portable Windows WebUI` — SUCCESS
+- `CodeRabbit` — SUCCESS（review profile = CHILL，全部 COMMENTED 无 REQUEST_CHANGES，无阻塞意见）
+
+`mergeable=MERGEABLE`, `mergeStateStatus=CLEAN`。
+
+### 6.4 CodeRabbit 非阻塞建议
+
+CodeRabbit 共发布 8 条 actionable comments（profile = CHILL，全部 nitpick / trivial 级），分布在：
+- `classifier.test.mjs`（1）：建议用 `assert.deepEqual` 而非 `include` 校验
+- `action-protocol.mjs`（1）：建议 `validateAction` 加 action-specific 校验（Plan B 接入前必修）
+- `bootstrap-topology.sh`（1）：state file 并发隔离（与 N5 同源）
+- `runner.mjs`（1）：建议 `result` 初始化提前到 `browser.newContext()` 之前（B3 已部分修复，CodeRabbit 建议更彻底）
+- `docs/audits/2026-07-23-PR-300-agent-browser-exploration.md`（4）：建议更新审计报告自身描述（与 B1/B2 修复后的语义对齐）
+
+按 AGENTS.md「审计遗留项处理」规则，上述非阻塞意见与原 §2 N1-N5、§3 L1-L3 一并整理后转 issue（PR 合并后执行）。
+
+### 6.5 最终裁决
+
+**通过合并**。
+
+- 3 个阻塞项（B1-B3）全部修复，独立验证证据见 §6.1。
+- 6 个后续 CI 修复项（B4-B9）全部修复，独立验证证据见 §6.2。
+- CI 全绿（6 项 SUCCESS），CodeRabbit 无阻塞意见。
+- 原审计 §2 N1-N5、§3 L1-L3 + CodeRabbit 8 条 nitpick 全部归入"未改动但写出来的修改意见"，按 AGENTS.md 时序约束（PR 合并后）转 issue。
+
+**审计遗留项清单（合并后转 issue，去重后 8 条）**：
+
+| ID | 来源 | 模块 | 严重度 | 建议时机 | 摘要 |
+|---|---|---|---|---|---|
+| F-1 | 原 N1 + 原审计 §2 | webui | 低 | 桌面 UI 路线启动时 | `ui/src/agent-test.ts` v1 与 `webui/assets/agent-test-harness.js` v2 命名不一致，建议改名 `__AIRP_AGENT_TEST_LEGACY__` |
+| F-2 | 原 N2 + CodeRabbit | workflow | 中 | 阶段 2 第二轮 PR | workflow `paths` 过滤与 classifier `DIFF_TASK_MAP` paths 不一致（缺 `webui/assets/chat-space.js`、`engine/src/memory/**` 等），导致手动 diff 能触发但 PR 自动触发漏 |
+| F-3 | 原 N3 | tasks | 中 | LLM 阶段接入后 | 任务模块 `check` 函数全靠 5xx + console errors 兜底，缺直接 API 调用断言；建议 plan §2.4 加"check 必须含 1 个直接 API 证据"要求 |
+| F-4 | 原 N4 | reporter | 低 | 任意 PR | `reporter.mjs:60` console errors 只 `slice(0, 10)`，无 `... and N more` 提示 |
+| F-5 | 原 N5 + CodeRabbit | bootstrap | 中 | 阶段 2 并发 PR 出现前 | `bootstrap-topology.sh:39` state_file 用固定路径 `.bootstrap-topology.state`，并发 PR 时 teardown 会错杀对方拓扑；改为 `.bootstrap-topology.$smoke_id.state` 并透传 smoke_id |
+| F-6 | 原 L1 | reporter | 低 | 阶段 3 | plan §2.4 承诺"Agent 发现的问题可转固定 Playwright 回归测试"，reporter 缺 `regressionStub` 字段 |
+| F-7 | 原 L2 | runner | 低 | 阶段 3 | 缺 `--dry-run` 选项（零 LLM 成本验证 classifier + reporter） |
+| F-8 | 原 L3 | ui | 低 | 桌面 UI 路线启动时 | 桌面 ui harness 升级无 owner，建议关联 issue #130 |
+| F-9 | CodeRabbit | classifier.test | 低 | 任意 PR | 测试用 `assert.include` 而非 `assert.deepEqual`，无法校验精确任务集 |
+| F-10 | CodeRabbit | action-protocol | 中 | 方案 B 接入前 | `validateAction` 缺 action-specific 必填字段校验 + navigation allow-list |
+| F-11 | CodeRabbit | runner | 低 | 任意 PR | B3 修复已收敛异常路径，CodeRabbit 建议更彻底把 `result` 初始化提到 `browser.newContext()` 之前 |
+| F-12 | CodeRabbit | 审计报告自身 | 低 | 已随本复审裁决修复 | 审计报告 §B.1/§B.2 描述需与 B1/B2 修复后语义对齐（本节 §6.1 已替代） |
+
+**复审员**：GLM-5.2
+**复审独立性声明**：本次复审独立基于当前 HEAD 源码 + CI 状态 + CodeRabbit review 输出，未将原审计 §1-§5 结论视为不可质疑的前提。
