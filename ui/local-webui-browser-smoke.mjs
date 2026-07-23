@@ -36,7 +36,7 @@ try {
   assert.equal(await page.locator('#console-nav .nav-link').count() >= 10, true);
 
   for (const path of [
-    '03-workbench.html', '04-world-book.html', '05-presets-models.html',
+    '03-workbench.html', '04-world-book.html', '05-presets.html',
     '06-user-persona.html', '07-agent-runs.html', '08-settings.html',
     '17-memory-state.html', '18-group-chat.html', '19-branch-tree.html',
     '20-assembly-preview.html', '21-usage-quota.html', '22-backup-restore.html',

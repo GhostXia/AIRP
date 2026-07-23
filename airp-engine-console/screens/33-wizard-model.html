@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>33 向导·模型选择 · AIRP 控制台样板</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/base.css">
+<link rel="stylesheet" href="../assets/components.css">
+<style>
+  .wizard-body { flex: 1; overflow-y: auto; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 24px; }
+  .steps { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px 28px; }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-tertiary); }
+  .step .no { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-pill); border: 1.5px solid var(--border-default); font-size: 11px; font-family: var(--font-mono); }
+  .step.done { color: var(--success); }
+  .step.done .no { background: var(--success); border-color: var(--success); color: #fff; }
+  .step.now { color: var(--primary-strong); font-weight: 600; }
+  .step.now .no { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .wizard-card { width: 100%; max-width: 1200px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-modal); padding: 28px 32px; display: flex; flex-direction: column; gap: 16px; }
+  .wizard-foot { display: flex; align-items: center; justify-content: space-between; }
+  .wizard-note { font-size: 11px; color: var(--text-tertiary); }
+  .picker-group { display: flex; flex-direction: column; gap: 8px; }
+  .model-picker { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-input); }
+  .model-picker .mp-arrow { font-family: var(--font-body); font-size: 12px; color: var(--text-tertiary); }
+  .fail-row { display: flex; gap: 12px; align-items: center; }
+  .fail-code { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--danger); }
+  .fail-desc { font-size: 11px; color: var(--text-secondary); flex: 1; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-block">A</span>
+      <span class="product-name">AIRP 控制台</span>
+      <span class="topbar-divider"></span>
+      <span class="crumb">首次启动向导</span>
+    </div>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text-tertiary)">跳过向导</span>
+    </div>
+  </header>
+
+  <div class="wizard-body">
+    <!-- 步骤条（复用 16 的 .step + .no） -->
+    <div class="steps">
+      <div class="step done"><span class="no">✓</span>部署检查</div>
+      <div class="step done"><span class="no">✓</span>Provider 配置</div>
+      <div class="step now"><span class="no">3</span>模型验证</div>
+      <div class="step"><span class="no">4</span>角色导入</div>
+      <div class="step"><span class="no">5</span>人设与预设</div>
+      <div class="step"><span class="no">6</span>首轮对话</div>
+    </div>
+
+    <!-- 向导卡（复用 16 的 .wizard-card） -->
+    <div class="wizard-card">
+      <div>
+        <h1 class="t-title" style="font-size:17px">第 3 步 · 验证并选择模型</h1>
+        <p class="t-sub">endpoint/key 已保存，engine 已从 /v1/models 拉取上游模型列表（显示原始 id）。</p>
+      </div>
+
+      <!-- 成功态 -->
+      <div class="picker-group">
+        <span class="status-pill ok"><i class="dot"></i>连接验证通过 · 已拉取 27 个模型</span>
+        <div class="model-picker">
+          <span>openai-main/gpt-4o</span>
+          <span class="mp-arrow">▾</span>
+        </div>
+      </div>
+
+      <!-- 失败降级态 -->
+      <div class="fail-row">
+        <span class="fail-code">code: upstream · 拉取超时 3.2s</span>
+        <span class="fail-desc">拉取失败时可回「上一步」手输模型 id；不阻塞继续向导。</span>
+      </div>
+
+      <!-- 底部按钮 -->
+      <div class="wizard-foot">
+        <button class="btn btn-secondary">← 上一步</button>
+        <button class="btn btn-primary">使用所选模型，下一步 →</button>
+      </div>
+    </div>
+
+    <p class="wizard-note">方案 A：endpoint/key 保存后由 engine 拉取 /v1/models；picker 与设置页同源组件。</p>
+  </div>
+</div>
+<script src="../assets/screens.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

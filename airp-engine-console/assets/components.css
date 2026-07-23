@@ -461,3 +461,83 @@
 /* ============ 20. 页面标题行（主区通用） ============ */
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .page-head .ph-actions { display: flex; gap: 8px; }
+
+/* ============ 21. NL enhance 区（03/04，规划中·契约未交付） ============ */
+.nl-zone {
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-card); padding: 20px;
+}
+.nl-zone .nl-head { display: flex; align-items: center; justify-content: space-between; }
+.nl-zone .nl-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.nl-zone .nl-planned-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--bg-subtle); border-radius: var(--radius-pill);
+  padding: 2px 8px; font-size: 10px; font-weight: 500; color: var(--text-tertiary);
+}
+.nl-zone .nl-input-row { display: flex; gap: 10px; align-items: flex-start; }
+.nl-zone .nl-input {
+  flex: 1; min-height: 54px;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-input); padding: 10px 12px;
+  font-size: 12px; color: var(--text-tertiary);
+}
+.nl-zone .nl-diff-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.nl-zone .nl-confirm { display: flex; align-items: center; gap: 8px; }
+.nl-zone .nl-note { font-size: 10px; color: var(--text-tertiary); }
+
+/* ============ 22. diff 视图（NL 区内嵌） ============ */
+.diff-block { display: flex; flex-direction: column; gap: 2px; }
+.diff-line {
+  display: flex; padding: 6px 10px;
+  border-radius: var(--radius-input);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+}
+.diff-line.del { background: var(--danger-tint); color: var(--danger); }
+.diff-line.add { background: var(--success-tint); color: var(--success); }
+.diff-line.del::before { content: "- "; }
+.diff-line.add::before { content: "+ "; }
+
+/* ============ 23. JSON 高级折叠区 ============ */
+.json-advanced {
+  display: flex; flex-direction: column;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+}
+.json-advanced .ja-bar {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-subtle); border-radius: var(--radius-card) var(--radius-card) 0 0;
+  padding: 12px; cursor: pointer;
+}
+.json-advanced .ja-bar .ja-arrow { font-size: 12px; color: var(--text-tertiary); }
+.json-advanced .ja-bar .ja-title { font-size: 12px; font-weight: 500; color: var(--text-secondary); flex: 1; }
+.json-advanced .ja-bar .ja-state { font-size: 10px; color: var(--text-tertiary); }
+.json-advanced .ja-body { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+.json-advanced .ja-warn {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--warning-tint); border-radius: var(--radius-input);
+  padding: 10px 12px; font-size: 11px; color: var(--warning);
+}
+.json-advanced .ja-code {
+  background: var(--bg-subtle); border-radius: var(--radius-input);
+  padding: 12px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap;
+}
+.json-advanced .ja-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ============ 24. 行内操作列 + combobox ============ */
+.op-col { display: flex; align-items: center; gap: 8px; }
+.op-col .op-link { font-size: 12px; font-weight: 500; color: var(--text-secondary); cursor: pointer; }
+.op-col .op-link.del { color: var(--danger); }
+.op-col .op-link:hover { color: var(--primary); }
+.op-col .op-link.del:hover { color: var(--danger); filter: brightness(0.85); }
+
+/* Combobox（model picker 降级态） */
+.combobox {
+  width: 100%;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-input); padding: 9px 12px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-primary);
+}
+.combobox.error-state { border-color: var(--danger); }
+.combobox-error { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--danger); }

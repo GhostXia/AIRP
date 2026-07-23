@@ -1,7 +1,7 @@
 # AIRP 控制台 · 权威样板规范（STYLEGUIDE）
 
 本目录是 AIRP 控制台前端的**权威视觉样板**（golden sample）。它与 Ardot 设计稿
-「AIRP Engine Console」（32 屏）逐屏对应，是派生 **WebUI** 与 **桌面端 UI** 的
+「AIRP Engine Console」（32 屏，编号至 33，缺 32）逐屏对应，是派生 **WebUI** 与 **桌面端 UI** 的
 视觉母本。后续 WebUI 与桌面端临时 UI 均须基于本样板开发。派生实现必须逐像素对齐
 本样板；与本样板冲突时，以本样板为准并回写 issue。
 
@@ -19,8 +19,8 @@ airp-engine-console/
 │   ├── components.css    # 共享组件类（全部界面的零件盒）
 │   ├── screens.js        # 屏清单注册表（增删屏的唯一注册点）
 │   └── app.js            # 样板脚手架：右下角返回导航贴片（非设计内容，勿携带）
-├── screens/              # 31 屏，每屏一个独立 HTML，编号与画布画板一致
-│   ├── 01-role-list.html … 31-message-types.html
+├── screens/              # 32 屏（编号至 33，缺 32），每屏一个独立 HTML
+│   ├── 01-role-list.html … 33-wizard-model.html
 └── exports/              # 设计稿归档（32 屏 PDF + 流转图 PNG），只读参照
 ```
 
@@ -88,6 +88,11 @@ airp-engine-console/
 | 模态 | `.modal-mask` `.modal` | 13/15 |
 | 工具调用卡 | `.tool-card(.pending)` | 07 |
 | 覆盖项行 | `.override-row` | 11 |
+| NL enhance 区 | `.nl-zone` `.nl-planned-tag` `.nl-diff-label` `.nl-confirm` `.nl-note` | 03/04（规划中·契约未交付） |
+| diff 视图 | `.diff-block` `.diff-line(.del/.add)` | 03/04 NL 区内 |
+| JSON 高级折叠区 | `.json-advanced` `.ja-bar` `.ja-body` `.ja-warn` `.ja-code` `.ja-actions` | 03/04 |
+| 行内操作列 | `.op-col` `.op-link(.del)` | 04 表格操作列 |
+| Combobox | `.combobox(.error-state)` `.combobox-error` | 08 降级态 |
 | 头像色相 | `.avatar.hue-violet/green/blue/red/amber` | 01/18 |
 
 图标目前用文字/符号占位（`.ico`）。派生实现应替换为统一图标库（描边 1.5px、
@@ -143,6 +148,9 @@ airp-engine-console/
   核心流的一部分，不是可选抛光项。
 - 规划预留屏（18/19/24，清单中 `planned: true`）只定义视觉与信息架构，
   不承诺当前能力，派生实现可后置。
+- **边界约定**：08「设置」管理 LLM Provider 底层连接（endpoint/key/picker），是引擎
+  全局配置的唯一入口；25「笔记与连接」管理角色/场景绑定的 profile 打包，属于场景级。
+  两者不可交叉——08 不做角色绑定，25 不做 key 管理。
 - 数据安全语义（不可视觉降级）：密钥不回显、partially_committed 禁止盲重发、
   危险操作二次确认（15）、破坏性 tool_call 需控制台确认（07）。
 
@@ -151,4 +159,4 @@ airp-engine-console/
 - 设计稿：Ardot「AIRP Engine Console」file id 706339765412318；
   每屏的 `design` 字段（screens.js）记录画板节点 ID。
 - 令牌来源：画布变量集「AIRP Tokens / Light」（2026-07-22 fetch_variables）。
-- 归档：`exports/AIRP Engine Console.pdf`（32 屏）、`exports/13_1.png`（流转图）。
+- 归档：`exports/AIRP Engine Console.pdf`（33 屏）、`exports/13_1.png`（流转图）。

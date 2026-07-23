@@ -189,22 +189,49 @@
     return values.map(item => typeof item === 'string' ? item : item && (item.id || item.name)).filter(Boolean);
   }
 
+  function errorCode(error) {
+    return error && error.data && error.data.error && error.data.error.code || '';
+  }
+
   async function renderModels() {
-    card.append(head('验证模型连接', '通过 Engine 请求 Provider 的模型目录，验证端点与密钥确实可用。'));
+    card.append(head('验证模型连接', '通过 Engine 请求 Provider 的模型目录，验证端点与密钥确实可用；可直接从目录选择模型（显示上游原始 id）。'));
     const content = node('div', 'wizard-content'); card.appendChild(content);
     const retry = button('重新验证', render);
-    const next = button('下一步 →', () => go(4), 'btn-primary'); next.disabled = true;
+    const next = button('下一步 →', () => go(4), 'btn-primary');
+    // 拉取失败不阻塞：用户已在第 2 步手填模型 ID（决策：降级可手敲）。
     card.appendChild(footer({ actions: [retry, next] }));
     try {
       setStatus('正在请求 Provider 模型目录…');
       const raw = await client.request('GET', '/v1/models');
       const models = modelItems(raw);
       const check = node('div', 'wizard-check ok'); check.append(node('span', '', 'Provider 验证通过'), node('code', '', models.length ? models.length + ' 个模型' : 'HTTP 200')); content.appendChild(check);
-      if (models.length) content.appendChild(node('pre', 'wizard-output', models.slice(0, 12).join('\n') + (models.length > 12 ? '\n…' : '')));
-      next.disabled = false;
+      if (models.length) {
+        const current = state.settings && state.settings.model || '';
+        const picker = field('从目录选择模型', models.includes(current) ? current : models[0], { select: models.map(id => ({ value: id, label: id })) });
+        content.appendChild(picker.wrap);
+        const use = button('使用所选模型', async () => {
+          setBusy(use, true, '正在保存…');
+          try {
+            state.settings = await client.request('POST', '/v1/settings', { model: picker.control.value });
+            setEngine('ok', '模型已更新：' + picker.control.value);
+            setStatus('模型已保存为 ' + picker.control.value + '。');
+          } catch (error) { setStatus('保存失败：' + errorMessage(error), true); }
+          finally { setBusy(use, false, '正在保存…'); }
+        }, 'btn-primary');
+        content.appendChild(use);
+      } else {
+        content.appendChild(node('p', 'wizard-muted', '上游未返回模型目录；可保持第 2 步手填的模型 ID 直接继续。'));
+      }
       setEngine('ok', '模型连接已验证');
-      setStatus('模型验证通过。');
-    } catch (error) { showFailure(content, error); setEngine('warn', 'Provider 验证失败'); }
+      if (!models.length) setStatus('模型验证通过。');
+    } catch (error) {
+      const code = errorCode(error);
+      const warn = node('div', 'wizard-check warn');
+      warn.append(node('span', '', '模型目录拉取失败' + (code ? '：' + code : '')), node('code', '', '可返回上一步手输模型 ID，不影响继续'));
+      content.appendChild(warn);
+      showFailure(content, error);
+      setEngine('warn', 'Provider 验证失败');
+    }
   }
 
   function bytesToBase64(bytes) {
@@ -261,7 +288,7 @@
       content.append(persona.wrap, preset.wrap, node('p', 'wizard-muted', '当前单用户 WebUI 会把 Persona 的姓名和变量带入请求；完整绑定关系可稍后在 Persona 页面管理。'));
       const links = node('div', 'wizard-links');
       const personaLink = node('a', '', '管理 Persona →'); personaLink.href = '06-user-persona.html?character=' + encodeURIComponent(state.characterId);
-      const presetLink = node('a', '', '管理预设 →'); presetLink.href = '05-presets-models.html?character=' + encodeURIComponent(state.characterId);
+      const presetLink = node('a', '', '管理预设 →'); presetLink.href = '05-presets.html?character=' + encodeURIComponent(state.characterId);
       links.append(personaLink, presetLink); content.appendChild(links);
       const next = button('下一步 →', async () => {
         setBusy(next, true, '正在准备…');

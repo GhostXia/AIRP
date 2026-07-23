@@ -73,7 +73,7 @@ test('chat space exposes session, history and streaming controls', () => {
 test('every shipped screen is compatible with the Engine CSP', async () => {
   const directory = new URL('../screens/', import.meta.url);
   const files = (await readdir(directory)).filter(name => name.endsWith('.html'));
-  assert.equal(files.length, 31);
+  assert.equal(files.length, 32);
   for (const file of files) {
     const html = await readFile(new URL(file, directory), 'utf8');
     assert.doesNotMatch(html, /\sstyle\s*=/i, file + ' contains an inline style');
@@ -83,11 +83,31 @@ test('every shipped screen is compatible with the Engine CSP', async () => {
 });
 
 test('operational console pages load the shared real-backend runtime', async () => {
-  for (const file of ['03-workbench.html', '04-world-book.html', '05-presets-models.html', '06-user-persona.html', '07-agent-runs.html', '08-settings.html', '17-memory-state.html', '18-group-chat.html', '19-branch-tree.html', '20-assembly-preview.html', '21-usage-quota.html', '22-backup-restore.html', '23-diagnostics.html', '24-plugins.html', '25-notes-connections.html']) {
+  for (const file of ['03-workbench.html', '04-world-book.html', '05-presets.html', '06-user-persona.html', '07-agent-runs.html', '08-settings.html', '17-memory-state.html', '18-group-chat.html', '19-branch-tree.html', '20-assembly-preview.html', '21-usage-quota.html', '22-backup-restore.html', '23-diagnostics.html', '24-plugins.html', '25-notes-connections.html']) {
     const html = await readFile(new URL('../screens/' + file, import.meta.url), 'utf8');
     assert.match(html, /assets\/api-client\.js/);
     assert.match(html, /assets\/console-runtime\.js/);
     assert.match(html, /id="engine-status" role="status"/);
     assert.doesNotMatch(html, /assets\/app\.js/);
   }
+});
+
+test('console-runtime implements #304 new UI components', async () => {
+  const rt = await readFile(new URL('../assets/console-runtime.js', import.meta.url), 'utf8');
+  // NL enhance zone with disabled button
+  assert.match(rt, /nl-zone/, 'missing NL zone');
+  assert.match(rt, /nl-planned-tag/, 'missing NL planned tag');
+  assert.match(rt, /nlGenBtn.*disabled = true/, 'NL generate button must be disabled');
+  // JSON advanced fold
+  assert.match(rt, /json-advanced/, 'missing JSON advanced fold');
+  assert.match(rt, /ja-bar/, 'missing JA bar');
+  // Worldbook switch component
+  assert.match(rt, /switch on.*switch/, 'missing .switch toggle in worldbook');
+  // Model pill neutral (not false ok)
+  assert.match(rt, /status-pill neutral/, 'model pill must be neutral');
+  assert.doesNotMatch(rt, /status-pill ok.*已拉取/, 'model pill must not show false ok');
+  // Combobox class on fallback input
+  assert.match(rt, /combobox/, 'missing combobox class');
+  // 05 presets must NOT contain model management
+  assert.doesNotMatch(rt, /renderPresets[\s\S]*?Provider 模型/, 'presets page must not render model card');
 });

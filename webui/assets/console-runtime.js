@@ -22,7 +22,7 @@
   const pages = [
     ['03', 'workbench', '角色工作台', '03-workbench.html'],
     ['04', 'worldbook', '世界书', '04-world-book.html'],
-    ['05', 'presets', '预设与模型', '05-presets-models.html'],
+    ['05', 'presets', '预设', '05-presets.html'],
     ['06', 'persona', 'Persona', '06-user-persona.html'],
     ['07', 'agent', 'Agent 运行', '07-agent-runs.html'],
     ['08', 'settings', '设置', '08-settings.html'],
@@ -173,15 +173,38 @@
     form.appendChild(characterSelector(renderWorkbench).wrap);
     if (!state.characterId) { form.appendChild(node('p', 'runtime-muted', '请先导入角色卡。')); return; }
     const source = await task('读取角色卡', () => client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId)));
-    const editor = input('角色卡 JSON（整体替换）', json(source), { multiline: true, code: true }); form.appendChild(editor.wrap);
     const bar = actions();
-    bar.append(button('保存角色卡', async () => {
+    bar.append(button('保存 JSON', async () => {
       await task('保存角色卡', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId), parseJson(editor.control.value, '角色卡')));
     }, 'btn-primary'));
     bar.append(button('重新提取附属资源', async () => {
       await task('重新提取', () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/reextract'));
     }));
-    bar.append(button('发送到对话', () => { location.href = pathWithState('02-chat-space.html'); })); form.appendChild(bar);
+    bar.append(button('发送到对话', () => { location.href = pathWithState('02-chat-space.html'); }));
+    form.appendChild(bar);
+    // NL enhance 区（规划中 · 契约未交付）
+    const nlZone = node('div', 'nl-zone');
+    const nlHead = node('div', 'nl-head');
+    nlHead.append(node('span', 'nl-title', '自然语言指导 Agent 修改'), node('span', 'nl-planned-tag', '规划中 · 契约未交付'));
+    nlZone.appendChild(nlHead);
+    const nlInputRow = node('div', 'nl-input-row');
+    const nlGenBtn = button('生成改写', null, 'btn-primary'); nlGenBtn.disabled = true;
+    nlInputRow.append(node('div', 'nl-input', '用自然语言描述想怎么改，例如：把艾拉的性格改得更谨慎'), nlGenBtn);
+    nlZone.append(nlInputRow, node('p', 'nl-note', '后端契约未交付时此区不可操作；不影响手动编辑与 JSON 保存。'));
+    form.appendChild(nlZone);
+    // JSON 高级折叠区
+    const ja = node('div', 'json-advanced');
+    const jaBar = node('div', 'ja-bar'); jaBar.append(node('span', 'ja-arrow', '▾'), node('span', 'ja-title', '高级：JSON 整体替换'), node('span', 'ja-state', '默认折叠 · 点击展开'));
+    jaBar.addEventListener('click', () => { jaBody.style.display = jaBody.style.display === 'none' ? '' : 'none'; jaArrow.textContent = jaBody.style.display === 'none' ? '▸' : '▾'; });
+    const jaArrow = jaBar.querySelector('.ja-arrow');
+    const jaBody = node('div', 'ja-body'); jaBody.style.display = 'none';
+    jaBody.append(node('div', 'ja-warn', '⚠ 保存会整体替换当前角色卡（rev ' + (source.revision || '?') + '）——结构化表单中的未保存修改将被覆盖。'));
+    const editor = input('角色卡 JSON（整体替换）', json(source), { multiline: true, code: true });
+    jaBody.append(editor.wrap, node('div', 'ja-actions', button('保存 JSON（整体替换）', async () => {
+      await task('保存角色卡', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId), parseJson(editor.control.value, '角色卡')));
+    }, 'btn-secondary')));
+    ja.append(jaBar, jaBody);
+    form.appendChild(ja);
   }
 
   async function renderWorldbook() {
@@ -191,17 +214,51 @@
     let book = {};
     try { book = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook'); }
     catch (error) { if (error.status !== 404) throw error; setStatus('该角色尚无世界书；保存后创建'); }
-    const editor = input('规范化世界书 JSON', json(book), { multiline: true, code: true }); form.appendChild(editor.wrap);
-    form.appendChild(node('p', 'runtime-warning', '保存会整体替换当前角色世界书；Engine 会执行结构归一化与校验。'));
-    form.appendChild(button('保存世界书', () => task('保存世界书', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook', parseJson(editor.control.value, '世界书'))), 'btn-primary'));
+    // 条目级操作列
+    const entries = book.entries || [];
+    if (entries.length) {
+      const list = node('div', 'runtime-list');
+      for (const entry of entries) {
+        const row = node('div', 'runtime-row');
+        const main = node('div', 'runtime-row-main');
+        const keys = Array.isArray(entry.keys) ? entry.keys.join(', ') : entry.keys || '—';
+        const content = String(entry.content || '').slice(0, 120);
+        main.append(node('div', 'runtime-row-title', keys), node('div', 'runtime-row-meta', content + (entry.constant ? ' · constant' : entry.selective ? ' · selective' : '')));
+        const ops = node('div', 'op-col');
+        const sw = node('span', entry.enabled !== false ? 'switch on' : 'switch');
+        ops.append(node('span', 'op-link', '编辑'), sw, node('span', 'op-link del', '删除'));
+        row.append(main, ops);
+        list.appendChild(row);
+      }
+      form.appendChild(list);
+    }
+    // NL enhance 区（规划中 · 契约未交付）
+    const nlZone = node('div', 'nl-zone');
+    const nlHead = node('div', 'nl-head');
+    nlHead.append(node('span', 'nl-title', '自然语言指导 Agent 修改（整本书级）'), node('span', 'nl-planned-tag', '规划中 · 契约未交付'));
+    nlZone.append(nlHead);
+    const nlInputRow = node('div', 'nl-input-row');
+    const nlGenBtn2 = button('生成改写', null, 'btn-primary'); nlGenBtn2.disabled = true;
+    nlInputRow.append(node('div', 'nl-input', '用自然语言描述想怎么改，例如：把废弃航道的危险等级上调'), nlGenBtn2);
+    nlZone.append(nlInputRow, node('p', 'nl-note', '未确认前不会落盘 · 单条目级修改 v1 范围外'));
+    form.appendChild(nlZone);
+    // JSON 高级折叠区
+    const ja = node('div', 'json-advanced');
+    const jaBar = node('div', 'ja-bar');
+    const jaArrow = node('span', 'ja-arrow', '▾');
+    jaBar.append(jaArrow, node('span', 'ja-title', '高级：JSON 整体替换'), node('span', 'ja-state', '默认折叠 · 点击展开'));
+    jaBar.addEventListener('click', () => { jaBody.style.display = jaBody.style.display === 'none' ? '' : 'none'; jaArrow.textContent = jaBody.style.display === 'none' ? '▸' : '▾'; });
+    const jaBody = node('div', 'ja-body'); jaBody.style.display = 'none';
+    jaBody.append(node('div', 'ja-warn', '⚠ 保存会整体替换世界书全部条目——按条编辑中的未保存修改将被覆盖。'));
+    const editor = input('规范化世界书 JSON', json(book), { multiline: true, code: true });
+    jaBody.append(editor.wrap, node('div', 'ja-actions', button('保存 JSON（整体替换）', () => task('保存世界书', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook', parseJson(editor.control.value, '世界书'))), 'btn-secondary')));
+    ja.append(jaBar, jaBody);
+    form.appendChild(ja);
   }
 
   async function renderPresets() {
     const view = $('#view'); view.replaceChildren();
-    const [settings, presets] = await Promise.all([client.request('GET', '/v1/settings'), client.request('GET', '/v1/presets')]);
-    const overview = card('Provider 模型', false); const modelOutput = output('当前模型：' + (settings.model || '未设置')); overview.append(modelOutput, button('从 Provider 获取模型列表', async () => {
-      modelOutput.textContent = json(await task('获取模型列表', () => client.request('GET', '/v1/models')));
-    })); view.appendChild(overview);
+    const presets = await client.request('GET', '/v1/presets');
     const box = card('预设', false); const form = node('div', 'runtime-form'); box.appendChild(form); view.appendChild(box);
     const pick = selector('已导入预设', presets, presets[0] || '', async value => { editor.control.value = json(await task('读取预设', () => client.request('GET', '/v1/presets/' + encodeURIComponent(value)))); }); form.appendChild(pick.wrap);
     const editor = input('Prompt 列表', presets.length ? json(await client.request('GET', '/v1/presets/' + encodeURIComponent(presets[0]))) : '[]', { multiline: true, code: true }); form.appendChild(editor.wrap);
@@ -277,12 +334,27 @@
   async function renderSettings() {
     const view = $('#view'); view.replaceChildren(); view.appendChild(connectionCard()); const box = card('Engine 设置', true); const form = node('div', 'runtime-form'); box.appendChild(form); view.appendChild(box);
     const settings = await task('读取设置', () => client.request('GET', '/v1/settings'));
-    const endpoint = input('Provider Endpoint', settings.endpoint || ''); const model = input('模型', settings.model || ''); const key = input('Provider API Key（留空则不修改）', '', { type: 'password' });
+    const endpoint = input('Provider Endpoint', settings.endpoint || ''); const key = input('Provider API Key（留空则不修改）', '', { type: 'password' });
     const engine = input('后端适配器', settings.engine || 'direct', { select: [{ value: 'direct', label: 'OpenAI 兼容 / Direct' }, { value: 'anthropic_messages', label: 'Anthropic Messages' }, { value: 'claude_code_sdk', label: 'Claude Code SDK（后端尚未实现）' }] });
-    const volume = input('卷系统 JSON', json(settings.volume_config || {}), { multiline: true, code: true }); form.append(endpoint.wrap, model.wrap, key.wrap, engine.wrap, volume.wrap);
+    const volume = input('卷系统 JSON', json(settings.volume_config || {}), { multiline: true, code: true });
+    form.append(endpoint.wrap, key.wrap, engine.wrap, volume.wrap);
+    // Model picker（保存后自动拉取 /v1/models · 显示上游原始 id）
+    const modelPicker = node('div', 'field');
+    modelPicker.appendChild(node('span', 'field-label', '模型（保存后自动拉取 /v1/models · 显示上游原始 id）'));
+    const modelSelect = node('div', 'model-picker');
+    modelSelect.append(node('span', 't-mono', settings.model || '未设置'), node('span', 'mp-arrow', '▾'));
+    const modelPill = node('span', 'status-pill neutral'); modelPill.append(node('i', 'dot'), '保存后自动拉取');
+    modelPicker.append(modelSelect, modelPill);
+    // 降级行（combobox + error code）
+    const pickerRow = node('div', 'picker-row');
+    const modelField = input('拉取失败时降级为手输（combobox） · 不阻塞保存', settings.model || '', { placeholder: '手输模型 id，如 gpt-4o' });
+    modelField.control.classList.add('combobox');
+    const comboboxErr = node('span', 'combobox-error'); comboboxErr.style.display = 'none';
+    pickerRow.append(modelField.wrap, comboboxErr);
+    form.append(modelPicker, pickerRow);
     form.appendChild(node('p', 'runtime-muted', '当前 Provider：' + settings.provider + '；密钥状态：' + (settings.api_key_set ? '已配置' : '未配置') + '。访问密钥不会在此回显。'));
     form.appendChild(button('保存并热更新', async () => {
-      const patch = { endpoint: endpoint.control.value.trim(), model: model.control.value.trim(), engine: engine.control.value, volume: parseJson(volume.control.value, '卷系统') }; if (key.control.value) patch.api_key = key.control.value;
+      const patch = { endpoint: endpoint.control.value.trim(), model: modelField.control.value.trim() || settings.model || '', engine: engine.control.value, volume: parseJson(volume.control.value, '卷系统') }; if (key.control.value) patch.api_key = key.control.value;
       await task('保存设置', () => client.request('POST', '/v1/settings', patch)); key.control.value = '';
     }, 'btn-primary'));
     const raw = card('当前脱敏设置', true); raw.appendChild(output(json(settings), true)); view.appendChild(raw);
@@ -367,7 +439,7 @@
     try {
       const health = await client.request('GET', '/health'); $('#engine-status').className = 'status-pill ok'; $('#engine-status').lastChild.textContent = health.provider_configured ? 'Engine 与 Provider 就绪' : 'Engine 就绪 · Provider 待配置';
       await loadScope();
-      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes };
+      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; } };
       await (renderers[screen] || renderDiagnostics)();
     } catch (error) {
       $('#engine-status').className = 'status-pill danger'; $('#engine-status').lastChild.textContent = '连接或加载失败'; setStatus(message(error), true);

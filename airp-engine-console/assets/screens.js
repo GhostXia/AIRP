@@ -18,7 +18,7 @@ const AIRP_SCREENS = [
   { id: "02", slug: "chat-space",         title: "对话空间",       group: "main",  design: "2:224", file: "screens/02-chat-space.html" },
   { id: "03", slug: "workbench",          title: "工作台",         group: "main",  design: "2:311", file: "screens/03-workbench.html" },
   { id: "04", slug: "world-book",         title: "世界书",         group: "main",  design: "6:40",  file: "screens/04-world-book.html" },
-  { id: "05", slug: "presets-models",     title: "预设与模型",     group: "main",  design: "6:120", file: "screens/05-presets-models.html" },
+  { id: "05", slug: "presets",           title: "预设",           group: "main",  design: "6:120", file: "screens/05-presets.html" },
   { id: "06", slug: "user-persona",       title: "用户人设",       group: "main",  design: "6:197", file: "screens/06-user-persona.html" },
   { id: "07", slug: "agent-runs",         title: "Agent 运行",     group: "main",  design: "6:264", file: "screens/07-agent-runs.html" },
   { id: "08", slug: "settings",           title: "设置",           group: "main",  design: "7:35",  file: "screens/08-settings.html" },
@@ -41,6 +41,7 @@ const AIRP_SCREENS = [
   { id: "23", slug: "diagnostics",        title: "诊断中心",       group: "ext",   design: "8:457", file: "screens/23-diagnostics.html" },
   { id: "24", slug: "plugins",            title: "插件技能",       group: "ext",   design: "8:532", file: "screens/24-plugins.html",       planned: true },
   { id: "25", slug: "notes-connections",  title: "笔记与连接",     group: "ext",   design: "8:575", file: "screens/25-notes-connections.html" },
+  { id: "33", slug: "wizard-model",       title: "向导·模型选择",  group: "ext",   design: "30:91", file: "screens/33-wizard-model.html" },
   // ---- 状态变体 ----
   { id: "26", slug: "chat-empty",         title: "对话·空状态",     group: "state", design: "10:1",   file: "screens/26-chat-empty.html" },
   { id: "27", slug: "chat-reconnect",     title: "对话·断流恢复",   group: "state", design: "10:26",  file: "screens/27-chat-reconnect.html" },
@@ -60,5 +61,7 @@ const AIRP_FLOWS = [
   ["06", "20", "solid"], ["17", "20", "solid"],
   ["05", "20", "solid"], ["25", "20", "solid"],
   ["01", "13", "dashed"],
+  ["12", "04", "dashed"],
+  ["16", "33", "dashed"],
   ["02", "26", "dashed"], ["02", "27", "dashed"], ["02", "28", "dashed"],
 ];

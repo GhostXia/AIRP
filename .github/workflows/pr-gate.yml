@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust:
-    name: Rust workspace
+  rust-lint:
+    name: Rust lint (fmt + clippy)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -26,6 +26,17 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -40,16 +51,76 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Rustdoc
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps --locked
+  rust-test:
+    name: Rust test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: Prepare Tauri engine sidecar
+        shell: pwsh
+        run: |
+          cargo build -p airp-core --bin airp-core --locked
+          New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
+          Copy-Item target/debug/airp-core.exe ui/src-tauri/binaries/airp-core-x86_64-pc-windows-msvc.exe
 
       - name: Workspace tests
         run: cargo test --workspace --locked
 
       - name: Sacred prompt-boundary invariants
         run: cargo test -p airp-core --lib subagent_ --locked -- --nocapture
+
+  rust-doc:
+    name: Rust doc
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-doc-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-doc-
+
+      - name: Prepare Tauri engine sidecar
+        shell: pwsh
+        run: |
+          cargo build -p airp-core --bin airp-core --locked
+          New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
+          Copy-Item target/debug/airp-core.exe ui/src-tauri/binaries/airp-core-x86_64-pc-windows-msvc.exe
+
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
 
   ui:
     name: UI and WebUI

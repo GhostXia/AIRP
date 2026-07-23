@@ -19,6 +19,9 @@
   .op-row + .op-row { border-top: 1px solid var(--border-default); }
   .op-row .op-t { font-size: 12px; font-weight: 600; }
   .op-row .op-d { font-size: 11px; color: var(--text-tertiary); }
+  .model-picker { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-input); }
+  .model-picker .mp-arrow { font-family: var(--font-body); font-size: 12px; color: var(--text-tertiary); }
+  .picker-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 </style>
 </head>
 <body>
@@ -52,9 +55,21 @@
           <select class="select"><option>Anthropic</option><option>OpenAI</option><option>DeepSeek</option></select>
         </div>
         <div class="field">
-          <label class="field-label">模型</label>
-          <select class="select t-mono"><option>claude-sonnet-4</option><option>claude-opus-4</option></select>
+          <label class="field-label">模型（保存后自动拉取 /v1/models · 显示上游原始 id）</label>
+          <div class="model-picker">
+            <span>openai-main/gpt-4o</span>
+            <span class="mp-arrow">▾</span>
+          </div>
+          <span class="status-pill ok" style="margin-top:6px"><i class="dot"></i>已拉取 27 个模型</span>
         </div>
+      </div>
+      <!-- 降级行（拉取失败时 combobox） -->
+      <div class="picker-row" style="margin-bottom:12px">
+        <div class="field" style="flex:1;max-width:660px">
+          <label class="field-label">拉取失败时降级为手输（combobox） · 不阻塞保存</label>
+          <div class="combobox">手输模型 id，如 gpt-4o</div>
+        </div>
+        <span class="combobox-error">code: upstream · 拉取超时 3.2s</span>
       </div>
       <div class="field">
         <label class="field-label" for="replacement-api-key">API Key（不回显）</label>

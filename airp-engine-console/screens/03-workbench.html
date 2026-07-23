@@ -15,6 +15,10 @@
   .ftree-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-input); font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }
   .ftree-item:hover { background: var(--bg-subtle); }
   .ftree-item.active { background: var(--primary-tint); color: var(--primary-strong); font-weight: 600; }
+  .nl-state-row { display: flex; gap: 16px; align-items: center; }
+  .nl-state-spin { font-size: 14px; color: var(--primary); }
+  .nl-state-text { font-size: 11px; color: var(--text-secondary); }
+  .nl-state-err { font-family: var(--font-mono); font-size: 11px; color: var(--danger); }
 </style>
 </head>
 <body>
@@ -73,7 +77,54 @@
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary">＋ 保存修改</button>
-          <button class="btn btn-secondary">发送到测试会话</button>
+          <button class="btn btn-secondary">发送到对话</button>
+          <button class="btn btn-secondary">重新提取附属资源</button>
+        </div>
+
+        <!-- NL enhance 区（规划中 · 契约未交付） -->
+        <div class="nl-zone">
+          <div class="nl-head">
+            <span class="nl-title">自然语言指导 Agent 修改</span>
+            <span class="nl-planned-tag">规划中 · 契约未交付</span>
+          </div>
+          <div class="nl-input-row">
+            <div class="nl-input">用自然语言描述想怎么改，例如：把艾拉的性格改得更谨慎</div>
+            <button class="btn btn-primary">生成改写</button>
+          </div>
+          <div class="nl-diff-label">人格设定 · 2 处变更（无变更时显示「Agent 未提出修改」）</div>
+          <div class="diff-block">
+            <div class="diff-line del">你是艾拉，一艘退役深空舰队的导航 AI。你说话简洁、精确，习惯用星图、轨道和引力做比喻。</div>
+            <div class="diff-line add">你是艾拉，一艘退役深空舰队的导航 AI。你说话谨慎、精确，给出建议前会先说明风险，习惯用星图做比喻。</div>
+          </div>
+          <div class="nl-state-row">
+            <span class="ico nl-state-spin">◎</span>
+            <span class="nl-state-text">生成中…（约 5–15s）</span>
+            <span class="nl-state-err">生成失败 · code: upstream · 可重试；不影响手动编辑</span>
+          </div>
+          <div class="nl-confirm">
+            <button class="btn btn-primary">应用修改</button>
+            <button class="btn btn-secondary">放弃</button>
+            <span class="nl-note">未确认前不会落盘</span>
+          </div>
+        </div>
+
+        <!-- JSON 高级折叠区 -->
+        <div class="json-advanced">
+          <div class="ja-bar">
+            <span class="ja-arrow">▾</span>
+            <span class="ja-title">高级：JSON 整体替换</span>
+            <span class="ja-state">默认折叠 · 当前为展开展示</span>
+          </div>
+          <div class="ja-body">
+            <div class="ja-warn">
+              <span class="ico">⚠</span>
+              <span>保存会整体替换当前角色卡（rev 18）——结构化表单中的未保存修改将被覆盖。</span>
+            </div>
+            <div class="ja-code">{&quot;name&quot;: &quot;艾拉 · 星港引航员&quot;,&quot;description&quot;: &quot;退役舰队导航 AI，冷静理性……&quot;,&quot;personality&quot;: &quot;冷静、精确、念旧、护短&quot;,&quot;first_mes&quot;: &quot;【舰桥 · 03:47 舰时】……&quot;}</div>
+            <div class="ja-actions">
+              <button class="btn btn-secondary">保存 JSON（整体替换）</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
