@@ -1,1 +1,2 @@
 deploy/production/*.sh text eol=lf
+deploy/linux-webui/*.sh text eol=lf
