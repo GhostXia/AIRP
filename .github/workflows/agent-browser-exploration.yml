@@ -48,6 +48,21 @@ jobs:
         working-directory: tools/agent-exploration
         run: npm install
 
+      # B6 修复：bootstrap-topology.sh 内部 `docker run airp-gateway:0.1.0 hash-password`
+      # 要求本地已 build 该镜像。pr-gate.yml 调用 smoke-ci.sh 前会先跑
+      # `docker compose build --pull`，本 workflow 也必须先 build 镜像，否则
+      # `docker run` 会因镜像不存在去 pull，触发 pull access denied (exit 125)。
+      # build 需要 .env 存在 (compose.yaml 引用 $AIRP_VERSION 等)，但 bootstrap-topology.sh
+      # 内部生成 .env 是在 docker run 之后，存在 chicken-and-egg。所以先用 .env.example
+      # 临时 .env 让 build 通过；bootstrap-topology.sh 会再覆盖 .env 用于实际 topology。
+      - name: Prepare .env for image build
+        working-directory: deploy/production
+        run: cp .env.example .env
+
+      - name: Build pinned production images
+        working-directory: deploy/production
+        run: docker compose --env-file .env -f compose.yaml build --pull
+
       - name: Bootstrap production smoke topology
         working-directory: deploy/production
         run: |
