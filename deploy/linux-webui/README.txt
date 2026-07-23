@@ -14,9 +14,9 @@ binary is statically linked against musl, so it runs on any x86_64 Linux
 distribution without additional runtime libraries.
 
 All mutable AIRP files stay inside this extracted folder: user content is in
-data/ and process configuration is in config.json. Back up data/ before an
-upgrade, and copy the existing data/ into the new AIRP folder instead of
-deleting or overwriting it. Protect this folder and your provider credentials.
+data/ and process configuration is in config.json. Before an upgrade, back up
+and copy both data/ and config.json into the new AIRP folder. Protect this
+folder and your provider credentials.
 Provider API keys are stored in data/secrets.json and are intentionally not
 returned by the API or shown again in the UI. This file is plaintext, matching
 the transparent local-user tradeoff common to single-user local-first apps.

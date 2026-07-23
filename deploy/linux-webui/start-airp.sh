@@ -19,26 +19,6 @@ unset AIRP_CORS_ORIGINS
 # (engine/src/main.rs). The engine prints the WebUI URL on startup; the user
 # opens it manually.
 
-# Smoke mode: when AIRP_LAUNCHER_SMOKE=1, start engine in background, wait for
-# HTTP 200 on /health, then kill. Mirrors Start-AIRP.cmd's smoke behavior.
-if [[ "${AIRP_LAUNCHER_SMOKE:-}" == "1" ]]; then
-    "$AIRP_ROOT/airp-core" \
-        --config "$AIRP_ROOT/config.json" \
-        daemon --host 127.0.0.1 --port 8765 --webui-dir "$AIRP_ROOT/webui" &
-    ENGINE_PID=$!
-    for i in $(seq 1 30); do
-        if curl -sf http://127.0.0.1:8765/health >/dev/null 2>&1; then
-            echo "SMOKE OK: engine healthy after ${i}s"
-            kill "$ENGINE_PID" 2>/dev/null; wait "$ENGINE_PID" 2>/dev/null
-            exit 0
-        fi
-        sleep 1
-    done
-    echo "SMOKE FAIL: engine did not become healthy within 30s" >&2
-    kill "$ENGINE_PID" 2>/dev/null; wait "$ENGINE_PID" 2>/dev/null
-    exit 1
-fi
-
 if [[ ! -x "$AIRP_ROOT/airp-core" ]]; then
     echo "Missing airp-core in $AIRP_ROOT" >&2
     exit 1
@@ -49,6 +29,27 @@ if [[ ! -f "$AIRP_ROOT/webui/index.html" ]]; then
 fi
 
 mkdir -p "$AIRP_DATA_DIR"
+chmod 0700 "$AIRP_DATA_DIR"
+
+# Smoke mode: when AIRP_LAUNCHER_SMOKE=1, start engine in background, wait for
+# HTTP 200 on /health, then kill. Mirrors Start-AIRP.cmd's smoke behavior.
+if [[ "${AIRP_LAUNCHER_SMOKE:-}" == "1" ]]; then
+    "$AIRP_ROOT/airp-core" \
+        --config "$AIRP_ROOT/config.json" \
+        daemon --host 127.0.0.1 --port 8765 --webui-dir "$AIRP_ROOT/webui" &
+    ENGINE_PID=$!
+    for i in $(seq 1 30); do
+        if curl -sf --connect-timeout 2 --max-time 5 http://127.0.0.1:8765/health >/dev/null 2>&1; then
+            echo "SMOKE OK: engine healthy after ${i}s"
+            kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true
+            exit 0
+        fi
+        sleep 1
+    done
+    echo "SMOKE FAIL: engine did not become healthy within 30s" >&2
+    kill "$ENGINE_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true
+    exit 1
+fi
 
 echo "Starting AIRP WebUI at http://127.0.0.1:8765"
 echo "User data stays in $AIRP_DATA_DIR"

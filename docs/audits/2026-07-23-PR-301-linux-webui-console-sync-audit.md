@@ -8,7 +8,7 @@
 
 ---
 
-## 裁决：有条件通过（2 项 HIGH 需修复后合并）
+## 裁决：通过（全部阻塞项已在同 PR 修复）
 
 ---
 
@@ -25,9 +25,9 @@
 
 ---
 
-## 二、阻塞项（HIGH — 合并前必须修复）
+## 二、阻塞项（HIGH — 已修复 ✅）
 
-### H-1 · webui/STYLEGUIDE.md 身份描述错误
+### H-1 · webui/STYLEGUIDE.md 身份描述错误 ✅ 已修复
 
 **位置**: `webui/STYLEGUIDE.md` L1-5
 
@@ -38,7 +38,7 @@
 **修复**: 将 webui/STYLEGUIDE.md 首段改为派生实现定位，例如：
 > 本目录是 AIRP 控制台前端的**派生 WebUI 实现**，视觉以 `airp-engine-console/` 权威样板为准。
 
-### H-2 · renderSettings model picker 显示虚假「已拉取」状态
+### H-2 · renderSettings model picker 显示虚假「已拉取」状态 ✅ 已修复
 
 **位置**: `webui/assets/console-runtime.js` L369
 
@@ -57,9 +57,9 @@ modelPill.append(node('i', 'dot'), '已拉取');
 
 ---
 
-## 三、中等项（MEDIUM — 建议本 PR 修复，可协商）
+## 三、中等项（MEDIUM — 已修复 ✅）
 
-### M-1 · worldbook 操作列与样板视觉不一致 + 空操作三元
+### M-1 · worldbook 操作列与样板视觉不一致 + 空操作三元 ✅ 已修复
 
 **位置**: `webui/assets/console-runtime.js` L227
 
@@ -73,7 +73,7 @@ node('span', 'op-link' + (entry.enabled === false ? '' : ''), ...)
 
 **修复**: 使用 `.switch` 组件对齐样板；移除无效三元。
 
-### M-2 · renderWorkbench「保存修改」按钮语义模糊
+### M-2 · renderWorkbench「保存修改」按钮语义模糊 ✅ 已修复
 
 **位置**: `webui/assets/console-runtime.js` L177-178
 
@@ -83,7 +83,7 @@ node('span', 'op-link' + (entry.enabled === false ? '' : ''), ...)
 
 **修复建议**: 将按钮文案改为「保存 JSON」或移至 JSON 折叠区内；或保留「保存修改」但实现结构化表单保存逻辑。
 
-### M-3 · 屏数标注不一致
+### M-3 · 屏数标注不一致 ✅ 已修复
 
 **位置**: 两处 STYLEGUIDE + `screens.js`
 
@@ -91,7 +91,7 @@ node('span', 'op-link' + (entry.enabled === false ? '' : ''), ...)
 
 **修复**: 改为「32 屏（编号至 33，缺 32）」或补全 32 屏。
 
-### M-4 · Linux workflow 未显式声明 `toolchain: stable`
+### M-4 · Linux workflow 未显式声明 `toolchain: stable` ✅ 已修复
 
 **位置**: `.github/workflows/linux-webui-build.yml` L27
 
@@ -99,7 +99,7 @@ node('span', 'op-link' + (entry.enabled === false ? '' : ''), ...)
 
 ---
 
-## 四、低优先级项（LOW — 记录为后续 issue）
+## 四、低优先级项（LOW — 已修复 ✅）
 
 | # | 位置 | 问题 |
 |---|---|---|
@@ -178,7 +178,7 @@ node('span', 'op-link' + (entry.enabled === false ? '' : ''), ...)
 
 ## 八、测试验证
 
-```
+```text
 webui/tests/runtime-pages.test.mjs: 11/11 pass
 ```
 
