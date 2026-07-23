@@ -91,3 +91,23 @@ test('operational console pages load the shared real-backend runtime', async () 
     assert.doesNotMatch(html, /assets\/app\.js/);
   }
 });
+
+test('console-runtime implements #304 new UI components', async () => {
+  const rt = await readFile(new URL('../assets/console-runtime.js', import.meta.url), 'utf8');
+  // NL enhance zone with disabled button
+  assert.match(rt, /nl-zone/, 'missing NL zone');
+  assert.match(rt, /nl-planned-tag/, 'missing NL planned tag');
+  assert.match(rt, /nlGenBtn.*disabled = true/, 'NL generate button must be disabled');
+  // JSON advanced fold
+  assert.match(rt, /json-advanced/, 'missing JSON advanced fold');
+  assert.match(rt, /ja-bar/, 'missing JA bar');
+  // Worldbook switch component
+  assert.match(rt, /switch on.*switch/, 'missing .switch toggle in worldbook');
+  // Model pill neutral (not false ok)
+  assert.match(rt, /status-pill neutral/, 'model pill must be neutral');
+  assert.doesNotMatch(rt, /status-pill ok.*已拉取/, 'model pill must not show false ok');
+  // Combobox class on fallback input
+  assert.match(rt, /combobox/, 'missing combobox class');
+  // 05 presets must NOT contain model management
+  assert.doesNotMatch(rt, /renderPresets[\s\S]*?Provider 模型/, 'presets page must not render model card');
+});

@@ -22,11 +22,11 @@
 样板与派生 WebUI 同处一个仓库，共享 commit 历史。每次同步后在此记录对应的
 WebUI commit，便于回退与溯源：
 
-| 样板同步批次 | 样板 commit | WebUI commit | 变更摘要 |
-|---|---|---|---|
-| #304 编辑体验 | `fbcab6e` | `fbcab6e` | NL区 / JSON高级折叠区 / diff视图 / 行内操作列 / model picker / 33屏向导 / 05重命名 |
-| #304 item 1 | `3caafa1` | `3caafa1` | model picker for onboarding step3 + console provider card |
-| 基线 | `bc72c48` | `bc72c48` | 305 fix: character_id query string |
+| 样板同步批次 | 样板 commit | WebUI commit | WebUI 版本 | 变更摘要 |
+|---|---|---|---|---|
+| #304 编辑体验 | `fbcab6e` | `fbcab6e` | v0.0.2+ | NL区 / JSON高级折叠区 / diff视图 / 行内操作列 / model picker / 33屏向导 / 05重命名 |
+| #304 item 1 | `3caafa1` | `3caafa1` | v0.0.2+ | model picker for onboarding step3 + console provider card |
+| 基线 | `bc72c48` | `bc72c48` | v0.0.2 | 305 fix: character_id query string |
 
 > **注意**：样板与 WebUI 在同一仓库内同步更新，所以上述 commit SHA 同时涵盖
 > `airp-engine-console/` 和 `webui/` 的变更。要查看某批次对 WebUI 的具体影响，
