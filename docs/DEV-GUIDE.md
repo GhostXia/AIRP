@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-20，`main@7895f8c`
+> 最后校准：2026-07-23，`main@03ffaf6`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -252,8 +252,8 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. PR #268 已合并 P1 审计跟进批次；当前第一优先级是继续开发首聊黄金路径，并用真实 provider、真实浏览器和生产拓扑建立可重复验收，分别覆盖页面刷新恢复与服务重启恢复；
-2. Swipe 多候选、Smooth Streaming、auto-regen/continue/per-message actions/单条删除已交付；优先修复首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏；
+1. PR #294（WebUI 从样板重建）+ PR #297（delete/search/persona-unbind 操作）已合并；当前第一优先级是让真实用户用真实 provider 完成首聊黄金路径，分别覆盖页面刷新恢复与服务重启恢复；
+2. Swipe 多候选、Smooth Streaming、auto-regen/continue/per-message actions/单条删除、角色/会话删除、FTS5 搜索、Persona 删除/解绑和 state history/schema 已交付；优先修复首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏；
 3. #114 Persona/Preset 高级生命周期、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 完整 session/revision/恢复分期和 #220 deferred 性能/重构项原则上进入 P2；若其中某项直接决定 P1 可用性、数据安全或可重复验收，可以按独立证据提前；
 4. P2 运维与恢复；
 5. P3 release candidate；
