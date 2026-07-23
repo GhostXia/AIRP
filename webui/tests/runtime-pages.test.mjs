@@ -73,7 +73,7 @@ test('chat space exposes session, history and streaming controls', () => {
 test('every shipped screen is compatible with the Engine CSP', async () => {
   const directory = new URL('../screens/', import.meta.url);
   const files = (await readdir(directory)).filter(name => name.endsWith('.html'));
-  assert.equal(files.length, 31);
+  assert.equal(files.length, 32);
   for (const file of files) {
     const html = await readFile(new URL(file, directory), 'utf8');
     assert.doesNotMatch(html, /\sstyle\s*=/i, file + ' contains an inline style');
@@ -83,7 +83,7 @@ test('every shipped screen is compatible with the Engine CSP', async () => {
 });
 
 test('operational console pages load the shared real-backend runtime', async () => {
-  for (const file of ['03-workbench.html', '04-world-book.html', '05-presets-models.html', '06-user-persona.html', '07-agent-runs.html', '08-settings.html', '17-memory-state.html', '18-group-chat.html', '19-branch-tree.html', '20-assembly-preview.html', '21-usage-quota.html', '22-backup-restore.html', '23-diagnostics.html', '24-plugins.html', '25-notes-connections.html']) {
+  for (const file of ['03-workbench.html', '04-world-book.html', '05-presets.html', '06-user-persona.html', '07-agent-runs.html', '08-settings.html', '17-memory-state.html', '18-group-chat.html', '19-branch-tree.html', '20-assembly-preview.html', '21-usage-quota.html', '22-backup-restore.html', '23-diagnostics.html', '24-plugins.html', '25-notes-connections.html']) {
     const html = await readFile(new URL('../screens/' + file, import.meta.url), 'utf8');
     assert.match(html, /assets\/api-client\.js/);
     assert.match(html, /assets\/console-runtime\.js/);

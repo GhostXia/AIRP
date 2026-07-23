@@ -57,7 +57,7 @@
 
       <table class="table">
         <thead>
-          <tr><th style="width:140px">主关键词</th><th>条目内容</th><th style="width:130px">触发方式</th><th style="width:90px">状态</th></tr>
+          <tr><th style="width:140px">主关键词</th><th>条目内容</th><th style="width:130px">触发方式</th><th style="width:90px">状态</th><th style="width:100px">操作</th></tr>
         </thead>
         <tbody>
           <tr>
@@ -65,24 +65,28 @@
             <td class="sub" style="font-size:12px;color:var(--text-secondary)">大崩塌后废弃的跃迁走廊，信标仍在以旧舰队频率广播…</td>
             <td><span class="tag tag-primary mono">常驻 constant</span></td>
             <td><span class="tag tag-success"><i class="dot"></i>已启用</span></td>
+            <td><div class="op-col"><span class="op-link">编辑</span><span class="switch on"></span><span class="op-link del">删除</span></div></td>
           </tr>
           <tr>
             <td style="font-weight:600">导航核心</td>
             <td style="font-size:12px;color:var(--text-secondary)">舰队级跃迁引擎的控制中枢，第三次维修后留下间歇性相位漂移…</td>
             <td><span class="tag tag-neutral mono">selective 双提</span></td>
             <td><span class="tag tag-success"><i class="dot"></i>已启用</span></td>
+            <td><div class="op-col"><span class="op-link">编辑</span><span class="switch on"></span><span class="op-link del">删除</span></div></td>
           </tr>
           <tr>
             <td style="font-weight:600">旧舰队军规</td>
             <td style="font-size:12px;color:var(--text-secondary)">第七舰队在役期间的行为准则，艾拉仍下意识遵守其中 12 条…</td>
             <td><span class="tag tag-neutral">关键词触发</span></td>
             <td><span class="tag tag-success"><i class="dot"></i>已启用</span></td>
+            <td><div class="op-col"><span class="op-link">编辑</span><span class="switch on"></span><span class="op-link del">删除</span></div></td>
           </tr>
           <tr>
             <td style="font-weight:600">星图档案馆</td>
             <td style="font-size:12px;color:var(--text-secondary)">存放历代舰队航迹数据的环形空间站，需要旧式军官权限…</td>
             <td><span class="tag tag-neutral">关键词触发</span></td>
             <td><span class="tag tag-warning"><i class="dot"></i>已停用</span></td>
+            <td><div class="op-col"><span class="op-link">编辑</span><span class="switch"></span><span class="op-link del">删除</span></div></td>
           </tr>
         </tbody>
       </table>
@@ -90,6 +94,47 @@
       <div class="wb-notice">
         <span class="ico">⚡</span>
         <span class="mono">v4 触发语义 enabled &amp;&amp; (constant || (primary_match &amp;&amp; (!selective || any_secondary_match))) advisory 字段 position/depth/probability）当前为只读展示。</span>
+      </div>
+
+      <!-- NL enhance 区（整本书级，规划中 · 契约未交付） -->
+      <div class="nl-zone">
+        <div class="nl-head">
+          <span class="nl-title">自然语言指导 Agent 修改（整本书级）</span>
+          <span class="nl-planned-tag">规划中 · 契约未交付</span>
+        </div>
+        <div class="nl-input-row">
+          <div class="nl-input">用自然语言描述想怎么改，例如：把废弃航道的危险等级上调，并补一条 related 条目</div>
+          <button class="btn btn-primary">生成改写</button>
+        </div>
+        <div class="nl-diff-label">条目「废弃航道」 · 1 处变更（无变更时显示「Agent 未提出修改」）</div>
+        <div class="diff-block">
+          <div class="diff-line del">大崩塌后废弃的跃迁走廊，信标仍在以旧舰队频率广播。</div>
+          <div class="diff-line add">大崩塌后废弃的跃迁走廊，危险等级 4/5，信标仍在以旧舰队频率广播。</div>
+        </div>
+        <div class="nl-confirm">
+          <button class="btn btn-primary">应用修改</button>
+          <button class="btn btn-secondary">放弃</button>
+          <span class="nl-note">未确认前不会落盘 · 单条目级修改 v1 范围外</span>
+        </div>
+      </div>
+
+      <!-- JSON 高级折叠区 -->
+      <div class="json-advanced">
+        <div class="ja-bar">
+          <span class="ja-arrow">▾</span>
+          <span class="ja-title">高级：JSON 整体替换</span>
+          <span class="ja-state">默认折叠 · 当前为展开展示</span>
+        </div>
+        <div class="ja-body">
+          <div class="ja-warn">
+            <span class="ico">⚠</span>
+            <span>保存会整体替换星港地图全部 24 条条目（rev 18）——按条编辑中的未保存修改将被覆盖。</span>
+          </div>
+          <div class="ja-code">{&quot;entries&quot;: [{ &quot;keys&quot;: [&quot;废弃航道&quot;], &quot;constant&quot;: true, &quot;content&quot;: &quot;大崩塌后……&quot; },{ &quot;keys&quot;: [&quot;导航核心&quot;], &quot;selective&quot;: true, &quot;secondary_keys&quot;: [&quot;故障&quot;] }],&quot;rev&quot;: 18}</div>
+          <div class="ja-actions">
+            <button class="btn btn-secondary">保存 JSON（整体替换）</button>
+          </div>
+        </div>
       </div>
     </main>
   </div>

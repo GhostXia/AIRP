@@ -288,7 +288,7 @@
       content.append(persona.wrap, preset.wrap, node('p', 'wizard-muted', '当前单用户 WebUI 会把 Persona 的姓名和变量带入请求；完整绑定关系可稍后在 Persona 页面管理。'));
       const links = node('div', 'wizard-links');
       const personaLink = node('a', '', '管理 Persona →'); personaLink.href = '06-user-persona.html?character=' + encodeURIComponent(state.characterId);
-      const presetLink = node('a', '', '管理预设 →'); presetLink.href = '05-presets-models.html?character=' + encodeURIComponent(state.characterId);
+      const presetLink = node('a', '', '管理预设 →'); presetLink.href = '05-presets.html?character=' + encodeURIComponent(state.characterId);
       links.append(personaLink, presetLink); content.appendChild(links);
       const next = button('下一步 →', async () => {
         setBusy(next, true, '正在准备…');
