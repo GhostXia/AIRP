@@ -12,7 +12,7 @@
 import { chromium } from 'playwright-core';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { chatCompletion, getModel } from './llm-client.mjs';
+import { chatCompletion, getModel, FALLBACK_MODE, getBuiltinSmokeScript } from './llm-client.mjs';
 import { HarnessClient } from './harness-client.mjs';
 import { writeReport } from './reporter.mjs';
 import { classifyPrDiff, DIFF_TASK_MAP } from './classifier.mjs';
@@ -195,6 +195,19 @@ async function runTask(browser, mod, name) {
 }
 
 async function generateAndRunScript(mod, ctx, taskDir) {
+  // B9 方案 3：fallback 模式下（OPENAI_API_KEY 未配），不调 LLM、不重试，
+  // 直接用 llm-client 内置的 minimal smoke 脚本。该脚本只 navigate + snapshot，
+  // 不做业务断言，目的是验证 topology + harness + runner + reporter 全链路可达。
+  // fallback 模式下所有任务集跑同一份脚本（任务差异由 reporter 的 task.name 体现）。
+  if (FALLBACK_MODE) {
+    const scriptContent = getBuiltinSmokeScript();
+    const scriptPath = join(taskDir, 'agent-script.mjs');
+    await writeFile(scriptPath, scriptContent);
+    const exitCode = await runTempScript(scriptPath, ctx);
+    if (exitCode === 0) return scriptPath;
+    throw new Error('fallback smoke script failed (exit code ' + exitCode + '); topology/harness is broken, not WebUI business logic');
+  }
+
   // 1. 构造 prompt（DOM 快照脱敏后再注入）
   const domSnapshot = await ctx.harness.getDomSnapshot().catch(() => []);
   const sanitized = sanitizeDomSnapshot(domSnapshot);

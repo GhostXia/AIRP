@@ -1,6 +1,6 @@
 name: Agent Browser Exploration
 
-# 阶段 2: 重大功能 PR 自动运行。Non-blocking (continue-on-error at job level via if + outputs).
+# 阶段 2: 重大功能 PR 自动运行。Non-blocking (continue-on-error at job level).
 # 触发条件: PR opened/synchronized/reopened, 且 diff 命中 Edit/Branch/Swipe/Memory/onboarding 任一区域。
 on:
   pull_request:
@@ -27,45 +27,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true  # MVP: non-blocking
-    outputs:
-      llm_key_configured: ${{ steps.check-llm-key.outputs.configured }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # B9 修复：AGENT_EXPLORATION_OPENAI_KEY secret 未配到 repo 时优雅跳过整个 job。
-      # 不再让 runner 启动后才发现 key 缺失（topology 已 boot，浪费 5+ 分钟）。
-      # 预检输出 configured=1/0，后续 step 用 if 条件跳过。
-      - name: Check LLM API key
-        id: check-llm-key
-        env:
-          LLM_KEY: ${{ secrets.AGENT_EXPLORATION_OPENAI_KEY }}
-        run: |
-          if [ -n "$LLM_KEY" ]; then
-            echo "configured=1" >> $GITHUB_OUTPUT
-            echo "LLM API key is configured."
-          else
-            echo "configured=0" >> $GITHUB_OUTPUT
-            echo "::warning::AGENT_EXPLORATION_OPENAI_KEY secret is not configured; skipping agent exploration. See step output for how to configure."
-          fi
+      # B9 方案 3：不再做 LLM key 预检 + skip 整 job。
+      # OPENAI_API_KEY 未配时，runner.mjs + llm-client.mjs 自动进入 fallback 模式：
+      # 跑内置 minimal smoke 脚本（只 navigate + snapshot，不做业务断言），
+      # 验证 topology + harness + runner + reporter + commenter 全链路可达。
+      # secret 已配时走真 LLM 路径。两种模式都跑同一个 workflow，省一份配置。
 
       - name: Setup Node
-        if: steps.check-llm-key.outputs.configured == '1'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install Chrome
-        if: steps.check-llm-key.outputs.configured == '1'
         id: setup-chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
 
       - name: Install runner deps
-        if: steps.check-llm-key.outputs.configured == '1'
         working-directory: tools/agent-exploration
         run: npm install
 
@@ -77,17 +62,14 @@ jobs:
       # 内部生成 .env 是在 docker run 之后，存在 chicken-and-egg。所以先用 .env.example
       # 临时 .env 让 build 通过；bootstrap-topology.sh 会再覆盖 .env 用于实际 topology。
       - name: Prepare .env for image build
-        if: steps.check-llm-key.outputs.configured == '1'
         working-directory: deploy/production
         run: cp .env.example .env
 
       - name: Build pinned production images
-        if: steps.check-llm-key.outputs.configured == '1'
         working-directory: deploy/production
         run: docker compose --env-file .env -f compose.yaml build --pull
 
       - name: Bootstrap production smoke topology
-        if: steps.check-llm-key.outputs.configured == '1'
         working-directory: deploy/production
         run: |
           # 用 bootstrap-topology.sh 只启 mock provider + TLS + 临时数据拓扑,
@@ -97,7 +79,6 @@ jobs:
           echo "TOPOLOGY_BOOTSTRAPPED=1" >> $GITHUB_ENV
 
       - name: Fetch PR diff
-        if: steps.check-llm-key.outputs.configured == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -108,7 +89,6 @@ jobs:
             > artifacts/agent-exploration/pr-diff.patch
 
       - name: Run agent exploration
-        if: steps.check-llm-key.outputs.configured == '1'
         env:
           AIRP_SMOKE_ORIGIN: https://localhost:9443
           AIRP_SMOKE_ADMIN_USER: airp-smoke
@@ -116,6 +96,8 @@ jobs:
           AIRP_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           AIRP_AUTH_USER: airp-smoke
           AIRP_AUTH_PASSWORD: synthetic-smoke-password
+          # B9 方案 3：未配 secret 时 GitHub 传空串, runner 自动进 fallback 模式
+          # (跑内置 smoke 脚本验证管线); 已配时走真 LLM 路径
           OPENAI_API_KEY: ${{ secrets.AGENT_EXPLORATION_OPENAI_KEY }}
           OPENAI_MODEL: ${{ secrets.AGENT_EXPLORATION_MODEL || 'gpt-4o-mini' }}
           # 故意不传 GITHUB_TOKEN: runner 不需要它 (diff 已在上一步取到文件),
@@ -148,33 +130,11 @@ jobs:
             deploy/production/*.log
           retention-days: 14
 
-      # B9 修复：LLM key 未配置时发友好评论，明确告诉用户如何配置，
-      # 而不是让用户看到神秘的 "OPENAI_API_KEY is required" 失败评论。
-      - name: Publish skipped (no LLM key) comment
-        if: steps.check-llm-key.outputs.configured == '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          gh pr comment "$PR_NUMBER" --body-file - <<'EOF'
-          ## ℹ️ Agent exploration skipped
-
-          The `AGENT_EXPLORATION_OPENAI_KEY` repo secret is not configured, so the exploration runner was skipped.
-
-          This is non-blocking (`continue-on-error: true`); merge is not affected. To enable agent exploration on future PRs:
-
-          1. Go to **Settings → Secrets and variables → Actions** for this repo.
-          2. Add a new secret named `AGENT_EXPLORATION_OPENAI_KEY` with an OpenAI API key (e.g. `sk-...`).
-          3. (Optional) Add `AGENT_EXPLORATION_MODEL` to override the default `gpt-4o-mini`.
-
-          See [the plan](../blob/feat/agent-browser-exploration/docs/AGENT-BROWSER-EXPLORATION-PLAN.md) for details.
-          EOF
-
       # B2 修复：runner 失败时 exit 1（虽然 job continue-on-error: true 不阻塞合并，
       # 但 step failure 会触发本步骤），先发占位评论确保失败信号不会因下游
       # Publish PR comment 自身失败（report.md 未生成 / gh 不可用）而完全丢失。
       - name: Publish failure placeholder comment
-        if: failure() && steps.check-llm-key.outputs.configured == '1'
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
