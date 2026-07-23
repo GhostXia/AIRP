@@ -73,6 +73,7 @@ tmp/
 .atomcode/
 .codex/
 .qoder/
+.workbuddy/
 .test-data/
 .uploads/
 
