@@ -115,7 +115,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-exploration-${{ github.event.pull_request.number }}
-          path: artifacts/agent-exploration/
+          # 包含 deploy/production/*.log 用于 bootstrap 失败诊断（B7）：
+          # topology-bootstrap.log, mock-provider.log 等
+          path: |
+            artifacts/agent-exploration/
+            deploy/production/*.log
           retention-days: 14
 
       # B2 修复：runner 失败时 exit 1（虽然 job continue-on-error: true 不阻塞合并，

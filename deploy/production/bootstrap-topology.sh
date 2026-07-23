@@ -80,6 +80,9 @@ trap cleanup_on_failure EXIT INT TERM
 #      restart-continuity smoke; not used by agent exploration.
 #
 # Stages 1-2 close the listener race from PR #243 run 29671033343.
+#
+# B7 修复：失败时 dump engine + gateway + mock_provider 日志到 stderr,
+# 让 CI annotations 直接看到根因而不用手挖 artifact。
 wait_for_engine_ready() {
   health_ready=0
   for _ in $(seq 1 60); do
@@ -91,6 +94,13 @@ wait_for_engine_ready() {
   done
   if [ "$health_ready" -ne 1 ]; then
     echo "wait_for_engine_ready: /health did not reach engine:\"ok\" within 60s" >&2
+    echo "----- engine logs (last 200) -----" >&2
+    $compose logs --no-color --tail=200 engine >&2 2>&1 || true
+    echo "----- gateway logs (last 200) -----" >&2
+    $compose logs --no-color --tail=200 gateway >&2 2>&1 || true
+    echo "----- mock_provider logs -----" >&2
+    if [ -f "$mock_log" ]; then tail -n 200 "$mock_log" >&2 2>&1 || true; fi
+    echo "----- end dump -----" >&2
     return 1
   fi
   models_ready=0
@@ -103,6 +113,13 @@ wait_for_engine_ready() {
   done
   if [ "$models_ready" -ne 1 ]; then
     echo "wait_for_engine_ready: /v1/models did not return 200 within 30s" >&2
+    echo "----- engine logs (last 200) -----" >&2
+    $compose logs --no-color --tail=200 engine >&2 2>&1 || true
+    echo "----- gateway logs (last 200) -----" >&2
+    $compose logs --no-color --tail=200 gateway >&2 2>&1 || true
+    echo "----- mock_provider logs -----" >&2
+    if [ -f "$mock_log" ]; then tail -n 200 "$mock_log" >&2 2>&1 || true; fi
+    echo "----- end dump -----" >&2
     return 1
   fi
 }
