@@ -124,7 +124,10 @@ async function runTask(browser, mod, name) {
 
   try {
     // 让 Agent 生成临时 Playwright 脚本（方案 A）
-    const scriptPath = await generateAndRunScript(mod, page, harness, taskDir, context);
+    // ctx 合并 fixtures：任务模块通过 mod.FIXTURES 提供解析好的 fixture JSON，
+    // Agent 脚本通过 ctx.fixtures 直接取用，不需要读 runner 文件系统。
+    const ctx = { page, harness, context, origin: ORIGIN, fixtures: mod.FIXTURES || {} };
+    const scriptPath = await generateAndRunScript(mod, ctx, taskDir);
     result.evidence.script = scriptPath;
 
     // 收集 harness 状态
@@ -165,9 +168,9 @@ async function runTask(browser, mod, name) {
   return result;
 }
 
-async function generateAndRunScript(mod, page, harness, taskDir, context) {
+async function generateAndRunScript(mod, ctx, taskDir) {
   // 1. 构造 prompt（DOM 快照脱敏后再注入）
-  const domSnapshot = await harness.getDomSnapshot().catch(() => []);
+  const domSnapshot = await ctx.harness.getDomSnapshot().catch(() => []);
   const sanitized = sanitizeDomSnapshot(domSnapshot);
   const prompt = buildPrompt(mod, sanitized);
 
@@ -193,7 +196,7 @@ async function generateAndRunScript(mod, page, harness, taskDir, context) {
 
     // 2. 执行临时脚本
     try {
-      const exitCode = await runTempScript(scriptPath, { page, harness, context, origin: ORIGIN });
+      const exitCode = await runTempScript(scriptPath, ctx);
       if (exitCode === 0) return scriptPath;
       lastError = 'script exit code: ' + exitCode;
     } catch (err) {
@@ -217,9 +220,14 @@ function sanitizeDomSnapshot(snapshot) {
 }
 
 function buildPrompt(mod, domSnapshot) {
+  // 仅在任务模块声明了 FIXTURES 时，告诉 Agent fixture JSON 已在 ctx.fixtures 中，
+  // 直接用即可，不要读文件。无 FIXTURES 的任务不附加此说明。
+  const fixtureNote = mod.FIXTURES
+    ? '\n\nFixtures: ctx.fixtures.characterCard is the parsed character card JSON. Use it directly in the POST /v1/characters/import body as { character_id, card_json }. Do NOT read files.'
+    : '';
   return {
     system: `You are an AIRP WebUI exploratory test generator. Output ONLY a single JavaScript code block (no prose) that exports an async function:
-export async function run(ctx) { /* ctx = { page, harness, origin } */ }
+export async function run(ctx) { /* ctx = { page, harness, origin, fixtures } */ }
 
 Rules:
 - Use only playwright-core page API and ctx.harness (window.__AIRP_AGENT_TEST__ wrapper).
@@ -248,6 +256,7 @@ Task contract:
 
 Initial DOM snapshot (truncated, current page may differ; call harness.navigate first):
 ${JSON.stringify(domSnapshot).slice(0, 4000)}
+${fixtureNote}
 
 Output the script now. Only the code block, no explanation.`,
   };
