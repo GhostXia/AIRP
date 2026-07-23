@@ -4,7 +4,7 @@
 >
 > 来源 issue：[#273 test: 引入 Agent 驱动的浏览器探索测试层](https://github.com/GhostXia/AIRP/issues/273)
 >
-> 基线日期：2026-07-23，`main` 分支
+> 基线日期：2026-07-23，`main` 分支 @ `03ffaf6`
 >
 > 审计模型（撰写本计划的 agent）：GLM-5.2
 
@@ -176,7 +176,10 @@ Expected: FAIL（`agent-test-harness.js` 不存在）
   'use strict';
 
   function shouldInstallAgentTestHarness() {
-    if (import.meta && import.meta.env && import.meta.env.VITE_AIRP_AGENT_TEST === '1') return true;
+    // VITE_AIRP_AGENT_TEST=1 is the Vite build-time flag for the desktop ui/ harness.
+    // In webui's vanilla classic <script>, there is no import.meta.env; a build step
+    // or operator may set window.VITE_AIRP_AGENT_TEST=1 before this script loads.
+    if (globalThis.VITE_AIRP_AGENT_TEST === '1') return true;
     try {
       const params = new URLSearchParams(window.location.search);
       if (params.get('airp_agent_test') === '1') return true;
@@ -281,11 +284,14 @@ Expected: FAIL（`agent-test-harness.js` 不存在）
     },
 
     clickButton(selectorOrText) {
-      let el = document.querySelector(selectorOrText);
+      // 先按可见文本找 button，避免非选择器文本（如"发送首轮消息"）触发 querySelector 语法错误
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+      let el = buttons.find(b => (b.textContent || '').trim() === selectorOrText);
       if (!el) {
-        // 按可见文本找 button
-        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
-        el = buttons.find(b => (b.textContent || '').trim() === selectorOrText);
+        // 不是按钮文本时，作为 CSS 选择器尝试；捕获语法错误以免整段崩溃
+        try { el = document.querySelector(selectorOrText); } catch (e) {
+          throw new Error('clickButton: not a valid selector and no button text matched: ' + selectorOrText);
+        }
       }
       if (!el) throw new Error('clickButton: not found: ' + selectorOrText);
       if (el.disabled) throw new Error('clickButton: disabled: ' + selectorOrText);
@@ -313,7 +319,21 @@ Expected: FAIL（`agent-test-harness.js` 不存在）
       return apiRequest(method, path, body);
     },
 
-    async waitFor(predicate, timeoutMs = 5000) {
+    async waitFor(predicateId, timeoutMs = 5000) {
+      // predicateId 是预定义 predicate 标识符字符串，避免 new Function（CSP unsafe-eval 禁止）
+      const PREDICATES = {
+        'send-button-ready': () => {
+          const btn = document.querySelector('.send-button, [data-send], button[type="submit"]');
+          return !!btn && !btn.classList.contains('stop') && !btn.disabled;
+        },
+        'no-pending-request': () => !document.querySelector('[data-pending-request="true"]'),
+        'message-list-stable': () => {
+          const list = document.querySelector('[data-message-list], .message-list, .chat-history');
+          return !!list && list.querySelectorAll('[data-message-id]').length > 0;
+        },
+      };
+      const predicate = PREDICATES[predicateId];
+      if (typeof predicate !== 'function') throw new Error('waitFor: unknown predicate id: ' + predicateId);
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         try { if (predicate()) return true; } catch {}
@@ -365,11 +385,9 @@ git commit -m "feat(webui): add agent test harness v2 for browser exploration (#
 
 - [ ] **Step 1: 增量测试 — 所有目标 screen 都引用 harness**
 
-在 `webui/tests/agent-harness.test.mjs` 末尾追加：
+在 `webui/tests/agent-harness.test.mjs` 末尾追加（`readFile` 已在文件顶部导入，不重复 import）：
 
 ```javascript
-import { readFile } from 'node:fs/promises';
-
 const screens = [
   '16-onboarding.html', '01-role-list.html', '02-chat-space.html',
   '17-memory-state.html', '19-branch-tree.html', '14-message-swipe.html',
@@ -410,6 +428,8 @@ Expected: 6 个新 test FAIL
 ```
 
 并依赖 harness 内部的 `shouldInstallAgentTestHarness()` 守卫（文件缺失时浏览器自然报 404，不阻塞页面；harness 内 flag 默认 off，生产用户即使 404 也无影响）。
+
+**注意（async 加载竞态）**：`<script async>` 在页面 `load` 事件后才安装 `window.__AIRP_AGENT_TEST__`。`HarnessClient.navigate()` 不能在调用 `window.__AIRP_AGENT_TEST__.navigate(...)` 后立即返回——必须在 `page.goto()` 后用 bounded `isReady()` 轮询等待 harness 安装完成（见 Task 3 `HarnessClient.navigate` 实现）。否则下一个 helper 调用会观察到 `undefined` 的 `window.__AIRP_AGENT_TEST__`。
 
 实施时先读 `webui/index.html` CSP meta 与 engine `daemon/mod.rs` 的 CSP header，确认内联 `onerror` 是否允许；如不允许，采用纯 `<script async>` 方案并更新测试正则为：
 
@@ -469,7 +489,7 @@ git commit -m "feat(webui): inject agent test harness into 6 key screens (#273)"
   "type": "module",
   "description": "Agent-driven browser exploratory testing for AIRP WebUI (#273)",
   "scripts": {
-    "test": "node --test runner.test.mjs",
+    "test": "node --test classifier.test.mjs",
     "run": "node runner.mjs"
   },
   "dependencies": {
@@ -495,15 +515,29 @@ if (!API_KEY) {
   process.exit(2);
 }
 
-export async function chatCompletion(messages, { maxTokens = 2048, temperature = 0.2 } = {}) {
-  const res = await fetch(BASE_URL + '/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + API_KEY,
-    },
-    body: JSON.stringify({ model: MODEL, messages, max_tokens: maxTokens, temperature }),
-  });
+export async function chatCompletion(messages, { maxTokens = 2048, temperature = 0.2, timeoutMs = 60000 } = {}) {
+  // Bounded deadline: 防止 stalled provider 把 task/workflow 拖到 30 分钟超时
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(BASE_URL + '/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + API_KEY,
+      },
+      body: JSON.stringify({ model: MODEL, messages, max_tokens: maxTokens, temperature }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error('LLM request timed out after ' + timeoutMs + 'ms (provider stalled?)');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`LLM ${res.status}: ${text}`);
@@ -523,14 +557,34 @@ export function getModel() { return MODEL; }
 // 通过 page.evaluate 调用页面内 window.__AIRP_AGENT_TEST__ 的 helper
 
 export class HarnessClient {
-  constructor(page) { this.page = page; }
+  constructor(page, origin) {
+    this.page = page;
+    this.origin = origin;
+  }
 
   async isReady() {
     return await this.page.evaluate(() => !!(window.__AIRP_AGENT_TEST__ && window.__AIRP_AGENT_TEST__.version === 2));
   }
 
+  // bounded wait for async-loaded harness to install window.__AIRP_AGENT_TEST__
+  async waitForReady(timeoutMs = 10000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.isReady()) return;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    throw new Error('HarnessClient: harness not ready after ' + timeoutMs + 'ms (async <script> not installed?)');
+  }
+
+  // navigate uses page.goto() (waits for load) then bounded waitForReady()
+  // instead of in-page window.location.href, so the next helper call cannot
+  // race the async harness script load.
   async navigate(screen, params) {
-    return await this.page.evaluate(([s, p]) => window.__AIRP_AGENT_TEST__.navigate(s, p), [screen, params]);
+    const url = new URL(this.origin + '/screens/' + screen);
+    if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    url.searchParams.set('airp_agent_test', '1');
+    await this.page.goto(url.href, { waitUntil: 'load' });
+    await this.waitForReady();
   }
 
   async getCurrentScreen() {
@@ -565,9 +619,10 @@ export class HarnessClient {
     return await this.page.evaluate(([p, m, b]) => window.__AIRP_AGENT_TEST__.getApiSnapshot(p, m, b), [path, method, body]);
   }
 
-  async waitFor(predicateSrc, timeoutMs = 5000) {
-    // predicateSrc 是字符串形式的 predicate 函数体，避免序列化闭包
-    return await this.page.evaluate(([src, t]) => window.__AIRP_AGENT_TEST__.waitFor(new Function('return (' + src + ')')(), t), [predicateSrc, timeoutMs]);
+  // predicateId 是预定义标识符字符串，由 harness 内 PREDICATES 注册表解析；
+  // 不再用 new Function(predicateSrc)（webui CSP 禁止 unsafe-eval）。
+  async waitFor(predicateId, timeoutMs = 5000) {
+    return await this.page.evaluate(([id, t]) => window.__AIRP_AGENT_TEST__.waitFor(id, t), [predicateId, timeoutMs]);
   }
 
   async screenshot(path) {
@@ -594,7 +649,7 @@ export const SUPPORTED_ACTIONS = [
   'navigate',     // { action: 'navigate', target: '16-onboarding.html', params?: {} }
   'click',        // { action: 'click', target: '按钮文本' | '#selector' }
   'fill',         // { action: 'fill', target: '#message-input', value: '文本' }
-  'wait',         // { action: 'wait', target: predicateSrc, timeoutMs?: 5000 }
+  'wait',         // { action: 'wait', target: predicateId, timeoutMs?: 5000 }
   'snapshot',     // { action: 'snapshot' } → 返回 DOM 快照 + console + requests
   'screenshot',   // { action: 'screenshot' }
 ];
@@ -737,7 +792,7 @@ if (args.task) {
   taskNames = classifyPrDiff(diff);
 } else {
   // 默认跑全部 4 个任务集
-  taskNames = Object.keys(DIFF_TASK_MAP).flatMap(k => DIFF_TASK_MAP[k]);
+  taskNames = Object.keys(DIFF_TASK_MAP);
   taskNames = [...new Set(taskNames)];
 }
 
@@ -788,7 +843,8 @@ async function runTask(browser, mod, name) {
   });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   const page = await context.newPage();
-  const harness = new HarnessClient(page);
+  // 传 origin 给 HarnessClient，让 navigate() 用 page.goto() 而不是 in-page href
+  const harness = new HarnessClient(page, ORIGIN);
 
   const taskDir = join(resolve(REPORT_DIR), name);
   await mkdir(taskDir, { recursive: true });
@@ -851,11 +907,14 @@ async function runTask(browser, mod, name) {
 }
 
 async function generateAndRunScript(mod, page, harness, taskDir, context) {
-  // 1. 构造 prompt
+  // 1. 构造 prompt（DOM 快照脱敏后再注入）
   const domSnapshot = await harness.getDomSnapshot().catch(() => []);
-  const prompt = buildPrompt(mod, domSnapshot);
+  const sanitized = sanitizeDomSnapshot(domSnapshot);
+  const prompt = buildPrompt(mod, sanitized);
 
   let lastError = null;
+  // ES module strict mode 要求显式声明；否则首次 lastScriptContent = scriptContent 抛 ReferenceError
+  let lastScriptContent = '';
   for (let revision = 0; revision <= MAX_REVISIONS; revision++) {
     const messages = revision === 0
       ? [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }]
@@ -883,6 +942,19 @@ async function generateAndRunScript(mod, page, harness, taskDir, context) {
     }
   }
   throw new Error('agent script failed after ' + (MAX_REVISIONS + 1) + ' revisions; last error:\n' + lastError);
+}
+
+// 脱敏 DOM 快照：message/memory/history 类元素的内容可能含用户数据，
+// 不应原样发送给外部 LLM（OPENAI_BASE_URL 可指向外部服务，--origin 也可被操作者改到真实实例）
+function sanitizeDomSnapshot(snapshot) {
+  const messageLike = /message|msg|chat|memory|history|conversation|reply|content/i;
+  return snapshot.map(el => {
+    const scope = (el.id || '') + ' ' + (el.classes || []).join(' ') + ' ' + (el.role || '');
+    if (el.text && messageLike.test(scope)) {
+      return { ...el, text: '[REDACTED]' };
+    }
+    return el;
+  });
 }
 
 function buildPrompt(mod, domSnapshot) {
@@ -928,10 +1000,29 @@ function extractCodeBlock(content) {
 }
 
 async function runTempScript(scriptPath, ctx) {
-  const mod = await import('file://' + scriptPath + '?t=' + Date.now());
-  if (typeof mod.run !== 'function') throw new Error('agent script must export async function run(ctx)');
-  await mod.run(ctx);
-  return 0;
+  // LLM 生成的脚本是不可信代码。Prompt 里的"不要读写文件"不是安全边界：
+  // 脚本能访问 process.env、fs、network、process.exit。
+  // MVP（方案 A）至少先在导入前清空 process.env 中的 secret，避免 OPENAI_API_KEY /
+  // GITHUB_TOKEN 被生成的脚本 exfiltrate。真正文件系统/网络隔离要等方案 B
+  // action-protocol 把执行迁到受限 child process / container（见 Task 3 Step 4）。
+  const SECRET_PATTERNS = [/OPENAI_API_KEY/i, /GITHUB_TOKEN/i, /API_KEY/i, /SECRET/i, /PASSWORD/i, /TOKEN/i, /_KEY$/i];
+  const savedSecrets = {};
+  for (const key of Object.keys(process.env)) {
+    if (SECRET_PATTERNS.some(p => p.test(key))) {
+      savedSecrets[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+  try {
+    const mod = await import('file://' + scriptPath + '?t=' + Date.now());
+    if (typeof mod.run !== 'function') throw new Error('agent script must export async function run(ctx)');
+    await mod.run(ctx);
+    return 0;
+  } finally {
+    for (const [key, value] of Object.entries(savedSecrets)) {
+      process.env[key] = value;
+    }
+  }
 }
 
 function parseArgs(argv) {
@@ -1188,39 +1279,27 @@ export async function check(harness, result) {
   return { ok: true };
 }
 
-// 暴露 fixture 路径给 Agent 脚本（通过环境变量传递）
-export const FIXTURES = { characterCardPath: cardPath };
-
-// Agent 脚本可以通过 ctx.harness.getApiSnapshot 调用 /v1/characters/import
-// 导入 fixture 卡片。卡片 JSON 由 Agent 读取（fixture 路径会注入 prompt）。
+// 通过 ctx.fixtures 把解析好的角色卡 JSON 传给 Agent 脚本。
+// 不要传 runner-local 路径：engine server 和 Agent 脚本都不应读 runner 文件系统。
+// runner 在 runTask 里读取该 fixture JSON 并放入 ctx.fixtures.characterCard。
+export const FIXTURES = { characterCard: JSON.parse(await readFile(cardPath, 'utf8')) };
 ```
 
-注意：`runner.mjs` 的 `buildPrompt` 需要把 `FIXTURES.characterCardPath` 注入 user prompt。在 `runner.mjs` 的 `buildPrompt` 调用前增加：
+注意：`runner.mjs` 需要把 `mod.FIXTURES` 注入到 `ctx`（不是 prompt），让 Agent 脚本通过 `ctx.fixtures.characterCard` 直接拿 JSON 并 POST 到 `/v1/characters/import` 的 `card_json` 字段。`buildPrompt` 的 prompt 只需告诉 Agent："fixture JSON 在 `ctx.fixtures.characterCard`，调 `/v1/characters/import` 时用 `card_json` 字段提交，不要读文件"。
+
+在 `runner.mjs` 的 `runTask` 中构造 ctx 时合并 fixtures：
 
 ```javascript
-// 在 generateAndRunScript 内 buildPrompt 调用处补充 fixture 信息
-const fixtureInfo = mod.FIXTURES
-  ? '\n\nFixtures (read via Node fs in the script if needed):\n' + JSON.stringify(mod.FIXTURES)
+const ctx = { page, harness, context, origin: ORIGIN, fixtures: mod.FIXTURES || {} };
+```
+
+并把 `generateAndRunScript` 内 `runTempScript(scriptPath, ctx)` 保持一致。`buildPrompt` 的 system prompt 已有"不要读写文件"规则，只需在 user prompt 末尾补一句：
+
+```javascript
+const fixtureNote = mod.FIXTURES
+  ? '\n\nFixtures: ctx.fixtures.characterCard is the parsed character card JSON. Use it directly in the POST /v1/characters/import body as { character_id, card_json }. Do NOT read files.'
   : '';
-prompt.user += fixtureInfo;
 ```
-
-由于 `runner.mjs` 已在 Task 3 写定，本任务需在 `runner.mjs` 的 `buildPrompt` 函数末尾 `Output the script now.` 之前追加 fixture 注入。具体修改 `runner.mjs` 的 `buildPrompt` 函数签名，加 `mod` 参数：
-
-```javascript
-function buildPrompt(mod, domSnapshot) {
-  // ... 现有内容 ...
-  const fixtureInfo = mod.FIXTURES
-    ? '\n\nFixtures (read with fs/promises readFile if the script needs them):\n' + JSON.stringify(mod.FIXTURES, null, 2)
-    : '';
-  return {
-    system: /* ... */,
-    user: /* ... */ + fixtureInfo + '\n\nOutput the script now. Only the code block, no explanation.',
-  };
-}
-```
-
-并在 `runTask` 中调用 `buildPrompt(mod, domSnapshot)` 保持参数一致。
 
 - [ ] **Step 3: 手动跑一次验证**
 
@@ -1518,6 +1597,7 @@ jobs:
           node-version: '20'
 
       - name: Install Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
@@ -1529,13 +1609,11 @@ jobs:
       - name: Bootstrap production smoke topology
         working-directory: deploy/production
         run: |
-          # 复用 smoke-ci.sh 的 mock provider + TLS + 临时数据拓扑
-          # 但只启拓扑, 不跑 smoke-ci.sh 本身（避免重复跑现有 smoke）
-          # 此处简化: 直接启 docker compose 拓扑
-          ./smoke-ci.sh &
-          SMOKE_PID=$!
-          # 等 topology ready (smoke-ci.sh 会跑完所有现有 smoke 才退)
-          wait $SMOKE_PID
+          # 用 bootstrap-topology.sh 只启 mock provider + TLS + 临时数据拓扑,
+          # 不跑 smoke-ci.sh 自身（避免重复跑现有 smoke）
+          # 脚本会启 docker compose 后台拓扑, 等待 health ready 后返回, 不阻塞
+          ./bootstrap-topology.sh
+          echo "TOPOLOGY_BOOTSTRAPPED=1" >> $GITHUB_ENV
 
       - name: Run agent exploration
         env:
@@ -1556,6 +1634,13 @@ jobs:
             --report-dir ../../artifacts/agent-exploration \
             --chrome-path $AIRP_CHROME_PATH
 
+      - name: Teardown topology
+        if: always()
+        working-directory: deploy/production
+        run: |
+          # 用同一脚本 teardown, 保证 mock provider + 临时数据卷在 job 结束前清理
+          ./bootstrap-topology.sh --teardown
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -1574,7 +1659,7 @@ jobs:
 ```
 
 注意：
-1. `smoke-ci.sh` 当前是完整跑 smoke 的脚本，Task 9 Step 1 的 bootstrap 步骤需要改为"只启拓扑不跑 smoke"。建议在 `deploy/production/` 新增 `bootstrap-topology.sh`（从 `smoke-ci.sh` 抽取 topology 启停部分，不含 api-smoke/browser-smoke）。此抽取工作作为 Step 1 的子步骤，不在本计划展开代码（避免本计划过长），但实施时必须先做这步，否则 workflow 会重复跑 smoke。
+1. `bootstrap-topology.sh` 必须在 Task 9 Step 1 实施前从 `deploy/production/smoke-ci.sh` 抽取并落地为独立脚本：仅启 mock provider + TLS + 临时数据拓扑、等待 health ready 后返回（不阻塞、不跑 smoke），并支持 `--teardown` 子命令做幂等清理。本计划不展开其代码（避免文档过长），但 workflow 中已直接调用该脚本，缺失会导致 Step 1 失败。
 2. `post-pr-comment.mjs` 需在 Task 9 Step 2 创建。
 
 - [ ] **Step 2: 写 PR 评论发布脚本**

@@ -92,7 +92,7 @@ Browser
 ### 已有地基
 
 - 基础 WebUI RP 闭环、provider 设置、角色导入、默认 Persona、Preset 导入/选择、命名会话、SSE 聊天、Agent Run、诊断和错误恢复已存在。
-- Engine 的 durable message ID 与 cursor history 合同仍在；PR #294 WebUI 当前使用 200 条有界读取、全量 DOM 重建与 rollback-by-ID，cursor"加载更早"和增量 DOM 尚未迁入新壳。
+- Engine 的 durable message ID 与 cursor history 合同仍在；PR #294 WebUI 当前使用 200 条有界读取、全量 DOM 重建与 rollback-by-ID，cursor-based "加载更早"和增量 DOM 尚未迁入新壳。
 - Swipe 多候选 + Smooth Streaming 已交付（PR #249/#251）；auto-regen、continue、per-message actions、单条消息删除已交付（PR #250）。
 - engine 已有 loopback 默认、精确 CORS、可选 bearer、限流、统一 outbound redirect policy、typed error 和 `/health`/`/version`。
 - `deploy/production/` 已有 digest-pinned OCI build、Compose/Caddy 同源 HTTPS 拓扑、私有 engine 网络、secret bootstrap 和 production WebUI runtime config；CI 会 build 镜像并启动一次性真实拓扑，验证 perimeter auth、私有 engine、CSP/headers、content-only import、三轮增量 SSE、重启持久化、浏览器注入/取消和 secret scan。Production 重启连续性已验证（PR #234/#236/#246），Caddy upstream warmup 竞态已修复。
