@@ -199,9 +199,32 @@
   async function renderPresets() {
     const view = $('#view'); view.replaceChildren();
     const [settings, presets] = await Promise.all([client.request('GET', '/v1/settings'), client.request('GET', '/v1/presets')]);
-    const overview = card('Provider 模型', false); const modelOutput = output('当前模型：' + (settings.model || '未设置')); overview.append(modelOutput, button('从 Provider 获取模型列表', async () => {
-      modelOutput.textContent = json(await task('获取模型列表', () => client.request('GET', '/v1/models')));
-    })); view.appendChild(overview);
+    const overview = card('Provider 模型', false);
+    const modelOutput = output('当前模型：' + (settings.model || '未设置'));
+    const modelField = input('模型 ID（拉取后可从下拉选择，显示上游原始 id）', settings.model || '');
+    const modelList = node('datalist'); modelList.id = 'provider-models-list';
+    modelField.control.setAttribute('list', modelList.id);
+    const modelBar = actions();
+    modelBar.append(button('从 Provider 拉取模型列表', async event => {
+      event.currentTarget.disabled = true;
+      setStatus('正在拉取模型列表…');
+      try {
+        const raw = await client.request('GET', '/v1/models');
+        const models = (Array.isArray(raw) ? raw : raw && Array.isArray(raw.data) ? raw.data : []).map(item => typeof item === 'string' ? item : item && (item.id || item.name)).filter(Boolean);
+        modelList.replaceChildren(...models.map(id => { const option = node('option'); option.value = id; return option; }));
+        setStatus(models.length ? '拉取到 ' + models.length + ' 个模型，可在模型 ID 输入框下拉选择。' : '上游返回空模型目录；可继续手输。');
+      } catch (error) {
+        const code = error && error.data && error.data.error && error.data.error.code;
+        setStatus('拉取失败' + (code ? '：' + code : '') + '（可继续手输模型 ID）', true);
+      } finally { event.currentTarget.disabled = false; }
+    }));
+    modelBar.append(button('保存模型', async () => {
+      const value = modelField.control.value.trim();
+      if (!value) { setStatus('模型 ID 不能为空', true); return; }
+      await task('保存模型', () => client.request('POST', '/v1/settings', { model: value }));
+      modelOutput.textContent = '当前模型：' + value;
+    }, 'btn-primary'));
+    overview.append(modelOutput, modelField.wrap, modelList, modelBar); view.appendChild(overview);
     const box = card('预设', false); const form = node('div', 'runtime-form'); box.appendChild(form); view.appendChild(box);
     const pick = selector('已导入预设', presets, presets[0] || '', async value => { editor.control.value = json(await task('读取预设', () => client.request('GET', '/v1/presets/' + encodeURIComponent(value)))); }); form.appendChild(pick.wrap);
     const editor = input('Prompt 列表', presets.length ? json(await client.request('GET', '/v1/presets/' + encodeURIComponent(presets[0]))) : '[]', { multiline: true, code: true }); form.appendChild(editor.wrap);
