@@ -145,6 +145,17 @@ docker run --rm --entrypoint caddy airp-gateway:0.1.0 \
   hash-password --algorithm argon2id --plaintext "$admin_password" \
   > "$deploy/secrets/admin_password_hash"
 
+# B8 修复：engine 容器以 uid 65532 运行（Dockerfile.engine USER 65532:65532），
+# 而上面 umask 077 导致 secrets 文件权限 0600（属主 runner），容器内 uid 65532
+# 无法读取 bind-mount 的 secret，entrypoint 报
+# "missing required secret: /run/secrets/engine_access_key" 并无限重启。
+# smoke-ci.sh 没有显式 umask 077（默认 022），所以 pr-gate.yml 能过。
+# 将需要被非 root 容器读取的 secret 显式设为 0644；admin_password_hash 由 root
+# 运行的 gateway 读取，保持 0644 亦可。
+chmod 0644 "$deploy/secrets/engine_access_key" \
+  "$deploy/secrets/provider_api_key" \
+  "$deploy/secrets/admin_password_hash"
+
 cat > "$deploy/.env" <<EOF
 AIRP_VERSION=0.1.0
 AIRP_PUBLIC_ORIGIN=$origin
