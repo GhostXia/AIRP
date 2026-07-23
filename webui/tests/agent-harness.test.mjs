@@ -32,3 +32,20 @@ test('harness gate defaults to off in production build', () => {
   // 默认关闭逻辑必须存在，生产构建未带 flag 时不暴露
   assert.match(harnessScript, /shouldInstallAgentTestHarness/);
 });
+
+const screens = [
+  '16-onboarding.html', '01-role-list.html', '02-chat-space.html',
+  '17-memory-state.html', '19-branch-tree.html', '14-message-swipe.html',
+];
+
+for (const screen of screens) {
+  test(screen + ' conditionally loads agent-test-harness.js with silent fail', async () => {
+    const html = await readFile(new URL('../screens/' + screen, import.meta.url), 'utf8');
+    // CSP 禁内联事件处理器，用纯 async external script；harness 内 flag 默认 off，文件缺失 404 不阻塞页面
+    assert.match(html, /<script\s+src="[^"]*assets\/agent-test-harness\.js"\s+async><\/script>/);
+    // 不得放在 <head>（避免阻塞首屏）
+    const headEnd = html.indexOf('</head>');
+    const scriptPos = html.indexOf('agent-test-harness.js');
+    assert.ok(scriptPos > headEnd, screen + ': harness script must be after </head>');
+  });
+}
