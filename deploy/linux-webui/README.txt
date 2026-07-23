@@ -19,7 +19,7 @@ upgrade, and copy the existing data/ into the new AIRP folder instead of
 deleting or overwriting it. Protect this folder and your provider credentials.
 Provider API keys are stored in data/secrets.json and are intentionally not
 returned by the API or shown again in the UI. This file is plaintext, matching
-the transparent local-user tradeoff used by projects such as SillyTavern.
+the transparent local-user tradeoff common to single-user local-first apps.
 Anyone who can read this file can use the key, so do not share the AIRP folder,
 publish it, or include secrets.json in support bundles.
 

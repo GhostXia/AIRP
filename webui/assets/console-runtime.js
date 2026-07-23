@@ -174,7 +174,7 @@
     if (!state.characterId) { form.appendChild(node('p', 'runtime-muted', '请先导入角色卡。')); return; }
     const source = await task('读取角色卡', () => client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId)));
     const bar = actions();
-    bar.append(button('保存修改', async () => {
+    bar.append(button('保存 JSON', async () => {
       await task('保存角色卡', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId), parseJson(editor.control.value, '角色卡')));
     }, 'btn-primary'));
     bar.append(button('重新提取附属资源', async () => {
@@ -188,7 +188,8 @@
     nlHead.append(node('span', 'nl-title', '自然语言指导 Agent 修改'), node('span', 'nl-planned-tag', '规划中 · 契约未交付'));
     nlZone.appendChild(nlHead);
     const nlInputRow = node('div', 'nl-input-row');
-    nlInputRow.append(node('div', 'nl-input', '用自然语言描述想怎么改，例如：把艾拉的性格改得更谨慎'), button('生成改写', null, 'btn-primary'));
+    const nlGenBtn = button('生成改写', null, 'btn-primary'); nlGenBtn.disabled = true;
+    nlInputRow.append(node('div', 'nl-input', '用自然语言描述想怎么改，例如：把艾拉的性格改得更谨慎'), nlGenBtn);
     nlZone.append(nlInputRow, node('p', 'nl-note', '后端契约未交付时此区不可操作；不影响手动编辑与 JSON 保存。'));
     form.appendChild(nlZone);
     // JSON 高级折叠区
@@ -224,7 +225,8 @@
         const content = String(entry.content || '').slice(0, 120);
         main.append(node('div', 'runtime-row-title', keys), node('div', 'runtime-row-meta', content + (entry.constant ? ' · constant' : entry.selective ? ' · selective' : '')));
         const ops = node('div', 'op-col');
-        ops.append(node('span', 'op-link', '编辑'), node('span', 'op-link' + (entry.enabled === false ? '' : ''), entry.enabled !== false ? '启用' : '停用'), node('span', 'op-link del', '删除'));
+        const sw = node('span', entry.enabled !== false ? 'switch on' : 'switch');
+        ops.append(node('span', 'op-link', '编辑'), sw, node('span', 'op-link del', '删除'));
         row.append(main, ops);
         list.appendChild(row);
       }
@@ -236,7 +238,8 @@
     nlHead.append(node('span', 'nl-title', '自然语言指导 Agent 修改（整本书级）'), node('span', 'nl-planned-tag', '规划中 · 契约未交付'));
     nlZone.append(nlHead);
     const nlInputRow = node('div', 'nl-input-row');
-    nlInputRow.append(node('div', 'nl-input', '用自然语言描述想怎么改，例如：把废弃航道的危险等级上调'), button('生成改写', null, 'btn-primary'));
+    const nlGenBtn2 = button('生成改写', null, 'btn-primary'); nlGenBtn2.disabled = true;
+    nlInputRow.append(node('div', 'nl-input', '用自然语言描述想怎么改，例如：把废弃航道的危险等级上调'), nlGenBtn2);
     nlZone.append(nlInputRow, node('p', 'nl-note', '未确认前不会落盘 · 单条目级修改 v1 范围外'));
     form.appendChild(nlZone);
     // JSON 高级折叠区
@@ -366,7 +369,7 @@
     modelPicker.appendChild(node('span', 'field-label', '模型（保存后自动拉取 /v1/models · 显示上游原始 id）'));
     const modelSelect = node('div', 'model-picker');
     modelSelect.append(node('span', 't-mono', settings.model || '未设置'), node('span', 'mp-arrow', '▾'));
-    const modelPill = node('span', 'status-pill ok'); modelPill.append(node('i', 'dot'), '已拉取');
+    const modelPill = node('span', 'status-pill neutral'); modelPill.append(node('i', 'dot'), '保存后自动拉取');
     modelPicker.append(modelSelect, modelPill);
     // 降级行（combobox + error code）
     const pickerRow = node('div', 'picker-row');

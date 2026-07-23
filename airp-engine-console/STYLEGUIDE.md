@@ -1,7 +1,7 @@
 # AIRP 控制台 · 权威样板规范（STYLEGUIDE）
 
 本目录是 AIRP 控制台前端的**权威视觉样板**（golden sample）。它与 Ardot 设计稿
-「AIRP Engine Console」（33 屏）逐屏对应，是派生 **WebUI** 与 **桌面端 UI** 的
+「AIRP Engine Console」（32 屏，编号至 33，缺 32）逐屏对应，是派生 **WebUI** 与 **桌面端 UI** 的
 视觉母本。后续 WebUI 与桌面端临时 UI 均须基于本样板开发。派生实现必须逐像素对齐
 本样板；与本样板冲突时，以本样板为准并回写 issue。
 
@@ -19,7 +19,7 @@ airp-engine-console/
 │   ├── components.css    # 共享组件类（全部界面的零件盒）
 │   ├── screens.js        # 屏清单注册表（增删屏的唯一注册点）
 │   └── app.js            # 样板脚手架：右下角返回导航贴片（非设计内容，勿携带）
-├── screens/              # 33 屏，每屏一个独立 HTML，编号与画布画板一致
+├── screens/              # 32 屏（编号至 33，缺 32），每屏一个独立 HTML
 │   ├── 01-role-list.html … 33-wizard-model.html
 └── exports/              # 设计稿归档（32 屏 PDF + 流转图 PNG），只读参照
 ```
