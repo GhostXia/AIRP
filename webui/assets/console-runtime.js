@@ -33,6 +33,7 @@
     ['21', 'quota', '用量配额', '21-usage-quota.html'],
     ['23', 'diagnostics', '诊断', '23-diagnostics.html'],
     ['32', 'style', '风格系统', '32-style-review.html'],
+    ['34', 'graph', '关系图谱', '34-relationship-graph.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 
@@ -181,6 +182,15 @@
     bar.append(button('重新提取附属资源', async () => {
       await task('重新提取', () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/reextract'));
     }));
+    // Phase 1.6: Decompose / Analysis 入口
+    bar.append(button('拆解角色卡', async () => {
+      const result = await task('拆解角色卡', () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/decompose'));
+      setStatus('拆解完成：' + (result.files_written || []).length + ' 个文件已写入 analysis/');
+      renderAnalysisPanel(form);
+    }));
+    bar.append(button('查看 Analysis', async () => {
+      renderAnalysisPanel(form);
+    }));
     bar.append(button('发送到对话', () => { location.href = pathWithState('02-chat-space.html'); }));
     form.appendChild(bar);
     // NL enhance 区（规划中 · 契约未交付）
@@ -206,6 +216,54 @@
     }, 'btn-secondary')));
     ja.append(jaBar, jaBody);
     form.appendChild(ja);
+
+    // Phase 1.6: Analysis 面板（动态加载）
+    async function renderAnalysisPanel(container) {
+      const old = container.querySelector('.analysis-panel'); if (old) old.remove();
+      const panel = node('div', 'analysis-panel runtime-form');
+      panel.appendChild(node('h3', '', 'Analysis 拆解产物'));
+      try {
+        const list = await task('读取 Analysis 列表', () => client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/analysis'));
+        const files = list.files || [];
+        if (!files.length) { panel.appendChild(node('p', 'runtime-muted', '还没有拆解产物。点击“拆解角色卡”生成。')); }
+        else {
+          const fileList = node('div', 'runtime-list');
+          files.forEach(filename => {
+            const row = node('div', 'runtime-row');
+            row.appendChild(node('div', 'runtime-row-title', filename));
+            const ops = node('div', 'op-col');
+            const viewBtn = node('span', 'op-link', '查看');
+            viewBtn.style.cursor = 'pointer';
+            viewBtn.addEventListener('click', async () => {
+              const file = await task('读取 ' + filename, () => client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/analysis/' + encodeURIComponent(filename)));
+              const oldContent = panel.querySelector('.analysis-content'); if (oldContent) oldContent.remove();
+              const pre = output(file.content || '', true); pre.classList.add('analysis-content');
+              panel.appendChild(pre);
+            });
+            const enhanceBtn = node('span', 'op-link', 'Enhance');
+            enhanceBtn.style.cursor = 'pointer';
+            enhanceBtn.addEventListener('click', async () => {
+              const result = await task('Enhance ' + filename, () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/analysis/' + encodeURIComponent(filename), { action: 'enhance' }));
+              const oldContent = panel.querySelector('.analysis-content'); if (oldContent) oldContent.remove();
+              const pre = output(result.enhanced_md || result.diff || json(result), true); pre.classList.add('analysis-content');
+              panel.appendChild(pre);
+              if (result.enhanced_md) {
+                const applyBtn = button('应用 Enhance 结果', async () => {
+                  await task('Apply ' + filename, () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/analysis/' + encodeURIComponent(filename), { action: 'apply', enhanced_md: result.enhanced_md }));
+                  setStatus(filename + ' 已应用增强结果');
+                }, 'btn-primary');
+                panel.appendChild(applyBtn);
+              }
+            });
+            ops.append(viewBtn, enhanceBtn);
+            row.appendChild(ops);
+            fileList.appendChild(row);
+          });
+          panel.appendChild(fileList);
+        }
+      } catch (error) { panel.appendChild(node('p', 'runtime-muted', '加载失败：' + message(error))); }
+      container.appendChild(panel);
+    }
   }
 
   async function renderWorldbook() {
@@ -412,7 +470,38 @@
     const list = card('场景列表', false); const rows = node('div', 'runtime-list'); list.appendChild(rows); view.appendChild(list);
     const editorCard = card('场景 JSON', false); const editor = input('创建或整体替换', json({ scene_id: '', description: '', characters: [], narrator_style: '', lorebook_merge: 'union', format_hint: '' }), { multiline: true, code: true }); editorCard.appendChild(editor.wrap); const save = button('保存场景', async () => { await task('保存场景', () => client.request('POST', '/v1/scenes', parseJson(editor.control.value, '场景'))); renderScenes(); }, 'btn-primary'); editorCard.appendChild(save); view.appendChild(editorCard);
     if (!ids.length) rows.appendChild(node('p', 'runtime-muted', '尚未创建场景。'));
-    for (const id of ids) { const row = node('div', 'runtime-row'); row.append(node('div', 'runtime-row-title', id), button('编辑', async () => { editor.control.value = json(await task('读取场景', () => client.request('GET', '/v1/scenes/' + encodeURIComponent(id)))); })); rows.appendChild(row); }
+    for (const id of ids) {
+      const row = node('div', 'runtime-row');
+      const main = node('div', 'runtime-row-main');
+      main.appendChild(node('div', 'runtime-row-title', id));
+      const meta = node('div', 'runtime-row-meta', ''); main.appendChild(meta);
+      const ops = node('div', 'op-col');
+      ops.appendChild(button('编辑', async () => { editor.control.value = json(await task('读取场景', () => client.request('GET', '/v1/scenes/' + encodeURIComponent(id)))); }));
+      // Phase 1.3: 场景添加角色 UI
+      ops.appendChild(button('+ 角色', async () => {
+        const scene = await task('读取场景', () => client.request('GET', '/v1/scenes/' + encodeURIComponent(id)));
+        meta.textContent = '已有角色: ' + ((scene.characters || []).map(c => c.character_id || c).join(', ') || '无');
+        const oldForm = row.querySelector('.add-char-form'); if (oldForm) { oldForm.remove(); return; }
+        const addForm = node('div', 'add-char-form runtime-form');
+        const charPick = input('角色 ID', state.characterId || '', { select: state.characters.map(v => ({ value: v, label: v })) });
+        const rolePick = input('角色类型', 'main', { select: [{ value: 'main', label: '主角 (main)' }, { value: 'supporting', label: '配角 (supporting)' }, { value: 'npc', label: 'NPC' }, { value: 'narrator', label: '旁白 (narrator)' }] });
+        const addBtn = button('添加到场景', async () => {
+          await task('添加角色到场景', () => client.request('POST', '/v1/scenes/' + encodeURIComponent(id) + '/characters', { character_id: charPick.control.value, role: rolePick.control.value }));
+          setStatus('角色 ' + charPick.control.value + ' 已添加到场景 ' + id);
+          addForm.remove();
+          const updated = await client.request('GET', '/v1/scenes/' + encodeURIComponent(id));
+          meta.textContent = '已有角色: ' + ((updated.characters || []).map(c => c.character_id || c).join(', ') || '无');
+        }, 'btn-primary');
+        addForm.append(charPick.wrap, rolePick.wrap, addBtn);
+        row.after(addForm);
+      }));
+      row.append(main, ops);
+      rows.appendChild(row);
+      // 加载场景元信息
+      client.request('GET', '/v1/scenes/' + encodeURIComponent(id)).then(scene => {
+        meta.textContent = '已有角色: ' + ((scene.characters || []).map(c => c.character_id || c).join(', ') || '无');
+      }).catch(() => {});
+    }
     // World Events 面板
     const weCard = card('世界事件 (World Events)', false);
     const weForm = node('div', 'runtime-form'); weCard.appendChild(weForm);
@@ -494,8 +583,20 @@
       if (!state.characterId) return;
       await task('保存 Soul-Drift', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/drift', { content: driftEditor.control.value }));
       setStatus('Soul-Drift 已保存');
+      if (state.characterId) loadDrift();
     }, 'btn-primary');
-    form.append(driftInfo, driftEditor.wrap, saveBtn);
+    // Phase 1.2: Drift 回滚按钮
+    const rollbackBtn = button('回滚到上一版本', async () => {
+      if (!state.characterId) return;
+      const currentRev = driftEditor.control.dataset.revision;
+      if (!currentRev || Number(currentRev) <= 1) { setStatus('没有可回滚的历史版本', true); return; }
+      const targetRev = Number(currentRev) - 1;
+      if (!window.confirm('确定回滚到 revision ' + targetRev + '？当前内容将被替换。')) return;
+      await task('回滚 Soul-Drift', () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/drift/rollback', { revision: targetRev }));
+      setStatus('Soul-Drift 已回滚到 revision ' + targetRev);
+      loadDrift();
+    });
+    form.append(driftInfo, driftEditor.wrap, saveBtn, rollbackBtn);
     view.appendChild(driftCard);
 
     const reviewCard = card('风格审查 (Style Review)', false);
@@ -544,6 +645,7 @@
         const drift = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/drift');
         driftInfo.textContent = (drift.char_count || 0) + ' / ' + (drift.capacity || 0) + ' 字符 · revision ' + (drift.revision != null ? drift.revision : '—');
         driftEditor.control.value = drift.content || '';
+        driftEditor.control.dataset.revision = drift.revision != null ? drift.revision : '';
       } catch (error) { driftInfo.textContent = '加载失败：' + message(error); }
     }
     // 角色选择后自动加载

@@ -528,11 +528,104 @@
       log('engine.ready', (version && version.version || version || 'ready').toString());
       await loadSessions();
       await loadHistory();
+      startHud(); // Phase 1.5: 启动状态 HUD 轮询
     } catch (error) {
       setConnection('danger', '连接失败');
       emptyState('无法连接 Engine', AIRPApi.errorMessage(error.data, error.message) + '。确认 Engine 已启动后刷新页面。');
       log('engine.error', AIRPApi.errorMessage(error.data, error.message));
     }
+  }
+
+  // ── Phase 1.5: 角色情感状态 HUD（聊天侧栏状态条） ──────────────────────
+  let hudTimer = null;
+  const HUD_INTERVAL = 15000; // 15s 轮询
+
+  function renderHud(stateData) {
+    const hud = $('#state-hud');
+    const body = $('#hud-body');
+    if (!stateData || typeof stateData !== 'object' || stateData.unavailable) {
+      hud.hidden = true;
+      return;
+    }
+    const entries = Object.entries(stateData).filter(([k]) => !k.startsWith('_'));
+    if (!entries.length) { hud.hidden = true; return; }
+    hud.hidden = false;
+    body.replaceChildren();
+    for (const [key, value] of entries) {
+      const row = document.createElement('div');
+      row.className = 'hud-row';
+      const label = document.createElement('span');
+      label.className = 'hud-key';
+      label.textContent = key;
+      const val = document.createElement('span');
+      val.className = 'hud-val';
+      if (typeof value === 'number') {
+        // 数值型显示为进度条
+        const bar = document.createElement('div');
+        bar.className = 'hud-bar';
+        const fill = document.createElement('div');
+        fill.className = 'hud-fill';
+        fill.style.width = Math.min(100, Math.max(0, value)) + '%';
+        bar.appendChild(fill);
+        val.textContent = value;
+        row.append(label, bar, val);
+      } else {
+        val.textContent = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        row.append(label, val);
+      }
+      body.appendChild(row);
+    }
+  }
+
+  async function pollState() {
+    if (!characterId) return;
+    try {
+      const data = await client.request('GET', '/v1/characters/' + encodeURIComponent(characterId) + '/state');
+      renderHud(data);
+    } catch { /* 状态不可用时静默隐藏 */ $('#state-hud').hidden = true; }
+  }
+
+  function startHud() {
+    stopHud();
+    pollState();
+    hudTimer = setInterval(pollState, HUD_INTERVAL);
+  }
+  function stopHud() { if (hudTimer) { clearInterval(hudTimer); hudTimer = null; } }
+
+  // ── Phase 1.1: 对话导出（Markdown / JSON 一键下载） ──────────────────────
+  function downloadBlob(content, filename, mime) {
+    const blob = new Blob([content], { type: mime + ';charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  }
+
+  async function exportConversation(format) {
+    if (!characterId || !sessionId) { log('export.error', '请先选择角色和会话'); return; }
+    try {
+      const data = await client.request('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId, limit: 9999 });
+      const messages = Array.isArray(data && data.messages) ? data.messages : [];
+      const timestamps = Array.isArray(data && data.message_timestamps) ? data.message_timestamps : [];
+      if (!messages.length) { log('export.empty', '当前会话无消息'); return; }
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+      const base = (characterName || characterId) + '_' + sessionId.slice(0, 8) + '_' + stamp;
+      if (format === 'json') {
+        const payload = { character: characterName || characterId, character_id: characterId, session_id: sessionId, exported_at: new Date().toISOString(), total: messages.length, messages: messages.map((m, i) => ({ role: m.role, content: m.content || m.text || '', timestamp: timestamps[i] || null })) };
+        downloadBlob(JSON.stringify(payload, null, 2), base + '.json', 'application/json');
+      } else {
+        let md = '# ' + (characterName || characterId) + ' — 对话记录\n\n';
+        md += '> 会话: ' + sessionId + '  \n> 导出时间: ' + new Date().toLocaleString('zh-CN') + '  \n> 消息数: ' + messages.length + '\n\n---\n\n';
+        messages.forEach((m, i) => {
+          const role = String(m.role || 'assistant').toLowerCase() === 'user' ? (sessionStorage.getItem('airp_user_name') || 'User') : (characterName || 'Assistant');
+          const time = timestamps[i] ? new Date(timestamps[i]).toLocaleString('zh-CN') : '';
+          md += '### ' + role + (time ? ' · ' + time : '') + '\n\n' + (m.content || m.text || '') + '\n\n';
+        });
+        downloadBlob(md, base + '.md', 'text/markdown');
+      }
+      log('export.' + format, messages.length + ' 条消息已导出');
+    } catch (error) { log('export.error', AIRPApi.errorMessage(error.data, error.message)); }
   }
 
   async function searchHistory() {
@@ -567,6 +660,8 @@
   });
   $('#clear-log').addEventListener('click', () => eventLog.replaceChildren());
   $('#toggle-log').addEventListener('click', () => { $('.pane-right').hidden = !$('.pane-right').hidden; });
+  $('#export-md').addEventListener('click', () => exportConversation('md'));
+  $('#export-json').addEventListener('click', () => exportConversation('json'));
   const searchInput = $('#search-input');
   if (searchInput) {
     searchInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); searchHistory(); } });

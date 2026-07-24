@@ -51,3 +51,12 @@
 /* P4: 会话切换过渡 */
 .msg-flow.switching { opacity: 0.4; transition: opacity .12s ease; }
 .msg-flow { transition: opacity .18s ease; }
+/* Phase 1.5: 角色情感状态 HUD */
+.state-hud { margin: 8px 10px 4px; padding: 8px 10px; background: var(--bg-subtle); border-radius: var(--radius-input); border: 1px solid var(--border-default); }
+.hud-title { font-size: 10px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.hud-body { display: flex; flex-direction: column; gap: 4px; }
+.hud-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.hud-key { color: var(--text-secondary); min-width: 56px; flex: none; }
+.hud-val { color: var(--text-primary); font-family: var(--font-mono); font-size: 10px; }
+.hud-bar { flex: 1; height: 4px; background: var(--bg-default); border-radius: 2px; overflow: hidden; }
+.hud-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width .3s ease; }
