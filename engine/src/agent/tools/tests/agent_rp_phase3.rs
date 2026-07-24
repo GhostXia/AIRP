@@ -54,7 +54,7 @@ async fn update_relationship_writes_live_json_with_revision_contract() {
                 "relation_type": "ally",
                 "intensity": 0.8
             }),
-            false,
+            true,
         )
         .await
         .unwrap();
@@ -109,7 +109,7 @@ async fn advance_plot_appends_plot_history_under_revision_contract() {
                 "development": "The tower doors swung open",
                 "type": "progression"
             }),
-            false,
+            true,
         )
         .await
         .unwrap();
@@ -155,7 +155,7 @@ async fn get_plot_status_returns_history_and_pending_clues() {
                 "development": "Setup scene",
                 "type": "setup"
             }),
-            false,
+            true,
         )
         .await
         .unwrap();
@@ -466,7 +466,7 @@ async fn concurrent_update_relationship_and_advance_plot_do_not_lose_updates() {
                     .build()
                     .expect("failed to build worker runtime");
                 let tool = reg.get(tool_name).unwrap();
-                rt.block_on(async { tool.call(params, false).await })
+                rt.block_on(async { tool.call(params, true).await })
             });
             handles.push(h);
         }
@@ -539,7 +539,7 @@ async fn update_relationship_returns_internal_when_live_json_is_not_object() {
                 "relation_type": "ally",
                 "intensity": 0.5
             }),
-            false,
+            true,
         )
         .await;
 
@@ -585,7 +585,7 @@ async fn update_relationship_returns_internal_when_relationships_field_is_wrong_
                 "relation_type": "ally",
                 "intensity": 0.5
             }),
-            false,
+            true,
         )
         .await;
 
@@ -619,7 +619,7 @@ async fn advance_plot_returns_internal_when_live_json_is_not_object() {
                 "development": "the tower fell",
                 "type": "progression"
             }),
-            false,
+            true,
         )
         .await;
 
@@ -657,7 +657,7 @@ async fn advance_plot_returns_internal_when_plot_history_field_is_wrong_type() {
                 "development": "the tower fell",
                 "type": "progression"
             }),
-            false,
+            true,
         )
         .await;
 

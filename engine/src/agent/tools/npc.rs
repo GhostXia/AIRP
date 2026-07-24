@@ -106,7 +106,7 @@ impl Tool for UpdateRelationshipTool {
     fn call(
         &self,
         params: Value,
-        _confirm: bool,
+        confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
@@ -127,6 +127,23 @@ impl Tool for UpdateRelationshipTool {
                 .get("intensity")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.5);
+
+            // #281: dry-run 模式——未确认时返回预览，不落盘
+            if !confirm {
+                return Ok(ToolResult {
+                    output: serde_json::json!({
+                        "dry_run": true,
+                        "would_update": {
+                            "from": from_char,
+                            "to": to_char,
+                            "relation_type": relation_type,
+                            "intensity": intensity,
+                        },
+                        "character_id": cid.as_str(),
+                    }),
+                    dry_run: true,
+                });
+            }
 
             // 通过 StateService::mutate 串行化 read-modify-write：
             // 1) 与 advance_plot / update_character_state 共享 state_lock(character_id)，
