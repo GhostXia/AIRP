@@ -47,6 +47,9 @@ pub struct WorldEvent {
     /// 最小触发轮次。
     #[serde(default)]
     pub min_turn: Option<u32>,
+    /// Phase 2.3: 时间触发条件——当 world_clock >= time_trigger 时自动触发。
+    #[serde(default)]
+    pub time_trigger: Option<u64>,
     /// 事件内容（注入到叙事上下文）。
     pub content: String,
     /// 是否已触发。
@@ -224,6 +227,219 @@ pub(super) fn register(reg: &mut ToolRegistry, state: Arc<DaemonState>) {
         state: state.clone(),
     }))
     .expect(COLLISION);
-    reg.register(Box::new(ListWorldEventsTool { state }))
+    reg.register(Box::new(ListWorldEventsTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(AdvanceClockTool {
+        state: state.clone(),
+    }))
+    .expect(COLLISION);
+    reg.register(Box::new(GetClockTool { state }))
         .expect(COLLISION);
+}
+
+// ── Phase 2.3: 世界时钟 ────────────────────────────────────────────────────────
+
+/// 世界时钟配置与状态。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorldClock {
+    /// 当前时间（抽象时间单位，从 0 开始）。
+    pub current_time: u64,
+    /// 每轮自动推进的时间单位。
+    pub advance_per_turn: u64,
+    /// 时间单位描述（用于显示，如 "hour", "day"）。
+    pub time_unit: String,
+    /// 可选的显示格式（如 "第{day}天 {hour}:00"）。
+    #[serde(default)]
+    pub display_format: Option<String>,
+}
+
+impl Default for WorldClock {
+    fn default() -> Self {
+        Self {
+            current_time: 0,
+            advance_per_turn: 1,
+            time_unit: "hour".to_string(),
+            display_format: None,
+        }
+    }
+}
+
+impl WorldClock {
+    /// 生成人类可读的时间显示。
+    pub fn display(&self) -> String {
+        if let Some(ref fmt) = self.display_format {
+            // 简单模板替换
+            let hours_per_day = 24u64;
+            let day = self.current_time / hours_per_day + 1;
+            let hour = self.current_time % hours_per_day;
+            fmt.replace("{day}", &day.to_string())
+                .replace("{hour}", &format!("{:02}", hour))
+                .replace("{time}", &self.current_time.to_string())
+        } else {
+            format!("T+{} {}", self.current_time, self.time_unit)
+        }
+    }
+}
+
+fn world_clock_path(data_root: &std::path::Path, character_id: &str) -> std::path::PathBuf {
+    data_root
+        .join("characters")
+        .join(character_id)
+        .join("world_clock.json")
+}
+
+/// 读取世界时钟。不存在返回默认值。
+pub fn load_world_clock(
+    data_root: &std::path::Path,
+    character_id: &str,
+) -> Result<WorldClock, AirpError> {
+    let path = world_clock_path(data_root, character_id);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            let clock: WorldClock = serde_json::from_str(&content)?;
+            Ok(clock)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(WorldClock::default()),
+        Err(e) => Err(AirpError::from(e)),
+    }
+}
+
+/// 保存世界时钟。
+pub fn save_world_clock(
+    data_root: &std::path::Path,
+    character_id: &str,
+    clock: &WorldClock,
+) -> Result<(), AirpError> {
+    let path = world_clock_path(data_root, character_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_vec_pretty(clock)?;
+    crate::data_dir::replace_file(&path, &content)?;
+    Ok(())
+}
+
+/// 推进时钟并检查时间触发事件。返回触发的事件列表。
+pub fn advance_and_check_triggers(
+    data_root: &std::path::Path,
+    character_id: &str,
+    session_dir: &std::path::Path,
+    advance_by: Option<u64>,
+) -> Result<(WorldClock, Vec<WorldEvent>), AirpError> {
+    let mut clock = load_world_clock(data_root, character_id)?;
+    let advance = advance_by.unwrap_or(clock.advance_per_turn);
+    clock.current_time += advance;
+    save_world_clock(data_root, character_id, &clock)?;
+
+    // 检查时间触发事件
+    let mut events = load_world_events(data_root, character_id)?;
+    let mut triggered_events = Vec::new();
+    for event in events.iter_mut() {
+        if !event.triggered {
+            if let Some(time_trigger) = event.time_trigger {
+                if clock.current_time >= time_trigger {
+                    event.triggered = true;
+                    triggered_events.push(event.clone());
+                    // 注入事件内容到 current.md
+                    let _ = crate::volume_store::append_to_current(
+                        session_dir,
+                        &format!("\n[世界事件: {}]\n{}\n", event.name, event.content),
+                    );
+                }
+            }
+        }
+    }
+    if !triggered_events.is_empty() {
+        save_world_events(data_root, character_id, &events)?;
+    }
+    Ok((clock, triggered_events))
+}
+
+/// `advance_clock`：推进世界时钟并检查时间触发事件。
+struct AdvanceClockTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for AdvanceClockTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "advance_clock",
+            description: "Advance the world clock by N time units (default: advance_per_turn). Checks and triggers any time-based world events.",
+            side_effect: ToolSideEffect::Mutate,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid = required_character_id(&params)?;
+            let sid = optional_session_id(&params)?;
+            let advance_by = params.get("advance_by").and_then(Value::as_u64);
+
+            let session_dir =
+                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
+
+            let state_boundary = state_lock(cid.as_str());
+            let _state_guard = state_boundary.lock().expect("state lock poisoned");
+
+            let (clock, triggered) = advance_and_check_triggers(
+                &state.data_root,
+                cid.as_str(),
+                &session_dir,
+                advance_by,
+            )?;
+
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "current_time": clock.current_time,
+                    "display": clock.display(),
+                    "time_unit": clock.time_unit,
+                    "triggered_events": triggered.iter().map(|e| &e.name).collect::<Vec<_>>(),
+                }),
+                dry_run: false,
+            })
+        })
+    }
+}
+
+/// `get_clock`：读取当前世界时钟状态。
+struct GetClockTool {
+    state: Arc<DaemonState>,
+}
+
+impl Tool for GetClockTool {
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            name: "get_clock",
+            description: "Get the current world clock state for a character.",
+            side_effect: ToolSideEffect::Readonly,
+        }
+    }
+
+    fn call(
+        &self,
+        params: Value,
+        _confirm: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let cid = required_character_id(&params)?;
+            let clock = load_world_clock(&state.data_root, cid.as_str())?;
+            Ok(ToolResult {
+                output: serde_json::json!({
+                    "current_time": clock.current_time,
+                    "display": clock.display(),
+                    "time_unit": clock.time_unit,
+                    "advance_per_turn": clock.advance_per_turn,
+                }),
+                dry_run: false,
+            })
+        })
+    }
 }
