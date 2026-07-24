@@ -326,6 +326,28 @@ async fn run_memory_extraction(
     // 追加到 resident.md
     crate::memory::append_resident_memory(session_dir, &facts)?;
 
+    // Phase 2.5: 遗忘曲线衰减 pass（压缩前先淡出低权重条目）
+    let decay_config = crate::memory::DecayConfig::default();
+    let content_before_decay = crate::memory::read_resident_memory(session_dir)?;
+    if !content_before_decay.trim().is_empty() {
+        match crate::memory::apply_decay(session_dir, &content_before_decay, &decay_config) {
+            Ok(result) => {
+                if result.faded_count > 0 {
+                    tracing::info!(
+                        faded = result.faded_count,
+                        total = result.total_entries,
+                        "resident memory 遗忘曲线：淡出 {} 条低权重记忆",
+                        result.faded_count
+                    );
+                    crate::memory::write_resident_memory(session_dir, &result.retained)?;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "decay pass 失败，跳过");
+            }
+        }
+    }
+
     // 检查是否需要压缩
     let resident_config = crate::memory::ResidentMemoryConfig::default();
     if crate::memory::is_over_capacity(session_dir, &resident_config) {
