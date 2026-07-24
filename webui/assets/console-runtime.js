@@ -34,6 +34,7 @@
     ['23', 'diagnostics', '诊断', '23-diagnostics.html'],
     ['32', 'style', '风格系统', '32-style-review.html'],
     ['34', 'graph', '关系图谱', '34-relationship-graph.html'],
+    ['35', 'plotarc', '剧情弧', '35-plot-arc.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 
