@@ -21,14 +21,8 @@ pub struct ResidentMemoryConfig {
 
 impl Default for ResidentMemoryConfig {
     fn default() -> Self {
-        // #274: 支持环境变量 AIRP_MEMORY_CAP 热重载容量，无需重编译
-        let cap = std::env::var("AIRP_MEMORY_CAP")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(RESIDENT_MEMORY_DEFAULT_CAP);
         Self {
-            capacity_chars: cap,
+            capacity_chars: RESIDENT_MEMORY_DEFAULT_CAP,
         }
     }
 }

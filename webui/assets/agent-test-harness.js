@@ -73,13 +73,11 @@
       if (interactive || (node.textContent && node.textContent.trim() && node.children.length === 0)) {
         const rect = node.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) { node = walker.nextNode(); continue; }
-        // #307: 只取元素自身直接文本，不泄漏子节点内容
-        const ownText = Array.from(node.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim().slice(0, 200);
         out.push({
           tag,
           id: node.id || null,
           classes: node.className && typeof node.className === 'string' ? node.className.split(/\s+/).filter(Boolean) : [],
-          text: ownText || (node.children.length === 0 ? (node.textContent || '').trim().slice(0, 200) : ''),
+          text: (node.textContent || '').trim().slice(0, 200),
           role: node.getAttribute('role'),
           ariaLabel: node.getAttribute('aria-label'),
           disabled: node.disabled || false,

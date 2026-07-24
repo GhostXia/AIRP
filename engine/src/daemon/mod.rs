@@ -40,8 +40,7 @@ use handlers::{
     get_character_lorebook, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
     get_persona_endpoint, get_persona_multi_endpoint, get_preset_endpoint, get_resident_memory,
-    get_scene_endpoint, get_settings, get_user_model, get_world_events, import_character,
-    import_preset_endpoint,
+    get_scene_endpoint, get_settings, get_user_model, import_character, import_preset_endpoint,
     list_agent_tools, list_characters, list_models, list_personas_endpoint, list_presets_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
     reextract_character_assets, regen_chat, rollback_chat, rollback_drift, style_review,
@@ -358,10 +357,6 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             get(get_character_state_schema),
         )
         .route(
-            "/v1/characters/:character_id/world-events",
-            get(get_world_events),
-        )
-        .route(
             "/v1/scenes",
             get(list_scenes_endpoint).post(create_scene_endpoint),
         )
@@ -433,8 +428,6 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             get(get_user_model)
                 .put(update_user_model.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
         )
-        // ── Onboarding（#303 状态持久化） ────────────────────────────────────
-        .route("/v1/onboarding/complete", post(complete_onboarding))
         // ── Decompose Agent Flow（Task 7） ──────────────────────────────────
         .route(
             "/v1/characters/:character_id/decompose",
@@ -639,31 +632,11 @@ async fn health_handler(
         let _ = std::fs::remove_file(state.data_root.join(".health_probe"));
     }
 
-    // #303: onboarding 完成状态持久化在 data_root，不再依赖浏览器 localStorage
-    let onboarded = state.data_root.join(".onboarded").exists();
-
     axum::Json(HealthInfo {
         engine: "ok",
         provider_configured,
         data_root_writable,
-        onboarded,
     })
-}
-
-/// POST /v1/onboarding/complete — 标记 onboarding 已完成（#303）。
-///
-/// 在 data_root 写入 `.onboarded` 标记文件。幂等：重复调用不报错。
-async fn complete_onboarding(
-    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
-) -> Response {
-    let marker = state.data_root.join(".onboarded");
-    match std::fs::write(&marker, b"true") {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            tracing::error!(path = %marker.display(), error = %e, "failed to write onboarding marker");
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to persist onboarding state").into_response()
-        }
-    }
 }
 
 #[derive(serde::Serialize)]
@@ -671,8 +644,6 @@ struct HealthInfo {
     engine: &'static str,
     provider_configured: bool,
     data_root_writable: bool,
-    /// #303: 是否已完成首次引导（持久化在 data_root/.onboarded）。
-    onboarded: bool,
 }
 
 #[cfg(test)]

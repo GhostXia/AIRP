@@ -46,7 +46,7 @@ impl Tool for AdvancePlotTool {
     fn call(
         &self,
         params: Value,
-        confirm: bool,
+        _confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let state = self.state.clone();
         Box::pin(async move {
@@ -60,19 +60,6 @@ impl Tool for AdvancePlotTool {
                 .and_then(Value::as_str)
                 .unwrap_or("progression");
             let sid = optional_session_id(&params)?;
-
-            // #281: dry-run 模式——未确认时返回预览，不落盘
-            if !confirm {
-                return Ok(ToolResult {
-                    output: serde_json::json!({
-                        "dry_run": true,
-                        "would_inject": format!("[剧情推进: {}] {}", plot_type, development),
-                        "character_id": cid.as_str(),
-                        "session_id": sid.as_ref().map(|s| s.to_string()),
-                    }),
-                    dry_run: true,
-                });
-            }
 
             // 注入剧情推进到 session 的 current.md
             let session_dir =

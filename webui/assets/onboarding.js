@@ -350,9 +350,7 @@
         sessionStorage.removeItem(firstChatSessionKey);
         sessionStorage.removeItem(firstChatUncertainKey);
         uncertainFirstChat = null;
-        // #303: 持久化到 Engine data_root，localStorage 仅作离线后备
-        client.request('POST', '/v1/onboarding/complete').catch(() => {});
-        try { localStorage.setItem('airp_onboarded', 'true'); } catch (e) { /* noop */ }
+        localStorage.setItem('airp_onboarded', 'true');
         setStatus('首次配置与首轮对话已完成。');
         setEngine('ok', 'AIRP 已就绪');
         message.control.disabled = true;
@@ -390,9 +388,7 @@
   }
 
   $('#skip-onboarding').addEventListener('click', () => {
-    // #303: 持久化到 Engine data_root，localStorage 仅作离线后备
-    client.request('POST', '/v1/onboarding/complete').catch(() => {});
-    try { localStorage.setItem('airp_onboarded', 'true'); } catch (e) { /* noop */ }
+    try { localStorage.setItem('airp_onboarded', 'true'); } catch {}
     location.href = '01-role-list.html';
   });
 

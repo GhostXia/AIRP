@@ -20,8 +20,6 @@
   let messageCount = 0;
   let lastHistory = null;
   let streamController = null;
-  let branchMeta = null; // { activePath: Set, activeLeaf, parents: [] }
-  let historyCursor = null; // { hasMore, oldestId } — #122 窗口化分页
 
   function log(type, detail) {
     const row = document.createElement('div');
@@ -98,19 +96,6 @@
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
   }
 
-  // P4: 错误可行动化——根据错误类型给出具体操作建议
-  function actionableHint(error, msg) {
-    const text = (msg || '').toLowerCase();
-    if (text.includes('upstream') || text.includes('provider') || text.includes('api_key')) return '检查设置页的 Provider 配置和 API Key 是否正确。';
-    if (text.includes('quota') || text.includes('429')) return '今日配额已用尽，明天再试或调整配额设置。';
-    if (text.includes('timeout') || text.includes('idle')) return 'Provider 响应超时，可能是网络问题或模型负载高，稍后重试。';
-    if (text.includes('model') && text.includes('not')) return '模型不存在或不可用，请在设置页更换模型。';
-    if (error && error.status === 401) return 'API Key 无效或已过期，请更新设置。';
-    if (error && error.status === 404) return '角色或会话不存在，请刷新页面重新选择。';
-    if (text.includes('network') || text.includes('fetch')) return 'Engine 连接失败，确认 Engine 已启动并刷新页面。';
-    return '';
-  }
-
   function appendMessage(role, text, options) {
     if (flow.querySelector('.runtime-empty')) flow.replaceChildren();
     const row = document.createElement('div');
@@ -122,7 +107,7 @@
       row.appendChild(avatar);
     }
     const bubble = document.createElement('div');
-    bubble.className = 'bubble ' + (role === 'user' ? 'user' : 'ai') + (options && options.error ? ' runtime-error' : '') + (options && options.onActivePath === false ? ' branch-inactive' : '');
+    bubble.className = 'bubble ' + (role === 'user' ? 'user' : 'ai') + (options && options.error ? ' runtime-error' : '');
     const content = document.createElement('div');
     content.className = 'bubble-text';
     content.textContent = text || '';
@@ -130,29 +115,6 @@
     meta.className = 'meta';
     meta.textContent = messageTime(options && options.timestamp) || (options && options.streaming ? '正在生成' : '');
     bubble.append(content, meta);
-    // Swipe 内联：多候选时显示切换控件
-    const candidates = options && options.candidates;
-    const swipeIndex = options && options.swipeIndex || 0;
-    if (role !== 'user' && candidates && candidates.length > 1 && options && options.messageId) {
-      const swipeBar = document.createElement('div');
-      swipeBar.className = 'swipe-bar';
-      const prev = document.createElement('button'); prev.type = 'button'; prev.className = 'swipe-btn'; prev.textContent = '‹'; prev.setAttribute('aria-label', '上一个候选');
-      const indicator = document.createElement('span'); indicator.className = 'swipe-indicator'; indicator.textContent = (swipeIndex + 1) + '/' + candidates.length;
-      const next = document.createElement('button'); next.type = 'button'; next.className = 'swipe-btn'; next.textContent = '›'; next.setAttribute('aria-label', '下一个候选');
-      const doSwipe = async (newIndex) => {
-        if (streamController) return;
-        try {
-          const resp = await client.request('POST', '/v1/chat/swipe', { character_id: characterId, session_id: sessionId, message_id: options.messageId, index: newIndex });
-          content.textContent = resp.content || candidates[newIndex] || '';
-          indicator.textContent = (resp.index + 1) + '/' + resp.candidates_count;
-          log('chat.swipe', options.messageId + ' → ' + (resp.index + 1) + '/' + resp.candidates_count);
-        } catch (error) { log('chat.swipe.error', AIRPApi.errorMessage(error.data, error.message)); }
-      };
-      prev.addEventListener('click', () => { const cur = parseInt(indicator.textContent) - 1; if (cur > 0) doSwipe(cur - 1); });
-      next.addEventListener('click', () => { const cur = parseInt(indicator.textContent) - 1; if (cur < candidates.length - 1) doSwipe(cur + 1); });
-      swipeBar.append(prev, indicator, next);
-      bubble.appendChild(swipeBar);
-    }
     if (options && options.messageId) {
       row.dataset.messageId = options.messageId;
       const controls = document.createElement('div');
@@ -163,13 +125,6 @@
       addAction('回滚到这里', () => rollbackTo(options.messageId));
       addAction('删除', () => deleteMessage(options.messageId));
       if (role === 'user') addAction('编辑', () => editMessage(options.messageId, content.textContent));
-      // Branch 内联：非活动分支的叶节点显示“切到此分支”
-      if (options.onActivePath === false && branchMeta && branchMeta.ids) {
-        const isLeaf = !branchMeta.parents.some(p => p === options.messageId);
-        if (isLeaf && options.messageId !== branchMeta.activeLeaf) {
-          addAction('⎇ 切到此分支', () => switchBranch(options.messageId));
-        }
-      }
       bubble.appendChild(controls);
     }
     row.appendChild(bubble);
@@ -233,8 +188,7 @@
     setComposer(false);
     emptyState('正在加载历史', '从 Engine 读取当前会话。');
     try {
-      // #122: 初始加载最近 50 条，而非 200 条全量重建
-      const data = await client.request('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId, limit: 50 });
+      const data = await client.request('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId, limit: 200 });
       lastHistory = data;
       const messages = Array.isArray(data && data.messages) ? data.messages : [];
       const timestamps = Array.isArray(data && data.message_timestamps) ? data.message_timestamps : [];
@@ -246,97 +200,12 @@
       $('#context-count').textContent = '上下文 ' + messageCount + ' 条';
       if (!messages.length) emptyState('会话已就绪', '发送第一条消息，开始这段对话。');
       const ids = Array.isArray(data && data.message_ids) ? data.message_ids : [];
-      const allCandidates = Array.isArray(data && data.message_candidates) ? data.message_candidates : [];
-      const allSwipeIdx = Array.isArray(data && data.message_swipe_index) ? data.message_swipe_index : [];
-      const allParents = Array.isArray(data && data.message_parents) ? data.message_parents : [];
-      const activePath = Array.isArray(data && data.active_path) ? data.active_path : ids.slice();
-      const activeLeaf = data && data.active_leaf || null;
-      branchMeta = { activePath: new Set(activePath), activeLeaf, parents: allParents, ids };
-      historyCursor = { hasMore: Boolean(data && data.has_more), oldestId: data && data.oldest_id || null };
-      renderLoadMore();
-      messages.forEach((message, index) => appendMessage(String(message.role).toLocaleLowerCase() === 'user' ? 'user' : 'assistant', message.content || message.text || '', { timestamp: timestamps[index], messageId: ids[index], candidates: allCandidates[index], swipeIndex: allSwipeIdx[index] || 0, onActivePath: activePath.includes(ids[index]) }));
+      messages.forEach((message, index) => appendMessage(String(message.role).toLocaleLowerCase() === 'user' ? 'user' : 'assistant', message.content || message.text || '', { timestamp: timestamps[index], messageId: ids[index] }));
       setComposer(true);
     } catch (error) {
       emptyState('历史加载失败', AIRPApi.errorMessage(error.data, error.message));
       setComposer(true);
     }
-  }
-
-  // #122: “加载更早”按钮渲染与增量 prepend
-  function renderLoadMore() {
-    const existing = flow.querySelector('.load-more-row');
-    if (existing) existing.remove();
-    if (!historyCursor || !historyCursor.hasMore) return;
-    const row = document.createElement('div');
-    row.className = 'load-more-row';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'load-more-btn';
-    btn.textContent = '↑ 加载更早的消息';
-    btn.addEventListener('click', loadMore);
-    row.appendChild(btn);
-    flow.prepend(row);
-  }
-
-  async function loadMore() {
-    if (!sessionId || !historyCursor || !historyCursor.oldestId || streamController) return;
-    const btn = flow.querySelector('.load-more-btn');
-    if (btn) { btn.disabled = true; btn.textContent = '正在加载…'; }
-    try {
-      const data = await client.request('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId, limit: 50, before: historyCursor.oldestId });
-      const messages = Array.isArray(data && data.messages) ? data.messages : [];
-      const timestamps = Array.isArray(data && data.message_timestamps) ? data.message_timestamps : [];
-      const ids = Array.isArray(data && data.message_ids) ? data.message_ids : [];
-      const allCandidates = Array.isArray(data && data.message_candidates) ? data.message_candidates : [];
-      const allSwipeIdx = Array.isArray(data && data.message_swipe_index) ? data.message_swipe_index : [];
-      const activePath = branchMeta ? Array.from(branchMeta.activePath) : [];
-      historyCursor = { hasMore: Boolean(data && data.has_more), oldestId: data && data.oldest_id || null };
-      renderLoadMore();
-      // 增量 prepend：保持滚动位置不跳
-      const anchor = flow.querySelector('.msg-row');
-      const prevTop = anchor ? anchor.getBoundingClientRect().top : 0;
-      const fragment = document.createDocumentFragment();
-      messages.forEach((message, index) => {
-        const temp = appendMessageToFragment(fragment, String(message.role).toLocaleLowerCase() === 'user' ? 'user' : 'assistant', message.content || message.text || '', { timestamp: timestamps[index], messageId: ids[index], candidates: allCandidates[index], swipeIndex: allSwipeIdx[index] || 0, onActivePath: activePath.includes(ids[index]) });
-      });
-      const loadMoreRow = flow.querySelector('.load-more-row');
-      if (loadMoreRow) loadMoreRow.after(fragment);
-      else flow.prepend(fragment);
-      // 滚动位置补偿
-      if (anchor) {
-        const newTop = anchor.getBoundingClientRect().top;
-        flow.scrollTop += newTop - prevTop;
-      }
-      log('chat.loadMore', messages.length + ' 条更早消息');
-    } catch (error) {
-      log('chat.loadMore.error', AIRPApi.errorMessage(error.data, error.message));
-      if (btn) { btn.disabled = false; btn.textContent = '↑ 加载更早的消息'; }
-    }
-  }
-
-  // 辅助：创建消息行并追加到 fragment（不直接插入 flow）
-  function appendMessageToFragment(fragment, role, text, options) {
-    const row = document.createElement('div');
-    row.className = 'msg-row' + (role === 'user' ? ' user' : '');
-    if (role !== 'user') {
-      const avatar = document.createElement('span');
-      avatar.className = 'avatar';
-      avatar.textContent = characterName.slice(0, 1) || 'A';
-      row.appendChild(avatar);
-    }
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble ' + (role === 'user' ? 'user' : 'ai') + (options && options.onActivePath === false ? ' branch-inactive' : '');
-    const content = document.createElement('div');
-    content.className = 'bubble-text';
-    content.textContent = text || '';
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = messageTime(options && options.timestamp);
-    bubble.append(content, meta);
-    if (options && options.messageId) row.dataset.messageId = options.messageId;
-    row.appendChild(bubble);
-    fragment.appendChild(row);
-    return row;
   }
 
   async function rollbackTo(messageId) {
@@ -362,15 +231,6 @@
       await client.request('PUT', '/v1/chat/message', { character_id: characterId, session_id: sessionId, message_id: messageId, content: content.trim() });
       log('chat.edit', messageId); await loadHistory();
     } catch (error) { log('chat.edit.error', AIRPApi.errorMessage(error.data, error.message)); }
-  }
-
-  async function switchBranch(targetLeafId) {
-    if (!sessionId || streamController) return;
-    try {
-      await client.request('POST', '/v1/chat/branch/switch', { character_id: characterId, session_id: sessionId, target_leaf_id: targetLeafId });
-      log('chat.branch.switch', targetLeafId);
-      await loadHistory();
-    } catch (error) { log('chat.branch.error', AIRPApi.errorMessage(error.data, error.message)); }
   }
 
   async function streamMutation(path, label) {
@@ -406,9 +266,7 @@
     sessionId = id;
     sessionStorage.setItem('airp_session_id', id);
     renderSessions();
-    flow.classList.add('switching');
     await loadHistory();
-    flow.classList.remove('switching');
   }
 
   async function createSession() {
@@ -470,9 +328,7 @@
         },
         onDone: () => log('llm.stream.complete', text.length + ' 字符'),
       });
-      // #303: 持久化到 Engine data_root，localStorage 仅作离线后备
-      client.request('POST', '/v1/onboarding/complete').catch(() => {});
-      try { localStorage.setItem('airp_onboarded', 'true'); } catch (e) { /* noop */ }
+      try { localStorage.setItem('airp_onboarded', 'true'); } catch {}
       sessionStorage.removeItem('airp_onboarding_session_id');
       sessionStorage.removeItem('airp_onboarding_commit_uncertain');
       await loadSessions();
@@ -483,12 +339,10 @@
         log('llm.stream.cancel', '用户停止生成');
       } else {
         const uncertain = error && ['partially_committed', 'unknown'].includes(error.commitState);
-        const rawMsg = AIRPApi.errorMessage(error.data, error.message);
-        const suggestion = actionableHint(error, rawMsg);
-        assistant.content.textContent = text || (uncertain ? '生成中断，本轮写入状态不确定。请刷新历史确认，不要直接重发。' : rawMsg + (suggestion ? '\n\n建议：' + suggestion : ''));
+        assistant.content.textContent = text || (uncertain ? '生成中断，本轮写入状态不确定。请刷新历史确认，不要直接重发。' : AIRPApi.errorMessage(error.data, error.message));
         assistant.row.querySelector('.bubble').classList.add('runtime-error');
         assistant.meta.textContent = uncertain ? '状态不确定 · 请刷新历史' : '生成失败';
-        log('llm.stream.error', rawMsg);
+        log('llm.stream.error', AIRPApi.errorMessage(error.data, error.message));
       }
     } finally {
       streamController = null;

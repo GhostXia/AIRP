@@ -35,19 +35,3 @@
 .search-group { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .search-input { width: 160px; font-size: 11px; padding: 4px 8px; }
 .search-heading { padding: 8px 0; font-size: 12px; color: var(--text-secondary); border-bottom: 1px solid var(--border-default); margin-bottom: 8px; }
-/* Swipe 内联控件：多候选回复切换 */
-.swipe-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--border-default); }
-.swipe-btn { border: 0; background: var(--bg-subtle); color: var(--text-secondary); cursor: pointer; font-size: 14px; line-height: 1; padding: 3px 8px; border-radius: var(--radius-input); transition: background .12s, color .12s; }
-.swipe-btn:hover { background: var(--primary-tint); color: var(--primary-strong); }
-.swipe-indicator { font: 10px/1 var(--font-mono); color: var(--text-tertiary); min-width: 28px; text-align: center; }
-/* Branch 内联：非活动分支消息淡化 */
-.branch-inactive { opacity: 0.45; border-left: 2px dashed var(--border-default); }
-.branch-inactive:hover { opacity: 0.75; }
-/* #122 长历史窗口化：加载更早按钮 */
-.load-more-row { text-align: center; padding: 8px 0; }
-.load-more-btn { border: 1px solid var(--border-default); background: var(--bg-subtle); color: var(--text-secondary); cursor: pointer; font: 11px/1.4 var(--font-body); padding: 6px 16px; border-radius: var(--radius-input); transition: background .12s, color .12s; }
-.load-more-btn:hover:not(:disabled) { background: var(--primary-tint); color: var(--primary-strong); }
-.load-more-btn:disabled { opacity: 0.5; cursor: default; }
-/* P4: 会话切换过渡 */
-.msg-flow.switching { opacity: 0.4; transition: opacity .12s ease; }
-.msg-flow { transition: opacity .18s ease; }

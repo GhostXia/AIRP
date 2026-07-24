@@ -44,7 +44,3 @@
 .picker-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 @media (max-width: 1050px) { .console-context { display: none; } }
 @media (max-width: 760px) { .console-body { flex-direction: column; } .console-nav { width: auto; flex: none; display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border-default); } .nav-group { display: none; } .nav-link { flex: 0 0 auto; } .console-main { padding: 20px 16px 40px; } .runtime-grid, .runtime-grid.three { grid-template-columns: 1fr; } }
-/* 记忆容量进度条 */
-.cap-bar { height: 6px; border-radius: 3px; background: var(--bg-subtle); overflow: hidden; margin: 4px 0; }
-.cap-fill { height: 100%; border-radius: 3px; background: var(--primary-strong); transition: width .3s ease; }
-.cap-fill.cap-warn { background: var(--danger); }

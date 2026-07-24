@@ -55,7 +55,7 @@ pub(super) use sessions::{
 pub(super) use settings::{get_settings, update_settings};
 pub(super) use state::{
     get_character_avatar, get_character_state, get_character_state_history,
-    get_character_state_schema, get_world_events,
+    get_character_state_schema,
 };
 pub(super) use style::{get_drift, rollback_drift, style_review, update_drift};
 
