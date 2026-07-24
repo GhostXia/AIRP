@@ -37,7 +37,7 @@ mod analysis;
 mod character;
 mod npc;
 mod params;
-mod plot;
+pub mod plot;
 mod search;
 mod session;
 mod state_lorebook;
