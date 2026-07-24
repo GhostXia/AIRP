@@ -1,9 +1,10 @@
-//! 记忆系统模块：常驻有界记忆 + 自动事实抽取 + 用户模型学习。
+//! 记忆系统模块：常驻有界记忆 + 自动事实抽取 + 用户模型学习 + 遗忘曲线。
 //!
 //! ## 架构
 //! - `resident`: 每角色/每 session 一份有界 markdown（`resident.md`）
 //! - `extract`: 从对话中异步抽取关键事实（控制平面 LLM 调用）
 //! - `compress`: 超限时 LLM 合并压缩
+//! - `decay`: 遗忘曲线——按 importance * recency 衰减，低于阈值的条目淡出
 //! - `user_model`: 每用户一份偏好模型（`user_model.md`）。HTTP 手动编辑 +
 //!   finalize 异步抽取（阶段二补全 D1 已接入）。
 //!
@@ -16,12 +17,14 @@
 //! MVP 范围内只做手动编辑，相关死代码已删除，待后续 PR 真正接入抽取/注入时再加回。
 
 mod compress;
+pub mod decay;
 mod extract;
 pub mod fts;
 mod resident;
 mod user_model;
 
 pub use compress::compress_resident_memory;
+pub use decay::{apply_decay, read_faded, reinforce_entry, DecayConfig, DecayResult};
 pub use extract::{extract_facts, extract_user_preferences, ExtractionConfig};
 pub use fts::{FtsStore, SearchResult};
 pub use resident::{
