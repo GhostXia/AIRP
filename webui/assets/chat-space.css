@@ -60,3 +60,12 @@
 .hud-val { color: var(--text-primary); font-family: var(--font-mono); font-size: 10px; }
 .hud-bar { flex: 1; height: 4px; background: var(--bg-base); border-radius: 2px; overflow: hidden; }
 .hud-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width .3s ease; }
+/* Phase 2.2: NPC 自主行动轮 / 世界推进消息差异化气泡 */
+.bubble.world-event { border-left: 3px solid #e67e22; background: linear-gradient(135deg, var(--bg-subtle) 0%, var(--bg-surface) 100%); }
+.bubble.world-event .bubble-text { font-style: italic; color: var(--text-secondary); }
+.bubble.world-event .meta::before { content: '🌍 '; }
+.bubble.npc-action { border-left: 3px solid #8b5cf6; background: linear-gradient(135deg, var(--bg-subtle) 0%, var(--bg-surface) 100%); }
+.bubble.npc-action .bubble-text { color: var(--text-secondary); }
+.bubble.npc-action .meta::before { content: '🎭 '; }
+.bubble.plot-advance { border-left: 3px solid #22c55e; background: linear-gradient(135deg, var(--bg-subtle) 0%, var(--bg-surface) 100%); }
+.bubble.plot-advance .meta::before { content: '📖 '; }
