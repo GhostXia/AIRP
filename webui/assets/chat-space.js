@@ -69,12 +69,18 @@
       input.disabled = true;
       $('#continue-message').disabled = true;
       $('#regen-message').disabled = true;
+      // Phase 3.5: 流式输出时头像动画
+      const avatar = $('#character-avatar');
+      if (avatar) avatar.classList.add('streaming');
     } else {
       sendButton.classList.remove('stop');
       sendButton.setAttribute('aria-label', '发送消息');
       sendButton.querySelector('.ico').textContent = '?';
       $('#stream-status').textContent = 'Enter 发送 · Shift+Enter 换行';
       setComposer(Boolean(sessionId));
+      // Phase 3.5: 停止头像动画
+      const avatar = $('#character-avatar');
+      if (avatar) avatar.classList.remove('streaming');
     }
   }
 
@@ -171,6 +177,10 @@
       addAction('回滚到这里', () => rollbackTo(options.messageId));
       addAction('删除', () => deleteMessage(options.messageId));
       if (role === 'user') addAction('编辑', () => editMessage(options.messageId, content.textContent));
+      // Phase 3.2: TTS 朗读按钮（仅助手消息）
+      if (role !== 'user' && 'speechSynthesis' in window) addAction('🔊 朗读', () => speakText(content.textContent));
+      // Phase 3.6: 对话片段分享卡片
+      addAction('📷 分享', () => shareAsCard(role, content.textContent, options));
       // Branch 内联：非活动分支的叶节点显示“切到此分支”
       if (options.onActivePath === false && branchMeta && branchMeta.ids) {
         const isLeaf = !branchMeta.parents.some(p => p === options.messageId);
@@ -182,6 +192,9 @@
     }
     row.appendChild(bubble);
     flow.appendChild(row);
+    // Phase 3.5: 消息到达动画
+    bubble.classList.add('arriving');
+    bubble.addEventListener('animationend', () => bubble.classList.remove('arriving'), { once: true });
     flow.scrollTop = flow.scrollHeight;
     return { row, content, meta };
   }
@@ -602,10 +615,12 @@
     try {
       const data = await client.request('GET', '/v1/characters/' + encodeURIComponent(characterId) + '/state');
       renderHud(data);
+      suggestBgm(data); // Phase 3.4: 根据状态推荐 BGM
     } catch (error) {
       // N-L 修复：原静默吞掉错误导致调试困难，至少留一条 warn 级别日志
       console.warn('[AIRP] state HUD 轮询失败，隐藏状态面板', error);
       $('#state-hud').hidden = true;
+      $('#bgm-hud').hidden = true;
     }
   }
 
@@ -615,6 +630,110 @@
     hudTimer = setInterval(pollState, HUD_INTERVAL);
   }
   function stopHud() { if (hudTimer) { clearInterval(hudTimer); hudTimer = null; } }
+
+  // ── Phase 3.4: 氛围 BGM 建议 ──────────────────────────────────────────────
+
+  // ── Phase 3.2: TTS 朗读（Web Speech API） ─────────────────────────────────
+  let ttsVoice = null;
+  function initTtsVoice() {
+    if (!('speechSynthesis' in window)) return;
+    const voices = speechSynthesis.getVoices();
+    // 优先选择中文女声
+    ttsVoice = voices.find(v => v.lang.startsWith('zh') && v.name.includes('Female'))
+      || voices.find(v => v.lang.startsWith('zh'))
+      || voices[0] || null;
+  }
+  if ('speechSynthesis' in window) {
+    speechSynthesis.onvoiceschanged = initTtsVoice;
+    initTtsVoice();
+  }
+  function speakText(text) {
+    if (!('speechSynthesis' in window) || !text) return;
+    speechSynthesis.cancel();
+    // 清理 markdown 标记和特殊符号
+    const clean = text.replace(/\[.*?\]/g, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
+    if (!clean) return;
+    const utterance = new SpeechSynthesisUtterance(clean);
+    if (ttsVoice) utterance.voice = ttsVoice;
+    utterance.lang = 'zh-CN';
+    utterance.rate = 0.9;
+    utterance.pitch = 1.0;
+    speechSynthesis.speak(utterance);
+    log('tts.speak', clean.slice(0, 30) + '…');
+  }
+
+  // ── Phase 3.6: 对话片段分享卡片 ─────────────────────────────────────────
+  function shareAsCard(role, text, options) {
+    if (!text) return;
+    const speaker = role === 'user' ? (sessionStorage.getItem('airp_user_name') || 'User') : (characterName || 'Assistant');
+    const time = options && options.timestamp ? new Date(options.timestamp).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN');
+    // 构建 HTML 卡片
+    const cardHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'
+      + 'body{margin:0;padding:24px;background:#f0f2f5;display:flex;justify-content:center;align-items:center;min-height:100vh;font-family:system-ui,-apple-system,sans-serif}'
+      + '.card{max-width:480px;width:100%;background:#fff;border-radius:16px;padding:24px;box-shadow:0 4px 24px rgba(0,0,0,.08)}'
+      + '.card-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}'
+      + '.card-avatar{width:36px;height:36px;border-radius:50%;background:#6366f1;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}'
+      + '.card-name{font-weight:600;font-size:14px;color:#1e293b}'
+      + '.card-time{font-size:11px;color:#94a3b8}'
+      + '.card-body{font-size:14px;line-height:1.8;color:#334155;white-space:pre-wrap;word-break:break-word}'
+      + '.card-foot{margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:10px;color:#94a3b8;display:flex;justify-content:space-between}'
+      + '</style></head><body><div class="card">'
+      + '<div class="card-head"><div class="card-avatar">' + speaker.slice(0, 1) + '</div><div><div class="card-name">' + speaker + '</div><div class="card-time">' + time + '</div></div></div>'
+      + '<div class="card-body">' + text.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>'
+      + '<div class="card-foot"><span>AIRP · ' + (characterName || '') + '</span><span>' + new Date().toLocaleDateString('zh-CN') + '</span></div>'
+      + '</div></body></html>';
+    const blob = new Blob([cardHtml], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'AIRP_share_' + Date.now() + '.html';
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    log('share.card', speaker + ' 的消息已导出为分享卡片');
+  }
+  const BGM_RULES = [
+    { keywords: ['战斗', '危机', '紧张', '危险', 'combat', 'danger'], mood: '紧张', tracks: ['Two Steps From Hell - Heart of Courage', 'Hans Zimmer - Time', '进击的巨人 OST - ətˈæk 0N tάɪtn'] },
+    { keywords: ['欢乐', '开心', '日常', '温馨', 'happy', 'peaceful'], mood: '欢快', tracks: ['久石让 - Summer', 'Yiruma - River Flows in You', 'Clannad OST - 楽しい会話'] },
+    { keywords: ['悲伤', '离别', '孤独', 'sad', 'lonely'], mood: '伤感', tracks: ['Secret Garden - Song from a Secret Garden', 'Hans Zimmer - Now We Are Free', 'Unravel - Tokyo Ghoul'] },
+    { keywords: ['神秘', '探索', '未知', 'mystery', 'explore'], mood: '神秘', tracks: ['Vangelis - Blade Runner Blues', 'Interstellar Main Theme', 'The Elder Scrolls V - Far Horizons'] },
+    { keywords: ['浪漫', '爱情', '温柔', 'romance', 'love'], mood: '浪漫', tracks: ['Yiruma - Kiss The Rain', 'Ludovico Einaudi - Nuvole Bianche', 'Your Name OST - なんでもないや'] },
+    { keywords: ['史诗', '壮阔', '战争', 'epic', 'war'], mood: '史诗', tracks: ['Two Steps From Hell - Victory', 'Hans Zimmer - Gladiator Suite', 'Lord of the Rings - The Bridge of Khazad Dum'] },
+  ];
+
+  function suggestBgm(stateData) {
+    const hud = $('#bgm-hud');
+    const body = $('#bgm-body');
+    if (!stateData || typeof stateData !== 'object') { hud.hidden = true; return; }
+    // 从状态中提取关键词
+    const stateText = JSON.stringify(stateData).toLowerCase();
+    let matched = null;
+    for (const rule of BGM_RULES) {
+      if (rule.keywords.some(kw => stateText.includes(kw.toLowerCase()))) {
+        matched = rule;
+        break;
+      }
+    }
+    if (!matched) { hud.hidden = true; return; }
+    hud.hidden = false;
+    body.replaceChildren();
+    const tag = document.createElement('span');
+    tag.className = 'bgm-tag';
+    tag.textContent = matched.mood;
+    body.appendChild(tag);
+    matched.tracks.forEach(track => {
+      const item = document.createElement('div');
+      item.className = 'bgm-item';
+      const name = document.createElement('span');
+      name.className = 'bgm-name';
+      name.textContent = track;
+      name.title = track;
+      item.appendChild(name);
+      item.addEventListener('click', () => {
+        window.open('https://www.youtube.com/results?search_query=' + encodeURIComponent(track), '_blank');
+      });
+      body.appendChild(item);
+    });
+  }
 
   // ── Phase 1.1: 对话导出（Markdown / JSON 一键下载） ──────────────────────
   function downloadBlob(content, filename, mime) {
