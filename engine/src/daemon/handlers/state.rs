@@ -102,3 +102,25 @@ pub(in crate::daemon) async fn get_character_state_history(
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+
+/// GET /v1/characters/:character_id/world-events
+///
+/// 返回角色的世界事件列表（world_events.json）。文件不存在时返回空数组。
+pub(in crate::daemon) async fn get_world_events(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(character_id): axum::extract::Path<String>,
+) -> Response {
+    let char_id = match CharacterId::new(character_id) {
+        Ok(id) => id,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let path = state
+        .data_root
+        .join("characters")
+        .join(char_id.as_str())
+        .join("world_events.json");
+    match fs::read_to_string(&path) {
+        Ok(json) => ([(header::CONTENT_TYPE, "application/json")], json).into_response(),
+        Err(_) => ([(header::CONTENT_TYPE, "application/json")], "[]").into_response(),
+    }
+}

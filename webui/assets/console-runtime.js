@@ -32,6 +32,7 @@
     ['20', 'preview', '装配预览', '20-assembly-preview.html'],
     ['21', 'quota', '用量配额', '21-usage-quota.html'],
     ['23', 'diagnostics', '诊断', '23-diagnostics.html'],
+    ['32', 'style', '风格系统', '32-style-review.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 
@@ -216,9 +217,15 @@
     catch (error) { if (error.status !== 404) throw error; setStatus('该角色尚无世界书；保存后创建'); }
     // 条目级操作列
     const entries = book.entries || [];
+    const saveBook = async (newEntries) => {
+      const updated = Object.assign({}, book, { entries: newEntries });
+      await task('保存世界书', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook', updated));
+      setStatus('世界书已保存（' + newEntries.length + ' 条）');
+      renderWorldbook();
+    };
     if (entries.length) {
       const list = node('div', 'runtime-list');
-      for (const entry of entries) {
+      entries.forEach((entry, idx) => {
         const row = node('div', 'runtime-row');
         const main = node('div', 'runtime-row-main');
         const keys = Array.isArray(entry.keys) ? entry.keys.join(', ') : entry.keys || '—';
@@ -226,10 +233,34 @@
         main.append(node('div', 'runtime-row-title', keys), node('div', 'runtime-row-meta', content + (entry.constant ? ' · constant' : entry.selective ? ' · selective' : '')));
         const ops = node('div', 'op-col');
         const sw = node('span', entry.enabled !== false ? 'switch on' : 'switch');
-        ops.append(node('span', 'op-link', '编辑'), sw, node('span', 'op-link del', '删除'));
+        sw.style.cursor = 'pointer';
+        sw.addEventListener('click', async () => { entries[idx].enabled = entry.enabled === false; await saveBook(entries); });
+        const editBtn = node('span', 'op-link', '编辑');
+        editBtn.style.cursor = 'pointer';
+        editBtn.addEventListener('click', () => {
+          const old = list.querySelector('.entry-editor'); if (old) old.remove();
+          const ed = node('div', 'entry-editor runtime-form');
+          const keysInput = input('关键词（逗号分隔）', Array.isArray(entry.keys) ? entry.keys.join(', ') : entry.keys || '');
+          const contentInput = input('内容', entry.content || '', { multiline: true, code: true });
+          const saveBtn2 = button('保存条目', async () => {
+            entries[idx].keys = keysInput.control.value.split(',').map(s => s.trim()).filter(Boolean);
+            entries[idx].content = contentInput.control.value;
+            await saveBook(entries);
+          }, 'btn-primary');
+          const cancelBtn = button('取消', () => ed.remove());
+          ed.append(keysInput.wrap, contentInput.wrap, saveBtn2, cancelBtn);
+          row.after(ed);
+        });
+        const delBtn = node('span', 'op-link del', '删除');
+        delBtn.style.cursor = 'pointer';
+        delBtn.addEventListener('click', async () => {
+          if (!window.confirm('删除条目“' + keys + '”？')) return;
+          entries.splice(idx, 1); await saveBook(entries);
+        });
+        ops.append(editBtn, sw, delBtn);
         row.append(main, ops);
         list.appendChild(row);
-      }
+      });
       form.appendChild(list);
     }
     // NL enhance 区（规划中 · 契约未交付）
@@ -364,7 +395,12 @@
     const view = $('#view'); view.replaceChildren();
     const resident = card('会话常驻记忆', false); const rf = node('div', 'runtime-form'); resident.appendChild(rf); view.appendChild(resident); rf.append(characterSelector(renderMemory).wrap, sessionSelector(renderMemory).wrap);
     let memory = state.characterId ? await client.request('GET', '/v1/memory/resident?character_id=' + encodeURIComponent(state.characterId) + (state.sessionId ? '&session_id=' + encodeURIComponent(state.sessionId) : '')) : { content: '', capacity: 0, char_count: 0 };
-    const re = input('内容（' + (memory.char_count || 0) + ' / ' + (memory.capacity || 0) + ' 字符）', memory.content || '', { multiline: true, code: true }); rf.append(re.wrap, button('保存常驻记忆', () => task('保存常驻记忆', () => client.request('PUT', '/v1/memory/resident', { character_id: state.characterId, session_id: state.sessionId || null, content: re.control.value })), 'btn-primary'));
+    // 容量进度条
+    const capBar = node('div', 'cap-bar'); const capFill = node('div', 'cap-fill'); const pct = memory.capacity ? Math.min(100, Math.round((memory.char_count || 0) / memory.capacity * 100)) : 0; capFill.style.width = pct + '%'; if (pct > 80) capFill.classList.add('cap-warn'); capBar.appendChild(capFill);
+    const capLabel = node('div', 'runtime-muted', (memory.char_count || 0) + ' / ' + (memory.capacity || 0) + ' 字符（' + pct + '%）' + (pct > 80 ? ' · 接近容量上限，超限后自动 LLM 压缩' : ''));
+    rf.append(capBar, capLabel);
+    rf.append(node('p', 'runtime-muted', '每轮对话结束后，Engine 自动从助手回复中抽取事实并追加到常驻记忆；超过容量时触发 LLM 压缩合并。'));
+    const re = input('内容', memory.content || '', { multiline: true, code: true }); rf.append(re.wrap, button('保存常驻记忆', () => task('保存常驻记忆', () => client.request('PUT', '/v1/memory/resident', { character_id: state.characterId, session_id: state.sessionId || null, content: re.control.value })), 'btn-primary'));
     const user = card('用户模型', false); const uf = node('div', 'runtime-form'); user.appendChild(uf); view.appendChild(user); const uid = input('用户 ID', state.userId); const um = await client.request('GET', '/v1/memory/user-model?user_id=' + encodeURIComponent(state.userId)); const ue = input('内容', um.content || '', { multiline: true, code: true }); uf.append(uid.wrap, ue.wrap, button('保存用户模型', () => task('保存用户模型', () => client.request('PUT', '/v1/memory/user-model', { user_id: uid.control.value.trim(), content: ue.control.value })), 'btn-primary'));
     const stateCard = card('角色实时状态', true); if (state.characterId) { const live = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/state').catch(error => ({ unavailable: message(error) })); stateCard.appendChild(output(json(live), true)); } view.appendChild(stateCard);
     const historyCard = card('状态变更历史', true); if (state.characterId) { const history = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/state/history').catch(error => ({ unavailable: message(error) })); historyCard.appendChild(output(json(history), true)); } view.appendChild(historyCard);
@@ -377,6 +413,24 @@
     const editorCard = card('场景 JSON', false); const editor = input('创建或整体替换', json({ scene_id: '', description: '', characters: [], narrator_style: '', lorebook_merge: 'union', format_hint: '' }), { multiline: true, code: true }); editorCard.appendChild(editor.wrap); const save = button('保存场景', async () => { await task('保存场景', () => client.request('POST', '/v1/scenes', parseJson(editor.control.value, '场景'))); renderScenes(); }, 'btn-primary'); editorCard.appendChild(save); view.appendChild(editorCard);
     if (!ids.length) rows.appendChild(node('p', 'runtime-muted', '尚未创建场景。'));
     for (const id of ids) { const row = node('div', 'runtime-row'); row.append(node('div', 'runtime-row-title', id), button('编辑', async () => { editor.control.value = json(await task('读取场景', () => client.request('GET', '/v1/scenes/' + encodeURIComponent(id)))); })); rows.appendChild(row); }
+    // World Events 面板
+    const weCard = card('世界事件 (World Events)', false);
+    const weForm = node('div', 'runtime-form'); weCard.appendChild(weForm);
+    weForm.append(characterSelector(renderScenes).wrap);
+    const weList = node('div', 'runtime-list'); weForm.appendChild(weList);
+    view.appendChild(weCard);
+    if (state.characterId) {
+      try {
+        const events = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/world-events');
+        if (!Array.isArray(events) || !events.length) { weList.appendChild(node('p', 'runtime-muted', '该角色没有定义世界事件。')); }
+        else events.forEach(ev => {
+          const row = node('div', 'runtime-row');
+          const main = node('div', 'runtime-row-main');
+          main.append(node('div', 'runtime-row-title', (ev.triggered ? '✓ ' : '○ ') + (ev.name || ev.id)), node('div', 'runtime-row-meta', (ev.description || '') + (ev.trigger_keywords && ev.trigger_keywords.length ? ' · 关键词: ' + ev.trigger_keywords.join(', ') : '')));
+          row.appendChild(main); weList.appendChild(row);
+        });
+      } catch (error) { weList.appendChild(node('p', 'runtime-muted', '加载失败：' + message(error))); }
+    } else { weList.appendChild(node('p', 'runtime-muted', '选择角色后加载世界事件。')); }
   }
 
   async function renderBranches() {
@@ -429,6 +483,75 @@
     form.append(editor.wrap, node('p', 'runtime-muted', '备注不会发送给 Engine，也不会进入角色、会话或备份。'), button('保存本机备注', () => { localStorage.setItem('airp_console_notes', editor.control.value); setStatus('本机备注已保存'); }, 'btn-primary'));
   }
 
+  async function renderStyle() {
+    const view = $('#view'); view.replaceChildren();
+    const driftCard = card('Soul-Drift 风格漂移', true);
+    const form = node('div', 'runtime-form'); driftCard.appendChild(form);
+    form.append(characterSelector(renderStyle).wrap);
+    const driftInfo = node('div', 'runtime-muted', '选择角色后加载漂移状态');
+    const driftEditor = input('漂移内容', '', { multiline: true, code: true });
+    const saveBtn = button('保存漂移', async () => {
+      if (!state.characterId) return;
+      await task('保存 Soul-Drift', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/drift', { content: driftEditor.control.value }));
+      setStatus('Soul-Drift 已保存');
+    }, 'btn-primary');
+    form.append(driftInfo, driftEditor.wrap, saveBtn);
+    view.appendChild(driftCard);
+
+    const reviewCard = card('风格审查 (Style Review)', false);
+    const reviewForm = node('div', 'runtime-form'); reviewCard.appendChild(reviewForm);
+    const reviewBtn = button('运行风格审查', async () => {
+      if (!state.characterId) { setStatus('请先选择角色', true); return; }
+      reviewBtn.disabled = true; reviewBtn.textContent = '审查中…';
+      try {
+        const resp = await task('风格审查', () => client.request('POST', '/v1/style/review', { character_id: state.characterId, session_id: state.sessionId || null }));
+        renderReviewResult(reviewForm, resp);
+        setStatus(resp.drift_applied ? '审查完成，漂移已更新' : '审查完成');
+        // 刷新漂移显示
+        if (state.characterId) loadDrift();
+      } catch (error) { setStatus('审查失败：' + message(error), true); }
+      finally { reviewBtn.disabled = false; reviewBtn.textContent = '运行风格审查'; }
+    }, 'btn-primary');
+    reviewForm.append(node('p', 'runtime-muted', '对比风格指南与最近 10 条助手回复，检查语气/视角/节奏偏移。需要 Provider 已配置。'), reviewBtn);
+    view.appendChild(reviewCard);
+
+    function renderReviewResult(container, resp) {
+      const old = container.querySelector('.review-result'); if (old) old.remove();
+      const box = node('div', 'review-result');
+      const report = resp.report || {};
+      box.appendChild(node('div', 'runtime-row-title', '语气偏移'));
+      box.appendChild(node('div', 'runtime-muted', report.tone_drift || '无'));
+      if (report.perspective_issues && report.perspective_issues.length) {
+        box.appendChild(node('div', 'runtime-row-title', '视角问题'));
+        report.perspective_issues.forEach(issue => box.appendChild(node('div', 'runtime-muted', '• ' + issue)));
+      }
+      box.appendChild(node('div', 'runtime-row-title', '节奏'));
+      box.appendChild(node('div', 'runtime-muted', report.pacing_notes || '无'));
+      if (report.suggestions && report.suggestions.length) {
+        box.appendChild(node('div', 'runtime-row-title', '建议'));
+        report.suggestions.forEach(s => box.appendChild(node('div', 'runtime-muted', '• ' + s)));
+      }
+      if (report.drift_patch) {
+        box.appendChild(node('div', 'runtime-row-title', 'Drift Patch'));
+        const pre = node('div', 'runtime-code', report.drift_patch); box.appendChild(pre);
+      }
+      container.appendChild(box);
+    }
+
+    async function loadDrift() {
+      if (!state.characterId) { driftInfo.textContent = '选择角色后加载漂移状态'; return; }
+      try {
+        const drift = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/drift');
+        driftInfo.textContent = (drift.char_count || 0) + ' / ' + (drift.capacity || 0) + ' 字符 · revision ' + (drift.revision != null ? drift.revision : '—');
+        driftEditor.control.value = drift.content || '';
+      } catch (error) { driftInfo.textContent = '加载失败：' + message(error); }
+    }
+    // 角色选择后自动加载
+    const origSelector = form.querySelector('select');
+    if (origSelector) origSelector.addEventListener('change', loadDrift);
+    if (state.characterId) loadDrift();
+  }
+
   async function renderUnavailable(kind) {
     const view = $('#view'); view.replaceChildren(); const box = card(kind === 'backup' ? '备份与恢复' : '插件管理', true); box.append(node('div', 'runtime-warning', kind === 'backup' ? '当前 Engine 没有备份/恢复 HTTP API。为避免制造“已备份”的假象，本页不提供不可验证的操作。请先通过文件系统或部署层备份 AIRP 数据目录。' : '当前 Engine 没有插件发现、安装或权限管理 API。本页只声明能力缺口，不伪造插件状态。'), node('p', 'runtime-muted', '后端提供正式契约后，可在此接入并加入 smoke 验收。')); view.appendChild(box);
   }
@@ -439,7 +562,7 @@
     try {
       const health = await client.request('GET', '/health'); $('#engine-status').className = 'status-pill ok'; $('#engine-status').lastChild.textContent = health.provider_configured ? 'Engine 与 Provider 就绪' : 'Engine 就绪 · Provider 待配置';
       await loadScope();
-      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; } };
+      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; } };
       await (renderers[screen] || renderDiagnostics)();
     } catch (error) {
       $('#engine-status').className = 'status-pill danger'; $('#engine-status').lastChild.textContent = '连接或加载失败'; setStatus(message(error), true);
