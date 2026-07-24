@@ -41,9 +41,8 @@ use handlers::{
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
     get_persona_endpoint, get_persona_multi_endpoint, get_preset_endpoint, get_resident_memory,
     get_scene_endpoint, get_settings, get_user_model, get_world_events, import_character,
-    import_preset_endpoint,
-    list_agent_tools, list_characters, list_models, list_personas_endpoint, list_presets_endpoint,
-    list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
+    import_preset_endpoint, list_agent_tools, list_characters, list_models, list_personas_endpoint,
+    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
     reextract_character_assets, regen_chat, rollback_chat, rollback_drift, style_review,
     swipe_chat, switch_branch, unbind_persona_endpoint, update_character_card,
     update_character_lorebook, update_drift, update_persona_endpoint,
@@ -661,7 +660,11 @@ async fn complete_onboarding(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!(path = %marker.display(), error = %e, "failed to write onboarding marker");
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to persist onboarding state").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist onboarding state",
+            )
+                .into_response()
         }
     }
 }
