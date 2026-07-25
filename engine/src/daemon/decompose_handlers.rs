@@ -79,7 +79,7 @@ pub struct EnhancePreview {
 ///
 /// axum 0.7 通配符贪婪匹配，`/*filename/enhance` 子路径与 `/*filename` 冲突，
 /// 因此合并为单 POST 端点，用 `action` 字段区分：
-/// - `action: "enhance"` — 只读返回 diff 预览（enhanced_md 由 LLM 生成，当前实现先返回原内容占位）
+/// - `action: "enhance"` — 只读返回 diff 预览（enhanced_md 由 LLM 真实生成，见 enhance_md_via_llm；issue #92 L3 修复）
 /// - `action: "apply"` — 写入 `enhanced_md` 到文件（需用户提供 enhanced_md 字段）
 #[derive(Deserialize)]
 pub struct EnhanceApplyRequest {

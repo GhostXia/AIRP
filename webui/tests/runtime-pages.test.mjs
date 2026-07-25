@@ -76,7 +76,7 @@ test('chat space exposes session, history and streaming controls', () => {
 test('every shipped screen is compatible with the Engine CSP', async () => {
   const directory = new URL('../screens/', import.meta.url);
   const files = (await readdir(directory)).filter(name => name.endsWith('.html'));
-  assert.equal(files.length, 33);
+  assert.equal(files.length, 34);
   for (const file of files) {
     const html = await readFile(new URL(file, directory), 'utf8');
     assert.doesNotMatch(html, /\sstyle\s*=/i, file + ' contains an inline style');
@@ -113,4 +113,56 @@ test('console-runtime implements #304 new UI components', async () => {
   assert.match(rt, /combobox/, 'missing combobox class');
   // 05 presets must NOT contain model management
   assert.doesNotMatch(rt, /renderPresets[\s\S]*?Provider 模型/, 'presets page must not render model card');
+});
+
+// N-K 修复：PR #314 Phase 1 WebUI 关键修复点契约测试
+test('PR #314 B1/B2/B3/N-D fixes are present in console-runtime and chat-space', async () => {
+  const rt = await readFile(new URL('../assets/console-runtime.js', import.meta.url), 'utf8');
+  const cs = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
+  // B1: AnalysisFileEntry 对象解构（不能把对象当字符串）
+  assert.match(rt, /files\.forEach\(entry =>/, 'B1: must iterate entries as objects');
+  assert.match(rt, /entry\.filename/, 'B1: must extract filename from entry object');
+  assert.doesNotMatch(rt, /files\.forEach\(filename =>/, 'B1: must not treat entry as string filename');
+  // B2: CharacterRole 对齐 Engine（primary/npc，不能是 main/supporting/narrator）
+  assert.match(rt, /value: 'primary'/, 'B2: must offer primary role');
+  assert.match(rt, /value: 'npc'/, 'B2: must offer npc role');
+  assert.doesNotMatch(rt, /value: 'main'/, 'B2: must not offer invalid main role');
+  assert.doesNotMatch(rt, /value: 'supporting'/, 'B2: must not offer invalid supporting role');
+  assert.doesNotMatch(rt, /value: 'narrator'/, 'B2: must not offer invalid narrator role');
+  // B3: 导出不传 limit（走 legacy 全量分支）
+  assert.match(cs, /\/v1\/chat\/history/, 'B3: export must call history endpoint');
+  assert.doesNotMatch(cs, /limit:\s*9999/, 'B3: must not hardcode limit:9999');
+  // N-D: 场景元信息竞态防护 metaToken
+  assert.match(rt, /metaToken/, 'N-D: must use metaToken for race condition protection');
+});
+
+// N-K 修复：PR #314 relationship-graph 关键修复点契约测试
+test('PR #314 N-F/N-G/N-H/N-I/N-M fixes are present in relationship-graph', async () => {
+  const rg = await readFile(new URL('../assets/relationship-graph.js', import.meta.url), 'utf8');
+  const rgHtml = await readFile(new URL('../screens/34-relationship-graph.html', import.meta.url), 'utf8');
+  const rgCss = await readFile(new URL('../assets/relationship-graph.css', import.meta.url), 'utf8');
+  // N-F: intensity:0 不能被 || 0.5 覆盖
+  assert.match(rg, /val\.intensity != null/, 'N-F: must use explicit null check for intensity');
+  assert.doesNotMatch(rg, /val\.intensity\s*\|\|\s*0\.5/, 'N-F: must not use || for intensity default');
+  // N-G: rAF 空转防护
+  assert.match(rg, /ensureAnim/, 'N-G: must have ensureAnim to wake sleeping rAF');
+  assert.match(rg, /animFrame = null/, 'N-G: must nullify animFrame when idle');
+  // N-H: 角色切换后重建导航
+  assert.match(rg, /renderChrome\(\)/, 'N-H: must call renderChrome on character change');
+  assert.match(rg, /nav\.replaceChildren\(\)/, 'N-H: renderChrome must clear old nav before rebuild');
+  // N-I: a11y 替代表格
+  assert.match(rgHtml, /sr-only/, 'N-I: must have sr-only table for a11y');
+  assert.match(rgHtml, /graph-a11y-body/, 'N-I: must have a11y table body');
+  assert.match(rgCss, /\.sr-only/, 'N-I: must define sr-only CSS class');
+  // N-M: 节点边框不用 --text-inverse
+  assert.match(rg, /primaryStrong/, 'N-M: must use primaryStrong for node border');
+  assert.doesNotMatch(rg, /strokeStyle = COLORS\.inverse/, 'N-M: must not use --text-inverse for stroke');
+});
+
+// N-K 修复：PR #314 N-E bearer 跨源防护契约测试
+test('PR #314 N-E bearer cross-origin protection is present in api-client', async () => {
+  const ac = await readFile(new URL('../assets/api-client.js', import.meta.url), 'utf8');
+  assert.match(ac, /shouldSendBearer/, 'N-E: must have shouldSendBearer guard');
+  assert.match(ac, /trustedOrigins/, 'N-E: must support trustedOrigins whitelist');
+  assert.match(ac, /headers\(.*,\s*base\)/, 'N-E: headers must receive target base for origin check');
 });

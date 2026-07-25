@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色关系图谱 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/relationship-graph.css">
+</head>
+<body data-screen="graph">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">角色关系图谱</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>角色 <b id="scope-character">—</b></span><span>会话 <b id="scope-session">—</b></span><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">角色关系图谱</h1>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <div class="graph-toolbar">
+    <label class="field"><span class="field-label">角色</span><select class="select runtime-select" id="graph-character"></select></label>
+    <button class="btn btn-primary" id="graph-refresh" type="button">刷新图谱</button>
+    <span class="runtime-muted" id="graph-info">选择角色后加载关系数据</span>
+  </div>
+  <div class="graph-container" id="graph-box">
+    <canvas id="graph-canvas" role="img" aria-label="角色关系力导向图"></canvas>
+    <!-- N-I 修复：为屏幕阅读器提供语义化替代，canvas 旁的 visually-hidden 表格 -->
+    <table class="sr-only" id="graph-a11y-table" aria-label="关系数据表格化替代">
+      <caption>角色关系列表</caption>
+      <thead><tr><th scope="col">源角色</th><th scope="col">目标角色</th><th scope="col">关系类型</th><th scope="col">强度</th></tr></thead>
+      <tbody id="graph-a11y-body"></tbody>
+    </table>
+    <div class="graph-empty" id="graph-empty">暂无关系数据。角色状态中的 relationships 字段将在此可视化。</div>
+    <div class="graph-legend">
+      <div class="lg-row"><span class="lg-dot" data-color="primary"></span> 角色节点</div>
+      <div class="lg-row"><span class="lg-dot" data-color="edge"></span> 关系强度（线宽）</div>
+      <div class="lg-row"><span class="lg-dot" data-color="friend"></span> 朋友</div>
+      <div class="lg-row"><span class="lg-dot" data-color="enemy"></span> 敌对</div>
+      <div class="lg-row"><span class="lg-dot" data-color="family"></span> 家人</div>
+      <div class="lg-row"><span class="lg-dot" data-color="lover"></span> 恋人</div>
+      <div class="lg-row"><span class="lg-dot" data-color="rival"></span> 对手</div>
+      <div class="lg-row"><span class="lg-dot" data-color="neutral"></span> 中立</div>
+      <div class="lg-row">拖拽节点可调整布局</div>
+    </div>
+  </div>
+</div>
+<div class="related-links" id="related-links"></div>
+</main>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/relationship-graph.js"></script>
+</body></html>
