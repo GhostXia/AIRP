@@ -1,0 +1,18 @@
+/* 38 风格迁移：页面私有样式 */
+.stylelearn-form { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; padding: 16px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+.textarea { resize: vertical; min-height: 160px; font-family: inherit; }
+.stylelearn-meta { font-size: 12px; color: var(--text-tertiary); }
+.stylelearn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.stylelearn-result { margin: 16px 0; }
+.result-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+.result-content { padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-subtle); white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-height: 480px; overflow: auto; margin: 0; }
+.stylelearn-profiles-section { margin-top: 24px; }
+.profiles-list { display: flex; flex-direction: column; gap: 8px; }
+.profiles-list .profile-card { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); cursor: pointer; }
+.profiles-list .profile-card:hover { border-color: var(--border-hover); }
+.profiles-list .profile-card .profile-id { font-weight: 600; color: var(--text-primary); font-size: 13px; }
+.profiles-list .profile-card .profile-meta { font-size: 11px; color: var(--text-tertiary); }
+.profiles-list .empty { padding: 24px; text-align: center; color: var(--text-tertiary); }
+.stylelearn-profile-detail { margin-top: 16px; }
+.profile-content { padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-subtle); white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-height: 480px; overflow: auto; margin: 0 0 8px; }
+.subheading { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 16px 0 8px; }
