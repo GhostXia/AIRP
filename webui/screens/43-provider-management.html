@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多 Provider 路由 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/provider-management.css">
+</head>
+<body data-screen="providers">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">多 Provider 路由</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">多 Provider 路由</h1>
+<p class="description">声明多个上游 provider，按 <b>角色 / 场景角色 / 任务类型</b> 优先级路由。空配置时回退到 <code>settings.json</code> 中的 legacy 单 provider。<b>api_key</b> 单独存储到 <code>data/provider_keys.json</code>，不会写入 <code>data/providers.json</code>。</p>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <section class="pm-section">
+    <div class="pm-section-head">
+      <h2 class="subheading">Provider 列表 <span class="pm-count" id="pm-count">0</span></h2>
+      <div class="pm-section-actions">
+        <button class="btn btn-primary" id="pm-add" type="button">+ 新增 Provider</button>
+        <button class="btn btn-secondary" id="pm-reload" type="button">重新加载</button>
+      </div>
+    </div>
+    <div class="pm-enabled-bar" id="pm-enabled-bar">
+      <span class="pm-enabled-tag" id="pm-enabled-tag">未启用</span>
+      <span class="pm-enabled-hint" id="pm-enabled-hint">provider 数组为空，daemon 走 legacy 单 provider 路径</span>
+    </div>
+    <table class="pm-table" id="pm-table" hidden>
+      <thead><tr><th>name</th><th>endpoint</th><th>model</th><th>engine</th><th>default</th><th>api_key</th><th></th></tr></thead>
+      <tbody id="pm-rows"></tbody>
+    </table>
+    <p class="pm-empty" id="pm-empty">尚未配置任何 provider。点击 “+ 新增 Provider” 开始。</p>
+  </section>
+
+  <section class="pm-section">
+    <h2 class="subheading">路由策略</h2>
+    <p class="description">命中优先级：<b>character_id</b> &gt; <b>scene_role</b> &gt; <b>task_kind</b> &gt; <b>default_provider</b> &gt; 第一个 <code>is_default=true</code> 的 entry。</p>
+    <label class="field"><span class="field-label">default_provider</span><select class="select runtime-select" id="pm-default-provider"></select></label>
+
+    <div class="pm-routing-grid">
+      <div class="pm-routing-col">
+        <h3 class="pm-routing-title">by_character</h3>
+        <p class="pm-routing-hint">character_id → provider name</p>
+        <div class="pm-routing-editor">
+          <input class="input" id="pm-bc-key" placeholder="character_id">
+          <select class="select runtime-select" id="pm-bc-value"></select>
+          <button class="btn btn-secondary" id="pm-bc-add" type="button">+</button>
+        </div>
+        <ul class="pm-routing-list" id="pm-bc-list"></ul>
+      </div>
+      <div class="pm-routing-col">
+        <h3 class="pm-routing-title">by_scene_role</h3>
+        <p class="pm-routing-hint">scene_role → provider name</p>
+        <div class="pm-routing-editor">
+          <input class="input" id="pm-bsr-key" placeholder="scene_role (如 narrator)">
+          <select class="select runtime-select" id="pm-bsr-value"></select>
+          <button class="btn btn-secondary" id="pm-bsr-add" type="button">+</button>
+        </div>
+        <ul class="pm-routing-list" id="pm-bsr-list"></ul>
+      </div>
+      <div class="pm-routing-col">
+        <h3 class="pm-routing-title">by_task_kind</h3>
+        <p class="pm-routing-hint">task_kind → provider name</p>
+        <div class="pm-routing-editor">
+          <input class="input" id="pm-btk-key" placeholder="task_kind (如 summarize)">
+          <select class="select runtime-select" id="pm-btk-value"></select>
+          <button class="btn btn-secondary" id="pm-btk-add" type="button">+</button>
+        </div>
+        <ul class="pm-routing-list" id="pm-btk-list"></ul>
+      </div>
+    </div>
+
+    <div class="pm-routing-actions">
+      <button class="btn btn-primary" id="pm-save-routing" type="button">保存路由策略</button>
+      <button class="btn btn-secondary" id="pm-reset-routing" type="button">放弃修改</button>
+    </div>
+  </section>
+
+  <section class="pm-section">
+    <h2 class="subheading">路由解析测试</h2>
+    <p class="description">模拟一次 RouteContext，查看会命中哪个 provider。仅调试用，不会修改任何配置。</p>
+    <div class="pm-resolve-form">
+      <label class="field"><span class="field-label">character_id</span><input class="input" id="pm-rs-char" placeholder="(可空)"></label>
+      <label class="field"><span class="field-label">scene_role</span><input class="input" id="pm-rs-role" placeholder="(可空)"></label>
+      <label class="field"><span class="field-label">task_kind</span><input class="input" id="pm-rs-task" placeholder="(可空)"></label>
+      <button class="btn btn-secondary" id="pm-rs-run" type="button">解析</button>
+    </div>
+    <div class="pm-resolve-result" id="pm-rs-result" hidden>
+      <span class="pm-resolve-status" id="pm-rs-status">—</span>
+      <span class="pm-resolve-rule" id="pm-rs-rule"></span>
+      <span class="pm-resolve-entry" id="pm-rs-entry"></span>
+    </div>
+  </section>
+</div>
+<div class="related-links" id="related-links"></div>
+</main>
+</div></div>
+
+<template id="pm-row-template">
+  <tr class="pm-row">
+    <td class="pm-cell pm-cell-name"></td>
+    <td class="pm-cell pm-cell-endpoint"><code></code></td>
+    <td class="pm-cell pm-cell-model"></td>
+    <td class="pm-cell pm-cell-engine"></td>
+    <td class="pm-cell pm-cell-default"><span class="pm-default-flag">默认</span></td>
+    <td class="pm-cell pm-cell-key"><span class="pm-key-set">已设置</span><span class="pm-key-unset">未设置</span></td>
+    <td class="pm-cell pm-cell-actions">
+      <button class="btn btn-secondary pm-edit" type="button">编辑</button>
+      <button class="btn btn-secondary pm-delete" type="button">删除</button>
+    </td>
+  </tr>
+</template>
+
+<dialog id="pm-editor" class="pm-editor">
+  <form method="dialog" id="pm-editor-form">
+    <h3 class="pm-editor-title" id="pm-editor-title">编辑 Provider</h3>
+    <label class="field"><span class="field-label">name <em>*</em></span><input class="input" id="pm-ed-name" required maxlength="64" autocomplete="off"></label>
+    <label class="field"><span class="field-label">endpoint <em>*</em></span><input class="input" id="pm-ed-endpoint" required placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off"></label>
+    <label class="field"><span class="field-label">model <em>*</em></span><input class="input" id="pm-ed-model" required placeholder="gpt-4o" autocomplete="off"></label>
+    <label class="field"><span class="field-label">engine</span><select class="select runtime-select" id="pm-ed-engine"><option value="direct">direct (OpenAI compat)</option><option value="anthropic_messages">anthropic_messages</option><option value="claude_code_sdk">claude_code_sdk (not implemented)</option></select></label>
+    <label class="field checkbox"><input type="checkbox" id="pm-ed-default"><span class="field-label">is_default</span></label>
+    <label class="field"><span class="field-label">api_key</span><input class="input" id="pm-ed-apikey" type="password" placeholder="留空表示不修改；输入新值会覆盖" autocomplete="off"></label>
+    <p class="pm-editor-hint" id="pm-editor-hint"></p>
+    <div class="pm-editor-actions">
+      <button class="btn btn-primary" id="pm-ed-save" type="submit">保存</button>
+      <button class="btn btn-secondary" id="pm-ed-cancel" type="button">取消</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="../assets/api-client.js"></script><script src="../assets/provider-management.js"></script>
+</body></html>

@@ -647,6 +647,7 @@ mod tests {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            provider_router: Default::default(),
             config: std::sync::RwLock::new(crate::daemon::MutableConfig {
                 provider: crate::adapter::Provider::OpenAI,
                 endpoint: "http://127.0.0.1:1/v1/chat/completions".to_string(),

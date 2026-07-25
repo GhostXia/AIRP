@@ -77,6 +77,7 @@ mod tests {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            provider_router: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -997,6 +998,7 @@ mod tests_ms6 {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            provider_router: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1221,6 +1223,7 @@ mod tests_issue27 {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            provider_router: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1377,6 +1380,7 @@ mod tests_dx1 {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            provider_router: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1932,6 +1936,7 @@ mod tests_a1b_pipeline_e2e {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            provider_router: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
