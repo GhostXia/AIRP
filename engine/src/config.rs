@@ -284,6 +284,7 @@ impl AppConfig {
         }
         if let Ok(e) = std::env::var("AIRP_ENGINE") {
             match e.as_str() {
+                "ollama" => self.engine = BackendEngine::Ollama,
                 "anthropic_messages" => self.engine = BackendEngine::AnthropicMessages,
                 "claude_code_sdk" => self.engine = BackendEngine::ClaudeCodeSdk,
                 _ => self.engine = BackendEngine::Direct,
