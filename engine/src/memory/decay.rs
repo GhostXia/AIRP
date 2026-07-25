@@ -189,7 +189,7 @@ pub fn apply_decay(
     }
 
     // 清理尾部多余空行
-    while retained_lines.last().map_or(false, |l| l.trim().is_empty()) {
+    while retained_lines.last().is_some_and(|l| l.trim().is_empty()) {
         retained_lines.pop();
     }
 

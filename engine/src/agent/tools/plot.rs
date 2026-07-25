@@ -260,10 +260,34 @@ impl Default for PlotArc {
         Self {
             title: "未命名故事".to_string(),
             phases: vec![
-                PlotPhase { id: "ki".into(), name: "起".into(), description: "引入世界观和角色".into(), target_turns: 5, completed: false },
-                PlotPhase { id: "sho".into(), name: "承".into(), description: "发展冲突与关系".into(), target_turns: 10, completed: false },
-                PlotPhase { id: "ten".into(), name: "转".into(), description: "高潮与转折".into(), target_turns: 5, completed: false },
-                PlotPhase { id: "ketsu".into(), name: "合".into(), description: "结局收束".into(), target_turns: 3, completed: false },
+                PlotPhase {
+                    id: "ki".into(),
+                    name: "起".into(),
+                    description: "引入世界观和角色".into(),
+                    target_turns: 5,
+                    completed: false,
+                },
+                PlotPhase {
+                    id: "sho".into(),
+                    name: "承".into(),
+                    description: "发展冲突与关系".into(),
+                    target_turns: 10,
+                    completed: false,
+                },
+                PlotPhase {
+                    id: "ten".into(),
+                    name: "转".into(),
+                    description: "高潮与转折".into(),
+                    target_turns: 5,
+                    completed: false,
+                },
+                PlotPhase {
+                    id: "ketsu".into(),
+                    name: "合".into(),
+                    description: "结局收束".into(),
+                    target_turns: 3,
+                    completed: false,
+                },
             ],
             current_phase: "ki".to_string(),
             progress: 0.0,
@@ -281,25 +305,26 @@ impl PlotArc {
     /// 推进轮次并更新进度。返回是否进入了新阶段。
     pub fn advance_turn(&mut self) -> bool {
         self.turn_count += 1;
-        let phase_changed = if let Some(phase) = self.phases.iter_mut().find(|p| p.id == self.current_phase) {
-            let phase_turns = self.turn_count;
-            self.progress = (phase_turns as f64 / phase.target_turns as f64).min(1.0);
-            if self.progress >= 1.0 {
-                phase.completed = true;
-                // 进入下一个未完成的阶段
-                if let Some(next) = self.phases.iter().find(|p| !p.completed) {
-                    self.current_phase = next.id.clone();
-                    self.progress = 0.0;
-                    true
+        let phase_changed =
+            if let Some(phase) = self.phases.iter_mut().find(|p| p.id == self.current_phase) {
+                let phase_turns = self.turn_count;
+                self.progress = (phase_turns as f64 / phase.target_turns as f64).min(1.0);
+                if self.progress >= 1.0 {
+                    phase.completed = true;
+                    // 进入下一个未完成的阶段
+                    if let Some(next) = self.phases.iter().find(|p| !p.completed) {
+                        self.current_phase = next.id.clone();
+                        self.progress = 0.0;
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
             } else {
                 false
-            }
-        } else {
-            false
-        };
+            };
         phase_changed
     }
 }

@@ -39,14 +39,15 @@ use handlers::{
     delete_session_endpoint, edit_message, get_character_avatar, get_character_card,
     get_character_lorebook, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
-    get_persona_endpoint, get_persona_multi_endpoint, get_preset_endpoint, get_resident_memory,
-    get_scene_endpoint, get_settings, get_user_model, get_world_events, get_plot_arc, import_character,
-    import_preset_endpoint, list_agent_tools, list_characters, list_models, list_personas_endpoint,
-    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint, preview_chat_assembly,
-    reextract_character_assets, regen_chat, rollback_chat, rollback_drift, style_review,
-    swipe_chat, switch_branch, unbind_persona_endpoint, update_character_card,
-    update_character_lorebook, update_drift, update_persona_endpoint, update_plot_arc,
-    update_persona_multi_endpoint, update_resident_memory, update_settings, update_user_model,
+    get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
+    get_resident_memory, get_scene_endpoint, get_settings, get_user_model, get_world_events,
+    import_character, import_preset_endpoint, list_agent_tools, list_characters, list_models,
+    list_personas_endpoint, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
+    preview_chat_assembly, reextract_character_assets, regen_chat, rollback_chat, rollback_drift,
+    style_review, swipe_chat, switch_branch, unbind_persona_endpoint, update_character_card,
+    update_character_lorebook, update_drift, update_persona_endpoint,
+    update_persona_multi_endpoint, update_plot_arc, update_resident_memory, update_settings,
+    update_user_model,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
