@@ -36,24 +36,25 @@ use handlers::{
     add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion, chat_search,
     continue_chat, create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
-    delete_session_endpoint, diff_character_revisions_endpoint, edit_message,
-    generate_image_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
-    get_character_revision_endpoint, get_character_state, get_character_state_history,
-    get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
-    get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
-    get_resident_memory, get_routing_endpoint, get_scene_endpoint, get_settings,
-    get_style_profile, get_template_endpoint, get_user_model, get_world_events,
-    generate_dialogue_examples_endpoint, get_lorebook_graph_endpoint, import_character,
-    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
+    delete_plugin_tool_endpoint, delete_session_endpoint, diff_character_revisions_endpoint,
+    edit_message, generate_image_endpoint, get_character_avatar, get_character_card,
+    get_character_lorebook, get_character_revision_endpoint, get_character_state,
+    get_character_state_history, get_character_state_schema, get_chat_history, get_drift,
+    get_effective_persona_endpoint, get_persona_endpoint, get_persona_multi_endpoint,
+    get_plot_arc, get_preset_endpoint, get_resident_memory, get_routing_endpoint,
+    get_scene_endpoint, get_settings, get_style_profile, get_template_endpoint, get_user_model,
+    get_world_events, generate_dialogue_examples_endpoint, get_lorebook_graph_endpoint,
+    import_character, import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
     list_character_revisions_endpoint, list_characters, list_images_endpoint, list_models,
-    list_personas_endpoint, list_presets_endpoint, list_providers_endpoint,
-    list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
-    preview_chat_assembly, reextract_character_assets, regen_chat, resolve_provider_endpoint,
-    rollback_chat, rollback_drift, style_learn, style_review, swipe_chat, switch_branch,
-    unbind_persona_endpoint, update_character_card, update_character_lorebook, update_drift,
-    update_persona_endpoint, update_persona_multi_endpoint, update_plot_arc,
-    update_providers_endpoint, update_resident_memory, update_routing_endpoint, update_settings,
-    update_user_model, export_session_timeline_endpoint, get_session_timeline_endpoint,
+    list_personas_endpoint, list_plugin_tools_endpoint, list_presets_endpoint,
+    list_providers_endpoint, list_scenes_endpoint, list_sessions_endpoint, list_style_profiles,
+    list_templates_endpoint, preview_chat_assembly, reextract_character_assets, regen_chat,
+    resolve_provider_endpoint, rollback_chat, rollback_drift, style_learn, style_review,
+    swipe_chat, switch_branch, test_plugin_tool_endpoint, unbind_persona_endpoint,
+    update_character_card, update_character_lorebook, update_drift, update_persona_endpoint,
+    update_persona_multi_endpoint, update_plot_arc, update_providers_endpoint,
+    update_resident_memory, update_routing_endpoint, update_settings, update_user_model,
+    export_session_timeline_endpoint, get_session_timeline_endpoint, upsert_plugin_tool_endpoint,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -72,6 +73,11 @@ pub struct DaemonState {
     /// 由 `data/providers.json` + `data/provider_keys.json` 加载，
     /// `POST /v1/providers` / `PUT /v1/provider-routing` 在线热更新。
     pub provider_router: std::sync::RwLock<crate::provider_routing::ProviderRouter>,
+    /// Phase 5.3：插件工具配置。由 `data/plugin_tools.json` +
+    /// `data/plugin_tool_headers.json` 加载，`POST /v1/plugin-tools` /
+    /// `DELETE /v1/plugin-tools/:name` 在线热更新。`AgentLoop::new` 在构造
+    /// ToolRegistry 时读取此字段，把启用的 PluginTool 注册进去。
+    pub plugin_tools: std::sync::RwLock<Vec<crate::plugin_tool::PluginToolConfig>>,
 }
 
 /// `/v1/settings` 的异步事务协调器。
@@ -475,6 +481,20 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             "/v1/provider-routing",
             get(get_routing_endpoint)
                 .put(update_routing_endpoint.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
+        )
+        // ── Phase 5.3: 插件/自定义工具 API ──────────────────────────────────
+        .route("/v1/plugin-tools", get(list_plugin_tools_endpoint))
+        .route(
+            "/v1/plugin-tools",
+            post(upsert_plugin_tool_endpoint).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/plugin-tools/:name",
+            axum::routing::delete(delete_plugin_tool_endpoint),
+        )
+        .route(
+            "/v1/plugin-tools/:name/test",
+            post(test_plugin_tool_endpoint).layer(DefaultBodyLimit::max(1024 * 1024)),
         )
         // ── Style API（4.1/4.2 风格系统） ──────────────────────────────────
         .route("/v1/style/review", post(style_review))

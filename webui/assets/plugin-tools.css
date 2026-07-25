@@ -1,0 +1,175 @@
+/* Phase 5.3: plugin-tools.css
+   与 provider-management.css 同构，仅前缀 pt-。 */
+
+.pt-section { margin-bottom: 1.5rem; }
+.pt-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.pt-section-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.subheading { margin: 0; font-size: 1.05rem; }
+.pt-count {
+  display: inline-block;
+  min-width: 1.5rem;
+  padding: 0 0.5rem;
+  margin-left: 0.4rem;
+  border-radius: 999px;
+  background: var(--token-bg-muted, rgba(127, 127, 127, 0.18));
+  font-size: 0.85rem;
+  text-align: center;
+}
+.pt-enabled-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--token-bg-muted, rgba(127, 127, 127, 0.12));
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--token-border, rgba(127, 127, 127, 0.2));
+}
+.pt-enabled-bar.is-enabled {
+  background: rgba(56, 161, 105, 0.12);
+  border-color: rgba(56, 161, 105, 0.4);
+}
+.pt-enabled-tag {
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  background: var(--token-bg-strong, rgba(127, 127, 127, 0.25));
+  color: var(--token-fg-muted, inherit);
+}
+.pt-enabled-bar.is-enabled .pt-enabled-tag {
+  background: rgba(56, 161, 105, 0.25);
+  color: rgb(34, 139, 75);
+}
+.pt-enabled-hint { color: var(--token-fg-muted, inherit); font-size: 0.9rem; }
+
+.pt-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--token-bg-elevated, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--token-border, rgba(127, 127, 127, 0.2));
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pt-table th,
+.pt-table td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--token-border, rgba(127, 127, 127, 0.15));
+  vertical-align: middle;
+}
+.pt-table th {
+  background: var(--token-bg-muted, rgba(127, 127, 127, 0.12));
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.pt-row:hover { background: var(--token-bg-hover, rgba(127, 127, 127, 0.06)); }
+.pt-cell-name { font-weight: 600; }
+.pt-cell-invocation code {
+  font-family: var(--token-mono, ui-monospace, monospace);
+  font-size: 0.85rem;
+  background: var(--token-bg-muted, rgba(127, 127, 127, 0.18));
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  word-break: break-all;
+}
+.pt-cell-side-effect {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--token-fg-muted, inherit);
+}
+.pt-cell-side-effect[data-side="destructive"] { color: rgb(197, 48, 48); }
+.pt-cell-side-effect[data-side="mutate"] { color: rgb(180, 100, 30); }
+.pt-cell-side-effect[data-side="append"] { color: rgb(50, 110, 170); }
+.pt-cell-actions {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.pt-toggle {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--token-fg-muted, rgba(127, 127, 127, 0.5));
+}
+.pt-toggle.is-on {
+  background: rgb(56, 161, 105);
+  box-shadow: 0 0 0 2px rgba(56, 161, 105, 0.2);
+}
+.pt-empty {
+  color: var(--token-fg-muted, inherit);
+  padding: 1rem;
+  text-align: center;
+  border: 1px dashed var(--token-border, rgba(127, 127, 127, 0.3));
+  border-radius: 6px;
+}
+
+.pt-test-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.pt-test-params-field { grid-column: 1 / -1; }
+.pt-test-grid .field { display: flex; flex-direction: column; gap: 0.3rem; }
+
+.pt-editor { padding: 0; border: 1px solid var(--token-border, rgba(127, 127, 127, 0.3)); border-radius: 8px; max-width: 640px; width: 90vw; }
+.pt-editor::backdrop { background: rgba(0, 0, 0, 0.45); }
+.pt-editor-form { padding: 1.25rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.pt-editor-title { margin: 0 0 0.25rem; font-size: 1.1rem; }
+.pt-editor-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--token-fg-muted, inherit);
+  min-height: 1.2em;
+}
+.pt-editor-hint.is-error { color: rgb(197, 48, 48); }
+.pt-editor-form .field { display: flex; flex-direction: column; gap: 0.3rem; }
+.pt-editor-form .field small { color: var(--token-fg-muted, inherit); font-size: 0.8rem; }
+.field-row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+.field-row .field { flex: 1; min-width: 180px; }
+
+.pt-invocation-block {
+  border: 1px solid var(--token-border, rgba(127, 127, 127, 0.2));
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.pt-invocation-block legend {
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0 0.4rem;
+  color: var(--token-fg-muted, inherit);
+}
+
+.context-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  color: var(--token-fg-muted, inherit);
+}
+.context-list li { margin-bottom: 0.3rem; line-height: 1.4; }
+.context-list code {
+  font-family: var(--token-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  background: var(--token-bg-muted, rgba(127, 127, 127, 0.18));
+  padding: 0 0.3rem;
+  border-radius: 3px;
+}
+
+@media (max-width: 720px) {
+  .pt-test-grid { grid-template-columns: 1fr; }
+  .pt-cell-actions { flex-direction: column; }
+  .pt-cell-actions .btn { width: 100%; }
+}

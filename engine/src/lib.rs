@@ -39,6 +39,7 @@ pub mod memory;
 pub mod orchestrator;
 pub mod outbound;
 pub mod png_parser;
+pub mod plugin_tool;
 pub mod provider_routing;
 pub mod quota;
 pub mod scene;
