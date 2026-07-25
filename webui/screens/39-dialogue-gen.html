@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>对话示例生成器 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/dialogue-gen.css">
+</head>
+<body data-screen="dialoguegen">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">对话示例生成器</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>角色 <b id="scope-character">—</b></span><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">对话示例生成器</h1>
+<p class="description">基于角色卡设定调用 LLM 生成 SillyTavern 兼容的 <code>&lt;START&gt;</code> 对话示例，可预览后写入角色卡 <code>mes_example</code> 字段。</p>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <div class="runtime-form">
+    <label class="field"><span class="field-label">角色</span><select class="select runtime-select" id="gen-character"></select></label>
+  </div>
+  <div class="dialoguegen-form">
+    <div class="dialoguegen-options">
+      <label class="field"><span class="field-label">生成轮数</span><select class="select" id="gen-turns"><option value="1">1 轮</option><option value="2">2 轮</option><option value="3" selected>3 轮</option><option value="4">4 轮</option><option value="5">5 轮</option><option value="6">6 轮</option><option value="7">7 轮</option><option value="8">8 轮</option><option value="9">9 轮</option><option value="10">10 轮</option></select></label>
+      <label class="field"><span class="field-label">用户视角（可选）</span><input class="input" id="gen-stance" placeholder="如：学生提问 / 朋友闲聊 / 对手挑衅"></label>
+      <label class="field"><span class="field-label">场景覆盖（可选，默认用角色卡 scenario）</span><input class="input" id="gen-scenario" placeholder="如：深夜咖啡馆 / 战场前沿"></label>
+      <label class="field"><span class="field-label">用户名（可选，仅生成时用）</span><input class="input" id="gen-username" placeholder="留空用 {{user}}"></label>
+    </div>
+    <div class="dialoguegen-flags">
+      <label class="checkbox-field"><input type="checkbox" id="gen-dry-run" checked><span>仅预览（不写角色卡）</span></label>
+      <label class="checkbox-field"><input type="checkbox" id="gen-append"><span>追加到现有 mes_example 末尾（默认覆盖）</span></label>
+    </div>
+    <div class="dialoguegen-actions">
+      <button class="btn btn-primary" id="gen-submit" type="button">生成对话示例</button>
+      <button class="btn btn-secondary" id="gen-clear" type="button">清空</button>
+      <button class="btn btn-secondary" id="gen-write" type="button" disabled>写入角色卡</button>
+    </div>
+  </div>
+  <div class="dialoguegen-result" id="gen-result" hidden>
+    <h2 class="subheading">生成结果</h2>
+    <div id="gen-result-meta" class="result-meta"></div>
+    <pre id="gen-result-content" class="result-content"></pre>
+  </div>
+  <div class="dialoguegen-current" id="gen-current" hidden>
+    <h2 class="subheading">当前角色卡 mes_example</h2>
+    <pre id="gen-current-content" class="result-content"></pre>
+  </div>
+</div>
+<div class="related-links" id="related-links"></div>
+</main>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/dialogue-gen.js"></script>
+</body></html>

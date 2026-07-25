@@ -29,6 +29,7 @@ mod context_limit;
 pub mod daemon;
 pub mod data_dir;
 pub mod decompose;
+pub mod dialogue_gen;
 pub mod domain;
 pub mod error;
 pub mod image_gen;

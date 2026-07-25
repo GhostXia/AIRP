@@ -38,6 +38,7 @@
     ['36', 'imagegen', '图片生成', '36-image-gen.html'],
     ['37', 'templates', '模板库', '37-character-templates.html'],
     ['38', 'stylelearn', '风格迁移', '38-style-learn.html'],
+    ['39', 'dialoguegen', '对话示例', '39-dialogue-gen.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 

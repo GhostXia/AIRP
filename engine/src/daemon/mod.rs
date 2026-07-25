@@ -41,7 +41,8 @@ use handlers::{
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
     get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
     get_resident_memory, get_scene_endpoint, get_settings, get_style_profile,
-    get_template_endpoint, get_user_model, get_world_events, import_character,
+    get_template_endpoint, get_user_model, get_world_events, generate_dialogue_examples_endpoint,
+    import_character,
     import_preset_endpoint, instantiate_template_endpoint, list_agent_tools, list_characters,
     list_images_endpoint, list_models, list_personas_endpoint, list_presets_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
@@ -457,6 +458,12 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/characters/:character_id/drift/rollback",
             post(rollback_drift),
+        )
+        // ── Dialogue Example Generator API（Phase 4.3 对话示例生成器） ──
+        .route(
+            "/v1/characters/:character_id/dialogue-examples",
+            post(generate_dialogue_examples_endpoint)
+                .layer(DefaultBodyLimit::max(64 * 1024)),
         )
         // ── Search API（4.3 FTS5 历史检索） ─────────────────────────────────
         .route("/v1/chat/search", post(chat_search))
