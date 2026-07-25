@@ -208,6 +208,9 @@ async function runTask(browser, mod, name) {
         },
         [ORIGIN, path, method, body]
       ),
+      // sseCall: 消费 SSE 流并返回 { content }。
+      // 注意：引擎 SSE 流只发 content chunks 和 done 事件，**不发 message_id**。
+      // 如需 message_id，调 sseCall 后再查 /v1/chat/history 取最后一条 assistant 消息的 message_id。
       sseCall: (path, body) => page.evaluate(
         async ([origin, p, b]) => {
           const res = await fetch(origin + p, {
@@ -220,7 +223,6 @@ async function runTask(browser, mod, name) {
           const decoder = new TextDecoder();
           let buffer = '';
           let lastContent = '';
-          let messageId = null;
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -233,13 +235,12 @@ async function runTask(browser, mod, name) {
                 if (!data) continue;
                 try {
                   const parsed = JSON.parse(data);
-                  if (parsed.message_id) messageId = parsed.message_id;
                   if (parsed.role === 'assistant') lastContent += parsed.content || '';
                 } catch {}
               }
             }
           }
-          return { messageId, content: lastContent };
+          return { content: lastContent };
         },
         [ORIGIN, path, body]
       ),
@@ -407,7 +408,7 @@ export async function run(ctx) { /* ctx = { page, harness, origin, fixtures, uui
 ## General Rules
 
 - Use ctx.apiCall(path, body, method) for ALL HTTP API calls. It goes through the browser's trusted TLS context. Do NOT use globalThis.fetch or Node fetch — they will fail on self-signed certs.
-- Use ctx.sseCall(path, body) for SSE endpoints (chat/completions, chat/regen). It consumes the stream and returns { messageId, content }.
+- Use ctx.sseCall(path, body) for SSE endpoints (chat/completions, chat/regen). It consumes the stream and returns \`{ content }\` — **ONLY content, no message_id**. The engine SSE stream does not emit message_id. If you need the message_id of the assistant reply, query \`/v1/chat/history\` afterwards and take the last assistant message's \`message_id\` field. Do NOT access \`.messageId\`, \`.message_id\`, or destructure \`messageId\` from sseCall results — these are always undefined/null.
 - Use ctx.harness for UI navigation and DOM inspection: ctx.harness.navigate('screen.html', params), ctx.harness.getDomSnapshot(), etc.
 - Each step must have a wait/poll, not a fixed sleep longer than 2s.
 - On assertion failure, throw with a clear message starting with "ASSERT: ".
@@ -415,6 +416,16 @@ export async function run(ctx) { /* ctx = { page, harness, origin, fixtures, uui
 - Navigate to the task's first screen explicitly: await ctx.harness.navigate('screen.html', params).
 - Do not call ctx.page.evaluate with closures over Node variables; pass primitive args only.
 - Do not read or write files; the runner handles artifacts.
+- **Prefer API calls over UI interactions** when the task is about data/memory/history, not UI behavior. For memory tests, send messages via ctx.sseCall (API) instead of filling UI input boxes — this avoids DOM selector coupling.
+
+## Key DOM selectors (02-chat-space.html)
+
+If you MUST interact with the UI (e.g. testing page refresh behavior), use these exact selectors:
+- Input textarea: \`#message-input\` (NOT #chat-input)
+- Send button: \`#send-message\` (NOT #send-button)
+- Message flow container: \`#message-flow\`
+- Assistant messages: \`.message.assistant\` or \`.msg-row.assistant\`
+- Engine status: \`#engine-status\`
 
 ## Reference snippets
 
@@ -427,7 +438,7 @@ if (!await ctx.characterExists(characterId)) throw new Error('ASSERT: character 
 const sessionId = await ctx.createSession(characterId);
 \`\`\`
 
-Send a chat message:
+Send a chat message and get the assistant message_id:
 \`\`\`js
 const reply = await ctx.sseCall('/v1/chat/completions', {
   character_id: characterId,
@@ -435,7 +446,11 @@ const reply = await ctx.sseCall('/v1/chat/completions', {
   message: 'Hello',
   user_profile: { name: 'Tester', variables: {} }
 });
-// reply = { messageId, content }
+// reply = { content } — NO messageId field (engine SSE stream doesn't emit message_id)
+// To get the assistant message_id, query history:
+const history = await ctx.apiCall('/v1/chat/history', { character_id: characterId, session_id: sessionId, limit: 10 });
+const assistantMsg = history.messages[history.messages.length - 1];
+const assistantMsgId = assistantMsg.message_id;
 \`\`\`
 
 Update resident memory:
@@ -451,9 +466,9 @@ await ctx.apiCall('/v1/memory/resident', {
 Task contract:
 - Expected: ${mod.EXPECTED}
 - Key API endpoints available (same-origin, use ctx.apiCall / ctx.sseCall):
-  - POST /v1/chat/completions (SSE) — ctx.sseCall('/v1/chat/completions', {character_id, session_id, message, user_profile: {name: "Tester", variables: {}}})
+  - POST /v1/chat/completions (SSE) — ctx.sseCall returns { content } only (NO messageId). For message_id, query /v1/chat/history after.
   - POST /v1/chat/history — ctx.apiCall('/v1/chat/history', {character_id, session_id, limit?})
-  - POST /v1/chat/regen — ctx.sseCall('/v1/chat/regen', {character_id, session_id, user_profile: {name: "Tester", variables: {}}})
+  - POST /v1/chat/regen (SSE) — ctx.sseCall returns { content } only (NO messageId). For message_id, query /v1/chat/history after.
   - POST /v1/chat/swipe — ctx.apiCall('/v1/chat/swipe', {character_id, session_id?, message_id, index})
   - PUT  /v1/chat/message — ctx.apiCall('/v1/chat/message', {character_id, session_id?, message_id, content}, 'PUT')
   - GET  /v1/memory/resident?character_id=...&session_id=... — ctx.apiCall(url, null, 'GET') — returns { content, char_count, capacity }

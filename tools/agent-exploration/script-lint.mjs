@@ -49,5 +49,29 @@ export function lintScript(src) {
   if (/['"`]test-['"`]\s*\+/.test(src) || /\\\`test-\$\{/.test(src)) {
     v.push("Found 'test-' + ... ID generation pattern — use ctx.uuid() instead");
   }
+  // 6. 错误的 DOM 选择器：#chat-input / #send-button（实际是 #message-input / #send-message）
+  if (/#chat-input/.test(src)) {
+    v.push("Found #chat-input selector — the correct selector is #message-input");
+  }
+  if (/#send-button/.test(src)) {
+    v.push("Found #send-button selector — the correct selector is #send-message");
+  }
+  // 7. 依赖 sseCall 返回的 messageId/message_id（引擎 SSE 流不发 message_id）
+  // sseCall 返回 { content } — 只有 content，没有 message_id/messageId。
+  // 需 message_id 时必须调 /v1/chat/history 取最后一条 assistant 消息的 message_id。
+  // 7a. .messageId (camelCase) 属性访问 — 任何 API 都不返回此字段名
+  if (/\.\s*messageId\b/.test(src)) {
+    v.push("Found .messageId access — sseCall returns { content } only. Query /v1/chat/history for message_id instead.");
+  }
+  // 7b. .message_id (snake_case) 属性访问 — 检测 sseCall 结果变量上的访问。
+  // 启发式：变量名匹配 reply/response/result 或以 Reply/Response 结尾。
+  // history 消息上的 .message_id 是合法的，不误报。
+  if (/\b(reply|response|result|initialReply|regenReply|userReply|newReply|chatReply|aiReply|assistantReply|\w*Reply|\w*Response)\s*\.\s*message_id\b/.test(src)) {
+    v.push("Found .message_id access on sseCall result — sseCall returns { content } only. Use /v1/chat/history to get message_id.");
+  }
+  // 7c. 解构 messageId (camelCase) — 任何 API 都不返回此字段名
+  if (/\{\s*messageId\b/.test(src)) {
+    v.push("Found destructuring of messageId — sseCall returns { content } only. Query /v1/chat/history for message_id instead.");
+  }
   return v;
 }
