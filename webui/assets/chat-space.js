@@ -605,7 +605,9 @@
   async function exportConversation(format) {
     if (!characterId || !sessionId) { log('export.error', '请先选择角色和会话'); return; }
     try {
-      const data = await client.request('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId, limit: 9999 });
+      // B3 修复：不传 limit 字段 → HistoryQuery.limit=None → handler 走 legacy 全量分支
+      // 传 limit（含 9999）会被 history_window 的 unwrap_or(50).clamp(1,200) 钳为 200，长对话静默截断
+      const data = await client.request('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId });
       const messages = Array.isArray(data && data.messages) ? data.messages : [];
       const timestamps = Array.isArray(data && data.message_timestamps) ? data.message_timestamps : [];
       if (!messages.length) { log('export.empty', '当前会话无消息'); return; }

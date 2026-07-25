@@ -228,15 +228,20 @@
         if (!files.length) { panel.appendChild(node('p', 'runtime-muted', '还没有拆解产物。点击“拆解角色卡”生成。')); }
         else {
           const fileList = node('div', 'runtime-list');
-          files.forEach(filename => {
+          // B1 修复：AnalysisFileEntry 是 {filename, size} 对象，不能当字符串处理
+          files.forEach(entry => {
+            const filename = entry && typeof entry === 'object' ? entry.filename : entry;
+            if (!filename) return;
+            const sizeLabel = entry && typeof entry === 'object' && typeof entry.size === 'number' ? ' · ' + entry.size + ' B' : '';
             const row = node('div', 'runtime-row');
-            row.appendChild(node('div', 'runtime-row-title', filename));
+            row.appendChild(node('div', 'runtime-row-title', filename + sizeLabel));
             const ops = node('div', 'op-col');
             const viewBtn = node('span', 'op-link', '查看');
             viewBtn.style.cursor = 'pointer';
             viewBtn.addEventListener('click', async () => {
               const file = await task('读取 ' + filename, () => client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/analysis/' + encodeURIComponent(filename)));
               const oldContent = panel.querySelector('.analysis-content'); if (oldContent) oldContent.remove();
+              const oldApply = panel.querySelector('.analysis-apply'); if (oldApply) oldApply.remove();
               const pre = output(file.content || '', true); pre.classList.add('analysis-content');
               panel.appendChild(pre);
             });
@@ -245,13 +250,15 @@
             enhanceBtn.addEventListener('click', async () => {
               const result = await task('Enhance ' + filename, () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/analysis/' + encodeURIComponent(filename), { action: 'enhance' }));
               const oldContent = panel.querySelector('.analysis-content'); if (oldContent) oldContent.remove();
+              const oldApply = panel.querySelector('.analysis-apply'); if (oldApply) oldApply.remove();
               const pre = output(result.enhanced_md || result.diff || json(result), true); pre.classList.add('analysis-content');
               panel.appendChild(pre);
               if (result.enhanced_md) {
-                const applyBtn = button('应用 Enhance 结果', async () => {
+                const applyBtn = button('应用 Enhance 结果到 ' + filename, async () => {
                   await task('Apply ' + filename, () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/analysis/' + encodeURIComponent(filename), { action: 'apply', enhanced_md: result.enhanced_md }));
                   setStatus(filename + ' 已应用增强结果');
                 }, 'btn-primary');
+                applyBtn.classList.add('analysis-apply');
                 panel.appendChild(applyBtn);
               }
             });
@@ -484,7 +491,8 @@
         const oldForm = row.querySelector('.add-char-form'); if (oldForm) { oldForm.remove(); return; }
         const addForm = node('div', 'add-char-form runtime-form');
         const charPick = input('角色 ID', state.characterId || '', { select: state.characters.map(v => ({ value: v, label: v })) });
-        const rolePick = input('角色类型', 'main', { select: [{ value: 'main', label: '主角 (main)' }, { value: 'supporting', label: '配角 (supporting)' }, { value: 'npc', label: 'NPC' }, { value: 'narrator', label: '旁白 (narrator)' }] });
+        // B2 修复：对齐 Engine CharacterRole 枚举（scene.rs:8-14 仅 Primary/Npc，snake_case 为 primary/npc）
+        const rolePick = input('角色类型', 'primary', { select: [{ value: 'primary', label: '主角 (primary)' }, { value: 'npc', label: 'NPC (npc)' }] });
         const addBtn = button('添加到场景', async () => {
           await task('添加角色到场景', () => client.request('POST', '/v1/scenes/' + encodeURIComponent(id) + '/characters', { character_id: charPick.control.value, role: rolePick.control.value }));
           setStatus('角色 ' + charPick.control.value + ' 已添加到场景 ' + id);
