@@ -1,0 +1,49 @@
+/* 42 角色卡版本对比：页面私有样式 */
+.description { color: var(--text-secondary); font-size: 13px; margin: 4px 0 16px; line-height: 1.5; }
+.description b { color: var(--text-primary); font-weight: 600; }
+.description code { background: var(--bg-subtle); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+.runtime-form { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin: 16px 0; padding: 16px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+.runtime-form .field { flex: 1 1 200px; min-width: 0; }
+.runtime-form .btn { flex: 0 0 auto; }
+
+.subheading { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 16px 0 8px; }
+
+.cd-meta { margin: 16px 0; padding: 12px 16px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+.cd-meta-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cd-meta-table th, .cd-meta-table td { padding: 6px 10px; border: 1px solid var(--border-default); text-align: left; }
+.cd-meta-table th { background: var(--bg-subtle); font-weight: 600; }
+.cd-meta-table code { background: var(--bg-subtle); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+.cd-stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.stat-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; background: var(--bg-subtle); border: 1px solid var(--border-default); font-size: 12px; color: var(--text-secondary); }
+.stat-pill b { color: var(--text-primary); font-weight: 600; }
+.stat-added { color: #1a7f37; border-color: #1a7f37; }
+.stat-removed { color: #cf222e; border-color: #cf222e; }
+.stat-changed { color: #bf3989; border-color: #bf3989; }
+
+.cd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; padding: 12px 16px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+
+.cd-changes { margin: 16px 0; }
+.cd-list { list-style: none; padding: 0; margin: 0; }
+.cd-list li { padding: 8px 12px; margin: 6px 0; border-left: 3px solid var(--border-default); background: var(--bg-subtle); border-radius: 0 6px 6px 0; }
+.cd-list li.cd-added { border-left-color: #1a7f37; }
+.cd-list li.cd-removed { border-left-color: #cf222e; }
+.cd-list li.cd-changed { border-left-color: #bf3989; }
+.cd-change-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 12px; flex-wrap: wrap; }
+.cd-op { font-weight: 600; padding: 1px 6px; border-radius: 3px; }
+.cd-op.cd-op-added { color: #1a7f37; background: rgba(26, 127, 55, 0.1); }
+.cd-op.cd-op-removed { color: #cf222e; background: rgba(207, 34, 46, 0.1); }
+.cd-op.cd-op-changed { color: #bf3989; background: rgba(191, 57, 137, 0.1); }
+.cd-path { background: var(--bg-surface); padding: 1px 6px; border-radius: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+.cd-value { padding: 8px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0; max-height: 240px; overflow: auto; }
+.cd-value-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cd-value-label { display: block; font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; font-weight: 600; }
+.cd-value-old .cd-value { border-left: 2px solid #cf222e; }
+.cd-value-new .cd-value { border-left: 2px solid #1a7f37; }
+.cd-empty { color: var(--text-secondary); font-style: italic; }
+
+.cd-preview { margin: 16px 0; padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+.cd-preview-controls { margin-bottom: 8px; display: flex; gap: 8px; }
+.result-content { padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-subtle); white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-height: 480px; overflow: auto; margin: 0; }
+.cd-preview-frame { width: 100%; height: 480px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: white; }

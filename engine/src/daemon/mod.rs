@@ -36,21 +36,23 @@ use handlers::{
     add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion, chat_search,
     continue_chat, create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
-    delete_session_endpoint, edit_message, generate_image_endpoint, get_character_avatar,
-    get_character_card, get_character_lorebook, get_character_state, get_character_state_history,
+    delete_session_endpoint, diff_character_revisions_endpoint, edit_message,
+    generate_image_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
+    get_character_revision_endpoint, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
     get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
     get_resident_memory, get_scene_endpoint, get_settings, get_style_profile,
     get_template_endpoint, get_user_model, get_world_events, generate_dialogue_examples_endpoint,
     get_lorebook_graph_endpoint, import_character,
-    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools, list_characters,
-    list_images_endpoint, list_models, list_personas_endpoint, list_presets_endpoint,
-    list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
-    preview_chat_assembly, reextract_character_assets, regen_chat, rollback_chat, rollback_drift,
-    style_learn, style_review, swipe_chat, switch_branch, unbind_persona_endpoint,
-    update_character_card, update_character_lorebook, update_drift, update_persona_endpoint,
-    update_persona_multi_endpoint, update_plot_arc, update_resident_memory, update_settings,
-    update_user_model, export_session_timeline_endpoint, get_session_timeline_endpoint,
+    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
+    list_character_revisions_endpoint, list_characters, list_images_endpoint, list_models,
+    list_personas_endpoint, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
+    list_style_profiles, list_templates_endpoint, preview_chat_assembly, reextract_character_assets,
+    regen_chat, rollback_chat, rollback_drift, style_learn, style_review, swipe_chat,
+    switch_branch, unbind_persona_endpoint, update_character_card, update_character_lorebook,
+    update_drift, update_persona_endpoint, update_persona_multi_endpoint, update_plot_arc,
+    update_resident_memory, update_settings, update_user_model,
+    export_session_timeline_endpoint, get_session_timeline_endpoint,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -442,6 +444,19 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/sessions/:character_id/:session_id/timeline/export",
             get(export_session_timeline_endpoint),
+        )
+        // ── Phase 4.6: 角色卡版本对比 API ──────────────────────────────
+        .route(
+            "/v1/characters/:character_id/revisions",
+            get(list_character_revisions_endpoint),
+        )
+        .route(
+            "/v1/characters/:character_id/revisions/diff",
+            get(diff_character_revisions_endpoint),
+        )
+        .route(
+            "/v1/characters/:character_id/revisions/:revision_id",
+            get(get_character_revision_endpoint),
         )
         .route("/v1/settings", get(get_settings).post(update_settings))
         // ── Style API（4.1/4.2 风格系统） ──────────────────────────────────

@@ -21,6 +21,7 @@
 
 pub mod adapter;
 pub mod agent;
+pub mod card_diff;
 pub mod character_templates;
 pub mod chat_pipeline;
 pub mod chat_store;
