@@ -76,7 +76,7 @@ test('chat space exposes session, history and streaming controls', () => {
 test('every shipped screen is compatible with the Engine CSP', async () => {
   const directory = new URL('../screens/', import.meta.url);
   const files = (await readdir(directory)).filter(name => name.endsWith('.html'));
-  assert.equal(files.length, 38);
+  assert.equal(files.length, 39);
   for (const file of files) {
     const html = await readFile(new URL(file, directory), 'utf8');
     assert.doesNotMatch(html, /\sstyle\s*=/i, file + ' contains an inline style');
