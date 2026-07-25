@@ -34,6 +34,7 @@ pub mod dialogue_gen;
 pub mod domain;
 pub mod error;
 pub mod image_gen;
+pub mod mcp_integration;
 pub mod worldbook_graph;
 pub mod memory;
 pub mod orchestrator;
