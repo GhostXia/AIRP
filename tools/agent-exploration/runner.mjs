@@ -146,9 +146,61 @@ async function runTask(browser, mod, name) {
     await harness.waitForReady();
 
     // 让 Agent 生成临时 Playwright 脚本（方案 A）
-    // ctx 合并 fixtures：任务模块通过 mod.FIXTURES 提供解析好的 fixture JSON，
-    // Agent 脚本通过 ctx.fixtures 直接取用，不需要读 runner 文件系统。
-    const ctx = { page, harness, context, origin: ORIGIN, fixtures: mod.FIXTURES || {} };
+    // ctx 合并 fixtures + apiCall helper：
+    // - fixtures: 任务模块提供解析好的 fixture JSON
+    // - apiCall: 通过 page.evaluate 走浏览器 TLS 信任（Node fetch 不信任自签证书）
+    // - sseCall: 同上，但消费 SSE 流并返回最终 content + message_id
+    const ctx = {
+      page, harness, context, origin: ORIGIN, fixtures: mod.FIXTURES || {},
+      apiCall: (path, body, method = 'POST') => page.evaluate(
+        async ([origin, p, m, b]) => {
+          const res = await fetch(origin + p, {
+            method: m,
+            headers: { 'Content-Type': 'application/json' },
+            body: b ? JSON.stringify(b) : undefined,
+          });
+          const text = await res.text();
+          if (!res.ok) throw new Error(`API ${m} ${p} returned ${res.status}: ${text}`);
+          try { return JSON.parse(text); } catch { return text; }
+        },
+        [ORIGIN, path, method, body]
+      ),
+      sseCall: (path, body) => page.evaluate(
+        async ([origin, p, b]) => {
+          const res = await fetch(origin + p, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(b),
+          });
+          if (!res.ok) throw new Error(`SSE ${p} returned ${res.status}: ${await res.text()}`);
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let lastContent = '';
+          let messageId = null;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              if (line.startsWith('data:')) {
+                const data = line.slice(5).trim();
+                if (!data) continue;
+                try {
+                  const parsed = JSON.parse(data);
+                  if (parsed.message_id) messageId = parsed.message_id;
+                  if (parsed.role === 'assistant') lastContent += parsed.content || '';
+                } catch {}
+              }
+            }
+          }
+          return { messageId, content: lastContent };
+        },
+        [ORIGIN, path, body]
+      ),
+    };
     const scriptPath = await generateAndRunScript(mod, ctx, taskDir);
     result.evidence.script = scriptPath;
 
@@ -271,36 +323,42 @@ function buildPrompt(mod, domSnapshot) {
   // 仅在任务模块声明了 FIXTURES 时，告诉 Agent fixture JSON 已在 ctx.fixtures 中，
   // 直接用即可，不要读文件。无 FIXTURES 的任务不附加此说明。
   const fixtureNote = mod.FIXTURES
-    ? '\n\nFixtures: ctx.fixtures.characterCard is the parsed character card JSON. Use it directly in the POST /v1/characters/import body as { character_id, card_json }. Do NOT read files.'
+    ? '\n\nFixtures: ctx.fixtures.characterCard is the parsed character card JSON. When calling /v1/characters/import, pass it as { character_id, card_json: JSON.stringify(ctx.fixtures.characterCard) }. The card_json field must be a JSON STRING, not an object. Do NOT read files.'
     : '';
   return {
     system: `You are an AIRP WebUI exploratory test generator. Output ONLY a single JavaScript code block (no prose) that exports an async function:
-export async function run(ctx) { /* ctx = { page, harness, origin, fixtures } */ }
+export async function run(ctx) { /* ctx = { page, harness, origin, fixtures, apiCall, sseCall } */ }
 
 Rules:
-- Use only playwright-core page API and ctx.harness (window.__AIRP_AGENT_TEST__ wrapper).
+- Use ctx.apiCall(path, body, method) for ALL HTTP API calls. It goes through the browser's trusted TLS context. Do NOT use globalThis.fetch or Node fetch — they will fail on self-signed certs.
+- Use ctx.sseCall(path, body) for SSE endpoints (chat/completions, chat/regen). It consumes the stream and returns { messageId, content }.
+- Use ctx.harness for UI navigation and DOM inspection: ctx.harness.navigate('screen.html', params), ctx.harness.getDomSnapshot(), etc.
 - Each step must have a wait/poll, not a fixed sleep longer than 2s.
 - On assertion failure, throw with a clear message starting with "ASSERT: ".
 - Max ${MAX_STEPS} steps.
 - Navigate to the task's first screen explicitly: await ctx.harness.navigate('screen.html', params).
 - Do not call ctx.page.evaluate with closures over Node variables; pass primitive args only.
-- Do not read or write files; the runner handles artifacts.`,
+- Do not read or write files; the runner handles artifacts.
+
+Character card schema for /v1/characters/import:
+- Body: { "character_id": "test-xxx", "card_json": "{\"spec\":\"chara_card_v2\",\"data\":{\"name\":\"TestBot\",\"first_mes\":\"Hello\",\"description\":\"A test bot\",\"personality\":\"friendly\"}}" }
+- card_json must be a JSON STRING (not an object), following chara_card_v2 spec with "spec" and "data" fields.
+- Minimal valid card: {"spec":"chara_card_v2","data":{"name":"TestBot","first_mes":"Hi"}}`,
     user: `Task: ${mod.DESCRIPTION}
 
 Task contract:
 - Expected: ${mod.EXPECTED}
-- Key API endpoints available (same-origin):
-  - POST /v1/chat/completions (SSE) — send {character_id, session_id, message}
-  - POST /v1/chat/history — {character_id, session_id, limit?}
-  - POST /v1/chat/regen — {character_id, session_id?}
-  - POST /v1/chat/swipe — {character_id, session_id?, message_id, index}
-  - PUT  /v1/chat/message — {character_id, session_id?, message_id, content} (user msg only)
-  - POST /v1/chat/branch/switch — {character_id, session_id?, target_leaf_id}
-  - GET  /v1/memory/resident?character_id=...&session_id=...
-  - PUT  /v1/memory/resident — {character_id, session_id?, user_id?, content}
-  - GET  /v1/characters
-  - POST /v1/characters/import — {character_id, card_json} or {character_id, card_path}
-  - POST /v1/sessions/:character_id — create session
+- Key API endpoints available (same-origin, use ctx.apiCall / ctx.sseCall):
+  - POST /v1/chat/completions (SSE) — use ctx.sseCall('/v1/chat/completions', {character_id, session_id, message})
+  - POST /v1/chat/history — ctx.apiCall('/v1/chat/history', {character_id, session_id, limit?})
+  - POST /v1/chat/regen — ctx.sseCall('/v1/chat/regen', {character_id, session_id?})
+  - POST /v1/chat/swipe — ctx.apiCall('/v1/chat/swipe', {character_id, session_id?, message_id, index})
+  - PUT  /v1/chat/message — ctx.apiCall('/v1/chat/message', {character_id, session_id?, message_id, content}, 'PUT')
+  - GET  /v1/memory/resident — ctx.apiCall('/v1/memory/resident?character_id=...&session_id=...', null, 'GET')
+  - PUT  /v1/memory/resident — ctx.apiCall('/v1/memory/resident', {character_id, session_id?, user_id?, content}, 'PUT')
+  - GET  /v1/characters — ctx.apiCall('/v1/characters', null, 'GET')
+  - POST /v1/characters/import — ctx.apiCall('/v1/characters/import', {character_id, card_json})
+  - POST /v1/sessions/:character_id — ctx.apiCall('/v1/sessions/' + characterId, {session_id?})
 
 Initial DOM snapshot (truncated, current page may differ; call harness.navigate first):
 ${JSON.stringify(domSnapshot).slice(0, 4000)}
