@@ -1,0 +1,22 @@
+/* 36 场景插图生成：页面私有样式 */
+.imagegen-form { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; padding: 16px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+.textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+.imagegen-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; align-items: end; }
+.checkbox-field { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.checkbox-field input { margin: 0; }
+.imagegen-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.imagegen-result { margin: 16px 0; }
+.imagegen-current { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+.imagegen-current img { max-width: 100%; height: auto; border-radius: var(--radius-input); }
+.imagegen-current .meta { font-size: 12px; color: var(--text-secondary); }
+.imagegen-current .meta dt { font-weight: 600; display: inline; }
+.imagegen-current .meta dd { display: inline; margin-left: 4px; }
+.imagegen-current .meta div { margin-top: 2px; }
+.imagegen-list-section { margin-top: 24px; }
+.imagegen-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.imagegen-list .image-card { border: 1px solid var(--border-default); border-radius: var(--radius-input); padding: 8px; background: var(--bg-surface); display: flex; flex-direction: column; gap: 6px; }
+.imagegen-list .image-card img { width: 100%; height: 160px; object-fit: cover; border-radius: calc(var(--radius-input) - 2px); background: var(--bg-subtle); }
+.imagegen-list .image-card .image-meta { font-size: 11px; color: var(--text-tertiary); display: flex; flex-direction: column; gap: 2px; }
+.imagegen-list .image-card .image-meta .image-prompt { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.imagegen-list .empty { grid-column: 1 / -1; padding: 24px; text-align: center; color: var(--text-tertiary); }
+.subheading { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 16px 0 8px; }

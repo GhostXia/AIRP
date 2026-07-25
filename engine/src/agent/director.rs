@@ -341,11 +341,20 @@ mod tests {
             evaluate_interval: 3,
             ..Default::default()
         };
-        let mut state = DirectorState::default();
-        assert!(should_evaluate(&config, &state)); // 0 is multiple of 3
-        state.turn_count = 1;
+        let state = DirectorState {
+            turn_count: 0,
+            ..Default::default()
+        };
+        assert!(should_evaluate(&config, &state)); // 0 % 3 == 0
+        let state = DirectorState {
+            turn_count: 1,
+            ..Default::default()
+        };
         assert!(!should_evaluate(&config, &state));
-        state.turn_count = 3;
+        let state = DirectorState {
+            turn_count: 3,
+            ..Default::default()
+        };
         assert!(should_evaluate(&config, &state));
     }
 

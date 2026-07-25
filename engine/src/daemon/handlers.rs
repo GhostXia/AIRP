@@ -9,8 +9,10 @@
 //! `extract_card_assets`）经 `pub(crate) use` 转发，供未来 MCP tool 复用。
 
 mod agent;
+mod character_templates;
 mod characters;
 mod chat;
+mod image_gen;
 mod lorebook;
 mod memory;
 mod models;
@@ -33,6 +35,10 @@ pub(super) use characters::{
 pub(super) use chat::{
     chat_completion, continue_chat, delete_message, edit_message, get_chat_history,
     preview_chat_assembly, regen_chat, rollback_chat, swipe_chat, switch_branch,
+};
+pub(super) use image_gen::{generate_image_endpoint, list_images_endpoint};
+pub(super) use character_templates::{
+    get_template_endpoint, instantiate_template_endpoint, list_templates_endpoint,
 };
 pub(super) use lorebook::{get_character_lorebook, update_character_lorebook};
 pub(super) use memory::{

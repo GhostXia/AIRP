@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>场景插图生成 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/image-gen.css">
+</head>
+<body data-screen="imagegen">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">场景插图生成</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>角色 <b id="scope-character">—</b></span><span>会话 <b id="scope-session">—</b></span><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">场景插图生成</h1>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <div class="runtime-form">
+    <label class="field"><span class="field-label">角色</span><select class="select runtime-select" id="image-character"></select></label>
+    <label class="field"><span class="field-label">会话（可选）</span><select class="select runtime-select" id="image-session"></select></label>
+  </div>
+  <div class="imagegen-form">
+    <label class="field"><span class="field-label">Prompt（场景描述）</span><textarea class="input textarea" id="image-prompt" rows="4" placeholder="例如：日落时分的城堡剪影，远山如黛，天空染成橘红"></textarea></label>
+    <div class="imagegen-options">
+      <label class="field"><span class="field-label">尺寸</span><select class="select" id="image-size"><option value="1024x1024">1024×1024（方形）</option><option value="1792x1024">1792×1024（横向）</option><option value="1024x1792">1024×1792（纵向）</option></select></label>
+      <label class="field"><span class="field-label">风格</span><select class="select" id="image-style"><option value="vivid">vivid（鲜艳）</option><option value="natural">natural（自然）</option></select></label>
+      <label class="field"><span class="field-label">图片模型（可选覆盖）</span><input class="input" id="image-model" placeholder="留空使用 settings 中的 model；或填 dall-e-3 等"></label>
+      <label class="field checkbox-field"><input type="checkbox" id="image-download" checked><span>下载到 session 资产目录</span></label>
+    </div>
+    <div class="imagegen-actions">
+      <button class="btn btn-primary" id="image-generate-btn" type="button">生成图片</button>
+      <button class="btn btn-secondary" id="image-refresh-btn" type="button">刷新列表</button>
+    </div>
+  </div>
+  <div class="imagegen-result" id="imagegen-result" hidden>
+    <h2 class="subheading">本次生成</h2>
+    <div id="imagegen-current" class="imagegen-current"></div>
+  </div>
+  <div class="imagegen-list-section">
+    <h2 class="subheading">已生成图片（本地资产）</h2>
+    <div id="imagegen-list" class="imagegen-list">加载中…</div>
+  </div>
+</div>
+<div class="related-links" id="related-links"></div>
+</main>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/image-gen.js"></script>
+</body></html>
