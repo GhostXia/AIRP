@@ -109,6 +109,9 @@ jobs:
           # (跑内置 smoke 脚本验证管线); 已配时走真 LLM 路径
           OPENAI_API_KEY: ${{ secrets.AGENT_EXPLORATION_OPENAI_KEY }}
           OPENAI_MODEL: ${{ secrets.AGENT_EXPLORATION_MODEL || 'gpt-4o-mini' }}
+          # 自定义 endpoint：支持 Azure OpenAI、代理或其他 OpenAI 兼容服务
+          # 未配时默认 https://api.openai.com/v1（见 llm-client.mjs）
+          OPENAI_BASE_URL: ${{ secrets.AGENT_EXPLORATION_BASE_URL }}
           # 故意不传 GITHUB_TOKEN: runner 不需要它 (diff 已在上一步取到文件),
           # 避免生成的临时脚本 exfiltrate repo write token。PR 评论用单独 step 的 GH_TOKEN。
         working-directory: tools/agent-exploration
