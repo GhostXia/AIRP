@@ -190,17 +190,34 @@ pub(in crate::daemon) async fn list_images_endpoint(
 
 /// 校验图片文件名，防 path traversal。
 ///
-/// 仅允许 `[A-Za-z0-9_.-]+\.png`，拒绝含路径分隔符、`..`、空字节的文件名。
+/// 仅允许 `[A-Za-z0-9_.-]+\.png`，拒绝含路径分隔符、`..`、空字节、Windows
+/// 驱动器前缀分隔符 `:` 等一切非白名单字符的文件名。
+///
+/// CodeRabbit 二次审计指出：原实现用黑名单（`contains('/')` 等）漏掉了 `:`。
+/// 在 Windows 上 `PathBuf::join` 会把带 prefix 无 root 的输入（如 `C:foo.png`）
+/// 视为驱动器相对路径并替换整个 base，可逃逸 `data_root`。改用白名单从根上杜绝。
 fn validate_image_filename(filename: &str) -> Result<(), AirpError> {
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains('\0')
-        || filename.contains("..")
-        || !filename.ends_with(".png")
-    {
+    if filename.is_empty() || !filename.ends_with(".png") {
         return Err(AirpError::BadRequest(format!(
             "invalid image filename: {filename}"
+        )));
+    }
+    // 白名单：仅允许字母、数字、下划线、连字符、点。其余（含 `/` `\` `:` `\0`
+    // `..` 虽由 `.` 单字符允许，但 `..` 作为整段路径仍需在 join 后再校验，见下）
+    // 一律拒绝。
+    if !filename
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
+        return Err(AirpError::BadRequest(format!(
+            "invalid image filename (contains non-whitelisted char): {filename}"
+        )));
+    }
+    // 即便单字符都合法，`..foo.png` / `foo..png` / `..` 仍可能被 PathBuf 解释为
+    // 父目录引用。显式拒绝任何 `..` 段。
+    if filename.contains("..") {
+        return Err(AirpError::BadRequest(format!(
+            "invalid image filename (parent directory reference): {filename}"
         )));
     }
     Ok(())
@@ -269,4 +286,67 @@ pub(in crate::daemon) async fn serve_session_image_endpoint(
         .join("images")
         .join(&filename);
     serve_image_file(filepath)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_image_filename;
+
+    #[test]
+    fn accepts_normal_png_filename() {
+        assert!(validate_image_filename("1690000000000.png").is_ok());
+        assert!(validate_image_filename("image_1.png").is_ok());
+        assert!(validate_image_filename("img-2.3.png").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_and_non_png() {
+        assert!(validate_image_filename("").is_err());
+        assert!(validate_image_filename("image.jpg").is_err());
+        assert!(validate_image_filename("image").is_err());
+    }
+
+    #[test]
+    fn rejects_path_separators_and_null() {
+        for bad in ["a/b.png", "a\\b.png", "a\0b.png", "a\nb.png"] {
+            assert!(
+                validate_image_filename(bad).is_err(),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_parent_dir_traversal() {
+        for bad in ["..png", "../etc.png", "a/../b.png", "a..b.png", "...png"] {
+            assert!(
+                validate_image_filename(bad).is_err(),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    /// CodeRabbit 二次审计指出：Windows 上 `PathBuf::join` 把 `C:foo.png`（带
+    /// prefix 无 root）当作驱动器相对路径并替换整个 base，可逃逸 `data_root`。
+    /// 必须拒绝 `:`。
+    #[test]
+    fn rejects_windows_drive_prefix_colon() {
+        for bad in ["C:foo.png", "D:evil.png", "a:b.png", ":hidden.png"] {
+            assert!(
+                validate_image_filename(bad).is_err(),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_other_non_whitelisted_chars() {
+        // 白名单仅 [A-Za-z0-9_.-]，其余一律拒
+        for bad in ["a b.png", "a;b.png", "a|b.png", "a(b).png", "中文.png"] {
+            assert!(
+                validate_image_filename(bad).is_err(),
+                "should reject {bad:?}"
+            );
+        }
+    }
 }

@@ -110,26 +110,37 @@ Engine 端 `list_sessions_endpoint` 返回 `Json<Vec<SessionId>>`（`sessions.rs
 
 ---
 
-## 3.1 二次修复：CodeRabbit inline review（commit 待推送）
+## 3.1 二次修复：CodeRabbit inline review（commit `bdf20f9`）
 
 > 本审计首轮（commit `338f911`）只覆盖 B1/B2/B3。CodeRabbit 在 head `6456c03` 上发了 12 条 actionable inline review 线程 + 1 条 markdownlint 线程，本轮全部就地修复。
+>
+> **ID 规约**：本表用 `#N` 指 CodeRabbit inline 线程序号；与 §4 `Nn` 非阻塞项的对应关系在"映射"列显式标注，避免 ID 冲突。
 
-| CodeRabbit 线程 | 位置 | 修复 |
+| #线程 | 位置 | 修复 | §4 映射 |
+|---|---|---|---|
+| #1 download 失败 abort 整个 handler | `engine/src/daemon/handlers/image_gen.rs:127-153` | `match` download 结果，失败时 `tracing::warn!` 并保留 `resp.image_url` 返回 URL-only 响应（不丢已计费的上游生成结果） | — |
+| #2 webui `<img src>` 404（`ServeDir` 指向 webui 不指 data_root） | `engine/src/daemon/mod.rs` + `handlers/image_gen.rs:237-272` | 新增 `GET /v1/characters/:cid/images/:filename` 与 `GET /v1/characters/:cid/sessions/:sid/images/:filename`，handler 校验 `CharacterId` / `SessionId` / `validate_image_filename` 后从 `data_root` 服务图片字节 | — |
+| #3 秒级时间戳文件名碰撞 | `engine/src/image_gen.rs:194-204` | 改用毫秒时间戳 + 碰撞自增后缀 `{millis}_{n}.png` | — |
+| #4 `index.json` 读-改-写竞态 + handler re-read `index.last()` | `engine/src/image_gen.rs:171-173,261-272` + `handlers/image_gen.rs:137-141` | 全局 `tokio::sync::Mutex` 序列化读-改-写；`download_image_to_session` 返回 `ImageMeta`，handler 直接用不再 re-read | **resolves §4 N5** |
+| #5 `default_size`/`default_style` 重复定义 | `engine/src/image_gen.rs:34-41` + `handlers/image_gen.rs:12-15` | 提为 `pub(crate)` 单一来源，handler `use` 复用 | — |
+| #6 图片下载无大小上限（DoS） | `engine/src/image_gen.rs:167-169,225-250` | `MAX_IMAGE_BYTES = 20 MiB`，Content-Length 预检 + 读后复核 | **resolves §4 N3** |
+| #7 跨源 engine 仍带 session bearer（凭据外泄） | `webui/assets/character-templates.js:11-12` | `(base === location.origin) ? storedBearer : ''`，跨源 engine 不带 bearer | — |
+| #8 模板卡 `<div>` 不可键盘操作 | `webui/assets/character-templates.js:55-57` + `.css:7-12` | 改 `<button type="button">`，加 `:focus-visible` 样式 | — |
+| #9 `BGM_RULES` 第三标题乱码 | `webui/assets/chat-space.js:701` | 改为 `进击的巨人 OST - ətˈæk 0N tάɪtn`（原文 IPA 标题） | — |
+| #10 `suggestBgm` 子串误命中（`warmth` 命中 `war`） | `webui/assets/chat-space.js:717-723` | ASCII 关键词用 `\b` 词边界正则，中文仍用 `includes` | 部分缓解 §4 N13 |
+| #12 `18-group-chat.html` 重复 `<!DOCTYPE>` 文档 | `webui/screens/18-group-chat.html` | 删除合并遗留的第二个文档块，保留单一 `<html>` | — |
+| #13 审计文档 markdownlint MD038（inline code span 转义反引号） | `docs/audits/2026-07-25-PR-317-phase3-image-templates-audit.md:181` | `` `[*_#\`]` `` → `` `` `[*_#`]` `` ``（双反引号分隔） | — |
+
+## 3.2 三次修复：CodeRabbit 二次 inline review（commit 待推送）
+
+> CodeRabbit 在 head `bdf20f9` 上又发了 2 条 actionable 线程，本轮就地修复。
+
+| #线程 | 位置 | 修复 |
 |---|---|---|
-| #1 download 失败 abort 整个 handler | `engine/src/daemon/handlers/image_gen.rs:127-153` | `match` download 结果，失败时 `tracing::warn!` 并保留 `resp.image_url` 返回 URL-only 响应（不丢已计费的上游生成结果） |
-| #2 webui `<img src>` 404（`ServeDir` 指向 webui 不指 data_root） | `engine/src/daemon/mod.rs` + `handlers/image_gen.rs:237-272` | 新增 `GET /v1/characters/:cid/images/:filename` 与 `GET /v1/characters/:cid/sessions/:sid/images/:filename`，handler 校验 `CharacterId` / `SessionId` / `validate_image_filename` 后从 `data_root` 服务图片字节 |
-| #3 秒级时间戳文件名碰撞 | `engine/src/image_gen.rs:194-204` | 改用毫秒时间戳 + 碰撞自增后缀 `{millis}_{n}.png` |
-| #4 `index.json` 读-改-写竞态 + handler re-read `index.last()` | `engine/src/image_gen.rs:171-173,261-272` + `handlers/image_gen.rs:137-141` | 全局 `tokio::sync::Mutex` 序列化读-改-写；`download_image_to_session` 返回 `ImageMeta`，handler 直接用不再 re-read |
-| #5/N1 `default_size`/`default_style` 重复定义 | `engine/src/image_gen.rs:34-41` + `handlers/image_gen.rs:12-15` | 提为 `pub(crate)` 单一来源，handler `use` 复用 |
-| #6/N2 图片下载无大小上限（DoS） | `engine/src/image_gen.rs:167-169,225-250` | `MAX_IMAGE_BYTES = 20 MiB`，Content-Length 预检 + 读后复核 |
-| #7 跨源 engine 仍带 session bearer（凭据外泄） | `webui/assets/character-templates.js:11-12` | `(base === location.origin) ? storedBearer : ''`，跨源 engine 不带 bearer |
-| #8 模板卡 `<div>` 不可键盘操作 | `webui/assets/character-templates.js:55-57` + `.css:7-12` | 改 `<button type="button">`，加 `:focus-visible` 样式 |
-| #9 `BGM_RULES` 第三标题乱码 | `webui/assets/chat-space.js:701` | 改为 `进击的巨人 OST - ətˈæk 0N tάɪtn`（原文 IPA 标题） |
-| #10 `suggestBgm` 子串误命中（`warmth` 命中 `war`） | `webui/assets/chat-space.js:717-723` | ASCII 关键词用 `\b` 词边界正则，中文仍用 `includes` |
-| #12 `18-group-chat.html` 重复 `<!DOCTYPE>` 文档 | `webui/screens/18-group-chat.html` | 删除合并遗留的第二个文档块，保留单一 `<html>` |
-| #13 审计文档 markdownlint MD038（inline code span 转义反引号） | `docs/audits/2026-07-25-PR-317-phase3-image-templates-audit.md:181` | `` `[*_#\`]` `` → `` `` `[*_#`]` `` ``（双反引号分隔） |
+| #14 审计文档 §3.1 与 §4 的 N1/N2 ID 冲突 | `docs/audits/2026-07-25-PR-317-phase3-image-templates-audit.md:122-123` | §3.1 表删去 `/N1` `/N2` 后缀，改用"§4 映射"列显式标注对应关系（#4→N5，#6→N3）；§4 N3/N5 标注"已由 §3.1 修复" |
+| #15 `validate_image_filename` 漏拒 `:`（Windows 驱动器前缀逃逸） | `engine/src/daemon/handlers/image_gen.rs:191-207` | 黑名单改白名单：仅允许 `[A-Za-z0-9_.-]`，显式拒 `..`。`C:foo.png` / `D:evil.png` / `:hidden.png` 全部拒。新增 6 个单元测试锁定行为 |
 
-**未修复（仍待合并后入 issue）**：N1 URL 构造 / N2 POST body limit / N4 Content-Type 校验 / N6 SSRF / N7 b64_json / N8 instantiate 顺序 / N9 `images_dir` pub 但不校验 / N10 list 无分页 / N11 无独立限流 / N12 group-chat session 创建失败静默 / N13 `JSON.stringify` 关键词匹配（部分已由 #10 缓解，仍建议改扫语义字段）/ N14 TTS 正则过简 / N15 CI 失败。
+**未修复（仍待合并后入 issue）**：§4 N1（URL 构造）/ N2（POST body limit）/ N4（Content-Type 校验）/ N6（SSRF）/ N7（b64_json）/ N8（instantiate 顺序）/ N9（`images_dir` pub 但不校验）/ N10（list 无分页）/ N11（无独立限流）/ N12（group-chat session 创建失败静默）/ N13（`JSON.stringify` 关键词匹配，部分已由 #10 缓解，仍建议改扫语义字段）/ N14（TTS 正则过简）/ N15（CI 失败）。§4 N3 与 N5 已由 §3.1 修复，从待办中移除。
 
 ---
 
@@ -145,17 +156,21 @@ Engine 端 `list_sessions_endpoint` 返回 `Json<Vec<SessionId>>`（`sessions.rs
 
 `POST /v1/image/generate` 与 `POST /v1/character-templates/:id/instantiate` 路由未挂 `DefaultBodyLimit`，依赖 axum 默认 2MB。虽未违反"PUT endpoints must have body limit"硬约束（这两条是 POST），但与仓库其他 POST/PUT 端点显式设限的惯例不一致。建议显式 `.layer(DefaultBodyLimit::max(2 * 1024 * 1024))`。
 
-### N3 — `image_gen.rs:166-236` 图片下载无大小限制（DoS）
+### N3 — `image_gen.rs:166-236` 图片下载无大小限制（DoS）—— ✅ 已由 §3.1 #6 修复
 
 `download_image_to_session` 用 `response.bytes().await` 一次性读全部响应体，无上限。恶意/被攻陷的上游可返回超大响应填满磁盘。建议流式读取并设上限（如 20MB）。
+
+**状态**：已在 commit `bdf20f9` 由 §3.1 #6 修复（`MAX_IMAGE_BYTES = 20 MiB`，Content-Length 预检 + 读后复核）。无需入 issue。
 
 ### N4 — `image_gen.rs:166-236` 图片下载无 Content-Type 校验
 
 下载的 bytes 直接存为 `{timestamp}.png`，不校验是否真为 PNG/图片。恶意上游可返回 HTML/JS 存为 `.png`。若后续静态文件服务按扩展名设 `Content-Type: image/png`，风险可控；但若按内容嗅探，可能被当 HTML 渲染。建议读 magic bytes 校验。
 
-### N5 — `image_gen.rs:209-223` `index.json` 读写竞态（lost update）
+### N5 — `image_gen.rs:209-223` `index.json` 读写竞态（lost update）—— ✅ 已由 §3.1 #4 修复
 
 `download_image_to_session` 读 `index.json` → push → 写回，非原子。两个并发请求可能 last-write-wins，丢失前一条记录。建议文件锁或 append-only 日志 + 周期 compact。
+
+**状态**：已在 commit `bdf20f9` 由 §3.1 #4 修复（全局 `tokio::sync::Mutex` 序列化读-改-写；handler 直接用返回的 `ImageMeta`，不再 re-read `index.last()`）。无需入 issue。
 
 ### N6 — `image_gen.rs:166-236` SSRF：上游返回的 `image_url` 无校验直接 fetch
 
@@ -211,8 +226,12 @@ if (!sessionId) {
 
 ## 5. 结论
 
-PR #317 的 3 个阻塞项（B1 XSS / B2 功能不可用 / B3 CI lint）**已由本审计就地修复**（commit `338f911`）。随后又对 CodeRabbit inline review 的 12 条 actionable 线程 + 1 条 markdownlint 线程做了二次修复（见 §3.1）。两轮修复后全部本地验证通过（fmt / clippy / 892 lib tests / 15 webui tests / 19 agent-exploration lint tests）。剩余 13 个非阻塞项建议合并后入 issue。
+PR #317 的 3 个阻塞项（B1 XSS / B2 功能不可用 / B3 CI lint）**已由本审计就地修复**（commit `338f911`）。随后对 CodeRabbit 三轮 inline review 共做了 15 条 actionable 线程的修复：
+- §3.1（commit `bdf20f9`）：12 条 + 1 条 markdownlint
+- §3.2（本 commit）：2 条（N1/N2 ID 冲突 + `:` filename 安全漏）
+
+三轮修复后全部本地验证通过（fmt / clippy / 898 lib tests / 15 webui tests / 19 agent-exploration lint tests）。§4 中 N3 与 N5 已由 §3.1 修复，剩余 13 个非阻塞项（N1/N2/N4/N6–N15）建议合并后入 issue。
 
 **独立审计立场**：本审计否决了 PR 描述中"15 项 webui 测试全过 = 已验证"的暗示——B2 在所有测试通过的情况下仍然存在，证明 runtime-pages 测试**不覆盖运行时数据契约**，建议后续补 session 列表契约测试（mock `/v1/sessions/:id` 返回裸字符串数组，断言下拉非空）。
 
-**建议**：二次修复 commit 推送后，待人工 review 与 CodeRabbit 复审通过后可合并；合并后由审计 agent 将 §4 中剩余非阻塞项整理为 GitHub issue。
+**建议**：三次修复 commit 推送后，待人工 review 与 CodeRabbit 复审通过后可合并；合并后由审计 agent 将 §4 中剩余非阻塞项（N1/N2/N4/N6–N15）整理为 GitHub issue。
