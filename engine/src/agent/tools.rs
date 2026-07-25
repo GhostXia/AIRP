@@ -52,6 +52,10 @@ mod world_event;
 pub(crate) use analysis::enhance_md_via_llm_shared;
 pub use analysis::ENHANCE_ANALYSIS_SYSTEM_PROMPT;
 
+// Phase 4.5：world_event 的类型与读取函数经 facade 做 pub(crate) re-export，
+// 供 `timeline_export` 模块复用 world_events.json 与 world_clock.json 的读取逻辑。
+pub(crate) use world_event::{load_world_clock, load_world_events, WorldClock, WorldEvent};
+
 /// 工具副作用分类（驱动 dry-run / 确认流 / 幂等去重）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

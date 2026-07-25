@@ -64,7 +64,11 @@ fn world_events_path(data_root: &std::path::Path, character_id: &str) -> std::pa
         .join("world_events.json")
 }
 
-fn load_world_events(
+/// 读取世界事件列表。不存在返回空 Vec。
+///
+/// Phase 4.5：本函数从私有提升为 `pub(crate)`，供 `timeline_export` 模块复用
+/// （避免在 timeline_export 中重复实现 world_events.json 的读取与解析）。
+pub(crate) fn load_world_events(
     data_root: &std::path::Path,
     character_id: &str,
 ) -> Result<Vec<WorldEvent>, AirpError> {

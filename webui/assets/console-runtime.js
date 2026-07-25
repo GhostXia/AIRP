@@ -40,6 +40,7 @@
     ['38', 'stylelearn', '风格迁移', '38-style-learn.html'],
     ['39', 'dialoguegen', '对话示例', '39-dialogue-gen.html'],
     ['40', 'wbgraph', '知识图谱', '40-worldbook-graph.html'],
+    ['41', 'timeline', '时间线导出', '41-timeline-export.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 
