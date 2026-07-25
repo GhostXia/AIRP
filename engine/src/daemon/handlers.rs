@@ -9,6 +9,7 @@
 //! `extract_card_assets`）经 `pub(crate) use` 转发，供未来 MCP tool 复用。
 
 mod agent;
+mod card_diff;
 mod character_templates;
 mod characters;
 mod chat;
@@ -31,6 +32,10 @@ mod worldbook_graph;
 
 // #155 PR 4/5/6：re-export moved handlers 保持 `daemon/mod.rs` 的 `use handlers::{...}` 不变。
 pub(super) use agent::{agent_run, list_agent_tools};
+pub(super) use card_diff::{
+    diff_character_revisions_endpoint, get_character_revision_endpoint,
+    list_character_revisions_endpoint,
+};
 pub(super) use character_templates::{
     get_template_endpoint, instantiate_template_endpoint, list_templates_endpoint,
 };

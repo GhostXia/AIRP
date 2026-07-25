@@ -41,6 +41,7 @@
     ['39', 'dialoguegen', '对话示例', '39-dialogue-gen.html'],
     ['40', 'wbgraph', '知识图谱', '40-worldbook-graph.html'],
     ['41', 'timeline', '时间线导出', '41-timeline-export.html'],
+    ['42', 'carddiff', '版本对比', '42-card-diff.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 
