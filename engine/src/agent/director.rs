@@ -128,7 +128,10 @@ fn director_directive_path(session_dir: &Path) -> PathBuf {
 }
 
 /// 读取导演状态。
-pub fn load_director_state(data_root: &Path, character_id: &str) -> Result<DirectorState, AirpError> {
+pub fn load_director_state(
+    data_root: &Path,
+    character_id: &str,
+) -> Result<DirectorState, AirpError> {
     let path = director_state_path(data_root, character_id);
     match fs::read_to_string(&path) {
         Ok(content) => Ok(serde_json::from_str(&content)?),
@@ -158,13 +161,19 @@ pub fn write_directive(session_dir: &Path, decision: &DirectorDecision) -> Resul
     let path = director_directive_path(session_dir);
     let content = match decision {
         DirectorDecision::Observe => String::new(),
-        DirectorDecision::IntroduceConflict { description, suggestion } => {
+        DirectorDecision::IntroduceConflict {
+            description,
+            suggestion,
+        } => {
             format!(
                 "[导演指令：引入冲突]\n{}\n建议方向：{}\n",
                 description, suggestion
             )
         }
-        DirectorDecision::SwitchScene { scene_description, reason } => {
+        DirectorDecision::SwitchScene {
+            scene_description,
+            reason,
+        } => {
             format!(
                 "[导演指令：场景切换]\n新场景：{}\n原因：{}\n",
                 scene_description, reason
@@ -176,10 +185,16 @@ pub fn write_directive(session_dir: &Path, decision: &DirectorDecision) -> Resul
                 units, changes
             )
         }
-        DirectorDecision::NpcAction { npc_name, npc_action } => {
+        DirectorDecision::NpcAction {
+            npc_name,
+            npc_action,
+        } => {
             format!("[导演指令：NPC 行动]\n{}：{}\n", npc_name, npc_action)
         }
-        DirectorDecision::AdvancePlot { direction, progress_note } => {
+        DirectorDecision::AdvancePlot {
+            direction,
+            progress_note,
+        } => {
             format!(
                 "[导演指令：剧情推进]\n方向：{}\n进度：{}\n",
                 direction, progress_note
@@ -236,14 +251,11 @@ pub fn should_evaluate(config: &DirectorConfig, state: &DirectorState) -> bool {
     if !config.enabled {
         return false;
     }
-    state.turn_count % config.evaluate_interval == 0
+    state.turn_count.is_multiple_of(config.evaluate_interval)
 }
 
 /// 更新导演状态（轮次计数 + 决策记录）。
-pub fn record_turn(
-    state: &mut DirectorState,
-    decision: Option<DirectorDecision>,
-) {
+pub fn record_turn(state: &mut DirectorState, decision: Option<DirectorDecision>) {
     state.turn_count += 1;
     if let Some(d) = decision {
         let now = std::time::SystemTime::now()
@@ -270,10 +282,12 @@ mod tests {
     #[test]
     fn director_state_roundtrip() {
         let tmp = tempdir().unwrap();
-        let mut state = DirectorState::default();
-        state.turn_count = 5;
-        state.tension_level = 0.7;
-        state.plot_phase = "承".to_string();
+        let state = DirectorState {
+            turn_count: 5,
+            tension_level: 0.7,
+            plot_phase: "承".to_string(),
+            ..Default::default()
+        };
         save_director_state(tmp.path(), "hero", &state).unwrap();
         let loaded = load_director_state(tmp.path(), "hero").unwrap();
         assert_eq!(loaded.turn_count, 5);
@@ -315,12 +329,20 @@ mod tests {
             evaluate_interval: 3,
             ..Default::default()
         };
-        let mut state = DirectorState::default();
-        state.turn_count = 0;
+        let state = DirectorState {
+            turn_count: 0,
+            ..Default::default()
+        };
         assert!(should_evaluate(&config, &state)); // 0 % 3 == 0
-        state.turn_count = 1;
+        let state = DirectorState {
+            turn_count: 1,
+            ..Default::default()
+        };
         assert!(!should_evaluate(&config, &state));
-        state.turn_count = 3;
+        let state = DirectorState {
+            turn_count: 3,
+            ..Default::default()
+        };
         assert!(should_evaluate(&config, &state));
     }
 
@@ -338,10 +360,7 @@ mod tests {
     fn record_turn_trims_history() {
         let mut state = DirectorState::default();
         for _ in 0..25 {
-            record_turn(
-                &mut state,
-                Some(DirectorDecision::Observe),
-            );
+            record_turn(&mut state, Some(DirectorDecision::Observe));
         }
         assert_eq!(state.turn_count, 25);
         assert!(state.recent_decisions.len() <= 20);

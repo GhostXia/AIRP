@@ -111,7 +111,10 @@ impl CouncilSession {
         if self.finished || self.config.participants.is_empty() {
             return None;
         }
-        self.config.participants.get(self.current_speaker_idx).map(|s| s.as_str())
+        self.config
+            .participants
+            .get(self.current_speaker_idx)
+            .map(|s| s.as_str())
     }
 
     /// 推进到下一个发言者。返回是否进入了新轮次。
@@ -152,12 +155,26 @@ impl CouncilSession {
     /// 生成会议摘要（用于注入到叙事上下文）。
     pub fn summary(&self) -> String {
         let mut s = format!("[会议记录] 主题: {}\n", self.config.topic);
-        s.push_str(&format!("参与者: {}\n", self.config.participants.join(", ")));
-        s.push_str(&format!("轮次: {}/{}\n", self.current_round.min(self.config.max_rounds), self.config.max_rounds));
+        s.push_str(&format!(
+            "参与者: {}\n",
+            self.config.participants.join(", ")
+        ));
+        s.push_str(&format!(
+            "轮次: {}/{}\n",
+            self.current_round.min(self.config.max_rounds),
+            self.config.max_rounds
+        ));
         s.push_str("---\n");
         for turn in &self.turns {
-            let prefix = if turn.is_intervention { "[用户介入] " } else { "" };
-            s.push_str(&format!("{}【{}】: {}\n", prefix, turn.speaker, turn.content));
+            let prefix = if turn.is_intervention {
+                "[用户介入] "
+            } else {
+                ""
+            };
+            s.push_str(&format!(
+                "{}【{}】: {}\n",
+                prefix, turn.speaker, turn.content
+            ));
         }
         if let Some(ref reason) = self.end_reason {
             s.push_str(&format!("---\n会议结束: {}\n", reason));
@@ -174,7 +191,10 @@ fn council_path(data_root: &Path, character_id: &str) -> PathBuf {
 }
 
 /// 读取会议状态。
-pub fn load_council(data_root: &Path, character_id: &str) -> Result<Option<CouncilSession>, AirpError> {
+pub fn load_council(
+    data_root: &Path,
+    character_id: &str,
+) -> Result<Option<CouncilSession>, AirpError> {
     let path = council_path(data_root, character_id);
     match std::fs::read_to_string(&path) {
         Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
@@ -262,10 +282,14 @@ mod tests {
     fn council_finishes_after_max_rounds() {
         let mut session = CouncilSession::new(make_config());
         // Round 1
-        for _ in 0..3 { session.advance_speaker(); }
+        for _ in 0..3 {
+            session.advance_speaker();
+        }
         assert_eq!(session.current_round, 2);
         // Round 2
-        for _ in 0..3 { session.advance_speaker(); }
+        for _ in 0..3 {
+            session.advance_speaker();
+        }
         assert!(session.finished);
         assert_eq!(session.end_reason, Some("达到最大轮次".to_string()));
     }

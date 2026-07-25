@@ -9,8 +9,10 @@
 //! `extract_card_assets`）经 `pub(crate) use` 转发，供未来 MCP tool 复用。
 
 mod agent;
+mod character_templates;
 mod characters;
 mod chat;
+mod image_gen;
 mod lorebook;
 mod memory;
 mod models;
@@ -34,6 +36,10 @@ pub(super) use chat::{
     chat_completion, continue_chat, delete_message, edit_message, get_chat_history,
     preview_chat_assembly, regen_chat, rollback_chat, swipe_chat, switch_branch,
 };
+pub(super) use image_gen::{generate_image_endpoint, list_images_endpoint};
+pub(super) use character_templates::{
+    get_template_endpoint, instantiate_template_endpoint, list_templates_endpoint,
+};
 pub(super) use lorebook::{get_character_lorebook, update_character_lorebook};
 pub(super) use memory::{
     get_resident_memory, get_user_model, update_resident_memory, update_user_model,
@@ -45,6 +51,7 @@ pub(super) use personas::{
     list_personas_endpoint, unbind_persona_endpoint, update_persona_endpoint,
     update_persona_multi_endpoint,
 };
+pub(super) use plot::{get_plot_arc, update_plot_arc};
 pub(super) use presets::{get_preset_endpoint, import_preset_endpoint, list_presets_endpoint};
 pub(super) use scenes::{
     add_scene_character_endpoint, create_scene_endpoint, get_scene_endpoint, list_scenes_endpoint,
@@ -59,7 +66,6 @@ pub(super) use state::{
     get_character_state_schema, get_world_events,
 };
 pub(super) use style::{get_drift, rollback_drift, style_review, update_drift};
-pub(super) use plot::{get_plot_arc, update_plot_arc};
 
 // M_MCP MCP-2：角色卡导入的 `pub(crate)` 共享实现，供未来 daemon HTTP handler 与
 // MCP tool 复用。facade 转发符号路径，保持 `crate::daemon::handlers::import_card_to_disk`
