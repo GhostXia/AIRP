@@ -6,7 +6,9 @@
 //! - `POST /v1/character-templates/:id/instantiate` — 基于模板创建角色，
 //!   复用 `import_card_to_disk` 落盘流程
 
-use crate::character_templates::{template_card_json, InstantiateRequest, InstantiateResponse, TemplateMeta, TEMPLATE_METAS};
+use crate::character_templates::{
+    template_card_json, InstantiateRequest, InstantiateResponse, TemplateMeta, TEMPLATE_METAS,
+};
 use crate::daemon::DaemonState;
 use crate::error::AirpError;
 use axum::extract::{Path, State};
@@ -54,7 +56,9 @@ pub(in crate::daemon) async fn instantiate_template_endpoint(
     let final_json = if let Some(ref name) = req.name_override {
         let name_trimmed = name.trim();
         if name_trimmed.is_empty() {
-            return Err(AirpError::BadRequest("name_override must not be empty".to_string()));
+            return Err(AirpError::BadRequest(
+                "name_override must not be empty".to_string(),
+            ));
         }
         let mut v: serde_json::Value = serde_json::from_str(&json_str)
             .map_err(|e| AirpError::Internal(format!("template json parse failed: {e}")))?;

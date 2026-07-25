@@ -229,9 +229,8 @@ pub fn template_card_json(template_id: &str) -> Result<String, AirpError> {
         }
     });
 
-    serde_json::to_string_pretty(&card).map_err(|e| {
-        AirpError::Internal(format!("template card serialize failed: {e}"))
-    })
+    serde_json::to_string_pretty(&card)
+        .map_err(|e| AirpError::Internal(format!("template card serialize failed: {e}")))
 }
 
 #[cfg(test)]
@@ -241,7 +240,8 @@ mod tests {
     #[test]
     fn all_template_metas_have_card_content() {
         for meta in TEMPLATE_METAS {
-            let json = template_card_json(meta.id).unwrap_or_else(|e| panic!("template {} card failed: {}", meta.id, e));
+            let json = template_card_json(meta.id)
+                .unwrap_or_else(|e| panic!("template {} card failed: {}", meta.id, e));
             let v: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert_eq!(v["spec"], "chara_card_v2");
             assert_eq!(v["data"]["name"], meta.name);

@@ -59,10 +59,21 @@
     const none = document.createElement('option'); none.value = ''; none.textContent = '— 不绑定 session —'; sel.appendChild(none);
     if (!characterId) { sessions = []; return; }
     try {
-      sessions = await client.request('GET', '/v1/sessions/' + encodeURIComponent(characterId)).catch(() => ({ sessions: [] }));
-      const list = (sessions && sessions.sessions) || [];
-      for (const s of list) { const opt = document.createElement('option'); opt.value = s.session_id; opt.textContent = s.name || s.session_id; sel.appendChild(opt); }
-      if (sessionId && list.some(s => s.session_id === sessionId)) sel.value = sessionId; else sessionId = '';
+      // B2 修复（审计 PR #317）：GET /v1/sessions/:character_id 返回 Vec<SessionId>
+      // （JSON 数组，元素为裸字符串），不是 { sessions: [{ session_id, name }] }。
+      // 原代码读 sessions.sessions 永远 undefined → 会话下拉恒空，图片无法绑定 session。
+      const resp = await client.request('GET', '/v1/sessions/' + encodeURIComponent(characterId)).catch(() => []);
+      sessions = Array.isArray(resp) ? resp : (resp && resp.sessions) || [];
+      for (const s of sessions) {
+        const opt = document.createElement('option');
+        // 兼容两种形态：裸字符串（实际 API）或 { session_id, name } 对象（防御）
+        const sid = typeof s === 'string' ? s : (s && s.session_id) || '';
+        const label = typeof s === 'string' ? s : (s && (s.name || s.session_id)) || '';
+        opt.value = sid;
+        opt.textContent = label;
+        sel.appendChild(opt);
+      }
+      if (sessionId && sessions.some(s => (typeof s === 'string' ? s : s && s.session_id) === sessionId)) sel.value = sessionId; else sessionId = '';
     } catch (error) {
       // 会话列表加载失败不阻塞主流程
     }

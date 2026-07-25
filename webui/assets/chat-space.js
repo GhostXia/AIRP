@@ -663,11 +663,17 @@
   }
 
   // ── Phase 3.6: 对话片段分享卡片 ─────────────────────────────────────────
+  // B1 修复（审计 PR #317）：speaker / characterName 来自用户可控的角色卡，
+  // 必须像 text 一样做 HTML 转义，否则角色名包含 <script> 等标签会在下载的
+  // HTML 文件被打开时执行（XSS）。time 来自 Date.toLocaleString，安全。
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
   function shareAsCard(role, text, options) {
     if (!text) return;
     const speaker = role === 'user' ? (sessionStorage.getItem('airp_user_name') || 'User') : (characterName || 'Assistant');
     const time = options && options.timestamp ? new Date(options.timestamp).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN');
-    // 构建 HTML 卡片
+    // 构建 HTML 卡片。所有外部字符串均经 escapeHtml。
     const cardHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'
       + 'body{margin:0;padding:24px;background:#f0f2f5;display:flex;justify-content:center;align-items:center;min-height:100vh;font-family:system-ui,-apple-system,sans-serif}'
       + '.card{max-width:480px;width:100%;background:#fff;border-radius:16px;padding:24px;box-shadow:0 4px 24px rgba(0,0,0,.08)}'
@@ -678,9 +684,9 @@
       + '.card-body{font-size:14px;line-height:1.8;color:#334155;white-space:pre-wrap;word-break:break-word}'
       + '.card-foot{margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:10px;color:#94a3b8;display:flex;justify-content:space-between}'
       + '</style></head><body><div class="card">'
-      + '<div class="card-head"><div class="card-avatar">' + speaker.slice(0, 1) + '</div><div><div class="card-name">' + speaker + '</div><div class="card-time">' + time + '</div></div></div>'
-      + '<div class="card-body">' + text.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>'
-      + '<div class="card-foot"><span>AIRP · ' + (characterName || '') + '</span><span>' + new Date().toLocaleDateString('zh-CN') + '</span></div>'
+      + '<div class="card-head"><div class="card-avatar">' + escapeHtml(speaker.slice(0, 1)) + '</div><div><div class="card-name">' + escapeHtml(speaker) + '</div><div class="card-time">' + escapeHtml(time) + '</div></div></div>'
+      + '<div class="card-body">' + escapeHtml(text) + '</div>'
+      + '<div class="card-foot"><span>AIRP · ' + escapeHtml(characterName || '') + '</span><span>' + escapeHtml(new Date().toLocaleDateString('zh-CN')) + '</span></div>'
       + '</div></body></html>';
     const blob = new Blob([cardHtml], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
