@@ -714,7 +714,17 @@
     const stateText = JSON.stringify(stateData).toLowerCase();
     let matched = null;
     for (const rule of BGM_RULES) {
-      if (rule.keywords.some(kw => stateText.includes(kw.toLowerCase()))) {
+      // CodeRabbit #10：ASCII 关键词用 \b 词边界匹配，避免命中 key 名或子串
+      // （如 {"mood":"not combat"} 不该命中 "combat"）。中文无词边界概念，仍用 includes。
+      const hit = rule.keywords.some(kw => {
+        const k = kw.toLowerCase();
+        // 简单 ASCII 判定：含 a-z0-9 视为 ASCII 关键词
+        if (/^[a-z0-9\s]+$/i.test(kw)) {
+          return new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(stateText);
+        }
+        return stateText.includes(k);
+      });
+      if (hit) {
         matched = rule;
         break;
       }

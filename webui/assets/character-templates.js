@@ -5,7 +5,11 @@
   const requestedEngine = params.get('engine');
   if (requestedEngine && /^https?:\/\//i.test(requestedEngine)) sessionStorage.setItem('airp_engine_url', requestedEngine.replace(/\/+$/, ''));
   const base = sessionStorage.getItem('airp_engine_url') || location.origin;
-  const bearer = sessionStorage.getItem('airp_bearer') || '';
+  // CodeRabbit #7：仅同源 Engine 接收 stored bearer。跨源 engine（可能由
+  // ?engine= 查询参数注入）不带 bearer，防止钓鱼链接窃取会话令牌。跨源
+  // engine 用户须在该 engine 域名单独登录。
+  const storedBearer = sessionStorage.getItem('airp_bearer') || '';
+  const bearer = (base === location.origin) ? storedBearer : '';
   const client = AIRPApi.createClient({ base, bearer });
   let characterId = params.get('character') || sessionStorage.getItem('airp_character_id') || '';
   let templates = [];
@@ -48,7 +52,9 @@
     });
     if (filtered.length === 0) { grid.appendChild(node('div', 'empty', '没有匹配的模板')); return; }
     for (const t of filtered) {
-      const card = node('div', 'template-card');
+      // CodeRabbit #8：改 <button type="button"> 使模板卡键盘可达（Tab + Enter）。
+      const card = node('button', 'template-card');
+      card.type = 'button';
       card.addEventListener('click', () => showDetail(t.id));
       const head = node('div', 'tc-head');
       head.appendChild(node('span', 'tc-name', t.name));
@@ -75,6 +81,9 @@
     const body = $('#detail-body');
     body.replaceChildren();
     wrap.hidden = false;
+    // CodeRabbit #6：await 前先清 selectedTemplate，加载失败时不保留上次选择，
+    // 避免用户误用旧 id 触发 instantiate。
+    selectedTemplate = null;
     setStatus('加载模板详情…');
     try {
       const card = await client.request('GET', '/v1/character-templates/' + encodeURIComponent(id));

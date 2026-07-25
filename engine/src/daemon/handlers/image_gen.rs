@@ -9,9 +9,15 @@
 
 use crate::daemon::DaemonState;
 use crate::error::AirpError;
-use crate::image_gen::{download_image_to_session, generate_image, ImageGenRequest, ImageMeta};
+use crate::image_gen::{
+    default_size, default_style, download_image_to_session, generate_image, ImageGenRequest,
+    ImageMeta,
+};
 use crate::types::CharacterId;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -31,13 +37,6 @@ pub struct GenerateImageEndpointRequest {
     pub download: bool,
     /// 可选图片生成 model（覆盖 settings 中的 `model`）。便于调用 dall-e-3 等。
     pub image_model: Option<String>,
-}
-
-fn default_size() -> String {
-    "1024x1024".to_string()
-}
-fn default_style() -> String {
-    "vivid".to_string()
 }
 
 /// `POST /v1/image/generate` 响应体。
@@ -125,7 +124,7 @@ pub(in crate::daemon) async fn generate_image_endpoint(
     let mut image_path = None;
     if req.download {
         if let Some(ref url) = resp.image_url {
-            let path = download_image_to_session(
+            match download_image_to_session(
                 &state.http_client,
                 &state.data_root,
                 cid.as_str(),
@@ -133,22 +132,23 @@ pub(in crate::daemon) async fn generate_image_endpoint(
                 url,
                 prompt,
             )
-            .await?;
-            // 读取刚写入的 index.json 末条元数据回填响应
-            let index_path = crate::image_gen::images_index_path(
-                &state.data_root,
-                cid.as_str(),
-                req.session_id.as_deref(),
-            );
-            if let Some(index) = std::fs::read_to_string(&index_path)
-                .ok()
-                .and_then(|s| serde_json::from_str::<Vec<ImageMeta>>(&s).ok())
+            .await
             {
-                meta = index.last().cloned();
+                Ok((m, path)) => {
+                    // CodeRabbit #4：直接用 download_image_to_session 返回的
+                    // ImageMeta，不再 re-read index.last()——并发下可能读到他人条目。
+                    meta = Some(m);
+                    image_path = Some(path);
+                    // 已下载到本地，不回传短期 URL 防止客户端缓存过期 URL
+                    resp.image_url = None;
+                }
+                Err(e) => {
+                    // CodeRabbit #1：下载失败不 abort 整个 handler。上游图片生成
+                    // 已计费/限流，保留 resp.image_url 返回 URL-only 响应，让用户
+                    // 在短期 URL 有效期内仍能使用已生成的图。
+                    tracing::warn!("image download failed, returning URL only: {e}");
+                }
             }
-            image_path = Some(path);
-            // 已下载到本地，不回传短期 URL 防止客户端缓存过期 URL
-            resp.image_url = None;
         }
     }
 
@@ -186,4 +186,87 @@ pub(in crate::daemon) async fn list_images_endpoint(
         .unwrap_or_default();
 
     Ok(Json(list))
+}
+
+/// 校验图片文件名，防 path traversal。
+///
+/// 仅允许 `[A-Za-z0-9_.-]+\.png`，拒绝含路径分隔符、`..`、空字节的文件名。
+fn validate_image_filename(filename: &str) -> Result<(), AirpError> {
+    if filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains('\0')
+        || filename.contains("..")
+        || !filename.ends_with(".png")
+    {
+        return Err(AirpError::BadRequest(format!(
+            "invalid image filename: {filename}"
+        )));
+    }
+    Ok(())
+}
+
+/// 内部：读取并返回图片字节，Content-Type 固定 `image/png`（当前下载流程
+/// 统一存为 `.png`）。
+fn serve_image_file(filepath: std::path::PathBuf) -> Result<Response, AirpError> {
+    if !filepath.exists() {
+        return Err(AirpError::NotFound(format!(
+            "image not found: {filepath:?}"
+        )));
+    }
+    let bytes = std::fs::read(&filepath)?;
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("image/png")),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=3600"),
+            ),
+        ],
+        Body::from(bytes),
+    )
+        .into_response())
+}
+
+/// `GET /v1/characters/:character_id/images/:filename`
+///
+/// 服务角色级（非 session 绑定）已生成图片的字节流。webui `<img src>` 需要
+/// 此端点才能显示图片——`ServeDir` fallback 指向 webui 静态目录，无法服务
+/// `data_root/characters/...` 下的资产（CodeRabbit #2）。
+pub(in crate::daemon) async fn serve_image_endpoint(
+    State(state): State<Arc<DaemonState>>,
+    Path((character_id, filename)): Path<(String, String)>,
+) -> Result<Response, AirpError> {
+    let cid = CharacterId::new(&character_id)?;
+    validate_image_filename(&filename)?;
+    let filepath = state
+        .data_root
+        .join("characters")
+        .join(cid.as_str())
+        .join("images")
+        .join(&filename);
+    serve_image_file(filepath)
+}
+
+/// `GET /v1/characters/:character_id/sessions/:session_id/images/:filename`
+///
+/// 服务 session 绑定的已生成图片字节流（CodeRabbit #2）。
+pub(in crate::daemon) async fn serve_session_image_endpoint(
+    State(state): State<Arc<DaemonState>>,
+    Path((character_id, session_id, filename)): Path<(String, String, String)>,
+) -> Result<Response, AirpError> {
+    let cid = CharacterId::new(&character_id)?;
+    // 校验 session_id 是合法 UUID（防 path traversal / 非法字符），校验后用原字符串构造路径。
+    let _ = crate::types::SessionId::parse(&session_id)?;
+    validate_image_filename(&filename)?;
+    let filepath = state
+        .data_root
+        .join("characters")
+        .join(cid.as_str())
+        .join("sessions")
+        .join(&session_id)
+        .join("images")
+        .join(&filename);
+    serve_image_file(filepath)
 }

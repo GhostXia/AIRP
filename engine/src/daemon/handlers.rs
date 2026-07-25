@@ -39,7 +39,10 @@ pub(super) use chat::{
     chat_completion, continue_chat, delete_message, edit_message, get_chat_history,
     preview_chat_assembly, regen_chat, rollback_chat, swipe_chat, switch_branch,
 };
-pub(super) use image_gen::{generate_image_endpoint, list_images_endpoint};
+pub(super) use image_gen::{
+    generate_image_endpoint, list_images_endpoint, serve_image_endpoint,
+    serve_session_image_endpoint,
+};
 pub(super) use lorebook::{get_character_lorebook, update_character_lorebook};
 pub(super) use memory::{
     get_resident_memory, get_user_model, update_resident_memory, update_user_model,

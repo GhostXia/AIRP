@@ -31,10 +31,12 @@ pub struct ImageGenRequest {
     pub style: String,
 }
 
-fn default_size() -> String {
+/// 图片尺寸默认值。`pub(crate)` 以便 handler 复用同一来源（CodeRabbit N1）。
+pub(crate) fn default_size() -> String {
     "1024x1024".to_string()
 }
-fn default_style() -> String {
+/// 图片风格默认值。`pub(crate)` 以便 handler 复用同一来源（CodeRabbit N1）。
+pub(crate) fn default_style() -> String {
     "vivid".to_string()
 }
 
@@ -162,7 +164,22 @@ pub async fn generate_image(
     })
 }
 
+/// 图片下载大小上限（20 MiB）。防止恶意/被攻陷上游返回超大响应压满磁盘
+/// （CodeRabbit N2）。
+const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+/// 序列化所有 `index.json` 读-改-写序列，避免并发请求 last-write-wins 丢失条目
+/// （CodeRabbit #4）。图片生成本身是秒级慢操作，全局序列化对吞吐影响可忽略。
+static INDEX_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// 下载图片到本地 session 资产目录。
+///
+/// 成功时返回 `(`[`ImageMeta`]`, 相对路径)`。调用方应**直接使用**返回的
+/// `ImageMeta`，不要再 re-read `index.last()`——并发下可能读到他人条目
+/// （CodeRabbit #4）。
+///
+/// 文件名采用毫秒精度时间戳 + 碰撞自增后缀，避免秒级精度下 1 秒内多次
+/// 生成覆盖前一张（CodeRabbit #3）。
 pub async fn download_image_to_session(
     client: &reqwest::Client,
     data_root: &Path,
@@ -170,15 +187,21 @@ pub async fn download_image_to_session(
     session_id: Option<&str>,
     image_url: &str,
     prompt: &str,
-) -> Result<String, AirpError> {
+) -> Result<(ImageMeta, String), AirpError> {
     let dir = images_dir(data_root, character_id, session_id);
     std::fs::create_dir_all(&dir)?;
 
-    let timestamp = std::time::SystemTime::now()
+    // 毫秒精度时间戳 + 碰撞自增，避免覆盖（CodeRabbit #3）。
+    let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    let filename = format!("{}.png", timestamp);
+        .as_millis();
+    let mut filename = format!("{}.png", millis);
+    let mut suffix = 1u32;
+    while dir.join(&filename).exists() {
+        filename = format!("{}_{}.png", millis, suffix);
+        suffix += 1;
+    }
     let filepath = dir.join(&filename);
 
     // 下载图片
@@ -199,30 +222,56 @@ pub async fn download_image_to_session(
         });
     }
 
+    // CodeRabbit N2：Content-Length 预检，防超大响应压满内存。
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_IMAGE_BYTES {
+            return Err(AirpError::Upstream {
+                status: 0,
+                body: format!(
+                    "image download rejected: Content-Length {len} exceeds {MAX_IMAGE_BYTES} bytes"
+                ),
+            });
+        }
+    }
+
     let bytes = response.bytes().await.map_err(|e| AirpError::Upstream {
         status: 0,
         body: format!("image download body read failed: {e}"),
     })?;
+    // CodeRabbit N2：读后复核，防 Content-Length 缺失/不准确的超大响应。
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(AirpError::Upstream {
+            status: 0,
+            body: format!(
+                "image download rejected: actual {} bytes exceeds {MAX_IMAGE_BYTES} bytes",
+                bytes.len()
+            ),
+        });
+    }
 
     crate::data_dir::replace_file(&filepath, &bytes)?;
 
-    // 更新 index.json
+    let meta = ImageMeta {
+        filename: filename.clone(),
+        prompt: prompt.to_string(),
+        timestamp: millis as u64,
+        size: format!("{} bytes", bytes.len()),
+    };
+
+    // 更新 index.json（CodeRabbit #4：全局 Mutex 序列化读-改-写）。
     let index_path = dir.join("index.json");
+    let _guard = INDEX_LOCK.lock().await;
     let mut index: Vec<ImageMeta> = std::fs::read_to_string(&index_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    index.push(ImageMeta {
-        filename: filename.clone(),
-        prompt: prompt.to_string(),
-        timestamp,
-        size: format!("{} bytes", bytes.len()),
-    });
+    index.push(meta.clone());
     let index_json = serde_json::to_string_pretty(&index)
         .map_err(|e| AirpError::Internal(format!("index serialize: {e}")))?;
     crate::data_dir::replace_file(&index_path, index_json.as_bytes())?;
+    drop(_guard);
 
-    // 返回相对路径
+    // 返回相对路径（供 handler 回填响应 `image_path` 字段）
     let relative = Path::new("characters")
         .join(character_id)
         .join(
@@ -232,7 +281,7 @@ pub async fn download_image_to_session(
         )
         .join("images")
         .join(&filename);
-    Ok(relative.to_string_lossy().to_string())
+    Ok((meta, relative.to_string_lossy().to_string()))
 }
 
 #[cfg(test)]

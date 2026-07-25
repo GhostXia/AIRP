@@ -5,7 +5,9 @@
   const requestedEngine = params.get('engine');
   if (requestedEngine && /^https?:\/\//i.test(requestedEngine)) sessionStorage.setItem('airp_engine_url', requestedEngine.replace(/\/+$/, ''));
   const base = sessionStorage.getItem('airp_engine_url') || location.origin;
-  const bearer = sessionStorage.getItem('airp_bearer') || '';
+  // CodeRabbit #7：仅同源 Engine 接收 stored bearer，跨源不带（防钓鱼链接窃取令牌）。
+  const storedBearer = sessionStorage.getItem('airp_bearer') || '';
+  const bearer = (base === location.origin) ? storedBearer : '';
   const client = AIRPApi.createClient({ base, bearer });
   let characterId = params.get('character') || sessionStorage.getItem('airp_character_id') || '';
   let sessionId = params.get('session') || sessionStorage.getItem('airp_session_id') || '';
@@ -122,8 +124,10 @@
 
     const img = node('img');
     if (resp.image_path) {
-      // 本地资产路径走 Engine 同源
-      img.src = new URL(resp.image_path, client.base.replace(/\/$/, '') + '/').href;
+      // CodeRabbit #2：用 /v1/ 路由命中 serve_image_endpoint /
+      // serve_session_image_endpoint。原相对 root 路径会被 ServeDir fallback
+      // 在 webui_dir 下找不到 → 404，图片无法显示。
+      img.src = client.base.replace(/\/$/, '') + '/v1/' + resp.image_path;
     } else if (resp.image_url) {
       img.src = resp.image_url;
     } else {
@@ -158,8 +162,8 @@
       for (const item of list) {
         const card = node('div', 'image-card');
         const img = node('img');
-        // 本地资产路径：characters/{id}/sessions/{sid}/images/{filename}
-        const imgUrl = new URL('characters/' + encodeURIComponent(characterId) + '/' + (sessionId ? 'sessions/' + encodeURIComponent(sessionId) + '/' : '') + 'images/' + encodeURIComponent(item.filename), client.base.replace(/\/$/, '') + '/').href;
+        // CodeRabbit #2：用 /v1/ 路由命中 serve_image(_session)_endpoint。
+        const imgUrl = client.base.replace(/\/$/, '') + '/v1/characters/' + encodeURIComponent(characterId) + '/' + (sessionId ? 'sessions/' + encodeURIComponent(sessionId) + '/' : '') + 'images/' + encodeURIComponent(item.filename);
         img.src = imgUrl;
         img.alt = item.prompt || item.filename;
         card.appendChild(img);

@@ -4,8 +4,12 @@
 .template-filter .field { flex: 0 0 auto; }
 .template-filter .input { min-width: 220px; }
 .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+/* CodeRabbit #8：模板卡改 <button>，重置原生 button 样式以保留原外观。 */
+button.template-card { display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; font: inherit; color: inherit; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-input); padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s; }
 .template-card { border: 1px solid var(--border-default); border-radius: var(--radius-input); padding: 14px 16px; background: var(--bg-surface); cursor: pointer; transition: border-color .15s, transform .1s; display: flex; flex-direction: column; gap: 8px; }
 .template-card:hover { border-color: var(--primary); transform: translateY(-1px); }
+/* CodeRabbit #8：键盘可达 focus-visible 样式。 */
+.template-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-color: var(--primary); }
 .template-card .tc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .template-card .tc-name { font-weight: 600; font-size: 14px; }
 .template-card .tc-category { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: var(--bg-subtle); color: var(--text-secondary); white-space: nowrap; }
@@ -15,7 +19,7 @@
 .template-detail { margin-top: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-input); padding: 16px; background: var(--bg-surface); }
 .detail-body { font-size: 13px; line-height: 1.6; color: var(--text-primary); }
 .detail-body h3 { font-size: 13px; font-weight: 600; margin: 12px 0 4px; color: var(--text-secondary); }
-.detail-body pre { white-space: pre-wrap; word-wrap: break-word; background: var(--bg-subtle); padding: 8px; border-radius: calc(var(--radius-input) - 4px); font-size: 12px; max-height: 320px; overflow: auto; }
+.detail-body pre { white-space: pre-wrap; overflow-wrap: break-word; background: var(--bg-subtle); padding: 8px; border-radius: calc(var(--radius-input) - 4px); font-size: 12px; max-height: 320px; overflow: auto; }
 .detail-actions { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-default); }
 .detail-actions .field { flex: 1 1 200px; min-width: 200px; }
 .subheading { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 8px; }

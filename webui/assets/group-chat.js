@@ -5,7 +5,9 @@
   const requestedEngine = params.get('engine');
   if (requestedEngine && /^https?:\/\//i.test(requestedEngine)) sessionStorage.setItem('airp_engine_url', requestedEngine.replace(/\/+$/, ''));
   const base = sessionStorage.getItem('airp_engine_url') || location.origin;
-  const bearer = sessionStorage.getItem('airp_bearer') || '';
+  // CodeRabbit #7：仅同源 Engine 接收 stored bearer，跨源不带（防钓鱼链接窃取令牌）。
+  const storedBearer = sessionStorage.getItem('airp_bearer') || '';
+  const bearer = (base === location.origin) ? storedBearer : '';
   const client = AIRPApi.createClient({ base, bearer });
 
   let scenes = [];
