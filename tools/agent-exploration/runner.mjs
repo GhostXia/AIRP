@@ -343,15 +343,25 @@ Rules:
 Character card schema for /v1/characters/import:
 - Body: { "character_id": "test-xxx", "card_json": "{\"spec\":\"chara_card_v2\",\"data\":{\"name\":\"TestBot\",\"first_mes\":\"Hello\",\"description\":\"A test bot\",\"personality\":\"friendly\"}}" }
 - card_json must be a JSON STRING (not an object), following chara_card_v2 spec with "spec" and "data" fields.
-- Minimal valid card: {"spec":"chara_card_v2","data":{"name":"TestBot","first_mes":"Hi"}}`,
+- Minimal valid card: {"spec":"chara_card_v2","data":{"name":"TestBot","first_mes":"Hi"}}
+- IMPORTANT: Use a UNIQUE character_id for each run (e.g. "test-" + Date.now()) to avoid conflicts with existing characters.
+
+Chat completions schema for /v1/chat/completions:
+- Body: { "character_id": "test-xxx", "session_id": "session-xxx", "message": "Hello", "user_profile": { "name": "Tester", "variables": {} } }
+- user_profile is REQUIRED and must contain "name" (string) and "variables" (object, can be empty).
+- session_id is optional but recommended for isolated conversations.
+
+Session creation:
+- POST /v1/sessions/:character_id with body { "session_id": "session-xxx" } or {} for auto-generated ID.
+- Use a UNIQUE session_id (e.g. "session-" + Date.now()).`,
     user: `Task: ${mod.DESCRIPTION}
 
 Task contract:
 - Expected: ${mod.EXPECTED}
 - Key API endpoints available (same-origin, use ctx.apiCall / ctx.sseCall):
-  - POST /v1/chat/completions (SSE) — use ctx.sseCall('/v1/chat/completions', {character_id, session_id, message})
+  - POST /v1/chat/completions (SSE) — ctx.sseCall('/v1/chat/completions', {character_id, session_id, message, user_profile: {name: "Tester", variables: {}}})
   - POST /v1/chat/history — ctx.apiCall('/v1/chat/history', {character_id, session_id, limit?})
-  - POST /v1/chat/regen — ctx.sseCall('/v1/chat/regen', {character_id, session_id?})
+  - POST /v1/chat/regen — ctx.sseCall('/v1/chat/regen', {character_id, session_id, user_profile: {name: "Tester", variables: {}}})
   - POST /v1/chat/swipe — ctx.apiCall('/v1/chat/swipe', {character_id, session_id?, message_id, index})
   - PUT  /v1/chat/message — ctx.apiCall('/v1/chat/message', {character_id, session_id?, message_id, content}, 'PUT')
   - GET  /v1/memory/resident — ctx.apiCall('/v1/memory/resident?character_id=...&session_id=...', null, 'GET')
