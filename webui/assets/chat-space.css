@@ -58,5 +58,5 @@
 .hud-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .hud-key { color: var(--text-secondary); min-width: 56px; flex: none; }
 .hud-val { color: var(--text-primary); font-family: var(--font-mono); font-size: 10px; }
-.hud-bar { flex: 1; height: 4px; background: var(--bg-default); border-radius: 2px; overflow: hidden; }
+.hud-bar { flex: 1; height: 4px; background: var(--bg-base); border-radius: 2px; overflow: hidden; }
 .hud-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width .3s ease; }

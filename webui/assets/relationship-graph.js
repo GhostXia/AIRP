@@ -65,8 +65,9 @@
     if (!animFrame) tick();
   }
 
-  const COLORS = { primary: '#6366f1', edge: '#e67e22', text: '#1e293b' };
-  const TYPE_COLORS = { friend: '#22c55e', enemy: '#ef4444', family: '#3b82f6', lover: '#ec4899', rival: '#f59e0b', neutral: '#94a3b8' };
+  const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const COLORS = { primary: cssVar('--primary'), edge: cssVar('--text-secondary'), text: cssVar('--text-primary'), inverse: cssVar('--text-inverse') };
+  const TYPE_COLORS = { friend: cssVar('--success'), enemy: cssVar('--danger'), family: cssVar('--rel-family'), lover: cssVar('--rel-lover'), rival: cssVar('--rel-rival'), neutral: cssVar('--text-tertiary') };
 
   function simulate() {
     const w = canvas.width / (window.devicePixelRatio || 1);
@@ -130,8 +131,8 @@
       ctx.stroke();
       ctx.globalAlpha = 1;
       const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
-      ctx.font = '9px sans-serif';
-      ctx.fillStyle = '#64748b';
+      ctx.font = '9px ' + cssVar('--font-body');
+      ctx.fillStyle = cssVar('--text-secondary');
       ctx.textAlign = 'center';
       ctx.fillText(e.type + ' (' + e.intensity.toFixed(1) + ')', mx, my - 4);
     }
@@ -140,15 +141,15 @@
       ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
       ctx.fillStyle = COLORS.primary;
       ctx.fill();
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = COLORS.inverse;
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.font = '11px sans-serif';
+      ctx.font = '11px ' + cssVar('--font-body');
       ctx.fillStyle = COLORS.text;
       ctx.textAlign = 'center';
       ctx.fillText(n.id.length > 8 ? n.id.slice(0, 7) + '…' : n.id, n.x, n.y + n.radius + 14);
-      ctx.font = 'bold 12px sans-serif';
-      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 12px ' + cssVar('--font-body');
+      ctx.fillStyle = COLORS.inverse;
       ctx.fillText(n.id.slice(0, 1).toUpperCase(), n.x, n.y + 4);
     }
   }
