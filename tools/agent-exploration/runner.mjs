@@ -17,6 +17,7 @@ import { HarnessClient } from './harness-client.mjs';
 import { writeReport } from './reporter.mjs';
 import { classifyPrDiff, DIFF_TASK_MAP } from './classifier.mjs';
 import { buildLaunchArgs } from './tls-args.mjs';
+import { lintScript } from './script-lint.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const ORIGIN = args.origin || process.env.AIRP_SMOKE_ORIGIN || 'http://127.0.0.1:8765';
@@ -152,6 +153,48 @@ async function runTask(browser, mod, name) {
     // - sseCall: 同上，但消费 SSE 流并返回最终 content + message_id
     const ctx = {
       page, harness, context, origin: ORIGIN, fixtures: mod.FIXTURES || {},
+      // uuid: generate a UUID v4 string (for character_id, session_id, message_id fields).
+      // Engine requires UUID format for session_id — do NOT use "session-<timestamp>" or other prefixes.
+      uuid: () => crypto.randomUUID(),
+      // createSession: 调 POST /v1/sessions/:character_id 创建会话并返回引擎生成的 UUID session_id。
+      // LLM 不应手写 session_id，也不应解析 /v1/sessions 响应——直接用本 helper。
+      // 返回值是 UUID 字符串（如 "550e8400-e29b-41d4-a716-446655440000"）。
+      createSession: async (characterId) => {
+        const sid = await page.evaluate(
+          async ([origin, cid]) => {
+            const res = await fetch(origin + '/v1/sessions/' + encodeURIComponent(cid), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+            });
+            const text = await res.text();
+            if (!res.ok) throw new Error(`POST /v1/sessions/${cid} returned ${res.status}: ${text}`);
+            try { return JSON.parse(text); } catch { return text; }
+          },
+          [ORIGIN, characterId]
+        );
+        // 引擎返回 Json<SessionId>，serde 序列化为带引号的 UUID 字符串。
+        // JSON.parse 后 sid 即为 UUID 字符串本身。
+        if (typeof sid !== 'string' || !sid.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+          throw new Error(`createSession: engine returned non-UUID session_id: ${JSON.stringify(sid)}`);
+        }
+        return sid;
+      },
+      // characterExists: 检查 character_id 是否已存在。
+      // /v1/characters 返回字符串数组（不是对象数组），LLM 不应直接解析响应——用本 helper。
+      characterExists: async (characterId) => {
+        const chars = await page.evaluate(
+          async ([origin]) => {
+            const res = await fetch(origin + '/v1/characters', { method: 'GET' });
+            const text = await res.text();
+            if (!res.ok) throw new Error(`GET /v1/characters returned ${res.status}: ${text}`);
+            try { return JSON.parse(text); } catch { return text; }
+          },
+          [ORIGIN]
+        );
+        // /v1/characters 返回 Vec<String>（["id1","id2",...]），不是 { characters: [...] }。
+        return Array.isArray(chars) && chars.includes(characterId);
+      },
       apiCall: (path, body, method = 'POST') => page.evaluate(
         async ([origin, p, m, b]) => {
           const res = await fetch(origin + p, {
@@ -291,6 +334,17 @@ async function generateAndRunScript(mod, ctx, taskDir) {
     const scriptContent = extractCodeBlock(content);
     lastScriptContent = scriptContent;
 
+    // 预检：在执行前拦截 LLM 反复犯的反模式（即使 prompt 明确禁止，LLM 仍可能违反）。
+    // 检测到反模式时不执行脚本，直接进入下一轮 revision，把违规点作为 feedback 给 LLM。
+    // 这避免浪费一次"执行失败 + 422 错误"的往返，并给 LLM 更精准的纠正信号。
+    const violations = lintScript(scriptContent);
+    if (violations.length > 0) {
+      lastError = 'Script lint failed (anti-patterns detected, script NOT executed):\n' +
+        violations.map(v => '  - ' + v).join('\n') +
+        '\n\nFix these and re-output the complete script.';
+      continue;
+    }
+
     const scriptPath = join(taskDir, 'agent-script.mjs');
     await writeFile(scriptPath, scriptContent);
 
@@ -327,9 +381,31 @@ function buildPrompt(mod, domSnapshot) {
     : '';
   return {
     system: `You are an AIRP WebUI exploratory test generator. Output ONLY a single JavaScript code block (no prose) that exports an async function:
-export async function run(ctx) { /* ctx = { page, harness, origin, fixtures, apiCall, sseCall } */ }
+export async function run(ctx) { /* ctx = { page, harness, origin, fixtures, uuid, createSession, characterExists, apiCall, sseCall } */ }
 
-Rules:
+## MANDATORY RULES (violations will cause test failure)
+
+1. **character_id**: MUST be generated via \`ctx.uuid()\`. Do NOT use 'test-' + Date.now(), 'test-' + randomHex(), or any human-readable prefix.
+
+2. **session_id**: MUST be obtained via \`const sessionId = await ctx.createSession(characterId);\`.
+   - Do NOT call POST /v1/sessions/:character_id directly — the helper does it for you.
+   - Do NOT write \`'session-' + ...\`, \`\\\`session-\${...}\\\`\`, or any prefixed string. Engine rejects non-UUID session_id with 422.
+   - Do NOT pass session_id in the request body to /v1/sessions — the engine ignores it and generates its own UUID.
+
+3. **Character existence check**: MUST use \`await ctx.characterExists(characterId)\`.
+   - Do NOT call GET /v1/characters and parse the response yourself.
+   - Do NOT write \`chars.characters.some(c => c.character_id === ...)\` — /v1/characters returns an ARRAY of strings (["id1","id2",...]), NOT an object with a .characters field.
+
+4. **PUT /v1/memory/resident body**: MUST be exactly \`{ character_id, session_id?, content }\`.
+   - Do NOT include a \`user_id\` field — UpdateResidentMemoryRequest does not have one; serde will reject the request.
+   - session_id is optional (omit if updating default session).
+
+5. **user_profile in chat completions**: MUST be \`{ name: "Tester", variables: {} }\`. Required field.
+
+6. **card_json in /v1/characters/import**: MUST be a JSON STRING (not an object). Use \`JSON.stringify({...})\`.
+
+## General Rules
+
 - Use ctx.apiCall(path, body, method) for ALL HTTP API calls. It goes through the browser's trusted TLS context. Do NOT use globalThis.fetch or Node fetch — they will fail on self-signed certs.
 - Use ctx.sseCall(path, body) for SSE endpoints (chat/completions, chat/regen). It consumes the stream and returns { messageId, content }.
 - Use ctx.harness for UI navigation and DOM inspection: ctx.harness.navigate('screen.html', params), ctx.harness.getDomSnapshot(), etc.
@@ -340,20 +416,36 @@ Rules:
 - Do not call ctx.page.evaluate with closures over Node variables; pass primitive args only.
 - Do not read or write files; the runner handles artifacts.
 
-Character card schema for /v1/characters/import:
-- Body: { "character_id": "test-xxx", "card_json": "{\"spec\":\"chara_card_v2\",\"data\":{\"name\":\"TestBot\",\"first_mes\":\"Hello\",\"description\":\"A test bot\",\"personality\":\"friendly\"}}" }
-- card_json must be a JSON STRING (not an object), following chara_card_v2 spec with "spec" and "data" fields.
-- Minimal valid card: {"spec":"chara_card_v2","data":{"name":"TestBot","first_mes":"Hi"}}
-- IMPORTANT: Use a UNIQUE character_id for each run (e.g. "test-" + Date.now()) to avoid conflicts with existing characters.
+## Reference snippets
 
-Chat completions schema for /v1/chat/completions:
-- Body: { "character_id": "test-xxx", "session_id": "session-xxx", "message": "Hello", "user_profile": { "name": "Tester", "variables": {} } }
-- user_profile is REQUIRED and must contain "name" (string) and "variables" (object, can be empty).
-- session_id is optional but recommended for isolated conversations.
+Create character + session:
+\`\`\`js
+const characterId = ctx.uuid();
+const cardJson = JSON.stringify({ spec: 'chara_card_v2', data: { name: 'TestBot', first_mes: 'Hi', description: 'Test', personality: 'cooperative' } });
+await ctx.apiCall('/v1/characters/import', { character_id: characterId, card_json: cardJson });
+if (!await ctx.characterExists(characterId)) throw new Error('ASSERT: character import failed');
+const sessionId = await ctx.createSession(characterId);
+\`\`\`
 
-Session creation:
-- POST /v1/sessions/:character_id with body { "session_id": "session-xxx" } or {} for auto-generated ID.
-- Use a UNIQUE session_id (e.g. "session-" + Date.now()).`,
+Send a chat message:
+\`\`\`js
+const reply = await ctx.sseCall('/v1/chat/completions', {
+  character_id: characterId,
+  session_id: sessionId,
+  message: 'Hello',
+  user_profile: { name: 'Tester', variables: {} }
+});
+// reply = { messageId, content }
+\`\`\`
+
+Update resident memory:
+\`\`\`js
+await ctx.apiCall('/v1/memory/resident', {
+  character_id: characterId,
+  session_id: sessionId,
+  content: 'User prefers concise answers.'
+}, 'PUT');
+\`\`\``,
     user: `Task: ${mod.DESCRIPTION}
 
 Task contract:
@@ -364,11 +456,11 @@ Task contract:
   - POST /v1/chat/regen — ctx.sseCall('/v1/chat/regen', {character_id, session_id, user_profile: {name: "Tester", variables: {}}})
   - POST /v1/chat/swipe — ctx.apiCall('/v1/chat/swipe', {character_id, session_id?, message_id, index})
   - PUT  /v1/chat/message — ctx.apiCall('/v1/chat/message', {character_id, session_id?, message_id, content}, 'PUT')
-  - GET  /v1/memory/resident — ctx.apiCall('/v1/memory/resident?character_id=...&session_id=...', null, 'GET')
-  - PUT  /v1/memory/resident — ctx.apiCall('/v1/memory/resident', {character_id, session_id?, user_id?, content}, 'PUT')
-  - GET  /v1/characters — ctx.apiCall('/v1/characters', null, 'GET')
+  - GET  /v1/memory/resident?character_id=...&session_id=... — ctx.apiCall(url, null, 'GET') — returns { content, char_count, capacity }
+  - PUT  /v1/memory/resident — ctx.apiCall('/v1/memory/resident', {character_id, session_id?, content}, 'PUT') — body MUST NOT contain user_id
+  - GET  /v1/characters — DO NOT call directly; use ctx.characterExists(characterId) instead
   - POST /v1/characters/import — ctx.apiCall('/v1/characters/import', {character_id, card_json})
-  - POST /v1/sessions/:character_id — ctx.apiCall('/v1/sessions/' + characterId, {session_id?})
+  - POST /v1/sessions/:character_id — DO NOT call directly; use ctx.createSession(characterId) instead
 
 Initial DOM snapshot (truncated, current page may differ; call harness.navigate first):
 ${JSON.stringify(domSnapshot).slice(0, 4000)}
