@@ -306,6 +306,19 @@ fn prepare_pipeline_with_mode(
                 content: plot_direction,
             });
         }
+        // Phase 2.1: 导演指令注入
+        let director_directive = crate::agent::director::read_directive(sd);
+        if !director_directive.trim().is_empty() {
+            let directive_content = format!("\n{}", director_directive);
+            system_prompt.push_str(&directive_content);
+            prompt_parts.push(SystemPromptPart {
+                source_kind: "director",
+                source_id: payload.session_id.as_ref().map(ToString::to_string),
+                item_id: None,
+                display_name: "导演指令",
+                content: directive_content,
+            });
+        }
         let mut related_history = String::new();
         inject_volume_context(sd, &payload.message, &mut related_history);
         if !related_history.is_empty() {

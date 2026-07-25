@@ -15,6 +15,7 @@ mod lorebook;
 mod memory;
 mod models;
 mod personas;
+mod plot;
 mod presets;
 mod scenes;
 mod search;
@@ -44,6 +45,7 @@ pub(super) use personas::{
     list_personas_endpoint, unbind_persona_endpoint, update_persona_endpoint,
     update_persona_multi_endpoint,
 };
+pub(super) use plot::{get_plot_arc, update_plot_arc};
 pub(super) use presets::{get_preset_endpoint, import_preset_endpoint, list_presets_endpoint};
 pub(super) use scenes::{
     add_scene_character_endpoint, create_scene_endpoint, get_scene_endpoint, list_scenes_endpoint,

@@ -20,6 +20,8 @@
 //! - `max_steps` 缺省或 =1 → 单回合退化（= 现有 `/v1/chat/completions`）。
 //! - `max_steps>1` → 进 loop。
 
+pub mod council;
+pub mod director;
 pub mod tools;
 
 use crate::chat_pipeline::{finalize_generation, prepare_pipeline, run_generation_step};
