@@ -330,7 +330,11 @@ pub fn advance_and_check_triggers(
 ) -> Result<(WorldClock, Vec<WorldEvent>), AirpError> {
     let mut clock = load_world_clock(data_root, character_id)?;
     let advance = advance_by.unwrap_or(clock.advance_per_turn);
-    clock.current_time += advance;
+    // 溢出检查：避免 unchecked addition 导致 u64 wrap-around
+    clock.current_time = clock
+        .current_time
+        .checked_add(advance)
+        .ok_or_else(|| AirpError::BadRequest("clock advance overflow".to_string()))?;
     save_world_clock(data_root, character_id, &clock)?;
 
     // 检查时间触发事件
@@ -340,13 +344,13 @@ pub fn advance_and_check_triggers(
         if !event.triggered {
             if let Some(time_trigger) = event.time_trigger {
                 if clock.current_time >= time_trigger {
-                    event.triggered = true;
-                    triggered_events.push(event.clone());
-                    // 注入事件内容到 current.md
-                    let _ = crate::volume_store::append_to_current(
+                    // 先注入事件内容到 current.md，成功后再标记 triggered
+                    crate::volume_store::append_to_current(
                         session_dir,
                         &format!("\n[世界事件: {}]\n{}\n", event.name, event.content),
-                    );
+                    )?;
+                    event.triggered = true;
+                    triggered_events.push(event.clone());
                 }
             }
         }

@@ -202,9 +202,9 @@ pub fn write_directive(session_dir: &Path, decision: &DirectorDecision) -> Resul
         }
     };
     if content.is_empty() {
-        // 清除旧指令
+        // 清除旧指令——传播错误而非静默吞错，避免 Observe 成功但旧指令残留
         if path.exists() {
-            let _ = fs::remove_file(&path);
+            fs::remove_file(&path)?;
         }
         return Ok(());
     }
@@ -219,6 +219,18 @@ pub fn write_directive(session_dir: &Path, decision: &DirectorDecision) -> Resul
 pub fn read_directive(session_dir: &Path) -> String {
     let path = director_directive_path(session_dir);
     fs::read_to_string(&path).unwrap_or_default()
+}
+
+/// 确认指令已被消费（生成成功后调用）。
+/// 清除指令文件，使非 observe 指令只生效一轮。
+/// 如果文件不存在或删除失败，不阻塞流程。
+pub fn acknowledge_directive(session_dir: &Path) {
+    let path = director_directive_path(session_dir);
+    if path.exists() {
+        if let Err(e) = fs::remove_file(&path) {
+            tracing::warn!(error = %e, "清除导演指令失败（best-effort）");
+        }
+    }
 }
 
 /// 导演评估 prompt 模板。

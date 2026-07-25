@@ -364,7 +364,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         // ── Phase 2.4: 剧情弧 API ───────────────────────────────────────
         .route(
             "/v1/characters/:character_id/plot-arc",
-            get(get_plot_arc).put(update_plot_arc),
+            get(get_plot_arc).put(update_plot_arc.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
         )
         .route(
             "/v1/scenes",

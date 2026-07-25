@@ -122,11 +122,14 @@
       row.appendChild(avatar);
     }
     const bubble = document.createElement('div');
-    // Phase 2.2: 检测世界推进消息类型，添加差异化样式
+    // Phase 2.2: 检测世界推进消息类型，添加差异化样式。
+    // 仅对非 user 消息应用 world-progression 样式，防止用户文本被误标记。
     let worldClass = '';
-    if (text && text.includes('[NPC行动')) worldClass = ' npc-action';
-    else if (text && text.includes('[世界事件')) worldClass = ' world-event';
-    else if (text && text.includes('[剧情推进')) worldClass = ' plot-advance';
+    if (role !== 'user') {
+      if (text && text.includes('[NPC行动')) worldClass = ' npc-action';
+      else if (text && text.includes('[世界事件')) worldClass = ' world-event';
+      else if (text && text.includes('[剧情推进')) worldClass = ' plot-advance';
+    }
     bubble.className = 'bubble ' + (role === 'user' ? 'user' : 'ai') + worldClass + (options && options.error ? ' runtime-error' : '') + (options && options.onActivePath === false ? ' branch-inactive' : '');
     const content = document.createElement('div');
     content.className = 'bubble-text';

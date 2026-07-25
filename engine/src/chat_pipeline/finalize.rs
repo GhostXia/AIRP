@@ -100,6 +100,10 @@ pub(super) async fn run_finalize(
             // 刚才说过什么"。因此改为硬失败，只有关键持久化全部成功后
             // 才向客户端发送 done；详细错误仅写内部日志。
             volume_store::append_to_current(&sd, &cleaned)?;
+            // Phase 2.1: 导演指令单轮交付——assistant 消息成功写入后
+            // 清除 directive 文件，使非 observe 指令只生效一轮。
+            // 如果生成失败（走不到这里），指令保持 pending，下轮重新注入。
+            crate::agent::director::acknowledge_directive(&sd);
         }
 
         let should_seal = signal.as_ref().map(|s| s.should_seal).unwrap_or(false)
@@ -323,8 +327,29 @@ async fn run_memory_extraction(
         return Ok(());
     }
 
-    // 追加到 resident.md
-    crate::memory::append_resident_memory(session_dir, &facts)?;
+    // 检查新抽取的条目是否已存在于 decay store 中：
+    // 已存在的条目调用 reinforce_entry 刷新 last_reinforced 和 importance，
+    // 避免重复追加相同内容到 resident.md
+    let new_lines: Vec<&str> = facts
+        .lines()
+        .filter(|l| l.trim().starts_with("- "))
+        .collect();
+    let existing_store = crate::memory::decay::load_decay_store(session_dir);
+    let mut facts_to_append = Vec::new();
+    for line in &new_lines {
+        let hash = crate::memory::decay::line_hash(line);
+        if existing_store.contains_key(&hash) {
+            // 已存在：强化而非重复追加
+            crate::memory::decay::reinforce_entry(session_dir, line)?;
+        } else {
+            facts_to_append.push(*line);
+        }
+    }
+
+    if !facts_to_append.is_empty() {
+        let new_facts = facts_to_append.join("\n");
+        crate::memory::append_resident_memory(session_dir, &new_facts)?;
+    }
 
     // Phase 2.5: 遗忘曲线衰减 pass（压缩前先淡出低权重条目）
     let decay_config = crate::memory::DecayConfig::default();

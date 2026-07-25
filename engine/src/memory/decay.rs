@@ -25,7 +25,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// per-session_dir 互斥锁，防止并发 apply_decay / reinforce_entry 丢更新。
+/// 不同 session_dir 独立加锁，互不阻塞。
+static DECAY_LOCKS: std::sync::LazyLock<Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 获取指定 session_dir 的专属锁。
+fn decay_lock(session_dir: &Path) -> std::sync::Arc<Mutex<()>> {
+    let key = session_dir.to_string_lossy().to_string();
+    let mut locks = DECAY_LOCKS.lock().expect("decay locks map poisoned");
+    locks
+        .entry(key)
+        .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
+        .clone()
+}
 
 /// 默认衰减速率（约 14 天半衰期）。
 pub const DEFAULT_DECAY_RATE: f64 = 0.05;
@@ -109,7 +125,7 @@ fn faded_path(session_dir: &Path) -> std::path::PathBuf {
 }
 
 /// 读取 decay.json。不存在返回空 map。
-fn load_decay_store(session_dir: &Path) -> DecayStore {
+pub(crate) fn load_decay_store(session_dir: &Path) -> DecayStore {
     let path = decay_json_path(session_dir);
     fs::read_to_string(&path)
         .ok()
@@ -152,11 +168,16 @@ pub fn apply_decay(
     content: &str,
     config: &DecayConfig,
 ) -> Result<DecayResult, AirpError> {
+    // 获取 per-session_dir 锁，防止并发 apply_decay 丢更新
+    let lock = decay_lock(session_dir);
+    let _guard = lock.lock().expect("decay lock poisoned");
     let now = now_secs();
     let mut store = load_decay_store(session_dir);
     let mut retained_lines: Vec<String> = Vec::new();
     let mut faded_lines: Vec<String> = Vec::new();
     let mut total = 0usize;
+    // 显式追踪上一个 bullet 的分类，续行跟随此状态
+    let mut last_bullet_faded: Option<bool> = None;
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -172,18 +193,19 @@ pub fn apply_decay(
             let weight = decay_weight(meta, config, now);
             if weight < config.fade_threshold {
                 faded_lines.push(line.to_string());
+                last_bullet_faded = Some(true);
             } else {
                 retained_lines.push(line.to_string());
+                last_bullet_faded = Some(false);
             }
         } else if trimmed.is_empty() {
             // 空行：如果后面还有条目则保留为分隔
             retained_lines.push(String::new());
         } else {
-            // 续行：跟随上一个条目的决策
-            if faded_lines.len() > retained_lines.len() {
-                faded_lines.push(line.to_string());
-            } else {
-                retained_lines.push(line.to_string());
+            // 续行：跟随上一个 bullet 的分类
+            match last_bullet_faded {
+                Some(true) => faded_lines.push(line.to_string()),
+                _ => retained_lines.push(line.to_string()),
             }
         }
     }
@@ -233,6 +255,9 @@ pub fn apply_decay(
 
 /// 强化条目：当记忆被重新抽取或手动编辑时，更新 last_reinforced。
 pub fn reinforce_entry(session_dir: &Path, line: &str) -> Result<(), AirpError> {
+    // 获取 per-session_dir 锁，防止与 apply_decay 并发冲突
+    let lock = decay_lock(session_dir);
+    let _guard = lock.lock().expect("decay lock poisoned");
     let mut store = load_decay_store(session_dir);
     let hash = line_hash(line);
     let now = now_secs();
