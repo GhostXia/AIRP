@@ -42,7 +42,7 @@ use handlers::{
     get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
     get_resident_memory, get_scene_endpoint, get_settings, get_style_profile,
     get_template_endpoint, get_user_model, get_world_events, generate_dialogue_examples_endpoint,
-    import_character,
+    get_lorebook_graph_endpoint, import_character,
     import_preset_endpoint, instantiate_template_endpoint, list_agent_tools, list_characters,
     list_images_endpoint, list_models, list_personas_endpoint, list_presets_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
@@ -456,6 +456,11 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             "/v1/characters/:character_id/dialogue-examples",
             post(generate_dialogue_examples_endpoint)
                 .layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        // ── Worldbook Knowledge Graph API（Phase 4.4 世界书知识图谱） ──
+        .route(
+            "/v1/characters/:character_id/lorebook/graph",
+            get(get_lorebook_graph_endpoint),
         )
         // ── Search API（4.3 FTS5 历史检索） ─────────────────────────────────
         .route("/v1/chat/search", post(chat_search))

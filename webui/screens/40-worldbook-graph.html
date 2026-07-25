@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>世界书知识图谱 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/worldbook-graph.css">
+</head>
+<body data-screen="worldbookgraph">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">世界书知识图谱</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>角色 <b id="scope-character">—</b></span><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">世界书知识图谱</h1>
+<p class="description">可视化 lorebook 条目间的 <b>key 重叠</b>与 <b>content 引用</b>关系，辅助发现设定冲突。蓝色边=共享 key（无向），红色箭头=content 引用 key（有向）。</p>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <div class="runtime-form">
+    <label class="field"><span class="field-label">角色</span><select class="select runtime-select" id="graph-character"></select></label>
+  </div>
+  <div class="graph-controls">
+    <label class="checkbox-field"><input type="checkbox" id="opt-key-overlap" checked><span>显示 key 重叠边</span></label>
+    <label class="checkbox-field"><input type="checkbox" id="opt-references" checked><span>显示引用边</span></label>
+    <label class="checkbox-field"><input type="checkbox" id="opt-conflicts" checked><span>检测冲突</span></label>
+    <label class="field"><span class="field-label">最小权重</span><input type="number" id="opt-min-weight" min="1" max="99" value="1" class="input min-weight-input"></label>
+    <button class="btn btn-primary" id="graph-refresh" type="button">应用并刷新</button>
+  </div>
+  <div class="graph-stats" id="graph-stats">节点 0 · 边 0 · 冲突 0</div>
+  <div class="graph-canvas-wrap">
+    <canvas id="graph-canvas" width="900" height="600"></canvas>
+    <div class="graph-empty" id="graph-empty">选择角色后加载图谱</div>
+  </div>
+  <div class="graph-conflicts" id="graph-conflicts" hidden>
+    <h2 class="subheading">冲突警告</h2>
+    <ul id="conflicts-list" class="conflicts-list"></ul>
+  </div>
+  <div class="graph-detail" id="graph-detail" hidden>
+    <h2 class="subheading">节点详情</h2>
+    <pre id="graph-detail-content" class="result-content"></pre>
+  </div>
+</div>
+<div class="related-links" id="related-links"></div>
+</main>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/worldbook-graph.js"></script>
+</body></html>
