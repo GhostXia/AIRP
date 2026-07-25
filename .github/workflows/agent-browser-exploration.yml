@@ -96,6 +96,11 @@ jobs:
           AIRP_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           AIRP_AUTH_USER: airp-smoke
           AIRP_AUTH_PASSWORD: synthetic-smoke-password
+          # TLS 修复：bootstrap-topology.sh 已把 chrome_spki 写到 $GITHUB_ENV。
+          # runner.mjs 据此构造 --ignore-certificate-errors-spki-list=<spki> 参数，
+          # 让 Chrome 精确信任 gateway 自签证书的 SPKI，而非无脑 ignoreHTTPSErrors。
+          # 对齐 pr-gate.yml 的 production-browser-smoke.mjs 模式。
+          AIRP_CHROME_SPKI: ${{ env.AIRP_CHROME_SPKI }}
           # B9 方案 3：未配 secret 时 GitHub 传空串, runner 自动进 fallback 模式
           # (跑内置 smoke 脚本验证管线); 已配时走真 LLM 路径
           OPENAI_API_KEY: ${{ secrets.AGENT_EXPLORATION_OPENAI_KEY }}
@@ -104,6 +109,11 @@ jobs:
           # 避免生成的临时脚本 exfiltrate repo write token。PR 评论用单独 step 的 GH_TOKEN。
         working-directory: tools/agent-exploration
         run: |
+          # 防回归：先跑 TLS 契约测试，确认 runner.mjs/tls-args.mjs/workflow/bootstrap
+          # 四处的 SPKI 处理逻辑都存在且互相一致。这一步独立于 runner 本身，
+          # 即使 runner 因 LLM/网络失败，TLS 契约仍能验证修复未退化。
+          node --test runner-tls.test.mjs
+          # 再跑 runner 本身
           node runner.mjs \
             --origin $AIRP_SMOKE_ORIGIN \
             --pr ${{ github.event.pull_request.number }} \

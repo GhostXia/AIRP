@@ -16,10 +16,12 @@ import { chatCompletion, getModel, FALLBACK_MODE, getBuiltinSmokeScript } from '
 import { HarnessClient } from './harness-client.mjs';
 import { writeReport } from './reporter.mjs';
 import { classifyPrDiff, DIFF_TASK_MAP } from './classifier.mjs';
+import { buildLaunchArgs } from './tls-args.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const ORIGIN = args.origin || process.env.AIRP_SMOKE_ORIGIN || 'http://127.0.0.1:8765';
 const CHROME = args['chrome-path'] || process.env.AIRP_CHROME_PATH;
+const CHROME_SPKI = args['chrome-spki'] || process.env.AIRP_CHROME_SPKI || '';
 const REPORT_DIR = args['report-dir'] || 'artifacts/agent-exploration';
 const MAX_STEPS = Number(args['max-steps'] || 30);
 const MAX_TOKENS = Number(args['max-tokens'] || 8000);
@@ -29,6 +31,8 @@ if (!CHROME) {
   console.error('AIRP_CHROME_PATH or --chrome-path is required');
   process.exit(2);
 }
+
+// TLS 修复说明见 ./tls-args.mjs。buildLaunchArgs 在该模块中实现，便于单元测试。
 
 // 任务集选择
 let taskNames;
@@ -69,7 +73,7 @@ const run = {
   tasks: [],
 };
 
-const browser = await chromium.launch({ headless: true, executablePath: CHROME });
+const browser = await chromium.launch({ headless: true, executablePath: CHROME, args: buildLaunchArgs(CHROME_SPKI) });
 try {
   for (const name of taskNames) {
     const mod = await import(taskModules[name]);
@@ -96,8 +100,13 @@ if (run.tasks.some(t => t.result === 'Failed')) {
 }
 
 async function runTask(browser, mod, name) {
+  // TLS 修复：显式 ignoreHTTPSErrors: false。
+  // 前面 chromium.launch 已通过 --ignore-certificate-errors-spki-list 精确信任 gateway SPKI，
+  // 这里不需要也不应该再无脑忽略所有 HTTPS 错误。显式 false 防止未来 Playwright 默认行为变化
+  // 导致安全降级。对齐 production-browser-smoke.mjs:36 的写法。
   const context = await browser.newContext({
     httpCredentials: process.env.AIRP_AUTH_USER ? { username: process.env.AIRP_AUTH_USER, password: process.env.AIRP_AUTH_PASSWORD } : undefined,
+    ignoreHTTPSErrors: false,
   });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 
