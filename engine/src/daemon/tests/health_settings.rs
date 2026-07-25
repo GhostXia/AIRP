@@ -57,6 +57,7 @@ async fn test_health_endpoint_returns_status() {
         fts: Default::default(),
         settings_update: Default::default(),
         provider_router: Default::default(),
+        plugin_tools: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),
@@ -115,6 +116,7 @@ async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
         fts: Default::default(),
         settings_update: Default::default(),
         provider_router: Default::default(),
+        plugin_tools: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "https://api.openai.com".to_string(),

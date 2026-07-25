@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>插件工具 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/plugin-tools.css">
+</head>
+<body data-screen="plugintools">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">插件工具</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">插件工具</h1>
+<p class="description">通过 HTTP webhook 或本地脚本注册自定义 Agent 工具，与内建工具一同进入 <code>ToolRegistry</code>。Webhook headers 单独存储到 <code>data/plugin_tool_headers.json</code>，不会写入 <code>data/plugin_tools.json</code>。脚本必须放在 <code>data/plugins/</code> 下，且执行时 <b>清空环境变量</b>，仅注入 <code>AIRP_PLUGIN_*</code>。</p>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <section class="pt-section">
+    <div class="pt-section-head">
+      <h2 class="subheading">工具列表 <span class="pt-count" id="pt-count">0</span></h2>
+      <div class="pt-section-actions">
+        <button class="btn btn-primary" id="pt-add" type="button">+ 新增工具</button>
+        <button class="btn btn-secondary" id="pt-reload" type="button">重新加载</button>
+      </div>
+    </div>
+    <div class="pt-enabled-bar" id="pt-enabled-bar">
+      <span class="pt-enabled-tag" id="pt-enabled-tag">未启用</span>
+      <span class="pt-enabled-hint" id="pt-enabled-hint">尚未注册任何插件工具</span>
+    </div>
+    <table class="pt-table" id="pt-table" hidden>
+      <thead><tr><th>name</th><th>invocation</th><th>side_effect</th><th>enabled</th><th></th></tr></thead>
+      <tbody id="pt-rows"></tbody>
+    </table>
+    <p class="pt-empty" id="pt-empty">尚未配置任何插件工具。点击 “+ 新增工具” 开始。</p>
+
+    <template id="pt-row-template">
+      <tr class="pt-row">
+        <td class="pt-cell-name"></td>
+        <td class="pt-cell-invocation"><code></code></td>
+        <td class="pt-cell-side-effect"></td>
+        <td class="pt-cell-enabled"><span class="pt-toggle"></span></td>
+        <td class="pt-cell-actions">
+          <button class="btn btn-secondary pt-test" type="button">测试</button>
+          <button class="btn btn-secondary pt-edit" type="button">编辑</button>
+          <button class="btn btn-secondary pt-delete" type="button">删除</button>
+        </td>
+      </tr>
+    </template>
+  </section>
+
+  <section class="pt-section">
+    <h2 class="subheading">测试调用</h2>
+    <p class="description">选择一个工具并传入 JSON 参数进行测试调用。注意：此操作会真实执行 webhook 或脚本，<code>confirm=false</code> 只是建议而非强制 dry-run。</p>
+    <div class="pt-test-grid">
+      <label class="field"><span class="field-label">工具名</span><select class="select runtime-select" id="pt-test-name"></select></label>
+      <label class="field"><span class="field-label">confirm</span><input class="input runtime-input" id="pt-test-confirm" type="checkbox"></label>
+      <label class="field pt-test-params-field"><span class="field-label">params (JSON)</span><textarea class="textarea runtime-textarea code" id="pt-test-params" rows="6" placeholder="{}"></textarea></label>
+    </div>
+    <div class="runtime-actions">
+      <button class="btn btn-primary" id="pt-test-run" type="button">运行测试</button>
+      <button class="btn btn-secondary" id="pt-test-clear" type="button">清空结果</button>
+    </div>
+    <pre class="runtime-output tall" id="pt-test-output"></pre>
+  </section>
+</div>
+
+<dialog class="pt-editor" id="pt-editor">
+  <form method="dialog" id="pt-editor-form" class="pt-editor-form">
+    <h3 class="pt-editor-title" id="pt-editor-title">新增工具</h3>
+    <p class="pt-editor-hint" id="pt-editor-hint"></p>
+    <label class="field"><span class="field-label">name <small>（^[a-z0-9_]{1,64}$，不可与内建工具冲突）</small></span><input class="input runtime-input" id="pt-ed-name" autocomplete="off" spellcheck="false"></label>
+    <label class="field"><span class="field-label">description <small>（≤512 chars，模型选择工具时依据）</small></span><textarea class="textarea runtime-textarea" id="pt-ed-description" rows="3"></textarea></label>
+    <div class="field-row">
+      <label class="field"><span class="field-label">side_effect</span><select class="select runtime-select" id="pt-ed-side-effect">
+        <option value="readonly">readonly</option>
+        <option value="mutate">mutate</option>
+        <option value="destructive">destructive</option>
+        <option value="append">append</option>
+      </select></label>
+      <label class="field"><span class="field-label">enabled</span><input class="input runtime-input" id="pt-ed-enabled" type="checkbox" checked></label>
+    </div>
+    <div class="field-row">
+      <label class="field"><span class="field-label">invocation.kind</span><select class="select runtime-select" id="pt-ed-kind">
+        <option value="webhook">webhook</option>
+        <option value="script">script</option>
+      </select></label>
+    </div>
+
+    <fieldset class="pt-invocation-block" id="pt-inv-webhook">
+      <legend>webhook</legend>
+      <label class="field"><span class="field-label">url <small>（http 仅允许 loopback；https 任意 host）</small></span><input class="input runtime-input" id="pt-ed-wh-url" autocomplete="off" spellcheck="false" placeholder="https://example.com/hook"></label>
+      <label class="field"><span class="field-label">timeout_secs <small>（缺省 30s，上限 30s）</small></span><input class="input runtime-input" id="pt-ed-wh-timeout" type="number" min="1" max="30" placeholder="30"></label>
+      <label class="field"><span class="field-label">headers <small>（每行 <code>Name: Value</code>；密钥单独存储）</small></span><textarea class="textarea runtime-textarea code" id="pt-ed-wh-headers" rows="4" placeholder="Authorization: Bearer ..."></textarea></label>
+    </fieldset>
+
+    <fieldset class="pt-invocation-block" id="pt-inv-script" hidden>
+      <legend>script</legend>
+      <label class="field"><span class="field-label">relative_path <small>（必须位于 <code>data/plugins/</code> 下）</small></span><input class="input runtime-input" id="pt-ed-sc-path" autocomplete="off" spellcheck="false" placeholder="hello.sh"></label>
+      <label class="field"><span class="field-label">args <small>（每行一个；≤16 条，每条 ≤4096 chars）</small></span><textarea class="textarea runtime-textarea code" id="pt-ed-sc-args" rows="3" placeholder="--flag"></textarea></label>
+      <label class="field"><span class="field-label">timeout_secs <small>（缺省 30s，上限 30s）</small></span><input class="input runtime-input" id="pt-ed-sc-timeout" type="number" min="1" max="30" placeholder="30"></label>
+    </fieldset>
+
+    <div class="runtime-actions">
+      <button class="btn btn-primary" id="pt-ed-save" type="submit">保存</button>
+      <button class="btn btn-secondary" id="pt-ed-cancel" type="button">取消</button>
+    </div>
+  </form>
+</dialog>
+</main>
+<aside class="console-context">
+  <div class="context-block"><h2 class="context-title">当前作用域</h2><dl class="runtime-kv"><dt>Engine</dt><dd id="engine-address-ctx">—</dd></dl></div>
+  <div class="context-block"><h2 class="context-title">相关入口</h2><div id="related-links"></div></div>
+  <div class="context-block"><h2 class="context-title">安全沙箱</h2>
+    <ul class="context-list">
+      <li>Webhook URL：仅允许 <code>https</code> 或 loopback <code>http</code>。</li>
+      <li>Script：必须位于 <code>data/plugins/</code> 下，env_clear 后注入 AIRP_PLUGIN_*。</li>
+      <li>超时上限 30s；stdout / 响应体 ≤ 1 MiB。</li>
+      <li>HTTP webhook 走共享 <code>reqwest::Client</code>（已禁 redirect）。</li>
+    </ul>
+  </div>
+</aside>
+</div>
+</div>
+<script src="../assets/api-client.js"></script>
+<script src="../assets/plugin-tools.js"></script>
+</body>
+</html>

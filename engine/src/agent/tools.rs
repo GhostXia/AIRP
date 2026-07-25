@@ -188,7 +188,8 @@ impl Tool for EchoTool {
 /// 忽略它。调用方（`AgentLoop::new`）已有 `Arc<DaemonState>`，传入即可。
 ///
 /// 注册顺序：echo → session family → character family → state/lorebook
-/// → volume/context → analysis。family 内顺序由各 `register` fn 内部决定，
+/// → volume/context → analysis → world_event → npc → plot → search
+/// → plugin tools (Phase 5.3)。family 内顺序由各 `register` fn 内部决定，
 /// 但 `ToolRegistry::list` 最终按 name 字典序输出，故注册顺序不影响
 /// `/v1/agent/tools` 响应。
 pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
@@ -217,6 +218,48 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     // 3.4 Agent 驱动的剧情推进 family 2 工具。
     plot::register(&mut reg, state.clone());
     // 4.3 FTS5 历史检索 family 1 工具。
-    search::register(&mut reg, state);
+    search::register(&mut reg, state.clone());
+    // Phase 5.3：注册启用的插件工具。重名（用户配置了内建工具名）→ 跳过并 warn。
+    register_plugin_tools(&mut reg, &state);
     reg
+}
+
+/// 把 `state.plugin_tools` 中启用的插件工具注册到 registry。
+///
+/// 重名处理：插件工具与内建工具重名时跳过并 warn（不静默覆盖，也不 panic）。
+/// 配置错误（已被 `save_plugin_tools` 校验过滤，理论上不会发生）同样跳过并 warn。
+fn register_plugin_tools(registry: &mut ToolRegistry, state: &DaemonState) {
+    let tools = match state.plugin_tools.read() {
+        Ok(tools) => tools,
+        Err(_) => {
+            tracing::warn!("plugin_tools lock poisoned, skipping plugin tool registration");
+            return;
+        }
+    };
+    for config in tools.iter() {
+        if !config.enabled {
+            continue;
+        }
+        let plugin = crate::plugin_tool::PluginTool::new(
+            config.clone(),
+            state.http_client.clone(),
+            state.data_root.clone(),
+        );
+        let name = config.name.clone();
+        match registry.register(Box::new(plugin)) {
+            Ok(()) => {
+                tracing::debug!(name = %name, "registered plugin tool");
+            }
+            Err(crate::error::AirpError::Config(msg)) => {
+                tracing::warn!(
+                    name = %name,
+                    error = %msg,
+                    "plugin tool name collides with existing tool, skipping"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(name = %name, error = %e, "failed to register plugin tool");
+            }
+        }
+    }
 }

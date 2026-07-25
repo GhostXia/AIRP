@@ -20,6 +20,7 @@ mod memory;
 mod models;
 mod personas;
 mod plot;
+mod plugin_tools;
 mod presets;
 mod provider_routing;
 mod scenes;
@@ -65,6 +66,10 @@ pub(super) use personas::{
     update_persona_multi_endpoint,
 };
 pub(super) use plot::{get_plot_arc, update_plot_arc};
+pub(super) use plugin_tools::{
+    delete_plugin_tool_endpoint, list_plugin_tools_endpoint, test_plugin_tool_endpoint,
+    upsert_plugin_tool_endpoint,
+};
 pub(super) use presets::{get_preset_endpoint, import_preset_endpoint, list_presets_endpoint};
 pub(super) use provider_routing::{
     get_routing_endpoint, list_providers_endpoint, resolve_provider_endpoint,

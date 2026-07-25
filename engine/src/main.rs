@@ -205,12 +205,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
 
+            // Phase 5.3: 加载插件工具配置（data/plugin_tools.json +
+            // data/plugin_tool_headers.json）。文件缺省时返回空 Vec。
+            let plugin_tools = match airp_core::plugin_tool::load_plugin_tools(&data_root) {
+                Ok(tools) => tools,
+                Err(e) => {
+                    tracing::warn!(%e, "加载插件工具配置失败，跳过插件工具注册");
+                    Vec::new()
+                }
+            };
+            if !plugin_tools.is_empty() {
+                let enabled_count = plugin_tools.iter().filter(|t| t.enabled).count();
+                tracing::info!(
+                    total = plugin_tools.len(),
+                    enabled = enabled_count,
+                    "已加载插件工具配置"
+                );
+            }
+
             let state = Arc::new(DaemonState {
                 data_root,
                 http_client: http_client.clone(),
                 fts: Default::default(),
                 settings_update: Default::default(),
                 provider_router: std::sync::RwLock::new(provider_router),
+                plugin_tools: std::sync::RwLock::new(plugin_tools),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
@@ -313,6 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fts: Default::default(),
                 settings_update: Default::default(),
                 provider_router: Default::default(),
+                plugin_tools: Default::default(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
