@@ -16,10 +16,12 @@
   function renderChrome() {
     $('#engine-address').textContent = client.base === location.origin ? '同源 Engine' : client.base;
     const nav = $('#console-nav');
+    nav.replaceChildren(); // N-H：清除旧链接，避免角色切换后追加重复导航
     const group = document.createElement('div'); group.className = 'nav-group'; group.textContent = '工作区'; nav.appendChild(group);
     const home = document.createElement('a'); home.className = 'nav-link'; home.textContent = '角色与会话'; home.href = pathWithState('01-role-list.html'); nav.appendChild(home);
     for (const [idx, id, title, href] of pages) { const link = document.createElement('a'); link.className = 'nav-link' + (id === 'graph' ? ' active' : ''); link.href = pathWithState(href); const spanIdx = document.createElement('span'); spanIdx.className = 'nav-index'; spanIdx.textContent = idx; const spanTitle = document.createElement('span'); spanTitle.textContent = title; link.append(spanIdx, spanTitle); nav.appendChild(link); }
     const related = $('#related-links');
+    related.replaceChildren();
     for (const [label, href] of [['对话空间','02-chat-space.html'],['角色列表','01-role-list.html'],['诊断','23-diagnostics.html']]) { const a = document.createElement('a'); a.className = 'context-link'; a.textContent = label + ' →'; a.href = pathWithState(href); related.appendChild(a); }
   }
 
@@ -47,7 +49,8 @@
       if (parts.length !== 2) continue;
       const [from, to] = parts;
       nodeSet.add(from); nodeSet.add(to);
-      parsedEdges.push({ source: from, target: to, type: (val && val.type) || 'neutral', intensity: (val && val.intensity) || 0.5 });
+      // N-F 修复：intensity:0 是合法值（显式零强度），不能用 || 0.5 覆盖（0 是 falsy）
+      parsedEdges.push({ source: from, target: to, type: (val && val.type) || 'neutral', intensity: (val && val.intensity != null) ? val.intensity : 0.5 });
     }
     if (!nodeSet.size) { nodes = []; edges = []; return; }
     const w = canvas.width / (window.devicePixelRatio || 1);
@@ -60,13 +63,28 @@
       return { id, x: cx + r * Math.cos(angle) + (Math.random() - 0.5) * 20, y: cy + r * Math.sin(angle) + (Math.random() - 0.5) * 20, vx: 0, vy: 0, radius: 22 };
     });
     edges = parsedEdges;
+    // N-I 修复：同步更新 a11y 表格供屏幕阅读器读取
+    const a11yBody = $('#graph-a11y-body');
+    if (a11yBody) {
+      a11yBody.replaceChildren();
+      for (const e of edges) {
+        const tr = document.createElement('tr');
+        tr.append(
+          Object.assign(document.createElement('td'), { textContent: e.source }),
+          Object.assign(document.createElement('td'), { textContent: e.target }),
+          Object.assign(document.createElement('td'), { textContent: e.type }),
+          Object.assign(document.createElement('td'), { textContent: String(e.intensity) })
+        );
+        a11yBody.appendChild(tr);
+      }
+    }
     $('#graph-empty').hidden = true;
     simRunning = true;
-    if (!animFrame) tick();
+    ensureAnim();
   }
 
   const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const COLORS = { primary: cssVar('--primary'), edge: cssVar('--text-secondary'), text: cssVar('--text-primary'), inverse: cssVar('--text-inverse') };
+  const COLORS = { primary: cssVar('--primary'), primaryStrong: cssVar('--primary-strong'), edge: cssVar('--text-secondary'), text: cssVar('--text-primary'), inverse: cssVar('--text-inverse') };
   const TYPE_COLORS = { friend: cssVar('--success'), enemy: cssVar('--danger'), family: cssVar('--rel-family'), lover: cssVar('--rel-lover'), rival: cssVar('--rel-rival'), neutral: cssVar('--text-tertiary') };
 
   function simulate() {
@@ -141,7 +159,8 @@
       ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
       ctx.fillStyle = COLORS.primary;
       ctx.fill();
-      ctx.strokeStyle = COLORS.inverse;
+      // N-M 修复：节点边框改用 --primary-strong（深橙 #A85430），原 --text-inverse（白色）在橙底米白底间不可见
+      ctx.strokeStyle = COLORS.primaryStrong;
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.font = '11px ' + cssVar('--font-body');
@@ -154,10 +173,19 @@
     }
   }
 
+  // N-G 修复：simRunning=false 且无拖拽时停止 rAF，避免空闲空转持续占用 CPU/GPU。
+  // 交互（拖拽/resize/数据加载）时通过 ensureAnim() 重启循环。
+  function ensureAnim() {
+    if (!animFrame) animFrame = requestAnimationFrame(tick);
+  }
   function tick() {
     if (simRunning) simulate();
     draw();
-    animFrame = requestAnimationFrame(tick);
+    if (simRunning || dragging) {
+      animFrame = requestAnimationFrame(tick);
+    } else {
+      animFrame = null; // 停止循环，待下次 ensureAnim 唤醒
+    }
   }
 
   // Drag interaction
@@ -169,7 +197,7 @@
     const pos = getMousePos(e);
     for (const n of nodes) {
       const dx = pos.x - n.x, dy = pos.y - n.y;
-      if (dx * dx + dy * dy < n.radius * n.radius) { dragging = n; simRunning = true; break; }
+      if (dx * dx + dy * dy < n.radius * n.radius) { dragging = n; simRunning = true; ensureAnim(); break; }
     }
   });
   canvas.addEventListener('mousemove', e => {
@@ -180,7 +208,7 @@
   });
   canvas.addEventListener('mouseup', () => { dragging = null; });
   canvas.addEventListener('mouseleave', () => { dragging = null; });
-  window.addEventListener('resize', () => { resizeCanvas(); simRunning = true; });
+  window.addEventListener('resize', () => { resizeCanvas(); simRunning = true; ensureAnim(); });
 
   // ── Data loading ──
   async function loadGraph() {
@@ -221,7 +249,8 @@
       sel.replaceChildren();
       for (const id of characters) { const opt = document.createElement('option'); opt.value = id; opt.textContent = id; sel.appendChild(opt); }
       sel.value = characterId;
-      sel.addEventListener('change', () => { characterId = sel.value; sessionStorage.setItem('airp_character_id', characterId); loadGraph(); });
+      // N-H 修复：角色切换后重建导航链接，否则 pathWithState 在 boot 时构建的链接保留旧 ?character=
+      sel.addEventListener('change', () => { characterId = sel.value; sessionStorage.setItem('airp_character_id', characterId); renderChrome(); loadGraph(); });
       $('#graph-refresh').addEventListener('click', loadGraph);
       if (characterId) loadGraph();
     } catch (error) {

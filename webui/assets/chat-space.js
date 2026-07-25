@@ -560,15 +560,27 @@
       const val = document.createElement('span');
       val.className = 'hud-val';
       if (typeof value === 'number') {
-        // 数值型显示为进度条
-        const bar = document.createElement('div');
-        bar.className = 'hud-bar';
-        const fill = document.createElement('div');
-        fill.className = 'hud-fill';
-        fill.style.width = Math.min(100, Math.max(0, value)) + '%';
-        bar.appendChild(fill);
-        val.textContent = value;
-        row.append(label, bar, val);
+        // N-B 修复：仅对已知百分比字段（0-100 刻度）渲染进度条。
+        // 原 impl 把任意数值（0-1 比例 / 1-10 等级 / >100 计数）都当百分比，导致误导。
+        // 启发式：字段名含 percent/_pct/_ratio 且值在 [0,100]；或值在 [0,1] 视为比例（×100 显示）。
+        const lowerKey = key.toLowerCase();
+        const isPercentField = /percent|_pct|_p$/.test(lowerKey) && value >= 0 && value <= 100;
+        const isRatioField = /_ratio|_rate|mood|affinity|trust|confidence|arousal/.test(lowerKey) && value >= 0 && value <= 1;
+        if (isPercentField || isRatioField) {
+          const pct = isRatioField ? value * 100 : value;
+          const bar = document.createElement('div');
+          bar.className = 'hud-bar';
+          const fill = document.createElement('div');
+          fill.className = 'hud-fill';
+          fill.style.width = Math.min(100, Math.max(0, pct)) + '%';
+          bar.appendChild(fill);
+          val.textContent = isRatioField ? pct.toFixed(0) + '%' : String(value);
+          row.append(label, bar, val);
+        } else {
+          // 非百分比数值按原值显示，不强制套进度条
+          val.textContent = String(value);
+          row.append(label, val);
+        }
       } else {
         val.textContent = typeof value === 'object' ? JSON.stringify(value) : String(value);
         row.append(label, val);
@@ -582,7 +594,11 @@
     try {
       const data = await client.request('GET', '/v1/characters/' + encodeURIComponent(characterId) + '/state');
       renderHud(data);
-    } catch { /* 状态不可用时静默隐藏 */ $('#state-hud').hidden = true; }
+    } catch (error) {
+      // N-L 修复：原静默吞掉错误导致调试困难，至少留一条 warn 级别日志
+      console.warn('[AIRP] state HUD 轮询失败，隐藏状态面板', error);
+      $('#state-hud').hidden = true;
+    }
   }
 
   function startHud() {

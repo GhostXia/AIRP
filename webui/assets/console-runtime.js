@@ -497,6 +497,8 @@
           await task('添加角色到场景', () => client.request('POST', '/v1/scenes/' + encodeURIComponent(id) + '/characters', { character_id: charPick.control.value, role: rolePick.control.value }));
           setStatus('角色 ' + charPick.control.value + ' 已添加到场景 ' + id);
           addForm.remove();
+          // N-D：递增 metaToken 使初始 fetch 的 stale 响应失效
+          if (row._metaToken) row._metaToken.version++;
           const updated = await client.request('GET', '/v1/scenes/' + encodeURIComponent(id));
           meta.textContent = '已有角色: ' + ((updated.characters || []).map(c => c.character_id || c).join(', ') || '无');
         }, 'btn-primary');
@@ -505,8 +507,11 @@
       }));
       row.append(main, ops);
       rows.appendChild(row);
-      // 加载场景元信息
+      // N-D 修复：场景元信息异步获取竞态——用 metaToken 防止初始 fetch 的 stale 响应覆盖添加角色后的最新 meta
+      const metaToken = { version: 0 };
+      row._metaToken = metaToken;
       client.request('GET', '/v1/scenes/' + encodeURIComponent(id)).then(scene => {
+        if (metaToken.version !== 0) return; // 已被添加角色操作递增，丢弃 stale 响应
         meta.textContent = '已有角色: ' + ((scene.characters || []).map(c => c.character_id || c).join(', ') || '无');
       }).catch(() => {});
     }

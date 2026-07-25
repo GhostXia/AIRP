@@ -1,4 +1,6 @@
 /* 34 关系图谱：力导向图可视化页面私有样式 */
+/* N-I 修复：屏幕阅读器专用，视觉上隐藏但可被 SR 读取 */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .graph-container { position: relative; flex: 1; min-height: 480px; background: var(--bg-base); border-radius: var(--radius-input); border: 1px solid var(--border-default); overflow: hidden; }
 .graph-container canvas { display: block; width: 100%; height: 100%; }
 .graph-legend { position: absolute; bottom: 12px; left: 12px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-input); padding: 8px 12px; font-size: 10px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }

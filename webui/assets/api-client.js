@@ -135,9 +135,24 @@
     const streamTimeoutMs = normalizeTimeout(opts.streamTimeoutMs, 300_000);
     if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
 
-    function headers(extra) {
+    // N-E 修复（CR-4）：bearer 跨源泄漏防护。
+    // 攻击向量：URL ?engine=https://evil.com 诱导用户点击后，bearer 会随每个 API 请求发往 evil.com。
+    // 策略：仅对同源或显式可信 origin 发送 Authorization 头；跨源时剥离 bearer。
+    // 同源判断用 location.origin；跨源 base 必须在 opts.trustedOrigins 白名单中才发送 bearer。
+    const trustedOrigins = Array.isArray(opts.trustedOrigins) ? opts.trustedOrigins.map(function (o) { return trimBase(o); }) : [];
+    function shouldSendBearer(targetBase) {
+      if (!bearer || !targetBase) return false;
+      try {
+        const target = new URL(targetBase);
+        const current = globalThis.location && globalThis.location.origin ? new URL(globalThis.location.origin) : null;
+        if (current && target.origin === current.origin) return true; // 同源
+        return trustedOrigins.indexOf(target.origin) !== -1; // 白名单跨源
+      } catch { return false; } // 无效 URL 不发 bearer
+    }
+
+    function headers(extra, targetBase) {
       const value = Object.assign({ Accept: 'application/json' }, extra || {});
-      if (bearer) value.Authorization = 'Bearer ' + bearer;
+      if (shouldSendBearer(targetBase)) value.Authorization = 'Bearer ' + bearer;
       return value;
     }
 
@@ -146,7 +161,7 @@
       const timed = timedSignal(requestOptions && requestOptions.signal, requestTimeoutMs);
       const init = {
         method,
-        headers: headers(body === undefined ? undefined : { 'Content-Type': 'application/json' }),
+        headers: headers(body === undefined ? undefined : { 'Content-Type': 'application/json' }, base),
         signal: timed.signal,
       };
       if (body !== undefined) init.body = JSON.stringify(body);
@@ -180,7 +195,7 @@
         try {
           response = await fetchImpl(base + path, {
             method: 'POST',
-            headers: headers({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
+            headers: headers({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }, base),
             body: JSON.stringify(body),
             signal: timed.signal,
           });

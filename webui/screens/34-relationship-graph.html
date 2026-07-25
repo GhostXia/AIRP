@@ -21,7 +21,13 @@
     <span class="runtime-muted" id="graph-info">选择角色后加载关系数据</span>
   </div>
   <div class="graph-container" id="graph-box">
-    <canvas id="graph-canvas"></canvas>
+    <canvas id="graph-canvas" role="img" aria-label="角色关系力导向图"></canvas>
+    <!-- N-I 修复：为屏幕阅读器提供语义化替代，canvas 旁的 visually-hidden 表格 -->
+    <table class="sr-only" id="graph-a11y-table" aria-label="关系数据表格化替代">
+      <caption>角色关系列表</caption>
+      <thead><tr><th scope="col">源角色</th><th scope="col">目标角色</th><th scope="col">关系类型</th><th scope="col">强度</th></tr></thead>
+      <tbody id="graph-a11y-body"></tbody>
+    </table>
     <div class="graph-empty" id="graph-empty">暂无关系数据。角色状态中的 relationships 字段将在此可视化。</div>
     <div class="graph-legend">
       <div class="lg-row"><span class="lg-dot" data-color="primary"></span> 角色节点</div>

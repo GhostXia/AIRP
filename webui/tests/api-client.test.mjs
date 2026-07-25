@@ -29,12 +29,26 @@ test('bearer is only added as an Authorization header', async () => {
   let call;
   const client = createClient({
     base: 'http://engine.test', bearer: 'secret-value',
+    // N-E 修复：非浏览器环境无 location.origin，需显式声明可信 origin 才发送 bearer
+    trustedOrigins: ['http://engine.test'],
     fetchImpl: async (url, init) => { call = { url, init }; return response('{}'); },
   });
   await client.request('GET', '/version');
   assert.equal(call.url, 'http://engine.test/version');
   assert.equal(call.init.headers.Authorization, 'Bearer secret-value');
   assert.ok(!call.url.includes('secret-value'));
+});
+
+test('N-E: bearer is stripped for non-trusted cross-origin base', async () => {
+  let call;
+  const client = createClient({
+    base: 'http://evil.attacker.example', bearer: 'secret-value',
+    trustedOrigins: ['http://engine.test'], // 仅信任 engine.test，不含 evil.attacker.example
+    fetchImpl: async (url, init) => { call = { url, init }; return response('{}'); },
+  });
+  await client.request('GET', '/version');
+  assert.equal(call.url, 'http://evil.attacker.example/version');
+  assert.equal(call.init.headers.Authorization, undefined, 'bearer 必须被剥离，不得发往非可信 origin');
 });
 
 test('request applies its configurable default timeout', async () => {
