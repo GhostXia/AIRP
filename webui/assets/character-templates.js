@@ -14,6 +14,11 @@
   let characterId = params.get('character') || sessionStorage.getItem('airp_character_id') || '';
   let templates = [];
   let selectedTemplate = null;
+  // CodeRabbit outside-diff #1：showDetail 请求序号，防旧响应覆盖新选择。
+  // 两次快速 showDetail 调用可能 out-of-order resolve；用递增 token 标识
+  // 最新请求，stale 响应（成功或失败）一律忽略，避免 selectedTemplate 被旧
+  // 响应设成错误的 id 导致 instantiate 创建到非用户当前选择的模板。
+  let detailRequestId = 0;
 
   const pages = [['03','workbench','角色工作台','03-workbench.html'],['04','worldbook','世界书','04-world-book.html'],['17','memory','记忆与状态','17-memory-state.html'],['18','scenes','多人场景','18-group-chat.html'],['32','style','风格系统','32-style-review.html'],['34','graph','关系图谱','34-relationship-graph.html'],['35','plotarc','剧情弧','35-plot-arc.html'],['36','imagegen','图片生成','36-image-gen.html'],['37','templates','模板库','37-character-templates.html']];
   function pathWithState(path) { const url = new URL(path, location.href); if (characterId) url.searchParams.set('character', characterId); if (client.base !== location.origin) url.searchParams.set('engine', client.base); return url.href; }
@@ -84,9 +89,14 @@
     // CodeRabbit #6：await 前先清 selectedTemplate，加载失败时不保留上次选择，
     // 避免用户误用旧 id 触发 instantiate。
     selectedTemplate = null;
+    // CodeRabbit outside-diff #1：本调用的请求 token。await 期间若用户又点了
+    // 别的模板，detailRequestId 会再 ++，本 token 即过期；resolve 后比对，
+    // 不匹配则丢弃响应。
+    const requestId = ++detailRequestId;
     setStatus('加载模板详情…');
     try {
       const card = await client.request('GET', '/v1/character-templates/' + encodeURIComponent(id));
+      if (requestId !== detailRequestId) return; // stale，丢弃
       selectedTemplate = id;
       $('#detail-title').textContent = card.data.name + '（' + card.data.extensions.airp_template_category + '）';
       body.appendChild(node('h3', null, '描述'));
@@ -103,6 +113,7 @@
       $('#detail-char-id').value = '';
       setStatus('');
     } catch (error) {
+      if (requestId !== detailRequestId) return; // stale，丢弃
       setStatus('加载失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     }
   }

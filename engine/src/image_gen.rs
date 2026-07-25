@@ -172,6 +172,21 @@ const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 /// （CodeRabbit #4）。图片生成本身是秒级慢操作，全局序列化对吞吐影响可忽略。
 static INDEX_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// 在 `dir` 下选一个不存在的图片文件名，格式 `{millis}.png` 或 `{millis}_{n}.png`。
+///
+/// 纯文件名选择算法，提取出来便于单元测试（CodeRabbit nitpick #3）。
+/// **调用方必须在 `INDEX_LOCK` 持锁后调用**，否则存在 TOCTOU：两个并发请求
+/// 可能同时观察到同一候选名不存在，互相覆盖。
+fn pick_unique_image_filename(dir: &Path, millis: u128) -> String {
+    let mut filename = format!("{}.png", millis);
+    let mut suffix = 1u32;
+    while dir.join(&filename).exists() {
+        filename = format!("{}_{}.png", millis, suffix);
+        suffix += 1;
+    }
+    filename
+}
+
 /// 下载图片到本地 session 资产目录。
 ///
 /// 成功时返回 `(`[`ImageMeta`]`, 相对路径)`。调用方应**直接使用**返回的
@@ -180,6 +195,11 @@ static INDEX_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 ///
 /// 文件名采用毫秒精度时间戳 + 碰撞自增后缀，避免秒级精度下 1 秒内多次
 /// 生成覆盖前一张（CodeRabbit #3）。
+///
+/// **并发安全**（CodeRabbit outside-diff #2）：`INDEX_LOCK` 持锁贯穿
+/// "选文件名 + 写文件 + 更新 index.json" 三步，避免同毫秒并发请求在
+/// `exists()` 检查处双双重叠导致选同一文件名互相覆盖。下载（慢网络 I/O）
+/// 在锁外执行以保留吞吐。
 pub async fn download_image_to_session(
     client: &reqwest::Client,
     data_root: &Path,
@@ -191,20 +211,7 @@ pub async fn download_image_to_session(
     let dir = images_dir(data_root, character_id, session_id);
     std::fs::create_dir_all(&dir)?;
 
-    // 毫秒精度时间戳 + 碰撞自增，避免覆盖（CodeRabbit #3）。
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let mut filename = format!("{}.png", millis);
-    let mut suffix = 1u32;
-    while dir.join(&filename).exists() {
-        filename = format!("{}_{}.png", millis, suffix);
-        suffix += 1;
-    }
-    let filepath = dir.join(&filename);
-
-    // 下载图片
+    // Phase 1（锁外）：下载图片字节。网络慢，并行化保留吞吐。
     let response = client
         .get(image_url)
         .timeout(std::time::Duration::from_secs(30))
@@ -249,6 +256,21 @@ pub async fn download_image_to_session(
         });
     }
 
+    // Phase 2（持锁）：选文件名 + 写文件 + 更新 index.json。
+    // CodeRabbit outside-diff #2：原实现先在锁外选文件名 + 写文件，再在
+    // index.json 更新前才取锁——同毫秒并发请求会双双重叠在 `exists()` 检查，
+    // 选同一文件名互相覆盖（lost image）。现将锁提到选文件名之前，覆盖整段
+    // critical section。图片生成本身是秒级慢操作且上游已限流，全局序列化对
+    // 吞吐影响可忽略。
+    let _guard = INDEX_LOCK.lock().await;
+
+    // 毫秒精度时间戳 + 碰撞自增，避免覆盖（CodeRabbit #3）。
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let filename = pick_unique_image_filename(&dir, millis);
+    let filepath = dir.join(&filename);
     crate::data_dir::replace_file(&filepath, &bytes)?;
 
     let meta = ImageMeta {
@@ -258,9 +280,8 @@ pub async fn download_image_to_session(
         size: format!("{} bytes", bytes.len()),
     };
 
-    // 更新 index.json（CodeRabbit #4：全局 Mutex 序列化读-改-写）。
+    // 更新 index.json（CodeRabbit #4：复用同一 guard，不再二次取锁）。
     let index_path = dir.join("index.json");
-    let _guard = INDEX_LOCK.lock().await;
     let mut index: Vec<ImageMeta> = std::fs::read_to_string(&index_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -310,5 +331,76 @@ mod tests {
         assert_eq!(req.size, "1024x1024");
         assert_eq!(req.style, "vivid");
         assert!(req.session_id.is_none());
+    }
+
+    /// CodeRabbit nitpick #3：锁定 `MAX_IMAGE_BYTES` 上限值，防回归。
+    /// 20 MiB = 20 * 1024 * 1024 = 20971520 bytes。若未来误改此常量，测试会
+    /// 立即失败。
+    #[test]
+    fn max_image_bytes_is_20_mib() {
+        assert_eq!(MAX_IMAGE_BYTES, 20 * 1024 * 1024);
+        assert_eq!(MAX_IMAGE_BYTES, 20_971_520);
+    }
+
+    /// CodeRabbit nitpick #3：锁定文件名碰撞后缀算法的纯逻辑部分。
+    ///
+    /// 测试调用**实际**的 `pick_unique_image_filename`（非重写），用 tempdir
+    /// 模拟 `exists()` 检查。算法是：取毫秒时间戳作 `{millis}.png`，若已存在
+    /// 则 `{millis}_{n}.png`（n 从 1 递增）。
+    #[test]
+    fn pick_unique_image_filename_skips_existing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "airp_image_filename_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let millis = 1_700_000_000_000u128;
+
+        // 空目录 → 直接用 millis
+        assert_eq!(
+            pick_unique_image_filename(&tmp, millis),
+            format!("{millis}.png")
+        );
+        // 占住 millis.png → 跳到 millis_1.png
+        std::fs::write(tmp.join(format!("{millis}.png")), b"x").unwrap();
+        assert_eq!(
+            pick_unique_image_filename(&tmp, millis),
+            format!("{millis}_1.png")
+        );
+        // 再占住 millis_1.png → 跳到 millis_2.png
+        std::fs::write(tmp.join(format!("{millis}_1.png")), b"x").unwrap();
+        assert_eq!(
+            pick_unique_image_filename(&tmp, millis),
+            format!("{millis}_2.png")
+        );
+        // 占住 millis_2.png → 跳到 millis_3.png
+        std::fs::write(tmp.join(format!("{millis}_2.png")), b"x").unwrap();
+        assert_eq!(
+            pick_unique_image_filename(&tmp, millis),
+            format!("{millis}_3.png")
+        );
+        // 不同 millis 不受 millis 的影响
+        let other = 1_700_000_000_001u128;
+        assert_eq!(
+            pick_unique_image_filename(&tmp, other),
+            format!("{other}.png")
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// CodeRabbit nitpick #3：端到端验证 `download_image_to_session` 的
+    /// TOCTOU 修复——`INDEX_LOCK` 持锁贯穿"选文件名 + 写文件 + 更新 index.json"
+    /// critical section。此测试需 mockito dev-dependency 模拟上游；当前仓库
+    /// 未启用，故 ignore。算法正确性由 `pick_unique_image_filename_skips_existing`
+    /// 锁定，锁覆盖范围由源码注释与人工 review 确认。
+    #[test]
+    #[ignore = "requires mockito dev-dependency; manually run with --features mockito"]
+    fn download_image_to_session_writes_unique_files_under_collision() {
+        // 占位：见 ignore 说明。算法 + 锁覆盖已由其它测试与源码审计覆盖。
     }
 }

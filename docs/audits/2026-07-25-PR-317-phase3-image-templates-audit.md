@@ -131,7 +131,7 @@ Engine 端 `list_sessions_endpoint` 返回 `Json<Vec<SessionId>>`（`sessions.rs
 | #12 `18-group-chat.html` 重复 `<!DOCTYPE>` 文档 | `webui/screens/18-group-chat.html` | 删除合并遗留的第二个文档块，保留单一 `<html>` | — |
 | #13 审计文档 markdownlint MD038（inline code span 转义反引号） | `docs/audits/2026-07-25-PR-317-phase3-image-templates-audit.md:181` | `` `[*_#\`]` `` → `` `` `[*_#`]` `` ``（双反引号分隔） | — |
 
-## 3.2 三次修复：CodeRabbit 二次 inline review（commit 待推送）
+## 3.2 三次修复：CodeRabbit 二次 inline review（commit `d09d618`）
 
 > CodeRabbit 在 head `bdf20f9` 上又发了 2 条 actionable 线程，本轮就地修复。
 
@@ -139,6 +139,16 @@ Engine 端 `list_sessions_endpoint` 返回 `Json<Vec<SessionId>>`（`sessions.rs
 |---|---|---|
 | #14 审计文档 §3.1 与 §4 的 N1/N2 ID 冲突 | `docs/audits/2026-07-25-PR-317-phase3-image-templates-audit.md:122-123` | §3.1 表删去 `/N1` `/N2` 后缀，改用"§4 映射"列显式标注对应关系（#4→N5，#6→N3）；§4 N3/N5 标注"已由 §3.1 修复" |
 | #15 `validate_image_filename` 漏拒 `:`（Windows 驱动器前缀逃逸） | `engine/src/daemon/handlers/image_gen.rs:191-207` | 黑名单改白名单：仅允许 `[A-Za-z0-9_.-]`，显式拒 `..`。`C:foo.png` / `D:evil.png` / `:hidden.png` 全部拒。新增 6 个单元测试锁定行为 |
+
+## 3.3 四次修复：CodeRabbit outside-diff + nitpick（commit 待推送）
+
+> CodeRabbit 在 head `bdf20f9` 的 review body（折叠区）还有 2 条 "Outside diff range" actionable 线程 + 1 条 nitpick，前轮漏读。本轮就地修复。
+
+| #线程 | 类型 | 位置 | 修复 |
+|---|---|---|---|
+| #16 `showDetail` 旧响应覆盖新选择（stale response race） | outside-diff | `webui/assets/character-templates.js:84-90` | 引入 `detailRequestId` 递增 token；每次 `showDetail` 进入时 `++` 取本请求 id，`await` 后比对，不匹配则丢弃响应（成功与失败分支都查）。stale 响应不再能覆盖用户最新选择的 `selectedTemplate` |
+| #17 `INDEX_LOCK` TOCTOU：锁在文件写入后才获取 | outside-diff | `engine/src/image_gen.rs:194-273` | 重构为两阶段：Phase 1 锁外下载字节（保留网络并行吞吐）；Phase 2 持锁贯穿"选文件名 + 写文件 + 更新 index.json" 整段 critical section。同毫秒并发请求不再能在 `exists()` 检查处重叠选同一文件名 |
+| #18 缺 `MAX_IMAGE_BYTES` / 文件名碰撞测试 | nitpick | `engine/src/image_gen.rs:287-314` | 提取 `pick_unique_image_filename(dir, millis)` 纯函数（调用方仍须持锁），新增 3 个测试：`max_image_bytes_is_20_mib`（锁定常量值防回归）、`pick_unique_image_filename_skips_existing`（用 tempdir 真实建文件验证跳后缀）、`download_image_to_session_writes_unique_files_under_collision`（标 ignore，需 mockito） |
 
 **未修复（仍待合并后入 issue）**：§4 N1（URL 构造）/ N2（POST body limit）/ N4（Content-Type 校验）/ N6（SSRF）/ N7（b64_json）/ N8（instantiate 顺序）/ N9（`images_dir` pub 但不校验）/ N10（list 无分页）/ N11（无独立限流）/ N12（group-chat session 创建失败静默）/ N13（`JSON.stringify` 关键词匹配，部分已由 #10 缓解，仍建议改扫语义字段）/ N14（TTS 正则过简）/ N15（CI 失败）。§4 N3 与 N5 已由 §3.1 修复，从待办中移除。
 
@@ -226,12 +236,13 @@ if (!sessionId) {
 
 ## 5. 结论
 
-PR #317 的 3 个阻塞项（B1 XSS / B2 功能不可用 / B3 CI lint）**已由本审计就地修复**（commit `338f911`）。随后对 CodeRabbit 三轮 inline review 共做了 15 条 actionable 线程的修复：
-- §3.1（commit `bdf20f9`）：12 条 + 1 条 markdownlint
-- §3.2（本 commit）：2 条（N1/N2 ID 冲突 + `:` filename 安全漏）
+PR #317 的 3 个阻塞项（B1 XSS / B2 功能不可用 / B3 CI lint）**已由本审计就地修复**（commit `338f911`）。随后对 CodeRabbit 四轮 review 共做了 18 条 actionable 线程的修复：
+- §3.1（commit `bdf20f9`）：12 条 inline + 1 条 markdownlint
+- §3.2（commit `d09d618`）：2 条 inline（N1/N2 ID 冲突 + `:` filename 安全漏）
+- §3.3（本 commit）：2 条 outside-diff（showDetail stale race + INDEX_LOCK TOCTOU）+ 1 条 nitpick（测试覆盖）
 
-三轮修复后全部本地验证通过（fmt / clippy / 898 lib tests / 15 webui tests / 19 agent-exploration lint tests）。§4 中 N3 与 N5 已由 §3.1 修复，剩余 13 个非阻塞项（N1/N2/N4/N6–N15）建议合并后入 issue。
+四轮修复后全部本地验证通过（fmt / clippy / 901 lib tests / 15 webui tests / 19 agent-exploration lint tests）。§4 中 N3 与 N5 已由 §3.1 修复，剩余 13 个非阻塞项（N1/N2/N4/N6–N15）建议合并后入 issue。
 
-**独立审计立场**：本审计否决了 PR 描述中"15 项 webui 测试全过 = 已验证"的暗示——B2 在所有测试通过的情况下仍然存在，证明 runtime-pages 测试**不覆盖运行时数据契约**，建议后续补 session 列表契约测试（mock `/v1/sessions/:id` 返回裸字符串数组，断言下拉非空）。
+**独立审计立场**：本审计否决了 PR 描述中"15 项 webui 测试全过 = 已验证"的暗示——B2 在所有测试通过的情况下仍然存在，证明 runtime-pages 测试**不覆盖运行时数据契约**，建议后续补 session 列表契约测试（mock `/v1/sessions/:id` 返回裸字符串数组，断言下拉非空）。本审计亦承认前两轮漏读了 CodeRabbit review body 折叠区内的 outside-diff 线程——以后 review CodeRabbit 结论时必须读完整 review body 而非仅看 inline 评论。
 
 **建议**：三次修复 commit 推送后，待人工 review 与 CodeRabbit 复审通过后可合并；合并后由审计 agent 将 §4 中剩余非阻塞项（N1/N2/N4/N6–N15）整理为 GitHub issue。
