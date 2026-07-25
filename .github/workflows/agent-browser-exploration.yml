@@ -17,6 +17,10 @@ on:
       - 'webui/screens/14-message-swipe.html'
       - 'webui/screens/17-memory-state.html'
       - 'webui/screens/19-branch-tree.html'
+      # 修复自身触发：改 workflow / runner / bootstrap 也应触发验证
+      - '.github/workflows/agent-browser-exploration.yml'
+      - 'tools/agent-exploration/**'
+      - 'deploy/production/bootstrap-topology.sh'
 
 permissions:
   contents: read
