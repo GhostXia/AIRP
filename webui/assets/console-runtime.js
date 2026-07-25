@@ -37,6 +37,7 @@
     ['35', 'plotarc', '剧情弧', '35-plot-arc.html'],
     ['36', 'imagegen', '图片生成', '36-image-gen.html'],
     ['37', 'templates', '模板库', '37-character-templates.html'],
+    ['38', 'stylelearn', '风格迁移', '38-style-learn.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 

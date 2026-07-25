@@ -40,14 +40,15 @@ use handlers::{
     get_character_card, get_character_lorebook, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
     get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
-    get_resident_memory, get_scene_endpoint, get_settings, get_template_endpoint, get_user_model,
-    get_world_events, import_character, import_preset_endpoint, instantiate_template_endpoint,
-    list_agent_tools, list_characters, list_images_endpoint, list_models, list_personas_endpoint,
-    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint, list_templates_endpoint,
+    get_resident_memory, get_scene_endpoint, get_settings, get_style_profile,
+    get_template_endpoint, get_user_model, get_world_events, import_character,
+    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools, list_characters,
+    list_images_endpoint, list_models, list_personas_endpoint, list_presets_endpoint,
+    list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
     preview_chat_assembly, reextract_character_assets, regen_chat, rollback_chat, rollback_drift,
-    serve_image_endpoint, serve_session_image_endpoint, style_review, swipe_chat, switch_branch,
-    unbind_persona_endpoint, update_character_card, update_character_lorebook, update_drift,
-    update_persona_endpoint, update_persona_multi_endpoint, update_plot_arc,
+    serve_image_endpoint, serve_session_image_endpoint, style_learn, style_review, swipe_chat,
+    switch_branch, unbind_persona_endpoint, update_character_card, update_character_lorebook,
+    update_drift, update_persona_endpoint, update_persona_multi_endpoint, update_plot_arc,
     update_resident_memory, update_settings, update_user_model,
 };
 
@@ -443,6 +444,12 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route("/v1/settings", get(get_settings).post(update_settings))
         // ── Style API（4.1/4.2 风格系统） ──────────────────────────────────
         .route("/v1/style/review", post(style_review))
+        .route(
+            "/v1/style/learn",
+            post(style_learn).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route("/v1/style/profiles", get(list_style_profiles))
+        .route("/v1/style/profiles/:profile_id", get(get_style_profile))
         .route(
             "/v1/characters/:character_id/drift",
             get(get_drift).put(update_drift),
