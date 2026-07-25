@@ -21,6 +21,7 @@ mod models;
 mod personas;
 mod plot;
 mod presets;
+mod provider_routing;
 mod scenes;
 mod search;
 mod sessions;
@@ -65,6 +66,10 @@ pub(super) use personas::{
 };
 pub(super) use plot::{get_plot_arc, update_plot_arc};
 pub(super) use presets::{get_preset_endpoint, import_preset_endpoint, list_presets_endpoint};
+pub(super) use provider_routing::{
+    get_routing_endpoint, list_providers_endpoint, resolve_provider_endpoint,
+    update_providers_endpoint, update_routing_endpoint,
+};
 pub(super) use scenes::{
     add_scene_character_endpoint, create_scene_endpoint, get_scene_endpoint, list_scenes_endpoint,
 };

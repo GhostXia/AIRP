@@ -189,11 +189,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app_config.access_api_key.as_deref(),
             )?;
 
+            // Phase 5.1: 加载多 provider 路由表（data/providers.json + data/provider_keys.json）。
+            // 文件缺省时返回 empty router，daemon 走 legacy 单 provider 路径。
+            let provider_router = match airp_core::provider_routing::load_provider_router(&data_root) {
+                Ok(router) => router,
+                Err(e) => {
+                    tracing::warn!(%e, "加载多 provider 路由表失败，回退到单 provider 模式");
+                    airp_core::provider_routing::ProviderRouter::empty()
+                }
+            };
+            if !provider_router.is_empty() {
+                tracing::info!(
+                    count = provider_router.entries().len(),
+                    "已加载多 provider 路由表"
+                );
+            }
+
             let state = Arc::new(DaemonState {
                 data_root,
                 http_client: http_client.clone(),
                 fts: Default::default(),
                 settings_update: Default::default(),
+                provider_router: std::sync::RwLock::new(provider_router),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
@@ -295,6 +312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 http_client: http_client.clone(),
                 fts: Default::default(),
                 settings_update: Default::default(),
+                provider_router: Default::default(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,

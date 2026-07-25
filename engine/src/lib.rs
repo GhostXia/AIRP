@@ -38,6 +38,7 @@ pub mod memory;
 pub mod orchestrator;
 pub mod outbound;
 pub mod png_parser;
+pub mod provider_routing;
 pub mod quota;
 pub mod scene;
 pub(crate) mod secret_store;

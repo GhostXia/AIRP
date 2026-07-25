@@ -37,6 +37,7 @@ async fn setup() -> (Arc<DaemonState>, tempfile::TempDir) {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: "https://example.test/v1/chat/completions".to_string(),

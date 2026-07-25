@@ -34,6 +34,7 @@ async fn enhance_analysis_returns_preview_and_rejects_world_book() {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: format!("{}/v1/chat/completions", mock_server.uri()),

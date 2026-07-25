@@ -1,0 +1,286 @@
+.pm-section {
+  margin-bottom: 2rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border, #d8dee4);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+.pm-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.pm-section-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.pm-count {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0 0.5rem;
+  background: var(--surface-inset, #f1f3f5);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted, #666);
+}
+.pm-enabled-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--surface-inset, #f6f8fa);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+.pm-enabled-tag {
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.78rem;
+  background: var(--neutral-bg, #e5e7eb);
+  color: var(--neutral-text, #4b5563);
+}
+.pm-enabled-bar.is-enabled .pm-enabled-tag {
+  background: var(--success-bg, #dcfce7);
+  color: var(--success-text, #166534);
+}
+.pm-enabled-hint {
+  color: var(--text-muted, #666);
+}
+.pm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.pm-table th,
+.pm-table td {
+  text-align: left;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  vertical-align: middle;
+}
+.pm-table th {
+  font-weight: 600;
+  color: var(--text-muted, #6b7280);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pm-cell-name {
+  font-weight: 600;
+}
+.pm-cell-endpoint code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+.pm-cell-engine {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.82rem;
+  color: var(--text-muted, #666);
+}
+.pm-default-flag {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  background: var(--accent-bg, #dbeafe);
+  color: var(--accent-text, #1e40af);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+.pm-cell-default.is-not-default .pm-default-flag {
+  display: none;
+}
+.pm-key-set,
+.pm-key-unset {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+.pm-key-set {
+  background: var(--success-bg, #dcfce7);
+  color: var(--success-text, #166534);
+}
+.pm-key-unset {
+  background: var(--warning-bg, #fef3c7);
+  color: var(--warning-text, #92400e);
+}
+.pm-cell-key.has-key .pm-key-unset {
+  display: none;
+}
+.pm-cell-key:not(.has-key) .pm-key-set {
+  display: none;
+}
+.pm-cell-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.pm-empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+.pm-routing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.pm-routing-col {
+  padding: 0.9rem;
+  border: 1px dashed var(--border, #d8dee4);
+  border-radius: 6px;
+  background: var(--surface-inset, #fafbfc);
+}
+.pm-routing-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.pm-routing-hint {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-muted, #888);
+}
+.pm-routing-editor {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.pm-routing-editor .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pm-routing-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pm-routing-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.86rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  margin-bottom: 0.35rem;
+  gap: 0.5rem;
+}
+.pm-routing-list li .pm-routing-pair {
+  font-family: var(--mono, ui-monospace, monospace);
+  word-break: break-all;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pm-routing-list li .pm-routing-pair b {
+  color: var(--text, #111);
+}
+.pm-routing-list li .pm-routing-remove {
+  flex: 0 0 auto;
+}
+.pm-routing-list li.is-dirty {
+  border-color: var(--accent, #3b82f6);
+}
+.pm-routing-actions {
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.5rem;
+}
+.pm-resolve-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-top: 0.5rem;
+}
+.pm-resolve-form .field {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.pm-resolve-result {
+  margin-top: 0.9rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: var(--surface-inset, #f6f8fa);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+.pm-resolve-status {
+  font-weight: 600;
+}
+.pm-resolve-status.is-matched {
+  color: var(--success-text, #166534);
+}
+.pm-resolve-status.is-unmatched {
+  color: var(--danger-text, #991b1b);
+}
+.pm-resolve-rule {
+  padding: 0.15rem 0.6rem;
+  border-radius: 4px;
+  background: var(--accent-bg, #dbeafe);
+  color: var(--accent-text, #1e40af);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.pm-resolve-entry {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.86rem;
+}
+.pm-editor {
+  border: 1px solid var(--border, #d8dee4);
+  border-radius: 10px;
+  padding: 1.5rem;
+  background: var(--surface, #fff);
+  max-width: 520px;
+  width: calc(100% - 2rem);
+}
+.pm-editor::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+.pm-editor-title {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+.pm-editor .field {
+  margin-bottom: 0.9rem;
+}
+.pm-editor .field.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pm-editor .field.checkbox .field-label {
+  margin: 0;
+}
+.pm-editor-hint {
+  margin: 0 0 0.9rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  background: var(--warning-bg, #fef3c7);
+  color: var(--warning-text, #92400e);
+  font-size: 0.84rem;
+}
+.pm-editor-hint:empty {
+  display: none;
+}
+.pm-editor-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
