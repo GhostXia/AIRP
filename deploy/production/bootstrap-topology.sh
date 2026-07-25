@@ -207,4 +207,17 @@ compose_project_name=$COMPOSE_PROJECT_NAME
 mock_pid=$mock_pid
 EOF
 
+# 导出 chrome_spki 到 GitHub Actions env，供后续 step（Run agent exploration）使用。
+# 对齐 pr-gate.yml 的 smoke-ci.sh L267 把 spki 传给 production-browser-smoke.mjs 的模式。
+# 没有这个值，runner.mjs 的 chromium.launch 不会传 --ignore-certificate-errors-spki-list，
+# Chrome 在 GitHub runner 上拒绝 localhost:9443 自签证书 → page.goto ERR_CERT_AUTHORITY_INVALID。
+# 本地运行（无 GITHUB_ENV）时 echo 到 stdout 提示，runner 仍可通过 AIRP_CHROME_SPKI env 直接传入。
+if [ -n "${GITHUB_ENV:-}" ]; then
+  printf 'AIRP_CHROME_SPKI=%s\n' "$chrome_spki" >> "$GITHUB_ENV"
+  printf 'AIRP_SMOKE_TRUST_BUNDLE=%s\n' "$trust_bundle" >> "$GITHUB_ENV"
+else
+  echo "AIRP_CHROME_SPKI=$chrome_spki"
+  echo "AIRP_SMOKE_TRUST_BUNDLE=$trust_bundle"
+fi
+
 echo "topology bootstrapped (project=$COMPOSE_PROJECT_NAME origin=$origin)"
