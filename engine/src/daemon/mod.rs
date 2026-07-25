@@ -50,7 +50,7 @@ use handlers::{
     style_learn, style_review, swipe_chat, switch_branch, unbind_persona_endpoint,
     update_character_card, update_character_lorebook, update_drift, update_persona_endpoint,
     update_persona_multi_endpoint, update_plot_arc, update_resident_memory, update_settings,
-    update_user_model,
+    update_user_model, export_session_timeline_endpoint, get_session_timeline_endpoint,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -433,6 +433,15 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/sessions/:character_id/:session_id",
             axum::routing::delete(delete_session_endpoint),
+        )
+        // ── Phase 4.5: 剧情时间线导出 API ──────────────────────────────
+        .route(
+            "/v1/sessions/:character_id/:session_id/timeline",
+            get(get_session_timeline_endpoint),
+        )
+        .route(
+            "/v1/sessions/:character_id/:session_id/timeline/export",
+            get(export_session_timeline_endpoint),
         )
         .route("/v1/settings", get(get_settings).post(update_settings))
         // ── Style API（4.1/4.2 风格系统） ──────────────────────────────────
