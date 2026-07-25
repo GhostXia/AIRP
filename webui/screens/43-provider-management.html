@@ -120,7 +120,7 @@
     <label class="field"><span class="field-label">name <em>*</em></span><input class="input" id="pm-ed-name" required maxlength="64" autocomplete="off"></label>
     <label class="field"><span class="field-label">endpoint <em>*</em></span><input class="input" id="pm-ed-endpoint" required placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off"></label>
     <label class="field"><span class="field-label">model <em>*</em></span><input class="input" id="pm-ed-model" required placeholder="gpt-4o" autocomplete="off"></label>
-    <label class="field"><span class="field-label">engine</span><select class="select runtime-select" id="pm-ed-engine"><option value="direct">direct (OpenAI compat)</option><option value="anthropic_messages">anthropic_messages</option><option value="claude_code_sdk">claude_code_sdk (not implemented)</option></select></label>
+    <label class="field"><span class="field-label">engine</span><select class="select runtime-select" id="pm-ed-engine"><option value="direct">direct (OpenAI compat)</option><option value="ollama">ollama (本地 Ollama, OpenAI compat)</option><option value="anthropic_messages">anthropic_messages</option><option value="claude_code_sdk">claude_code_sdk (not implemented)</option></select></label>
     <label class="field checkbox"><input type="checkbox" id="pm-ed-default"><span class="field-label">is_default</span></label>
     <label class="field"><span class="field-label">api_key</span><input class="input" id="pm-ed-apikey" type="password" placeholder="留空表示不修改；输入新值会覆盖" autocomplete="off"></label>
     <p class="pm-editor-hint" id="pm-editor-hint"></p>
