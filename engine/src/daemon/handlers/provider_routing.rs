@@ -14,7 +14,7 @@ use crate::daemon::DaemonState;
 use crate::error::AirpError;
 use crate::provider_routing::{
     load_provider_keys, save_provider_keys, save_provider_routing, validate_provider_config,
-    ProviderEntry, ProviderRouting, ProviderRouter,
+    ProviderEntry, ProviderRouter, ProviderRouting,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -89,8 +89,11 @@ pub(in crate::daemon) async fn list_providers_endpoint(
         .provider_router
         .read()
         .map_err(|_| AirpError::Internal("provider_router lock poisoned".to_string()))?;
-    let entries: Vec<ProviderEntryView> =
-        router.entries().iter().map(ProviderEntryView::from_entry).collect();
+    let entries: Vec<ProviderEntryView> = router
+        .entries()
+        .iter()
+        .map(ProviderEntryView::from_entry)
+        .collect();
     let routing = router.routing().clone();
     let enabled = !router.is_empty();
     Ok(Json(ProvidersResponse {
@@ -190,14 +193,12 @@ pub(in crate::daemon) async fn update_routing_endpoint(
             .provider_router
             .read()
             .map_err(|_| AirpError::Internal("provider_router lock poisoned".to_string()))?;
-        (
-            router.entries().to_vec(),
-            router.routing().clone(),
-        )
+        (router.entries().to_vec(), router.routing().clone())
     };
     if entries.is_empty() {
         return Err(AirpError::BadRequest(
-            "providers 数组为空，无法更新 routing（请先 POST /v1/providers 添加 provider".to_string(),
+            "providers 数组为空，无法更新 routing（请先 POST /v1/providers 添加 provider"
+                .to_string(),
         ));
     }
     validate_provider_config(&entries, &update.routing)

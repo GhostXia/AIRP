@@ -275,10 +275,7 @@ pub(in crate::daemon) async fn delete_plugin_tool_endpoint(
     let before = new_tools.len();
     new_tools.retain(|t| t.name != name);
     if new_tools.len() == before {
-        return Err(AirpError::NotFound(format!(
-            "插件工具 '{}' 不存在",
-            name
-        )));
+        return Err(AirpError::NotFound(format!("插件工具 '{}' 不存在", name)));
     }
 
     // 持久化。
@@ -328,13 +325,9 @@ pub(in crate::daemon) async fn test_plugin_tool_endpoint(
         state.http_client.clone(),
         state.data_root.clone(),
     );
-    let result = crate::agent::tools::Tool::call(
-        &tool,
-        req.params,
-        req.confirm,
-    )
-    .await
-    .map_err(|e| AirpError::Internal(format!("插件工具 '{}' 测试调用失败: {}", name, e)))?;
+    let result = crate::agent::tools::Tool::call(&tool, req.params, req.confirm)
+        .await
+        .map_err(|e| AirpError::Internal(format!("插件工具 '{}' 测试调用失败: {}", name, e)))?;
 
     Ok(Json(PluginToolTestResponse {
         name: config.name,

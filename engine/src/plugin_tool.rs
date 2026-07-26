@@ -71,9 +71,7 @@ impl PluginInvocation {
         const MAX_SECS: u32 = 30;
         let raw = match self {
             PluginInvocation::Webhook { timeout_secs, .. }
-            | PluginInvocation::Script { timeout_secs, .. } => {
-                timeout_secs.unwrap_or(DEFAULT_SECS)
-            }
+            | PluginInvocation::Script { timeout_secs, .. } => timeout_secs.unwrap_or(DEFAULT_SECS),
         };
         raw.clamp(1, MAX_SECS)
     }
@@ -128,10 +126,7 @@ impl PluginToolConfig {
     pub fn validate(&self, data_root: &Path) -> Result<(), String> {
         validate_tool_name(&self.name)?;
         if self.description.trim().is_empty() {
-            return Err(format!(
-                "PluginTool[{}] description 不能为空",
-                self.name
-            ));
+            return Err(format!("PluginTool[{}] description 不能为空", self.name));
         }
         if self.description.chars().count() > 512 {
             return Err(format!(
@@ -150,10 +145,7 @@ impl PluginToolConfig {
             } => {
                 validate_script_path(data_root, relative_path)?;
                 if args.len() > 16 {
-                    return Err(format!(
-                        "PluginTool[{}] script args 过多（>16）",
-                        self.name
-                    ));
+                    return Err(format!("PluginTool[{}] script args 过多（>16）", self.name));
                 }
                 for arg in args {
                     if arg.len() > 4096 {
@@ -181,7 +173,9 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
         return Err("PluginTool.name 含 null byte".to_string());
     }
     let mut chars = name.chars();
-    let first = chars.next().ok_or_else(|| "PluginTool.name 为空".to_string())?;
+    let first = chars
+        .next()
+        .ok_or_else(|| "PluginTool.name 为空".to_string())?;
     if first.is_ascii_digit() {
         return Err(format!("PluginTool.name 不能以数字开头: {}", name));
     }
@@ -199,8 +193,17 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
     }
     // 保留前缀：与内建工具命名空间冲突的拒绝。
     const BUILTIN_PREFIXES: &[&str] = &[
-        "echo", "session_", "character_", "lorebook_", "preset_", "volume_", "analysis_",
-        "world_event_", "npc_", "plot_", "search_",
+        "echo",
+        "session_",
+        "character_",
+        "lorebook_",
+        "preset_",
+        "volume_",
+        "analysis_",
+        "world_event_",
+        "npc_",
+        "plot_",
+        "search_",
     ];
     for prefix in BUILTIN_PREFIXES {
         if name.starts_with(prefix) {
@@ -213,7 +216,7 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 校验 webhook URL：只允许 http://localhost|127.0.0.1|[::1] 或任意 https://。
+/// 校验 webhook URL：只允许 `http://localhost`、`127.0.0.1`、`[::1]` 或任意 `https://`。
 pub fn validate_webhook_url(url: &str) -> Result<(), String> {
     if url.is_empty() {
         return Err("webhook url 不能为空".to_string());
@@ -221,16 +224,15 @@ pub fn validate_webhook_url(url: &str) -> Result<(), String> {
     if url.contains('\0') {
         return Err("webhook url 含 null byte".to_string());
     }
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|e| format!("webhook url 解析失败: {e}"))?;
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("webhook url 解析失败: {e}"))?;
     match parsed.scheme() {
         "https" => {
             // https 任意 host 都允许（已加密）。
         }
         "http" => {
-            let host = parsed.host_str().ok_or_else(|| {
-                "webhook url 缺少 host".to_string()
-            })?;
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| "webhook url 缺少 host".to_string())?;
             // 仅允许 loopback。
             const ALLOWED_LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "[::1]", "::1"];
             if !ALLOWED_LOOPBACK.contains(&host) {
@@ -303,13 +305,10 @@ pub fn validate_script_path(data_root: &Path, relative_path: &str) -> Result<(),
             canonical.display()
         ));
     }
-    let metadata = std::fs::metadata(&canonical)
-        .map_err(|e| format!("读取 script 元数据失败: {e}"))?;
+    let metadata =
+        std::fs::metadata(&canonical).map_err(|e| format!("读取 script 元数据失败: {e}"))?;
     if !metadata.is_file() {
-        return Err(format!(
-            "script 路径不是文件: {}",
-            canonical.display()
-        ));
+        return Err(format!("script 路径不是文件: {}", canonical.display()));
     }
     Ok(())
 }
@@ -326,11 +325,7 @@ pub struct PluginTool {
 }
 
 impl PluginTool {
-    pub fn new(
-        config: PluginToolConfig,
-        http_client: reqwest::Client,
-        data_root: PathBuf,
-    ) -> Self {
+    pub fn new(config: PluginToolConfig, http_client: reqwest::Client, data_root: PathBuf) -> Self {
         Self {
             config,
             http_client,
@@ -367,23 +362,21 @@ impl PluginTool {
             "confirm": confirm,
         });
         request = request.json(&body);
-        let response = tokio::time::timeout(
-            Duration::from_secs(timeout_secs as u64),
-            request.send(),
-        )
-        .await
-        .map_err(|_| {
-            AirpError::Internal(format!(
-                "插件工具 {} webhook 超时 ({}s)",
-                self.config.name, timeout_secs
-            ))
-        })?
-        .map_err(|e| {
-            AirpError::Internal(format!(
-                "插件工具 {} webhook 调用失败: {}",
-                self.config.name, e
-            ))
-        })?;
+        let response =
+            tokio::time::timeout(Duration::from_secs(timeout_secs as u64), request.send())
+                .await
+                .map_err(|_| {
+                    AirpError::Internal(format!(
+                        "插件工具 {} webhook 超时 ({}s)",
+                        self.config.name, timeout_secs
+                    ))
+                })?
+                .map_err(|e| {
+                    AirpError::Internal(format!(
+                        "插件工具 {} webhook 调用失败: {}",
+                        self.config.name, e
+                    ))
+                })?;
         let status = response.status();
         // 限制响应体大小（防止内存炸）。
         let bytes = response
@@ -483,11 +476,8 @@ impl PluginTool {
         }
         // 超时等待 child 退出。`child.wait()` 只借 `&mut self`，超时后 child
         // 仍可被 kill。
-        let wait_result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs as u64),
-            child.wait(),
-        )
-        .await;
+        let wait_result =
+            tokio::time::timeout(Duration::from_secs(timeout_secs as u64), child.wait()).await;
         let exit_status = match wait_result {
             Err(_) => {
                 // 超时：先 kill 子进程，再 reap（避免僵尸进程）。
@@ -714,10 +704,7 @@ pub fn load_plugin_tool_headers(
 ///
 /// headers 字段从 `PluginInvocation::Webhook` 中提取到独立的
 /// `data/plugin_tool_headers.json`，避免 `data/plugin_tools.json` 被分享时泄露密钥。
-pub fn save_plugin_tools(
-    data_root: &Path,
-    tools: &[PluginToolConfig],
-) -> Result<(), AirpError> {
+pub fn save_plugin_tools(data_root: &Path, tools: &[PluginToolConfig]) -> Result<(), AirpError> {
     // 校验全部工具。
     for tool in tools {
         tool.validate(data_root)
@@ -783,8 +770,14 @@ mod tests {
         assert!(validate_tool_name("has.dot").is_err());
         assert!(validate_tool_name("has space").is_err());
         assert!(validate_tool_name("hasUppercase").is_err());
-        assert!(validate_tool_name("echo").is_err(), "echo conflicts with builtin");
-        assert!(validate_tool_name("session_x").is_err(), "session_ prefix reserved");
+        assert!(
+            validate_tool_name("echo").is_err(),
+            "echo conflicts with builtin"
+        );
+        assert!(
+            validate_tool_name("session_x").is_err(),
+            "session_ prefix reserved"
+        );
         assert!(validate_tool_name("character_x").is_err());
         assert!(validate_tool_name("lorebook_x").is_err());
         assert!(validate_tool_name("preset_x").is_err());
@@ -1013,7 +1006,10 @@ mod tests {
         // headers 在加载时合并回来。
         if let PluginInvocation::Webhook { headers, .. } = &loaded[0].invocation {
             assert_eq!(headers.len(), 2);
-            assert_eq!(headers.get("Authorization"), Some(&"Bearer secret".to_string()));
+            assert_eq!(
+                headers.get("Authorization"),
+                Some(&"Bearer secret".to_string())
+            );
         } else {
             panic!("expected webhook invocation");
         }
@@ -1075,14 +1071,8 @@ mod tests {
                 timeout_secs: None,
             },
         };
-        let tool = PluginTool::new(
-            config,
-            reqwest::Client::new(),
-            dir.path().to_path_buf(),
-        );
-        let result = tool
-            .call(serde_json::json!({"x": 1}), false)
-            .await;
+        let tool = PluginTool::new(config, reqwest::Client::new(), dir.path().to_path_buf());
+        let result = tool.call(serde_json::json!({"x": 1}), false).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("保护"), "got: {err}");

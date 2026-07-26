@@ -205,18 +205,13 @@ pub fn validate_provider_config(
             ));
         }
         if entry.model.is_empty() {
-            return Err(format!(
-                "ProviderEntry[name={}] model 不能为空",
-                entry.name
-            ));
+            return Err(format!("ProviderEntry[name={}] model 不能为空", entry.name));
         }
     }
     if !entries.is_empty() {
         let has_default = entries.iter().any(|e| e.is_default);
         if !has_default {
-            return Err(
-                "providers 非空时至少必须有一个 entry 的 is_default = true".to_string(),
-            );
+            return Err("providers 非空时至少必须有一个 entry 的 is_default = true".to_string());
         }
     }
     if let Some(name) = routing.default_provider.as_deref() {
@@ -357,9 +352,7 @@ pub fn save_provider_routing(
 /// 从 `data/provider_keys.json` 加载所有 provider 的 api_key。
 ///
 /// 文件不存在或未启用持久化时返回空 HashMap。
-pub fn load_provider_keys(
-    data_root: &Path,
-) -> Result<HashMap<String, String>, AirpError> {
+pub fn load_provider_keys(data_root: &Path) -> Result<HashMap<String, String>, AirpError> {
     let path = provider_keys_file_path(data_root);
     if !path.exists() {
         return Ok(HashMap::new());
@@ -375,7 +368,11 @@ pub fn load_provider_keys(
         )));
     }
     // 过滤空字符串，规范化"未设置"语义。
-    Ok(file.keys.into_iter().filter(|(_, v)| !v.is_empty()).collect())
+    Ok(file
+        .keys
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .collect())
 }
 
 /// 将 provider name → api_key 映射写入 `data/provider_keys.json`。
@@ -437,9 +434,24 @@ mod tests {
 
     fn sample_entries() -> Vec<ProviderEntry> {
         vec![
-            entry("openai", "https://api.openai.com/v1/chat/completions", "gpt-4o", true),
-            entry("deepseek", "https://api.deepseek.com/v1/chat/completions", "deepseek-chat", false),
-            entry("local", "http://127.0.0.1:11434/v1/chat/completions", "llama3", false),
+            entry(
+                "openai",
+                "https://api.openai.com/v1/chat/completions",
+                "gpt-4o",
+                true,
+            ),
+            entry(
+                "deepseek",
+                "https://api.deepseek.com/v1/chat/completions",
+                "deepseek-chat",
+                false,
+            ),
+            entry(
+                "local",
+                "http://127.0.0.1:11434/v1/chat/completions",
+                "llama3",
+                false,
+            ),
         ]
     }
 
@@ -460,7 +472,9 @@ mod tests {
         let routing = ProviderRouting::default();
         let router = ProviderRouter::new(entries, routing);
         let ctx = RouteContext::default();
-        let resolved = router.resolve(&ctx).expect("should fall back to is_default entry");
+        let resolved = router
+            .resolve(&ctx)
+            .expect("should fall back to is_default entry");
         assert_eq!(resolved.entry.name, "openai");
         assert_eq!(resolved.matched_rule, MatchedRule::FirstDefault);
     }
@@ -552,7 +566,9 @@ mod tests {
             character_id: Some("char-x".to_string()),
             ..Default::default()
         };
-        let resolved = router.resolve(&ctx).expect("should fall through to default_provider");
+        let resolved = router
+            .resolve(&ctx)
+            .expect("should fall through to default_provider");
         assert_eq!(resolved.entry.name, "openai");
         assert_eq!(resolved.matched_rule, MatchedRule::Default);
     }
@@ -623,8 +639,8 @@ mod tests {
             engine: BackendEngine::Direct,
             is_default: true,
         }];
-        let err = validate_provider_config(&entries_no_model, &ProviderRouting::default())
-            .unwrap_err();
+        let err =
+            validate_provider_config(&entries_no_model, &ProviderRouting::default()).unwrap_err();
         assert!(err.contains("model 不能为空"));
     }
 
@@ -750,7 +766,10 @@ mod tests {
         let (loaded_entries, loaded_routing) = load_provider_routing(tmp.path()).unwrap();
         assert_eq!(loaded_entries.len(), entries.len());
         assert_eq!(loaded_entries[0].name, "openai");
-        assert_eq!(loaded_entries[0].api_key, None, "api_key must be stripped on disk");
+        assert_eq!(
+            loaded_entries[0].api_key, None,
+            "api_key must be stripped on disk"
+        );
         assert_eq!(loaded_routing, routing);
     }
 
@@ -768,7 +787,10 @@ mod tests {
             !raw.contains("sk-leaked"),
             "api_key must never be persisted to providers.json"
         );
-        assert!(!raw.contains("api_key"), "api_key field should be skipped entirely");
+        assert!(
+            !raw.contains("api_key"),
+            "api_key field should be skipped entirely"
+        );
     }
 
     #[test]
@@ -805,7 +827,10 @@ mod tests {
         let loaded = load_provider_keys(tmp.path()).unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded.get("openai").map(String::as_str), Some("sk-openai"));
-        assert_eq!(loaded.get("deepseek").map(String::as_str), Some("sk-deepseek"));
+        assert_eq!(
+            loaded.get("deepseek").map(String::as_str),
+            Some("sk-deepseek")
+        );
     }
 
     #[test]
@@ -859,7 +884,10 @@ mod tests {
             deepseek.api_key.is_none(),
             "deepseek has no key in provider_keys.json"
         );
-        assert!(router.get("ghost").is_none(), "ghost key must not create an entry");
+        assert!(
+            router.get("ghost").is_none(),
+            "ghost key must not create an entry"
+        );
     }
 
     #[test]

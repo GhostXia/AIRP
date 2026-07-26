@@ -50,12 +50,12 @@ use handlers::{
     list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
     preview_chat_assembly, reextract_character_assets, regen_chat, resolve_provider_endpoint,
-    rollback_chat, rollback_drift, serve_image_endpoint, serve_session_image_endpoint,
-    style_learn, style_review, swipe_chat, switch_branch, test_plugin_tool_endpoint,
-    unbind_persona_endpoint, update_character_card, update_character_lorebook, update_drift,
-    update_persona_endpoint, update_persona_multi_endpoint, update_plot_arc,
-    update_providers_endpoint, update_resident_memory, update_routing_endpoint,
-    update_settings, update_user_model, upsert_plugin_tool_endpoint,
+    rollback_chat, rollback_drift, serve_image_endpoint, serve_session_image_endpoint, style_learn,
+    style_review, swipe_chat, switch_branch, test_plugin_tool_endpoint, unbind_persona_endpoint,
+    update_character_card, update_character_lorebook, update_drift, update_persona_endpoint,
+    update_persona_multi_endpoint, update_plot_arc, update_providers_endpoint,
+    update_resident_memory, update_routing_endpoint, update_settings, update_user_model,
+    upsert_plugin_tool_endpoint,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。

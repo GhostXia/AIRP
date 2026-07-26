@@ -191,13 +191,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Phase 5.1: 加载多 provider 路由表（data/providers.json + data/provider_keys.json）。
             // 文件缺省时返回 empty router，daemon 走 legacy 单 provider 路径。
-            let provider_router = match airp_core::provider_routing::load_provider_router(&data_root) {
-                Ok(router) => router,
-                Err(e) => {
-                    tracing::warn!(%e, "加载多 provider 路由表失败，回退到单 provider 模式");
-                    airp_core::provider_routing::ProviderRouter::empty()
-                }
-            };
+            let provider_router =
+                match airp_core::provider_routing::load_provider_router(&data_root) {
+                    Ok(router) => router,
+                    Err(e) => {
+                        tracing::warn!(%e, "加载多 provider 路由表失败，回退到单 provider 模式");
+                        airp_core::provider_routing::ProviderRouter::empty()
+                    }
+                };
             if !provider_router.is_empty() {
                 tracing::info!(
                     count = provider_router.entries().len(),
