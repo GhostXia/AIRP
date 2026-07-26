@@ -2628,7 +2628,10 @@ mod tests_bug_d_finalize_order {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    fn make_finalizer_ctx_with_state(data_root: PathBuf, character_id: CharacterId) -> FinalizerCtx {
+    fn make_finalizer_ctx_with_state(
+        data_root: PathBuf,
+        character_id: CharacterId,
+    ) -> FinalizerCtx {
         FinalizerCtx {
             character_id: Some(character_id),
             session_id: None,
@@ -2652,9 +2655,7 @@ mod tests_bug_d_finalize_order {
         }
     }
 
-    fn setup_character_with_user_msg(
-        char_id: &str,
-    ) -> (tempfile::TempDir, PathBuf, CharacterId) {
+    fn setup_character_with_user_msg(char_id: &str) -> (tempfile::TempDir, PathBuf, CharacterId) {
         let tmp = tempdir().unwrap();
         let data_root = tmp.path().to_path_buf();
         let character = CharacterId::new(char_id).unwrap();
@@ -2676,12 +2677,13 @@ mod tests_bug_d_finalize_order {
     async fn finalize_persists_message_and_state_when_both_present() {
         // 唯一 character_id：避免与其他 #[tokio::test] 争用 process-global
         // state_lock / session_lock（均以 character_id 为 key）。
-        let (_tmp, data_root, character) =
-            setup_character_with_user_msg("finalize-bug-d-both");
+        let (_tmp, data_root, character) = setup_character_with_user_msg("finalize-bug-d-both");
         let ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
 
         // cleaned_acc 含正文 + <state> 块
-        let raw_acc = "The hero draws their sword.\n<state>{\"hp\":80,\"mood\":\"determined\"}</state>".to_string();
+        let raw_acc =
+            "The hero draws their sword.\n<state>{\"hp\":80,\"mood\":\"determined\"}</state>"
+                .to_string();
         let cleaned_acc = raw_acc.clone();
 
         run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
@@ -2693,7 +2695,9 @@ mod tests_bug_d_finalize_order {
         assert_eq!(log.messages.len(), 2, "user + assistant");
         assert_eq!(log.messages[1].role, MessageRole::Assistant);
         assert!(
-            log.messages[1].content.contains("The hero draws their sword."),
+            log.messages[1]
+                .content
+                .contains("The hero draws their sword."),
             "assistant content must be persisted"
         );
         assert!(
