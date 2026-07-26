@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-24，`main@44b9c83`
+> 最后校准：2026-07-26，`main@200fed9`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -14,7 +14,7 @@
 4. 对任何“已实现”声明，先找到当前源码入口和测试；旧计划、issue 标题或 PR 描述不是运行时证据。
 5. 代码任务使用 `codex/` 分支和 PR；本地全绿只允许开 PR，不允许绕过审计 bot 或人工 review 合并。
 
-当前主线是 WebUI 单实例、自托管、单用户 P1 有限试用验证。每项产品能力优先纵向贯通：
+当前主线是 WebUI 单实例、本地/自托管、单用户 P1 有限试用收敛。Phase 1–5.3 已快速扩大功能面；新工作默认先补正确性、恢复和真实用户证据。每项产品能力仍须纵向贯通：
 
 ```text
 engine shared service → HTTP/SSE → WebUI → production/browser tests
@@ -33,7 +33,7 @@ engine shared service → HTTP/SSE → WebUI → production/browser tests
 ├── webui/                  当前产品 WebUI
 ├── deploy/production/      P0 OCI/Compose/Caddy preview 拓扑
 ├── data/                   运行时数据根规范与安全样例
-├── docs/                   活文档、专题合同、研究资料和 archive
+├── docs/                   基线、专题合同、参考材料、审计与 archive
 └── .github/workflows/      PR gate 与手动 Windows build
 ```
 
@@ -44,8 +44,9 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-MCP-Se
 - `domain.rs` 与各 shared service：数据和业务不变量；
 - `data_dir/`：路径、原子替换与数据根；
 - `chat_store.rs`：durable history 与 session metadata；
-- `chat_pipeline/`：RP prompt 装配（10 个子模块：finalize、generation_step、helpers、prepare、prepare_scene、state_extract、stdout_runner、stream、trace、types）；
-- `agent/`：bounded loop、registry、工具和控制平面；
+- `chat_pipeline/`：RP prompt 装配、provider 解析、流式生成、finalize 与 trace；
+- `agent/`：bounded loop、30 个内置工具、Director/Council 和控制平面；
+- `provider_routing.rs`、`plugin_tool.rs`：多 Provider 选择和动态插件工具；
 - `daemon/handlers/`：HTTP adapter，handler 不应重新实现 domain 规则；
 - `daemon/tests/`：route 合同与安全测试。
 
@@ -98,7 +99,7 @@ RP 角色平面只包含角色卡、世界书、Preset、Persona、state、记�
 - `AIRP_DATA_DIR` > 开发模式 `cwd/data` > 打包程序 OS per-user `airp/`；
 - 仓库只跟踪 `data/README.md`、`data/settings.json` 和 `data/styles/profiles/default.md`；
 - 命名 session 目录 UUID 是 session/history/metadata 的唯一规范 ID；
-- 当前已隔离命名 session 的 `history/` 与 `memory/`；完整 state、角色卡、worldbook 工作副本和 unified revision 尚未全部落地；
+- 当前已隔离命名 session 的 `history/` 与 `memory/`；character/persona/preset/lorebook/state/memory 六类 asset 已接入统一 `content_revision`，但完整 session state、角色卡/Worldbook 工作副本物化、跨资源事务和统一 migration registry 尚未全部落地；
 - 新数据根不得创建根级 `world.md`/`items.md`，新角色不得创建 legacy `worldbooks/`；已有用户数据只兼容读取，不自动删除；
 - 运行时只应依赖明确 manifest/ID，不用递归扫描或文件名猜测替代合同。
 
@@ -111,7 +112,7 @@ RP 角色平面只包含角色卡、世界书、Preset、Persona、state、记�
 - provider key 和 engine bearer 不持久化到普通 settings、前端、日志或诊断；
 - 浏览器只访问同源 gateway，不接收 engine 私有 URL/bearer；
 - `webui/start.bat`、`serve.js` 和 `cargo run` 都是开发路径，不是生产部署；
-- 当前 artifact 验收使用 `.github/workflows/webui-windows-build.yml`；Tauri manual build 是长期维护线，Docker/WSL 不是当前落地依赖；
+- 当前 artifact 验收使用 `.github/workflows/webui-windows-build.yml`，Linux 包使用手动 workflow；Tauri manual build 是长期维护线，Docker/WSL 不是 Windows 便携包依赖；
 - P0 topology 全绿不等于正式发布，P1–P3 见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
 
 安全改动同步 [SECURITY.md](SECURITY.md) 与 [RISK-REGISTER.md](RISK-REGISTER.md)。
@@ -252,11 +253,11 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. PR #300（Agent 浏览器探索测试层 MVP）+ PR #305（persona bindings DELETE 修复）已合并；当前第一优先级仍是让真实用户用真实 provider 完成首聊黄金路径，分别覆盖页面刷新恢复与服务重启恢复；
-2. Agent 浏览器探索测试层已交付（`tools/agent-exploration/` + CI workflow + WebUI harness）；Swipe 多候选、Smooth Streaming、auto-regen/continue/per-message actions/单条删除、角色/会话删除、FTS5 搜索、Persona 删除/解绑和 state history/schema 已交付；优先修复首聊阻断、永久 loading、不可行动错误、secret 泄露、虚假成功和关键资产静默损坏；
-3. #114 Persona/Preset 高级生命周期、[SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md) 完整 session/revision/恢复分期和 #220 deferred 性能/重构项原则上进入 P2；若其中某项直接决定 P1 可用性、数据安全或可重复验收，可以按独立证据提前；
-4. P2 运维与恢复；
-5. P3 release candidate；
-6. 工程治理后续切片（#192 自动版本检测与去重 issue、release pipeline 强制 SBOM 度量、发布签名）按 [#231](https://github.com/GhostXia/AIRP/issues/231)（#192 关闭状态与原验收项偏差的核对 umbrella）推进，不抢占产品主线。
+1. `main@200fed9` 已包含 PR #314/#316/#317/#323/#328 的 Phase 1–5.3 功能，以及 PR #333/#334/#335/#338 的 finalize/world-event 并发修复；
+2. 优先处理 #320–#339 中仍开放且会影响数据正确性、失败行为或 WebUI 验收的审计遗留；不要只因 issue 编号较新就机械排序；
+3. 用真实 provider + 真实浏览器闭合 onboarding → 首聊 → 多轮 → 页面刷新 → 服务重启；分别记录传输失败、commit state、恢复动作和资产一致性；
+4. screen 34–44 已存在，需逐页校准 runtime contract、空/错/慢状态、视觉样板一致性和 browser smoke；
+5. P2 再推进 migration、自动备份/恢复、可恢复删除、完整资产生命周期和长会话资源上界；
+6. issue #312 是历史功能池，不是自动执行队列；外部 MCP、多语言、跨设备同步等扩展不得抢占 P1 收敛。
 
-动手前必须重新查询 issues 和 `main`，不要把本节当成永久队列。
+动手前重新查询 issues、开放 PR 和 `main`。本节只给稳定的接手顺序，不复制实时 backlog。

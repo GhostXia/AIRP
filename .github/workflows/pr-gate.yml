@@ -22,6 +22,29 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Verify runtime data ignore boundary
+        shell: pwsh
+        run: |
+          $ignoredPaths = @(
+            "data/providers.json",
+            "data/provider_keys.json",
+            "data/plugin_tools.json",
+            "data/plugin_tool_headers.json",
+            "data/plugins/tool.ps1"
+          )
+          foreach ($path in $ignoredPaths) {
+            git check-ignore --no-index --quiet -- $path
+            if ($LASTEXITCODE -ne 0) {
+              throw "Runtime data path is not ignored: $path"
+            }
+          }
+          foreach ($path in @("data/README.md", "data/settings.json")) {
+            git check-ignore --no-index --quiet -- $path
+            if ($LASTEXITCODE -eq 0) {
+              throw "Tracked data fixture is unexpectedly ignored: $path"
+            }
+          }
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

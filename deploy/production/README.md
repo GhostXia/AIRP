@@ -1,6 +1,6 @@
 # AIRP production deployment
 
-> Baseline checked: 2026-07-18 at `main@2a14b7e`.
+> Baseline checked: 2026-07-26 at `main@200fed9`; the accepted P0 topology is unchanged.
 
 This directory is the first-party single-instance, self-hosted WebUI bundle. It runs two
 application services: a Caddy HTTPS gateway and a private AIRP engine. Only Caddy publishes

@@ -1,8 +1,10 @@
 # Multi-Persona HTTP API
 
 > Status: A1a (PR #151), A1b (PR #152), A2a (PR #154), and the A2b/A2c WebUI closure (PR #180) delivered.
-> This document records the stable HTTP/pipeline contract and the remaining
-> product boundary; it is not an execution log. Last checked: 2026-07-18 at `main@2a14b7e` (#114 Persona activation source delivered in PR #217; PR #232 made destructive cleanup validate IDs and fail closed; advanced lifecycle — base lock / drift / rollback / avatar / import-export / backup-restore — remains open for P2).
+> This document is a historical implementation plan that also records the delivered
+> HTTP/pipeline contract. It is not the current route inventory or execution log.
+> Last checked: 2026-07-26 at `main@200fed9`; advanced lifecycle — base lock,
+> drift/history/rollback, avatar, import/export, and backup/restore — remains open for P2.
 
 ## Scope
 

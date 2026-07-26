@@ -1,6 +1,6 @@
 # Security and deployment boundary
 
-> Baseline reviewed: 2026-07-18 at `main@2a14b7e`. Current implementation status and release gates are in [CURRENT-BASELINE.md](CURRENT-BASELINE.md).
+> Baseline reviewed: 2026-07-26 at `main@200fed9`. Multi-provider routing and plugin tools are now implemented surfaces; current implementation status and release gates are in [CURRENT-BASELINE.md](CURRENT-BASELINE.md).
 
 AIRP defaults to a single-user local topology. The current priority artifact is a portable Windows WebUI package; Tauri remains a long-term client line.
 
@@ -9,6 +9,7 @@ AIRP defaults to a single-user local topology. The current priority artifact is 
 - `AIRP_API_KEY` supplies the upstream provider credential.
 - `AIRP_ACCESS_KEY` enables bearer authentication for `/v1/*`.
 - Access keys remain runtime-only. `config.json` and `data/settings.json` never serialize provider/access keys, and legacy plaintext fields are ignored when loading. The portable Windows launcher explicitly enables one local-user exception: the provider key is saved in `data/secrets.json`, while API responses, UI, logs and diagnostics remain redacted.
+- Multi-provider credentials are separated from routing metadata: `data/providers.json` contains no keys, while `data/provider_keys.json` stores the provider-name/key map. Plugin webhook headers follow the same split between `data/plugin_tools.json` and `data/plugin_tool_headers.json`. GET responses expose only `api_key_set` / `headers_set`, never the values. These files are plaintext local secrets, not encryption; keep the entire data root private and exclude them from sharing and support bundles.
 - In development, `POST /v1/settings` may replace a key for the current process, but its persisted settings omit secrets. In production, the engine bearer is immutable through this endpoint and must be rotated with the gateway secret followed by restart.
 - WebUI diagnostics recursively redact credential fields, quoted JSON credentials, URL userinfo and secret query parameters. HTTP/SSE clients receive stable public error messages; upstream bodies, internal persistence details and server paths such as `PathEscape` values remain server-side only.
 
@@ -58,3 +59,15 @@ UI consent is a user-experience gate, not the authority. Agent tools are disable
 Third-party widgets must never receive the daemon bearer key directly. The trusted host should translate a user grant into the smallest capability/allowlist request needed for one operation.
 
 `GET /v1/agent/tools` exposes names, descriptions, and side-effect classes only; it grants no capability. `export_context_bundle` writes beneath the engine data root, validates identifiers, and applies the same model-facing size limit as lorebook reads. `update_lorebook` and `seal_volume` are destructive and therefore require exact-name confirmation.
+
+## Plugin/custom tool boundary
+
+Plugin tools are trusted-user extensions, not a security sandbox for untrusted code:
+
+- Webhooks allow literal loopback HTTP or public HTTPS. HTTPS hostnames resolving to loopback, private, link-local, unspecified, or multicast addresses are rejected; redirects are disabled. This reduces SSRF exposure but does not make a remote webhook trustworthy.
+- Local scripts must resolve beneath `data_root/plugins/` and are canonicalized both at registration and execution. The process clears inherited environment variables and passes bounded JSON through stdin/environment, but the script still executes with the AIRP process user's operating-system authority. Only install code the user trusts.
+- Input/output or response bodies are capped at 1 MiB and execution is clamped to 1–30 seconds. These are resource limits, not CPU, filesystem, network, child-process, or syscall isolation.
+- A plugin's declared side-effect class and handling of the `confirm` flag are plugin-supplied behavior. AIRP enforces registry capability/allowlist/confirmation before dispatch, but cannot prove that a plugin labeled read-only is actually read-only or that a destructive plugin implements a reversible dry-run.
+- Webhook headers and provider keys are separately persisted and redacted from list APIs. Error/log paths must not print header values, provider keys, full private responses, or script environment data.
+
+Production and portable packages must not enable preinstalled custom tools silently. Adding or enabling a plugin is an explicit trusted-user action; broader plugin distribution, signing, permission manifests, isolation, and revocation remain release work.

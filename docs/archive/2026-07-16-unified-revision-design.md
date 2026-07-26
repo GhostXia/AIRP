@@ -63,7 +63,7 @@
 >
 > 审计源模型：GLM-5.2（本会话）
 >
-> 关联：[#115](https://github.com/GhostXia/AIRP/issues/115) Phase 2、[SESSION-DATA-DESIGN.md](../../SESSION-DATA-DESIGN.md) §4、[#199](https://github.com/GhostXia/AIRP/issues/199)、[#114](https://github.com/GhostXia/AIRP/issues/114)
+> 关联：[#115](https://github.com/GhostXia/AIRP/issues/115) Phase 2、[SESSION-DATA-DESIGN.md](../SESSION-DATA-DESIGN.md) §4、[#199](https://github.com/GhostXia/AIRP/issues/199)、[#114](https://github.com/GhostXia/AIRP/issues/114)
 
 ## 1. 目标
 
@@ -780,9 +780,9 @@ issue #114 的 Persona 高级生命周期可在本设计 Phase 2g 交付后，�
 
 ## 14. 参考资料
 
-- [CURRENT-BASELINE.md](../../CURRENT-BASELINE.md) §3、§4
-- [SESSION-DATA-DESIGN.md](../../SESSION-DATA-DESIGN.md) §4、§5.3、§7
-- [PLAN.md](../../PLAN.md) §2 不变式、§4.1 产品能力支柱
+- [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) §3、§4
+- [SESSION-DATA-DESIGN.md](../SESSION-DATA-DESIGN.md) §4、§5.3、§7
+- [PLAN.md](../PLAN.md) §2 不变式、§4.1 产品能力支柱
 - [#115 issue body](https://github.com/GhostXia/AIRP/issues/115) Phase 2 范围
 - [#115 PR #194 合并后审计遗留归档](https://github.com/GhostXia/AIRP/issues/115#issuecomment-4990498643)
 - [#199 orchestrator card field 拆分](https://github.com/GhostXia/AIRP/issues/199)

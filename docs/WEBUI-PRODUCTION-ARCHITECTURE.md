@@ -4,7 +4,7 @@
 >
 > Decision date: 2026-07-13
 >
-> Last baseline check: 2026-07-18 (`main@2a14b7e`; PR #196 scene lorebook provenance, PR #201-#203/#206/#215 unified revision contract, PR #208 launch-validation targets, PR #212 onboarding wizard Phase 1, PR #217 #114 effective config summary, PR #218/#229 dep-governance/SBOM, PR #219/#227 persistence hardening, PR #232 P1 failure boundaries and manual rollback traffic barrier 已合并；P0 topology boundary remains unchanged)
+> Last baseline check: 2026-07-26 (`main@200fed9`; later product features, provider routing, plugin tools, and finalize/world-event fixes do not change this accepted P0 topology boundary)
 >
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)
