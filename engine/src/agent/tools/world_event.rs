@@ -345,13 +345,20 @@ pub fn save_world_clock(
     Ok(())
 }
 
-/// 推进时钟并检查时间触发事件。返回触发的事件列表。
+/// 推进时钟并检查时间触发事件。返回触发的事件列表与待追加到 `current.md`
+/// 的内容缓冲。调用方负责在 `session_lock` 临界区内执行 `append_to_current`。
+///
+/// 不在此函数内执行 `append_to_current` 的原因：append 必须持有
+/// `session_lock(character_id, session_id)`，而时钟/事件状态变更必须持有
+/// `state_lock(character_id)`。若同一调用同时持有两把锁（state → session），
+/// 会与 `advance_plot`（session → state，经 `StateService::mutate`）形成
+/// 锁序倒置死锁。因此将状态变更（state_lock）与内容追加（session_lock）
+/// 拆分到两个临界区，由调用方分别加锁。
 pub fn advance_and_check_triggers(
     data_root: &std::path::Path,
     character_id: &str,
-    session_dir: &std::path::Path,
     advance_by: Option<u64>,
-) -> Result<(WorldClock, Vec<WorldEvent>), AirpError> {
+) -> Result<(WorldClock, Vec<WorldEvent>, String), AirpError> {
     let mut clock = load_world_clock(data_root, character_id)?;
     let advance = advance_by.unwrap_or(clock.advance_per_turn);
     // 溢出检查：避免 unchecked addition 导致 u64 wrap-around
@@ -364,25 +371,38 @@ pub fn advance_and_check_triggers(
     // 检查时间触发事件
     let mut events = load_world_events(data_root, character_id)?;
     let mut triggered_events = Vec::new();
-    for event in events.iter_mut() {
+
+    // 先收集所有到期事件，构造单次追加内容。
+    // 旧实现逐事件 append_to_current：若事件 1 append 成功但事件 2 append
+    // 失败，事件 1 内容已落盘但 triggered 标志未持久化（save_world_events
+    // 在循环外），下次 advance_clock 重试会重复注入事件 1 内容到 current.md。
+    // 新实现：批量收集 → 标记 + 持久化 → 由调用方在 session_lock 下单次 append。
+    // 顺序权衡（save → append）：若 append 失败，事件已标记 triggered（不会
+    // 重触发），内容未注入——失败对调用方可见（Err），不会静默累积重复内容。
+    let mut due_indices: Vec<usize> = Vec::new();
+    let mut content_buf = String::new();
+    for (idx, event) in events.iter().enumerate() {
         if !event.triggered {
             if let Some(time_trigger) = event.time_trigger {
                 if clock.current_time >= time_trigger {
-                    // 先注入事件内容到 current.md，成功后再标记 triggered
-                    crate::volume_store::append_to_current(
-                        session_dir,
-                        &format!("\n[世界事件: {}]\n{}\n", event.name, event.content),
-                    )?;
-                    event.triggered = true;
-                    triggered_events.push(event.clone());
+                    content_buf.push_str(&format!(
+                        "\n[世界事件: {}]\n{}\n",
+                        event.name, event.content
+                    ));
+                    due_indices.push(idx);
                 }
             }
         }
     }
-    if !triggered_events.is_empty() {
+
+    if !due_indices.is_empty() {
+        for &idx in &due_indices {
+            events[idx].triggered = true;
+            triggered_events.push(events[idx].clone());
+        }
         save_world_events(data_root, character_id, &events)?;
     }
-    Ok((clock, triggered_events))
+    Ok((clock, triggered_events, content_buf))
 }
 
 /// `advance_clock`：推进世界时钟并检查时间触发事件。
@@ -413,15 +433,29 @@ impl Tool for AdvanceClockTool {
             let session_dir =
                 crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
 
-            let state_boundary = state_lock(cid.as_str());
-            let _state_guard = state_boundary.lock().expect("state lock poisoned");
+            // 阶段一：推进时钟 + 收集/标记到期事件（state_lock 临界区）。
+            // 持有 state_lock 直到 save_world_events 完成，与
+            // update_relationship / advance_plot / trigger_world_event 共享
+            // 同一把锁，杜绝 world_clock.json / world_events.json 的
+            // read-modify-write 丢更新。
+            let (clock, triggered, content_buf) = {
+                let state_boundary = state_lock(cid.as_str());
+                let _state_guard = state_boundary.lock().expect("state lock poisoned");
+                advance_and_check_triggers(&state.data_root, cid.as_str(), advance_by)?
+            };
+            // state_lock 在此处释放，避免与 session_lock 形成锁序倒置死锁。
 
-            let (clock, triggered) = advance_and_check_triggers(
-                &state.data_root,
-                cid.as_str(),
-                &session_dir,
-                advance_by,
-            )?;
+            // 阶段二：将到期事件内容追加到 current.md（session_lock 临界区）。
+            // 与 npc_action / advance_plot / trigger_world_event 共享同一把
+            // per-session 锁，防止并发追加在 current.md 中交错混合叙事内容。
+            // 审计 Bug B 修复：旧实现未持有 session_lock 就调用
+            // append_to_current，允许并发 npc_action / advance_plot 的 append
+            // 与此处的 append 在 current.md 中交错。
+            if !content_buf.is_empty() {
+                let session_boundary = session_lock(cid.as_str(), sid.as_ref());
+                let _session_guard = session_boundary.lock().expect("session lock poisoned");
+                crate::volume_store::append_to_current(&session_dir, &content_buf)?;
+            }
 
             Ok(ToolResult {
                 output: serde_json::json!({
