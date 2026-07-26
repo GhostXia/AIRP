@@ -7,11 +7,14 @@
 //! 事件定义存储在 `characters/{id}/world_events.json`。
 //! 事件注入走 volume_store::append_to_current（不新增注入路径）。
 //!
-//! 并发纪律（PR #272 审计修复 + CodeRabbit 跟进）：
+//! 并发纪律（PR #272 审计修复 + CodeRabbit 跟进 + Bug F 死锁修复）：
 //! - `trigger_world_event` 的 check-then-act（读 `triggered` → 注入 → 标记）
-//!   原本无锁，并发触发同一 event_id 会双重注入 current.md。现在整段
-//!   临界区持有 `state_lock(character_id)`，与 live.json 写入共享同一把
-//!   锁，保证触发原子性。
+//!   原本无锁，并发触发同一 event_id 会双重注入 current.md。修复方式为
+//!   两段独立临界区：阶段一在 `state_lock(character_id)` 内 load + check +
+//!   mark + save；阶段二在 `session_lock(character_id, session_id)` 内
+//!   append。同一调用任意时刻只持有一把锁——这是 Bug F（死锁）修复的关键：
+//!   旧实现同时持有 state_lock + session_lock（state→session 顺序）与
+//!   `advance_plot` 的 session→state 顺序形成锁序倒置死锁。
 //! - 事件注入到 current.md 走 `volume_store::append_to_current`，调用前
 //!   显式持有 `session_lock(character_id, session_id)`，与 `npc_action` /
 //!   `advance_plot` / `seal_volume` 共享同一把 per-session 锁，防止并发
@@ -127,50 +130,67 @@ impl Tool for TriggerWorldEventTool {
                 .ok_or_else(|| AirpError::BadRequest("event_id is required".to_string()))?;
             let sid = optional_session_id(&params)?;
 
-            // 持有 state_lock(character_id) 直到所有 mutation 完成：
-            // 1) 防止两个并发 trigger_world_event(event_id=X) 都通过 `triggered=false`
-            //    检查后各自注入 + 标记，导致 current.md 出现两份事件内容；
-            // 2) 与 update_relationship / advance_plot 共享同一把锁，避免
-            //    live.json 与 world_events.json 的写乱序影响叙事一致性。
-            let state_boundary = state_lock(cid.as_str());
-            let _state_guard = state_boundary.lock().expect("state lock poisoned");
-
-            let mut events = load_world_events(&state.data_root, cid.as_str())?;
-            let event_idx = events
-                .iter()
-                .position(|e| e.id == event_id)
-                .ok_or_else(|| AirpError::NotFound(format!("event {} not found", event_id)))?;
-
-            if events[event_idx].triggered {
-                return Ok(ToolResult {
-                    output: serde_json::json!({
-                        "success": false,
-                        "message": "event already triggered"
-                    }),
-                    dry_run: false,
-                });
-            }
-
-            let event = events[event_idx].clone();
-
-            // 注入事件内容到 session 的 current.md
+            // session_dir 解析（无锁，仅路径计算 + 目录确保），与 advance_clock 同模式
+            // 在两段临界区外完成，避免在锁内做无关 I/O。
             let session_dir =
                 crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
 
-            // 持有 session_lock 直到 append_to_current + memory revision commit
-            // 完成，与 npc_action / advance_plot / seal_volume 共享同一把
-            // per-session 锁，防止并发追加在 current.md 中交错混合叙事内容。
-            let session_boundary = session_lock(cid.as_str(), sid.as_ref());
-            let _session_guard = session_boundary.lock().expect("session lock poisoned");
+            // 阶段一：state_lock 临界区——load + check + mark + save。
+            // 返回 (event, content_buf) 给阶段二使用。若事件已 triggered，
+            // 直接返回 success:false（无需 append）。
+            //
+            // 审计 Bug F（死锁）修复：旧实现在此函数内同时持有 state_lock 与
+            // session_lock（state → session 顺序），与 `advance_plot` 的
+            // session → state 顺序（plot.rs 持 session_lock 后经
+            // StateService::mutate 持 state_lock）形成锁序倒置死锁：
+            //   线程 A (advance_plot):    hold session_lock → wait state_lock
+            //   线程 B (trigger_world_event): hold state_lock → wait session_lock
+            // 两者并发时永久阻塞。修复方式与 advance_and_check_triggers 一致：
+            // 拆分为两段独立临界区，state_lock 在阶段一末尾释放，阶段二才获取
+            // session_lock，同一调用任意时刻只持有一把锁。
+            let (event, content_buf) = {
+                let state_boundary = state_lock(cid.as_str());
+                let _state_guard = state_boundary.lock().expect("state lock poisoned");
 
-            crate::volume_store::append_to_current(
-                &session_dir,
-                &format!("\n[世界事件: {}]\n{}\n", event.name, event.content),
-            )?;
+                let mut events = load_world_events(&state.data_root, cid.as_str())?;
+                let event_idx = events
+                    .iter()
+                    .position(|e| e.id == event_id)
+                    .ok_or_else(|| AirpError::NotFound(format!("event {} not found", event_id)))?;
 
-            // 标记为已触发（save_world_events 已改用 data_dir::replace_file 原子写）
-            events[event_idx].triggered = true;
-            save_world_events(&state.data_root, cid.as_str(), &events)?;
+                if events[event_idx].triggered {
+                    return Ok(ToolResult {
+                        output: serde_json::json!({
+                            "success": false,
+                            "message": "event already triggered"
+                        }),
+                        dry_run: false,
+                    });
+                }
+
+                let event = events[event_idx].clone();
+
+                // 先标记 triggered 并持久化（在 state_lock 内），再构造 content_buf
+                // 交给阶段二的 session_lock 临界区 append。
+                // 顺序权衡（save → append）：若 append 失败，事件已标记 triggered
+                // （不会重触发），内容未注入——失败对调用方可见（Err），不会静默累积
+                // 重复内容。内容丢失比静默重复更可控：用户可见错误，可手动重置 triggered。
+                events[event_idx].triggered = true;
+                save_world_events(&state.data_root, cid.as_str(), &events)?;
+
+                let content_buf = format!("\n[世界事件: {}]\n{}\n", event.name, event.content);
+                (event, content_buf)
+            };
+            // state_lock 在此处释放，避免与 session_lock 形成锁序倒置死锁。
+
+            // 阶段二：session_lock 临界区——append 内容到 current.md。
+            // 与 npc_action / advance_plot / seal_volume 共享同一把 per-session 锁，
+            // 防止并发追加在 current.md 中交错混合叙事内容。
+            {
+                let session_boundary = session_lock(cid.as_str(), sid.as_ref());
+                let _session_guard = session_boundary.lock().expect("session lock poisoned");
+                crate::volume_store::append_to_current(&session_dir, &content_buf)?;
+            }
 
             Ok(ToolResult {
                 output: serde_json::json!({
