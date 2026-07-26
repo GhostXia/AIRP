@@ -2606,3 +2606,138 @@ mod tests_b1_finalize_empty_stripped {
         assert_eq!(log.messages[1].content, "old-reply");
     }
 }
+
+/// 审计 Bug D 修复测试：`run_finalize` 在 assistant 消息同时含正文与
+/// `<state>` 块时，必须先追加 assistant 消息到 `chat_log.jsonl`，
+/// 再持久化 `live.json`。
+///
+/// 旧顺序（state → message）：若 message append 失败，state 已更新但
+/// chat log 无对应消息——live.json 反映了一条用户从未见到的助手回复。
+/// 新顺序（message → state）：若 state persist 失败，消息已落盘用户可见，
+/// state 略滞后但下轮可重新抽取；消息丢失比 state 滞后更不可恢复。
+///
+/// 本测试覆盖 happy path：两者都成功时，chat_log 与 live.json 都应反映
+/// 本轮 assistant 输出。顺序由 `?` 传播保证：message append 失败时
+/// `persist_live_state` 不会被调用。
+#[cfg(test)]
+mod tests_bug_d_finalize_order {
+    use super::finalize::run_finalize;
+    use super::*;
+    use crate::adapter::{MessageRole, Provider};
+    use crate::types::CharacterId;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    fn make_finalizer_ctx_with_state(
+        data_root: PathBuf,
+        character_id: CharacterId,
+    ) -> FinalizerCtx {
+        FinalizerCtx {
+            character_id: Some(character_id),
+            session_id: None,
+            user_id: None,
+            data_root,
+            session_dir: None,
+            provider_config: Arc::new(ProviderConfig {
+                provider: Provider::OpenAI,
+                endpoint: "https://example.test/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+            }),
+            gen_params: GenerationParams {
+                model: "test-model".to_string(),
+                temperature: None,
+                max_tokens: None,
+            },
+            volume_config: VolumeConfig::default(),
+            http_client: reqwest::Client::new(),
+            continue_mode: false,
+            swipe_candidates: Vec::new(),
+        }
+    }
+
+    fn setup_character_with_user_msg(char_id: &str) -> (tempfile::TempDir, PathBuf, CharacterId) {
+        let tmp = tempdir().unwrap();
+        let data_root = tmp.path().to_path_buf();
+        let character = CharacterId::new(char_id).unwrap();
+        ChatService::new(&data_root)
+            .append(
+                &character,
+                None,
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "hello".into(),
+                },
+            )
+            .unwrap();
+        (tmp, data_root, character)
+    }
+
+    /// Bug D happy path：assistant 消息含正文 + `<state>` 块，两者都应落盘。
+    #[tokio::test]
+    async fn finalize_persists_message_and_state_when_both_present() {
+        // 唯一 character_id：避免与其他 #[tokio::test] 争用 process-global
+        // state_lock / session_lock（均以 character_id 为 key）。
+        let (_tmp, data_root, character) = setup_character_with_user_msg("finalize-bug-d-both");
+        let ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
+
+        // cleaned_acc 含正文 + <state> 块
+        let raw_acc =
+            "The hero draws their sword.\n<state>{\"hp\":80,\"mood\":\"determined\"}</state>"
+                .to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        // chat_log 应含 user + assistant，assistant 正文是 stripped 后的文本。
+        let log = ChatService::new(&data_root)
+            .history(&character, None)
+            .unwrap();
+        assert_eq!(log.messages.len(), 2, "user + assistant");
+        assert_eq!(log.messages[1].role, MessageRole::Assistant);
+        assert!(
+            log.messages[1]
+                .content
+                .contains("The hero draws their sword."),
+            "assistant content must be persisted"
+        );
+        assert!(
+            !log.messages[1].content.contains("<state>"),
+            "<state> block must be stripped from chat log"
+        );
+
+        // live.json 应含 <state> 块中的字段。
+        let live_path = data_root.join("characters/finalize-bug-d-both/state/live.json");
+        let live: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&live_path).unwrap()).unwrap();
+        assert_eq!(live["hp"], 80);
+        assert_eq!(live["mood"], "determined");
+    }
+
+    /// Bug D 回归：assistant 消息只含 `<state>` 块（stripped 为空）且无
+    /// swipe_candidates 时，不应创建 assistant 消息，但 state 仍应持久化。
+    /// 这验证 state persist 在 message append 分支跳过后仍能执行。
+    #[tokio::test]
+    async fn finalize_state_persisted_when_stripped_empty_no_candidates() {
+        let (_tmp, data_root, character) =
+            setup_character_with_user_msg("finalize-bug-d-state-only");
+        let ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
+
+        // 只含 <state> 块，无正文
+        let raw_acc = r#"<state>{"hp":50}</state>"#.to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        // 不应创建 assistant 消息（stripped 为空 + 无 candidates）
+        let log = ChatService::new(&data_root)
+            .history(&character, None)
+            .unwrap();
+        assert_eq!(log.messages.len(), 1, "only user message, no assistant");
+
+        // 但 state 应被持久化
+        let live_path = data_root.join("characters/finalize-bug-d-state-only/state/live.json");
+        let live: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&live_path).unwrap()).unwrap();
+        assert_eq!(live["hp"], 50);
+    }
+}

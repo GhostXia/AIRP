@@ -43,11 +43,14 @@ pub(super) async fn run_finalize(
 
     // (1) Persist assistant message to ChatLog
     //     M_LS-1: strip <state>…</state> before persisting; side-persist state/live.json.
+    //     审计 Bug D 修复：先追加 assistant 消息到 chat_log.jsonl，再持久化
+    //     live state。旧顺序（state → message）在 message append 失败时：state
+    //     已更新但 chat log 无对应消息，下次 prepare 读历史时无法对账——
+    //     state 反映了一条用户从未见到的助手回复。新顺序（message → state）
+    //     在 state persist 失败时：消息已落盘用户可见，state 略滞后但下轮
+    //     可重新抽取；消息丢失比 state 滞后更不可恢复。
     if let Some(ref cid) = ctx.character_id {
         let (stripped, live_state) = extract_state_content(&cleaned_acc);
-        if let Some(ref state) = live_state {
-            persist_live_state(&ctx.data_root, cid.as_str(), state).await?;
-        }
         if !stripped.trim().is_empty() {
             if ctx.continue_mode {
                 // Continue: append generated text to the existing last assistant message.
@@ -85,6 +88,12 @@ pub(super) async fn run_finalize(
                 ctx.session_id.as_ref(),
                 ctx.swipe_candidates.clone(),
             )?;
+        }
+        // 先确认 assistant 消息成功落盘，再持久化 live state。
+        // 若上面的消息追加失败（`?` 传播 Err），state 不会被写入，
+        // 避免 live.json 领先于 chat_log 的不一致。
+        if let Some(ref state) = live_state {
+            persist_live_state(&ctx.data_root, cid.as_str(), state).await?;
         }
     }
 
