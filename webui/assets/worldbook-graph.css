@@ -16,5 +16,5 @@
 .conflicts-list li .conflict-key { font-weight: 600; color: var(--text-warning, #b07000); margin-right: 8px; }
 .conflicts-list li .conflict-entries { color: var(--text-secondary); font-size: 12px; }
 .graph-detail { margin: 24px 0; }
-.result-content { padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-subtle); white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-height: 360px; overflow: auto; margin: 0; }
+.result-content { padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-subtle); white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-height: 360px; overflow: auto; margin: 0; }
 .subheading { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 16px 0 8px; }

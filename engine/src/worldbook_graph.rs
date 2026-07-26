@@ -180,7 +180,15 @@ pub fn build_graph(
         std::collections::HashSet::new();
 
     if query.include_key_overlap {
-        for indices in key_to_entries.values() {
+        // 遍历 (key, indices) 对：保留 key 用于正确填充 shared_keys。
+        // 之前的 `for indices in key_to_entries.values()` 实现存在两个 bug：
+        //   (1) 首次创建边时用 `entries[a].keys.find(|k| entries[b].keys.contains(k))`
+        //       查找"某个"共享 key，但实际多个共享 key 的边只能记录第一个，
+        //       后续重复 pair 仅 weight+1 不再 push。
+        //   (2) weight=N 的边 shared_keys 长度始终为 1，与字段文档
+        //       "共享的具体 key 列表" 矛盾，UI tooltip 会显示缺失的 key。
+        // 改为按 (key, indices) 遍历，能正确把所有共享 key 累积到 shared_keys。
+        for (shared_key, indices) in &key_to_entries {
             if indices.len() < 2 {
                 continue;
             }
@@ -191,28 +199,23 @@ pub fn build_graph(
                     let b = indices[i].max(indices[j]);
                     let key = (a, b, EdgeKind::KeyOverlap);
                     if !seen_pairs.insert(key) {
-                        // 已存在，找到那条边并 weight+1，shared_keys.push
-                        if let Some(edge) = edges
-                            .iter_mut()
-                            .find(|e| e.source == a && e.target == b && e.kind == EdgeKind::KeyOverlap)
-                        {
+                        // 同一对节点已建过边：weight+1 并把当前 key 追加到 shared_keys
+                        if let Some(edge) = edges.iter_mut().find(|e| {
+                            e.source == a && e.target == b && e.kind == EdgeKind::KeyOverlap
+                        }) {
                             edge.weight += 1;
-                            // shared_keys 已在首次添加时 push，此处跳过避免重复
+                            let k = (*shared_key).to_string();
+                            if !edge.shared_keys.contains(&k) {
+                                edge.shared_keys.push(k);
+                            }
                         }
                     } else {
-                        // 找到共享的具体 key
-                        let shared_key = entries[a]
-                            .keys
-                            .iter()
-                            .find(|k| entries[b].keys.contains(k))
-                            .cloned()
-                            .unwrap_or_default();
                         edges.push(GraphEdge {
                             source: a,
                             target: b,
                             kind: EdgeKind::KeyOverlap,
                             weight: 1,
-                            shared_keys: vec![shared_key],
+                            shared_keys: vec![(*shared_key).to_string()],
                         });
                     }
                 }
@@ -251,10 +254,9 @@ pub fn build_graph(
                 }
                 let key = (a_idx, b_idx, EdgeKind::Reference);
                 if !seen_pairs.insert(key) {
-                    if let Some(edge) = edges
-                        .iter_mut()
-                        .find(|e| e.source == a_idx && e.target == b_idx && e.kind == EdgeKind::Reference)
-                    {
+                    if let Some(edge) = edges.iter_mut().find(|e| {
+                        e.source == a_idx && e.target == b_idx && e.kind == EdgeKind::Reference
+                    }) {
                         edge.weight += hits;
                         for k in hit_keys {
                             if !edge.shared_keys.contains(&k) {
@@ -362,7 +364,11 @@ mod tests {
         }
     }
 
-    fn make_entry_string_keys(keys: Vec<String>, content: &str, comment: Option<&str>) -> LorebookEntry {
+    fn make_entry_string_keys(
+        keys: Vec<String>,
+        content: &str,
+        comment: Option<&str>,
+    ) -> LorebookEntry {
         LorebookEntry {
             keys,
             content: content.to_string(),
@@ -457,14 +463,11 @@ mod tests {
     #[test]
     fn disabled_entries_excluded_from_edges() {
         let lb = Lorebook {
-            entries: vec![
-                make_entry(vec!["龙", "城堡"], "entry A", Some("A")),
-                {
-                    let mut e = make_entry(vec!["龙", "魔法"], "entry B", Some("B"));
-                    e.enabled = Some(false);
-                    e
-                },
-            ],
+            entries: vec![make_entry(vec!["龙", "城堡"], "entry A", Some("A")), {
+                let mut e = make_entry(vec!["龙", "魔法"], "entry B", Some("B"));
+                e.enabled = Some(false);
+                e
+            }],
         };
         let graph = build_graph("hero", &lb, &GraphQuery::default()).unwrap();
         // B 被 disabled，不参与 key_overlap

@@ -56,10 +56,12 @@
     sel.replaceChildren();
     sel.appendChild(new Option('不绑定角色', ''));
     try {
-      characters = await client.request('GET', '/v1/characters').catch(() => []);
+      characters = await client.request('GET', '/v1/characters');
       for (const id of characters) sel.appendChild(new Option(id, id));
       if (characterId && characters.includes(characterId)) sel.value = characterId;
     } catch (error) {
+      // 加载失败时保留"不绑定角色"占位项，通过 status bar 提示用户
+      characters = [];
       setStatus('加载角色失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     }
   }

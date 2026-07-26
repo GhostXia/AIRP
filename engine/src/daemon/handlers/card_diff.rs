@@ -75,11 +75,8 @@ pub(in crate::daemon) async fn diff_character_revisions_endpoint(
         .into_response();
     }
     if rev_a == rev_b {
-        return AirpError::BadRequest(format!(
-            "rev_a ({}) 不能等于 rev_b ({})",
-            rev_a, rev_b
-        ))
-        .into_response();
+        return AirpError::BadRequest(format!("rev_a ({}) 不能等于 rev_b ({})", rev_a, rev_b))
+            .into_response();
     }
 
     match run_build_diff(&state, &character_id, rev_a, rev_b).await {
@@ -107,10 +104,7 @@ async fn run_get_revision(
     let cid = CharacterId::new(character_id)?;
     ensure_character_exists(&state.data_root, &cid)?;
     let revision: u64 = revision_id.parse().map_err(|_| {
-        AirpError::BadRequest(format!(
-            "revision_id {:?} 不是合法数字",
-            revision_id
-        ))
+        AirpError::BadRequest(format!("revision_id {:?} 不是合法数字", revision_id))
     })?;
     load_revision_snapshot(&state.data_root, cid.as_str(), revision)
 }
@@ -162,10 +156,19 @@ pub struct RevisionsListResponse {
 }
 
 /// 根据 format 渲染响应：JSON 直接返回，Markdown/HTML 返回文件下载。
-fn render_diff(diff: &CardDiff, format: &DiffExportFormat, character_id: &str) -> axum::response::Response {
+fn render_diff(
+    diff: &CardDiff,
+    format: &DiffExportFormat,
+    character_id: &str,
+) -> axum::response::Response {
     match format {
         DiffExportFormat::Json => match serde_json::to_vec_pretty(diff) {
-            Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, "application/json; charset=utf-8")], bytes).into_response(),
+            Ok(bytes) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+                bytes,
+            )
+                .into_response(),
             Err(e) => AirpError::from(e).into_response(),
         },
         DiffExportFormat::Markdown => {

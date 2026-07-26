@@ -81,9 +81,7 @@ pub(super) use style::{
     get_drift, get_style_profile, list_style_profiles, rollback_drift, style_learn, style_review,
     update_drift,
 };
-pub(super) use timeline_export::{
-    export_session_timeline_endpoint, get_session_timeline_endpoint,
-};
+pub(super) use timeline_export::{export_session_timeline_endpoint, get_session_timeline_endpoint};
 pub(super) use worldbook_graph::get_lorebook_graph_endpoint;
 
 // M_MCP MCP-2：角色卡导入的 `pub(crate)` 共享实现，供未来 daemon HTTP handler 与

@@ -112,9 +112,7 @@ pub async fn run_style_learn(
     text: &str,
 ) -> Result<StyleFeatures, AirpError> {
     if text.trim().is_empty() {
-        return Err(AirpError::BadRequest(
-            "text 样本不能为空".to_string(),
-        ));
+        return Err(AirpError::BadRequest("text 样本不能为空".to_string()));
     }
     // 上限保护：超长样本截断到 20k 字符，避免 prompt 过长。
     let truncated: String = text.chars().take(20_000).collect();
@@ -416,9 +414,6 @@ mod tests {
     #[test]
     fn test_global_profile_path() {
         let path = global_profile_path(Path::new("/data"), "default");
-        assert_eq!(
-            path,
-            PathBuf::from("/data/styles/profiles/default.md")
-        );
+        assert_eq!(path, PathBuf::from("/data/styles/profiles/default.md"));
     }
 }

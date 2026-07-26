@@ -34,7 +34,6 @@ pub mod dialogue_gen;
 pub mod domain;
 pub mod error;
 pub mod image_gen;
-pub mod worldbook_graph;
 pub mod memory;
 pub mod orchestrator;
 pub mod outbound;
@@ -46,6 +45,7 @@ pub mod style;
 pub mod timeline_export;
 pub mod types;
 pub mod ulid;
+pub mod worldbook_graph;
 
 // M0 F-50 / 6.0n：实现细节模块收紧为 pub(crate)，仅 crate 内部互调。
 // 这些模块不被 main.rs / 外部消费者直接引用，未来重构无 API 兼容包袱。

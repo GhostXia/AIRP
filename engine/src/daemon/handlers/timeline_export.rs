@@ -26,12 +26,22 @@ pub(in crate::daemon) async fn get_session_timeline_endpoint(
     State(state): State<Arc<DaemonState>>,
     Path((character_id, session_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match run_build_timeline(&state, &character_id, &session_id).await {
-        Ok(timeline) => match serde_json::to_value(&timeline) {
-            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
-            Err(e) => AirpError::from(e).into_response(),
-        },
-        Err(e) => e.into_response(),
+    // R1: 把同步 fs + 解析 + 排序放到 spawn_blocking，避免阻塞 axum runtime。
+    //     timeline export 会读 chat_log.jsonl 全量 + world_events.json + world_clock.json，
+    //     长会话可达到几 MB，反序列化 + 排序在繁忙 daemon 上会阻塞其它请求。
+    // R2: TimelineExport 已实现 Serialize，直接交给 Json，不再绕一层 to_value。
+    let state = state.clone();
+    match tokio::task::spawn_blocking(move || {
+        run_build_timeline_sync(&state, &character_id, &session_id)
+    })
+    .await
+    {
+        Ok(Ok(timeline)) => (StatusCode::OK, Json(timeline)).into_response(),
+        Ok(Err(e)) => e.into_response(),
+        Err(join_err) => {
+            AirpError::Internal(format!("timeline build task join failed: {}", join_err))
+                .into_response()
+        }
     }
 }
 
@@ -44,9 +54,19 @@ pub(in crate::daemon) async fn export_session_timeline_endpoint(
     Query(query): Query<ExportQuery>,
 ) -> impl IntoResponse {
     let format = query.format.unwrap_or_default();
-    match run_build_timeline(&state, &character_id, &session_id).await {
-        Ok(timeline) => render_export(&timeline, &format),
-        Err(e) => e.into_response(),
+    // 与 get_session_timeline_endpoint 同样把同步工作放到 spawn_blocking。
+    let state = state.clone();
+    match tokio::task::spawn_blocking(move || {
+        run_build_timeline_sync(&state, &character_id, &session_id)
+    })
+    .await
+    {
+        Ok(Ok(timeline)) => render_export(&timeline, &format),
+        Ok(Err(e)) => e.into_response(),
+        Err(join_err) => {
+            AirpError::Internal(format!("timeline export task join failed: {}", join_err))
+                .into_response()
+        }
     }
 }
 
@@ -57,7 +77,7 @@ pub struct ExportQuery {
     pub format: Option<ExportFormat>,
 }
 
-async fn run_build_timeline(
+fn run_build_timeline_sync(
     state: &DaemonState,
     character_id: &str,
     session_id: &str,
@@ -89,7 +109,11 @@ fn read_character_name(
 ) -> Result<String, AirpError> {
     let card = crate::data_dir::get_character_card(data_root, cid)?;
     // 兼容 v2 (data.name) 与 v1 (name)
-    if let Some(name) = card.get("data").and_then(|d| d.get("name")).and_then(|v| v.as_str()) {
+    if let Some(name) = card
+        .get("data")
+        .and_then(|d| d.get("name"))
+        .and_then(|v| v.as_str())
+    {
         return Ok(name.to_string());
     }
     if let Some(name) = card.get("name").and_then(|v| v.as_str()) {

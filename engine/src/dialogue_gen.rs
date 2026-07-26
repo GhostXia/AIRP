@@ -42,6 +42,15 @@ pub struct DialogueExampleRequest {
     /// 可选用户 persona 名字（替换 {{user}} 默认占位符说明）。
     #[serde(default)]
     pub user_name: Option<String>,
+    /// CodeRabbit #9（critical）：用于"预览→确认→写入"流程。当 dry_run=false
+    /// 且本字段非空时，handler 跳过 LLM 调用，直接把此文本作为 mes_example 写入
+    /// 角色卡。这样前端 writeGenerated 不必再次请求 LLM 生成（temperature 0.7
+    /// 非确定性，会导致用户预览的内容 A 与最终写入的内容 B 不一致）。
+    ///
+    /// 本字段与 dry_run=true 互斥：dry_run=true 时即使提供也忽略。
+    /// 本字段非空时 turns / user_stance / scenario_override / user_name 全部忽略。
+    #[serde(default)]
+    pub mes_example_override: Option<String>,
 }
 
 fn default_turns() -> u32 {
@@ -99,9 +108,7 @@ pub async fn run_dialogue_gen(
 ) -> Result<String, AirpError> {
     // 校验 turns
     if req.turns == 0 || req.turns > 10 {
-        return Err(AirpError::BadRequest(
-            "turns 必须在 1~10 之间".to_string(),
-        ));
+        return Err(AirpError::BadRequest("turns 必须在 1~10 之间".to_string()));
     }
 
     // 提取角色卡字段（支持 v2 data 嵌套 + v1 flat）
@@ -123,10 +130,7 @@ pub async fn run_dialogue_gen(
         .as_deref()
         .or_else(|| data.get("scenario").and_then(|v| v.as_str()))
         .unwrap_or("");
-    let first_mes = data
-        .get("first_mes")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let first_mes = data.get("first_mes").and_then(|v| v.as_str()).unwrap_or("");
 
     if description.is_empty() && personality.is_empty() {
         return Err(AirpError::BadRequest(
@@ -183,6 +187,14 @@ pub async fn run_dialogue_gen(
     if cleaned.trim().is_empty() {
         return Err(AirpError::Internal(
             "LLM 返回空内容，对话示例生成失败".to_string(),
+        ));
+    }
+    // 格式契约校验：clean_dialogue_output 已截断到第一个 <START>，但若 LLM 输出
+    // 完全不含 <START> 标记（如纯解释性文本），cleaned 会是非空但不符合契约的文本。
+    // 此时无法被 SillyTavern 解析为 mes_example，必须显式拒绝。
+    if count_starts(&cleaned) == 0 {
+        return Err(AirpError::Internal(
+            "LLM 输出未包含 <START> 标记，对话示例生成失败".to_string(),
         ));
     }
     Ok(cleaned)

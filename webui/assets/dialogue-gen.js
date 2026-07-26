@@ -57,13 +57,15 @@
     sel.replaceChildren();
     sel.appendChild(new Option('— 请选择角色 —', ''));
     try {
-      characters = await client.request('GET', '/v1/characters').catch(() => []);
+      characters = await client.request('GET', '/v1/characters');
       for (const id of characters) sel.appendChild(new Option(id, id));
       if (characterId && characters.includes(characterId)) {
         sel.value = characterId;
         loadCurrentMesExample();
       }
     } catch (error) {
+      // 加载失败时保留"— 请选择角色 —"占位项，通过 status bar 提示用户
+      characters = [];
       setStatus('加载角色失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     }
   }
@@ -141,15 +143,14 @@
 
   async function writeGenerated() {
     if (!characterId || !lastGenerated) { setStatus('无可写入的生成内容', true); return; }
+    // CodeRabbit #9（critical）：写盘时不再重新调用 LLM 生成。
+    // 之前实现把 dry_run=true 时拿到的 lastGenerated 丢弃，重新构造与
+    // 生成阶段相同的 body 再次 POST，触发 temperature 0.7 的非确定性
+    // 生成——用户预览 A 但写入 B，破坏预览-确认-写入契约。
+    // 现在通过 mes_example_override 字段把 lastGenerated 原样交给 handler，
+    // handler 跳过 LLM 直接写盘。turns 等参数对 override 路径无效。
     const append = $('#gen-append').checked;
-    const turns = parseInt($('#gen-turns').value, 10);
-    const body = { turns, dry_run: false, append };
-    const stance = $('#gen-stance').value.trim();
-    const scenario = $('#gen-scenario').value.trim();
-    const userName = $('#gen-username').value.trim();
-    if (stance) body.user_stance = stance;
-    if (scenario) body.scenario_override = scenario;
-    if (userName) body.user_name = userName;
+    const body = { dry_run: false, append, mes_example_override: lastGenerated };
 
     const btn = $('#gen-write');
     btn.disabled = true;

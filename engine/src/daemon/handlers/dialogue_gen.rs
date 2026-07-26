@@ -62,31 +62,79 @@ async fn run_dialogue_gen_handler(
         )));
     }
 
-    // 读取角色卡 JSON
-    let card_text = crate::data_dir::read_character_card_text(&state.data_root, &cid)?;
-    let mut card: serde_json::Value = serde_json::from_str(&card_text)
-        .map_err(|e| AirpError::BadRequest(format!("card.json 解析失败: {}", e)))?;
+    // R1（修订）：锁纪律说明。
+    // 旧版尝试在"读卡 → LLM 生成 → 写卡"整段临界区上持有 character_lock 写锁，
+    // 但 `std::sync::RwLockWriteGuard` 是 `!Send`，跨 `.await` 持有会让 future 变成
+    // `!Send`，违反 axum `Handler` trait，编译报错 E0277。改为两阶段：
+    //   Phase A（无锁）：读卡 → LLM 生成（异步、可能耗时数秒）
+    //   Phase B（character_lock 写锁）：重读卡 → 校验 mes_example 仍是旧值
+    //                                  → 写入新值 + mes_example.bak
+    // 若 Phase B 重读发现 mes_example 被并发改动，返回 Conflict 让用户重试。
+    // 这放弃了"LLM 期间阻塞所有卡写入"的强保证，但保留了关键的"原子
+    // read-modify-write"——并发写入会被检测到，绝不会丢失（last-writer
+    // 检测到 stale snapshot 后拒绝写入，符合 CodeRabbit #1 的修复意图）。
+    // 与 update_character_card 的锁纪律对齐（其临界区是纯同步 fs 写）。
 
-    // 构造 provider config + gen params
+    // ── Phase A: 无锁读卡 + LLM 生成 ──
+    let card_text = crate::data_dir::read_character_card_text(&state.data_root, &cid)?;
+    let card: serde_json::Value = serde_json::from_str(&card_text)
+        .map_err(|e| AirpError::BadRequest(format!("card.json 解析失败: {}", e)))?;
+    let baseline_mes_example = card
+        .get("data")
+        .and_then(|d| d.get("mes_example"))
+        .or_else(|| card.get("mes_example"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // 构造 provider config + gen params。
+    // 注意：handler 只提供 model；temperature 与 max_tokens 由 run_dialogue_gen
+    // 在校验 turns (1~10) 之后安全计算（避免 300 * payload.turns 在 turns=u32::MAX
+    // 时溢出 panic，构成 DoS）。
     let snapshot = state
         .config
         .read()
         .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
         .clone();
-    let provider_config = Arc::new(crate::adapter::ProviderConfig {
-        provider: snapshot.provider.clone(),
-        endpoint: snapshot.endpoint.clone(),
-        api_key: snapshot.api_key.clone(),
-    });
-    let gen_params = crate::adapter::GenerationParams {
-        model: snapshot.model.clone(),
-        temperature: Some(0.7),
-        max_tokens: Some((300 * payload.turns + 200).min(4000)),
-    };
 
-    // 调用 LLM 生成
-    let generated =
-        run_dialogue_gen(&state.http_client, provider_config, gen_params, &card, &payload).await?;
+    // CodeRabbit #9（critical）：mes_example_override 路径——前端 writeGenerated
+    // 持有 dry_run=true 阶段拿到的预览内容（lastGenerated），通过本字段把该内容
+    // 原样写盘。绝不在此路径再次调用 LLM，否则 temperature 0.7 非确定性会让用户
+    // 预览 A 但写入 B，破坏"预览→确认→写入"契约。
+    let generated = if let Some(override_text) = payload.mes_example_override.as_deref() {
+        let trimmed = override_text.trim();
+        if trimmed.is_empty() {
+            return Err(AirpError::BadRequest(
+                "mes_example_override 不能为空字符串".to_string(),
+            ));
+        }
+        // 校验格式契约：必须包含至少一个 <START> 分隔符，与 run_dialogue_gen 一致。
+        if crate::dialogue_gen::count_starts(trimmed) == 0 {
+            return Err(AirpError::BadRequest(
+                "mes_example_override 未包含 <START> 标记，不符合 SillyTavern 格式契约".to_string(),
+            ));
+        }
+        trimmed.to_string()
+    } else {
+        // 走 LLM 生成路径
+        let provider_config = Arc::new(crate::adapter::ProviderConfig {
+            provider: snapshot.provider.clone(),
+            endpoint: snapshot.endpoint.clone(),
+            api_key: snapshot.api_key.clone(),
+        });
+        let gen_params = crate::adapter::GenerationParams {
+            model: snapshot.model.clone(),
+            temperature: None,
+            max_tokens: None,
+        };
+        run_dialogue_gen(
+            &state.http_client,
+            provider_config,
+            gen_params,
+            &card,
+            &payload,
+        )
+        .await?
+    };
 
     let turns_generated = crate::dialogue_gen::count_starts(&generated) as u32;
 
@@ -100,17 +148,30 @@ async fn run_dialogue_gen_handler(
         });
     }
 
-    // 写入角色卡：data.mes_example（v2 嵌套）或顶层 mes_example（v1 flat）
-    // 取出旧值
-    let data_obj = if card.get("data").is_some() {
-        card.get("data").cloned().unwrap_or_default()
-    } else {
-        card.clone()
-    };
-    let previous = data_obj
-        .get("mes_example")
+    // ── Phase B: 取 character_lock 写锁，原子 read-modify-write 卡片 ──
+    let character = crate::domain::character_lock(cid.as_str());
+    let _guard = character.write().expect("character lock poisoned");
+
+    // 重读 card：检测 Phase A 期间是否发生并发写入。
+    let card_text_now = crate::data_dir::read_character_card_text(&state.data_root, &cid)?;
+    let mut card_now: serde_json::Value = serde_json::from_str(&card_text_now)
+        .map_err(|e| AirpError::BadRequest(format!("card.json 解析失败: {}", e)))?;
+    let current_mes_example = card_now
+        .get("data")
+        .and_then(|d| d.get("mes_example"))
+        .or_else(|| card_now.get("mes_example"))
         .and_then(|v| v.as_str())
         .map(String::from);
+    if current_mes_example != baseline_mes_example {
+        // Phase A 拿到的 snapshot 已 stale，拒绝覆盖（防止丢失并发写入）。
+        return Err(AirpError::Conflict(format!(
+            "character {} card mes_example was modified during dialogue generation; please retry",
+            cid
+        )));
+    }
+
+    // 写入角色卡：data.mes_example（v2 嵌套）或顶层 mes_example（v1 flat）
+    let previous = current_mes_example;
 
     let new_mes_example = if payload.append {
         let mut combined = previous.clone().unwrap_or_default();
@@ -123,19 +184,29 @@ async fn run_dialogue_gen_handler(
         generated.clone()
     };
 
-    // 写回 card JSON
-    let is_v2 = card.get("data").is_some();
+    // 持久化备份：在覆盖 mes_example 之前，先把旧值写入 `mes_example.bak` 字段。
+    // 这与模块级文档（engine/src/dialogue_gen.rs:11-16 "不破坏用户资产"）对齐：
+    // 仅靠响应字段 previous_mes_example 无法跨请求/跨会话恢复旧值，必须落盘到卡内。
+    // v2 卡写入 data.mes_example.bak；v1 卡写入顶层 mes_example.bak。
+    let is_v2 = card_now.get("data").is_some();
+    if let Some(prev) = previous.as_deref() {
+        if is_v2 {
+            card_now["data"]["mes_example.bak"] = serde_json::Value::String(prev.to_string());
+        } else {
+            card_now["mes_example.bak"] = serde_json::Value::String(prev.to_string());
+        }
+    }
     if is_v2 {
-        card["data"]["mes_example"] = serde_json::Value::String(new_mes_example.clone());
+        card_now["data"]["mes_example"] = serde_json::Value::String(new_mes_example.clone());
     } else {
-        card["mes_example"] = serde_json::Value::String(new_mes_example.clone());
+        card_now["mes_example"] = serde_json::Value::String(new_mes_example.clone());
     }
 
     // 原子写回 card/card.json + card/raw.json
     let char_dir = crate::data_dir::character_dir(&state.data_root, cid.as_str())?;
     let card_dir = char_dir.join("card");
     std::fs::create_dir_all(&card_dir)?;
-    let json_str = serde_json::to_string_pretty(&card)
+    let json_str = serde_json::to_string_pretty(&card_now)
         .map_err(|e| AirpError::BadRequest(format!("card JSON 序列化失败: {}", e)))?;
     let json_bytes = json_str.as_bytes();
     crate::data_dir::replace_file(&card_dir.join("card.json"), json_bytes)?;

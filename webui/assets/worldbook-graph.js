@@ -62,13 +62,15 @@
     sel.replaceChildren();
     sel.appendChild(new Option('— 请选择角色 —', ''));
     try {
-      characters = await client.request('GET', '/v1/characters').catch(() => []);
+      characters = await client.request('GET', '/v1/characters');
       for (const id of characters) sel.appendChild(new Option(id, id));
       if (characterId && characters.includes(characterId)) {
         sel.value = characterId;
         loadGraph();
       }
     } catch (error) {
+      // 加载失败时保留"— 请选择角色 —"占位项，通过 status bar 提示用户
+      characters = [];
       setStatus('加载角色失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     }
   }
@@ -104,6 +106,9 @@
 
   function renderGraph(graph) {
     $('#graph-stats').textContent = '节点 ' + graph.node_count + ' · 边 ' + graph.edge_count + ' · 冲突 ' + graph.conflicts.length;
+    // 重置 graph-empty 文本：之前的失败错误信息在重新加载成功后应清除，
+    // 否则即使节点为空也会显示旧的错误信息。
+    $('#graph-empty').textContent = '选择角色后加载图谱';
     // 冲突列表
     const conflictsWrap = $('#graph-conflicts');
     const conflictsList = $('#conflicts-list');
@@ -148,6 +153,9 @@
         vx: 0,
         vy: 0,
         radius: 18 + Math.min(n.keys.length * 2, 12),
+        // CodeRabbit #11：pinned 标记被拖拽过的节点，位移循环跳过 pinned
+        // 节点以保持用户的手动布局。loadGraph 重置时所有节点 pinned=false。
+        pinned: false,
       };
     });
     simEdges = graph.edges.map(e => ({
@@ -160,66 +168,87 @@
   }
 
   // 简化版 Fruchterman-Reingold 力导向算法（AIRP 独立实现）
+  // CodeRabbit #10：之前的同步 300 次 O(n²) 迭代在 500 节点时是 ~75M 次力计算，
+  // 完全阻塞主线程数秒，期间无法响应输入/重绘。改为 requestAnimationFrame 分批：
+  // 每帧最多 10 次迭代，300 次共 30 帧（约 0.5s on 60Hz），既保持布局质量又让
+  // 浏览器在帧间响应输入/绘制。冷却系数 cool 也按比例分散到每帧。
+  // 同时支持 pinned 标记：被用户拖拽过的节点保持位置不参与位移，避免
+  // 释放鼠标后立即被 300 次迭代"弹回"原位置（CodeRabbit #11）。
+  let simulationRunning = false;
   function runSimulation() {
     if (simNodes.length === 0) { clearCanvas(); return; }
-    const iterations = 300;
+    if (simulationRunning) return; // 防止重入：上次模拟未结束时忽略新触发
+    const totalIterations = 300;
+    const batchSize = 10;
     const canvas = $('#graph-canvas');
     const W = canvas.width;
     const H = canvas.height;
     const k = Math.sqrt((W * H) / Math.max(simNodes.length, 1)) * 0.6;
-    const temperature = W / 10;
-    let cool = temperature;
-    for (let iter = 0; iter < iterations; iter++) {
-      // 计算排斥力
-      for (const a of simNodes) {
-        a.fx = 0; a.fy = 0;
-        for (const b of simNodes) {
-          if (a === b) continue;
-          let dx = a.x - b.x;
-          let dy = a.y - b.y;
-          let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
-          const repulsion = (k * k) / dist;
-          a.fx += (dx / dist) * repulsion;
-          a.fy += (dy / dist) * repulsion;
+    const initialTemp = W / 10;
+    const coolFactor = Math.pow(0.05, batchSize / totalIterations); // 每 batch 衰减到 5%（等效于 0.95^300）
+    simulationRunning = true;
+    let iter = 0;
+    let cool = initialTemp;
+    function runBatch() {
+      for (let i = 0; i < batchSize && iter < totalIterations; i++, iter++) {
+        // 计算排斥力
+        for (const a of simNodes) {
+          a.fx = 0; a.fy = 0;
+          for (const b of simNodes) {
+            if (a === b) continue;
+            let dx = a.x - b.x;
+            let dy = a.y - b.y;
+            let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+            const repulsion = (k * k) / dist;
+            a.fx += (dx / dist) * repulsion;
+            a.fy += (dy / dist) * repulsion;
+          }
         }
+        // 计算吸引力（边）
+        for (const e of simEdges) {
+          const a = simNodes[e.source];
+          const b = simNodes[e.target];
+          if (!a || !b) continue;
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+          const attraction = (dist * dist) / k;
+          const fx = (dx / dist) * attraction;
+          const fy = (dy / dist) * attraction;
+          a.fx += fx; a.fy += fy;
+          b.fx -= fx; b.fy -= fy;
+        }
+        // 居中引力
+        const cx = W / 2;
+        const cy = H / 2;
+        for (const a of simNodes) {
+          a.fx += (cx - a.x) * 0.01;
+          a.fy += (cy - a.y) * 0.01;
+        }
+        // 应用位移（限制最大步长）
+        for (const a of simNodes) {
+          // pinned 节点（拖拽过的）保持位置，不再参与位移
+          if (a === dragNode || a.pinned) continue;
+          let dx = a.fx;
+          let dy = a.fy;
+          let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+          const step = Math.min(dist, cool);
+          a.x += (dx / dist) * step;
+          a.y += (dy / dist) * step;
+          // 边界约束
+          a.x = Math.max(a.radius, Math.min(W - a.radius, a.x));
+          a.y = Math.max(a.radius, Math.min(H - a.radius, a.y));
+        }
+        cool *= coolFactor;
       }
-      // 计算吸引力（边）
-      for (const e of simEdges) {
-        const a = simNodes[e.source];
-        const b = simNodes[e.target];
-        if (!a || !b) continue;
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
-        const attraction = (dist * dist) / k;
-        const fx = (dx / dist) * attraction;
-        const fy = (dy / dist) * attraction;
-        a.fx += fx; a.fy += fy;
-        b.fx -= fx; b.fy -= fy;
+      drawCanvas();
+      if (iter < totalIterations) {
+        requestAnimationFrame(runBatch);
+      } else {
+        simulationRunning = false;
       }
-      // 居中引力
-      const cx = W / 2;
-      const cy = H / 2;
-      for (const a of simNodes) {
-        a.fx += (cx - a.x) * 0.01;
-        a.fy += (cy - a.y) * 0.01;
-      }
-      // 应用位移（限制最大步长）
-      for (const a of simNodes) {
-        if (a === dragNode) continue;
-        let dx = a.fx;
-        let dy = a.fy;
-        let dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
-        const step = Math.min(dist, cool);
-        a.x += (dx / dist) * step;
-        a.y += (dy / dist) * step;
-        // 边界约束
-        a.x = Math.max(a.radius, Math.min(W - a.radius, a.x));
-        a.y = Math.max(a.radius, Math.min(H - a.radius, a.y));
-      }
-      cool *= 0.95;
     }
-    drawCanvas();
+    requestAnimationFrame(runBatch);
   }
 
   function clearCanvas() {
@@ -367,16 +396,23 @@
     });
     canvas.addEventListener('mouseup', () => {
       if (dragNode) {
+        // CodeRabbit #11：之前在 mouseup 后立即调用 runSimulation()，
+        // 但 dragNode 已被置 null，被释放的节点不再被 pinned，新一轮 300 次
+        // 迭代会立即把它"弹回"原始松弛位置——用户拖到哪都没用。
+        // 现在标记 dropped.pinned=true（位移循环会跳过 pinned 节点），
+        // 并只 redraw 而不重跑 simulation。用户可在下次显式触发"重新布局"
+        // 时再 reset pinned（loadGraph 会重置整个 simNodes）。
+        dragNode.pinned = true;
         dragNode = null;
         canvas.style.cursor = 'grab';
-        runSimulation();
+        drawCanvas();
       }
     });
     canvas.addEventListener('mouseleave', () => {
       if (dragNode) {
+        dragNode.pinned = true;
         dragNode = null;
         canvas.style.cursor = 'grab';
-        runSimulation();
       }
       hoverNode = null;
       drawCanvas();

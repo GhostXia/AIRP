@@ -104,9 +104,7 @@ pub fn load_revision_snapshot(
 ) -> Result<RevisionSnapshot, AirpError> {
     let cid = CharacterId::new(character_id)?;
     if revision == 0 {
-        return Err(AirpError::BadRequest(
-            "revision 必须 >= 1".to_string(),
-        ));
+        return Err(AirpError::BadRequest("revision 必须 >= 1".to_string()));
     }
 
     let char_dir = crate::data_dir::character_dir(data_root, cid.as_str())?;
@@ -131,10 +129,7 @@ pub fn load_revision_snapshot(
     let manifest_path = revision_dir.join("manifest.json");
     let manifest_bytes = std::fs::read(&manifest_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            AirpError::NotFound(format!(
-                "revision {} 的 manifest.json 不存在",
-                revision
-            ))
+            AirpError::NotFound(format!("revision {} 的 manifest.json 不存在", revision))
         } else {
             AirpError::from(e)
         }
@@ -145,10 +140,7 @@ pub fn load_revision_snapshot(
     let card_path = revision_dir.join("card.json");
     let card_bytes = std::fs::read(&card_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            AirpError::NotFound(format!(
-                "revision {} 的 card.json 不存在",
-                revision
-            ))
+            AirpError::NotFound(format!("revision {} 的 card.json 不存在", revision))
         } else {
             AirpError::from(e)
         }
@@ -271,7 +263,12 @@ pub fn build_card_diff(
     let snapshot_b = load_revision_snapshot(data_root, character_id, newer)?;
 
     let mut changes: Vec<FieldChange> = Vec::new();
-    diff_values(&snapshot_a.card, &snapshot_b.card, "$".to_string(), &mut changes);
+    diff_values(
+        &snapshot_a.card,
+        &snapshot_b.card,
+        "$".to_string(),
+        &mut changes,
+    );
     changes.sort_by(|a, b| {
         let pa = change_path(a);
         let pb = change_path(b);
@@ -828,7 +825,8 @@ mod tests {
     fn build_card_diff_with_real_revisions() {
         let tmp = tempdir().unwrap();
         let card_v1 = r#"{"name":"alice","description":"v1 desc","data":{"tags":["friendly"]}}"#;
-        let card_v2 = r#"{"name":"alice","description":"v2 desc","data":{"tags":["friendly","brave"]}}"#;
+        let card_v2 =
+            r#"{"name":"alice","description":"v2 desc","data":{"tags":["friendly","brave"]}}"#;
         commit_card(tmp.path(), "alice", 1, card_v1).unwrap();
         commit_card(tmp.path(), "alice", 2, card_v2).unwrap();
 
@@ -932,7 +930,13 @@ mod tests {
     fn to_html_renders_full_diff() {
         let tmp = tempdir().unwrap();
         commit_card(tmp.path(), "alice", 1, r#"{"name":"alice","v":1}"#).unwrap();
-        commit_card(tmp.path(), "alice", 2, r#"{"name":"alice","v":2,"new":"x"}"#).unwrap();
+        commit_card(
+            tmp.path(),
+            "alice",
+            2,
+            r#"{"name":"alice","v":2,"new":"x"}"#,
+        )
+        .unwrap();
         let diff = build_card_diff(tmp.path(), "alice", 1, 2).unwrap();
         let html = to_html(&diff);
         assert!(html.contains("<!DOCTYPE html>"));
@@ -963,7 +967,10 @@ mod tests {
 
     #[test]
     fn escape_html_special_chars() {
-        assert_eq!(escape_html("a<b>c&d\"e'f"), "a&lt;b&gt;c&amp;d&quot;e&#39;f");
+        assert_eq!(
+            escape_html("a<b>c&d\"e'f"),
+            "a&lt;b&gt;c&amp;d&quot;e&#39;f"
+        );
     }
 
     #[test]

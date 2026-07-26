@@ -28,7 +28,9 @@
   </div>
   <div class="graph-stats" id="graph-stats">节点 0 · 边 0 · 冲突 0</div>
   <div class="graph-canvas-wrap">
-    <canvas id="graph-canvas" width="900" height="600"></canvas>
+    <canvas id="graph-canvas" width="900" height="600" role="img" aria-label="世界书知识图谱力导向视图：蓝色边表示条目间共享 key（无向），红色箭头表示某条目的 content 引用了其他条目的 key（有向）；下方冲突警告与节点详情为文本等价物。">
+      当前浏览器不支持画布渲染，请参考下方冲突警告与节点详情。
+    </canvas>
     <div class="graph-empty" id="graph-empty">选择角色后加载图谱</div>
   </div>
   <div class="graph-conflicts" id="graph-conflicts" hidden>

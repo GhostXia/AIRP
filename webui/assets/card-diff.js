@@ -56,17 +56,6 @@
     return v;
   }
 
-  function el(tag, opts) {
-    const v = document.createElement(tag);
-    if (opts) {
-      if (opts.className) v.className = opts.className;
-      if (opts.text !== undefined) v.textContent = opts.text;
-      if (opts.html !== undefined) v.innerHTML = opts.html;
-      if (opts.hidden !== undefined) v.hidden = opts.hidden;
-    }
-    return v;
-  }
-
   function shortHash(hash) {
     if (!hash) return '—';
     return hash.length > 16 ? hash.slice(0, 16) + '...' : hash;
@@ -85,13 +74,15 @@
     sel.replaceChildren();
     sel.appendChild(new Option('— 请选择角色 —', ''));
     try {
-      characters = await client.request('GET', '/v1/characters').catch(() => []);
+      characters = await client.request('GET', '/v1/characters');
       for (const id of characters) sel.appendChild(new Option(id, id));
       if (characterId && characters.includes(characterId)) {
         sel.value = characterId;
         await loadRevisions();
       }
     } catch (error) {
+      // 加载失败时保留"— 请选择角色 —"占位项，并通过 status bar 提示用户
+      characters = [];
       setStatus('加载角色失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     }
   }
@@ -332,6 +323,8 @@
   function bind() {
     $('#cd-character').addEventListener('change', async () => {
       characterId = $('#cd-character').value;
+      sessionStorage.setItem('airp_character_id', characterId);
+      $('#scope-character').textContent = characterId || '—';
       revA = '';
       revB = '';
       hideDiff();
@@ -354,9 +347,25 @@
     $('#cd-preview-close').addEventListener('click', closePreview);
   }
 
-  document.addEventListener('DOMContentLoaded', () => {
+  // R1: 转为 boot() 模式以与其它屏幕对齐——既填充 #scope-character/#scope-user，
+  //     也通过 /health 检查更新 #engine-status（HTML 中的"正在连接"占位此前永不更新）。
+  async function boot() {
     renderChrome();
+    try {
+      const health = await client.request('GET', '/health');
+      $('#engine-status').className = 'status-pill ok';
+      $('#engine-status').lastChild.textContent = health.provider_configured ? 'Engine 就绪' : 'Engine 就绪 · Provider 待配置';
+    } catch (error) {
+      $('#engine-status').className = 'status-pill danger';
+      $('#engine-status').lastChild.textContent = '连接失败';
+      setStatus('无法连接 Engine：' + AIRPApi.errorMessage(error.data, error.message), true);
+      return;
+    }
     bind();
-    loadCharacters();
-  });
+    await loadCharacters();
+    $('#scope-character').textContent = characterId || '—';
+    $('#scope-user').textContent = sessionStorage.getItem('airp_user_id') || 'default';
+  }
+
+  boot();
 })();

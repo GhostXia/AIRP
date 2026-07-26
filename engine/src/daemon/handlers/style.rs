@@ -269,9 +269,13 @@ async fn run_style_learn_handler(
     };
 
     // 4. 调用 LLM 提取风格特征
-    let features =
-        crate::style::run_style_learn(&state.http_client, provider_config, gen_params, &payload.text)
-            .await?;
+    let features = crate::style::run_style_learn(
+        &state.http_client,
+        provider_config,
+        gen_params,
+        &payload.text,
+    )
+    .await?;
 
     // 5. 渲染 markdown profile
     let profile_md = crate::style::render_profile_markdown(&features, &payload.profile_id);
@@ -279,23 +283,30 @@ async fn run_style_learn_handler(
 
     // 6. 写入全局 profile
     let global_path = crate::style::global_profile_path(&state.data_root, &payload.profile_id);
-    let relative_path =
-        crate::style::write_profile(&state.data_root, &global_path, &profile_md)?;
+    let relative_path = crate::style::write_profile(&state.data_root, &global_path, &profile_md)?;
 
     // 7. 若提供 character_id，额外写入角色专属 profile
     if let Some(cid) = payload.character_id.as_deref() {
         let char_path = crate::style::character_profile_path(&state.data_root, cid);
-        // 复用相同 profile 内容；角色专属 profile 不带 profile_id 头部
+        // 角色专属 profile 只保留 feature 条目部分，去掉全局 profile_md 的
+        // `# Style Profile: {profile_id}` 头部和 `来源：...（{timestamp}）` 行，
+        // 改用角色专属头部。否则会出现两层 # 头部和两个来源时间戳，污染 prompt。
+        let entries = profile_md
+            .find("\n- ")
+            .map(|i| &profile_md[i + 1..])
+            .unwrap_or(profile_md.as_str());
         let char_md = {
             let now = chrono::Utc::now().to_rfc3339();
             let mut md = String::with_capacity(512);
             md.push_str(&format!("# Character Style Profile: {}\n\n", cid));
             md.push_str(&format!("来源：用户文本样本学习（{}）\n\n", now));
-            // 复用全局 profile 的条目部分（去掉头部）
-            md.push_str(&profile_md);
+            md.push_str(entries);
             md
         };
-        let _ = crate::style::write_profile(&state.data_root, &char_path, &char_md);
+        // R1: propagate write failure — requests with character_id must not report
+        // success when the character profile was not persisted. 与全局 profile
+        // write_profile(? operator above) 的错误传播纪律对齐。
+        crate::style::write_profile(&state.data_root, &char_path, &char_md)?;
     }
 
     Ok(crate::style::StyleLearnResponse {
@@ -334,9 +345,7 @@ pub async fn get_style_profile(
 }
 
 /// Phase 4.2: `GET /v1/style/profiles` — 列出所有已学习的风格 profile。
-pub async fn list_style_profiles(
-    State(state): State<Arc<DaemonState>>,
-) -> impl IntoResponse {
+pub async fn list_style_profiles(State(state): State<Arc<DaemonState>>) -> impl IntoResponse {
     let result = (|| -> Result<Vec<serde_json::Value>, AirpError> {
         let profiles_dir = state.data_root.join("styles").join("profiles");
         if !profiles_dir.exists() {

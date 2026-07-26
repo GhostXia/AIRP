@@ -27,16 +27,25 @@ pub(in crate::daemon) async fn get_lorebook_graph_endpoint(
     Path(character_id): Path<String>,
     Query(query): Query<GraphQuery>,
 ) -> impl IntoResponse {
-    match run_get_graph(&state, &character_id, query).await {
-        Ok(graph) => match serde_json::to_value(graph) {
-            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
-            Err(e) => AirpError::from(e).into_response(),
-        },
-        Err(e) => e.into_response(),
+    // R1: 把同步 fs + 解析 + build_graph 放到 spawn_blocking，避免阻塞 axum
+    // runtime 线程。lorebook.json 可能达到数百 KB（500 条 entry），读取与
+    // 反序列化在繁忙 daemon 上会显著延迟其它请求。
+    // R2: 直接把 WorldbookGraph 交给 Json（WorldbookGraph 已实现 Serialize），
+    // 不再绕一层 serde_json::to_value → Value → Json，减少一次序列化拷贝。
+    let state = state.clone();
+    match tokio::task::spawn_blocking(move || run_get_graph_sync(&state, &character_id, query))
+        .await
+    {
+        Ok(Ok(graph)) => (StatusCode::OK, Json(graph)).into_response(),
+        Ok(Err(e)) => e.into_response(),
+        Err(join_err) => {
+            AirpError::Internal(format!("lorebook graph task join failed: {}", join_err))
+                .into_response()
+        }
     }
 }
 
-async fn run_get_graph(
+fn run_get_graph_sync(
     state: &DaemonState,
     character_id: &str,
     query: GraphQuery,
@@ -68,9 +77,7 @@ async fn run_get_graph(
     })?;
 
     let lorebook: crate::orchestrator::lorebook::Lorebook = serde_json::from_str(&lorebook_text)
-        .map_err(|e| {
-            AirpError::BadRequest(format!("lorebook.json 解析失败: {}", e))
-        })?;
+        .map_err(|e| AirpError::BadRequest(format!("lorebook.json 解析失败: {}", e)))?;
 
     build_graph(cid.as_str(), &lorebook, &query)
 }

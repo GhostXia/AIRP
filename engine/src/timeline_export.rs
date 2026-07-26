@@ -145,8 +145,43 @@ pub fn build_timeline(
 ) -> Result<TimelineExport, AirpError> {
     let cid = CharacterId::new(character_id)?;
 
-    // 1. 加载 chat log（不创建，不存在则返回空）
-    let log = ChatLog::load_or_create_for_session(data_root, cid.as_str(), session_id)?;
+    // 1. 加载 chat log（read-only：不存在则返回空，不创建新 session，不修复 meta）。
+    //    使用 load_for_session_if_exists 避免 timeline export 产生 side effect
+    //    （创建空 session 文件 / meta 修复写入）。
+    let log = match ChatLog::load_for_session_if_exists(data_root, cid.as_str(), session_id)? {
+        Some(log) => log,
+        None => {
+            // JSONL 不存在 → 返回空 TimelineExport（仅含 world events / clock 元数据）
+            let world_events = load_world_events(data_root, cid.as_str())?;
+            let world_clock = load_world_clock(data_root, cid.as_str())?;
+            let clock_snapshot = WorldClockSnapshot::from(&world_clock);
+            let pending_events: Vec<WorldEvent> = world_events
+                .iter()
+                .filter(|e| !e.triggered)
+                .cloned()
+                .collect();
+            let session_id_str = match session_id {
+                Some(sid) => sid.to_string(),
+                None => String::new(),
+            };
+            return Ok(TimelineExport {
+                generated_at: chrono::Utc::now().to_rfc3339(),
+                character_id: cid.as_str().to_string(),
+                session_id: session_id_str,
+                session_created_at: String::new(),
+                session_updated_at: String::new(),
+                character: character_name.map(|name| CharacterSnapshot {
+                    character_id: cid.as_str().to_string(),
+                    name,
+                }),
+                world_clock: Some(clock_snapshot),
+                entries: Vec::new(),
+                pending_events,
+                message_count: 0,
+                triggered_event_count: world_events.iter().filter(|e| e.triggered).count(),
+            });
+        }
+    };
 
     // 2. 加载 world_events 与 world_clock（角色级，不依赖 session）
     let world_events = load_world_events(data_root, cid.as_str())?;
@@ -154,11 +189,15 @@ pub fn build_timeline(
     let clock_snapshot = WorldClockSnapshot::from(&world_clock);
 
     // 3. 构建条目并排序
-    let entries = build_entries(&log, &world_events);
+    let entries = build_entries(&log, &world_events)?;
 
     let message_count = log.messages.len();
     let triggered_event_count = world_events.iter().filter(|e| e.triggered).count();
-    let pending_events: Vec<WorldEvent> = world_events.iter().filter(|e| !e.triggered).cloned().collect();
+    let pending_events: Vec<WorldEvent> = world_events
+        .iter()
+        .filter(|e| !e.triggered)
+        .cloned()
+        .collect();
 
     let session_id_str = match session_id {
         Some(sid) => sid.to_string(),
@@ -194,7 +233,10 @@ pub fn build_timeline(
 /// 3. 无 ts 的 chat message → 按物理顺序排在末尾
 /// 4. triggered 但无 time_trigger 的 world event → 排在所有 chat message 之后、
 ///    pending 之前
-fn build_entries(log: &ChatLog, world_events: &[WorldEvent]) -> Vec<TimelineEntry> {
+fn build_entries(
+    log: &ChatLog,
+    world_events: &[WorldEvent],
+) -> Result<Vec<TimelineEntry>, AirpError> {
     // 收集 (idx, ts) 二元组：保留物理索引以回查 message_ids[idx]
     let mut timed: Vec<(usize, &Option<String>)> = Vec::new();
     let mut untimed: Vec<usize> = Vec::new();
@@ -246,7 +288,15 @@ fn build_entries(log: &ChatLog, world_events: &[WorldEvent]) -> Vec<TimelineEntr
     }
 
     for (idx, ts) in &timed {
-        let msg = &log.messages[*idx];
+        // 防御性索引：message_timestamps 与 messages 长度不一致时不应 panic，
+        // 而是跳过该条目（数据损坏由上层修复逻辑处理，timeline export 不修复）。
+        let msg = log.messages.get(*idx).ok_or_else(|| {
+            AirpError::Internal(format!(
+                "message index {} out of bounds (messages.len()={})",
+                idx,
+                log.messages.len()
+            ))
+        })?;
         let mid = log.message_ids.get(*idx).cloned();
         entries.push(TimelineEntry::ChatMessage {
             message_id: mid,
@@ -257,7 +307,13 @@ fn build_entries(log: &ChatLog, world_events: &[WorldEvent]) -> Vec<TimelineEntr
     }
 
     for idx in &untimed {
-        let msg = &log.messages[*idx];
+        let msg = log.messages.get(*idx).ok_or_else(|| {
+            AirpError::Internal(format!(
+                "message index {} out of bounds (messages.len()={})",
+                idx,
+                log.messages.len()
+            ))
+        })?;
         let mid = log.message_ids.get(*idx).cloned();
         entries.push(TimelineEntry::ChatMessage {
             message_id: mid,
@@ -278,7 +334,7 @@ fn build_entries(log: &ChatLog, world_events: &[WorldEvent]) -> Vec<TimelineEntr
         });
     }
 
-    entries
+    Ok(entries)
 }
 
 /// MessageRole → 字符串，与 serde 序列化（rename_all = lowercase）一致。
@@ -306,11 +362,20 @@ pub fn to_markdown(timeline: &TimelineExport) -> String {
     out.push_str("## 元数据\n\n");
     out.push_str(&format!("- 角色 ID: `{}`\n", timeline.character_id));
     out.push_str(&format!("- Session ID: `{}`\n", timeline.session_id));
-    out.push_str(&format!("- Session 创建时间: {}\n", timeline.session_created_at));
-    out.push_str(&format!("- Session 更新时间: {}\n", timeline.session_updated_at));
+    out.push_str(&format!(
+        "- Session 创建时间: {}\n",
+        timeline.session_created_at
+    ));
+    out.push_str(&format!(
+        "- Session 更新时间: {}\n",
+        timeline.session_updated_at
+    ));
     out.push_str(&format!("- 导出生成时间: {}\n", timeline.generated_at));
     out.push_str(&format!("- 消息总数: {}\n", timeline.message_count));
-    out.push_str(&format!("- 已触发世界事件: {}\n", timeline.triggered_event_count));
+    out.push_str(&format!(
+        "- 已触发世界事件: {}\n",
+        timeline.triggered_event_count
+    ));
 
     if let Some(clock) = &timeline.world_clock {
         out.push_str(&format!(
@@ -327,10 +392,7 @@ pub fn to_markdown(timeline: &TimelineExport) -> String {
         for entry in &timeline.entries {
             match entry {
                 TimelineEntry::ChatMessage {
-                    ts,
-                    role,
-                    content,
-                    ..
+                    ts, role, content, ..
                 } => {
                     let ts_str = ts.as_deref().unwrap_or("(无时间戳)");
                     let label = match role.as_str() {
@@ -372,7 +434,14 @@ pub fn to_markdown(timeline: &TimelineExport) -> String {
                 .time_trigger
                 .map(|t| format!(" (time_trigger T+{})", t))
                 .unwrap_or_default();
-            out.push_str(&format!("- **{}**{}: {}", escape_md(&e.name), tt, escape_md(&e.description)));
+            // 每条 bullet 末尾必须加 \n，否则多个 pending events 会渲染成同一行
+            // （Markdown 列表项需要换行分隔）。
+            out.push_str(&format!(
+                "- **{}**{}: {}\n",
+                escape_md(&e.name),
+                tt,
+                escape_md(&e.description)
+            ));
         }
         out.push('\n');
     }
@@ -393,24 +462,51 @@ pub fn to_html(timeline: &TimelineExport) -> String {
     out.push_str("<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n");
     out.push_str("<meta charset=\"UTF-8\">\n");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
-    out.push_str(&format!("<title>{} · 剧情时间线</title>\n", escape_html(title)));
+    out.push_str(&format!(
+        "<title>{} · 剧情时间线</title>\n",
+        escape_html(title)
+    ));
     out.push_str(HTML_STYLE);
     out.push_str("</head>\n<body>\n");
 
     out.push_str("<main class=\"timeline-doc\">\n");
 
-    out.push_str(&format!("<h1 class=\"doc-title\">{} · 剧情时间线</h1>\n", escape_html(title)));
+    out.push_str(&format!(
+        "<h1 class=\"doc-title\">{} · 剧情时间线</h1>\n",
+        escape_html(title)
+    ));
 
     // 元数据卡片
     out.push_str("<section class=\"meta-card\">\n");
     out.push_str("<h2>元数据</h2>\n<dl>\n");
-    out.push_str(&format!("<dt>角色 ID</dt><dd><code>{}</code></dd>\n", escape_html(&timeline.character_id)));
-    out.push_str(&format!("<dt>Session ID</dt><dd><code>{}</code></dd>\n", escape_html(&timeline.session_id)));
-    out.push_str(&format!("<dt>Session 创建时间</dt><dd>{}</dd>\n", escape_html(&timeline.session_created_at)));
-    out.push_str(&format!("<dt>Session 更新时间</dt><dd>{}</dd>\n", escape_html(&timeline.session_updated_at)));
-    out.push_str(&format!("<dt>导出生成时间</dt><dd>{}</dd>\n", escape_html(&timeline.generated_at)));
-    out.push_str(&format!("<dt>消息总数</dt><dd>{}</dd>\n", timeline.message_count));
-    out.push_str(&format!("<dt>已触发世界事件</dt><dd>{}</dd>\n", timeline.triggered_event_count));
+    out.push_str(&format!(
+        "<dt>角色 ID</dt><dd><code>{}</code></dd>\n",
+        escape_html(&timeline.character_id)
+    ));
+    out.push_str(&format!(
+        "<dt>Session ID</dt><dd><code>{}</code></dd>\n",
+        escape_html(&timeline.session_id)
+    ));
+    out.push_str(&format!(
+        "<dt>Session 创建时间</dt><dd>{}</dd>\n",
+        escape_html(&timeline.session_created_at)
+    ));
+    out.push_str(&format!(
+        "<dt>Session 更新时间</dt><dd>{}</dd>\n",
+        escape_html(&timeline.session_updated_at)
+    ));
+    out.push_str(&format!(
+        "<dt>导出生成时间</dt><dd>{}</dd>\n",
+        escape_html(&timeline.generated_at)
+    ));
+    out.push_str(&format!(
+        "<dt>消息总数</dt><dd>{}</dd>\n",
+        timeline.message_count
+    ));
+    out.push_str(&format!(
+        "<dt>已触发世界事件</dt><dd>{}</dd>\n",
+        timeline.triggered_event_count
+    ));
     if let Some(clock) = &timeline.world_clock {
         out.push_str(&format!(
             "<dt>世界时钟</dt><dd>{} ({})</dd>\n",
@@ -439,9 +535,7 @@ pub fn to_html(timeline: &TimelineExport) -> String {
                         "system" => ("系统", "msg-system"),
                         _ => (role.as_str(), "msg-other"),
                     };
-                    out.push_str(&format!(
-                        "<li class=\"timeline-item {}\">\n", cls
-                    ));
+                    out.push_str(&format!("<li class=\"timeline-item {}\">\n", cls));
                     out.push_str(&format!(
                         "<div class=\"item-meta\"><span class=\"item-ts\">{}</span><span class=\"item-role\">{}</span></div>\n",
                         escape_html(ts_str), escape_html(label)
@@ -697,25 +791,21 @@ mod tests {
     fn build_entries_empty_log_and_events() {
         let log = make_log(vec![], vec![]);
         let events = vec![];
-        let entries = build_entries(&log, &events);
+        let entries = build_entries(&log, &events).expect("build_entries failed");
         assert!(entries.is_empty());
     }
 
     #[test]
     fn build_entries_only_chat_messages_timed() {
         let log = make_log(
-            vec![
-                ("user", "hi"),
-                ("assistant", "hello"),
-                ("user", "bye"),
-            ],
+            vec![("user", "hi"), ("assistant", "hello"), ("user", "bye")],
             vec![
                 Some("2026-01-01T10:00:00+00:00"),
                 Some("2026-01-01T10:01:00+00:00"),
                 Some("2026-01-01T10:02:00+00:00"),
             ],
         );
-        let entries = build_entries(&log, &[]);
+        let entries = build_entries(&log, &[]).expect("build_entries failed");
         assert_eq!(entries.len(), 3);
         // 应按 ts 升序
         if let TimelineEntry::ChatMessage { ts, role, .. } = &entries[0] {
@@ -740,7 +830,7 @@ mod tests {
                 Some("2026-01-01T10:00:00+00:00"),
             ],
         );
-        let entries = build_entries(&log, &[]);
+        let entries = build_entries(&log, &[]).expect("build_entries failed");
         assert_eq!(entries.len(), 3);
         // timed 排在前面，按 ts 升序
         match &entries[0] {
@@ -776,16 +866,22 @@ mod tests {
             make_event("e1", "黎明", true, Some(6)),
             make_event("e2", "黄昏", true, Some(18)),
         ];
-        let entries = build_entries(&log, &events);
+        let entries = build_entries(&log, &events).expect("build_entries failed");
         // 前 2 个是 world events，按 time_trigger 升序
         assert_eq!(entries.len(), 3);
-        if let TimelineEntry::WorldEvent { name, time_trigger, .. } = &entries[0] {
+        if let TimelineEntry::WorldEvent {
+            name, time_trigger, ..
+        } = &entries[0]
+        {
             assert_eq!(name, "黎明");
             assert_eq!(*time_trigger, Some(6));
         } else {
             panic!("expected WorldEvent first");
         }
-        if let TimelineEntry::WorldEvent { name, time_trigger, .. } = &entries[1] {
+        if let TimelineEntry::WorldEvent {
+            name, time_trigger, ..
+        } = &entries[1]
+        {
             assert_eq!(name, "黄昏");
             assert_eq!(*time_trigger, Some(18));
         } else {
@@ -801,7 +897,7 @@ mod tests {
             vec![Some("2026-01-01T10:00:00+00:00")],
         );
         let events = vec![make_event("e1", "突发", true, None)];
-        let entries = build_entries(&log, &events);
+        let entries = build_entries(&log, &events).expect("build_entries failed");
         assert_eq!(entries.len(), 2);
         assert!(matches!(&entries[0], TimelineEntry::ChatMessage { .. }));
         assert!(matches!(&entries[1], TimelineEntry::WorldEvent { .. }));
@@ -814,7 +910,7 @@ mod tests {
             make_event("e1", "已触发", true, None),
             make_event("e2", "未触发", false, Some(10)),
         ];
-        let entries = build_entries(&log, &events);
+        let entries = build_entries(&log, &events).expect("build_entries failed");
         // 只应有一个已触发 event + 一个 message
         assert_eq!(entries.len(), 2);
     }
@@ -938,7 +1034,10 @@ mod tests {
 
     #[test]
     fn escape_html_special_chars() {
-        assert_eq!(escape_html("a<b>c&d\"e'f"), "a&lt;b&gt;c&amp;d&quot;e&#39;f");
+        assert_eq!(
+            escape_html("a<b>c&d\"e'f"),
+            "a&lt;b&gt;c&amp;d&quot;e&#39;f"
+        );
     }
 
     #[test]
@@ -1015,7 +1114,10 @@ mod tests {
         std::fs::create_dir_all(&char_dir).unwrap();
 
         // 创建命名 session 目录 + 空 chat_log.jsonl + meta
-        let session_dir = char_dir.join("sessions").join("11111111-2222-3333-4444-555555555555").join("history");
+        let session_dir = char_dir
+            .join("sessions")
+            .join("11111111-2222-3333-4444-555555555555")
+            .join("history");
         std::fs::create_dir_all(&session_dir).unwrap();
         std::fs::write(
             session_dir.join("chat_log.jsonl"),
@@ -1062,7 +1164,8 @@ mod tests {
         .unwrap();
 
         let sid = SessionId::parse("11111111-2222-3333-4444-555555555555").unwrap();
-        let timeline = build_timeline(root, char_id, Some(&sid), Some("Alice".to_string())).unwrap();
+        let timeline =
+            build_timeline(root, char_id, Some(&sid), Some("Alice".to_string())).unwrap();
 
         assert_eq!(timeline.character_id, char_id);
         assert_eq!(timeline.session_id, "11111111-2222-3333-4444-555555555555");
@@ -1072,10 +1175,19 @@ mod tests {
         // 1 world event + 2 messages = 3 entries
         assert_eq!(timeline.entries.len(), 3);
         // 第一个是 world event
-        assert!(matches!(&timeline.entries[0], TimelineEntry::WorldEvent { .. }));
+        assert!(matches!(
+            &timeline.entries[0],
+            TimelineEntry::WorldEvent { .. }
+        ));
         // 后两个是 chat message
-        assert!(matches!(&timeline.entries[1], TimelineEntry::ChatMessage { .. }));
-        assert!(matches!(&timeline.entries[2], TimelineEntry::ChatMessage { .. }));
+        assert!(matches!(
+            &timeline.entries[1],
+            TimelineEntry::ChatMessage { .. }
+        ));
+        assert!(matches!(
+            &timeline.entries[2],
+            TimelineEntry::ChatMessage { .. }
+        ));
 
         // 渲染为 markdown / html 应无 panic
         let md = to_markdown(&timeline);
