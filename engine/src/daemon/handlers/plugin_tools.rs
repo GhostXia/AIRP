@@ -216,6 +216,9 @@ pub(in crate::daemon) async fn list_plugin_tools_endpoint(
 /// 4. 持久化到 `data/plugin_tools.json` + `data/plugin_tool_headers.json`（atomic）。
 ///
 /// 持久化失败时不会污染内存（先校验和持久化，再提交到内存）。
+///
+/// **Major1, 2026-07-26**：通过 `plugin_tools_update` 协调器串行化
+/// read-persist-commit，避免并发 upsert / delete 造成盘-内存不一致。
 pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
     State(state): State<Arc<DaemonState>>,
     Json(upsert): Json<PluginToolUpsert>,
@@ -225,6 +228,10 @@ pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
     config
         .validate(&state.data_root)
         .map_err(|e| AirpError::BadRequest(format!("插件工具配置不合法: {e}")))?;
+    // Minor2: 与内建工具命名空间冲突检查由 validate_tool_name 完成（前缀保护）。
+
+    // Major1: 串行化 read-persist-commit。
+    let _lock = state.plugin_tools_update.lock().await;
 
     // 读取当前列表，upsert（按 name 替换或追加）。
     let mut new_tools: Vec<PluginToolConfig> = {
@@ -261,10 +268,16 @@ pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
 /// `DELETE /v1/plugin-tools/:name` — 删除指定 name 的插件工具。
 ///
 /// 不存在时返回 404。
+///
+/// **Major1, 2026-07-26**：与 upsert 共享 `plugin_tools_update` 协调器，
+/// 串行化 read-persist-commit。
 pub(in crate::daemon) async fn delete_plugin_tool_endpoint(
     State(state): State<Arc<DaemonState>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AirpError> {
+    // Major1: 串行化 read-persist-commit。
+    let _lock = state.plugin_tools_update.lock().await;
+
     let mut new_tools: Vec<PluginToolConfig> = {
         let tools = state
             .plugin_tools

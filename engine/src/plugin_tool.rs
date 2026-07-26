@@ -217,6 +217,11 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
 }
 
 /// 校验 webhook URL：只允许 `http://localhost`、`127.0.0.1`、`[::1]` 或任意 `https://`。
+///
+/// **SSRF 控制（Major2, 2026-07-26）**：`https://` 任意 host 都允许加密传输，
+/// 但拒绝解析到 loopback / private / link-local / unspecified 的 IP，避免
+/// 利用公网 DNS 指向内部地址进行 SSRF。允许的 host 类型仅限域名（解析后非内网）
+/// 或公网 IP。`http://` 仅允许字面量 loopback。
 pub fn validate_webhook_url(url: &str) -> Result<(), String> {
     if url.is_empty() {
         return Err("webhook url 不能为空".to_string());
@@ -227,7 +232,32 @@ pub fn validate_webhook_url(url: &str) -> Result<(), String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("webhook url 解析失败: {e}"))?;
     match parsed.scheme() {
         "https" => {
-            // https 任意 host 都允许（已加密）。
+            // https 任意 host 都允许（已加密），但拒绝解析到内网 IP（SSRF 控制）。
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| "webhook url 缺少 host".to_string())?;
+            if host.is_empty() {
+                return Err("webhook url host 为空".to_string());
+            }
+            // 拒绝字面量 IP 形式的内网地址（避免 DNS 解析环节被绕过）。
+            if let Some(ip) = parse_literal_ip(host) {
+                if is_internal_ip(&ip) {
+                    return Err(format!(
+                        "https webhook host 解析为内网 IP ({})，拒绝 SSRF 风险",
+                        ip
+                    ));
+                }
+            } else {
+                // 域名：解析所有 A / AAAA 记录，任一为内网即拒绝。
+                // 注意：DNS 解析可能阻塞，但 validate 在 upsert handler 同步路径上
+                // 调用，且单次解析 <1s。失败时不阻断（视为未解析到内网）。
+                if resolves_to_internal_ip(host) {
+                    return Err(format!(
+                        "https webhook host '{}' 解析到内网 IP，拒绝 SSRF 风险",
+                        host
+                    ));
+                }
+            }
         }
         "http" => {
             let host = parsed
@@ -253,6 +283,68 @@ pub fn validate_webhook_url(url: &str) -> Result<(), String> {
         return Err("webhook url 不允许携带 userinfo".to_string());
     }
     Ok(())
+}
+
+/// 解析字面量 IPv4 / IPv6（含 `[::1]` 形式）。失败返回 None。
+fn parse_literal_ip(host: &str) -> Option<std::net::IpAddr> {
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    // 先试 IPv4
+    if let Ok(v4) = trimmed.parse::<std::net::Ipv4Addr>() {
+        return Some(std::net::IpAddr::V4(v4));
+    }
+    // 再试 IPv6
+    if let Ok(v6) = trimmed.parse::<std::net::Ipv6Addr>() {
+        return Some(std::net::IpAddr::V6(v6));
+    }
+    None
+}
+
+/// 判断 IP 是否为内网（loopback / private / link-local / unspecified / multicast）。
+fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                // IPv6 unique local fc00::/7
+                || {
+                    let segs = v6.segments();
+                    (segs[0] & 0xfe00) == 0xfc00
+                }
+                // IPv6 link-local fe80::/10
+                || {
+                    let segs = v6.segments();
+                    (segs[0] & 0xffc0) == 0xfe80
+                }
+        }
+    }
+}
+
+/// 解析 host 的所有 A/AAAA 记录，任一为内网 IP 返回 true。
+/// 解析失败时返回 false（保守允许，避免 DNS 暂时故障阻断合法 webhook）。
+fn resolves_to_internal_ip(host: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    // ToSocketAddrs 需要 port；用 0 占位。
+    let addr_str = format!("{}:0", host);
+    match addr_str.to_socket_addrs() {
+        Ok(iter) => {
+            for socket_addr in iter {
+                if is_internal_ip(&socket_addr.ip()) {
+                    return true;
+                }
+            }
+            false
+        }
+        Err(_) => false,
+    }
 }
 
 /// 校验脚本路径：必须在 `data_root/plugins/` 下，且必须存在且为文件。
@@ -318,18 +410,32 @@ pub fn validate_script_path(data_root: &Path, relative_path: &str) -> Result<(),
 /// 包装 [`PluginToolConfig`] 为可执行 [`Tool`]。
 ///
 /// `http_client` 由 daemon 共享注入；script 执行通过 `tokio::process::Command`。
+///
+/// **Major3, 2026-07-26**：`name_static` / `description_static` 在 `new` 时
+/// 一次性 leak，避免 `meta()` 每次调用都重复 leak 同一字符串。
 pub struct PluginTool {
     config: PluginToolConfig,
     http_client: reqwest::Client,
     data_root: PathBuf,
+    /// 一次性 leak 的工具名（`&'static str`）。
+    name_static: &'static str,
+    /// 一次性 leak 的工具描述（`&'static str`）。
+    description_static: &'static str,
 }
 
 impl PluginTool {
     pub fn new(config: PluginToolConfig, http_client: reqwest::Client, data_root: PathBuf) -> Self {
+        // Major3: 在构造时一次性 leak name/description，避免 meta() 每次调用都 leak。
+        // 工具数量有限（用户级插件，<100 个），daemon 生命周期内不释放。
+        let name_static: &'static str = Box::leak(config.name.clone().into_boxed_str());
+        let description_static: &'static str =
+            Box::leak(config.description.clone().into_boxed_str());
         Self {
             config,
             http_client,
             data_root,
+            name_static,
+            description_static,
         }
     }
 
@@ -409,6 +515,15 @@ impl PluginTool {
     }
 
     /// 执行脚本调用。返回 stdout 解析后的 JSON。
+    ///
+    /// **安全（Critical1, 2026-07-26）**：在 spawn 之前重新 canonicalize 并校验
+    /// canonical 路径仍在 `data_root/plugins/` 下，防止配置校验后文件系统被替换
+    /// （TOCTOU）。`validate_script_path` 在配置 upsert 时已校验一次，这里是执行
+    /// 时第二次校验。
+    ///
+    /// **并发读写（Critical2, 2026-07-26）**：stdin 写入、stdout/stderr 读取
+    /// 与 child wait 并发执行，避免子进程因 pipe buffer 满而阻塞导致超时假死。
+    /// stdout/stderr 读取使用 `take(MAX_OUTPUT_BYTES + 1)` 限制内存，超限即报错。
     async fn call_script(
         &self,
         params: serde_json::Value,
@@ -425,6 +540,34 @@ impl PluginTool {
                 self.config.name, e
             ))
         })?;
+        // Critical1: 执行前重新校验 canonical 路径仍在 plugins/ 下。
+        let canonical_plugins = plugins_dir.canonicalize().map_err(|e| {
+            AirpError::Internal(format!(
+                "plugins 目录无法访问 {}: {}",
+                plugins_dir.display(),
+                e
+            ))
+        })?;
+        if !canonical.starts_with(&canonical_plugins) {
+            return Err(AirpError::Internal(format!(
+                "插件工具 {} script 路径越出 plugins/ 目录: {}",
+                self.config.name,
+                canonical.display()
+            )));
+        }
+        let metadata = std::fs::metadata(&canonical).map_err(|e| {
+            AirpError::Internal(format!(
+                "插件工具 {} script 元数据读取失败: {}",
+                self.config.name, e
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(AirpError::Internal(format!(
+                "插件工具 {} script 路径不是文件: {}",
+                self.config.name,
+                canonical.display()
+            )));
+        }
         let mut command = tokio::process::Command::new(&canonical);
         command.args(args);
         command.stdin(std::process::Stdio::piped());
@@ -445,20 +588,19 @@ impl PluginTool {
                 self.config.name, e
             ))
         })?;
-        // 先取出 stdout / stderr 管道，避免 `wait_with_output` 消费 child 导致
-        // 超时分支无法 kill 子进程（E0382 borrow of moved value）。
+        // 先取出 stdin / stdout / stderr 管道，避免后续 child.wait() 与之冲突
+        // （Critical2: 并发 stdin 写入 + stdout/stderr 读取 + wait，避免 pipe 阻塞）。
+        let mut stdin_pipe = child.stdin.take();
         let mut stdout_pipe = child.stdout.take();
         let mut stderr_pipe = child.stderr.take();
-        // 写入 stdin。
-        {
-            // 限制 stdin 大小（防止脚本被超大 params 炸掉）。
+        // 任一阶段超时即 kill 子进程并报错。
+        let stdin_handle = {
             let payload = serde_json::to_vec(&serde_json::json!({
                 "params": params,
                 "confirm": confirm,
             }))
             .map_err(|e| AirpError::Internal(format!("序列化 stdin 失败: {e}")))?;
             if payload.len() > MAX_INPUT_BYTES {
-                // 提前 kill 子进程避免泄漏。
                 let _ = child.start_kill();
                 let _ = child.wait().await;
                 return Err(AirpError::Internal(format!(
@@ -468,21 +610,50 @@ impl PluginTool {
                     MAX_INPUT_BYTES
                 )));
             }
-            if let Some(mut stdin) = child.stdin.take() {
-                // 写入失败时不致命：脚本可能不读 stdin。
-                let _ = stdin.write_all(&payload).await;
-                let _ = stdin.shutdown().await;
+            tokio::spawn(async move {
+                if let Some(mut stdin) = stdin_pipe.take() {
+                    // 写入失败时不致命：脚本可能不读 stdin。
+                    let _ = stdin.write_all(&payload).await;
+                    let _ = stdin.shutdown().await;
+                }
+            })
+        };
+        // 并发读取 stdout / stderr，使用 take 限制内存。
+        let stdout_handle = tokio::spawn(async move {
+            if let Some(stdout) = stdout_pipe.as_mut() {
+                use tokio::io::AsyncReadExt;
+                // 多读 1 byte 用于判断是否超限。
+                let mut buf = Vec::new();
+                let _ = stdout
+                    .take((MAX_OUTPUT_BYTES as u64) + 1)
+                    .read_to_end(&mut buf)
+                    .await;
+                buf
+            } else {
+                Vec::new()
             }
-        }
-        // 超时等待 child 退出。`child.wait()` 只借 `&mut self`，超时后 child
-        // 仍可被 kill。
+        });
+        let stderr_handle = tokio::spawn(async move {
+            if let Some(stderr) = stderr_pipe.as_mut() {
+                use tokio::io::AsyncReadExt;
+                let mut buf = Vec::new();
+                let _ = stderr
+                    .take((MAX_OUTPUT_BYTES as u64) + 1)
+                    .read_to_end(&mut buf)
+                    .await;
+                buf
+            } else {
+                Vec::new()
+            }
+        });
+        // 超时等待 child 退出。
         let wait_result =
             tokio::time::timeout(Duration::from_secs(timeout_secs as u64), child.wait()).await;
         let exit_status = match wait_result {
             Err(_) => {
-                // 超时：先 kill 子进程，再 reap（避免僵尸进程）。
                 let _ = child.start_kill();
                 let _ = child.wait().await;
+                // 不必等待 stdin/stdout/stderr handle 完成：子进程已 kill，pipe 会 EOF。
                 return Err(AirpError::Internal(format!(
                     "插件工具 {} script 超时 ({}s)",
                     self.config.name, timeout_secs
@@ -498,17 +669,14 @@ impl PluginTool {
             }
             Ok(Ok(status)) => status,
         };
-        // 收集 stdout / stderr。已 take 出来的 pipe 在这里读。
-        let mut stdout_buf = Vec::new();
-        let mut stderr_buf = Vec::new();
-        if let Some(stdout) = stdout_pipe.as_mut() {
-            use tokio::io::AsyncReadExt;
-            let _ = stdout.read_to_end(&mut stdout_buf).await;
-        }
-        if let Some(stderr) = stderr_pipe.as_mut() {
-            use tokio::io::AsyncReadExt;
-            let _ = stderr.read_to_end(&mut stderr_buf).await;
-        }
+        // 等待 stdin 写入完成（写完即结束，不应阻塞）。
+        let _ = stdin_handle.await;
+        let stdout_buf = stdout_handle
+            .await
+            .map_err(|e| AirpError::Internal(format!("stdout join 失败: {e}")))?;
+        let stderr_buf = stderr_handle
+            .await
+            .map_err(|e| AirpError::Internal(format!("stderr join 失败: {e}")))?;
         if stdout_buf.len() > MAX_OUTPUT_BYTES {
             return Err(AirpError::Internal(format!(
                 "插件工具 {} script stdout 过大 ({} > {} bytes)",
@@ -550,14 +718,11 @@ fn is_protected_header(name: &str) -> bool {
 
 impl Tool for PluginTool {
     fn meta(&self) -> ToolMeta {
-        // PluginToolConfig.name / description 是 String，但 ToolMeta 字段是 &'static str。
-        // 这里用 Box::leak 把 String 转为 &'static str —— 注册时一次性 leak，
-        // 数量有限（用户级插件，<100 个），且 daemon 生命周期内不释放。
-        let name: &'static str = Box::leak(self.config.name.clone().into_boxed_str());
-        let description: &'static str = Box::leak(self.config.description.clone().into_boxed_str());
+        // Major3: 使用构造时 leak 的 name_static / description_static，
+        // 避免 meta() 每次调用都重复 leak。
         ToolMeta {
-            name,
-            description,
+            name: self.name_static,
+            description: self.description_static,
             side_effect: self.config.side_effect.into(),
         }
     }
@@ -569,19 +734,14 @@ impl Tool for PluginTool {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<ToolResult, AirpError>> + Send + '_>,
     > {
-        let config = self.config.clone();
-        let http_client = self.http_client.clone();
-        let data_root = self.data_root.clone();
+        // 返回的 Future 借用 self（`+ '_``），无需 clone config / http_client / data_root。
+        // CodeRabbit nitpick (2026-07-26): 直接调用 self.call_webhook / self.call_script，
+        // 避免每次 call 重复构造 PluginTool 与重复 leak name_static / description_static。
         Box::pin(async move {
-            let timeout = config.invocation.effective_timeout_secs();
-            let output = match &config.invocation {
+            let timeout = self.config.invocation.effective_timeout_secs();
+            let output = match &self.config.invocation {
                 PluginInvocation::Webhook { url, headers, .. } => {
-                    let tool = PluginTool {
-                        config: config.clone(),
-                        http_client,
-                        data_root,
-                    };
-                    tool.call_webhook(params, url, headers, timeout, confirm)
+                    self.call_webhook(params, url, headers, timeout, confirm)
                         .await?
                 }
                 PluginInvocation::Script {
@@ -589,12 +749,7 @@ impl Tool for PluginTool {
                     args,
                     ..
                 } => {
-                    let tool = PluginTool {
-                        config: config.clone(),
-                        http_client,
-                        data_root,
-                    };
-                    tool.call_script(params, relative_path, args, timeout, confirm)
+                    self.call_script(params, relative_path, args, timeout, confirm)
                         .await?
                 }
             };
@@ -704,12 +859,23 @@ pub fn load_plugin_tool_headers(
 ///
 /// headers 字段从 `PluginInvocation::Webhook` 中提取到独立的
 /// `data/plugin_tool_headers.json`，避免 `data/plugin_tools.json` 被分享时泄露密钥。
+///
+/// **Major4, 2026-07-26**：`plugin_tool_headers.json` 含鉴权密钥，
+/// 在 unix 平台上设置 0600 权限防止其他用户读取。
+///
+/// **Critical4, 2026-07-26**：preserve-on-edit 语义。当 webhook 工具的
+/// `headers` 字段为空时，**保留**磁盘上已有的 headers（而不是清空）。
+/// 这是因为前端编辑时只能拿到 `headers_set: bool`，无法回填真实 headers；
+/// 用户不修改 headers 时发空 map，后端应保留原值。如需清空 headers，
+/// 用户必须先删除工具再重新创建（或未来增加显式"清空"按钮）。
 pub fn save_plugin_tools(data_root: &Path, tools: &[PluginToolConfig]) -> Result<(), AirpError> {
     // 校验全部工具。
     for tool in tools {
         tool.validate(data_root)
             .map_err(|e| AirpError::BadRequest(format!("plugin_tools.json 不合法: {e}")))?;
     }
+    // Critical4: 加载已有 headers，对 webhook 工具的空 headers 保留原值。
+    let existing_headers = load_plugin_tool_headers(data_root).unwrap_or_default();
     // 提取 headers 并清空配置中的 headers 字段（serde skip 已保证不写入）。
     let mut headers_map: HashMap<String, BTreeMap<String, String>> = HashMap::new();
     let sanitized: Vec<PluginToolConfig> = tools
@@ -718,7 +884,11 @@ pub fn save_plugin_tools(data_root: &Path, tools: &[PluginToolConfig]) -> Result
             let mut clone = tool.clone();
             if let PluginInvocation::Webhook { headers, .. } = &mut clone.invocation {
                 if !headers.is_empty() {
+                    // 显式更新：用新 headers 覆盖。
                     headers_map.insert(tool.name.clone(), headers.clone());
+                } else if let Some(prev) = existing_headers.get(&tool.name) {
+                    // preserve-on-edit：incoming 为空但磁盘有值 → 保留。
+                    headers_map.insert(tool.name.clone(), prev.clone());
                 }
                 headers.clear();
             }
@@ -740,7 +910,28 @@ pub fn save_plugin_tools(data_root: &Path, tools: &[PluginToolConfig]) -> Result
     let headers_bytes = serde_json::to_vec_pretty(&headers_file)?;
     let headers_path = plugin_tool_headers_file_path(data_root);
     replace_file(&headers_path, &headers_bytes)?;
+    // Major4: 凭据文件设置 0600 权限，防止其他用户读取。
+    restrict_file_permissions(&headers_path);
     Ok(())
+}
+
+/// 在 unix 平台上将文件权限设置为 0600（仅 owner 读写）。
+/// Windows 平台无此语义，no-op。失败时仅记录日志，不阻断流程
+/// （权限加固是 defense-in-depth，不是安全边界）。
+fn restrict_file_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o600);
+            let _ = std::fs::set_permissions(path, permissions);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 // ── 单元测试 ───────────────────────────────────────────────────────────────

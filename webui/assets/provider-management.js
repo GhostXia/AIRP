@@ -220,7 +220,8 @@
     const model = $('#pm-ed-model').value.trim();
     const engine = $('#pm-ed-engine').value;
     const isDefault = $('#pm-ed-default').checked;
-    const apiKey = $('#pm-ed-apikey').value;
+    const apiKeyInput = $('#pm-ed-apikey').value;
+    const apiKeyTrimmed = apiKeyInput.trim();
 
     if (!name) { setStatus('name 不能为空', true); return; }
     if (!endpoint) { setStatus('endpoint 不能为空', true); return; }
@@ -234,30 +235,48 @@
       }
     }
 
+    // Critical4, 2026-07-26: api_key 三态语义
+    // - 编辑现有 provider 且输入为空 → 省略 api_key 字段（preserve-on-edit）
+    // - 编辑现有 provider 且输入非空 → 更新 api_key
+    // - 新增 provider 且输入为空 → api_key = null（不设置）
+    // - 新增 provider 且输入非空 → api_key = 输入值
+    // warn-before-clearing: 编辑时输入为空 = preserve（不修改服务端 key）；
+    //   如需清空 key，用户必须显式输入空格再保存——当前简化为不支持"清空"操作，
+    //   避免误操作丢失凭据。如未来需要"清空"按钮，应在 UI 中显式提供并要求二次确认。
+    let apiKeyPayload;
+    if (editingIndex === -1) {
+      // 新增：null 表示不设置
+      apiKeyPayload = apiKeyTrimmed ? apiKeyTrimmed : null;
+    } else {
+      // 编辑：输入为空 → undefined（省略字段，preserve）；输入非空 → 更新
+      apiKeyPayload = apiKeyTrimmed ? apiKeyTrimmed : undefined;
+    }
+
     if (editingIndex === -1) {
       // 新增
       draftEntries.push({
         name, endpoint, model, engine, is_default: isDefault,
-        api_key: apiKey || null,
+        api_key: apiKeyPayload,
       });
     } else {
       const prev = draftEntries[editingIndex];
-      // api_key 留空表示不修改：保留原值（如有）
-      const preservedKey = apiKey ? apiKey : (prev.api_key || null);
-      draftEntries[editingIndex] = {
+      const newEntry = {
         name, endpoint, model, engine, is_default: isDefault,
-        api_key: preservedKey,
+        api_key: apiKeyPayload,
       };
+      // preserve-on-edit：draft 中保留原值标记，让保存时能正确 omit
+      if (apiKeyPayload === undefined) {
+        newEntry.api_key = prev.api_key;
+        newEntry._api_key_unchanged = true;
+      }
+      draftEntries[editingIndex] = newEntry;
     }
 
     // is_default 互斥：勾选了当前 entry 时，其它 entry 的 is_default 自动取消
     if (isDefault) {
+      const selfIndex = editingIndex === -1 ? draftEntries.length - 1 : editingIndex;
       for (let i = 0; i < draftEntries.length; i++) {
-        if (i !== editingIndex && i !== draftEntries.length - 1 && editingIndex === -1) {
-          draftEntries[i].is_default = false;
-        } else if (i !== editingIndex && editingIndex >= 0) {
-          draftEntries[i].is_default = false;
-        }
+        if (i !== selfIndex) draftEntries[i].is_default = false;
       }
     }
     // 没有 is_default 时，自动把第一个设为 default（保存时后端会校验）
@@ -322,17 +341,29 @@
     }
     setStatus('正在保存 providers...', false);
     try {
-      // 构造请求体；api_key 字段空字符串视为未设置
-      const entriesPayload = draftEntries.map(e => ({
-        name: e.name,
-        endpoint: e.endpoint,
-        model: e.model,
-        engine: e.engine,
-        is_default: e.is_default,
-        // 后端 ProviderEntry.api_key 是 Option<String>，序列化时 serde skip 不会读，
-        // 但反序列化时如果 JSON 中没有该字段就为 None。这里始终带上。
-        api_key: e.api_key || '',
-      }));
+      // Critical4, 2026-07-26: api_key 三态语义
+      // - _api_key_unchanged = true → 省略 api_key 字段（preserve-on-edit）
+      // - api_key = null → 省略 api_key 字段（新增未设置）
+      // - api_key = "" → 发送空字符串（清空）
+      // - api_key 非空 → 发送值（更新）
+      const entriesPayload = draftEntries.map(e => {
+        const payload = {
+          name: e.name,
+          endpoint: e.endpoint,
+          model: e.model,
+          engine: e.engine,
+          is_default: e.is_default,
+        };
+        if (e._api_key_unchanged) {
+          // preserve-on-edit: 不发送 api_key 字段，后端保留已有 key
+        } else if (e.api_key === null || e.api_key === undefined) {
+          // null/undefined：不发送 api_key 字段（新增未设置或 preserve）
+        } else {
+          // 字符串（含空字符串）：发送给后端
+          payload.api_key = e.api_key;
+        }
+        return payload;
+      });
       const body = {
         entries: entriesPayload,
         routing: draftRouting,

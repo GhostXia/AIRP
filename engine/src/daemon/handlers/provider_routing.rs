@@ -108,10 +108,17 @@ pub(in crate::daemon) async fn list_providers_endpoint(
 /// 流程：
 /// 1. 反序列化 + 校验（`validate_provider_config`）。
 /// 2. 提取 `api_key` 到独立的 HashMap（不入 `data/providers.json`）。
+///    **Critical4, 2026-07-26**：`api_key` 字段语义：
+///    - `None`（JSON 中省略）→ 保留服务端已有 key（preserve-on-edit）
+///    - `Some("")` → 清空 key
+///    - `Some("xyz")` → 更新 key
 /// 3. 持久化 `data/providers.json` + `data/provider_keys.json`（atomic via `replace_file`）。
 /// 4. 提交到 `RwLock<ProviderRouter>` 内存状态。
 ///
 /// 持久化失败时不会污染内存（先写盘后改内存）。
+///
+/// **Major1, 2026-07-26**：通过 `provider_routing_update` 协调器串行化
+/// read-persist-commit，避免并发 POST/PUT 造成盘-内存不一致。
 pub(in crate::daemon) async fn update_providers_endpoint(
     State(state): State<Arc<DaemonState>>,
     Json(update): Json<ProvidersUpdate>,
@@ -120,12 +127,30 @@ pub(in crate::daemon) async fn update_providers_endpoint(
     validate_provider_config(&update.entries, &update.routing)
         .map_err(|e| AirpError::BadRequest(format!("providers 配置不合法: {e}")))?;
 
-    // 2) 提取 api_keys
+    // Major1: 串行化 read-persist-commit。
+    let _lock = state.provider_routing_update.lock().await;
+
+    // 2) 提取 api_keys（Critical4: 保留未显式清空的 key）
+    // 先加载服务端已有 keys，对每个 entry：
+    //   - api_key = None → 保留已有 key（如有）
+    //   - api_key = Some("") → 清空
+    //   - api_key = Some("xyz") → 更新
+    let existing_keys = load_provider_keys(&state.data_root)?;
     let mut keys: HashMap<String, String> = HashMap::new();
     for entry in &update.entries {
-        if let Some(key) = entry.api_key.as_deref() {
-            if !key.is_empty() {
-                keys.insert(entry.name.clone(), key.to_string());
+        match &entry.api_key {
+            None => {
+                // 保留服务端已有 key
+                if let Some(k) = existing_keys.get(&entry.name) {
+                    keys.insert(entry.name.clone(), k.clone());
+                }
+            }
+            Some(new_key) if !new_key.is_empty() => {
+                // 更新 key
+                keys.insert(entry.name.clone(), new_key.clone());
+            }
+            Some(_) => {
+                // 空字符串 → 清空（不插入 map，save_provider_keys 会写入过滤后的 map）
             }
         }
     }
@@ -143,8 +168,16 @@ pub(in crate::daemon) async fn update_providers_endpoint(
     .await
     .map_err(|e| AirpError::Internal(format!("provider 持久化任务失败: {e}")))??;
 
-    // 4) 提交到内存
-    let new_router = ProviderRouter::new(update.entries, update.routing);
+    // 4) 提交到内存（注入 api_key 供 router 内部使用）
+    let mut entries_for_memory = update.entries;
+    for entry in entries_for_memory.iter_mut() {
+        if let Some(k) = keys.get(&entry.name) {
+            entry.api_key = Some(k.clone());
+        } else {
+            entry.api_key = None;
+        }
+    }
+    let new_router = ProviderRouter::new(entries_for_memory, update.routing);
     let view_entries: Vec<ProviderEntryView> = new_router
         .entries()
         .iter()
@@ -183,10 +216,16 @@ pub(in crate::daemon) async fn get_routing_endpoint(
 /// `PUT /v1/provider-routing` — 仅替换路由策略表（不动 providers 数组）。
 ///
 /// 校验：新 routing 必须指向已存在的 provider name。
+///
+/// **Major1, 2026-07-26**：与 `update_providers_endpoint` 共享
+/// `provider_routing_update` 协调器，串行化 read-persist-commit。
 pub(in crate::daemon) async fn update_routing_endpoint(
     State(state): State<Arc<DaemonState>>,
     Json(update): Json<RoutingUpdate>,
 ) -> Result<Json<ProviderRouting>, AirpError> {
+    // Major1: 串行化 read-persist-commit。
+    let _lock = state.provider_routing_update.lock().await;
+
     // 1) 读当前 entries，与新 routing 一起校验
     let (entries, current_routing) = {
         let router = state

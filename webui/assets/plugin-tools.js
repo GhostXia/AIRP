@@ -228,8 +228,12 @@
         $('#pt-ed-kind').value = 'webhook';
         $('#pt-ed-wh-url').value = inv.url || '';
         $('#pt-ed-wh-timeout').value = inv.timeout_secs || '';
-        // headers 不返回本体（仅 headers_set），编辑时清空，提示用户重新输入
-        $('#pt-ed-wh-headers').value = inv.headers_set ? '# headers_set=true，请重新输入（不修改则保留原值）' : '';
+        // Critical4, 2026-07-26: headers 不返回本体（仅 headers_set）。
+        // 编辑时清空 textarea，提示用户：留空 = 保留原 headers，输入新内容 = 覆盖。
+        $('#pt-ed-wh-headers').value = '';
+        if (inv.headers_set) {
+          hint.textContent = '已设置自定义 headers；留空表示保留原值，输入新内容会覆盖。';
+        }
       } else if (inv.kind === 'script') {
         $('#pt-ed-kind').value = 'script';
         $('#pt-ed-sc-path').value = inv.relative_path || '';
@@ -266,13 +270,25 @@
     const enabled = $('#pt-ed-enabled').checked;
     const kind = $('#pt-ed-kind').value;
 
+    // Minor3, 2026-07-26: name 格式校验（与后端 `^[a-z0-9_]{1,64}$` 对齐）
     if (!name) {
       hint.textContent = 'name 不能为空';
       hint.classList.add('is-error');
       return;
     }
+    if (!/^[a-z0-9_]{1,64}$/.test(name)) {
+      hint.textContent = 'name 只能包含小写字母、数字和下划线，长度 1-64';
+      hint.classList.add('is-error');
+      return;
+    }
     if (!description) {
       hint.textContent = 'description 不能为空';
+      hint.classList.add('is-error');
+      return;
+    }
+    // Major5, 2026-07-26: 新增工具时检查重名（编辑时 name disabled，无需检查）
+    if (editingIndex === -1 && serverTools.some(t => t.name === name)) {
+      hint.textContent = `工具名 "${name}" 已存在`;
       hint.classList.add('is-error');
       return;
     }
@@ -285,13 +301,9 @@
         hint.classList.add('is-error');
         return;
       }
-      const timeoutRaw = $('#pt-ed-wh-timeout').value.trim();
-      const timeout_secs = timeoutRaw ? Number(timeoutRaw) : null;
-      if (timeout_secs !== null && (!Number.isFinite(timeout_secs) || timeout_secs < 1 || timeout_secs > 30)) {
-        hint.textContent = 'timeout_secs 必须在 1..30 之间';
-        hint.classList.add('is-error');
-        return;
-      }
+      // Minor3: 抽取 timeout 校验为共享 helper
+      const timeout_secs = validateTimeout($('#pt-ed-wh-timeout').value, hint);
+      if (timeout_secs === null && hint.classList.contains('is-error')) return;
       const headersText = $('#pt-ed-wh-headers').value;
       const headers = parseHeaders(headersText);
       if (headers === null) {
@@ -299,16 +311,35 @@
         hint.classList.add('is-error');
         return;
       }
+      // Minor3: 单个 header name/value 长度限制
+      for (const [hname, hvalue] of Object.entries(headers)) {
+        if (hname.length > 64) {
+          hint.textContent = `header name "${hname.slice(0, 16)}..." 超过 64 字符`;
+          hint.classList.add('is-error');
+          return;
+        }
+        if (hvalue.length > 4096) {
+          hint.textContent = `header "${hname}" 的 value 超过 4096 字符`;
+          hint.classList.add('is-error');
+          return;
+        }
+      }
       invocation = {
         kind: 'webhook',
         url,
         headers,
-        timeout_secs: timeout_secs === null ? null : Math.floor(timeout_secs),
+        timeout_secs,
       };
     } else if (kind === 'script') {
       const relative_path = $('#pt-ed-sc-path').value.trim();
       if (!relative_path) {
         hint.textContent = 'relative_path 不能为空';
+        hint.classList.add('is-error');
+        return;
+      }
+      // Minor3: relative_path 长度限制
+      if (relative_path.length > 512) {
+        hint.textContent = 'relative_path 超过 512 字符';
         hint.classList.add('is-error');
         return;
       }
@@ -322,18 +353,22 @@
         hint.classList.add('is-error');
         return;
       }
-      const timeoutRaw = $('#pt-ed-sc-timeout').value.trim();
-      const timeout_secs = timeoutRaw ? Number(timeoutRaw) : null;
-      if (timeout_secs !== null && (!Number.isFinite(timeout_secs) || timeout_secs < 1 || timeout_secs > 30)) {
-        hint.textContent = 'timeout_secs 必须在 1..30 之间';
-        hint.classList.add('is-error');
-        return;
+      // Minor3: 单个 arg 长度限制
+      for (const arg of args) {
+        if (arg.length > 4096) {
+          hint.textContent = '单个 arg 超过 4096 字符';
+          hint.classList.add('is-error');
+          return;
+        }
       }
+      // Minor3: 抽取 timeout 校验为共享 helper
+      const timeout_secs = validateTimeout($('#pt-ed-sc-timeout').value, hint);
+      if (timeout_secs === null && hint.classList.contains('is-error')) return;
       invocation = {
         kind: 'script',
         relative_path,
         args,
-        timeout_secs: timeout_secs === null ? null : Math.floor(timeout_secs),
+        timeout_secs,
       };
     } else {
       hint.textContent = '未知 invocation.kind: ' + kind;
@@ -353,6 +388,20 @@
       hint.textContent = '保存失败：' + (err && err.message ? err.message : String(err));
       hint.classList.add('is-error');
     }
+  }
+
+  // Minor3, 2026-07-26: 共享 timeout 校验 helper。
+  // 返回解析后的 timeout_secs（null 表示未设置），或在校验失败时设置 hint 并返回 null + is-error。
+  function validateTimeout(raw, hint) {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const num = Number(trimmed);
+    if (!Number.isFinite(num) || num < 1 || num > 30) {
+      hint.textContent = 'timeout_secs 必须在 1..30 之间';
+      hint.classList.add('is-error');
+      return null;
+    }
+    return Math.floor(num);
   }
 
   // 解析 "Name: Value" 多行 headers。返回 BTreeMap-like 对象，或 null（格式错误）。

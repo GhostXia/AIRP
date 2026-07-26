@@ -29,7 +29,19 @@ pub struct RouteContext {
 pub struct ProviderEntry {
     pub name: String,
     pub endpoint: String,
-    #[serde(skip)]
+    /// API key for this provider.
+    ///
+    /// **Serde 语义（Critical4, 2026-07-26）**：
+    /// - 序列化时 skip（`skip_serializing`）：`GET /v1/providers` 不返回 key 本体，
+    ///   只返回 `api_key_set: bool`（由 handler 构造的 `ProviderEntryView`）。
+    /// - 反序列化时使用 default（`default`）：客户端**省略**该字段时为 `None`，
+    ///   表示"保留服务端已有 key"（preserve-on-edit）。
+    /// - 客户端传 `api_key: ""` 表示"清空 key"（warn-before-clearing 由前端处理）。
+    /// - 客户端传 `api_key: "new_value"` 表示"更新 key"。
+    ///
+    /// 注意：`providers.json` 持久化时由 `save_provider_routing` 防御性清空为 `None`，
+    /// 真实 key 存放在 `provider_keys.json`。
+    #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
     pub model: String,
     #[serde(default)]
@@ -378,6 +390,9 @@ pub fn load_provider_keys(data_root: &Path) -> Result<HashMap<String, String>, A
 /// 将 provider name → api_key 映射写入 `data/provider_keys.json`。
 ///
 /// 空字符串会被过滤掉（视为未设置）。
+///
+/// **Major4, 2026-07-26**：`provider_keys.json` 含 api_key 密钥，
+/// 在 unix 平台上设置 0600 权限防止其他用户读取。
 pub fn save_provider_keys(
     data_root: &Path,
     keys: &HashMap<String, String>,
@@ -393,7 +408,29 @@ pub fn save_provider_keys(
     };
     let bytes = serde_json::to_vec_pretty(&file)?;
     let path = provider_keys_file_path(data_root);
-    crate::data_dir::replace_file(&path, &bytes)
+    crate::data_dir::replace_file(&path, &bytes)?;
+    // Major4: 凭据文件设置 0600 权限，防止其他用户读取。
+    restrict_file_permissions(&path);
+    Ok(())
+}
+
+/// 在 unix 平台上将文件权限设置为 0600（仅 owner 读写）。
+/// Windows 平台无此语义，no-op。失败时仅记录日志，不阻断流程
+/// （权限加固是 defense-in-depth，不是安全边界）。
+fn restrict_file_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o600);
+            let _ = std::fs::set_permissions(path, permissions);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 /// 一次性加载 entries + routing + api_keys，构造 ready-to-use `ProviderRouter`。
@@ -718,7 +755,7 @@ mod tests {
 
     #[test]
     fn router_serializes_entries_via_serde_skip_api_key() {
-        // api_key 使用 serde(skip)，序列化结果不应包含该字段
+        // api_key 使用 serde(default, skip_serializing)，序列化结果不应包含该字段
         let mut e = entry("openai", "https://x", "gpt-4o", true);
         e.api_key = Some("sk-secret".to_string());
         let v = serde_json::to_value(&e).unwrap();
@@ -728,6 +765,33 @@ mod tests {
         let raw = serde_json::to_string(&e).unwrap();
         let back: ProviderEntry = serde_json::from_str(&raw).unwrap();
         assert!(back.api_key.is_none());
+    }
+
+    /// Critical4, 2026-07-26：验证 `api_key` 字段的三态反序列化语义。
+    /// - JSON 中省略 api_key → `None`（preserve-on-edit）
+    /// - JSON 中 api_key = "" → `Some("")`（clear）
+    /// - JSON 中 api_key = "sk-xyz" → `Some("sk-xyz")`（update）
+    #[test]
+    fn provider_entry_api_key_deserializes_three_states_for_critical4() {
+        // 省略 api_key 字段 → None
+        let raw_no_key = r#"{"name":"openai","endpoint":"https://x","model":"gpt-4o"}"#;
+        let e: ProviderEntry = serde_json::from_str(raw_no_key).unwrap();
+        assert!(e.api_key.is_none(), "omitted api_key must be None");
+
+        // api_key = "" → Some("")
+        let raw_empty = r#"{"name":"openai","endpoint":"https://x","model":"gpt-4o","api_key":""}"#;
+        let e: ProviderEntry = serde_json::from_str(raw_empty).unwrap();
+        assert_eq!(
+            e.api_key.as_deref(),
+            Some(""),
+            "empty api_key must be Some(\"\")"
+        );
+
+        // api_key = "sk-xyz" → Some("sk-xyz")
+        let raw_with_key =
+            r#"{"name":"openai","endpoint":"https://x","model":"gpt-4o","api_key":"sk-xyz"}"#;
+        let e: ProviderEntry = serde_json::from_str(raw_with_key).unwrap();
+        assert_eq!(e.api_key.as_deref(), Some("sk-xyz"));
     }
 
     #[test]

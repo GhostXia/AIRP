@@ -74,11 +74,17 @@ pub struct DaemonState {
     /// 由 `data/providers.json` + `data/provider_keys.json` 加载，
     /// `POST /v1/providers` / `PUT /v1/provider-routing` 在线热更新。
     pub provider_router: std::sync::RwLock<crate::provider_routing::ProviderRouter>,
+    /// Phase 5.1 (Major1, 2026-07-26)：provider 路由写操作（upsert / update_routing）
+    /// 协调器，串行化 read-persist-commit，避免并发写造成盘-内存不一致。
+    pub provider_routing_update: tokio::sync::Mutex<()>,
     /// Phase 5.3：插件工具配置。由 `data/plugin_tools.json` +
     /// `data/plugin_tool_headers.json` 加载，`POST /v1/plugin-tools` /
     /// `DELETE /v1/plugin-tools/:name` 在线热更新。`AgentLoop::new` 在构造
     /// ToolRegistry 时读取此字段，把启用的 PluginTool 注册进去。
     pub plugin_tools: std::sync::RwLock<Vec<crate::plugin_tool::PluginToolConfig>>,
+    /// Phase 5.3 (Major1, 2026-07-26)：plugin tools 写操作（upsert / delete）
+    /// 协调器，串行化 read-persist-commit，避免并发写造成盘-内存不一致。
+    pub plugin_tools_update: tokio::sync::Mutex<()>,
 }
 
 /// `/v1/settings` 的异步事务协调器。

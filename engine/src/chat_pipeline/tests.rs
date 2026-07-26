@@ -78,7 +78,9 @@ mod tests {
             fts: Default::default(),
             settings_update: Default::default(),
             provider_router: Default::default(),
+            provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
+            plugin_tools_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1000,7 +1002,9 @@ mod tests_ms6 {
             fts: Default::default(),
             settings_update: Default::default(),
             provider_router: Default::default(),
+            provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
+            plugin_tools_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1226,7 +1230,9 @@ mod tests_issue27 {
             fts: Default::default(),
             settings_update: Default::default(),
             provider_router: Default::default(),
+            provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
+            plugin_tools_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1384,7 +1390,9 @@ mod tests_dx1 {
             fts: Default::default(),
             settings_update: Default::default(),
             provider_router: Default::default(),
+            provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
+            plugin_tools_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1941,7 +1949,9 @@ mod tests_a1b_pipeline_e2e {
             fts: Default::default(),
             settings_update: Default::default(),
             provider_router: Default::default(),
+            provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
+            plugin_tools_update: Default::default(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
