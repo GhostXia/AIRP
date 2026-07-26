@@ -1245,13 +1245,46 @@ mod tests {
         assert!(!is_protected_header("X-Custom"));
     }
 
-    #[test]
-    fn webhook_non_success_error_omits_response_body() {
-        let error = webhook_non_success_error("private_tool", reqwest::StatusCode::BAD_GATEWAY);
-        let message = error.to_string();
-        assert!(message.contains("private_tool"));
-        assert!(message.contains("502"));
-        assert!(!message.contains("body="));
+    #[tokio::test]
+    async fn webhook_non_success_error_omits_response_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const SECRET_BODY: &str = "unique-secret-webhook-body-8f3d2a";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/hook"))
+            .respond_with(ResponseTemplate::new(502).set_body_string(SECRET_BODY))
+            .mount(&server)
+            .await;
+
+        let dir = make_data_root();
+        let tool = PluginTool::new(
+            PluginToolConfig {
+                name: "private_tool".to_string(),
+                description: "test webhook error redaction".to_string(),
+                side_effect: PluginSideEffect::Readonly,
+                enabled: true,
+                invocation: PluginInvocation::Webhook {
+                    url: format!("{}/hook", server.uri()),
+                    headers: BTreeMap::new(),
+                    timeout_secs: None,
+                },
+            },
+            reqwest::Client::new(),
+            dir.path().to_path_buf(),
+        );
+
+        let error = tool
+            .call(serde_json::json!({"input": "test"}), false)
+            .await
+            .unwrap_err();
+        let internal_message = error.to_string();
+        let public_message = error.public_message();
+        assert!(internal_message.contains("private_tool"));
+        assert!(internal_message.contains("502"));
+        assert!(!internal_message.contains(SECRET_BODY));
+        assert!(!public_message.contains(SECRET_BODY));
     }
 
     #[tokio::test]
