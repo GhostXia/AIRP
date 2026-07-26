@@ -44,6 +44,7 @@ jobs:
               throw "Tracked data fixture is unexpectedly ignored: $path"
             }
           }
+          exit 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
