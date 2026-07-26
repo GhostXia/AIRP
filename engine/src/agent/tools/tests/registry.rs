@@ -1,6 +1,6 @@
 // Registry contract tests for `agent::tools`.
 //
-// 本文件固定 `default_registry` 的 28 工具契约：名称、排序、description、
+// 本文件固定 `default_registry` 的 30 工具契约：名称、排序、description、
 // side_effect 精确快照。任何工具的新增/删除/改名/metadata 变更都会立刻
 // 被快照测试捕获，迫使开发者 conscious 更新而非静默漂移。
 

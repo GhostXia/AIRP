@@ -36,18 +36,19 @@ use handlers::{
     add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion, chat_search,
     continue_chat, create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
-    delete_session_endpoint, edit_message, get_character_avatar, get_character_card,
-    get_character_lorebook, get_character_state, get_character_state_history,
+    delete_session_endpoint, edit_message, generate_image_endpoint, get_character_avatar,
+    get_character_card, get_character_lorebook, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
     get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
-    get_resident_memory, get_scene_endpoint, get_settings, get_user_model, get_world_events,
-    import_character, import_preset_endpoint, list_agent_tools, list_characters, list_models,
-    list_personas_endpoint, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
+    get_resident_memory, get_scene_endpoint, get_settings, get_template_endpoint, get_user_model,
+    get_world_events, import_character, import_preset_endpoint, instantiate_template_endpoint,
+    list_agent_tools, list_characters, list_images_endpoint, list_models, list_personas_endpoint,
+    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint, list_templates_endpoint,
     preview_chat_assembly, reextract_character_assets, regen_chat, rollback_chat, rollback_drift,
-    style_review, swipe_chat, switch_branch, unbind_persona_endpoint, update_character_card,
-    update_character_lorebook, update_drift, update_persona_endpoint,
-    update_persona_multi_endpoint, update_plot_arc, update_resident_memory, update_settings,
-    update_user_model,
+    serve_image_endpoint, serve_session_image_endpoint, style_review, swipe_chat, switch_branch,
+    unbind_persona_endpoint, update_character_card, update_character_lorebook, update_drift,
+    update_persona_endpoint, update_persona_multi_endpoint, update_plot_arc,
+    update_resident_memory, update_settings, update_user_model,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -365,6 +366,33 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/characters/:character_id/plot-arc",
             get(get_plot_arc).put(update_plot_arc.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
+        )
+        // ── Phase 3.3: 场景插图生成 API ───────────────────────────────────
+        .route("/v1/image/generate", post(generate_image_endpoint))
+        .route(
+            "/v1/characters/:character_id/images",
+            get(list_images_endpoint),
+        )
+        // CodeRabbit #2：服务已生成图片的实际字节。`ServeDir` fallback 指向
+        // webui 静态目录，无法服务 `data_root/characters/...` 下的图片资产，
+        // 必须显式路由。
+        .route(
+            "/v1/characters/:character_id/images/:filename",
+            get(serve_image_endpoint),
+        )
+        .route(
+            "/v1/characters/:character_id/sessions/:session_id/images/:filename",
+            get(serve_session_image_endpoint),
+        )
+        // ── Phase 4.1: 角色卡模板库 API ───────────────────────────────────
+        .route("/v1/character-templates", get(list_templates_endpoint))
+        .route(
+            "/v1/character-templates/:template_id",
+            get(get_template_endpoint),
+        )
+        .route(
+            "/v1/character-templates/:template_id/instantiate",
+            post(instantiate_template_endpoint),
         )
         .route(
             "/v1/scenes",

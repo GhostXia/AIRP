@@ -21,6 +21,7 @@
 
 pub mod adapter;
 pub mod agent;
+pub mod character_templates;
 pub mod chat_pipeline;
 pub mod chat_store;
 pub mod config;
@@ -30,6 +31,7 @@ pub mod data_dir;
 pub mod decompose;
 pub mod domain;
 pub mod error;
+pub mod image_gen;
 pub mod memory;
 pub mod orchestrator;
 pub mod outbound;
