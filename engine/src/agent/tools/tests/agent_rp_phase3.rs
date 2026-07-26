@@ -671,6 +671,233 @@ async fn advance_plot_returns_internal_when_plot_history_field_is_wrong_type() {
     }
 }
 
+/// 审计 Bug B 修复测试：`advance_clock` 推进世界时钟到 `time_trigger` 阈值时，
+/// 到期事件内容必须被追加到 `current.md`，且 `triggered` 标志必须被持久化。
+///
+/// 旧 Bug B：`AdvanceClockTool::call` 未持有 `session_lock` 就调用
+/// `append_to_current`，允许并发 `npc_action` / `advance_plot` 的 append
+/// 与此处的 append 在 `current.md` 中交错混合叙事内容。修复后，
+/// `AdvanceClockTool::call` 在 `session_lock` 临界区内执行 append。
+///
+/// 本测试覆盖功能性契约（事件触发 + 内容追加 + 标志持久化）；
+/// 并发不交错由 `session_lock` 串行化保证，与 `npc_action` 共享同一把锁。
+#[tokio::test]
+async fn advance_clock_triggers_time_events_and_appends_to_current() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "adv_clk_trig");
+    let reg = default_registry(state.clone());
+
+    // 写入 world_clock.json：current_time=0, advance_per_turn=1
+    let clock_path = state
+        .data_root
+        .join("characters/adv_clk_trig/world_clock.json");
+    std::fs::write(
+        &clock_path,
+        serde_json::json!({
+            "current_time": 0,
+            "advance_per_turn": 1,
+            "time_unit": "hour"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // 写入 world_events.json：一个 time_trigger=1 的事件
+    let events_path = state
+        .data_root
+        .join("characters/adv_clk_trig/world_events.json");
+    std::fs::write(
+        &events_path,
+        serde_json::json!([{
+            "id": "evt_time_1",
+            "name": "Dawn",
+            "description": "The sun rises",
+            "content": "Golden light spills over the horizon.",
+            "time_trigger": 1
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    // 调用 advance_clock：默认推进 advance_per_turn=1，current_time 从 0→1，
+    // 达到 time_trigger=1 阈值，事件应被触发。
+    let tool = reg.get("advance_clock").unwrap();
+    let result = tool
+        .call(serde_json::json!({"character_id": "adv_clk_trig"}), true)
+        .await
+        .unwrap();
+
+    assert_eq!(result.output["current_time"], 1);
+    let triggered = result.output["triggered_events"].as_array().unwrap();
+    assert_eq!(triggered.len(), 1);
+    assert_eq!(triggered[0], "Dawn");
+
+    // current.md 应含事件内容（由 session_lock 临界区内的 append 写入）。
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "adv_clk_trig", None).unwrap();
+    let current = crate::volume_store::read_current(&session_dir).unwrap();
+    assert!(
+        current.contains("[世界事件: Dawn]"),
+        "current.md should contain event injection, got: {current}"
+    );
+    assert!(
+        current.contains("Golden light spills over the horizon."),
+        "current.md should contain event content"
+    );
+
+    // world_events.json 中 triggered 应为 true（由 state_lock 临界区内的
+    // save_world_events 持久化）。
+    let events: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&events_path).unwrap()).unwrap();
+    assert_eq!(events[0]["triggered"], true);
+}
+
+/// 审计 Bug B 修复测试：`advance_clock` 在没有到期事件时，不应向 `current.md`
+/// 追加任何内容，且 `triggered_events` 应为空数组。
+#[tokio::test]
+async fn advance_clock_no_due_events_does_not_append() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "adv_clk_empty");
+    let reg = default_registry(state.clone());
+
+    let clock_path = state
+        .data_root
+        .join("characters/adv_clk_empty/world_clock.json");
+    std::fs::write(
+        &clock_path,
+        serde_json::json!({
+            "current_time": 0,
+            "advance_per_turn": 1,
+            "time_unit": "hour"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // 事件的 time_trigger=10，当前推进到 1，不会触发。
+    // 显式写入 triggered:false，使后续断言 events[0]["triggered"] == false
+    // 可靠（不依赖 serde 默认值，因 advance_clock 不触发事件时不会重写文件）。
+    let events_path = state
+        .data_root
+        .join("characters/adv_clk_empty/world_events.json");
+    std::fs::write(
+        &events_path,
+        serde_json::json!([{
+            "id": "evt_future",
+            "name": "Eclipse",
+            "description": "A rare eclipse",
+            "content": "Darkness falls at noon.",
+            "time_trigger": 10,
+            "triggered": false
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    let tool = reg.get("advance_clock").unwrap();
+    let result = tool
+        .call(serde_json::json!({"character_id": "adv_clk_empty"}), true)
+        .await
+        .unwrap();
+
+    assert_eq!(result.output["current_time"], 1);
+    let triggered = result.output["triggered_events"].as_array().unwrap();
+    assert_eq!(triggered.len(), 0, "no events should be triggered");
+
+    // current.md 不应含事件内容。
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "adv_clk_empty", None).unwrap();
+    let current = crate::volume_store::read_current(&session_dir).unwrap();
+    assert!(
+        !current.contains("Eclipse"),
+        "current.md should not contain untriggered event content"
+    );
+
+    // 事件不应被标记为 triggered。
+    let events: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&events_path).unwrap()).unwrap();
+    assert_eq!(events[0]["triggered"], false);
+}
+
+/// 审计 Bug B 修复测试：`advance_clock` 批量触发多个到期事件时，
+/// 所有事件内容应被合并为单次追加（而非逐事件 append），避免部分
+/// 成功部分失败导致重复注入。所有到期事件应被标记为 triggered。
+#[tokio::test]
+async fn advance_clock_triggers_multiple_due_events_in_single_append() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "adv_clk_multi");
+    let reg = default_registry(state.clone());
+
+    let clock_path = state
+        .data_root
+        .join("characters/adv_clk_multi/world_clock.json");
+    std::fs::write(
+        &clock_path,
+        serde_json::json!({
+            "current_time": 0,
+            "advance_per_turn": 5,
+            "time_unit": "hour"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // 两个事件都在 time_trigger=3，推进 5 后都应触发。
+    let events_path = state
+        .data_root
+        .join("characters/adv_clk_multi/world_events.json");
+    std::fs::write(
+        &events_path,
+        serde_json::json!([
+            {
+                "id": "evt_a",
+                "name": "Storm",
+                "description": "A sudden storm",
+                "content": "Lightning split the sky.",
+                "time_trigger": 3
+            },
+            {
+                "id": "evt_b",
+                "name": "Festival",
+                "description": "Annual festival",
+                "content": "The town square fills with color.",
+                "time_trigger": 3
+            }
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let tool = reg.get("advance_clock").unwrap();
+    let result = tool
+        .call(serde_json::json!({"character_id": "adv_clk_multi"}), true)
+        .await
+        .unwrap();
+
+    assert_eq!(result.output["current_time"], 5);
+    let triggered = result.output["triggered_events"].as_array().unwrap();
+    assert_eq!(triggered.len(), 2, "both events should be triggered");
+
+    // current.md 应含两个事件的内容（单次 append）。
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "adv_clk_multi", None).unwrap();
+    let current = crate::volume_store::read_current(&session_dir).unwrap();
+    assert!(current.contains("Lightning split the sky."));
+    assert!(current.contains("The town square fills with color."));
+
+    // 两个事件都应被标记为 triggered。
+    let events: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&events_path).unwrap()).unwrap();
+    assert_eq!(events[0]["triggered"], true);
+    assert_eq!(events[1]["triggered"], true);
+}
+
 /// 审计 Bug F（死锁）修复测试：`trigger_world_event` 与 `advance_plot` 在同一
 /// `character_id` 上并发执行时不得死锁。
 ///
