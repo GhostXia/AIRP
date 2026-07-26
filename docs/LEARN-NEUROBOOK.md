@@ -5,7 +5,7 @@
 > 对象：https://github.com/notnotype/neuro-book —— 本地 AI 工作台 IDE，长篇小说写作 + AI RP。Nuxt/Vue/Bun/SQLite/Prisma。许可证记录已于 2026-07-11 复核为 AGPL-3.0；此前 PolyForm Noncommercial 的记录已经过时。本文仍仅参考理念，不搬代码。
 > topics 直接含 `airp` / `rp` / `sillytavern` / `harness` / `agent`——与我们**高度同域**，且它**独立收敛出与我们相同的多个核心设计**，佐证方向、并提供可借鉴的具体形态。
 > 性质：学习参考。一切以 AIRP 实际需求与 [PLAN.md](PLAN.md) §1 为准。
-> 最后更新：2026-07-11
+> 研究更新：2026-07-11；状态复核：2026-07-26，`main@200fed9`
 
 ---
 

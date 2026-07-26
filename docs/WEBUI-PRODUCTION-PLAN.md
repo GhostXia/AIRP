@@ -1,10 +1,10 @@
 # WebUI 正式上线计划
 
-> 状态：当前近期执行主入口
+> 状态：发布门与验收计划；近期优先级总览以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准
 >
-> 基线日期：2026-07-24，`main@44b9c83` / PR #310
+> 基线日期：2026-07-26，`main@200fed9`
 >
-> 产品目标：继续把现有“基本可用的开发/验证 WebUI”收敛为首聊黄金路径可重复验收的 P1 有限试用版；再推进可升级、可恢复的正式 Web 产品。
+> 产品目标：在 Phase 1–5.3 功能扩张后，暂停用页面/功能数量替代发布证据；先把真实首聊、刷新/重启恢复、失败关闭、视觉一致性和用户资产安全收敛为可重复验收的 P1 有限试用版，再推进可升级、可恢复的正式 Web 产品。
 
 P0 的已接受实现合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。首方 OCI/Compose + Caddy 同源入口、生产配置、鉴权、远端导入边界与 production topology smoke 已实现；P1-P3 仍是正式上线前置，不能把 P0 全绿写成正式发布。
 

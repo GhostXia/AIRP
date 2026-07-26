@@ -1,128 +1,83 @@
 # AIRP 产品与架构计划
 
-> 状态：长期产品原则与目标架构
->
-> 最后校准：2026-07-23
->
-> 当前事实与近期顺序分别以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 和 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) 为准。本文不证明任何功能已经交付。
+> 状态：活路线原则
+> 校准：2026-07-26，`main@200fed9`
+> 当前能力与开放缺口以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 和 GitHub issues 为准。
 
-## 1. 产品北极星
+## 1. 产品目标
 
-AIRP 是一个专精 Role Play 的完整 AI Agent 客户端：无头 RP/Agent engine 提供数据、推理、工具、记忆与扩展原语；WebUI、桌面 UI 或未来客户端通过稳定协议使用同一内核。
+AIRP 要成为可本地拥有、可审计、可恢复的 Role Play Agent 客户端：
 
-权威始终是 AIRP 自身用户需求。第一方前序仓库和第三方项目只能提供资产、理念、公开行为与互操作性经验，不能替 AIRP 决定产品边界。来源吸收规则见 [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)，第三方独立实现与 provenance 见 [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)。
+- 角色、Persona、Preset、Worldbook、会话和记忆由用户持有；
+- Engine 是数据、装配、Agent 执行和安全边界的唯一真相；
+- WebUI 是当前正式交付主面，桌面端是保留维护线；
+- Agent 能力服务 RP 工作流，不以通用编排平台、工具数量或页面数量作为产品目标；
+- 内部结构可以迭代甚至重建，但用户资产必须可迁移、验证、导出和回滚。
 
-代码取向：更开放、更透明、未来更易修正、更易迭代更新。表现为清楚的接口与扩展点、可观察的状态/决策/错误、低耦合可替换边界，以及版本化、小步迁移的数据和协议。
+## 2. 当前阶段：P1 收敛
 
-## 2. 不可破坏的不变式
+Phase 1–5.3 的大量功能已在 2026-07-25 至 2026-07-26 合入。当前约束已从“缺功能”转为“功能面超过验证面”。在 P1 证据闭合前，默认冻结无直接用户证据的新子系统扩张。
 
-1. **干净角色平面**：角色卡、世界书、Preset、Persona、state、记忆和历史进入 RP prompt；工具定义、调用、结果与编排脚手架走模型原生控制平面，不写入角色自然语言。`subagent_context_has_no_orchestrator_noise` 是阻塞门禁。
-2. **有界 Agent**：每次运行都有 step、token、成本、墙钟和取消边界；每步可观察、可审计。
-3. **能力在 engine 强制**：allowlist、capability、破坏性确认、幂等和单写者规则不能只靠 UI 声明。
-4. **数据单一真相**：业务数据由 engine shared service 管理；HTTP、Agent tool、UI 和未来 MCP adapter 复用同一合同，不各自落盘。
-5. **大数据不驻留窄管**：大文件优先 path token、multipart 或流式传输；不得把 base64/blob 长期塞入模型上下文、reactive store、Blueprint 或日志。服务端路径只允许可信本地调用。
-6. **性能有界**：历史在 engine 完整保留，UI 只取窗口；稳定 ID、增量 patch、流式追加、离屏清理与可测内存上界是产品合同。
-7. **扩展受控开放**：工具、事件、宏、技能和声明式 Widget 可以开放，但必须经过 capability、沙箱、用户同意和审计；不执行 Agent 或第三方生成的任意代码。
+P1 通过需要同时满足：
 
-## 3. 目标架构
+1. 新用户能完成 onboarding、配置 provider、导入/创建角色并完成真实首聊；
+2. 继续生成、编辑、分支、Swipe、刷新页面和重启服务后，历史与活动状态保持一致；
+3. 网络中断、provider 错误、取消、超时和关键落盘失败不会产生虚假成功或静默损坏；
+4. provider key、bearer、路径和私密正文不会泄漏到 URL、浏览器持久化、日志、诊断或错误响应；
+5. Windows 便携包有可重复 smoke；production preview 的结论只用于其自身拓扑；
+6. 关键路径有自动化证据，并完成真实浏览器/人工验收。
 
-```text
-WebUI / Tauri / future clients
-        │  stable HTTP/SSE + versioned UI protocol
-        ▼
-AIRP engine
-├── Agent kernel
-│   ├── provider adapters + bounded loop
-│   ├── Tool / Memory / Skill / Hook / Macro / Subagent primitives
-│   └── capability, budget, cancel, trace and arbitration
-├── RP domain
-│   ├── Character / Persona / Preset / Worldbook / Scene
-│   ├── Session / History / State / Memory / Revision
-│   └── pristine prompt assembly and import diagnostics
-└── service adapters
-    ├── HTTP/SSE
-    ├── built-in Agent tools
-    └── optional MCP and extension adapters
-```
+页面、route、测试数量或单次演示都不能单独满足这些条件。
 
-当前只交付 RP 产品。通用原语必须保持可复用，但不能为了“平台化”提前牺牲 RP 闭环。
+## 3. 交付顺序
 
-## 4. 产品能力支柱
+### P1-A：正确性与恢复
 
-### 4.1 角色、Persona 与 Preset
+- 处理并发、锁序、跨资源提交、failure injection 和误报成功；
+- 统一删除、revision、migration、备份与回滚边界；
+- 把 screen 34–44 纳入空/错/慢/刷新状态和最小 browser smoke；
+- 清理已实现但 issue/文档仍标为未实现的状态漂移。
 
-- 角色卡支持受控导入、稳定 ID、原始 sidecar、canonical view 与明确 provenance。
-- Persona 是用户 RP 身份，不是客户端任意拼入的字符串；目标支持 default、角色绑定、session 绑定、revision、导入导出和可观察的有效配置。
-- Preset 是可迁移的建议与结构化 prompt 资产；不能把特定模型的机械参数顺序当成跨模型真理。
-- 当前实现和剩余产品边界见 [PERSONA-HTTP-API-PLAN.md](PERSONA-HTTP-API-PLAN.md) 与 #114/#115。
+### P1-B：真实黄金路径
 
-### 4.2 Worldbook 与资产规格
+- 真实 provider + 真实浏览器；
+- onboarding → 首聊 → 多轮 → 页面刷新 → 服务重启；
+- 单角色、scene/群聊、Agent run 各取最小代表路径；
+- 记录成功条件、失败分类、恢复动作和用户可理解提示。
 
-- AIRP 使用自己的版本化 canonical model，并保留第三方字段和来源；“成功导入”必须区分 converted、preserved、unsupported、invalid 与 needs-review。
-- 已接受的运行时语义由 [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md) 定义；高级 SillyTavern 字段只有经过确定性合同和 prompt-placement 测试后才能进入 runtime。
-- 长期资产规格策略见 [ASSET-SPEC.md](ASSET-SPEC.md)，对标清单见 [TAVERN-PARITY.md](TAVERN-PARITY.md)。二者都不是当前兼容性声明。
+### P2：资产生命周期与运维
 
-### 4.3 Session、历史与记忆
-
-- 一个 `session_id` 是一个独立开局/存档槽位，显示标题可变而目录身份稳定。
-- session 最终必须自包含 history、memory、state、角色卡与世界书工作副本、provenance 和不可变内容 revisions；恢复不能依赖外部可变素材库。
-- durable history 合同见 [LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)，目标存档/revision 合同见 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)。
-- 自进化记忆、Soul 与跨会话学习仍是候选方向，见 [HERMES-MEMORY.md](HERMES-MEMORY.md)，不能写成当前能力。
-
-### 4.4 Agent 与扩展
-
-- Agent loop 是产品脊柱，不是可选附属；内建工具和未来扩展都复用 engine capability 与 trace。
-- MCP upstream、skills/plugin runtime、ChangeInbox 与可配置多 Agent 编排按需求逐步实现；不为匹配某个源仓库数量而复制能力。
-- 编排原则见 [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)，受控扩展产品决策由 #163 跟踪。
-
-### 4.5 UI 与发布
-
-- WebUI 是当前正式产品交付主面；每项能力应贯通 shared service → HTTP/SSE → WebUI → production tests。
-- Tauri/Vue 资产保留，继续共享 engine 和协议，但恢复桌面排期前必须重新校准 artifact、sidecar 与性能基线。
-- 首发拓扑是单实例、自托管、单用户、同源 HTTPS、私有 engine；P0 合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)，P1–P3 门禁见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
-
-## 5. 路线
-
-### P1：正式 RP 使用面
-
-- 解决开发工具链安全告警；
-- 闭合 Persona/Preset/Worldbook 管理、选择、绑定、有效配置和诊断；
-- 让已有 engine 合同在 WebUI 主路径可见、可操作、可恢复；
-- 继续保持 production P0 和干净提示词门禁全绿。
-
-### P2：数据可靠性与运维
-
-- 分阶段落地 session 自包含、统一 revision、完整性验证和恢复导出；
-- 版本化 migration、备份/恢复、可恢复删除、readiness、脱敏日志、资源上界与运维 runbook；
-- 明确 access log 的用途、字段、输出和保留，或删除不需要的日志复杂度。
+- versioned migration registry、升级前备份、完整性检查和演练回滚；
+- 自动备份/恢复、可恢复删除、支持包与运维 runbook；
+- Persona/Preset/Worldbook/session 的完整 revision、drift、collision、export/import；
+- 长会话窗口化/虚拟化与资源上界。
 
 ### P3：发布候选
 
-- 浏览器兼容与安全负向矩阵；
-- 旧数据升级、备份恢复与回滚演练；
-- 长会话 soak、资源上界、SBOM/notices、版本与 artifact 门禁；
-- 只有全部门禁通过后才能称正式发布。
+- 浏览器与平台矩阵、长会话/故障/恢复 soak；
+- SBOM、notices、签名、构建 provenance 和 release rollback；
+- 文档、安装、升级、卸载、数据导出和已知限制；
+- 明确的用户试用、核心任务成功率、留存和继续使用意愿观察窗口。
 
-### 后续方向
+正式发布或代际替代必须由用户明确批准，不能由开发完成度自动触发。
 
-ChangeInbox、Agent-first 工作台、Style Review、长期记忆、可配置编排、MCP/skills/plugin 扩展与桌面恢复均在主发布链稳定后推进。
+## 4. 扩展方向的准入
 
-## 6. 仍需显式裁定的产品问题
+issue #312 保留了历史功能路线图。5.4 外部 MCP、5.5 多语言、5.6 自动备份/恢复、5.7 跨设备同步等方向，不按编号自动执行。新扩展只有满足以下条件才进入实现：
 
-- 高级 worldbook 字段哪些进入确定性 runtime，哪些只保留为 advisory/retrieval 输入；
-- Persona/Preset 的 session snapshot、绑定与历史解释边界；
-- extension developer mode、沙箱粒度、分发和兼容承诺；
-- 多 Agent profile 的持久化格式、仲裁和人工升级合同；
-- 桌面路线恢复时的发布平台、sidecar 生命周期和性能门槛。
+1. 有具体用户工作流或已复现缺口；
+2. 不绕过 P1 的正确性、恢复和安全门；
+3. 能沿 `shared service → HTTP/Agent → WebUI → test` 纵向闭环；
+4. 明确数据所有权、授权、资源上界、失败/回滚和 secret 边界；
+5. 不复制第三方实现，并完成依赖许可证/provenance 核验。
 
-这些问题应在对应 issue/ADR 中裁定。已被源码和合同解决的问题不再留在本页作为“开放题”。
+## 5. 稳定架构原则
 
-## 7. 文档分工
+- **单一 Engine**：UI、handler、Agent tool 复用同一 domain service。
+- **结构化控制平面**：工具、调度、validator 和审计不进入 RP 角色 prompt。
+- **默认有界**：外部调用、并发、重试、存储和大对象都有上界与取消。
+- **版本化数据**：稳定 ID、原子写、revision conflict、migration、完整性与导出优先。
+- **能力可换**：provider、UI、模型和工具通过明确接口替换，用户数据不绑定某一实现。
+- **证据分层**：单元、route、browser、artifact、production、人工与市场证据各自只证明自身覆盖面。
 
-- 当前事实：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)
-- 实现交接：[DEV-GUIDE.md](DEV-GUIDE.md)
-- 发布门禁：[WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)
-- 风险：[RISK-REGISTER.md](RISK-REGISTER.md) / [SECURITY.md](SECURITY.md)
-- 文档地图与维护规则：[README.md](README.md)
-
-历史修订、逐 PR 过程与已完成旧计划统一放在 [archive/](archive/)，不再堆入本页。
+专题合同见 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)、[WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)、[SECURITY.md](SECURITY.md) 和 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。

@@ -1,7 +1,7 @@
 # UI 协议与 Widget 决策
 
 > 状态：已接受
-> 日期：2026-07-03
+> 决策日期：2026-07-03；边界复核：2026-07-26，`main@200fed9`
 > 上位决策：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)
 
 ## 结论

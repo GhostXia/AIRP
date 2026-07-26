@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-18 at `main@2a14b7e`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and compressed archives remain historical evidence.
+> Last reviewed: 2026-07-26 at `main@200fed9`. Current implementation authority is [CURRENT-BASELINE.md](CURRENT-BASELINE.md); [README.md](README.md) defines documentation authority, and archives remain historical evidence. This pass recalibrated document state; it did not close open runtime risks.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -53,7 +53,7 @@
 
 ## RR-007 · Protocol and capability authority drift
 
-- **Status**: Partially mitigated in PR #111 through wire discriminant fixtures and engine-side capability/allowlist/confirm enforcement. Broader widget/MCP/hook authority remains future work.
+- **Status**: Partially mitigated in PR #111 through wire discriminant fixtures and engine-side capability/allowlist/confirm enforcement. Plugin hooks are now implemented, while broader widget/MCP authority and generated schemas remain open.
 - **Surface**: Rust and TypeScript protocol types are maintained manually; UI consent is not enforced by engine authorization.
 - **Risk**: A client can pass UI checks yet invoke an operation the engine never authoritatively authorized; wire changes can fail only at runtime.
 - **Current control**: Both sides have unit tests and runtime guards.
@@ -108,3 +108,12 @@
 - **Required direction**: Before wider distribution, add a versioned in-folder migration/backup flow and a recoverable upgrade UI. Until then, release notes must require backing up and carrying forward `data/`; users must not be told that replacing the folder preserves data automatically.
 
 The blanket local-path import switch remains forbidden in the browser package. Any future relaxation must be tracked as a separate issue and require a trusted local broker, explicit user file selection, capability scoping, and negative tests proving the browser cannot name or read arbitrary host paths.
+
+## RR-014 · Plugin tools execute external network requests or local code
+
+- **Status**: Partially mitigated; runtime controls landed in PR #328 and repository-owned ignore coverage was added on 2026-07-26. Plugin execution remains acceptable only for explicit trusted-user extensions.
+- **Surface**: Dynamic Agent tools backed by HTTPS/loopback HTTP webhooks or executables beneath `data_root/plugins/`.
+- **Risk**: A misleading tool description or side-effect label can cause the model/user to authorize behavior different from what the webhook or script performs. A local script runs with the AIRP OS user's authority and may read/write files, use the network, spawn children, or exfiltrate data. A webhook can disclose tool parameters and return hostile/private content. Plaintext plugin headers can be stolen by any principal that can read the data root.
+- **Current control**: Engine capability/allowlist/exact confirmation still gates dispatch; webhook redirects are disabled, plaintext HTTP is loopback-only, and public HTTPS targets are rejected when registration-time DNS resolution succeeds and returns a private/local address. DNS-resolution failures are allowed, and the destination is not revalidated at request time. Protected hop-by-hop headers and URL userinfo are rejected. Script paths are canonicalized beneath `data_root/plugins/` at registration and execution; inherited environment is cleared. Calls have 1–30 second timeouts and 1 MiB input/output limits. Header values live in a separate restricted-permission file and list APIs expose only `headers_set`. Repository `.gitignore` covers all Provider/plugin runtime files and `data/plugins/`; `pr-gate.yml` verifies ignore coverage, rejects tracked runtime paths, and preserves the tracked fixture exceptions.
+- **Residual boundary**: These controls are not a code sandbox, signature system, permission manifest, provenance check, or proof that declared side effects are truthful. Fail-open DNS errors, DNS rebinding, and later resolution changes remain SSRF risks. The plugin receives the `confirm` flag and is responsible for its own dry-run semantics. Ignore rules prevent ordinary accidental staging but do not protect copied, force-added, or filesystem-exposed secrets.
+- **Required direction**: Keep the repository-owned ignore assertions as a blocking PR check. Keep plugins disabled by default in distributed profiles; add explicit install provenance, permission manifests, reviewable parameter disclosure, revocation, audit events, and stronger process isolation before treating third-party plugins as a supported ecosystem.

@@ -498,12 +498,7 @@ impl PluginTool {
             )));
         }
         if !status.is_success() {
-            return Err(AirpError::Internal(format!(
-                "插件工具 {} webhook 返回非 success 状态: {} body={}",
-                self.config.name,
-                status,
-                String::from_utf8_lossy(&bytes)
-            )));
+            return Err(webhook_non_success_error(&self.config.name, status));
         }
         // 解析 JSON；若解析失败则把原文包成 {"raw": "..."}。
         let output = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_else(|_| {
@@ -708,6 +703,12 @@ const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 const MAX_INPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 
 /// 受 reqwest 保护的头列表（不允许插件设置）。
+fn webhook_non_success_error(tool_name: &str, status: reqwest::StatusCode) -> AirpError {
+    AirpError::Internal(format!(
+        "插件工具 {tool_name} webhook 返回非 success 状态: {status}"
+    ))
+}
+
 fn is_protected_header(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
@@ -1242,6 +1243,15 @@ mod tests {
         assert!(is_protected_header("Content-Encoding"));
         assert!(!is_protected_header("Authorization"));
         assert!(!is_protected_header("X-Custom"));
+    }
+
+    #[test]
+    fn webhook_non_success_error_omits_response_body() {
+        let error = webhook_non_success_error("private_tool", reqwest::StatusCode::BAD_GATEWAY);
+        let message = error.to_string();
+        assert!(message.contains("private_tool"));
+        assert!(message.contains("502"));
+        assert!(!message.contains("body="));
     }
 
     #[tokio::test]

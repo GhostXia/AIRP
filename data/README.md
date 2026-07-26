@@ -1,6 +1,6 @@
 # `data/` 持久化目录规范
 
-> 当前/目标边界最后在 2026-07-19 按 Windows 便携 WebUI 优先路线复核。
+> 当前/目标边界最后在 2026-07-26 的 `main@200fed9` 复核。
 
 `data/` 是引擎的数据根，不是一个可以随意堆放资源的共享目录。角色相关资产按稳定角色 ID 聚合；每个命名 session 是一个独立开局/存档槽位。完整的目标合同见 [`docs/SESSION-DATA-DESIGN.md`](../docs/SESSION-DATA-DESIGN.md)。
 
@@ -20,6 +20,11 @@
 data/
 ├── settings.json
 ├── secrets.json
+├── providers.json
+├── provider_keys.json
+├── plugin_tools.json
+├── plugin_tool_headers.json
+├── plugins/
 ├── styles/
 │   └── profiles/default.md
 ├── characters/
@@ -72,6 +77,8 @@ data/
 
 `secrets.json` 仅由 Windows 便携 WebUI 在显式开启 `AIRP_PERSIST_PROVIDER_KEY` 时创建。它是带版本字段的明文 provider key 单文件，API/UI 默认不回显；能读取 `data/` 的主体也能读取 key，因此不得提交、共享或收入支持包。
 
+多 Provider 模式把非敏感条目/路由保存在 `providers.json`，把 key 映射保存在 `provider_keys.json`；插件工具把非敏感配置保存在 `plugin_tools.json`，把 webhook headers 保存在 `plugin_tool_headers.json`。API 只返回 `api_key_set` / `headers_set`。这些拆分减少误分享，但 secret 文件仍是明文，必须随整个 data root 一起保护、备份和排除。`plugins/` 只允许放置用户明确信任的本地可执行工具；目录 containment 不是 OS 级代码沙箱。
+
 这是目标归属模型，目录按需创建。当前代码已经隔离命名 session 的 history 与 memory，并落地 Phase 2 (#115) 6 类 asset（character/persona/preset/lorebook/state/memory）的统一 `content_revision` 合同（asset 级 `revisions/{N}/` 快照 + `current_revision` 指针，PR #201/#202/#203/#206/#215）；但 `meta.json`、session state、角色卡/世界书工作副本物化、第三方素材库、世界书 manifest 与覆盖二者的 session 级统一 revision 仍待分阶段实现，不能把本树全部视为已交付能力。
 
 ### 角色目录名
@@ -99,6 +106,8 @@ data/
 - `users/`：多用户隔离根；请求带 `user_id` 时，其下可再出现同样的 `characters/`、`presets/` 和 `scenes/`。
 - `exports/`：引擎生成的上下文导出，不是输入资产源。
 - `quota.json`：单用户模式的运行计数；多用户模式位于对应用户根。
+- `providers.json` / `provider_keys.json`：多 Provider 路由与分离的明文密钥。
+- `plugin_tools.json` / `plugin_tool_headers.json` / `plugins/`：动态工具配置、分离的明文 webhook headers 和可信本地脚本。
 
 第三方世界书统一使用 `third_party/worldbooks/{source_id}/{package_id}/{version}/`，并区分原始文件、AIRP 归一化素材和 provenance。该目录是素材库，不是活跃 session 的动态依赖；采用时必须复制到 session 的 `worldbooks/` 并由 manifest 明确启用、顺序、来源和 hash。此合同已经确定，但运行时尚未实现。
 
@@ -112,6 +121,6 @@ data/
 ## 入仓与验收
 
 - `git ls-files data/` 只应包含 `README.md`、`settings.json` 和 `styles/profiles/default.md`。
-- `data/characters/`、`data/presets/` 及所有会话、状态、记忆、导出和迁移锁均由 `.gitignore` 排除。
+- `data/characters/`、`data/presets/`、Provider/插件配置与 secret、`data/plugins/` 及所有会话、状态、记忆、导出和迁移锁均由仓库 `.gitignore` 排除。规则必须用 `git check-ignore` 验证，不能依赖维护者的全局 ignore。
 - 仓库不得包含真实玩家的角色卡、历史、记忆、物品或世界状态。
 - 新建数据根不应产生根级 `world.md`、`items.md`；新建角色不应产生 legacy `worldbooks/`。

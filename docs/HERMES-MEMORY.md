@@ -1,11 +1,10 @@
 # Hermes Agent 记忆机制学习 → 用到我们 RP 客户端
 
-> **研究与未来方向**：本文描述候选机制，不代表 AIRP 已实现自动记忆、skills、soul 或 FTS5 长程检索。落地顺序必须以当前基线重新排序。当前状态见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
-
+> **研究与未来方向**：本文描述候选机制，不代表 AIRP 已实现自动记忆、skills 或 soul。AIRP 已有 resident memory、遗忘曲线和 session FTS5 搜索，但不等同于本文的自进化闭环。落地顺序以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准。
 > 研究对象：Hermes Agent（Nous Research 开源自进化 agent）。"随使用时长能力提升"的核心=持久记忆+技能自建+用户建模的自我进化闭环。
 > 来源：hermes-agent.nousresearch.com/docs、mindstudio 5-支柱解析、glukhov 记忆系统技术贴（2026-07 实读）。
 > 结论先行：这套机制**极适合 RP**，且**主要靠扩展我们已有的件即可实现**，是相对酒馆（每轮重灌静态卡+世界书、无跨会话学习）的**核心差异化**。
-> 最后更新：2026-07-01
+> 研究日期：2026-07-01；状态复核：2026-07-26，`main@200fed9`
 
 ---
 
@@ -49,7 +48,7 @@
 | USER.md 用户画像（自动学） | 🔧 Core User Persona（M_UP base+drift） | 有双层模型，但 drift 偏手动。**缺从对话自动抽取用户偏好/文风**——这是"越用越懂你"的魔法。要加 |
 | Skills 经验技能 | ✅ 生态已有 SKILL.md + skills-vs-mcp + Claude-Code 式技能 | RP 技能（"怎么写角色 X""某类场景套路""你偏好的文风"）从经验自建。框架在，接进 loop |
 | Soul 动态人格 | 🔧 角色卡/persona | 卡是**作者写死**的；Hermes soul 会随反馈演化。RP 里→给角色一个**学习式人格 overlay**（类似 state drift 但作用于文风/性格深度），或作用于"agent 的书写风格" |
-| session_search（FTS5+摘要） | 🆕 我们 RAG 暂缓 | **Hermes 证明 FTS5+LLM 摘要是非向量的轻量长程记忆**，正合"先简单检索、RAG 后置"。"回忆三个月前那段剧情"对长 RP 极有用 |
+| session_search（FTS5+摘要） | 🔧 FTS5 搜索已交付；LLM 摘要未交付 | **Hermes 证明 FTS5+LLM 摘要是非向量的轻量长程记忆**。AIRP 当前先使用已交付的 FTS5 检索，是否增加摘要层仍需独立合同与验证 |
 | frozen snapshot 稳定前缀 | ✅ AIRP 候选缓存纪律：按可变性排序/`[[CACHE_BREAK]]` | **同一原理**——记忆作为稳定前缀可跨轮保持字节稳定；具体实现仍需独立合同与验证 |
 | 有界+80% 整理 | 🆕 | 我们封卷有阈值信号，但缺"常驻记忆超限自动合并压缩"。要加 |
 
@@ -68,7 +67,7 @@
 **RP 记忆分三层（借 Hermes 两层 + 我们封卷）：**
 1. **常驻有界记忆**（新加）：每角色/每存档一份有界 markdown（RP 版 MEMORY.md=关键情节/关系/世界事实 + USER.md=用户文风偏好），always-injected 当稳定前缀，超限自动整理。**从对话自动抽取更新**（frozen snapshot：本轮落盘、下轮生效）。
 2. **归档卷**（已有）：封卷 volumes，长会话压缩归档。
-3. **历史检索**（新加）：SQLite FTS5 全文 + LLM 摘要的 `session_search`，回忆任意历史片段。非 RAG，轻量。
+3. **历史检索**：SQLite FTS5 全文 `session_search` 已交付；LLM 摘要层是候选增强，尚未交付。非向量 RAG。
 
 **技能层**：RP 技能（角色书写 playbook/场景套路/用户文风）从经验自建、反馈更新，接入 Agent loop 的工具/技能注册表，并与 [PLAN.md](PLAN.md) §4.4 的扩展面共用底座。
 
@@ -80,7 +79,7 @@
 - **守干净提示词**：soul-drift 是 RP 数据，进角色平面正当；演化/抽取的控制逻辑走控制平面。
 - **优先级：第二档**（MVP 后、与常驻记忆/用户模型同批推进）。
 
-**优先级**：常驻有界记忆 + 用户模型自动抽取 = "越用越懂你"的最小魔法，**MVP 后紧接着做**（是核心卖点，不宜太后）；session_search FTS5 中期；Soul 演化待议。
+**优先级**：常驻有界记忆 + 用户模型自动抽取 = "越用越懂你"的最小魔法，**MVP 后紧接着做**（是核心卖点，不宜太后）；`session_search` FTS5 已交付，摘要增强待排；Soul 演化待议。
 
 ---
 

@@ -100,7 +100,7 @@ enabled && (
 
 此裁定依据 AIRP 的确定性、可测试与固定 prompt-placement 门禁，不以“上游常用”作为
 充分理由。`case_sensitive`、position/depth、概率与递归仍不进入 runtime；实现 v4 时同步
-更新 [TAVERN-PARITY.md](../../TAVERN-PARITY.md) 中旧的 advisory 候选描述，避免两份合同互相冲突。
+更新 [TAVERN-PARITY.md](../TAVERN-PARITY.md) 中旧的 advisory 候选描述，避免两份合同互相冲突。
 
 ## 5. 设计
 
@@ -280,8 +280,8 @@ production system-Chrome smoke。测试：
 
 - [lorebook.rs](../../../engine/src/orchestrator/lorebook.rs)：`LorebookEntry` 加 `selective` 字段；`trigger()` 加 secondary 匹配；merge equality 加 selective
 - [worldbook_normalizer.rs](../../../engine/src/orchestrator/worldbook_normalizer.rs)：top-level/ST/v3 extensions 的 `selective` 迁移到 canonical
-- [WORLDBOOK-SEMANTICS.md](../../WORLDBOOK-SEMANTICS.md)：升 v4
-- [TAVERN-PARITY.md](../../TAVERN-PARITY.md)：实现时同步 runtime/advisory 裁定
+- [WORLDBOOK-SEMANTICS.md](../WORLDBOOK-SEMANTICS.md)：升 v4
+- [TAVERN-PARITY.md](../TAVERN-PARITY.md)：实现时同步 runtime/advisory 裁定
 - `engine/tests/fixtures/worldbook/airp-v4-selective.json`：新 fixture
 - trigger/prompt-placement 测试
 

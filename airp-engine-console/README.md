@@ -1,14 +1,14 @@
 # AIRP Engine Console · 权威样板
 
-本目录是 AIRP 控制台前端的**权威视觉样板**（golden sample），与 Ardot 设计稿
-「AIRP Engine Console」逐屏对应。所有派生实现（WebUI、桌面端）须基于本样板开发，
-视觉冲突以本样板为准。
+本目录是 AIRP 控制台 1–33 屏的**权威视觉样板**（golden sample），与 Ardot 设计稿
+「AIRP Engine Console」逐屏对应。WebUI 已扩展到 44 屏；34–44 屏没有对应的原始
+Ardot 画板，必须复用本样板的 token、布局语言和交互规则，并通过独立视觉审查。
 
 详细规范见 [STYLEGUIDE.md](STYLEGUIDE.md)。
 
 ## 基线定义
 
-**v0.0.2 release（2026-07-22）的 webui 版本是基线。** 后续所有样板/WebUI 变更
+**v0.0.2 release（2026-07-22）的 1–33 屏是视觉基线。** 后续所有样板/WebUI 变更
 均以此为起点衡量。基线包含的核心能力：
 
 - PR #294 重建的无构建、多页面、CSP 兼容同源客户端
@@ -53,3 +53,6 @@ git checkout 3caafa1 -- airp-engine-console/
 
 直接在浏览器中打开 `index.html` 即可浏览全部 33 屏样板。
 每屏 HTML 也可独立打开（`screens/NN-*.html`），无需服务器。
+
+> 2026-07-26 状态：WebUI 34–44 屏尚未纳入本样板目录；不得把“页面已实现”写成
+> “已通过样板一致性审查”。开放审查项以 GitHub issues 为准。

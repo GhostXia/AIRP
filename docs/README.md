@@ -1,75 +1,57 @@
 # AIRP 文档地图
 
-> 最后校准：2026-07-24，`main@44b9c83`
->
-> 当前事实入口：[CURRENT-BASELINE.md](CURRENT-BASELINE.md)
+> 校准：2026-07-26，`main@200fed9`
 
-源码、manifest、测试与可重复运行证据高于文档；GitHub issues 是未完成工作的实时追踪面。本文定义文档角色，防止计划、研究和历史材料冒充当前能力。
+文档按“事实、合同、治理、参考、历史”分层。新 session 不需要通读全部文档；先读事实入口，再按任务选择一个直接相关合同。
 
 ## 最短阅读路径
 
-1. [CURRENT-BASELINE.md](CURRENT-BASELINE.md)：当前能力、缺口、顺序与最近证据；
-2. [DEV-GUIDE.md](DEV-GUIDE.md)：工程不变式、仓库边界、验证与交付流程；
-3. [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)：当前 release gates；
-4. 与任务直接相关的专题合同；
-5. [PLAN.md](PLAN.md)：长期产品原则，不用于证明交付。
+1. 根目录 [`AGENTS.md`](../AGENTS.md)：本机环境、审计、第三方独立实现和合并门禁；
+2. [CURRENT-BASELINE.md](CURRENT-BASELINE.md)：当前能力、缺口、优先级和验证边界；
+3. [DEV-GUIDE.md](DEV-GUIDE.md)：代码地图、命令、不变式和交付流程；
+4. 任务直接相关的一个专题合同；
+5. 开放 GitHub issue：实时范围与验收。
 
-## 活文档与合同
+## 活文档
 
-| 范围 | 文档 | 角色 |
+| 类别 | 文档 | 职责 |
 |---|---|---|
-| 当前事实 | [CURRENT-BASELINE.md](CURRENT-BASELINE.md) | 唯一人工维护的全项目实时基线 |
-| 开发交接 | [DEV-GUIDE.md](DEV-GUIDE.md)、根 `AGENTS.md` | 工程不变式、本机约束、审计与交付规则 |
-| 产品与发布 | [PLAN.md](PLAN.md)、[WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) | 长期方向与近期 P1–P3 门禁 |
-| 生产架构 | [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)、[SECURITY.md](SECURITY.md)、[RISK-REGISTER.md](RISK-REGISTER.md) | 已接受 P0 边界、安全规则与开放风险 |
-| 会话与历史 | [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md) | 目标存档/revision 合同与已实现 durable history |
-| Persona | [PERSONA-HTTP-API-PLAN.md](PERSONA-HTTP-API-PLAN.md)、[Persona WebUI closure spec](archive/2026-07-15-persona-webui-closure-design.md) | 已实现 HTTP/pipeline/effective/WebUI 绑定闭环；高级生命周期仍开放 |
-| Worldbook | [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)、[Worldbook closure spec](archive/2026-07-15-worldbook-management-design.md) | 当前 canonical schema、normalizer、runtime 语义与已交付主面板闭环 |
-| 资产策略 | [ASSET-SPEC.md](ASSET-SPEC.md) | 候选版本化资产规格；尚非已发布标准 |
-| Agent/扩展 | [AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md)、[UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md) | 待实现编排规范与已接受 UI/Widget 边界 |
-| 来源吸收 | [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)、[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | 第一方来源规则、第三方研究与 provenance |
+| 当前事实 | [CURRENT-BASELINE.md](CURRENT-BASELINE.md) | 唯一人工维护的全仓能力基线 |
+| 开发治理 | [DEV-GUIDE.md](DEV-GUIDE.md) | 开发/审计入口、验证和工作流 |
+| 产品方向 | [PLAN.md](PLAN.md) | 稳定目标、阶段门和取舍；不复制 issue 队列 |
+| 数据合同 | [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md) | session、revision、history、恢复 |
+| RP 合同 | [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)、[ASSET-SPEC.md](ASSET-SPEC.md) | Worldbook runtime 与资产规格候选边界 |
+| 接口/架构 | [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)、[AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md) | UI 协议决策与可配置编排草案 |
+| 安全/发布 | [SECURITY.md](SECURITY.md)、[RISK-REGISTER.md](RISK-REGISTER.md)、[WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)、[WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) | 威胁边界、风险、部署拓扑和发布门 |
+| 来源治理 | [SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)、[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | 第一方来源裁定、第三方参考和 provenance |
 
-## 候选目录与研究资料
+## 参考材料
 
-以下文档用于选型或需求审计，不是当前 capability inventory：
+以下文档保留研究价值，但不代表当前能力、优先级或兼容承诺：
 
-- [CAPABILITY-ABSORPTION.md](CAPABILITY-ABSORPTION.md)：四个第一方前序项目的能力筛选；
-- [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)：源 MCP-Server catalog 与 AIRP 落点；
-- [TAVERN-PARITY.md](TAVERN-PARITY.md)：SillyTavern 功能/互操作性对标；
-- [HERMES-MEMORY.md](HERMES-MEMORY.md)：长期记忆、skills、Soul 候选方向；
-- [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md)：长篇 RP/authoring 研究参考。
+- [CAPABILITY-ABSORPTION.md](CAPABILITY-ABSORPTION.md)：第一方前序项目能力筛选；
+- [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)：前序 MCP-Server catalog 与候选落点；
+- [TAVERN-PARITY.md](TAVERN-PARITY.md)：SillyTavern 公开行为与互操作性研究；
+- [HERMES-MEMORY.md](HERMES-MEMORY.md)：长期记忆、skills、Soul 研究；
+- [LEARN-NEUROBOOK.md](LEARN-NEUROBOOK.md)：长篇 RP/authoring 研究；
+- [PERSONA-HTTP-API-PLAN.md](PERSONA-HTTP-API-PLAN.md)：Persona HTTP 方案的历史实施依据；当前接口事实以源码和基线为准。
 
-这些文档中的状态图例通常描述“来源有无”或“候选价值”，不证明 AIRP 的 domain、HTTP、Agent tool 或 UI 已交付。
+参考材料只在相关任务中读取。若其状态与当前源码、本页或基线冲突，以当前源码和基线为准。
 
-## 目录入口
+## 历史与审计
 
-- [../README.md](../README.md)：项目入口与常用命令；
-- [../engine/README.md](../engine/README.md)：engine 能力、API 与模块；
-- [../ui/README.md](../ui/README.md)：暂停中的桌面客户端资产；
-- [../webui/README.md](../webui/README.md)：WebUI 开发与验证；
-- [../data/README.md](../data/README.md)：数据根和入仓边界；
-- [../deploy/production/README.md](../deploy/production/README.md)：P0 production preview 操作。
+- `docs/audits/`：PR 审计原始记录。按仓库规则保留并随 PR 归档；不得压缩成当前事实。
+- `docs/archive/`：已完成设计、月度历史和审计索引。归档文档保持原始语境，不做滚动能力更新。
+- `docs/sbom/`：生成的 SPDX、CycloneDX、inventory 和第三方声明快照。
 
-## 历史归档
-
-- [archive/PROJECT-HISTORY-2026-07.md](archive/PROJECT-HISTORY-2026-07.md)：项目审计与实施历史；
-- [archive/WEBUI-HISTORY-2026-07.md](archive/WEBUI-HISTORY-2026-07.md)：已完成 WebUI 计划和验证；
-- [archive/PR-AUDITS-2026-07.md](archive/PR-AUDITS-2026-07.md)：逐 PR 审计索引；
-- [archive/2026-07-15-persona-webui-closure-design.md](archive/2026-07-15-persona-webui-closure-design.md)：Persona WebUI 闭环设计；
-- [archive/2026-07-15-worldbook-management-design.md](archive/2026-07-15-worldbook-management-design.md)：Worldbook 管理设计；
-- [archive/2026-07-16-unified-revision-design.md](archive/2026-07-16-unified-revision-design.md)：统一 revision 设计；
-- [archive/2026-07-17-onboarding-wizard-design.md](archive/2026-07-17-onboarding-wizard-design.md)：Onboarding 向导设计；
-- [archive/2026-07-19-chat-experience-upgrade-design.md](archive/2026-07-19-chat-experience-upgrade-design.md)：聊天体验升级设计；
-- [archive/2026-07-23-agent-browser-exploration-plan.md](archive/2026-07-23-agent-browser-exploration-plan.md)：Agent 浏览器探索测试层 MVP 实施计划（已实现，PR #300）。
-
-归档不提供当前任务排序。被压缩的原文可按归档页记录的 commit 使用 `git show` 恢复。
+已完成且没有独立合同价值的临时拆分计划、重复实施计划会删除，而不是继续留在活文档或 archive。历史 PR 和审计报告仍提供可追溯性。
 
 ## 维护规则
 
-1. “已实现”必须指向当前源码入口和测试，并区分 domain/data、HTTP、Agent tool、WebUI、desktop 与 production evidence。
-2. 测试数字只属于明确 commit/命令快照；不能在后续变更中沿用。
-3. 普通 PR review 留在 GitHub；未修审计意见在 PR 合并后写 issue，不复制到多份 Markdown。
-4. 新专题文档只有在现有活文档无法承载且会持续维护时才创建。
-5. 完成旧计划后，先吸收仍有效合同，再压缩进 archive 并删除散落原文。
-6. 新增研究或第三方依赖时同步 `ACKNOWLEDGEMENTS.md`；研究状态不得升级为交付声明。
-7. 每次基线校准至少检查：tracked Markdown、相对链接、日期/commit、开放 issue、敏感信息、本地路径、重复入口和历史状态残留。
+- 能力变化只更新 `CURRENT-BASELINE.md`；不要在多份研究文档复制同一“当前状态”。
+- 稳定行为写进已有专题合同；不要为每个 PR 新建永久计划文档。
+- “已实现”必须标明是 domain/data、HTTP、Agent、WebUI、desktop、artifact 还是 production evidence。
+- 测试数字必须带命令和 commit，并按 test binary/runner 分桶；历史数字不外推到新 `HEAD`。
+- GitHub issues 管理实时待办；文档只保存稳定依赖、阶段门和长期理由。
+- 完成的计划先吸收仍有效合同，再删除或归档；审计记录不按此规则删除。
+- 相对链接、状态标签、日期、commit 和“已交付/未交付”措辞是 docs-only 变更的最低校验项。

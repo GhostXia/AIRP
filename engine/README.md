@@ -2,11 +2,11 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-18 的 `main@2a14b7e` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-26 的 `main@200fed9` 复核。
 
 ## 当前能力
 
-- OpenAI-compatible 与 Anthropic provider；响应头阶段可配置超时；
+- OpenAI-compatible、Anthropic、Ollama 与多 Provider 路由；响应头阶段可配置超时；
 - 单回合 `/v1/chat/completions` SSE 对话；
 - `/v1/agent/run` 有 step/token/wall-clock/cancel 闸和 typed SSE 事件；
 - Tavern Card JSON/PNG 导入、canonical/sidecar 落盘和角色 CRUD；
@@ -24,14 +24,17 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - Phase 2 (#115) 6 类 asset（character/persona/preset/lorebook/state/memory）统一 revision 合同已落地：`commit_revision` + 单调 u64 `content_revision` + 不可变 `revisions/{N}/` 快照 + 原子 `current_revision` 指针；旧数据推送 `*_revision_unavailable` 诊断；`next_content_revision` 在 orphan revision_dir 场景下跳过取号，避免 asset 永久不可写；base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计仍未交付；
 - settings/models/version/health 和 rate limit；默认 daemon 只适合 loopback 本地开发，desktop 使用进程级 bearer；development CORS 保留 WebUI/Tauri 精确来源，production CORS 只允许 `AIRP_PUBLIC_ORIGIN`。
 - settings 更新在专用异步事务边界内完成校验、原子持久化和 live commit；失败不产生部分更新，并发提交保持运行态与磁盘一致。
+- Director/Council、NPC 行动、剧情弧、世界时钟/定时事件和长期记忆遗忘曲线；
+- 场景插图、角色模板、风格学习、对话示例、Worldbook 图谱、时间线导出与角色卡 revision diff；
+- HTTP webhook/受控本地脚本插件工具，可从配置动态追加到 Agent registry；外部 MCP client 尚未交付。
 
 ## 必须诚实区分的边界
 
 ### Agent loop 已可动态规划和调用工具
 
-当前 planner 使用 OpenAI/Anthropic 原生 structured tool call，在 step/token/wall-clock/cancel 边界内进行 plan-act-observe；工具执行受 capability、allowlist 和 destructive confirm 三层门控。finalizer 只接收整理后的 observation，并保持角色平面不含协调器噪声。它仍不是完整 MCP/skills/plugin runtime。
+当前 planner 使用 provider 原生 structured tool call，在 step/token/wall-clock/cancel 边界内进行 plan-act-observe；工具执行受 capability、allowlist 和 destructive confirm 三层门控。finalizer 只接收整理后的 observation，并保持角色平面不含协调器噪声。它已有受控插件工具，但仍不是完整 MCP/skills runtime 或任意代码沙箱。
 
-### 默认 Agent 工具恰为 21 个
+### 默认 Agent 工具为 30 个
 
 | 分组 | 工具 |
 |---|---|
@@ -40,11 +43,15 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 | 角色 | `list_characters`、`get_character`、`delete_character` |
 | 状态 | `get_character_state`、`update_character_state` |
 | 世界书 | `get_lorebook`、`update_lorebook`、`apply_lorebook`、`merge_lorebooks` |
-| 记忆/导出 | `seal_volume`、`export_context_bundle` |
+| 卷/导出 | `seal_volume`、`export_context_bundle` |
 | Analysis | `enhance_analysis`、`apply_enhanced_analysis` |
 | Preset | `get_preset`、`update_preset` |
+| 世界事件/时钟 | `trigger_world_event`、`list_world_events`、`advance_clock`、`get_clock` |
+| NPC/关系 | `npc_action`、`update_relationship` |
+| 剧情 | `advance_plot`、`get_plot_status` |
+| 搜索 | `session_search` |
 
-目录由 `GET /v1/agent/tools` 从实际 registry 生成。`update_preset` 支持 dry-run，实际写入受 destructive confirmation 门控。底层模块或 HTTP route 存在仍不等于 Agent registry 已注册；Persona 已有 domain/HTTP/pipeline，但没有 Persona Agent tool；plugin data、MCP client/server、skills、完整记忆 runtime 也尚未实现。
+目录由 `GET /v1/agent/tools` 从实际 registry 生成；插件配置可动态追加工具，所以运行时数量可能超过 30。`update_preset` 等写工具支持 dry-run/确认。底层模块或 HTTP route 存在仍不等于 Agent registry 已注册；Persona 已有 domain/HTTP/pipeline，但没有 Persona Agent tool；外部 MCP client/server、skills 与完整自进化记忆 runtime 尚未实现。
 
 ### Worldbook 与 state 都是部分实现
 
@@ -142,9 +149,11 @@ cargo run -p airp-core -- run --message "hello"
 | 路径 | 职责 |
 |---|---|
 | `src/adapter.rs` | provider 请求与 SSE 解析 |
-| `src/chat_pipeline.rs` | prepare/stream/finalize 单回合管线 |
-| `src/agent/` | loop 骨架、Tool trait/registry、内置工具 |
-| `src/agent/tools/` | 按 session/character、state/lorebook、volume/context、analysis、preset 拆分的工具 family |
+| `src/provider_routing.rs` | 多 Provider 配置、解析与选择 |
+| `src/plugin_tool.rs` | webhook/本地脚本插件工具 |
+| `src/chat_pipeline/` | prepare/stream/finalize 单回合管线 |
+| `src/agent/` | loop、Director/Council、Tool trait/registry |
+| `src/agent/tools/` | 按资源职责拆分的内置工具 family |
 | `src/daemon/` | axum routes、auth、rate limit 与 adapter facade |
 | `src/daemon/handlers/` | 按资源职责拆分的 HTTP handler family |
 | `src/daemon/tests/` | catalog/chat/settings/persona/security/session/state 等 route 合同测试 |
@@ -168,7 +177,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-PR #232 最终 head `29b52fa` 的 [GitHub run `29645599733`](https://github.com/GhostXia/AIRP/actions/runs/29645599733) 中 Rust workspace（含 warning-free rustdoc 与干净提示词不变式 `subagent_context_has_no_orchestrator_noise`）、UI and WebUI、Production topology 与 CodeRabbit 全绿，随后以代码树等价的 merge commit `main@2a14b7e` 合入。`cargo test --workspace --locked` = 756 lib（740 engine pass + 1 ignored + 6 protocol + 9 ui）+ 25 integration tests（4 agent_run + 11 openai_compat + 5 production_startup + 5 sse_wiremock）；新增回归覆盖 timeline/持久化顺序、finalization 失败关闭、结构化 SSE commit state、Persona 删除路径与清理安全、客户端错误脱敏和生产镜像静态资产。后续修改必须重跑并记录新结果。
+2026-07-26 在 `main@200fed9` 本地运行 `cargo test --workspace --locked`：engine lib 1056 passed / 2 ignored，engine main 4 passed，6 个 integration binaries 合计 38 passed，protocol 6 passed，Tauri shell 9 passed。该结果不覆盖 production topology、真实 provider/browser、artifact、崩溃注入或长会话；最新完整边界见 [当前基线](../docs/CURRENT-BASELINE.md)。
 
 ## License
 
