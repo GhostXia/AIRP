@@ -798,6 +798,15 @@ async fn advance_clock_no_due_events_does_not_append() {
     )
     .unwrap();
 
+    // 预先向 current.md 写入代表性内容，确保 no-due 路径不会执行
+    // 任何 append（包括空 append 或无关 append）。CodeRabbit 建议：
+    // 不只断言"不含事件内容"，而是断言 current.md 完全不变。
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "adv_clk_empty", None).unwrap();
+    let preexisting = "[剧情推进: setup] The party rests at the inn.\n";
+    crate::volume_store::append_to_current(&session_dir, preexisting).unwrap();
+    let before = crate::volume_store::read_current(&session_dir).unwrap();
+
     let tool = reg.get("advance_clock").unwrap();
     let result = tool
         .call(serde_json::json!({"character_id": "adv_clk_empty"}), true)
@@ -808,13 +817,11 @@ async fn advance_clock_no_due_events_does_not_append() {
     let triggered = result.output["triggered_events"].as_array().unwrap();
     assert_eq!(triggered.len(), 0, "no events should be triggered");
 
-    // current.md 不应含事件内容。
-    let session_dir =
-        crate::data_dir::resolve_session_dir(&state.data_root, "adv_clk_empty", None).unwrap();
-    let current = crate::volume_store::read_current(&session_dir).unwrap();
-    assert!(
-        !current.contains("Eclipse"),
-        "current.md should not contain untriggered event content"
+    // current.md 必须与调用前完全一致——无事件内容、无空 append、无格式变化。
+    let after = crate::volume_store::read_current(&session_dir).unwrap();
+    assert_eq!(
+        before, after,
+        "current.md must be unchanged when no events are due"
     );
 
     // 事件不应被标记为 triggered。

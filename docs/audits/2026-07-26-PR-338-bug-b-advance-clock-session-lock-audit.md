@@ -1,4 +1,4 @@
-# PR #336 独立审计 — Bug B（advance_clock 缺失 session_lock 并发保护）
+# PR #338 独立审计 — Bug B（advance_clock 缺失 session_lock 并发保护）
 
 > **审计主体**：GLM-5.2 审计代理（本会话独立执行）
 > **审计时间**：2026-07-26
