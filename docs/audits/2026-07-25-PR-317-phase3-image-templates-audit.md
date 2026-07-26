@@ -171,7 +171,7 @@ Engine 端 `list_sessions_endpoint` 返回 `Json<Vec<SessionId>>`（`sessions.rs
 | #线程 | 类型 | 位置 | 修复 |
 |---|---|---|---|
 | #20 `image_gen.rs` 图片下载 `response.bytes().await` 一次性缓冲整个 body，超大 chunked response 在 post-read 检查前已耗尽内存 | 🟠 Major，outside-diff | `engine/src/image_gen.rs:232-257` | 改用 `response.chunk().await` 流式接口，每个 chunk 累加检查 `MAX_IMAGE_BYTES`；超上限立即返回 `AirpError::Upstream`，不再继续读取。`Vec::with_capacity(1024 * 1024)` 用 1 MiB 起步而非预分配 20 MiB，避免对大图过度预留。`checked_add` 防 usize 溢出。Content-Length 预检保留（快速 reject），原 post-read 复核已删除（被流式检查取代） |
-| #21 `local-webui-browser-smoke.mjs` 18 屏 predicate 在 engine `danger` 时仍要求 `#scene-list` populated，导致健康失败时 timeout 而非进 connectivity 错误报告 | Inline，actionable | `ui/local-webui-browser-smoke.mjs:55-62` | predicate 改为 `finalized && (danger || populated)`——engine 进入 `danger` 时立即返回 true，下一行 `assert.equal(... classList.contains('danger'), false, 'must stay connected')` 会立即抛错并打印实际状态，不再 timeout |
+| #21 `local-webui-browser-smoke.mjs` 18 屏 predicate 在 engine `danger` 时仍要求 `#scene-list` populated，导致健康失败时 timeout 而非进 connectivity 错误报告 | Inline，actionable | `ui/local-webui-browser-smoke.mjs:55-62` | predicate 改为 `finalized && (danger OR populated)`（对应 JS `||`；用 `OR` 文本以避免 markdown 表格 cell 内 `\|\|` 被解析为列分隔符）——engine 进入 `danger` 时立即返回 true，下一行 `assert.equal(... classList.contains('danger'), false, 'must stay connected')` 会立即抛错并打印实际状态，不再 timeout。完整 predicate 代码见下方段落 |
 
 **为何两条之前没修**：#20 是 CodeRabbit 在 §3.3 修复（commit `7f6e42d`）之后的复核中才提的新 outside-diff，此前 `response.bytes().await` 旁边还没有 `MAX_IMAGE_BYTES` 检查，§3.1 #6 只加了 Content-Length 预检 + 读后复核，没改读取方式本身；#21 是 §3.4（commit `bce1260`）引入的 18 屏专用 predicate 的副作用——只考虑了"engine 启动成功但 sceneList 未填充"的等待场景，没考虑"engine 启动失败、sceneList 永不填充"的失败场景，CodeRabbit 在复核 `bce1260` 时指出。
 
