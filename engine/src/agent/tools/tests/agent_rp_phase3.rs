@@ -670,3 +670,127 @@ async fn advance_plot_returns_internal_when_plot_history_field_is_wrong_type() {
         other => panic!("expected Internal, got {other:?}"),
     }
 }
+
+/// 审计 Bug F（死锁）修复测试：`trigger_world_event` 与 `advance_plot` 在同一
+/// `character_id` 上并发执行时不得死锁。
+///
+/// 旧 Bug F：`trigger_world_event::call` 同时持有 `state_lock(cid)` +
+/// `session_lock(cid, sid)`（state→session 顺序），而 `advance_plot::call`
+/// 持有 `session_lock(cid, sid)` 后经 `StateService::mutate` 再获取
+/// `state_lock(cid)`（session→state 顺序）。两者并发形成锁序倒置死锁：
+///   线程 A (advance_plot):         hold session_lock → wait state_lock
+///   线程 B (trigger_world_event):  hold state_lock   → wait session_lock
+/// 修复后 `trigger_world_event` 拆为两段独立临界区（state_lock 释放后才获取
+/// session_lock），同一调用任意时刻只持一把锁，消除锁序倒置。
+///
+/// 测试策略：用 `std::thread::scope` + `Barrier` 让两个 worker 同时进入
+/// `tool.call(...)`，外加 30s 超时。若死锁残留，超时触发 panic 使测试失败；
+/// 修复后两者应在秒级完成。
+///
+/// 复用 `concurrent_update_relationship_and_advance_plot_do_not_lose_updates`
+/// 的隔离模式（独立 OS thread + 独立 single-thread runtime），避免占用
+/// parent tokio runtime worker pool。
+#[tokio::test(flavor = "current_thread")]
+async fn trigger_world_event_and_advance_plot_concurrent_no_deadlock() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    // 唯一 character_id：避免与其他 #[tokio::test] 争用 process-global 锁。
+    seed_character(&state.data_root, "deadlock_f");
+
+    // 写入一个可触发的 world_event。
+    let events_path = state
+        .data_root
+        .join("characters/deadlock_f/world_events.json");
+    std::fs::write(
+        &events_path,
+        serde_json::json!([{
+            "id": "evt_df",
+            "name": "Storm",
+            "description": "A sudden storm",
+            "content": "Lightning split the sky."
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    // 30s 超时：死锁时让测试失败而非无限挂起 CI。
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
+    let join_handle = tokio::task::spawn_blocking(move || {
+        std::thread::scope(|s| {
+            let mut handles = Vec::new();
+
+            // Worker A: trigger_world_event（修复前持 state→session 两把锁）
+            {
+                let state = state.clone();
+                let barrier = barrier.clone();
+                handles.push(s.spawn(move || -> Result<(), String> {
+                    let reg = default_registry(state.clone());
+                    let tool = reg.get("trigger_world_event").unwrap();
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .map_err(|e| format!("rt build: {e}"))?;
+                    barrier.wait();
+                    rt.block_on(async {
+                        tool.call(
+                            serde_json::json!({
+                                "character_id": "deadlock_f",
+                                "event_id": "evt_df"
+                            }),
+                            true,
+                        )
+                        .await
+                    })
+                    .map_err(|e| format!("trigger_world_event: {e:?}"))?;
+                    Ok(())
+                }));
+            }
+
+            // Worker B: advance_plot（持 session_lock 后经 mutate 持 state_lock）
+            {
+                let state = state.clone();
+                let barrier = barrier.clone();
+                handles.push(s.spawn(move || -> Result<(), String> {
+                    let reg = default_registry(state.clone());
+                    let tool = reg.get("advance_plot").unwrap();
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .map_err(|e| format!("rt build: {e}"))?;
+                    barrier.wait();
+                    rt.block_on(async {
+                        tool.call(
+                            serde_json::json!({
+                                "character_id": "deadlock_f",
+                                "development": "the storm broke",
+                                "type": "progression"
+                            }),
+                            true,
+                        )
+                        .await
+                    })
+                    .map_err(|e| format!("advance_plot: {e:?}"))?;
+                    Ok(())
+                }));
+            }
+
+            for h in handles {
+                h.join().map_err(|e| format!("worker join: {e:?}"))??;
+            }
+            Ok::<(), String>(())
+        })
+    });
+
+    // 用 tokio timeout 包裹 spawn_blocking：死锁时 join_handle 不会返回。
+    let result = tokio::time::timeout_at(deadline, join_handle).await;
+    match result {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(msg))) => panic!("worker error: {msg}"),
+        Ok(Err(join_err)) => panic!("spawn_blocking join error: {join_err:?}"),
+        Err(_) => {
+            panic!("trigger_world_event + advance_plot 死锁：30s 超时未完成（Bug F 修复未生效）")
+        }
+    }
+}
