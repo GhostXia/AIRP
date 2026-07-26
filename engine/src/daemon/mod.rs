@@ -36,16 +36,20 @@ use handlers::{
     add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion, chat_search,
     continue_chat, create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
-    delete_session_endpoint, edit_message, generate_image_endpoint, get_character_avatar,
-    get_character_card, get_character_lorebook, get_character_state, get_character_state_history,
+    delete_session_endpoint, diff_character_revisions_endpoint, edit_message,
+    export_session_timeline_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
+    get_character_avatar, get_character_card, get_character_lorebook,
+    get_character_revision_endpoint, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
-    get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint,
-    get_resident_memory, get_scene_endpoint, get_settings, get_template_endpoint, get_user_model,
-    get_world_events, import_character, import_preset_endpoint, instantiate_template_endpoint,
-    list_agent_tools, list_characters, list_images_endpoint, list_models, list_personas_endpoint,
-    list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint, list_templates_endpoint,
-    preview_chat_assembly, reextract_character_assets, regen_chat, rollback_chat, rollback_drift,
-    serve_image_endpoint, serve_session_image_endpoint, style_review, swipe_chat, switch_branch,
+    get_lorebook_graph_endpoint, get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc,
+    get_preset_endpoint, get_resident_memory, get_scene_endpoint, get_session_timeline_endpoint,
+    get_settings, get_style_profile, get_template_endpoint, get_user_model, get_world_events,
+    import_character, import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
+    list_character_revisions_endpoint, list_characters, list_images_endpoint, list_models,
+    list_personas_endpoint, list_presets_endpoint, list_scenes_endpoint, list_sessions_endpoint,
+    list_style_profiles, list_templates_endpoint, preview_chat_assembly,
+    reextract_character_assets, regen_chat, rollback_chat, rollback_drift, serve_image_endpoint,
+    serve_session_image_endpoint, style_learn, style_review, swipe_chat, switch_branch,
     unbind_persona_endpoint, update_character_card, update_character_lorebook, update_drift,
     update_persona_endpoint, update_persona_multi_endpoint, update_plot_arc,
     update_resident_memory, update_settings, update_user_model,
@@ -440,9 +444,37 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             "/v1/sessions/:character_id/:session_id",
             axum::routing::delete(delete_session_endpoint),
         )
+        // ── Phase 4.5: 剧情时间线导出 API ──────────────────────────────
+        .route(
+            "/v1/sessions/:character_id/:session_id/timeline",
+            get(get_session_timeline_endpoint),
+        )
+        .route(
+            "/v1/sessions/:character_id/:session_id/timeline/export",
+            get(export_session_timeline_endpoint),
+        )
+        // ── Phase 4.6: 角色卡版本对比 API ──────────────────────────────
+        .route(
+            "/v1/characters/:character_id/revisions",
+            get(list_character_revisions_endpoint),
+        )
+        .route(
+            "/v1/characters/:character_id/revisions/diff",
+            get(diff_character_revisions_endpoint),
+        )
+        .route(
+            "/v1/characters/:character_id/revisions/:revision_id",
+            get(get_character_revision_endpoint),
+        )
         .route("/v1/settings", get(get_settings).post(update_settings))
         // ── Style API（4.1/4.2 风格系统） ──────────────────────────────────
         .route("/v1/style/review", post(style_review))
+        .route(
+            "/v1/style/learn",
+            post(style_learn).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route("/v1/style/profiles", get(list_style_profiles))
+        .route("/v1/style/profiles/:profile_id", get(get_style_profile))
         .route(
             "/v1/characters/:character_id/drift",
             get(get_drift).put(update_drift),
@@ -450,6 +482,16 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/characters/:character_id/drift/rollback",
             post(rollback_drift),
+        )
+        // ── Dialogue Example Generator API（Phase 4.3 对话示例生成器） ──
+        .route(
+            "/v1/characters/:character_id/dialogue-examples",
+            post(generate_dialogue_examples_endpoint).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        // ── Worldbook Knowledge Graph API（Phase 4.4 世界书知识图谱） ──
+        .route(
+            "/v1/characters/:character_id/lorebook/graph",
+            get(get_lorebook_graph_endpoint),
         )
         // ── Search API（4.3 FTS5 历史检索） ─────────────────────────────────
         .route("/v1/chat/search", post(chat_search))
@@ -572,9 +614,17 @@ fn cors_layer(state: &DaemonState) -> CorsLayer {
         configured.as_deref(),
     );
 
+    // R1: 显式 expose Content-Disposition——card-diff 与 timeline-export 的下载端点
+    // 通过该 header 向浏览器传递文件名（RFC 6266 + RFC 5987）。CORS 默认仅暴露
+    // CORS-safelisted response headers（Cache-Control / Content-Language /
+    // Content-Length / Content-Type / Expires / Pragma / Last-Modified），不含
+    // Content-Disposition。当 WebUI 与 Engine 跨源时，浏览器会屏蔽未列入 expose
+    // 的 header，前端 `resp.headers.get('Content-Disposition')` 恒为 null，
+    // 文件名降级为 'card-diff.<ext>' / 'timeline.<ext>'，破坏 UTF-8 文件名契约。
     CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .expose_headers([header::CONTENT_DISPOSITION])
         .allow_origin(AllowOrigin::list(origins))
 }
 

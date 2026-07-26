@@ -9,9 +9,11 @@
 //! `extract_card_assets`）经 `pub(crate) use` 转发，供未来 MCP tool 复用。
 
 mod agent;
+mod card_diff;
 mod character_templates;
 mod characters;
 mod chat;
+mod dialogue_gen;
 mod image_gen;
 mod lorebook;
 mod memory;
@@ -25,9 +27,15 @@ mod sessions;
 mod settings;
 mod state;
 mod style;
+mod timeline_export;
+mod worldbook_graph;
 
 // #155 PR 4/5/6：re-export moved handlers 保持 `daemon/mod.rs` 的 `use handlers::{...}` 不变。
 pub(super) use agent::{agent_run, list_agent_tools};
+pub(super) use card_diff::{
+    diff_character_revisions_endpoint, get_character_revision_endpoint,
+    list_character_revisions_endpoint,
+};
 pub(super) use character_templates::{
     get_template_endpoint, instantiate_template_endpoint, list_templates_endpoint,
 };
@@ -39,6 +47,7 @@ pub(super) use chat::{
     chat_completion, continue_chat, delete_message, edit_message, get_chat_history,
     preview_chat_assembly, regen_chat, rollback_chat, swipe_chat, switch_branch,
 };
+pub(super) use dialogue_gen::generate_dialogue_examples_endpoint;
 pub(super) use image_gen::{
     generate_image_endpoint, list_images_endpoint, serve_image_endpoint,
     serve_session_image_endpoint,
@@ -68,7 +77,12 @@ pub(super) use state::{
     get_character_avatar, get_character_state, get_character_state_history,
     get_character_state_schema, get_world_events,
 };
-pub(super) use style::{get_drift, rollback_drift, style_review, update_drift};
+pub(super) use style::{
+    get_drift, get_style_profile, list_style_profiles, rollback_drift, style_learn, style_review,
+    update_drift,
+};
+pub(super) use timeline_export::{export_session_timeline_endpoint, get_session_timeline_endpoint};
+pub(super) use worldbook_graph::get_lorebook_graph_endpoint;
 
 // M_MCP MCP-2：角色卡导入的 `pub(crate)` 共享实现，供未来 daemon HTTP handler 与
 // MCP tool 复用。facade 转发符号路径，保持 `crate::daemon::handlers::import_card_to_disk`

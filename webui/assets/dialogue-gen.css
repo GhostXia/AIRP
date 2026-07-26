@@ -1,0 +1,14 @@
+/* 39 对话示例生成器：页面私有样式 */
+.description { color: var(--text-secondary); font-size: 13px; margin: 4px 0 16px; line-height: 1.5; }
+.description code { background: var(--bg-subtle); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+.dialoguegen-form { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; padding: 16px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
+.dialoguegen-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: end; }
+.dialoguegen-flags { display: flex; gap: 16px; flex-wrap: wrap; padding: 8px 0; border-top: 1px dashed var(--border-default); border-bottom: 1px dashed var(--border-default); }
+.checkbox-field { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.checkbox-field input { margin: 0; }
+.dialoguegen-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dialoguegen-result { margin: 16px 0; }
+.result-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+.result-content { padding: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-subtle); white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-height: 480px; overflow: auto; margin: 0; }
+.dialoguegen-current { margin: 24px 0; }
+.subheading { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 16px 0 8px; }

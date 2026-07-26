@@ -37,6 +37,11 @@
     ['35', 'plotarc', '剧情弧', '35-plot-arc.html'],
     ['36', 'imagegen', '图片生成', '36-image-gen.html'],
     ['37', 'templates', '模板库', '37-character-templates.html'],
+    ['38', 'stylelearn', '风格迁移', '38-style-learn.html'],
+    ['39', 'dialoguegen', '对话示例', '39-dialogue-gen.html'],
+    ['40', 'wbgraph', '知识图谱', '40-worldbook-graph.html'],
+    ['41', 'timeline', '时间线导出', '41-timeline-export.html'],
+    ['42', 'carddiff', '版本对比', '42-card-diff.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 
@@ -680,7 +685,14 @@
     try {
       const health = await client.request('GET', '/health'); $('#engine-status').className = 'status-pill ok'; $('#engine-status').lastChild.textContent = health.provider_configured ? 'Engine 与 Provider 就绪' : 'Engine 就绪 · Provider 待配置';
       await loadScope();
-      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; } };
+      // CodeRabbit #8：屏 38–42 是独立 HTML 页面（各自加载 style-learn.js /
+      // dialogue-gen.js / worldbook-graph.js / timeline-export.js / card-diff.js），
+      // 不通过 console-runtime.js 渲染。但 nav 链接的 id（stylelearn 等）会出现在
+      // ?screen= 查询参数里——若用户从书签或外部链接访问 console.html?screen=stylelearn，
+      // 旧代码会落入 renderDiagnostics fallback 而非跳到正确的专用页面。
+      // 这里加 redirect renderer，把这类请求转发到对应的 HTML 页面。
+      const redirectRenderer = href => () => { location.href = pathWithState(href); };
+      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; }, stylelearn: redirectRenderer('38-style-learn.html'), dialoguegen: redirectRenderer('39-dialogue-gen.html'), wbgraph: redirectRenderer('40-worldbook-graph.html'), timeline: redirectRenderer('41-timeline-export.html'), carddiff: redirectRenderer('42-card-diff.html') };
       await (renderers[screen] || renderDiagnostics)();
     } catch (error) {
       $('#engine-status').className = 'status-pill danger'; $('#engine-status').lastChild.textContent = '连接或加载失败'; setStatus(message(error), true);

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色卡版本对比 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/card-diff.css">
+</head>
+<body data-screen="carddiff">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">角色卡版本对比</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>角色 <b id="scope-character">—</b></span><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">角色卡版本对比</h1>
+<p class="description">基于 revision 系统读取两个版本的角色卡 <code>card.json</code>，生成结构化 diff（<b>Added / Removed / Changed</b>），支持 <b>JSON / Markdown / HTML</b> 三种格式导出。</p>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <div class="runtime-form">
+    <label class="field"><span class="field-label">角色</span><select class="select runtime-select" id="cd-character"></select></label>
+    <label class="field"><span class="field-label">Revision A</span><select class="select runtime-select" id="cd-rev-a"></select></label>
+    <label class="field"><span class="field-label">Revision B</span><select class="select runtime-select" id="cd-rev-b"></select></label>
+    <button class="btn btn-primary" id="cd-compare" type="button">对比版本</button>
+  </div>
+
+  <div class="cd-meta" id="cd-meta" hidden>
+    <h2 class="subheading">Revision 元数据</h2>
+    <table class="cd-meta-table">
+      <thead><tr><th></th><th id="cd-meta-a-head">rev A</th><th id="cd-meta-b-head">rev B</th></tr></thead>
+      <tbody>
+        <tr><td>revision</td><td id="cd-meta-a-rev">—</td><td id="cd-meta-b-rev">—</td></tr>
+        <tr><td>created_at</td><td id="cd-meta-a-time">—</td><td id="cd-meta-b-time">—</td></tr>
+        <tr><td>tree_sha256</td><td id="cd-meta-a-hash"><code>—</code></td><td id="cd-meta-b-hash"><code>—</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="cd-stats" id="cd-stats" hidden>
+    <span class="stat-pill stat-added">🟢 Added <b id="cd-stat-added">0</b></span>
+    <span class="stat-pill stat-removed">🔴 Removed <b id="cd-stat-removed">0</b></span>
+    <span class="stat-pill stat-changed">🟡 Changed <b id="cd-stat-changed">0</b></span>
+  </div>
+
+  <div class="cd-actions" id="cd-actions" hidden>
+    <button class="btn btn-secondary" id="cd-export-json" type="button">下载 JSON</button>
+    <button class="btn btn-secondary" id="cd-export-md" type="button">下载 Markdown</button>
+    <button class="btn btn-secondary" id="cd-export-html" type="button">下载 HTML</button>
+    <button class="btn btn-secondary" id="cd-preview-md" type="button">预览 Markdown</button>
+    <button class="btn btn-secondary" id="cd-preview-html" type="button">预览 HTML</button>
+  </div>
+
+  <div class="cd-changes" id="cd-changes" hidden>
+    <h2 class="subheading">变更明细</h2>
+    <ul id="cd-change-list" class="cd-list"></ul>
+  </div>
+
+  <div class="cd-preview" id="cd-preview" hidden>
+    <h2 class="subheading" id="cd-preview-title">预览</h2>
+    <div class="cd-preview-controls">
+      <button class="btn btn-secondary" id="cd-preview-close" type="button">关闭预览</button>
+    </div>
+    <pre id="cd-preview-md-content" class="result-content" hidden></pre>
+    <iframe id="cd-preview-html-frame" class="cd-preview-frame" hidden title="HTML 预览" sandbox="allow-same-origin"></iframe>
+  </div>
+</div>
+<div class="related-links" id="related-links"></div>
+</main>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/card-diff.js"></script>
+</body></html>

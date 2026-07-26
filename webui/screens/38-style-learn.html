@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>风格迁移 · AIRP 控制台</title>
+<link rel="stylesheet" href="../assets/tokens.css"><link rel="stylesheet" href="../assets/base.css"><link rel="stylesheet" href="../assets/components.css"><link rel="stylesheet" href="../assets/console.css"><link rel="stylesheet" href="../assets/style-learn.css">
+</head>
+<body data-screen="stylelearn">
+<div class="canvas">
+<header class="topbar"><div class="topbar-left"><span class="logo-block">A</span><span class="product-name">AIRP 控制台</span><span class="topbar-divider"></span><span class="crumb" id="page-title">风格迁移</span></div><div class="topbar-right"><span class="status-pill" id="engine-status" role="status"><i class="dot"></i>正在连接</span></div></header>
+<div class="console-body">
+<nav class="console-nav" id="console-nav"></nav>
+<main class="console-main">
+<div class="scope-bar"><span>角色 <b id="scope-character">—</b></span><span>会话 <b id="scope-session">—</b></span><span>用户 <b id="scope-user">—</b></span><span class="engine-addr" id="engine-address"></span></div>
+<h1 class="heading" id="heading-title">风格迁移</h1>
+<div id="runtime-status" class="runtime-status"></div>
+<div id="view">
+  <p class="hint">粘贴一段文本样本（小说/对话/散文），Engine 调用 LLM 提取风格特征，写入风格 profile。后续风格审查会读取该 profile 做对齐检查。</p>
+  <div class="stylelearn-form">
+    <label class="field"><span class="field-label">Profile ID（可选，留空用 default）</span><input class="input" id="learn-profile-id" placeholder="如：my-style 或 default"></label>
+    <label class="field"><span class="field-label">角色 ID（可选，同时写入角色专属 profile）</span><select class="select" id="learn-character"><option value="">不绑定角色</option></select></label>
+    <label class="field"><span class="field-label">文本样本（100~20000 字符）</span><textarea class="input textarea" id="learn-text" rows="12" placeholder="粘贴待学习的文本样本：小说片段、对话记录、散文等。Engine 将提取语气/视角/节奏/修辞/词汇 5 个维度的风格特征，写入风格 profile。"></textarea></label>
+    <div class="stylelearn-meta"><span id="learn-char-count">0</span> 字符</div>
+    <div class="stylelearn-actions">
+      <button class="btn btn-primary" id="learn-submit" type="button">提取风格并写入 Profile</button>
+      <button class="btn btn-secondary" id="learn-clear" type="button">清空</button>
+    </div>
+  </div>
+  <div class="stylelearn-result" id="learn-result" hidden>
+    <h2 class="subheading">提取结果</h2>
+    <div class="result-meta" id="learn-result-meta"></div>
+    <pre class="result-content" id="learn-result-content"></pre>
+  </div>
+  <div class="stylelearn-profiles-section">
+    <h2 class="subheading">已有 Profile 列表</h2>
+    <button class="btn btn-secondary" id="profiles-refresh" type="button">刷新</button>
+    <div id="profiles-list" class="profiles-list">加载中…</div>
+  </div>
+  <div class="stylelearn-profile-detail" id="profile-detail" hidden>
+    <h2 class="subheading" id="profile-detail-title">Profile 详情</h2>
+    <pre class="profile-content" id="profile-detail-content"></pre>
+    <button class="btn btn-secondary" id="profile-detail-close" type="button">关闭</button>
+  </div>
+</div>
+<div class="related-links" id="related-links"></div>
+</main>
+</div></div>
+<script src="../assets/api-client.js"></script><script src="../assets/style-learn.js"></script>
+</body></html>

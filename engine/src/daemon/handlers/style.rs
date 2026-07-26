@@ -217,3 +217,175 @@ pub async fn rollback_drift(
         Err(e) => e.into_response(),
     }
 }
+
+/// Phase 4.2: `POST /v1/style/learn` — 从文本样本提取风格特征写入 profile。
+///
+/// 请求体：`{ text, profile_id?, character_id? }`
+/// 行为：
+/// 1. 校验 profile_id 防路径遍历
+/// 2. 调用 LLM 提取 6 维度风格特征
+/// 3. 渲染为 markdown profile，原子写入 `styles/profiles/{profile_id}.md`
+/// 4. 若提供 character_id，额外写入 `characters/{cid}/style-profile.md`
+pub async fn style_learn(
+    State(state): State<Arc<DaemonState>>,
+    Json(payload): Json<crate::style::StyleLearnRequest>,
+) -> impl IntoResponse {
+    match run_style_learn_handler(&state, payload).await {
+        Ok(resp) => match serde_json::to_value(resp) {
+            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+            Err(e) => AirpError::from(e).into_response(),
+        },
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn run_style_learn_handler(
+    state: &DaemonState,
+    payload: crate::style::StyleLearnRequest,
+) -> Result<crate::style::StyleLearnResponse, AirpError> {
+    // 1. 校验 profile_id
+    crate::style::validate_profile_id(&payload.profile_id)?;
+
+    // 2. 校验 character_id（若提供）
+    if let Some(cid) = payload.character_id.as_deref() {
+        let _ = CharacterId::new(cid)?;
+    }
+
+    // 3. 构造 provider config + gen params
+    let snapshot = state
+        .config
+        .read()
+        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
+        .clone();
+    let provider_config = Arc::new(crate::adapter::ProviderConfig {
+        provider: snapshot.provider.clone(),
+        endpoint: snapshot.endpoint.clone(),
+        api_key: snapshot.api_key.clone(),
+    });
+    let gen_params = crate::adapter::GenerationParams {
+        model: snapshot.model.clone(),
+        temperature: Some(0.3),
+        max_tokens: Some(800),
+    };
+
+    // 4. 调用 LLM 提取风格特征
+    let features = crate::style::run_style_learn(
+        &state.http_client,
+        provider_config,
+        gen_params,
+        &payload.text,
+    )
+    .await?;
+
+    // 5. 渲染 markdown profile
+    let profile_md = crate::style::render_profile_markdown(&features, &payload.profile_id);
+    let count = crate::style::features_count(&features);
+
+    // 6. 写入全局 profile
+    let global_path = crate::style::global_profile_path(&state.data_root, &payload.profile_id);
+    let relative_path = crate::style::write_profile(&state.data_root, &global_path, &profile_md)?;
+
+    // 7. 若提供 character_id，额外写入角色专属 profile
+    if let Some(cid) = payload.character_id.as_deref() {
+        let char_path = crate::style::character_profile_path(&state.data_root, cid);
+        // 角色专属 profile 只保留 feature 条目部分，去掉全局 profile_md 的
+        // `# Style Profile: {profile_id}` 头部和 `来源：...（{timestamp}）` 行，
+        // 改用角色专属头部。否则会出现两层 # 头部和两个来源时间戳，污染 prompt。
+        let entries = profile_md
+            .find("\n- ")
+            .map(|i| &profile_md[i + 1..])
+            .unwrap_or(profile_md.as_str());
+        let char_md = {
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut md = String::with_capacity(512);
+            md.push_str(&format!("# Character Style Profile: {}\n\n", cid));
+            md.push_str(&format!("来源：用户文本样本学习（{}）\n\n", now));
+            md.push_str(entries);
+            md
+        };
+        // R1: propagate write failure — requests with character_id must not report
+        // success when the character profile was not persisted. 与全局 profile
+        // write_profile(? operator above) 的错误传播纪律对齐。
+        crate::style::write_profile(&state.data_root, &char_path, &char_md)?;
+    }
+
+    Ok(crate::style::StyleLearnResponse {
+        success: true,
+        profile_path: relative_path,
+        features_count: count,
+        profile_content: profile_md,
+    })
+}
+
+/// Phase 4.2: `GET /v1/style/profiles/:profile_id` — 读取已学习的风格 profile。
+pub async fn get_style_profile(
+    State(state): State<Arc<DaemonState>>,
+    Path(profile_id): Path<String>,
+) -> impl IntoResponse {
+    let result = (|| -> Result<serde_json::Value, AirpError> {
+        crate::style::validate_profile_id(&profile_id)?;
+        let path = crate::style::global_profile_path(&state.data_root, &profile_id);
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AirpError::NotFound(format!("style profile '{}' not found", profile_id))
+            } else {
+                AirpError::from(e)
+            }
+        })?;
+        Ok(serde_json::json!({
+            "profile_id": profile_id,
+            "content": content,
+            "char_count": content.chars().count(),
+        }))
+    })();
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Phase 4.2: `GET /v1/style/profiles` — 列出所有已学习的风格 profile。
+pub async fn list_style_profiles(State(state): State<Arc<DaemonState>>) -> impl IntoResponse {
+    let result = (|| -> Result<Vec<serde_json::Value>, AirpError> {
+        let profiles_dir = state.data_root.join("styles").join("profiles");
+        if !profiles_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&profiles_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let metadata = entry.metadata()?;
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            entries.push(serde_json::json!({
+                "profile_id": stem,
+                "size_bytes": metadata.len(),
+                "modified_timestamp": modified,
+            }));
+        }
+        entries.sort_by(|a, b| {
+            b.get("profile_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .cmp(a.get("profile_id").and_then(|v| v.as_str()).unwrap_or(""))
+        });
+        Ok(entries)
+    })();
+    match result {
+        Ok(list) => (StatusCode::OK, Json(list)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}

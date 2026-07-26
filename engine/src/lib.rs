@@ -21,6 +21,7 @@
 
 pub mod adapter;
 pub mod agent;
+pub mod card_diff;
 pub mod character_templates;
 pub mod chat_pipeline;
 pub mod chat_store;
@@ -29,6 +30,7 @@ mod context_limit;
 pub mod daemon;
 pub mod data_dir;
 pub mod decompose;
+pub mod dialogue_gen;
 pub mod domain;
 pub mod error;
 pub mod image_gen;
@@ -40,8 +42,10 @@ pub mod quota;
 pub mod scene;
 pub(crate) mod secret_store;
 pub mod style;
+pub mod timeline_export;
 pub mod types;
 pub mod ulid;
+pub mod worldbook_graph;
 
 // M0 F-50 / 6.0n：实现细节模块收紧为 pub(crate)，仅 crate 内部互调。
 // 这些模块不被 main.rs / 外部消费者直接引用，未来重构无 API 兼容包袱。

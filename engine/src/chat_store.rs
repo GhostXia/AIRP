@@ -473,6 +473,43 @@ impl ChatLog {
         Ok(log)
     }
 
+    /// Read-only 加载：仅当 JSONL 已存在时返回 `Ok(Some(log))`，否则返回 `Ok(None)`。
+    /// 用于 timeline export 等 read-only 操作，避免：
+    /// 1. 在导出不存在的 session 时创建空 session 文件（`load_or_create_for_session`
+    ///    的 default branch 会调用 `log.save()`）
+    /// 2. 触发 meta 修复写入（`load_or_create_for_session` 的 `needs_repair` 分支会
+    ///    写回 `chat_log_meta.json`）
+    ///
+    /// 注意：当前实现仍委托给 `load_or_create_for_session` 来读取已存在的 JSONL，
+    /// 因此 meta 修复写入在 meta 损坏的边缘场景仍可能发生。完全消除写入需要将
+    /// 读取逻辑从 `load_or_create_for_session` 中抽出，作为独立重构（见 audit 遗留项）。
+    pub fn load_for_session_if_exists(
+        data_root: &Path,
+        character_id: &str,
+        session_id: Option<&SessionId>,
+    ) -> Result<Option<Self>, AirpError> {
+        let exists = match session_id {
+            Some(sid) => {
+                let scope = sid.to_string();
+                crate::data_dir::resolve_session_dir(data_root, character_id, Some(sid))?;
+                Self::scoped_jsonl_path(data_root, character_id, Some(&scope)).exists()
+            }
+            None => {
+                Self::jsonl_path(data_root, character_id).exists()
+                    || Self::pre_cf2_jsonl_path(data_root, character_id).exists()
+                    || Self::legacy_path(data_root, character_id).exists()
+            }
+        };
+        if !exists {
+            return Ok(None);
+        }
+        Ok(Some(Self::load_or_create_for_session(
+            data_root,
+            character_id,
+            session_id,
+        )?))
+    }
+
     /// Read recent messages without creating directories, migrating files, or repairing metadata.
     /// Used by request previews where observational reads must remain side-effect free.
     pub fn recent_existing_for_session(

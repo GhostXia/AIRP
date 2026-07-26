@@ -43,6 +43,11 @@ pub enum AirpError {
     #[error("资源不存在: {0}")]
     NotFound(String),
 
+    /// 乐观并发冲突：read-modify-write 期间检测到资源被并发改动。
+    /// 映射到 HTTP 409 Conflict。
+    #[error("冲突: {0}")]
+    Conflict(String),
+
     /// 路径遍历攻击保护：用户提供的路径 canonicalize 后越出 `data_root` 子树。
     /// 映射到 HTTP 400。
     #[error("路径越出 data_root: {0:?}")]
@@ -96,6 +101,7 @@ impl AirpError {
         match self {
             AirpError::BadRequest(_) | AirpError::PathEscape(_) => StatusCode::BAD_REQUEST,
             AirpError::NotFound(_) => StatusCode::NOT_FOUND,
+            AirpError::Conflict(_) => StatusCode::CONFLICT,
             AirpError::Upstream { .. } => StatusCode::BAD_GATEWAY,
             AirpError::QuotaExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             AirpError::Io(_)
@@ -120,6 +126,7 @@ impl AirpError {
             AirpError::BadRequest(_) => "bad_request",
             AirpError::PathEscape(_) => "path_escape",
             AirpError::NotFound(_) => "not_found",
+            AirpError::Conflict(_) => "conflict",
             AirpError::Upstream { .. } => "upstream",
             AirpError::QuotaExceeded(_) => "quota_exceeded",
             AirpError::Io(_) => "io_error",
