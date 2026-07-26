@@ -92,7 +92,7 @@ if !content_buf.is_empty() {
 - 事件 1 append 成功 → 事件 2 append 失败 → 事件 1 内容已落盘但 `triggered` 标志未持久化（`save_world_events` 在循环外）→ 下次 `advance_clock` 重试会重复注入事件 1 内容。
 
 新实现批量收集 → 标记 + 持久化 → 单次 append：
-- 若 `save_world_events` 失败：无任何内容落盘，无副作用。✓
+- 若 `save_world_events` 失败：**clock 已被持久化但事件未标记/未注入**——`save_world_clock` 在 `advance_and_check_triggers` 内先于 `save_world_events` 调用（`world_event.rs:369`），失败时 `Err` 传播给调用方。这是部分落盘的中间态：clock 已前进但到期事件未被标记 `triggered`，下次重试 `advance_clock` 会再前进一次 clock（叠加 advance_per_turn）并重新检查同一批到期事件。**重试影响**：clock 比"应有值"多 advance 一次（用户可见，可手动回写 `world_clock.json`），但事件不会重复注入（事件未被标记，content_buf 未 append）。本审计认为此权衡可接受——clock 偏移是显式可观测的数值偏差，而旧实现的重复注入是污染叙事连续性的静默错误。
 - 若 `append_to_current` 失败：事件已标记 `triggered`（不会重触发），内容未注入——失败对调用方可见（`Err` 传播），不会静默累积重复内容。
 
 **审计权衡**：save→append 顺序意味着 append 失败时事件"丢失"（triggered=true 但内容未注入）。替代方案 append→save 则可能 append 成功但 save 失败导致重复注入。前者（内容丢失）比后者（内容重复）更可控——用户可见错误可手动重置 `triggered=false`，而静默重复会污染叙事连续性。此权衡与 Bug F 修复一致。✓
