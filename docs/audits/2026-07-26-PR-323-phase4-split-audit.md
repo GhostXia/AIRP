@@ -228,11 +228,11 @@ CR10 修复后 simulation 是异步的，但用户切换 character 或点"应用
 
 CR3 修复后 `mes_example.bak` 已落盘，但 UI `renderResult` 仍显示"旧值已备份（{N} 字符）"——这隐含"已持久化到磁盘"，对用户是正确的。但若 `mes_example.bak` 字段在未来被改名或弃用，UI 文案需同步。建议加注释把 UI 与 `engine/src/daemon/handlers/dialogue_gen.rs:190-203` 的字段名绑定。优先级：低。
 
-### N7 — `card-diff.js` `previewHtml` 用 `srcdoc` 注入完整 HTML，未限制 sandbox
+### N7 — `card-diff.js` `previewHtml` 用 `srcdoc` 注入完整 HTML —— ✅ 已就地修复
 
 `frame.srcdoc = cachedHtml` 把 engine 返回的 HTML diff 直接注入 iframe。engine 端 `card_diff.rs` 的 HTML 渲染是 AIRP 自己实现的（非用户内容），但若未来允许用户自定义 HTML 模板，这会成为 XSS 向量。
 
-建议：`<iframe sandbox="allow-same-origin">` 限制脚本执行（card-diff HTML 不需要脚本）。优先级：低（当前 HTML 来自 engine 可信源，但应纵深防御）。
+**状态**：首轮审计 commit `fe199d6` 已就地修复——`webui/screens/42-card-diff.html:63` 的 iframe 已带 `sandbox="allow-same-origin"`（限制脚本执行，card-diff HTML 不需要脚本）。原 §4 误把此项列为非阻塞，实际已在阻塞修复中顺带完成。无需入 issue。
 
 ### N8 — `worldbook_graph.rs` 500 节点上限是 hardcoded
 
@@ -293,8 +293,8 @@ PR #323 的 12 个 CodeRabbit 阻塞项 + 1 个编译错误（B0 `AirpError::Con
 - **CR6**：`timeline_export.rs` 安全索引 + `build_entries -> Result`
 - **CR7**：`worldbook_graph.rs` `shared_keys` 完整性 + 正确 key
 
-§4 中 10 个非阻塞项（N1–N10）建议合并后入 issue。其中 N2 / N9 / N10 涉及数据一致性但发生概率低，N1 / N5 / N8 是体验问题，N3 / N4 / N6 / N7 是设计债务。
+§4 中 9 个非阻塞项（N1–N6, N8–N10，N7 已由首轮 commit `fe199d6` 就地修复）建议合并后入 issue。其中 N2 / N9 / N10 涉及数据一致性但发生概率低，N1 / N5 / N8 是体验问题，N3 / N4 / N6 是设计债务。
 
 **视觉审查声明**：按 issue #319 补充要求（2026-07-26 用户立），WebUI 改动 PR 必须由 KIMI K3+ 多模态 agent 执行视觉审查。**本审计 agent 为 GLM-5.2 纯文本模型，整轮审计未执行视觉审查**——CR1–CR12 全部修复均基于 HTML 字符串/DOM 契约/源码语义判断，未对 38–42 五屏的实际渲染做截图审查。建议在合并前由多模态 agent 对 PR #323 涉及的视觉改动（特别是 40 屏 canvas 力导向布局异步化后的渐进式动画、42 屏 card-diff HTML 预览 srcdoc 注入、38 屏 style-learn 表单）独立补审。
 
-**建议**：本 commit 推送后，待人工 review、CodeRabbit 复审、`Portable Windows WebUI` CI 复跑通过、以及多模态 agent 视觉审查通过后可合并；合并后由审计 agent 将 §4 中 10 个非阻塞项整理为 GitHub issue。
+**建议**：本 commit 推送后，待人工 review、CodeRabbit 复审、`Portable Windows WebUI` CI 复跑通过、以及多模态 agent 视觉审查通过后可合并；合并后由审计 agent 将 §4 中 9 个非阻塞项（N7 已就地修复）整理为 GitHub issue。
