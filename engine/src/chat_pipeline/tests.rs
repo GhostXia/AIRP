@@ -2741,3 +2741,133 @@ mod tests_bug_d_finalize_order {
         assert_eq!(live["hp"], 50);
     }
 }
+
+/// 审计 Bug E 修复测试：当本轮触发封卷（`should_seal=true`）时，
+/// `run_finalize` 必须跳过周期维护，避免 `run_seal_flow` 与
+/// `run_maintenance` 并发对 `index.md` 做 read-modify-write 导致
+/// 后写者覆盖先写者的 diff。
+///
+/// 测试策略：构造 3 卷都含同一实体「Alpha」的场景（满足 maintenance
+/// 晋升阈值 3），然后：
+/// - 触发封卷（`<卷评估 封存="true"/>`）→ 维护应被跳过 → 「Alpha」不被晋升
+/// - 不触发封卷（普通正文）→ 维护应执行 → 「Alpha」被晋升
+///
+/// 两个测试各自独立 session_dir + 唯一 character_id（None 即可，因
+/// 本测试不涉及 message append / live state / memory extraction，
+/// 仅验证 volume side-effects 路径）。
+#[cfg(test)]
+mod tests_bug_e_seal_skips_maintenance {
+    use super::finalize::run_finalize;
+    use super::*;
+    use crate::adapter::Provider;
+    use crate::config::VolumeConfig;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    /// 构造一个 session_dir，写入 3 卷都含实体「Alpha」，
+    /// 满足 `run_maintenance` 的跨卷晋升阈值（PROMOTE_THRESHOLD=3）。
+    fn seed_session_with_promotable_entity(session_dir: &std::path::Path) {
+        crate::volume_store::ensure_session_dirs(session_dir).unwrap();
+        for n in 1..=3u32 {
+            let body = format!(
+                "# 卷{}\n## [卷索引]\n- 登场: Alpha, 仅本卷{}\n\n---\n\n正文",
+                n, n
+            );
+            crate::volume_store::write_volume(session_dir, n, &body).unwrap();
+        }
+    }
+
+    /// 构造 FinalizerCtx：`character_id=None` 跳过消息追加与记忆抽取，
+    /// 仅激活 volume side-effects 路径。`maintenance_interval=1` 使每轮
+    /// 都触发维护条件（`turn_count % interval == 0`）。
+    fn make_finalize_ctx_for_volume(data_root: PathBuf, session_dir: PathBuf) -> FinalizerCtx {
+        FinalizerCtx {
+            character_id: None,
+            session_id: None,
+            user_id: None,
+            data_root,
+            session_dir: Some(session_dir),
+            provider_config: Arc::new(ProviderConfig {
+                provider: Provider::OpenAI,
+                endpoint: "https://example.test/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+            }),
+            gen_params: GenerationParams {
+                model: "test-model".to_string(),
+                temperature: None,
+                max_tokens: None,
+            },
+            volume_config: VolumeConfig {
+                maintenance_interval: 1,
+                ..VolumeConfig::default()
+            },
+            http_client: reqwest::Client::new(),
+            continue_mode: false,
+            swipe_candidates: Vec::new(),
+        }
+    }
+
+    /// Bug E：`should_seal=true` 时维护被跳过，跨卷实体「Alpha」不应被晋升。
+    ///
+    /// 触发条件：raw_acc 含 `<卷评估 封存="true"/>`，parse_seal_signal 解析出
+    /// `should_seal=true`。current.md 为空（seal flow 内部检测到空内容后
+    /// 返回 `Ok(None)`，不发起 HTTP 调用，测试不依赖网络）。
+    #[tokio::test]
+    async fn finalize_skips_maintenance_when_seal_triggered() {
+        let tmp = tempdir().unwrap();
+        let data_root = tmp.path().to_path_buf();
+        let session_dir = data_root.join("sessions/seal_skip_main/s1");
+        seed_session_with_promotable_entity(&session_dir);
+        let ctx = make_finalize_ctx_for_volume(data_root, session_dir.clone());
+
+        // raw_acc 含封卷信号 → parse_seal_signal 返回 should_seal=true。
+        // cleaned（剥离信号后）为空 → 不向 current.md 追加内容 → current.md
+        // 保持空 → run_seal_flow 内部检测空内容后返回 Ok(None)，不调 HTTP。
+        let raw_acc = r#"<卷评估 封存="true" 原因="test seal"/>"#.to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        // 维护被跳过 → 「Alpha」不应出现在人物段（未晋升）。
+        let idx = crate::volume_store::read_index(&session_dir).unwrap();
+        let characters_section = idx
+            .split("## 人物")
+            .nth(1)
+            .and_then(|s| s.split("##").next())
+            .unwrap_or("");
+        assert!(
+            !characters_section.contains("Alpha"),
+            "Bug E: maintenance should be skipped when seal triggers, but Alpha was promoted.\nindex:\n{idx}"
+        );
+    }
+
+    /// Bug E 控制组：`should_seal=false` 时维护正常执行，「Alpha」应被晋升。
+    /// 与上一测试对照，证明「跳过」是 Bug E 修复的精确行为，而非环境问题。
+    #[tokio::test]
+    async fn finalize_runs_maintenance_when_no_seal() {
+        let tmp = tempdir().unwrap();
+        let data_root = tmp.path().to_path_buf();
+        let session_dir = data_root.join("sessions/no_seal_main/s1");
+        seed_session_with_promotable_entity(&session_dir);
+        let ctx = make_finalize_ctx_for_volume(data_root, session_dir.clone());
+
+        // raw_acc 不含封卷信号 → should_seal=false。
+        // cleaned = 正文 → 追加到 current.md（内容无所谓，maintenance 不读 current.md）。
+        let raw_acc = "The hero ventures forth.".to_string();
+        let cleaned_acc = raw_acc.clone();
+
+        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
+
+        // 维护执行 → 「Alpha」应出现在人物段（已晋升）。
+        let idx = crate::volume_store::read_index(&session_dir).unwrap();
+        let characters_section = idx
+            .split("## 人物")
+            .nth(1)
+            .and_then(|s| s.split("##").next())
+            .unwrap_or("");
+        assert!(
+            characters_section.contains("Alpha"),
+            "Control: maintenance should run when no seal, but Alpha was not promoted.\nindex:\n{idx}"
+        );
+    }
+}

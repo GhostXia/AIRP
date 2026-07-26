@@ -148,7 +148,13 @@ pub(super) async fn run_finalize(
 
         if let Ok(turn_count) = volume_store::increment_turn_counter(&sd) {
             let interval = ctx.volume_config.maintenance_interval.max(1) as u64;
-            if turn_count > 0 && turn_count % interval == 0 {
+            // 审计 Bug E 修复：当本轮触发封卷（should_seal=true）时，跳过
+            // 周期维护。run_seal_flow 与 run_maintenance 都对 index.md 做
+            // read-modify-write（seal 在 volume_manager.rs:219/280，
+            // maintenance 在 430/470），并发执行时后写者覆盖先写者的 diff，
+            // 导致卷索引或跨卷实体晋升丢失。封卷已涵盖本轮的卷过渡，维护
+            // 推迟到下一个非封卷轮次触发。
+            if !should_seal && turn_count > 0 && turn_count % interval == 0 {
                 let sd_maint = sd.clone();
                 join_set.spawn(async move {
                     if let Err(e) = volume_manager::run_maintenance(&sd_maint) {
