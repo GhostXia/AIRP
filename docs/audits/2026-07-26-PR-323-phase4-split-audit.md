@@ -252,13 +252,35 @@ CR3 修复后 `mes_example.bak` 已落盘，但 UI `renderResult` 仍显示"旧�
 
 ---
 
+## 4.1 二次修复：CI `Rust doc` failure（本 commit）
+
+> 首轮 commit `fe199d6` 推送后，CI `Rust doc` job 在 `RUSTDOCFLAGS=-D warnings` 下 fail：
+>
+> ```
+> error: unclosed HTML tag `WorldEvent`
+>   --> engine\src\timeline_export.rs:10:67
+> ```
+>
+> 根因：`timeline_export.rs` 模块级 doc comment 把 `Vec<WorldEvent>` 写在裸文本里，rustdoc 把 `<WorldEvent>` 当作未闭合 HTML 标签。原 PR 描述与首轮审计都未跑 `cargo doc --no-deps --workspace`，仅跑了 `cargo test --lib`（不触发 rustdoc），故漏检。
+
+| 位置 | 修复 |
+|---|---|
+| `engine/src/timeline_export.rs:10` | `Vec<WorldEvent>` → `` `Vec<WorldEvent>` ``（反引号包裹为 inline code，rustdoc 不再当作 HTML 标签） |
+
+**本地复跑**：`$env:RUSTDOCFLAGS="-D warnings"; cargo doc --no-deps --workspace` exit 0，生成 `target/doc/airp_core/index.html`。
+
+**审计教训**：本审计首轮的"验证证据"表只跑了 `cargo fmt / clippy / test --lib`，未跑 `cargo doc`。CI 的 `Rust doc` job 用 `-D warnings` 把 rustdoc lint 升级为 error，这是 `cargo test --lib` 不覆盖的维度。后续审计应把 `cargo doc --no-deps --workspace` 加入标准验证集。
+
+---
+
 ## 5. 结论
 
-PR #323 的 12 个 CodeRabbit 阻塞项 + 1 个编译错误（B0 `AirpError::Conflict`）+ 2 个 clippy 警告（`chat_store.rs::load_for_session_if_exists` doc-lazy-continuation）**已由本审计就地修复**。修复后本地验证通过：
+PR #323 的 12 个 CodeRabbit 阻塞项 + 1 个编译错误（B0 `AirpError::Conflict`）+ 2 个 clippy 警告（`chat_store.rs::load_for_session_if_exists` doc-lazy-continuation）+ 1 个 CI rustdoc failure（`timeline_export.rs:10` unclosed HTML tag）**已由本审计就地修复**。修复后本地验证通过：
 
 - `cargo fmt --all --check` 干净
 - `cargo clippy --lib --tests -- -D warnings` 干净
 - `cargo test --lib` = **989 passed / 0 failed / 2 ignored**（ignored 为 mockito feature 与 bench，与本 PR 无关）
+- `cargo doc --no-deps --workspace`（`RUSTDOCFLAGS=-D warnings`）exit 0
 - `node --test tests/runtime-pages.test.mjs tests/api-client.test.mjs tests/operations.test.mjs tests/agent-harness.test.mjs`（webui）= **50 passed**
 - `cargo build --bin airp-daemon`（隐式覆盖，由 cargo test 触发）通过
 

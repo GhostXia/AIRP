@@ -7,7 +7,7 @@
 //! ## 数据来源
 //! - **chat history**：`characters/{id}/sessions/{sid}/history/chat_log.jsonl`
 //!   每条 StoredMessage 含 `role/content/id/ts`（旧消息可能无 ts）。
-//! - **world_events**：`characters/{id}/world_events.json`（角色级，Vec<WorldEvent>）
+//! - **world_events**：`characters/{id}/world_events.json`（角色级，`Vec<WorldEvent>`）
 //!   含 `triggered` 标记与可选 `time_trigger`（world_clock 时刻）。
 //! - **world_clock**：`characters/{id}/world_clock.json`（角色级）
 //!   含 `current_time / advance_per_turn / time_unit / display_format`。
