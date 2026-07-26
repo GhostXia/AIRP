@@ -46,6 +46,23 @@ try {
     // smoke representative of a human operator instead of bursting 15 pages.
     await page.waitForTimeout(1_500);
     await page.goto(origin + '/screens/' + path + '?character=webui-smoke', { waitUntil: 'domcontentloaded' });
+    if (path === '18-group-chat.html') {
+      // 18-group-chat.html was rewritten in PR #317 to a custom group-chat
+      // layout (scene sidebar + message flow) and no longer uses the
+      // console-runtime.js skeleton (#view / #heading-title / #runtime-status).
+      // Verify its own boot path populated #scene-list and finalized
+      // #engine-status (boot() always flips the pill to ok or danger).
+      await page.waitForFunction(() => {
+        const status = document.querySelector('#engine-status');
+        const sceneList = document.querySelector('#scene-list');
+        if (!status || !sceneList) return false;
+        const finalized = status.classList.contains('ok') || status.classList.contains('danger');
+        const populated = sceneList.textContent.trim().length > 0 && sceneList.textContent.trim() !== '加载中…';
+        return finalized && populated;
+      });
+      assert.equal(await page.locator('#engine-status').evaluate(node => node.classList.contains('danger')), false, path + ' must stay connected');
+      continue;
+    }
     await page.waitForFunction(() => document.querySelector('#view')?.children.length > 0);
     assert.ok((await page.locator('#heading-title').textContent())?.trim(), path + ' must render a title');
     assert.equal(await page.locator('#engine-status').evaluate(node => node.classList.contains('danger')), false, path + ' must stay connected');
