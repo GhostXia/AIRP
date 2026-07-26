@@ -64,7 +64,7 @@ Third-party widgets must never receive the daemon bearer key directly. The trust
 
 Plugin tools are trusted-user extensions, not a security sandbox for untrusted code:
 
-- Webhooks allow literal loopback HTTP or public HTTPS. HTTPS hostnames resolving to loopback, private, link-local, unspecified, or multicast addresses are rejected; redirects are disabled. This reduces SSRF exposure but does not make a remote webhook trustworthy.
+- Webhooks allow literal loopback HTTP or public HTTPS. HTTPS hostnames that successfully resolve to loopback, private, link-local, unspecified, or multicast addresses are rejected; redirects are disabled. DNS-resolution failures are currently allowed, so private-address validation fails open, and the destination is not revalidated at request time. This reduces SSRF exposure but leaves DNS failure/rebinding and later resolution changes as residual risks.
 - Local scripts must resolve beneath `data_root/plugins/` and are canonicalized both at registration and execution. The process clears inherited environment variables and passes bounded JSON through stdin/environment, but the script still executes with the AIRP process user's operating-system authority. Only install code the user trusts.
 - Input/output or response bodies are capped at 1 MiB and execution is clamped to 1–30 seconds. These are resource limits, not CPU, filesystem, network, child-process, or syscall isolation.
 - A plugin's declared side-effect class and handling of the `confirm` flag are plugin-supplied behavior. AIRP enforces registry capability/allowlist/confirmation before dispatch, but cannot prove that a plugin labeled read-only is actually read-only or that a destructive plugin implements a reversible dry-run.

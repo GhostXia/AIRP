@@ -64,7 +64,7 @@ cargo run -p airp-core -- daemon --open-browser --webui-dir webui
 deploy/windows-webui/build.ps1
 ```
 
-用户下载并解压 artifact 后双击 `Start-AIRP.cmd`。包内 `data/` 是用户资产根，升级或移动前必须备份并一并迁移。便携包不需要用户安装 Rust、Node、Docker、WSL 或 Tauri。
+用户下载并解压 artifact 后双击 `Start-AIRP.cmd`。包内 `data/` 是用户资产根，升级或移动前必须备份并一并迁移，但普通资产备份/迁移包必须排除 `data/secrets.json`；该明文密钥文件只能通过加密且权限受限的渠道单独处理。便携包不需要用户安装 Rust、Node、Docker、WSL 或 Tauri。
 
 ### 本地验证
 

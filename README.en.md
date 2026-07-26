@@ -64,7 +64,7 @@ Maintainers build it with:
 deploy/windows-webui/build.ps1
 ```
 
-Users extract the artifact and run `Start-AIRP.cmd`. The package-local `data/` directory contains user assets and must be backed up and migrated when upgrading or moving the package. Users do not need Rust, Node, Docker, WSL, or Tauri.
+Users extract the artifact and run `Start-AIRP.cmd`. The package-local `data/` directory contains user assets and must be backed up and migrated when upgrading or moving the package, but ordinary asset backups and migration bundles must exclude `data/secrets.json`; handle that plaintext key file separately through encrypted, permission-restricted storage and transfer. Users do not need Rust, Node, Docker, WSL, or Tauri.
 
 ### Local verification
 

@@ -32,14 +32,30 @@ jobs:
             "data/plugin_tool_headers.json",
             "data/plugins/tool.ps1"
           )
+          $emptyExcludes = Join-Path $env:RUNNER_TEMP "empty-git-excludes"
+          New-Item -ItemType File -Force $emptyExcludes | Out-Null
+
           foreach ($path in $ignoredPaths) {
-            git check-ignore --no-index --quiet -- $path
+            git -c "core.excludesFile=$emptyExcludes" check-ignore --no-index --quiet -- $path
             if ($LASTEXITCODE -ne 0) {
               throw "Runtime data path is not ignored: $path"
             }
           }
-          foreach ($path in @("data/README.md", "data/settings.json")) {
-            git check-ignore --no-index --quiet -- $path
+          $trackedRuntimePaths = git ls-files -- `
+            "data/providers.json" `
+            "data/provider_keys.json" `
+            "data/plugin_tools.json" `
+            "data/plugin_tool_headers.json" `
+            "data/plugins/**"
+          if ($trackedRuntimePaths) {
+            throw "Runtime data paths must not be tracked: $($trackedRuntimePaths -join ', ')"
+          }
+          foreach ($path in @(
+            "data/README.md",
+            "data/settings.json",
+            "data/styles/profiles/default.md"
+          )) {
+            git -c "core.excludesFile=$emptyExcludes" check-ignore --no-index --quiet -- $path
             if ($LASTEXITCODE -eq 0) {
               throw "Tracked data fixture is unexpectedly ignored: $path"
             }

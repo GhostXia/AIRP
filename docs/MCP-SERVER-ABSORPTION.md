@@ -43,7 +43,7 @@
 | 导出 | `export_context_bundle` | ✅ 已注册；固定安全目录、稳定块在前、live state 在后、UTF-8 安全截断 | 保持 generic Markdown 与隔离 subagent 不变式 |
 | 插件 | `plugin_kv_get/set` `plugin_jsonl_append/read` `plugin_blob_write/read` | 🆕 | 候选需求；须先完成 #163 的扩展身份、配额、沙箱与迁移合同 |
 
-> 汇总（历史 catalog）：约 20 个指底层 domain/data 等价能力的估算，并非当前已注册工具数；当前 registry 的确切数是 21。未注册的 analyze/decompose 族、preset 正则/artifact、plugin 零 schema 仍须按当前源码与真实工作流重新核验后再决定是否暴露。
+> 汇总（历史 catalog）：约 20 个指底层 domain/data 等价能力的估算，并非当前已注册工具数；当前默认 registry 包含 30 个内置工具，并可动态追加插件工具。`GET /v1/agent/tools` 是某次运行实际目录与数量的权威来源。未注册的 analyze/decompose 族、preset 正则/artifact、plugin 零 schema 仍须按当前源码与真实工作流重新核验后再决定是否暴露。
 
 ## 2. 工作流提示词（12）→ engine agent 工作流/技能
 
