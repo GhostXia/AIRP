@@ -88,6 +88,10 @@ async fn setup_with_quota(
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
+        plugin_tools: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -122,6 +126,10 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
+        plugin_tools: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -151,6 +159,10 @@ async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::T
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
+        plugin_tools: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,

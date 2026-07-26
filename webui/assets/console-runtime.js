@@ -42,6 +42,8 @@
     ['40', 'wbgraph', '知识图谱', '40-worldbook-graph.html'],
     ['41', 'timeline', '时间线导出', '41-timeline-export.html'],
     ['42', 'carddiff', '版本对比', '42-card-diff.html'],
+    ['43', 'providers', '多 Provider 路由', '43-provider-management.html'],
+    ['44', 'plugintools', '插件工具', '44-plugin-tools.html'],
   ];
   const titles = Object.fromEntries(pages.map(item => [item[1], item[2]]));
 

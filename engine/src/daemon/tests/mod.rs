@@ -35,6 +35,10 @@ pub(super) fn make_state_with_key(key: Option<&str>) -> (Arc<DaemonState>, tempf
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools: Default::default(),
+        plugin_tools_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),
@@ -82,6 +86,10 @@ pub(super) fn make_state_no_key() -> (Arc<DaemonState>, tempfile::TempDir) {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools: Default::default(),
+        plugin_tools_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),

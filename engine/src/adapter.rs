@@ -64,7 +64,12 @@ where
 /// DX-6：后端引擎选择。控制 AIRP 如何调用上游 LLM 服务。
 ///
 /// - `Direct`（默认）：OpenAI 兼容 `/v1/chat/completions` SSE，适用于 OpenAI /
-///   DeepSeek / Together / Ollama 等所有 OpenAI compat 端点。
+///   DeepSeek / Together / vLLM / LM Studio 等所有 OpenAI compat 端点。
+/// - `Ollama`：本地 Ollama 实例。走与 `Direct` 相同的 OpenAI compat 流式路径
+///   （`http://localhost:11434/v1/chat/completions`），但语义上区分以允许未来
+///   利用 Ollama 原生 API（`/api/chat`）或本地模型特有能力（如 keep_alive、
+///   modelfile 操作）。当前实现等同于 `Direct`，但 provider 可省略 `api_key`
+///   而不会触发鉴权错误。
 /// - `AnthropicMessages`：Anthropic 原生 `/v1/messages` API（SSE），需配合
 ///   `anthropic.com` 端点与 `x-api-key` 鉴权。自动从消息列表提取 `system` 字段。
 /// - `ClaudeCodeSdk`：保留为未来集成 Claude Code SDK 的入口；当前返回 "not implemented"。
@@ -73,6 +78,7 @@ where
 pub enum BackendEngine {
     #[default]
     Direct,
+    Ollama,
     AnthropicMessages,
     ClaudeCodeSdk,
 }
@@ -384,7 +390,7 @@ pub fn call_streaming_api_auto(
     messages: Vec<ChatMessage>,
 ) -> BoxTokenStream {
     match engine {
-        BackendEngine::Direct => Box::pin(call_streaming_api(
+        BackendEngine::Direct | BackendEngine::Ollama => Box::pin(call_streaming_api(
             client,
             provider,
             params,
@@ -517,6 +523,7 @@ mod tests {
     fn test_backend_engine_serde_roundtrip() {
         for (variant, expected_str) in &[
             (BackendEngine::Direct, "\"direct\""),
+            (BackendEngine::Ollama, "\"ollama\""),
             (BackendEngine::AnthropicMessages, "\"anthropic_messages\""),
             (BackendEngine::ClaudeCodeSdk, "\"claude_code_sdk\""),
         ] {

@@ -98,6 +98,10 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
+        plugin_tools: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: format!("{}/v1/chat/completions", upstream_url),

@@ -189,11 +189,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app_config.access_api_key.as_deref(),
             )?;
 
+            // Phase 5.1: 加载多 provider 路由表（data/providers.json + data/provider_keys.json）。
+            // 文件缺省时返回 empty router，daemon 走 legacy 单 provider 路径。
+            let provider_router =
+                match airp_core::provider_routing::load_provider_router(&data_root) {
+                    Ok(router) => router,
+                    Err(e) => {
+                        tracing::warn!(%e, "加载多 provider 路由表失败，回退到单 provider 模式");
+                        airp_core::provider_routing::ProviderRouter::empty()
+                    }
+                };
+            if !provider_router.is_empty() {
+                tracing::info!(
+                    count = provider_router.entries().len(),
+                    "已加载多 provider 路由表"
+                );
+            }
+
+            // Phase 5.3: 加载插件工具配置（data/plugin_tools.json +
+            // data/plugin_tool_headers.json）。文件缺省时返回空 Vec。
+            let plugin_tools = match airp_core::plugin_tool::load_plugin_tools(&data_root) {
+                Ok(tools) => tools,
+                Err(e) => {
+                    tracing::warn!(%e, "加载插件工具配置失败，跳过插件工具注册");
+                    Vec::new()
+                }
+            };
+            if !plugin_tools.is_empty() {
+                let enabled_count = plugin_tools.iter().filter(|t| t.enabled).count();
+                tracing::info!(
+                    total = plugin_tools.len(),
+                    enabled = enabled_count,
+                    "已加载插件工具配置"
+                );
+            }
+
             let state = Arc::new(DaemonState {
                 data_root,
                 http_client: http_client.clone(),
                 fts: Default::default(),
                 settings_update: Default::default(),
+                provider_router: std::sync::RwLock::new(provider_router),
+                provider_routing_update: tokio::sync::Mutex::new(()),
+                plugin_tools: std::sync::RwLock::new(plugin_tools),
+                plugin_tools_update: tokio::sync::Mutex::new(()),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
@@ -295,6 +334,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 http_client: http_client.clone(),
                 fts: Default::default(),
                 settings_update: Default::default(),
+                provider_router: Default::default(),
+                provider_routing_update: tokio::sync::Mutex::new(()),
+                plugin_tools: Default::default(),
+                plugin_tools_update: tokio::sync::Mutex::new(()),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,

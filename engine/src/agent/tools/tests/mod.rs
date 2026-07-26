@@ -36,6 +36,10 @@ pub(super) fn make_state(data_root: PathBuf) -> Arc<DaemonState> {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        provider_router: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools: Default::default(),
+        plugin_tools_update: Default::default(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: "https://example.test/v1/chat/completions".to_string(),

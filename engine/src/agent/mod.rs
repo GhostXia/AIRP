@@ -416,7 +416,7 @@ async fn decide_action(
         "observations": observations,
     }))?;
     let mut request = match &engine {
-        crate::adapter::BackendEngine::Direct => {
+        crate::adapter::BackendEngine::Direct | crate::adapter::BackendEngine::Ollama => {
             state.http_client.post(endpoint).json(&serde_json::json!({
                 "model": model,
                 "stream": false,
@@ -499,7 +499,7 @@ fn decode_tool_call(
     payload: &Value,
 ) -> Result<Option<(String, Value)>, AirpError> {
     let call = match engine {
-        crate::adapter::BackendEngine::Direct => payload
+        crate::adapter::BackendEngine::Direct | crate::adapter::BackendEngine::Ollama => payload
             .pointer("/choices/0/message/tool_calls/0/function")
             .and_then(Value::as_object)
             .cloned(),
@@ -647,6 +647,10 @@ mod tests {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            provider_router: Default::default(),
+            provider_routing_update: tokio::sync::Mutex::new(()),
+            plugin_tools: Default::default(),
+            plugin_tools_update: tokio::sync::Mutex::new(()),
             config: std::sync::RwLock::new(crate::daemon::MutableConfig {
                 provider: crate::adapter::Provider::OpenAI,
                 endpoint: "http://127.0.0.1:1/v1/chat/completions".to_string(),
