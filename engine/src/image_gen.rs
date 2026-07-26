@@ -212,7 +212,7 @@ pub async fn download_image_to_session(
     std::fs::create_dir_all(&dir)?;
 
     // Phase 1（锁外）：下载图片字节。网络慢，并行化保留吞吐。
-    let response = client
+    let mut response = client
         .get(image_url)
         .timeout(std::time::Duration::from_secs(30))
         .send()
@@ -241,19 +241,36 @@ pub async fn download_image_to_session(
         }
     }
 
-    let bytes = response.bytes().await.map_err(|e| AirpError::Upstream {
-        status: 0,
-        body: format!("image download body read failed: {e}"),
-    })?;
-    // CodeRabbit N2：读后复核，防 Content-Length 缺失/不准确的超大响应。
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err(AirpError::Upstream {
+    // 流式累积，超限立即 reject（CodeRabbit 第五轮 outside-diff）。
+    // 原 `response.bytes().await` 一次性缓冲整个 body，当 `Content-Length`
+    // 缺失或错误（chunked transfer encoding）时，超大响应会在 post-read
+    // 检查运行前已耗尽内存。改用 `chunk()` 流式接口，每收到一个 chunk
+    // 累加检查；超上限立即返回 Upstream 错误，不再继续读取。
+    // `Vec::with_capacity` 用 1 MiB 起步而非 MAX_IMAGE_BYTES，避免对大图
+    // 预分配 20 MiB。
+    let mut bytes: Vec<u8> = Vec::with_capacity(1024 * 1024);
+    loop {
+        let chunk = response.chunk().await.map_err(|e| AirpError::Upstream {
             status: 0,
-            body: format!(
-                "image download rejected: actual {} bytes exceeds {MAX_IMAGE_BYTES} bytes",
-                bytes.len()
-            ),
-        });
+            body: format!("image download body read failed: {e}"),
+        })?;
+        match chunk {
+            Some(chunk) => {
+                let new_len = bytes.len().checked_add(chunk.len()).ok_or_else(|| {
+                    AirpError::Internal("image download size overflowed usize".to_string())
+                })?;
+                if new_len > MAX_IMAGE_BYTES {
+                    return Err(AirpError::Upstream {
+                        status: 0,
+                        body: format!(
+                            "image download rejected: streamed {new_len} bytes exceeds {MAX_IMAGE_BYTES} bytes"
+                        ),
+                    });
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            None => break,
+        }
     }
 
     // Phase 2（持锁）：选文件名 + 写文件 + 更新 index.json。

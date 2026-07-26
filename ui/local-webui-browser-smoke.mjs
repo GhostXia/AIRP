@@ -50,15 +50,20 @@ try {
       // 18-group-chat.html was rewritten in PR #317 to a custom group-chat
       // layout (scene sidebar + message flow) and no longer uses the
       // console-runtime.js skeleton (#view / #heading-title / #runtime-status).
-      // Verify its own boot path populated #scene-list and finalized
-      // #engine-status (boot() always flips the pill to ok or danger).
+      // Verify its own boot path finalized #engine-status (boot() always
+      // flips the pill to ok or danger). When the engine is in danger,
+      // #scene-list may never populate (its data fetch failed), so we must
+      // let the predicate return on danger alone — the next assertion will
+      // then surface the connectivity failure immediately instead of timing
+      // out (CodeRabbit 第五轮 inline).
       await page.waitForFunction(() => {
         const status = document.querySelector('#engine-status');
         const sceneList = document.querySelector('#scene-list');
         if (!status || !sceneList) return false;
         const finalized = status.classList.contains('ok') || status.classList.contains('danger');
+        const danger = status.classList.contains('danger');
         const populated = sceneList.textContent.trim().length > 0 && sceneList.textContent.trim() !== '加载中…';
-        return finalized && populated;
+        return finalized && (danger || populated);
       });
       assert.equal(await page.locator('#engine-status').evaluate(node => node.classList.contains('danger')), false, path + ' must stay connected');
       continue;

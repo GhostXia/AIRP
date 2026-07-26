@@ -164,6 +164,21 @@ Engine 端 `list_sessions_endpoint` 返回 `Json<Vec<SessionId>>`（`sessions.rs
 
 ---
 
+## 3.5 六次修复：CodeRabbit 第五轮 review（本 commit）
+
+> CodeRabbit 在 `bce1260` 推送后又发了一轮 review（2026-07-26T02:04:24Z），提出 2 条 actionable 线程。本节为对这两条的修复。
+
+| #线程 | 类型 | 位置 | 修复 |
+|---|---|---|---|
+| #20 `image_gen.rs` 图片下载 `response.bytes().await` 一次性缓冲整个 body，超大 chunked response 在 post-read 检查前已耗尽内存 | 🟠 Major，outside-diff | `engine/src/image_gen.rs:232-257` | 改用 `response.chunk().await` 流式接口，每个 chunk 累加检查 `MAX_IMAGE_BYTES`；超上限立即返回 `AirpError::Upstream`，不再继续读取。`Vec::with_capacity(1024 * 1024)` 用 1 MiB 起步而非预分配 20 MiB，避免对大图过度预留。`checked_add` 防 usize 溢出。Content-Length 预检保留（快速 reject），原 post-read 复核已删除（被流式检查取代） |
+| #21 `local-webui-browser-smoke.mjs` 18 屏 predicate 在 engine `danger` 时仍要求 `#scene-list` populated，导致健康失败时 timeout 而非进 connectivity 错误报告 | Inline，actionable | `ui/local-webui-browser-smoke.mjs:55-62` | predicate 改为 `finalized && (danger || populated)`——engine 进入 `danger` 时立即返回 true，下一行 `assert.equal(... classList.contains('danger'), false, 'must stay connected')` 会立即抛错并打印实际状态，不再 timeout |
+
+**为何两条之前没修**：#20 是 CodeRabbit 在 §3.3 修复（commit `7f6e42d`）之后的复核中才提的新 outside-diff，此前 `response.bytes().await` 旁边还没有 `MAX_IMAGE_BYTES` 检查，§3.1 #6 只加了 Content-Length 预检 + 读后复核，没改读取方式本身；#21 是 §3.4（commit `bce1260`）引入的 18 屏专用 predicate 的副作用——只考虑了"engine 启动成功但 sceneList 未填充"的等待场景，没考虑"engine 启动失败、sceneList 永不填充"的失败场景，CodeRabbit 在复核 `bce1260` 时指出。
+
+**视觉审查声明**：本次修复涉及 WebUI 改动（`ui/local-webui-browser-smoke.mjs` 是测试脚本而非 `webui/` 视觉资产，但 18 屏渲染行为间接相关），按 issue #319 补充要求（2026-07-26 用户立）应执行多模态视觉审查。**本审计 agent 为 GLM-5.2 纯文本模型，未执行视觉审查**——本次修改仅触及测试 predicate 逻辑，不改变 18 屏的视觉渲染；如需补审，应由 KIMI K3+ 多模态 agent 在 PR 合并前对 18 屏渲染截图独立审查。
+
+---
+
 ## 4. 非阻塞项（合并后入 issue）
 
 > 按 AGENTS.md "审计遗留项处理" 规约，以下非阻塞项将在 PR 合并后整理为 GitHub issue。
@@ -248,14 +263,17 @@ if (!sessionId) {
 
 ## 5. 结论
 
-PR #317 的 3 个阻塞项（B1 XSS / B2 功能不可用 / B3 CI lint）**已由本审计就地修复**（commit `338f911`）。随后对 CodeRabbit 四轮 review + 一轮 CI 修复共做了 19 条 actionable 线程的修复：
+PR #317 的 3 个阻塞项（B1 XSS / B2 功能不可用 / B3 CI lint）**已由本审计就地修复**（commit `338f911`）。随后对 CodeRabbit 四轮 review + 一轮 CI 修复 + 一轮 CodeRabbit 复核共做了 21 条 actionable 线程的修复：
 - §3.1（commit `bdf20f9`）：12 条 inline + 1 条 markdownlint
 - §3.2（commit `d09d618`）：2 条 inline（N1/N2 ID 冲突 + `:` filename 安全漏）
 - §3.3（commit `7f6e42d`）：2 条 outside-diff（showDetail stale race + INDEX_LOCK TOCTOU）+ 1 条 nitpick（测试覆盖）
-- §3.4（本 commit）：1 条 CI blocker（`local-webui-browser-smoke.mjs` 对 18 屏检查不存在的 `#view`）
+- §3.4（commit `bce1260`）：1 条 CI blocker（`local-webui-browser-smoke.mjs` 对 18 屏检查不存在的 `#view`）
+- §3.5（本 commit）：2 条（image_gen 流式读取 + smoke predicate 让 danger 立即返回）
 
-五轮修复后本地验证通过（fmt / clippy / 901 lib tests / 15 webui tests / 19 agent-exploration lint tests / `local-webui-browser-smoke.mjs` `node --check` 语法通过）。§4 中 N3、N5 已由 §3.1 修复，N15 的 `Portable Windows WebUI` 部分由 §3.4 修复，剩余 12 个非阻塞项（N1/N2/N4/N6–N14，及 N15 的 `explore` 部分）建议合并后入 issue。
+六轮修复后本地验证通过：`cargo fmt --all -- --check` 干净；`cargo clippy --lib --tests --workspace --all-targets -- -D warnings` 干净；`cargo test --lib -p airp-core` = **900 passed / 2 ignored**（ignored 为 `image_gen::tests::download_image_to_session_writes_unique_files_under_collision` 需 mockito feature，与 `orchestrator::lorebook::tests::bench_aho_corasick_vs_naive` 基准测试）；`node --test tests/runtime-pages.test.mjs tests/api-client.test.mjs tests/operations.test.mjs tests/agent-harness.test.mjs`（webui）= **50 passed**；`node --test script-lint.test.mjs`（agent-exploration）= **19 passed**；`node --check ui/local-webui-browser-smoke.mjs` 语法通过。§4 中 N3、N5 已由 §3.1 修复，N15 的 `Portable Windows WebUI` 部分由 §3.4 修复，剩余 12 个非阻塞项（N1/N2/N4/N6–N14，及 N15 的 `explore` 部分）建议合并后入 issue。
 
-**独立审计立场修订**：本审计否决了 PR 描述中"15 项 webui 测试全过 = 已验证"的暗示——B2 在所有测试通过的情况下仍然存在，证明 runtime-pages 测试**不覆盖运行时数据契约**。本审计亦承认前两轮漏读了 CodeRabbit review body 折叠区内的 outside-diff 线程——以后 review CodeRabbit 结论时必须读完整 review body 而非仅看 inline 评论。**§4 N15 早期"CI 失败非本 PR 引入"判断有误**——`Portable Windows WebUI` 失败正是本 PR 重写 18 屏后未同步 smoke 测试导致，已由 §3.4 修复。今后涉及"屏幕重写"的 PR 必须同时检查 `ui/local-webui-browser-smoke.mjs` 的导航 loop 是否还兼容新布局，不能只过 `runtime-pages.test.mjs`。
+**独立审计立场修订**：本审计否决了 PR 描述中"15 项 webui 测试全过 = 已验证"的暗示——B2 在所有测试通过的情况下仍然存在，证明 runtime-pages 测试**不覆盖运行时数据契约**。本审计亦承认前两轮漏读了 CodeRabbit review body 折叠区内的 outside-diff 线程——以后 review CodeRabbit 结论时必须读完整 review body 而非仅看 inline 评论。**§4 N15 早期"CI 失败非本 PR 引入"判断有误**——`Portable Windows WebUI` 失败正是本 PR 重写 18 屏后未同步 smoke 测试导致，已由 §3.4 修复。今后涉及"屏幕重写"的 PR 必须同时检查 `ui/local-webui-browser-smoke.mjs` 的导航 loop 是否还兼容新布局，不能只过 `runtime-pages.test.mjs`。**§3.5 #20 的修复进一步揭示**：§3.1 #6 当时只补了 post-read 复核，未触及读取方式本身——`response.bytes().await` 在 chunked transfer 下仍会先缓冲后检查。审计应回到 `download_image_to_session` 的读取语义本身，而非满足于"加了上限检查"。
 
-**建议**：五次修复 commit 推送后，待人工 review、CodeRabbit 复审与 `Portable Windows WebUI` CI 复跑通过后可合并；合并后由审计 agent 将 §4 中剩余非阻塞项（N1/N2/N4/N6–N14，及 N15 的 `explore` 部分）整理为 GitHub issue。
+**视觉审查声明**：按 issue #319 补充要求（2026-07-26 用户立），WebUI 改动 PR 必须由 KIMI K3+ 多模态 agent 执行视觉审查。**本审计 agent 为 GLM-5.2 纯文本模型，整轮审计未执行视觉审查**——B1/B2/B3 与 §3.1-§3.5 全部修复均基于 HTML 字符串/DOM 契约/源码语义判断，未对 18 屏重写后的实际渲染做截图审查。建议在合并前由多模态 agent 对 PR #317 涉及的视觉改动（特别是 18 屏重写、`chat-space.js` `shareAsCard` XSS 修复、character-templates.js 详情面板）独立补审。
+
+**建议**：六次修复 commit 推送后，待人工 review、CodeRabbit 复审与 `Portable Windows WebUI` CI 复跑通过后可合并；合并后由审计 agent 将 §4 中剩余非阻塞项（N1/N2/N4/N6–N14，及 N15 的 `explore` 部分）整理为 GitHub issue。
