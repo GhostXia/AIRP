@@ -48,7 +48,7 @@ pub struct GenerateImageEndpointResponse {
     /// 上游 API 返回的图片 URL（短期有效）。
     pub image_url: Option<String>,
     pub revised_prompt: Option<String>,
-    /// 图片元数据（仅当 `download=true` 时返回最新条目）。
+    /// 图片元数据（`b64_json` 响应或 `download=true` 且下载成功时存在）。
     pub meta: Option<ImageMeta>,
 }
 

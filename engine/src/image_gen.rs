@@ -132,6 +132,61 @@ fn parse_image_generation_response(body: &str) -> Result<ImageGenResponse, AirpE
     })
 }
 
+fn append_limited_response_chunk(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+) -> Result<(), AirpError> {
+    let new_len = body
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| AirpError::Internal("image response size overflowed usize".to_string()))?;
+    if new_len > limit {
+        return Err(image_download_error(
+            "image generation response exceeds the response size limit",
+        ));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn read_image_generation_response(
+    mut response: reqwest::Response,
+) -> Result<(reqwest::StatusCode, String), AirpError> {
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_IMAGE_RESPONSE_BYTES as u64)
+    {
+        return Err(image_download_error(
+            "image generation response exceeds the response size limit",
+        ));
+    }
+
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .map(|length| length.min(1024 * 1024) as usize)
+            .unwrap_or(0),
+    );
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| AirpError::Upstream {
+            status: status.as_u16(),
+            body: format!("image generation response read failed: {error}"),
+        })?
+    {
+        append_limited_response_chunk(&mut body, &chunk, MAX_IMAGE_RESPONSE_BYTES)?;
+    }
+
+    let body = String::from_utf8(body).map_err(|_| AirpError::Upstream {
+        status: status.as_u16(),
+        body: "image generation response is not valid UTF-8".to_string(),
+    })?;
+    Ok((status, body))
+}
+
 /// 调用 OpenAI-compatible 图片生成 API。
 pub async fn generate_image(
     client: &reqwest::Client,
@@ -165,8 +220,7 @@ pub async fn generate_image(
             body: format!("image generation request failed: {e}"),
         })?;
 
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let (status, body) = read_image_generation_response(response).await?;
 
     if !status.is_success() {
         return Err(AirpError::Upstream {
@@ -182,6 +236,7 @@ pub async fn generate_image(
 /// （CodeRabbit N2）。
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_BASE64_IMAGE_CHARS: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
+const MAX_IMAGE_RESPONSE_BYTES: usize = MAX_BASE64_IMAGE_CHARS + 64 * 1024;
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
 fn image_download_error(message: impl Into<String>) -> AirpError {
@@ -592,6 +647,17 @@ mod tests {
     fn image_generation_response_rejects_invalid_b64_json() {
         let error = parse_image_generation_response(r#"{"data":[{"b64_json":"not base64!"}]}"#)
             .unwrap_err();
+        assert!(matches!(error, AirpError::Upstream { .. }));
+    }
+
+    #[test]
+    fn image_generation_response_body_is_bounded_across_chunks() {
+        let mut body = Vec::new();
+        append_limited_response_chunk(&mut body, b"12", 4).unwrap();
+        append_limited_response_chunk(&mut body, b"34", 4).unwrap();
+        let error = append_limited_response_chunk(&mut body, b"5", 4).unwrap_err();
+
+        assert_eq!(body, b"1234");
         assert!(matches!(error, AirpError::Upstream { .. }));
     }
 
