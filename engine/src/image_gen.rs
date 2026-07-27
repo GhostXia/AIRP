@@ -249,10 +249,14 @@ async fn validate_image_download_url(image_url: &str) -> Result<ValidatedImageDo
         .ok_or_else(|| image_download_error("image download rejected: URL has no host"))?
         .to_string();
     let port = url.port_or_known_default().unwrap_or(443);
-    let addresses: Vec<_> = tokio::net::lookup_host((host.as_str(), port))
-        .await
-        .map_err(|_| image_download_error("image download rejected: host resolution failed"))?
-        .collect();
+    let resolved = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| image_download_error("image download rejected: host resolution failed"))?
+    .map_err(|_| image_download_error("image download rejected: host resolution failed"))?;
+    let addresses: Vec<_> = resolved.collect();
     if addresses.is_empty() {
         return Err(image_download_error(
             "image download rejected: host resolved to no addresses",
