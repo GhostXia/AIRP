@@ -75,7 +75,7 @@
     const content = $('#gen-current-content');
     if (!characterId) { wrap.hidden = true; return; }
     try {
-      const card = await client.request('GET', '/v1/characters/' + encodeURIComponent(characterId) + '/card');
+      const card = await client.request('GET', '/v1/characters/' + encodeURIComponent(characterId));
       const data = card.data || card;
       const mes = data.mes_example || '';
       content.textContent = mes || '（角色卡尚未设置 mes_example）';

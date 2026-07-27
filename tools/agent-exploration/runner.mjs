@@ -18,6 +18,7 @@ import { writeReport } from './reporter.mjs';
 import { classifyPrDiff, DIFF_TASK_MAP } from './classifier.mjs';
 import { buildLaunchArgs } from './tls-args.mjs';
 import { lintScript } from './script-lint.mjs';
+import { sanitizeDomSnapshot } from './dom-privacy.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const ORIGIN = args.origin || process.env.AIRP_SMOKE_ORIGIN || 'http://127.0.0.1:8765';
@@ -359,19 +360,6 @@ async function generateAndRunScript(mod, ctx, taskDir) {
     }
   }
   throw new Error('agent script failed after ' + (MAX_REVISIONS + 1) + ' revisions; last error:\n' + lastError);
-}
-
-// 脱敏 DOM 快照：message/memory/history 类元素的内容可能含用户数据，
-// 不应原样发送给外部 LLM（OPENAI_BASE_URL 可指向外部服务，--origin 也可被操作者改到真实实例）
-function sanitizeDomSnapshot(snapshot) {
-  const messageLike = /message|msg|chat|memory|history|conversation|reply|content/i;
-  return snapshot.map(el => {
-    const scope = (el.id || '') + ' ' + (el.classes || []).join(' ') + ' ' + (el.role || '');
-    if (el.text && messageLike.test(scope)) {
-      return { ...el, text: '[REDACTED]' };
-    }
-    return el;
-  });
 }
 
 function buildPrompt(mod, domSnapshot) {

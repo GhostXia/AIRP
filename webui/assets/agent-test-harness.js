@@ -62,6 +62,23 @@
     return { status: res.status, ok: res.ok, json, text };
   }
 
+  const messageLike = /message|msg|chat|memory|history|conversation|reply|content/i;
+
+  function isSensitiveNode(node) {
+    let current = node;
+    while (current) {
+      const scope = [
+        current.id || '',
+        current.className && typeof current.className === 'string' ? current.className : '',
+        current.getAttribute && current.getAttribute('role') || '',
+      ].join(' ');
+      if (messageLike.test(scope)) return true;
+      if (current === document.documentElement) break;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
   function buildDomSnapshot() {
     // 简化 a11y-like 树：可交互元素 + 可见文本节点
     const out = [];
@@ -84,6 +101,7 @@
           ariaLabel: node.getAttribute('aria-label'),
           disabled: node.disabled || false,
           visible: rect.width > 0 && rect.height > 0,
+          sensitive: isSensitiveNode(node),
         });
       }
       node = walker.nextNode();

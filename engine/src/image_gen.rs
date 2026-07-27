@@ -12,6 +12,7 @@
 
 use crate::error::AirpError;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 /// 图片生成请求。
@@ -167,6 +168,127 @@ pub async fn generate_image(
 /// 图片下载大小上限（20 MiB）。防止恶意/被攻陷上游返回超大响应压满磁盘
 /// （CodeRabbit N2）。
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+fn image_download_error(message: impl Into<String>) -> AirpError {
+    AirpError::Upstream {
+        status: 0,
+        body: message.into(),
+    }
+}
+
+fn is_png_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("image/png"))
+}
+
+fn validate_png_signature(bytes: &[u8]) -> Result<(), AirpError> {
+    if bytes.starts_with(PNG_SIGNATURE) {
+        Ok(())
+    } else {
+        Err(image_download_error(
+            "image download rejected: response body is not a valid PNG",
+        ))
+    }
+}
+
+fn is_non_public_image_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || octets[0] == 0
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+                || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+                || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+                || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+                || octets[0] >= 240
+        }
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            let first = segments[0];
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| is_non_public_image_ip(IpAddr::V4(mapped)))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedImageDownload {
+    url: reqwest::Url,
+    host: String,
+    address: std::net::SocketAddr,
+}
+
+async fn validate_image_download_url(image_url: &str) -> Result<ValidatedImageDownload, AirpError> {
+    let url = reqwest::Url::parse(image_url)
+        .map_err(|_| image_download_error("image download rejected: invalid URL"))?;
+    if url.scheme() != "https" {
+        return Err(image_download_error(
+            "image download rejected: only HTTPS URLs are allowed",
+        ));
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| image_download_error("image download rejected: URL has no host"))?
+        .to_string();
+    let port = url.port_or_known_default().unwrap_or(443);
+    let resolved = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| image_download_error("image download rejected: host resolution failed"))?
+    .map_err(|_| image_download_error("image download rejected: host resolution failed"))?;
+    let addresses: Vec<_> = resolved.collect();
+    if addresses.is_empty() {
+        return Err(image_download_error(
+            "image download rejected: host resolved to no addresses",
+        ));
+    }
+    if addresses
+        .iter()
+        .any(|address| is_non_public_image_ip(address.ip()))
+    {
+        return Err(image_download_error(
+            "image download rejected: host resolves to a non-public address",
+        ));
+    }
+
+    Ok(ValidatedImageDownload {
+        url,
+        host,
+        address: addresses[0],
+    })
+}
+
+fn pinned_image_download_client(
+    host: &str,
+    address: std::net::SocketAddr,
+) -> Result<reqwest::Client, AirpError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .resolve(host, address)
+        .build()
+        .map_err(|_| image_download_error("image download rejected: HTTP client setup failed"))
+}
 
 /// 序列化所有 `index.json` 读-改-写序列，避免并发请求 last-write-wins 丢失条目
 /// （CodeRabbit #4）。图片生成本身是秒级慢操作，全局序列化对吞吐影响可忽略。
@@ -201,19 +323,22 @@ fn pick_unique_image_filename(dir: &Path, millis: u128) -> String {
 /// `exists()` 检查处双双重叠导致选同一文件名互相覆盖。下载（慢网络 I/O）
 /// 在锁外执行以保留吞吐。
 pub async fn download_image_to_session(
-    client: &reqwest::Client,
     data_root: &Path,
     character_id: &str,
     session_id: Option<&str>,
     image_url: &str,
     prompt: &str,
 ) -> Result<(ImageMeta, String), AirpError> {
+    let validated = validate_image_download_url(image_url).await?;
+    // Bind the request to an address from the validated DNS result. The URL
+    // retains its original hostname for TLS/SNI and HTTP Host semantics.
+    let client = pinned_image_download_client(&validated.host, validated.address)?;
     let dir = images_dir(data_root, character_id, session_id);
     std::fs::create_dir_all(&dir)?;
 
     // Phase 1（锁外）：下载图片字节。网络慢，并行化保留吞吐。
     let mut response = client
-        .get(image_url)
+        .get(validated.url)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -227,6 +352,17 @@ pub async fn download_image_to_session(
             status: response.status().as_u16(),
             body: "image download returned non-success status".to_string(),
         });
+    }
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    if !is_png_content_type(content_type) {
+        return Err(image_download_error(
+            "image download rejected: response Content-Type must be image/png",
+        ));
     }
 
     // CodeRabbit N2：Content-Length 预检，防超大响应压满内存。
@@ -272,6 +408,8 @@ pub async fn download_image_to_session(
             None => break,
         }
     }
+
+    validate_png_signature(&bytes)?;
 
     // Phase 2（持锁）：选文件名 + 写文件 + 更新 index.json。
     // CodeRabbit outside-diff #2：原实现先在锁外选文件名 + 写文件，再在
@@ -357,6 +495,56 @@ mod tests {
     fn max_image_bytes_is_20_mib() {
         assert_eq!(MAX_IMAGE_BYTES, 20 * 1024 * 1024);
         assert_eq!(MAX_IMAGE_BYTES, 20_971_520);
+    }
+
+    #[test]
+    fn rejects_non_public_image_download_addresses() {
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "169.254.169.254",
+            "192.168.1.1",
+            "100.64.0.1",
+            "198.18.0.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(
+                is_non_public_image_ip(ip.parse().unwrap()),
+                "{ip} must not be eligible for image downloads"
+            );
+        }
+        assert!(!is_non_public_image_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_non_public_image_ip(
+            "2606:4700:4700::1111".parse().unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn image_download_url_requires_https_before_resolution() {
+        let error = validate_image_download_url("http://127.0.0.1/image.png")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("only HTTPS"));
+
+        let error = validate_image_download_url("https://127.0.0.1/image.png")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("non-public address"));
+    }
+
+    #[test]
+    fn image_download_requires_png_content_type_and_signature() {
+        assert!(is_png_content_type(Some("image/png")));
+        assert!(is_png_content_type(Some("IMAGE/PNG")));
+        assert!(is_png_content_type(Some("image/png; charset=binary")));
+        assert!(!is_png_content_type(Some("text/html")));
+        assert!(!is_png_content_type(None));
+        assert!(validate_png_signature(b"\x89PNG\r\n\x1a\npayload").is_ok());
+        assert!(validate_png_signature(b"<html>not an image</html>").is_err());
     }
 
     /// CodeRabbit nitpick #3：锁定文件名碰撞后缀算法的纯逻辑部分。
