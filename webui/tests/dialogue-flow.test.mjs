@@ -72,3 +72,37 @@ test('write refuses missing preview without issuing a request', async () => {
   );
   assert.equal(calls, 0);
 });
+
+test('write succeeds even when the post-write reload fails', async () => {
+  // Regression: append-mode retry after a reload failure duplicated mes_example.
+  // writePreviewAndReload must treat the write (POST) as authoritative and
+  // only attempt the reload (GET) as best-effort verification. If the reload
+  // fails, the caller must still see the write as committed so it does not
+  // retry and append the same content a second time.
+  const calls = [];
+  const writeResponse = {
+    written: true,
+    character_id: 'alice',
+    mes_example: '<START>\n{{user}}: Hi',
+    turns_generated: 1,
+    previous_mes_example: null,
+  };
+  const client = {
+    async request(method, path, body) {
+      calls.push({ method, path, body });
+      if (method === 'POST') return writeResponse;
+      // Simulate a transient reload failure (network glitch after write commit)
+      throw new Error('reload failed');
+    },
+  };
+  const flow = create(client);
+
+  const result = await flow.writePreviewAndReload('alice', { mes_example: '<START>\n{{user}}: Hi' }, true);
+
+  assert.equal(result.response.written, true);
+  assert.equal(result.current, null);
+  assert.deepEqual(calls, [
+    { method: 'POST', path: '/v1/characters/alice/dialogue-examples', body: { dry_run: false, append: true, mes_example_override: '<START>\n{{user}}: Hi' } },
+    { method: 'GET', path: '/v1/characters/alice', body: undefined },
+  ]);
+});

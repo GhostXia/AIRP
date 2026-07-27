@@ -36,7 +36,14 @@
         append: Boolean(append),
         mes_example_override: preview.mes_example,
       });
-      const current = await load(characterId);
+      // Write已提交——reload 仅作落盘验证，失败不能让调用方误以为写入失败。
+      // 否则 append 模式下用户重试会把同一内容二次追加，导致 mes_example 重复。
+      let current = null;
+      try {
+        current = await load(characterId);
+      } catch {
+        // reload 失败时 response 仍代表已提交的写入结果。
+      }
       return { response, current };
     }
 
