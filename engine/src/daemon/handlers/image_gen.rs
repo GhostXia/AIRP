@@ -52,11 +52,16 @@ pub struct GenerateImageEndpointResponse {
     pub meta: Option<ImageMeta>,
 }
 
-/// `GET /v1/characters/:character_id/images?session_id=...` 查询参数。
+/// `GET /v1/characters/:character_id/images?session_id=...&limit=50&offset=0` 查询参数。
 #[derive(Debug, Deserialize)]
 pub struct ListImagesQuery {
     pub session_id: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
+
+const DEFAULT_IMAGE_LIST_LIMIT: usize = 50;
+const MAX_IMAGE_LIST_LIMIT: usize = 200;
 
 /// `POST /v1/image/generate`
 ///
@@ -170,7 +175,7 @@ pub(in crate::daemon) async fn generate_image_endpoint(
     }))
 }
 
-/// `GET /v1/characters/:character_id/images?session_id=...`
+/// `GET /v1/characters/:character_id/images?session_id=...&limit=50&offset=0`
 ///
 /// 返回指定角色（可选 session）下已生成图片的元数据列表。
 pub(in crate::daemon) async fn list_images_endpoint(
@@ -182,6 +187,13 @@ pub(in crate::daemon) async fn list_images_endpoint(
     if let Some(ref sid) = query.session_id {
         let _ = crate::types::SessionId::parse(sid)?;
     }
+    let limit = query.limit.unwrap_or(DEFAULT_IMAGE_LIST_LIMIT);
+    if !(1..=MAX_IMAGE_LIST_LIMIT).contains(&limit) {
+        return Err(AirpError::BadRequest(format!(
+            "limit must be between 1 and {MAX_IMAGE_LIST_LIMIT}"
+        )));
+    }
+    let offset = query.offset.unwrap_or(0);
 
     let index_path = crate::image_gen::images_index_path(
         &state.data_root,
@@ -194,7 +206,7 @@ pub(in crate::daemon) async fn list_images_endpoint(
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    Ok(Json(list))
+    Ok(Json(list.into_iter().skip(offset).take(limit).collect()))
 }
 
 /// 校验图片文件名，防 path traversal。

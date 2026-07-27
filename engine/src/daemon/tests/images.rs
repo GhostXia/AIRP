@@ -49,3 +49,66 @@ async fn generate_image_persists_b64_json_when_url_is_unavailable() {
     let relative = body["image_path"].as_str().unwrap();
     assert_eq!(std::fs::read(data_root.join(relative)).unwrap(), png);
 }
+
+#[tokio::test]
+async fn list_images_applies_bounded_limit_and_offset() {
+    let (state, _tmp) = make_state_with_key(None);
+    let index_path = crate::image_gen::images_index_path(&state.data_root, "hero", None);
+    std::fs::create_dir_all(index_path.parent().unwrap()).unwrap();
+    let images: Vec<_> = (0..55)
+        .map(|index| {
+            serde_json::json!({
+                "filename": format!("{index}.png"),
+                "prompt": format!("prompt {index}"),
+                "timestamp": index,
+                "size": "8 bytes"
+            })
+        })
+        .collect();
+    std::fs::write(&index_path, serde_json::to_vec(&images).unwrap()).unwrap();
+    let app = create_router(state);
+
+    let page = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/hero/images?limit=2&offset=3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(page.into_body(), 4096).await.unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(page.as_array().unwrap().len(), 2);
+    assert_eq!(page[0]["filename"], "3.png");
+    assert_eq!(page[1]["filename"], "4.png");
+
+    let default_page = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/hero/images")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(default_page.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let default_page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(default_page.as_array().unwrap().len(), 50);
+
+    let invalid = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/hero/images?limit=201")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
