@@ -189,9 +189,17 @@
     bar.append(button('保存 JSON', async () => {
       await task('保存角色卡', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId), parseJson(editor.control.value, '角色卡')));
     }, 'btn-primary'));
-    bar.append(button('重新提取附属资源', async () => {
-      await task('重新提取', () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/reextract'));
-    }));
+    const reextractButton = button('重新提取附属资源', () => {
+      AIRPWorkbench.reextractCharacterResources({
+        characterId: state.characterId,
+        button: reextractButton,
+        confirm: text => window.confirm(text),
+        request: (...args) => client.request(...args),
+        setStatus,
+        errorMessage: message,
+      });
+    });
+    bar.append(reextractButton);
     // Phase 1.6: Decompose / Analysis 入口
     bar.append(button('拆解角色卡', async () => {
       const result = await task('拆解角色卡', () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/decompose'));
