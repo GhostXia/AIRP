@@ -25,6 +25,7 @@ mod security;
 mod sessions;
 mod state_scene;
 mod style;
+mod templates;
 
 /// Build a `DaemonState` rooted at a fresh tempdir, optionally with an
 /// `access_api_key`. The returned guard must stay alive for the test lifetime.

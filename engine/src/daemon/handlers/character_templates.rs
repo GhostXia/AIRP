@@ -52,6 +52,11 @@ pub(in crate::daemon) async fn instantiate_template_endpoint(
 ) -> Result<Json<InstantiateResponse>, AirpError> {
     let json_str = template_card_json(&template_id)?;
 
+    // 可选 character_id 校验
+    if let Some(ref id) = req.character_id {
+        let _ = crate::types::CharacterId::new(id)?;
+    }
+
     // 可选 name 覆盖：解析 → 替换 data.name → 重新序列化
     let final_json = if let Some(ref name) = req.name_override {
         let name_trimmed = name.trim();
@@ -68,11 +73,6 @@ pub(in crate::daemon) async fn instantiate_template_endpoint(
     } else {
         json_str
     };
-
-    // 可选 character_id 校验
-    if let Some(ref id) = req.character_id {
-        let _ = crate::types::CharacterId::new(id)?;
-    }
 
     let (final_id, card_format, _json) = import_card_to_disk(
         &state.data_root,

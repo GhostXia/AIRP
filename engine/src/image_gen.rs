@@ -80,6 +80,18 @@ pub fn images_index_path(
     images_dir(data_root, character_id, session_id).join("index.json")
 }
 
+fn image_generation_url(endpoint: &str) -> Result<reqwest::Url, AirpError> {
+    let mut url = reqwest::Url::parse(endpoint)
+        .map_err(|error| AirpError::Config(format!("invalid image endpoint: {error}")))?;
+    let path = url.path().trim_end_matches('/').to_string();
+
+    if let Some(prefix) = path.strip_suffix("/chat/completions") {
+        url.set_path(&format!("{prefix}/images/generations"));
+    }
+
+    Ok(url)
+}
+
 /// 调用 OpenAI-compatible 图片生成 API。
 pub async fn generate_image(
     client: &reqwest::Client,
@@ -89,17 +101,9 @@ pub async fn generate_image(
     req: &ImageGenRequest,
 ) -> Result<ImageGenResponse, AirpError> {
     // 构建图片生成 API URL（兼容 OpenAI images/generations）
-    let base_url = endpoint.trim_end_matches('/');
-    let url = if base_url.contains("/images") {
-        base_url.to_string()
-    } else {
-        // 从 chat/completions endpoint 推导 images endpoint
-        base_url
-            .replace("/chat/completions", "/images/generations")
-            .replace("/v1/chat/completions", "/v1/images/generations")
-    };
+    let url = image_generation_url(endpoint)?;
 
-    let mut request = client.post(&url).json(&serde_json::json!({
+    let mut request = client.post(url).json(&serde_json::json!({
         "model": model,
         "prompt": req.prompt,
         "n": 1,
@@ -486,6 +490,37 @@ mod tests {
         assert_eq!(req.size, "1024x1024");
         assert_eq!(req.style, "vivid");
         assert!(req.session_id.is_none());
+    }
+
+    #[test]
+    fn image_generation_url_rewrites_only_chat_completions_suffix() {
+        let url = image_generation_url(
+            "https://provider.example/images-api/v1/chat/completions?tenant=one",
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://provider.example/images-api/v1/images/generations?tenant=one"
+        );
+
+        let explicit =
+            image_generation_url("https://provider.example/v1/images/generations").unwrap();
+        assert_eq!(
+            explicit.as_str(),
+            "https://provider.example/v1/images/generations"
+        );
+
+        let custom = image_generation_url("https://provider.example/custom/image-create").unwrap();
+        assert_eq!(
+            custom.as_str(),
+            "https://provider.example/custom/image-create"
+        );
+    }
+
+    #[test]
+    fn image_generation_url_rejects_invalid_endpoint() {
+        let error = image_generation_url("not a URL").unwrap_err();
+        assert!(matches!(error, AirpError::Config(_)));
     }
 
     /// CodeRabbit nitpick #3：锁定 `MAX_IMAGE_BYTES` 上限值，防回归。
