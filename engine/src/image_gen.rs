@@ -11,6 +11,7 @@
 //! - 元数据保存在 `characters/{id}/sessions/{sid}/images/index.json`
 
 use crate::error::AirpError;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,9 @@ pub struct ImageGenResponse {
     pub image_url: Option<String>,
     /// 修订后的 prompt。
     pub revised_prompt: Option<String>,
+    /// Decoded PNG bytes when an upstream returns `b64_json` instead of a URL.
+    #[serde(skip)]
+    pub(crate) image_bytes: Option<Vec<u8>>,
 }
 
 /// 图片元数据。
@@ -92,6 +96,97 @@ fn image_generation_url(endpoint: &str) -> Result<reqwest::Url, AirpError> {
     Ok(url)
 }
 
+fn parse_image_generation_response(body: &str) -> Result<ImageGenResponse, AirpError> {
+    let payload: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| AirpError::Internal(format!("image generation response parse error: {e}")))?;
+    let first = payload
+        .get("data")
+        .and_then(|data| data.as_array())
+        .and_then(|data| data.first());
+
+    let image_url = first
+        .and_then(|item| item.get("url"))
+        .and_then(|url| url.as_str())
+        .map(String::from);
+    let revised_prompt = first
+        .and_then(|item| item.get("revised_prompt"))
+        .and_then(|prompt| prompt.as_str())
+        .map(String::from);
+
+    let image_bytes = if image_url.is_none() {
+        first
+            .and_then(|item| item.get("b64_json"))
+            .and_then(|encoded| encoded.as_str())
+            .map(decode_generated_image)
+            .transpose()?
+    } else {
+        None
+    };
+
+    Ok(ImageGenResponse {
+        success: image_url.is_some() || image_bytes.is_some(),
+        image_path: None,
+        image_url,
+        revised_prompt,
+        image_bytes,
+    })
+}
+
+fn append_limited_response_chunk(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+) -> Result<(), AirpError> {
+    let new_len = body
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| AirpError::Internal("image response size overflowed usize".to_string()))?;
+    if new_len > limit {
+        return Err(image_download_error(
+            "image generation response exceeds the response size limit",
+        ));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn read_image_generation_response(
+    mut response: reqwest::Response,
+) -> Result<(reqwest::StatusCode, String), AirpError> {
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_IMAGE_RESPONSE_BYTES as u64)
+    {
+        return Err(image_download_error(
+            "image generation response exceeds the response size limit",
+        ));
+    }
+
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .map(|length| length.min(1024 * 1024) as usize)
+            .unwrap_or(0),
+    );
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| AirpError::Upstream {
+            status: status.as_u16(),
+            body: format!("image generation response read failed: {error}"),
+        })?
+    {
+        append_limited_response_chunk(&mut body, &chunk, MAX_IMAGE_RESPONSE_BYTES)?;
+    }
+
+    let body = String::from_utf8(body).map_err(|_| AirpError::Upstream {
+        status: status.as_u16(),
+        body: "image generation response is not valid UTF-8".to_string(),
+    })?;
+    Ok((status, body))
+}
+
 /// 调用 OpenAI-compatible 图片生成 API。
 pub async fn generate_image(
     client: &reqwest::Client,
@@ -125,8 +220,7 @@ pub async fn generate_image(
             body: format!("image generation request failed: {e}"),
         })?;
 
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let (status, body) = read_image_generation_response(response).await?;
 
     if !status.is_success() {
         return Err(AirpError::Upstream {
@@ -135,43 +229,14 @@ pub async fn generate_image(
         });
     }
 
-    let payload: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| AirpError::Internal(format!("image generation response parse error: {e}")))?;
-
-    // 解析 OpenAI 格式响应
-    let data = payload.get("data").and_then(|d| d.as_array());
-    let first = data.and_then(|arr| arr.first());
-
-    let image_url = first
-        .and_then(|item| item.get("url"))
-        .and_then(|u| u.as_str())
-        .map(String::from);
-
-    let revised_prompt = first
-        .and_then(|item| item.get("revised_prompt"))
-        .and_then(|p| p.as_str())
-        .map(String::from);
-
-    if image_url.is_none() {
-        return Ok(ImageGenResponse {
-            success: false,
-            image_path: None,
-            image_url: None,
-            revised_prompt: None,
-        });
-    }
-
-    Ok(ImageGenResponse {
-        success: true,
-        image_path: None, // URL 模式不保存本地
-        image_url,
-        revised_prompt,
-    })
+    parse_image_generation_response(&body)
 }
 
 /// 图片下载大小上限（20 MiB）。防止恶意/被攻陷上游返回超大响应压满磁盘
 /// （CodeRabbit N2）。
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+const MAX_BASE64_IMAGE_CHARS: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4;
+const MAX_IMAGE_RESPONSE_BYTES: usize = MAX_BASE64_IMAGE_CHARS + 64 * 1024;
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
 fn image_download_error(message: impl Into<String>) -> AirpError {
@@ -179,6 +244,24 @@ fn image_download_error(message: impl Into<String>) -> AirpError {
         status: 0,
         body: message.into(),
     }
+}
+
+fn decode_generated_image(encoded: &str) -> Result<Vec<u8>, AirpError> {
+    if encoded.len() > MAX_BASE64_IMAGE_CHARS {
+        return Err(image_download_error(
+            "image generation rejected: b64_json exceeds the image size limit",
+        ));
+    }
+    let bytes = STANDARD.decode(encoded).map_err(|_| {
+        image_download_error("image generation rejected: b64_json is not valid base64")
+    })?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(image_download_error(
+            "image generation rejected: decoded image exceeds the image size limit",
+        ));
+    }
+    validate_png_signature(&bytes)?;
+    Ok(bytes)
 }
 
 fn is_png_content_type(content_type: Option<&str>) -> bool {
@@ -337,8 +420,6 @@ pub async fn download_image_to_session(
     // Bind the request to an address from the validated DNS result. The URL
     // retains its original hostname for TLS/SNI and HTTP Host semantics.
     let client = pinned_image_download_client(&validated.host, validated.address)?;
-    let dir = images_dir(data_root, character_id, session_id);
-    std::fs::create_dir_all(&dir)?;
 
     // Phase 1（锁外）：下载图片字节。网络慢，并行化保留吞吐。
     let mut response = client
@@ -413,7 +494,27 @@ pub async fn download_image_to_session(
         }
     }
 
-    validate_png_signature(&bytes)?;
+    store_image_bytes_to_session(data_root, character_id, session_id, &bytes, prompt).await
+}
+
+/// Persist already-decoded image bytes through the same validation and atomic
+/// index update used by URL downloads.
+pub(crate) async fn store_image_bytes_to_session(
+    data_root: &Path,
+    character_id: &str,
+    session_id: Option<&str>,
+    bytes: &[u8],
+    prompt: &str,
+) -> Result<(ImageMeta, String), AirpError> {
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(image_download_error(
+            "image storage rejected: image exceeds the image size limit",
+        ));
+    }
+    validate_png_signature(bytes)?;
+
+    let dir = images_dir(data_root, character_id, session_id);
+    std::fs::create_dir_all(&dir)?;
 
     // Phase 2（持锁）：选文件名 + 写文件 + 更新 index.json。
     // CodeRabbit outside-diff #2：原实现先在锁外选文件名 + 写文件，再在
@@ -430,7 +531,7 @@ pub async fn download_image_to_session(
         .as_millis();
     let filename = pick_unique_image_filename(&dir, millis);
     let filepath = dir.join(&filename);
-    crate::data_dir::replace_file(&filepath, &bytes)?;
+    crate::data_dir::replace_file(&filepath, bytes)?;
 
     let meta = ImageMeta {
         filename: filename.clone(),
@@ -521,6 +622,64 @@ mod tests {
     fn image_generation_url_rejects_invalid_endpoint() {
         let error = image_generation_url("not a URL").unwrap_err();
         assert!(matches!(error, AirpError::Config(_)));
+    }
+
+    #[test]
+    fn image_generation_response_decodes_b64_json() {
+        let png = b"\x89PNG\r\n\x1a\npayload";
+        let encoded = STANDARD.encode(png);
+        let response = parse_image_generation_response(&format!(
+            r#"{{"data":[{{"b64_json":"{encoded}","revised_prompt":"revised"}}]}}"#
+        ))
+        .unwrap();
+
+        assert!(response.success);
+        assert_eq!(response.image_bytes.as_deref(), Some(png.as_slice()));
+        assert!(response.image_url.is_none());
+        assert_eq!(response.revised_prompt.as_deref(), Some("revised"));
+        assert!(serde_json::to_value(&response)
+            .unwrap()
+            .get("image_bytes")
+            .is_none());
+    }
+
+    #[test]
+    fn image_generation_response_rejects_invalid_b64_json() {
+        let error = parse_image_generation_response(r#"{"data":[{"b64_json":"not base64!"}]}"#)
+            .unwrap_err();
+        assert!(matches!(error, AirpError::Upstream { .. }));
+    }
+
+    #[test]
+    fn image_generation_response_body_is_bounded_across_chunks() {
+        let mut body = Vec::new();
+        append_limited_response_chunk(&mut body, b"12", 4).unwrap();
+        append_limited_response_chunk(&mut body, b"34", 4).unwrap();
+        let error = append_limited_response_chunk(&mut body, b"5", 4).unwrap_err();
+
+        assert_eq!(body, b"1234");
+        assert!(matches!(error, AirpError::Upstream { .. }));
+    }
+
+    #[tokio::test]
+    async fn decoded_image_uses_shared_storage_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let png = b"\x89PNG\r\n\x1a\npayload";
+        let (meta, relative) =
+            store_image_bytes_to_session(temp.path(), "hero", None, png, "a prompt")
+                .await
+                .unwrap();
+
+        assert_eq!(meta.prompt, "a prompt");
+        assert_eq!(meta.size, format!("{} bytes", png.len()));
+        assert!(temp.path().join(&relative).exists());
+
+        let index: Vec<ImageMeta> = serde_json::from_str(
+            &std::fs::read_to_string(images_index_path(temp.path(), "hero", None)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].filename, meta.filename);
     }
 
     /// CodeRabbit nitpick #3：锁定 `MAX_IMAGE_BYTES` 上限值，防回归。

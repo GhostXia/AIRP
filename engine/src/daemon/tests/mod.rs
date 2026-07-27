@@ -18,6 +18,7 @@ use tower::util::ServiceExt;
 mod catalog;
 mod chat;
 mod health_settings;
+mod images;
 mod local_webui;
 mod memory;
 mod persona;
