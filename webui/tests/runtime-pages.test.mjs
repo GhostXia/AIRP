@@ -13,6 +13,7 @@ const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
 const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
 const dialogueGenScript = await readFile(new URL('../assets/dialogue-gen.js', import.meta.url), 'utf8');
+const dialogueFlowScript = await readFile(new URL('../assets/dialogue-flow.js', import.meta.url), 'utf8');
 const agentHarnessScript = await readFile(new URL('../assets/agent-test-harness.js', import.meta.url), 'utf8');
 const engineRouter = await readFile(new URL('../../engine/src/daemon/mod.rs', import.meta.url), 'utf8');
 
@@ -80,8 +81,9 @@ test('chat space exposes session, history and streaming controls', () => {
 
 test('dialogue example card reads use the registered Engine character route', () => {
   assert.match(engineRouter, /"\/v1\/characters\/:character_id"[\s\S]*?get\(get_character_card\)/);
-  assert.match(dialogueGenScript, /client\.request\('GET', '\/v1\/characters\/' \+ encodeURIComponent\(characterId\)\)/);
-  assert.doesNotMatch(dialogueGenScript, /\/v1\/characters\/['"]?\s*\+[^;\n]+\/card/);
+  assert.match(dialogueFlowScript, /'\/v1\/characters\/' \+ encodeURIComponent\(characterId\)/);
+  assert.doesNotMatch(dialogueFlowScript, /\/v1\/characters\/['"]?\s*\+[^;\n]+\/card/);
+  assert.match(dialogueGenScript, /dialogueFlow\.load\(characterId\)/);
 });
 
 test('agent DOM snapshots redact descendant content while retaining interface labels', () => {

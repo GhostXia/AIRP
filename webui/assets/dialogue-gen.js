@@ -7,6 +7,7 @@
   const base = sessionStorage.getItem('airp_engine_url') || location.origin;
   const bearer = sessionStorage.getItem('airp_bearer') || '';
   const client = AIRPApi.createClient({ base, bearer });
+  const dialogueFlow = AIRPDialogueFlow.create(client);
   let characterId = params.get('character') || sessionStorage.getItem('airp_character_id') || '';
   let characters = [];
   // 缓存最近一次 dry_run 生成的对话示例，供"写入角色卡"按钮使用
@@ -61,7 +62,7 @@
       for (const id of characters) sel.appendChild(new Option(id, id));
       if (characterId && characters.includes(characterId)) {
         sel.value = characterId;
-        loadCurrentMesExample();
+        await loadCurrentMesExample();
       }
     } catch (error) {
       // 加载失败时保留"— 请选择角色 —"占位项，通过 status bar 提示用户
@@ -75,10 +76,8 @@
     const content = $('#gen-current-content');
     if (!characterId) { wrap.hidden = true; return; }
     try {
-      const card = await client.request('GET', '/v1/characters/' + encodeURIComponent(characterId));
-      const data = card.data || card;
-      const mes = data.mes_example || '';
-      content.textContent = mes || '（角色卡尚未设置 mes_example）';
+      const current = await dialogueFlow.load(characterId);
+      content.textContent = current.mesExample || '（角色卡尚未设置 mes_example）';
       wrap.hidden = false;
     } catch (error) {
       content.textContent = '加载失败：' + AIRPApi.errorMessage(error.data, error.message);
@@ -101,26 +100,30 @@
     if (userName) body.user_name = userName;
 
     const btn = $('#gen-submit');
+    const characterSelect = $('#gen-character');
     btn.disabled = true;
+    characterSelect.disabled = true;
     const original = btn.textContent;
     btn.textContent = '生成中…';
     setStatus('正在调用 LLM 生成对话示例…');
     try {
-      const resp = await client.request('POST', '/v1/characters/' + encodeURIComponent(characterId) + '/dialogue-examples', body);
+      const resp = await dialogueFlow.generate(characterId, body);
       renderResult(resp);
-      lastGenerated = resp.mes_example || '';
+      // 只有 dry-run 结果能成为后续一次性写入凭证；直接写入结果不可再次提交。
+      lastGenerated = resp.written ? '' : (resp.mes_example || '');
       if (resp.written) {
         setStatus('已写入角色卡 mes_example（' + resp.turns_generated + ' 轮）');
         $('#gen-write').disabled = true;
-        loadCurrentMesExample();
+        await loadCurrentMesExample();
       } else {
         setStatus('生成完成（' + resp.turns_generated + ' 轮，预览模式未写盘）');
-        $('#gen-write').disabled = false;
+        $('#gen-write').disabled = !lastGenerated;
       }
     } catch (error) {
       setStatus('生成失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     } finally {
       btn.disabled = false;
+      characterSelect.disabled = false;
       btn.textContent = original;
     }
   }
@@ -143,29 +146,34 @@
 
   async function writeGenerated() {
     if (!characterId || !lastGenerated) { setStatus('无可写入的生成内容', true); return; }
-    // CodeRabbit #9（critical）：写盘时不再重新调用 LLM 生成。
-    // 之前实现把 dry_run=true 时拿到的 lastGenerated 丢弃，重新构造与
-    // 生成阶段相同的 body 再次 POST，触发 temperature 0.7 的非确定性
-    // 生成——用户预览 A 但写入 B，破坏预览-确认-写入契约。
-    // 现在通过 mes_example_override 字段把 lastGenerated 原样交给 handler，
-    // handler 跳过 LLM 直接写盘。turns 等参数对 override 路径无效。
     const append = $('#gen-append').checked;
-    const body = { dry_run: false, append, mes_example_override: lastGenerated };
 
     const btn = $('#gen-write');
+    const characterSelect = $('#gen-character');
     btn.disabled = true;
+    characterSelect.disabled = true;
     const original = btn.textContent;
+    let written = false;
     btn.textContent = '写入中…';
     setStatus('正在写入角色卡 mes_example…');
     try {
-      const resp = await client.request('POST', '/v1/characters/' + encodeURIComponent(characterId) + '/dialogue-examples', body);
+      // 控制器保证 dry-run 预览原样写入，并在写成功后重新读取角色卡验证落盘。
+      const { response: resp, current } = await dialogueFlow.writePreviewAndReload(
+        characterId,
+        { mes_example: lastGenerated },
+        append,
+      );
       renderResult(resp);
       setStatus('已写入角色卡（' + resp.turns_generated + ' 轮）');
-      loadCurrentMesExample();
+      $('#gen-current-content').textContent = current.mesExample || '（角色卡尚未设置 mes_example）';
+      $('#gen-current').hidden = false;
+      lastGenerated = '';
+      written = true;
     } catch (error) {
       setStatus('写入失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     } finally {
-      btn.disabled = false;
+      btn.disabled = written || !lastGenerated;
+      characterSelect.disabled = false;
       btn.textContent = original;
     }
   }
@@ -202,6 +210,10 @@
 
     $('#gen-character').addEventListener('change', () => {
       characterId = $('#gen-character').value;
+      // dry-run 预览只授权写回生成它的角色，切换作用域即作废。
+      lastGenerated = '';
+      $('#gen-write').disabled = true;
+      $('#gen-result').hidden = true;
       sessionStorage.setItem('airp_character_id', characterId);
       $('#scope-character').textContent = characterId || '—';
       loadCurrentMesExample();
