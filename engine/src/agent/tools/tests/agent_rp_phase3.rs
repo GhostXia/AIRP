@@ -1028,3 +1028,131 @@ async fn trigger_world_event_and_advance_plot_concurrent_no_deadlock() {
         }
     }
 }
+
+/// PR #338 审计遗留 N1：`advance_clock` 与 `advance_plot` 在同一角色、同一
+/// session 上并发执行时不得形成 state→session / session→state 锁序环。
+///
+/// 两个 worker 使用独立 OS thread 和 current-thread runtime，并由 Barrier
+/// 同时放行。30 秒门限只用于把残留死锁转为明确测试失败；正常路径应秒级完成。
+#[tokio::test(flavor = "current_thread")]
+async fn advance_clock_and_advance_plot_concurrent_no_deadlock() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    // 唯一 character_id：避免与其他测试争用 process-global 锁。
+    seed_character(&state.data_root, "deadlock_clock_plot");
+
+    let character_dir = state.data_root.join("characters/deadlock_clock_plot");
+    std::fs::write(
+        character_dir.join("world_clock.json"),
+        serde_json::json!({
+            "current_time": 0,
+            "advance_per_turn": 1,
+            "time_unit": "hour"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        character_dir.join("world_events.json"),
+        serde_json::json!([{
+            "id": "evt_clock_plot",
+            "name": "Dawn",
+            "description": "The sun rises",
+            "content": "Dawn reached the valley.",
+            "time_trigger": 1
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
+    let worker_state = state.clone();
+    let join_handle = tokio::task::spawn_blocking(move || {
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+
+            {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                handles.push(scope.spawn(move || -> Result<(), String> {
+                    let registry = default_registry(state);
+                    let tool = registry.get("advance_clock").unwrap();
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .map_err(|error| format!("runtime build: {error}"))?;
+                    barrier.wait();
+                    runtime
+                        .block_on(tool.call(
+                            serde_json::json!({
+                                "character_id": "deadlock_clock_plot",
+                                "advance_by": 1
+                            }),
+                            true,
+                        ))
+                        .map_err(|error| format!("advance_clock: {error:?}"))?;
+                    Ok(())
+                }));
+            }
+
+            {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                handles.push(scope.spawn(move || -> Result<(), String> {
+                    let registry = default_registry(state);
+                    let tool = registry.get("advance_plot").unwrap();
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .map_err(|error| format!("runtime build: {error}"))?;
+                    barrier.wait();
+                    runtime
+                        .block_on(tool.call(
+                            serde_json::json!({
+                                "character_id": "deadlock_clock_plot",
+                                "development": "the valley woke at dawn",
+                                "type": "progression"
+                            }),
+                            true,
+                        ))
+                        .map_err(|error| format!("advance_plot: {error:?}"))?;
+                    Ok(())
+                }));
+            }
+
+            for handle in handles {
+                handle
+                    .join()
+                    .map_err(|error| format!("worker join: {error:?}"))??;
+            }
+            Ok::<(), String>(())
+        })
+    });
+
+    match tokio::time::timeout_at(deadline, join_handle).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(message))) => panic!("worker error: {message}"),
+        Ok(Err(error)) => panic!("spawn_blocking join error: {error:?}"),
+        Err(_) => {
+            panic!("advance_clock + advance_plot deadlocked: workers exceeded 30 seconds")
+        }
+    }
+
+    let clock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(character_dir.join("world_clock.json")).unwrap())
+            .unwrap();
+    assert_eq!(clock["current_time"], 1);
+
+    let events: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(character_dir.join("world_events.json")).unwrap())
+            .unwrap();
+    assert_eq!(events[0]["triggered"], true);
+
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "deadlock_clock_plot", None)
+            .unwrap();
+    let current = crate::volume_store::read_current(&session_dir).unwrap();
+    assert!(current.contains("Dawn reached the valley."));
+    assert!(current.contains("the valley woke at dawn"));
+}
