@@ -10,8 +10,8 @@
 use crate::daemon::DaemonState;
 use crate::error::AirpError;
 use crate::image_gen::{
-    default_size, default_style, download_image_to_session, generate_image, ImageGenRequest,
-    ImageMeta,
+    default_size, default_style, download_image_to_session, generate_image,
+    store_image_bytes_to_session, ImageGenRequest, ImageMeta,
 };
 use crate::types::CharacterId;
 use axum::body::Body;
@@ -43,7 +43,7 @@ pub struct GenerateImageEndpointRequest {
 #[derive(Debug, Serialize)]
 pub struct GenerateImageEndpointResponse {
     pub success: bool,
-    /// 本地相对路径（仅当 `download=true` 且下载成功时存在）。
+    /// 本地相对路径（`b64_json` 响应或 `download=true` 且下载成功时存在）。
     pub image_path: Option<String>,
     /// 上游 API 返回的图片 URL（短期有效）。
     pub image_url: Option<String>,
@@ -119,10 +119,20 @@ pub(in crate::daemon) async fn generate_image_endpoint(
         }));
     }
 
-    // 可选下载到本地
     let mut meta = None;
     let mut image_path = None;
-    if req.download {
+    if let Some(bytes) = resp.image_bytes.take() {
+        let (stored_meta, stored_path) = store_image_bytes_to_session(
+            &state.data_root,
+            cid.as_str(),
+            req.session_id.as_deref(),
+            &bytes,
+            prompt,
+        )
+        .await?;
+        meta = Some(stored_meta);
+        image_path = Some(stored_path);
+    } else if req.download {
         if let Some(ref url) = resp.image_url {
             match download_image_to_session(
                 &state.data_root,
