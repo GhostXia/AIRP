@@ -10,6 +10,9 @@ const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
 const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
+const dialogueGenScript = await readFile(new URL('../assets/dialogue-gen.js', import.meta.url), 'utf8');
+const agentHarnessScript = await readFile(new URL('../assets/agent-test-harness.js', import.meta.url), 'utf8');
+const engineRouter = await readFile(new URL('../../engine/src/daemon/mod.rs', import.meta.url), 'utf8');
 
 test('runtime entry redirects through an external CSP-compatible script', () => {
   assert.match(entryPage, /assets\/entry\.js/);
@@ -71,6 +74,18 @@ test('chat space exposes session, history and streaming controls', () => {
     assert.match(chatPage, new RegExp('id="' + id + '"'));
   }
   assert.match(chatPage, /assets\/chat-space\.js/);
+});
+
+test('dialogue example card reads use the registered Engine character route', () => {
+  assert.match(engineRouter, /"\/v1\/characters\/:character_id"[\s\S]*?get\(get_character_card\)/);
+  assert.match(dialogueGenScript, /client\.request\('GET', '\/v1\/characters\/' \+ encodeURIComponent\(characterId\)\)/);
+  assert.doesNotMatch(dialogueGenScript, /\/v1\/characters\/['"]?\s*\+[^;\n]+\/card/);
+});
+
+test('agent DOM snapshots propagate message sensitivity to descendant leaves', () => {
+  assert.match(agentHarnessScript, /function isSensitiveNode\(node\)/);
+  assert.match(agentHarnessScript, /current = current\.parentElement/);
+  assert.match(agentHarnessScript, /sensitive: isSensitiveNode\(node\)/);
 });
 
 test('every shipped screen is compatible with the Engine CSP', async () => {

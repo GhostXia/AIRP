@@ -390,7 +390,10 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             get(get_plot_arc).put(update_plot_arc.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
         )
         // ── Phase 3.3: 场景插图生成 API ───────────────────────────────────
-        .route("/v1/image/generate", post(generate_image_endpoint))
+        .route(
+            "/v1/image/generate",
+            post(generate_image_endpoint).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
         .route(
             "/v1/characters/:character_id/images",
             get(list_images_endpoint),
@@ -414,7 +417,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         )
         .route(
             "/v1/character-templates/:template_id/instantiate",
-            post(instantiate_template_endpoint),
+            post(instantiate_template_endpoint).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(
             "/v1/scenes",
