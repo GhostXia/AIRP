@@ -428,21 +428,70 @@
   }
 
   async function renderAgent() {
-    const view = $('#view'); view.replaceChildren(); const tools = await client.request('GET', '/v1/agent/tools');
+    const view = $('#view'); view.replaceChildren();
+    const [tools, settings] = await Promise.all([
+      client.request('GET', '/v1/agent/tools'),
+      client.request('GET', '/v1/settings'),
+    ]);
+    const toolAuthorityEnabled = Boolean(settings.access_api_key_set);
     const run = card('受控 Agent 运行', true); const form = node('div', 'runtime-form'); run.appendChild(form); view.appendChild(run);
     form.append(characterSelector(renderAgent).wrap, sessionSelector(renderAgent).wrap);
     const prompt = input('任务', '', { multiline: true, placeholder: '描述本次 Agent 要完成的任务' }); const steps = input('最大步数', '4', { type: 'number' }); const result = output('等待运行…', true); form.append(prompt.wrap, steps.wrap);
+    const authorization = node('div', toolAuthorityEnabled ? 'runtime-muted' : 'runtime-warning',
+      toolAuthorityEnabled
+        ? '默认仅普通生成。勾选下方工具后，本次运行才会获得 call:tool，并且只允许已勾选工具。'
+        : '当前 Engine 未配置 AIRP_ACCESS_KEY，本页只能普通生成；工具调用授权已禁用。');
+    form.appendChild(authorization);
+    const toolList = node('div', 'agent-tool-list' + (toolAuthorityEnabled ? '' : ' disabled'));
+    const toolChecks = new Map();
+    for (const item of tools) {
+      const label = node('label', 'agent-tool');
+      const check = document.createElement('input'); check.type = 'checkbox'; check.disabled = !toolAuthorityEnabled;
+      const copy = node('span');
+      copy.append(node('span', 'agent-tool-name', item.name), node('span', 'agent-tool-meta', item.side_effect + ' · ' + item.description));
+      label.append(check, copy); toolList.appendChild(label); toolChecks.set(item.name, check);
+    }
+    form.appendChild(toolList);
     const bar = actions(); const stop = button('停止', null); stop.disabled = true; let abort;
-    bar.append(button('开始运行', async event => {
+    const confirm = button('确认执行演练过的破坏性工具', null, 'btn-danger'); confirm.hidden = true;
+    let dryRunTools = [];
+    function selectedTools() { return [...toolChecks].filter(([, check]) => check.checked).map(([name]) => name); }
+    async function startRun(confirmedTools, allowedTools) {
       if (!state.characterId || !state.sessionId || !prompt.control.value.trim()) return;
-      event.currentTarget.disabled = true; stop.disabled = false; result.textContent = ''; abort = new AbortController();
+      start.disabled = true; confirm.disabled = true; stop.disabled = false; result.textContent = ''; abort = new AbortController();
+      confirm.hidden = true; dryRunTools = [];
       try {
-        await client.stream('/v1/agent/run', { character_id: state.characterId, session_id: state.sessionId, user_id: state.userId, user_profile: { name: state.userId, variables: {} }, message: prompt.control.value.trim(), max_steps: Number(steps.control.value) || 1, capabilities: [] }, { signal: abort.signal, onChunk: item => { result.textContent += json(item) + '\n'; }, onDone: item => { if (item) result.textContent += json(item) + '\n'; } });
+        await AIRPAgentRun.run(client, {
+          characterId: state.characterId,
+          sessionId: state.sessionId,
+          userId: state.userId,
+          message: prompt.control.value.trim(),
+          maxSteps: steps.control.value,
+          toolAuthorityEnabled,
+          tools,
+          selectedTools: allowedTools || selectedTools(),
+          confirmedTools,
+        }, {
+          signal: abort.signal,
+          onEvent: (item, text) => {
+            result.textContent += text + (item.type === 'delta' ? '' : '\n');
+            if (item.type === 'tool_result' && item.dry_run && item.tool) dryRunTools.push(item.tool);
+          },
+          onDone: () => { confirm.hidden = dryRunTools.length === 0; },
+        });
         setStatus('Agent 运行完成');
-      } catch (error) { if (error.name !== 'AbortError') setStatus('Agent 运行失败：' + message(error), true); }
-      finally { event.currentTarget.disabled = false; stop.disabled = true; abort = null; }
-    }, 'btn-primary'), stop); stop.addEventListener('click', () => abort && abort.abort()); form.append(bar, result);
-    const catalog = card('工具目录', true); for (const item of tools) catalog.appendChild(node('span', 'tool-badge', item.name || String(item))); view.appendChild(catalog);
+      } catch (error) {
+        if (error.name === 'AbortError') setStatus('Agent 运行已停止；不会自动重试，请先刷新历史确认状态');
+        else setStatus('Agent 运行失败：' + message(error), true);
+      }
+      finally { start.disabled = false; confirm.disabled = false; stop.disabled = true; abort = null; }
+    }
+    const start = button('开始运行', () => startRun([]), 'btn-primary');
+    confirm.addEventListener('click', () => {
+      const confirmed = [...new Set(dryRunTools)];
+      startRun(confirmed, confirmed);
+    });
+    bar.append(start, stop, confirm); stop.addEventListener('click', () => abort && abort.abort()); form.append(bar, result);
   }
 
   async function renderSettings() {
