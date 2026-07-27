@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { readdir } from 'node:fs/promises';
+import vm from 'node:vm';
+import { sanitizeDomSnapshot } from '../../tools/agent-exploration/dom-privacy.mjs';
 
 const rolePage = await readFile(new URL('../screens/01-role-list.html', import.meta.url), 'utf8');
 const chatPage = await readFile(new URL('../screens/02-chat-space.html', import.meta.url), 'utf8');
@@ -82,10 +84,86 @@ test('dialogue example card reads use the registered Engine character route', ()
   assert.doesNotMatch(dialogueGenScript, /\/v1\/characters\/['"]?\s*\+[^;\n]+\/card/);
 });
 
-test('agent DOM snapshots propagate message sensitivity to descendant leaves', () => {
-  assert.match(agentHarnessScript, /function isSensitiveNode\(node\)/);
-  assert.match(agentHarnessScript, /current = current\.parentElement/);
-  assert.match(agentHarnessScript, /sensitive: isSensitiveNode\(node\)/);
+test('agent DOM snapshots redact descendant content while retaining interface labels', () => {
+  function element(tagName, { id = '', className = '', text = '', ariaLabel = null, parentElement = null } = {}) {
+    return {
+      tagName,
+      id,
+      className,
+      textContent: text,
+      childNodes: text ? [{ nodeType: 3, textContent: text }] : [],
+      children: [],
+      parentElement,
+      disabled: false,
+      getAttribute(name) {
+        if (name === 'aria-label') return ariaLabel;
+        return null;
+      },
+      getBoundingClientRect() { return { width: 10, height: 10 }; },
+      matches() { return false; },
+    };
+  }
+
+  function runHarness(html, nodes) {
+    const document = {
+      documentElement: html,
+      body: nodes[0],
+      createTreeWalker() {
+        let index = 0;
+        return {
+          currentNode: nodes[0],
+          nextNode() {
+            index += 1;
+            return nodes[index] || null;
+          },
+        };
+      },
+    };
+    const window = {
+      VITE_AIRP_AGENT_TEST: '1',
+      location: { origin: 'https://example.test', pathname: '/', search: '' },
+      addEventListener() {},
+    };
+    vm.runInNewContext(agentHarnessScript, {
+      window,
+      globalThis: window,
+      document,
+      NodeFilter: { SHOW_ELEMENT: 1 },
+      console: { info() {} },
+    });
+    return window.__AIRP_AGENT_TEST__.getDomSnapshot();
+  }
+
+  const html = element('HTML');
+  const body = element('BODY', { parentElement: html });
+  const message = element('DIV', { className: 'message', parentElement: body });
+  const secret = element('SPAN', {
+    text: 'private user message',
+    ariaLabel: 'private message preview',
+    parentElement: message,
+  });
+  const rootSecret = element('SPAN', { text: 'root secret', parentElement: body });
+  const label = element('BUTTON', {
+    id: 'save-settings',
+    text: 'Save',
+    ariaLabel: 'Save settings',
+    parentElement: body,
+  });
+  const snapshot = runHarness(html, [body, message, secret, label]);
+  const secretLeaf = snapshot.find(element => element.text === 'private user message');
+  assert.equal(secretLeaf.sensitive, true);
+
+  const sanitized = sanitizeDomSnapshot(snapshot);
+  assert.equal(sanitized.find(element => element.id === 'save-settings').text, 'Save');
+  assert.equal(sanitized.find(element => element.id === 'save-settings').ariaLabel, 'Save settings');
+  assert.equal(sanitized.find(element => element.tag === 'span').text, '[REDACTED]');
+  assert.equal(sanitized.find(element => element.tag === 'span').ariaLabel, '[REDACTED]');
+
+  const messageRoot = element('HTML', { className: 'message-root' });
+  const rootBody = element('BODY', { parentElement: messageRoot });
+  rootSecret.parentElement = rootBody;
+  const rootSnapshot = runHarness(messageRoot, [rootBody, rootSecret]);
+  assert.equal(rootSnapshot.find(element => element.text === 'root secret').sensitive, true);
 });
 
 test('every shipped screen is compatible with the Engine CSP', async () => {

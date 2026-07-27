@@ -66,13 +66,14 @@
 
   function isSensitiveNode(node) {
     let current = node;
-    while (current && current !== document.documentElement) {
+    while (current) {
       const scope = [
         current.id || '',
         current.className && typeof current.className === 'string' ? current.className : '',
         current.getAttribute && current.getAttribute('role') || '',
       ].join(' ');
       if (messageLike.test(scope)) return true;
+      if (current === document.documentElement) break;
       current = current.parentElement;
     }
     return false;

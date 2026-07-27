@@ -7,8 +7,12 @@ export function sanitizeDomSnapshot(snapshot) {
       ...(Array.isArray(element.classes) ? element.classes : []),
       element.role || '',
     ].join(' ');
-    if (element.text && (element.sensitive === true || MESSAGE_LIKE.test(scope))) {
-      return { ...element, text: '[REDACTED]' };
+    if (element.sensitive === true || MESSAGE_LIKE.test(scope)) {
+      return {
+        ...element,
+        text: element.text ? '[REDACTED]' : element.text,
+        ariaLabel: element.ariaLabel ? '[REDACTED]' : element.ariaLabel,
+      };
     }
     return element;
   });

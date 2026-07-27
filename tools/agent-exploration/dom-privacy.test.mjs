@@ -10,6 +10,7 @@ test('redacts leaf text marked sensitive by a message-like ancestor', () => {
       classes: [],
       role: null,
       text: 'private user message',
+      ariaLabel: 'private message preview',
       sensitive: true,
     },
   ];
@@ -18,6 +19,7 @@ test('redacts leaf text marked sensitive by a message-like ancestor', () => {
     {
       ...snapshot[0],
       text: '[REDACTED]',
+      ariaLabel: '[REDACTED]',
     },
   ]);
 });

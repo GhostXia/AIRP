@@ -125,7 +125,6 @@ pub(in crate::daemon) async fn generate_image_endpoint(
     if req.download {
         if let Some(ref url) = resp.image_url {
             match download_image_to_session(
-                &state.http_client,
                 &state.data_root,
                 cid.as_str(),
                 req.session_id.as_deref(),

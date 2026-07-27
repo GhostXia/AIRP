@@ -228,7 +228,14 @@ fn is_non_public_image_ip(ip: IpAddr) -> bool {
     }
 }
 
-async fn validate_image_download_url(image_url: &str) -> Result<reqwest::Url, AirpError> {
+#[derive(Debug)]
+struct ValidatedImageDownload {
+    url: reqwest::Url,
+    host: String,
+    address: std::net::SocketAddr,
+}
+
+async fn validate_image_download_url(image_url: &str) -> Result<ValidatedImageDownload, AirpError> {
     let url = reqwest::Url::parse(image_url)
         .map_err(|_| image_download_error("image download rejected: invalid URL"))?;
     if url.scheme() != "https" {
@@ -239,9 +246,10 @@ async fn validate_image_download_url(image_url: &str) -> Result<reqwest::Url, Ai
 
     let host = url
         .host_str()
-        .ok_or_else(|| image_download_error("image download rejected: URL has no host"))?;
+        .ok_or_else(|| image_download_error("image download rejected: URL has no host"))?
+        .to_string();
     let port = url.port_or_known_default().unwrap_or(443);
-    let addresses: Vec<_> = tokio::net::lookup_host((host, port))
+    let addresses: Vec<_> = tokio::net::lookup_host((host.as_str(), port))
         .await
         .map_err(|_| image_download_error("image download rejected: host resolution failed"))?
         .collect();
@@ -259,7 +267,23 @@ async fn validate_image_download_url(image_url: &str) -> Result<reqwest::Url, Ai
         ));
     }
 
-    Ok(url)
+    Ok(ValidatedImageDownload {
+        url,
+        host,
+        address: addresses[0],
+    })
+}
+
+fn pinned_image_download_client(
+    host: &str,
+    address: std::net::SocketAddr,
+) -> Result<reqwest::Client, AirpError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .resolve(host, address)
+        .build()
+        .map_err(|_| image_download_error("image download rejected: HTTP client setup failed"))
 }
 
 /// 序列化所有 `index.json` 读-改-写序列，避免并发请求 last-write-wins 丢失条目
@@ -295,20 +319,22 @@ fn pick_unique_image_filename(dir: &Path, millis: u128) -> String {
 /// `exists()` 检查处双双重叠导致选同一文件名互相覆盖。下载（慢网络 I/O）
 /// 在锁外执行以保留吞吐。
 pub async fn download_image_to_session(
-    client: &reqwest::Client,
     data_root: &Path,
     character_id: &str,
     session_id: Option<&str>,
     image_url: &str,
     prompt: &str,
 ) -> Result<(ImageMeta, String), AirpError> {
-    let validated_url = validate_image_download_url(image_url).await?;
+    let validated = validate_image_download_url(image_url).await?;
+    // Bind the request to an address from the validated DNS result. The URL
+    // retains its original hostname for TLS/SNI and HTTP Host semantics.
+    let client = pinned_image_download_client(&validated.host, validated.address)?;
     let dir = images_dir(data_root, character_id, session_id);
     std::fs::create_dir_all(&dir)?;
 
     // Phase 1（锁外）：下载图片字节。网络慢，并行化保留吞吐。
     let mut response = client
-        .get(validated_url)
+        .get(validated.url)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
