@@ -2616,9 +2616,9 @@ mod tests_b1_finalize_empty_stripped {
 /// 新顺序（message → state）：若 state persist 失败，消息已落盘用户可见，
 /// state 略滞后但下轮可重新抽取；消息丢失比 state 滞后更不可恢复。
 ///
-/// 本测试覆盖 happy path：两者都成功时，chat_log 与 live.json 都应反映
-/// 本轮 assistant 输出。顺序由 `?` 传播保证：message append 失败时
-/// `persist_live_state` 不会被调用。
+/// 测试覆盖 happy path 与 message append 失败路径：两者都成功时，
+/// chat_log 与 live.json 都应反映本轮 assistant 输出；message append
+/// 失败时，`persist_live_state` 不得被调用。
 #[cfg(test)]
 mod tests_bug_d_finalize_order {
     use super::finalize::run_finalize;
@@ -2711,6 +2711,35 @@ mod tests_bug_d_finalize_order {
             serde_json::from_slice(&std::fs::read(&live_path).unwrap()).unwrap();
         assert_eq!(live["hp"], 80);
         assert_eq!(live["mood"], "determined");
+    }
+
+    /// Bug D 失败路径：chat log 无法追加时，finalize 必须返回错误且不得写 live state。
+    #[tokio::test]
+    async fn finalize_does_not_persist_state_when_message_append_fails() {
+        let (_tmp, data_root, character) =
+            setup_character_with_user_msg("finalize-bug-d-append-fails");
+        let ctx = make_finalizer_ctx_with_state(data_root.clone(), character);
+
+        // 用同名目录替换 jsonl 文件，跨平台、确定性地让下一次 open-for-append 失败。
+        let chat_log_path =
+            data_root.join("characters/finalize-bug-d-append-fails/history/chat_log.jsonl");
+        std::fs::remove_file(&chat_log_path).unwrap();
+        std::fs::create_dir(&chat_log_path).unwrap();
+
+        let output = "This message cannot be committed.\n<state>{\"hp\":1}</state>".to_string();
+        let error = run_finalize(ctx, output.clone(), output)
+            .await
+            .expect_err("chat log append failure must propagate");
+
+        assert!(
+            matches!(error, crate::error::AirpError::Io(_)),
+            "sabotaged chat log path should produce an I/O error: {error}"
+        );
+        let live_path = data_root.join("characters/finalize-bug-d-append-fails/state/live.json");
+        assert!(
+            !live_path.exists(),
+            "live state must not advance when the assistant message was not committed"
+        );
     }
 
     /// Bug D 回归：assistant 消息只含 `<state>` 块（stripped 为空）且无
