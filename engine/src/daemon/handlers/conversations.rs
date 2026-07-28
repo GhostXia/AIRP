@@ -12,7 +12,11 @@ use crate::types::SessionId;
 use axum::{extract::Query, Json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
+const CONVERSATION_TURN_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Create a generic Engine-owned Conversation manifest.
 pub(in crate::daemon) async fn create_conversation_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(request): Json<CreateConversationRequest>,
@@ -21,6 +25,7 @@ pub(in crate::daemon) async fn create_conversation_endpoint(
     Ok(Json(ConversationService::new(root).create(request)?))
 }
 
+/// Snapshot a scene into a generic Conversation manifest.
 pub(in crate::daemon) async fn create_scene_conversation_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(scene_id): axum::extract::Path<String>,
@@ -33,6 +38,7 @@ pub(in crate::daemon) async fn create_scene_conversation_endpoint(
     Ok(Json(ConversationService::new(root).create(create)?))
 }
 
+/// List readable Conversation manifests within the selected user scope.
 pub(in crate::daemon) async fn list_conversations_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Query(query): Query<ConversationScopeQuery>,
@@ -41,6 +47,7 @@ pub(in crate::daemon) async fn list_conversations_endpoint(
     Ok(Json(ConversationService::new(root).list()?))
 }
 
+/// Load one Conversation manifest from the selected user scope.
 pub(in crate::daemon) async fn get_conversation_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(conversation_id): axum::extract::Path<String>,
@@ -51,6 +58,7 @@ pub(in crate::daemon) async fn get_conversation_endpoint(
     Ok(Json(ConversationService::new(root).get(conversation_id)?))
 }
 
+/// Append one caller-supplied event through the durable journal service.
 pub(in crate::daemon) async fn append_conversation_event_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(conversation_id): axum::extract::Path<String>,
@@ -65,6 +73,7 @@ pub(in crate::daemon) async fn append_conversation_event_endpoint(
     ))
 }
 
+/// Read a bounded cursor window from a Conversation journal.
 pub(in crate::daemon) async fn get_conversation_events_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(conversation_id): axum::extract::Path<String>,
@@ -79,11 +88,13 @@ pub(in crate::daemon) async fn get_conversation_events_endpoint(
     )?))
 }
 
+/// Discover registered Engine policy descriptors.
 pub(in crate::daemon) async fn list_conversation_policies_endpoint(
 ) -> Json<Vec<crate::conversation_policy::ConversationPolicyDescriptor>> {
     Json(crate::conversation_policy::builtin_conversation_policy_registry().list())
 }
 
+/// Execute and durably record one bounded Engine-owned Conversation turn.
 pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(conversation_id): axum::extract::Path<String>,
@@ -97,18 +108,36 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     let manifest = service.get(conversation_id)?;
     let plan = crate::conversation_policy::builtin_conversation_policy_registry()
         .plan_turn(&manifest, &request.user_actor_id)?;
+    if plan.speakers.len() > crate::conversation_policy::MAX_CONVERSATION_SPEAKERS_PER_TURN {
+        return Err(AirpError::BadRequest(format!(
+            "conversation turn planned {} speakers; maximum is {}",
+            plan.speakers.len(),
+            crate::conversation_policy::MAX_CONVERSATION_SPEAKERS_PER_TURN
+        )));
+    }
+    let provider_call_count = u32::try_from(plan.speakers.len()).map_err(|_| {
+        AirpError::BadRequest("conversation speaker count is too large".to_string())
+    })?;
     let quota = state
         .config
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .quota
         .clone();
-    crate::quota::check_and_increment(&root, &quota)?;
+    crate::quota::check_and_increment_by(&root, &quota, provider_call_count)?;
 
     let turn_id = crate::ulid::new_id();
-    let mut history = project_messages(&manifest, &service.all_events(conversation_id)?);
+    let history_service = service.clone();
+    let history_manifest = manifest.clone();
+    let mut history = tokio::task::spawn_blocking(move || {
+        let events = history_service.all_events(conversation_id)?;
+        Ok::<_, AirpError>(project_messages(&history_manifest, &events))
+    })
+    .await
+    .map_err(|error| AirpError::Internal(format!("conversation history task failed: {error}")))??;
     let mut committed = Vec::new();
-    let user_event = service.append_event_locked(
+    let user_event = append_event_locked_blocking(
+        service.clone(),
         conversation_id,
         AppendConversationEventRequest {
             user_id: None,
@@ -123,7 +152,8 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
             extensions: request.extensions.clone(),
             expected_next_sequence: Some(request.expected_next_sequence),
         },
-    )?;
+    )
+    .await?;
     history.push(crate::adapter::ChatMessage {
         role: crate::adapter::MessageRole::User,
         content: request.base.message.clone(),
@@ -131,6 +161,7 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     let mut next_sequence = user_event.sequence + 1;
     let user_event_id = user_event.event_id.clone();
     committed.push(user_event);
+    let turn_deadline = tokio::time::Instant::now() + CONVERSATION_TURN_TIMEOUT;
 
     for speaker in plan.speakers {
         let participant_id = speaker.participant_id;
@@ -154,19 +185,51 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
                     %error,
                     "conversation turn preparation failed after user event commit"
                 );
-                return Ok(Json(commit_turn_failure(
-                    &service,
-                    conversation_id,
-                    turn_id,
-                    participant_id,
-                    "generation_preparation_failed",
-                    user_event_id,
-                    next_sequence,
-                    committed,
-                )?));
+                return Ok(Json(
+                    commit_turn_failure(
+                        service.clone(),
+                        conversation_id,
+                        turn_id,
+                        Some(participant_id),
+                        "generation_preparation_failed",
+                        user_event_id,
+                        next_sequence,
+                        committed,
+                    )
+                    .await?,
+                ));
             }
         };
-        let result = crate::chat_pipeline::run_generation_step(pipeline).await;
+        let result = match tokio::time::timeout_at(
+            turn_deadline,
+            crate::chat_pipeline::run_generation_step(pipeline),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::error!(
+                    %conversation_id,
+                    %turn_id,
+                    %participant_id,
+                    timeout_secs = CONVERSATION_TURN_TIMEOUT.as_secs(),
+                    "conversation turn timed out after user event commit"
+                );
+                return Ok(Json(
+                    commit_turn_failure(
+                        service.clone(),
+                        conversation_id,
+                        turn_id,
+                        Some(participant_id),
+                        "turn_timeout",
+                        user_event_id,
+                        next_sequence,
+                        committed,
+                    )
+                    .await?,
+                ));
+            }
+        };
         crate::quota::record_tokens(
             &root,
             crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32,
@@ -179,36 +242,49 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
                 %error,
                 "conversation participant generation failed after user event commit"
             );
-            return Ok(Json(commit_turn_failure(
-                &service,
-                conversation_id,
-                turn_id,
-                participant_id,
-                "generation_failed",
-                user_event_id,
-                next_sequence,
-                committed,
-            )?));
+            return Ok(Json(
+                commit_turn_failure(
+                    service.clone(),
+                    conversation_id,
+                    turn_id,
+                    Some(participant_id),
+                    "generation_failed",
+                    user_event_id,
+                    next_sequence,
+                    committed,
+                )
+                .await?,
+            ));
         }
         let (content, live_state) =
             crate::chat_pipeline::extract_conversation_state(&result.cleaned_acc);
         if content.trim().is_empty() {
-            return Ok(Json(commit_turn_failure(
-                &service,
-                conversation_id,
-                turn_id,
-                participant_id,
-                "empty_generation",
-                user_event_id,
-                next_sequence,
-                committed,
-            )?));
+            tracing::error!(
+                %conversation_id,
+                %turn_id,
+                %participant_id,
+                "conversation participant returned an empty generation after user event commit"
+            );
+            return Ok(Json(
+                commit_turn_failure(
+                    service.clone(),
+                    conversation_id,
+                    turn_id,
+                    Some(participant_id),
+                    "empty_generation",
+                    user_event_id,
+                    next_sequence,
+                    committed,
+                )
+                .await?,
+            ));
         }
         let mut unpacker = crate::xml_unpacker::StreamingXmlUnpacker::new();
         let mut chunks = unpacker.process_chunk(&content);
         chunks.extend(unpacker.finish());
         let chunks = serde_json::to_value(chunks)?;
-        let assistant_event = service.append_event_locked(
+        let assistant_event = append_event_locked_blocking(
+            service.clone(),
             conversation_id,
             AppendConversationEventRequest {
                 user_id: None,
@@ -226,7 +302,8 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
                 extensions: BTreeMap::new(),
                 expected_next_sequence: Some(next_sequence),
             },
-        )?;
+        )
+        .await?;
         next_sequence += 1;
         history.push(crate::adapter::ChatMessage {
             role: crate::adapter::MessageRole::Assistant,
@@ -235,7 +312,8 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
         committed.push(assistant_event);
     }
 
-    let completed = service.append_event_locked(
+    let completed = append_event_locked_blocking(
+        service.clone(),
         conversation_id,
         AppendConversationEventRequest {
             user_id: None,
@@ -249,7 +327,8 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
             extensions: BTreeMap::new(),
             expected_next_sequence: Some(next_sequence),
         },
-    )?;
+    )
+    .await?;
     next_sequence += 1;
     committed.push(completed);
     Ok(Json(ConversationTurnOutcome {
@@ -318,17 +397,18 @@ fn project_messages(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn commit_turn_failure(
-    service: &ConversationService,
+async fn commit_turn_failure(
+    service: ConversationService,
     conversation_id: SessionId,
     turn_id: String,
-    participant_id: String,
+    participant_id: Option<String>,
     code: &str,
     causation_id: String,
     next_sequence: u64,
     mut committed: Vec<crate::conversation::ConversationEvent>,
 ) -> Result<ConversationTurnOutcome, AirpError> {
-    let failed = service.append_event_locked(
+    let failed = append_event_locked_blocking(
+        service,
         conversation_id,
         AppendConversationEventRequest {
             user_id: None,
@@ -344,7 +424,8 @@ fn commit_turn_failure(
             extensions: BTreeMap::new(),
             expected_next_sequence: Some(next_sequence),
         },
-    )?;
+    )
+    .await?;
     committed.push(failed);
     Ok(ConversationTurnOutcome {
         turn_id,
@@ -353,7 +434,19 @@ fn commit_turn_failure(
         next_sequence: next_sequence + 1,
         failure: Some(ConversationTurnFailure {
             code: code.to_string(),
-            participant_id: Some(participant_id),
+            participant_id,
         }),
     })
+}
+
+async fn append_event_locked_blocking(
+    service: ConversationService,
+    conversation_id: SessionId,
+    request: AppendConversationEventRequest,
+) -> Result<crate::conversation::ConversationEvent, AirpError> {
+    tokio::task::spawn_blocking(move || service.append_event_locked(conversation_id, request))
+        .await
+        .map_err(|error| {
+            AirpError::Internal(format!("conversation journal task failed: {error}"))
+        })?
 }

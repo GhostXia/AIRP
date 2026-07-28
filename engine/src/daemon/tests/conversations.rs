@@ -494,6 +494,195 @@ async fn turn_rejects_client_owned_history_before_committing() {
 }
 
 #[tokio::test]
+async fn turn_rejects_unregistered_policy_before_committing() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let conversation_id = create_conversation(&app, create_body()).await;
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "user_actor_id": "user",
+                        "expected_next_sequence": 0,
+                        "base": {
+                            "user_profile": {"name": "User", "variables": {}},
+                            "message": "hi"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let journal = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/v1/conversations/{conversation_id}/events"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(journal.into_body(), 4096)
+        .await
+        .unwrap();
+    let journal: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(journal["total"], 0);
+}
+
+#[tokio::test]
+async fn turn_rejects_an_oversized_speaker_plan_before_committing() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let mut participants = vec![serde_json::json!({
+        "participant_id": "human:gm",
+        "kind": "human"
+    })];
+    participants.extend(
+        (0..=crate::conversation_policy::MAX_CONVERSATION_SPEAKERS_PER_TURN).map(|index| {
+            let character_id = format!("character-{index}");
+            serde_json::json!({
+                "participant_id": format!("character:{character_id}"),
+                "kind": "character",
+                "resource": {"kind": "character", "id": character_id}
+            })
+        }),
+    );
+    let conversation_id = create_conversation(
+        &app,
+        serde_json::json!({
+            "participants": participants,
+            "resources": [{"kind": "scene", "id": "oversized"}],
+            "orchestration": {
+                "policy_id": crate::conversation_policy::SCENE_ROUND_ROBIN_V1,
+                "config": {}
+            }
+        }),
+    )
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "user_actor_id": "human:gm",
+                        "expected_next_sequence": 0,
+                        "base": {
+                            "user_profile": {"name": "GM", "variables": {}},
+                            "message": "hi"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let journal = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/v1/conversations/{conversation_id}/events"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(journal.into_body(), 4096)
+        .await
+        .unwrap();
+    let journal: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(journal["total"], 0);
+}
+
+#[tokio::test]
+async fn turn_reserves_request_quota_for_every_planned_provider_call() {
+    let (state, _tmp) = make_state_with_key(None);
+    state.config.write().unwrap().quota.max_requests_per_day = 1;
+    let data_root = state.data_root.clone();
+    let app = create_router(state);
+    let conversation_id = create_conversation(
+        &app,
+        serde_json::json!({
+            "participants": [
+                {"participant_id": "human:gm", "kind": "human"},
+                {
+                    "participant_id": "character:alice",
+                    "kind": "character",
+                    "resource": {"kind": "character", "id": "alice"}
+                },
+                {
+                    "participant_id": "character:bob",
+                    "kind": "character",
+                    "resource": {"kind": "character", "id": "bob"}
+                }
+            ],
+            "resources": [{"kind": "scene", "id": "quota-scene"}],
+            "orchestration": {
+                "policy_id": crate::conversation_policy::SCENE_ROUND_ROBIN_V1,
+                "config": {}
+            }
+        }),
+    )
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "user_actor_id": "human:gm",
+                        "expected_next_sequence": 0,
+                        "base": {
+                            "user_profile": {"name": "GM", "variables": {}},
+                            "message": "hi"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let quota = crate::quota::QuotaState::load(&crate::quota::quota_file_path(&data_root));
+    assert_eq!(quota.requests_today, 0);
+
+    let journal = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/v1/conversations/{conversation_id}/events"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(journal.into_body(), 4096)
+        .await
+        .unwrap();
+    let journal: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(journal["total"], 0);
+}
+
+#[tokio::test]
 async fn provider_failure_is_reported_as_partially_committed_turn() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

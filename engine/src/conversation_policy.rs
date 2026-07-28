@@ -10,9 +10,14 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+/// Identifier of the built-in scene round-robin policy.
 pub const SCENE_ROUND_ROBIN_V1: &str = "airp.scene.round_robin.v1";
+/// Schema version used by policy discovery descriptors.
 pub const CONVERSATION_POLICY_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
+/// Hard safety ceiling for provider calls planned in one turn.
+pub const MAX_CONVERSATION_SPEAKERS_PER_TURN: usize = 16;
 
+/// Discoverable metadata and configuration contract for one policy.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationPolicyDescriptor {
@@ -22,21 +27,26 @@ pub struct ConversationPolicyDescriptor {
     pub config_schema: Value,
 }
 
+/// One attributed provider speaker selected by a policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationSpeaker {
     pub participant_id: String,
     pub resource_id: String,
 }
 
+/// Executable, Engine-validated speaker plan for one turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationTurnPlan {
     pub scene_id: String,
     pub speakers: Vec<ConversationSpeaker>,
 }
 
+/// Engine extension point that maps an open policy reference to a safe plan.
 pub trait ConversationPolicy: Send + Sync {
+    /// Return stable discovery metadata for this policy.
     fn descriptor(&self) -> ConversationPolicyDescriptor;
 
+    /// Validate the manifest and policy configuration, then plan one turn.
     fn plan_turn(
         &self,
         manifest: &ConversationManifest,
@@ -45,6 +55,7 @@ pub trait ConversationPolicy: Send + Sync {
     ) -> Result<ConversationTurnPlan, AirpError>;
 }
 
+/// Registry of explicitly trusted Conversation policy implementations.
 #[derive(Default)]
 pub struct ConversationPolicyRegistry {
     policies: HashMap<String, RegisteredPolicy>,
@@ -56,10 +67,12 @@ struct RegisteredPolicy {
 }
 
 impl ConversationPolicyRegistry {
+    /// Create an empty policy registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Register one policy, rejecting empty or duplicate identities.
     pub fn register(&mut self, policy: Arc<dyn ConversationPolicy>) -> Result<(), AirpError> {
         let descriptor = policy.descriptor();
         if descriptor.policy_id.trim().is_empty() {
@@ -80,6 +93,7 @@ impl ConversationPolicyRegistry {
         Ok(())
     }
 
+    /// Return stable descriptors sorted by policy identity.
     pub fn list(&self) -> Vec<ConversationPolicyDescriptor> {
         let mut policies = self
             .policies
@@ -90,6 +104,7 @@ impl ConversationPolicyRegistry {
         policies
     }
 
+    /// Resolve and execute the policy referenced by a manifest.
     pub fn plan_turn(
         &self,
         manifest: &ConversationManifest,
@@ -110,6 +125,7 @@ impl ConversationPolicyRegistry {
     }
 }
 
+/// Process-wide registry containing AIRP's built-in policies.
 pub fn builtin_conversation_policy_registry() -> &'static ConversationPolicyRegistry {
     static REGISTRY: OnceLock<ConversationPolicyRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {

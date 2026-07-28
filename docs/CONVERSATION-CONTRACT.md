@@ -121,6 +121,8 @@ scene adapter 会：
 4. 每个角色结果立即以其 participant ID 持久化，后续角色可以看到本轮先前角色的输出；
 5. 成功写入 `turn.completed`；provider 或组装失败则写入 `turn.failed`，返回 `partially_committed`，不伪造回滚或泄漏上游错误正文。
 
+participant 总量不设产品级上限，但单回合 speaker plan 最多执行 16 个 provider 调用，并在写入用户事件前原子预留对应的请求配额。整轮 provider 调用共享 120 秒绝对 deadline；超时会取消当前调用并 durable 写入 `turn.failed`。历史扫描、解析和 journal durable append 在 blocking pool 中执行，不占用 async runtime worker。
+
 客户端不能在 turn 请求中注入 `scene_id`、`session_id`、`character_id`、history 或 legacy branch/swipe 控制。provider、model、preset、persona 和采样参数继续复用既有 chat pipeline 合同，因此 UI 只是能力调用方，不决定 Engine 的作用域、历史或调度。
 
 ## 7. 兼容边界

@@ -117,6 +117,21 @@ pub fn quota_file_path(effective_root: &Path) -> PathBuf {
 /// Returns `Err(AirpError::QuotaExceeded)` if any limit would be breached.
 /// On success, the incremented state is persisted immediately.
 pub fn check_and_increment(effective_root: &Path, config: &QuotaConfig) -> Result<(), AirpError> {
+    check_and_increment_by(effective_root, config, 1)
+}
+
+/// Atomically reserve `request_count` provider calls against the daily quota.
+///
+/// Batch reservation is all-or-nothing so a multi-provider operation cannot
+/// consume part of its request allowance and then fail quota validation.
+pub fn check_and_increment_by(
+    effective_root: &Path,
+    config: &QuotaConfig,
+    request_count: u32,
+) -> Result<(), AirpError> {
+    if request_count == 0 {
+        return Ok(());
+    }
     if config.is_unlimited() {
         return Ok(());
     }
@@ -137,7 +152,13 @@ pub fn check_and_increment(effective_root: &Path, config: &QuotaConfig) -> Resul
     let path = quota_file_path(effective_root);
     let mut state = QuotaState::load(&path);
 
-    if config.max_requests_per_day > 0 && state.requests_today >= config.max_requests_per_day {
+    let next_requests = state.requests_today.checked_add(request_count);
+    let exceeds_request_limit = config.max_requests_per_day > 0
+        && match next_requests {
+            Some(next) => next > config.max_requests_per_day,
+            None => true,
+        };
+    if exceeds_request_limit {
         return Err(AirpError::QuotaExceeded(format!(
             "请求配额已达上限：今日已发 {} 次，上限 {} 次/天",
             state.requests_today, config.max_requests_per_day
@@ -153,7 +174,7 @@ pub fn check_and_increment(effective_root: &Path, config: &QuotaConfig) -> Resul
         )));
     }
 
-    state.requests_today += 1;
+    state.requests_today = next_requests.unwrap_or(u32::MAX);
     state.save(&path);
     Ok(())
 }
@@ -217,6 +238,44 @@ mod tests_dx3 {
         check_and_increment(dir.path(), &cfg).unwrap();
         let state = QuotaState::load(&quota_file_path(dir.path()));
         assert_eq!(state.requests_today, 2);
+    }
+
+    #[test]
+    fn test_batch_reservation_is_atomic() {
+        let dir = tempdir().unwrap();
+        let cfg = limited(3, 0);
+        check_and_increment_by(dir.path(), &cfg, 2).unwrap();
+        let error = check_and_increment_by(dir.path(), &cfg, 2).unwrap_err();
+        assert!(matches!(error, AirpError::QuotaExceeded(_)));
+        let state = QuotaState::load(&quota_file_path(dir.path()));
+        assert_eq!(
+            state.requests_today, 2,
+            "a rejected batch must not consume a partial request allowance"
+        );
+    }
+
+    #[test]
+    fn test_zero_sized_batch_is_a_no_op() {
+        let dir = tempdir().unwrap();
+        let cfg = limited(1, 0);
+        check_and_increment_by(dir.path(), &cfg, 0).unwrap();
+        let state = QuotaState::load(&quota_file_path(dir.path()));
+        assert_eq!(state.requests_today, 0);
+    }
+
+    #[test]
+    fn test_batch_reservation_rejects_counter_overflow() {
+        let dir = tempdir().unwrap();
+        let path = quota_file_path(dir.path());
+        QuotaState {
+            date: QuotaState::today_utc(),
+            requests_today: u32::MAX,
+            tokens_today: 0,
+        }
+        .save(&path);
+        let error = check_and_increment_by(dir.path(), &limited(u32::MAX, 0), 1).unwrap_err();
+        assert!(matches!(error, AirpError::QuotaExceeded(_)));
+        assert_eq!(QuotaState::load(&path).requests_today, u32::MAX);
     }
 
     #[test]

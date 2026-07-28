@@ -16,7 +16,9 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+/// Manifest schema version written by this Engine.
 pub const CONVERSATION_SCHEMA_VERSION: u32 = 1;
+/// Event journal schema version written by this Engine.
 pub const CONVERSATION_EVENT_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_WINDOW_LIMIT: usize = 50;
 const MAX_WINDOW_LIMIT: usize = 200;
@@ -170,6 +172,7 @@ pub struct ConversationEvent {
     pub occurred_at: String,
 }
 
+/// Request for appending one immutable event to a conversation journal.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppendConversationEventRequest {
@@ -192,6 +195,7 @@ pub struct AppendConversationEventRequest {
     pub expected_next_sequence: Option<u64>,
 }
 
+/// Optional user scope for manifest reads and listings.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationScopeQuery {
@@ -199,6 +203,7 @@ pub struct ConversationScopeQuery {
     pub user_id: Option<UserId>,
 }
 
+/// Cursor and user scope accepted by the event-window endpoint.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventsQuery {
@@ -210,6 +215,7 @@ pub struct ConversationEventsQuery {
     pub before: Option<String>,
 }
 
+/// Bounded event-journal window returned to callers.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConversationEventWindow {
     pub events: Vec<ConversationEvent>,
@@ -236,6 +242,7 @@ pub struct ConversationTurnRequest {
     pub extensions: BTreeMap<String, Value>,
 }
 
+/// Durable completion state of a submitted turn.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationTurnStatus {
@@ -243,6 +250,7 @@ pub enum ConversationTurnStatus {
     PartiallyCommitted,
 }
 
+/// Stable failure details for a partially committed turn.
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationTurnFailure {
@@ -250,6 +258,7 @@ pub struct ConversationTurnFailure {
     pub participant_id: Option<String>,
 }
 
+/// Events and journal position produced by one Engine-owned turn.
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationTurnOutcome {
@@ -270,18 +279,21 @@ struct ConversationJournalState {
     last_event_id: String,
 }
 
+/// Persistent Conversation aggregate service rooted at one effective user root.
 #[derive(Debug, Clone)]
 pub struct ConversationService {
     data_root: PathBuf,
 }
 
 impl ConversationService {
+    /// Bind a service to an effective data root.
     pub fn new(data_root: impl AsRef<Path>) -> Self {
         Self {
             data_root: data_root.as_ref().to_path_buf(),
         }
     }
 
+    /// Validate and persist an immutable conversation manifest.
     pub fn create(
         &self,
         request: CreateConversationRequest,
@@ -311,6 +323,7 @@ impl ConversationService {
         Ok(manifest)
     }
 
+    /// Load and validate one conversation manifest.
     pub fn get(&self, conversation_id: SessionId) -> Result<ConversationManifest, AirpError> {
         let path = self.conversation_dir(conversation_id).join("manifest.json");
         if !path.is_file() {
@@ -323,6 +336,7 @@ impl ConversationService {
         Ok(manifest)
     }
 
+    /// List valid manifests while isolating unreadable conversation entries.
     pub fn list(&self) -> Result<Vec<ConversationManifest>, AirpError> {
         let root = self.data_root.join("conversations");
         if !root.is_dir() {
@@ -340,12 +354,20 @@ impl ConversationService {
             let Ok(conversation_id) = SessionId::parse(&name) else {
                 continue;
             };
-            manifests.push(self.get(conversation_id)?);
+            match self.get(conversation_id) {
+                Ok(manifest) => manifests.push(manifest),
+                Err(error) => tracing::warn!(
+                    %conversation_id,
+                    %error,
+                    "skipping unreadable conversation manifest during list"
+                ),
+            }
         }
         manifests.sort_by(|left, right| left.created_at.cmp(&right.created_at));
         Ok(manifests)
     }
 
+    /// Serialize and durably append one event under the conversation write lock.
     pub async fn append_event(
         &self,
         conversation_id: SessionId,
@@ -435,6 +457,7 @@ impl ConversationService {
         Ok(event)
     }
 
+    /// Read a bounded reverse-cursor window from the authoritative journal.
     pub fn events(
         &self,
         conversation_id: SessionId,
@@ -737,6 +760,7 @@ fn read_last_event(path: &Path) -> Result<Option<ConversationEvent>, AirpError> 
     Ok(Some(serde_json::from_slice(&reversed)?))
 }
 
+/// Resolve the per-user effective root used by Conversation storage.
 pub fn effective_conversation_root(
     data_root: &Path,
     user_id: Option<&UserId>,
@@ -744,6 +768,7 @@ pub fn effective_conversation_root(
     crate::data_dir::resolve_effective_root(data_root, user_id.map(UserId::as_str))
 }
 
+/// Snapshot an AIRP scene into a generic Conversation create request.
 pub fn request_from_scene(
     scene: &crate::scene::SceneConfig,
     request: CreateSceneConversationRequest,
@@ -785,7 +810,7 @@ pub fn request_from_scene(
         }],
         orchestration: request.orchestration.or_else(|| {
             Some(ConversationPolicyRef {
-                policy_id: "airp.scene.round_robin.v1".to_string(),
+                policy_id: crate::conversation_policy::SCENE_ROUND_ROBIN_V1.to_string(),
                 config: serde_json::json!({}),
                 extensions: BTreeMap::new(),
             })
@@ -867,6 +892,20 @@ mod tests {
             serde_json::json!(true)
         );
         assert_eq!(service.list().unwrap(), vec![created]);
+    }
+
+    #[test]
+    fn list_skips_an_unreadable_manifest_without_hiding_valid_conversations() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let created = service.create(request()).unwrap();
+        let corrupt_id = SessionId::new();
+        let corrupt_dir = service.conversation_dir(corrupt_id);
+        fs::create_dir_all(&corrupt_dir).unwrap();
+        fs::write(corrupt_dir.join("manifest.json"), b"{not-json").unwrap();
+
+        assert_eq!(service.list().unwrap(), vec![created]);
+        assert!(matches!(service.get(corrupt_id), Err(AirpError::Json(_))));
     }
 
     #[test]
