@@ -55,6 +55,94 @@ pub use stdout_runner::run_pipeline_to_stdout;
 pub use stream::build_sse_stream;
 pub use types::{FinalizerCtx, GenerationStepResult, PrepareMode, PreparedPipeline};
 
+/// Prepare one authoritative speaker inside a scene conversation.
+///
+/// The regular scene pipeline remains the source of prompt assembly, provider
+/// selection, filters, memory, lorebook, and persona behavior. This adapter
+/// only narrows the current response to one scene participant and replaces the
+/// legacy caller-supplied history with the Conversation event projection.
+pub(crate) fn prepare_scene_participant_pipeline(
+    payload: &crate::daemon::ChatCompletionRequest,
+    state: &std::sync::Arc<crate::daemon::DaemonState>,
+    speaker_character_id: &str,
+    messages: Vec<crate::adapter::ChatMessage>,
+) -> Result<PreparedPipeline, crate::error::AirpError> {
+    let scene_id = payload
+        .scene_id
+        .as_deref()
+        .ok_or_else(|| crate::error::AirpError::Internal("scene id not injected".to_string()))?;
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;
+    let scene =
+        crate::scene::SceneConfig::load(&effective_root, &crate::types::SceneId::new(scene_id)?)?;
+    if !scene
+        .characters
+        .iter()
+        .any(|entry| entry.character_id == speaker_character_id)
+    {
+        return Err(crate::error::AirpError::Conflict(format!(
+            "conversation participant character:{speaker_character_id} is no longer in scene {scene_id}"
+        )));
+    }
+
+    let mut pipeline =
+        prepare_scene::prepare_scene_pipeline(payload, state, scene_id, PrepareMode::Chat)?;
+    let focus = format!(
+        "\n\n[Scene turn]\nRespond only as the scene character with id \
+         \"{speaker_character_id}\". Do not speak for the user or any other participant."
+    );
+    let position = pipeline.system_prompt.len();
+    pipeline.system_prompt.push_str(&focus);
+    let mut segments = std::mem::take(&mut pipeline.prompt_trace.segments);
+    segments.retain(|segment| segment.source_kind != "history" && segment.source_kind != "user");
+    segments.push(crate::orchestrator::trace::PromptSegment {
+        source_kind: "scene_turn".to_string(),
+        source_id: Some(scene_id.to_string()),
+        item_id: Some(speaker_character_id.to_string()),
+        display_name: Some("Active scene speaker".to_string()),
+        role: Some("system".to_string()),
+        position,
+        enabled_reason: Some("selected by conversation orchestration policy".to_string()),
+        chars: focus.chars().count(),
+        estimated_tokens: crate::volume_store::estimate_tokens(&focus),
+        truncated: false,
+        stable_or_volatile: crate::orchestrator::trace::Stability::Volatile,
+    });
+    let mut message_position = position + focus.len();
+    for message in &messages {
+        let role = match message.role {
+            crate::adapter::MessageRole::User => "user",
+            crate::adapter::MessageRole::Assistant => "assistant",
+            crate::adapter::MessageRole::System => "system",
+        };
+        segments.push(crate::orchestrator::trace::PromptSegment {
+            source_kind: "conversation_event".to_string(),
+            source_id: None,
+            item_id: None,
+            display_name: Some("Conversation event projection".to_string()),
+            role: Some(role.to_string()),
+            position: message_position,
+            enabled_reason: Some("projected from authoritative event journal".to_string()),
+            chars: message.content.chars().count(),
+            estimated_tokens: crate::volume_store::estimate_tokens(&message.content),
+            truncated: false,
+            stable_or_volatile: crate::orchestrator::trace::Stability::Volatile,
+        });
+        message_position += message.content.len();
+    }
+    pipeline.prompt_trace = crate::orchestrator::trace::PromptAssemblyTrace::new(
+        pipeline.prompt_trace.effective.clone(),
+        segments,
+        pipeline.prompt_trace.diagnostics.clone(),
+    );
+    pipeline.messages = messages;
+    Ok(pipeline)
+}
+
+pub(crate) fn extract_conversation_state(text: &str) -> (String, Option<serde_json::Value>) {
+    state_extract::extract_state_content(text)
+}
+
 // ── Test-only re-exports ──────────────────────────────────────────────────────
 //
 // `tests.rs` 用 `use super::*;` 拉入父模块作用域。原 `chat_pipeline.rs` 是单文件，

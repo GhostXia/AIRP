@@ -27,6 +27,8 @@ pub mod chat_pipeline;
 pub mod chat_store;
 pub mod config;
 mod context_limit;
+pub mod conversation;
+pub mod conversation_policy;
 pub mod daemon;
 pub mod data_dir;
 pub mod decompose;
