@@ -1,6 +1,81 @@
 use super::*;
+use async_trait::async_trait;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+struct ParallelTestPolicy;
+
+#[async_trait]
+impl crate::conversation_policy::ConversationPolicy for ParallelTestPolicy {
+    fn descriptor(&self) -> crate::conversation_policy::ConversationPolicyDescriptor {
+        crate::conversation_policy::ConversationPolicyDescriptor {
+            schema_version:
+                crate::conversation_policy::CONVERSATION_POLICY_DESCRIPTOR_SCHEMA_VERSION,
+            policy_id: "test.parallel.v1".to_string(),
+            policy_version: "1.0.0".to_string(),
+            description: "Test-only parallel policy".to_string(),
+            provenance: crate::conversation_policy::ConversationPolicyProvenance {
+                source: crate::conversation_policy::ConversationPolicySource::External,
+                provider: "AIRP daemon test".to_string(),
+                implementation: "daemon::tests::conversations::ParallelTestPolicy".to_string(),
+            },
+            capabilities: crate::conversation_policy::ConversationPolicyCapabilities {
+                execution_modes: vec![
+                    crate::conversation_policy::ConversationExecutionMode::Parallel,
+                ],
+                supports_message_limit: false,
+            },
+            resource_limits: crate::conversation_policy::ConversationPolicyResourceLimits {
+                max_speakers_per_turn: 4,
+                max_parallelism: 2,
+                max_config_bytes: 1024,
+                planning_timeout_ms: 100,
+            },
+            lifecycle_state: crate::conversation_policy::ConversationPolicyLifecycleState::Active,
+            config_schema: serde_json::json!({
+                "type": "object",
+                "maxProperties": 0,
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn validate_config(&self, config: &serde_json::Value) -> Result<(), crate::error::AirpError> {
+        if !config.as_object().is_some_and(serde_json::Map::is_empty) {
+            return Err(crate::error::AirpError::BadRequest(
+                "parallel test policy requires empty config".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn plan_turn(
+        &self,
+        manifest: &crate::conversation::ConversationManifest,
+        _policy: &crate::conversation::ConversationPolicyRef,
+        _user_actor_id: &str,
+    ) -> Result<crate::conversation_policy::ConversationTurnPlan, crate::error::AirpError> {
+        let speakers = manifest
+            .participants
+            .iter()
+            .filter_map(|participant| {
+                let resource = participant.resource.as_ref()?;
+                (participant.kind == "character").then(|| {
+                    crate::conversation_policy::ConversationSpeaker {
+                        participant_id: participant.participant_id.clone(),
+                        resource_id: resource.id.clone(),
+                    }
+                })
+            })
+            .collect();
+        Ok(crate::conversation_policy::ConversationTurnPlan {
+            scene_id: "tavern".to_string(),
+            speakers,
+            execution_mode: crate::conversation_policy::ConversationExecutionMode::Parallel,
+            stop_after_messages: None,
+        })
+    }
+}
 
 fn create_body() -> serde_json::Value {
     serde_json::json!({
@@ -166,7 +241,10 @@ async fn policy_catalog_exposes_versioned_config_contract() {
         .unwrap();
     let policies: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
     assert_eq!(policies.len(), 1);
-    assert_eq!(policies[0]["schema_version"], 1);
+    assert_eq!(
+        policies[0]["schema_version"],
+        crate::conversation_policy::CONVERSATION_POLICY_DESCRIPTOR_SCHEMA_VERSION
+    );
     assert_eq!(
         policies[0]["policy_id"],
         crate::conversation_policy::SCENE_ROUND_ROBIN_V1
@@ -175,6 +253,9 @@ async fn policy_catalog_exposes_versioned_config_contract() {
         policies[0]["config_schema"]["oneOf"][0]["additionalProperties"],
         false
     );
+    assert_eq!(policies[0]["policy_version"], "1.0.0");
+    assert_eq!(policies[0]["provenance"]["source"], "built_in");
+    assert_eq!(policies[0]["lifecycle_state"], "active");
 }
 
 #[tokio::test]
@@ -569,6 +650,137 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
         .unwrap();
     let journal: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(journal["events"], outcome["events"]);
+}
+
+#[tokio::test]
+async fn injected_parallel_policy_generates_from_one_snapshot_and_commits_in_plan_order() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"Parallel\"}}]}\n\n\
+                     data: [DONE]\n\n",
+                    "text/event-stream",
+                ),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let (state, _tmp) = make_state_with_key(None);
+    state.config.write().unwrap().endpoint = server.uri();
+    for character_id in ["alice", "bob"] {
+        write_character_card(&state.data_root, character_id);
+    }
+    let registry = crate::conversation_policy::ConversationPolicyRegistry::with_builtins();
+    let app = create_router_with_conversation_policy_registry(state, registry.clone());
+    registry
+        .register_external(Arc::new(ParallelTestPolicy))
+        .unwrap();
+    let scene = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/scenes")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "scene_id": "tavern",
+                        "characters": [
+                            {"character_id": "alice", "role": "primary"},
+                            {"character_id": "bob", "role": "npc"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scene.status(), StatusCode::CREATED);
+    let conversation_id = create_conversation(
+        &app,
+        serde_json::json!({
+            "participants": [
+                {"participant_id": "human:gm", "kind": "human"},
+                {
+                    "participant_id": "character:alice",
+                    "kind": "character",
+                    "resource": {"kind": "character", "id": "alice"}
+                },
+                {
+                    "participant_id": "character:bob",
+                    "kind": "character",
+                    "resource": {"kind": "character", "id": "bob"}
+                }
+            ],
+            "resources": [{"kind": "scene", "id": "tavern"}],
+            "orchestration": {"policy_id": "test.parallel.v1", "config": {}}
+        }),
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "user_actor_id": "human:gm",
+                        "expected_next_sequence": 0,
+                        "base": {
+                            "user_profile": {"name": "GM", "variables": {}},
+                            "message": "Start"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let outcome: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        outcome["events"][0]["payload"]["policy"]["policy_id"],
+        "test.parallel.v1"
+    );
+    assert_eq!(
+        outcome["events"][0]["payload"]["policy"]["execution_mode"],
+        "parallel"
+    );
+    assert_eq!(
+        outcome["events"][0]["payload"]["policy"]["speakers"][0]["participant_id"],
+        "character:alice"
+    );
+    assert_eq!(
+        outcome["events"][0]["payload"]["policy"]["speakers"][1]["participant_id"],
+        "character:bob"
+    );
+    assert_eq!(outcome["events"][3]["actor_id"], "character:alice");
+    assert_eq!(outcome["events"][4]["actor_id"], "character:bob");
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let request: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert!(
+            request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|message| message["role"] != "assistant"),
+            "parallel speakers must generate from the same pre-batch history snapshot"
+        );
+    }
 }
 
 #[tokio::test]

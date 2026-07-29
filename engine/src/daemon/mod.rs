@@ -315,6 +315,18 @@ const RATE_LIMIT_BURST: u32 = 20;
 
 /// 构造 axum Router：注册所有 `/v1/*` 端点、CORS 中间件、限流中间件。
 pub fn create_router(state: Arc<DaemonState>) -> Router {
+    create_router_with_conversation_policy_registry(
+        state,
+        crate::conversation_policy::ConversationPolicyRegistry::with_builtins(),
+    )
+}
+
+/// Build a daemon router backed by a host-owned, runtime-mutable Conversation
+/// policy registry.
+pub fn create_router_with_conversation_policy_registry(
+    state: Arc<DaemonState>,
+    conversation_policies: Arc<crate::conversation_policy::ConversationPolicyRegistry>,
+) -> Router {
     let cors = cors_layer(&state);
 
     // A2-7: rate limiting previously protected only /v1/chat/completions,
@@ -633,6 +645,7 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
             state.clone(),
             production_cache_policy,
         ))
+        .layer(axum::Extension(conversation_policies))
         .layer(cors)
         .with_state(state)
 }

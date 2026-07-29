@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
 > 基线日期：2026-07-29
-> 代码基线：`main@e82b3b5`
+> 代码基线：本批分支基于 `main@66abbd6`
 > 用途：冷启动开发、审计和产品判断的第一事实入口。
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -34,7 +34,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 |---|---|---|---|---|
 | 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools | 已有管理、选择、导入与诊断入口 | 高级生命周期、完整导出/恢复仍未闭合 |
 | 会话与聊天 | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe | OpenAI-compatible chat SSE、continue/regen/search | 命名会话、流式聊天、编辑/删除/分支/Swipe、导出 | 长会话虚拟化、跨资源事务与完整恢复仍开放 |
-| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行；同步 I/O 隔离到 blocking worker；长历史 prompt 由 Engine 预算、可重建 checkpoint 与可验证 summary 前缀有界投影 | `/v1/conversations*`、turn 状态/显式取消、`/v1/conversation-policies`；未知策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同且不能注入 history | 自动 summary 生成 policy、通用审计 projection、跨进程 provider reconciliation 与外部策略加载仍开放 |
+| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行；受控外部 Rust policy 可运行时注入并受 provenance/capability/lifecycle/resource gate 约束；支持确定性提交的串行/并行 plan 与消息数量停止条件；同步 I/O 隔离到 blocking worker；长历史 prompt 由 Engine 预算、可重建 checkpoint 与可验证 summary 前缀有界投影 | `/v1/conversations*`、turn 状态/显式取消、descriptor v2 `/v1/conversation-policies`；未知、停用、失败、panic 或超时策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同且不能注入 history、代码或调度语义 | 自动 summary 生成 policy、内容型停止条件、通用审计 projection、跨进程 provider reconciliation 与沙箱化跨进程/动态策略仍开放 |
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | advisory 语义、完整 session 物化与生命周期未完成 |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 30 个内置工具；运行时还可加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径仍有开放审计项；不是通用可配置多 Agent 平台 |
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP 接口 | 屏 36–42 已接入 | 功能存在不等于真实 provider、数据恢复与用户工作流已验收 |
@@ -104,7 +104,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| Rust workspace | `cargo test --workspace --locked` | engine lib 1127 passed / 4 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1184 passed / 4 ignored |
+| Rust workspace | `cargo test --workspace --locked` | engine lib 1129 passed / 4 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1186 passed / 4 ignored |
 | Rust 静态门禁 | `cargo fmt --all -- --check`；workspace clippy `-D warnings`；rustdoc `-D warnings` | 通过 |
 | Conversation 长历史 | 50,000 events release benchmark + 50 次 append-aware projection soak；10,000 events 默认测试 | cold 117 ms；每次先 append 再 projection 的均值 5.329 ms；输出最多 128 messages，checkpoint 普通 suffix 增量扩展，删除/失配/篡改可重建 |
 | WebUI | `node --test webui/tests/*.test.mjs` | 67 passed |
