@@ -9,7 +9,7 @@ use crate::error::AirpError;
 use crate::types::SessionId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
@@ -105,17 +105,19 @@ pub(crate) fn push_bounded_context_message(
     budget: ConversationContextBudget,
 ) -> Result<(), AirpError> {
     validate_budget(budget)?;
-    messages.push(message);
+    let mut candidate = messages.clone();
+    candidate.push(message);
     loop {
-        let token_count = messages.iter().map(message_tokens).sum::<usize>();
-        let ordinary_count = messages
+        let token_count = candidate.iter().map(message_tokens).sum::<usize>();
+        let ordinary_count = candidate
             .iter()
             .filter(|message| message.role != MessageRole::System)
             .count();
         if token_count <= budget.max_estimated_tokens && ordinary_count <= budget.max_messages {
+            *messages = candidate;
             return Ok(());
         }
-        let Some(index) = messages
+        let Some(index) = candidate
             .iter()
             .position(|message| message.role != MessageRole::System)
         else {
@@ -123,13 +125,12 @@ pub(crate) fn push_bounded_context_message(
                 "conversation summary exceeds the Engine context budget".to_string(),
             ));
         };
-        if index == messages.len() - 1 {
-            messages.pop();
+        if index == candidate.len() - 1 {
             return Err(AirpError::BadRequest(
                 "latest conversation message exceeds the Engine context budget".to_string(),
             ));
         }
-        messages.remove(index);
+        candidate.remove(index);
     }
 }
 
@@ -150,6 +151,7 @@ struct ConversationContextCheckpoint {
     journal_sha256: String,
     source_next_sequence: u64,
     total_message_count: u64,
+    tail_event: Option<ContextEventRef>,
     latest_summary: Option<ContextEventRef>,
     recent_messages: Vec<ContextEventRef>,
 }
@@ -200,8 +202,7 @@ impl ConversationService {
         let checkpoint_path = self
             .conversation_dir(conversation_id)
             .join("context_checkpoint.json");
-        let checkpoint = match load_verified_checkpoint(&manifest, &checkpoint_path, &journal_path)?
-        {
+        let checkpoint = match load_verified_checkpoint(&checkpoint_path, &journal_path)? {
             Some(checkpoint) => checkpoint,
             None => {
                 let checkpoint = rebuild_checkpoint(&manifest, &journal_path)?;
@@ -311,9 +312,9 @@ fn rebuild_checkpoint(
     let mut first_event_id = None;
     let mut last_event_id = None;
     let mut total_message_count = 0u64;
+    let mut tail_event = None;
     let mut latest_summary = None;
     let mut recent_messages = VecDeque::with_capacity(RECENT_MESSAGE_INDEX_LIMIT);
-    let participant_ids = participant_ids(manifest);
 
     loop {
         buffer.clear();
@@ -333,7 +334,13 @@ fn rebuild_checkpoint(
                 first_event_id.as_deref(),
                 last_event_id.as_deref(),
                 &hex_digest(hasher.clone().finalize()),
-            )?;
+            )
+            .map_err(|error| {
+                AirpError::Internal(format!(
+                    "invalid committed context summary at sequence {}: {error}",
+                    event.sequence
+                ))
+            })?;
             latest_summary = Some(ContextEventRef {
                 offset,
                 sequence: event.sequence,
@@ -341,7 +348,7 @@ fn rebuild_checkpoint(
                 estimated_tokens: summary_message_tokens(&payload),
             });
             recent_messages.clear();
-        } else if let Some(message) = project_message(&participant_ids, &event) {
+        } else if let Some(message) = project_message(&event) {
             total_message_count = total_message_count.saturating_add(1);
             if recent_messages.len() == RECENT_MESSAGE_INDEX_LIMIT {
                 recent_messages.pop_front();
@@ -354,6 +361,12 @@ fn rebuild_checkpoint(
             });
         }
 
+        tail_event = Some(ContextEventRef {
+            offset,
+            sequence: event.sequence,
+            event_id: event.event_id.clone(),
+            estimated_tokens: 0,
+        });
         hasher.update(&buffer);
         last_event_id = Some(event.event_id);
         expected_sequence = expected_sequence
@@ -374,13 +387,13 @@ fn rebuild_checkpoint(
         journal_sha256: hex_digest(hasher.finalize()),
         source_next_sequence: expected_sequence,
         total_message_count,
+        tail_event,
         latest_summary,
         recent_messages: recent_messages.into_iter().collect(),
     })
 }
 
 fn load_verified_checkpoint(
-    manifest: &ConversationManifest,
     checkpoint_path: &Path,
     journal_path: &Path,
 ) -> Result<Option<ConversationContextCheckpoint>, AirpError> {
@@ -398,32 +411,44 @@ fn load_verified_checkpoint(
     if sha256_bytes(&checkpoint_bytes) != envelope.checkpoint_sha256 {
         return Ok(None);
     }
-    if journal_path.metadata()?.len() != envelope.checkpoint.journal_bytes {
+    let journal_bytes = journal_path.metadata()?.len();
+    if journal_bytes != envelope.checkpoint.journal_bytes {
         return Ok(None);
     }
-    let mut file = File::open(journal_path)?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
-    if hex_digest(hasher.finalize()) != envelope.checkpoint.journal_sha256 {
+    let Some(tail_reference) = envelope.checkpoint.tail_event.as_ref() else {
+        return Ok(None);
+    };
+    let mut reader = BufReader::new(File::open(journal_path)?);
+    let Ok((tail_event, tail_end)) = read_event_ref(&mut reader, tail_reference) else {
+        return Ok(None);
+    };
+    if tail_end != journal_bytes
+        || tail_event
+            .sequence
+            .checked_add(1)
+            .is_none_or(|next| next != envelope.checkpoint.source_next_sequence)
+    {
         return Ok(None);
     }
     if let Some(reference) = envelope.checkpoint.latest_summary.as_ref() {
-        let Ok(event) = read_event_ref(journal_path, reference) else {
+        let Ok((event, _)) = read_event_ref(&mut reader, reference) else {
             return Ok(None);
         };
-        if event.kind != CONVERSATION_CONTEXT_SUMMARY_EVENT
-            || summary_payload(&event).is_err()
-            || summary_message_tokens(&summary_payload(&event)?) != reference.estimated_tokens
-        {
+        if event.kind != CONVERSATION_CONTEXT_SUMMARY_EVENT {
+            return Ok(None);
+        }
+        let Ok(payload) = summary_payload(&event) else {
+            return Ok(None);
+        };
+        if summary_message_tokens(&payload) != reference.estimated_tokens {
             return Ok(None);
         }
     }
-    let participants = participant_ids(manifest);
     for reference in &envelope.checkpoint.recent_messages {
-        let Ok(event) = read_event_ref(journal_path, reference) else {
+        let Ok((event, _)) = read_event_ref(&mut reader, reference) else {
             return Ok(None);
         };
-        let Some(message) = project_message(&participants, &event) else {
+        let Some(message) = project_message(&event) else {
             return Ok(None);
         };
         if message_tokens(&message) != reference.estimated_tokens {
@@ -451,13 +476,13 @@ fn project_from_checkpoint(
     checkpoint: ConversationContextCheckpoint,
     budget: ConversationContextBudget,
 ) -> Result<ConversationContextProjection, AirpError> {
-    let participant_ids = participant_ids(manifest);
     let mut remaining_tokens = budget.max_estimated_tokens;
     let mut summary = None;
     let mut messages = Vec::new();
+    let mut reader = BufReader::new(File::open(path)?);
 
     if let Some(reference) = checkpoint.latest_summary.as_ref() {
-        let event = read_event_ref(path, reference)?;
+        let (event, _) = read_event_ref(&mut reader, reference)?;
         if event.kind != CONVERSATION_CONTEXT_SUMMARY_EVENT {
             return Err(AirpError::Internal(
                 "conversation context checkpoint summary mismatch".to_string(),
@@ -503,8 +528,8 @@ fn project_from_checkpoint(
         selected.push_front(reference);
     }
     for reference in selected {
-        let event = read_event_ref(path, reference)?;
-        let message = project_message(&participant_ids, &event).ok_or_else(|| {
+        let (event, _) = read_event_ref(&mut reader, reference)?;
+        let message = project_message(&event).ok_or_else(|| {
             AirpError::Internal("conversation context checkpoint message mismatch".to_string())
         })?;
         messages.push(message);
@@ -529,10 +554,9 @@ fn project_from_checkpoint(
 }
 
 fn read_event_ref(
-    path: &Path,
+    reader: &mut BufReader<File>,
     reference: &ContextEventRef,
-) -> Result<ConversationEvent, AirpError> {
-    let mut reader = BufReader::new(File::open(path)?);
+) -> Result<(ConversationEvent, u64), AirpError> {
     reader.seek(SeekFrom::Start(reference.offset))?;
     let mut buffer = Vec::new();
     if reader.read_until(b'\n', &mut buffer)? == 0 {
@@ -546,7 +570,15 @@ fn read_event_ref(
             "conversation context checkpoint event mismatch".to_string(),
         ));
     }
-    Ok(event)
+    let end = reference
+        .offset
+        .checked_add(
+            u64::try_from(buffer.len()).map_err(|_| {
+                AirpError::Internal("conversation journal offset overflow".to_string())
+            })?,
+        )
+        .ok_or_else(|| AirpError::Internal("conversation journal offset overflow".to_string()))?;
+    Ok((event, end))
 }
 
 fn parse_event_line(bytes: &[u8]) -> Result<ConversationEvent, AirpError> {
@@ -563,18 +595,7 @@ fn parse_event_line(bytes: &[u8]) -> Result<ConversationEvent, AirpError> {
     Ok(serde_json::from_str(line)?)
 }
 
-fn participant_ids(manifest: &ConversationManifest) -> HashSet<&str> {
-    manifest
-        .participants
-        .iter()
-        .map(|participant| participant.participant_id.as_str())
-        .collect()
-}
-
-fn project_message(
-    participant_ids: &HashSet<&str>,
-    event: &ConversationEvent,
-) -> Option<ChatMessage> {
+fn project_message(event: &ConversationEvent) -> Option<ChatMessage> {
     if event.kind != "message.created" {
         return None;
     }
@@ -593,7 +614,6 @@ fn project_message(
     } else {
         content.to_string()
     };
-    let _unresolved_actor = !participant_ids.contains(actor_id);
     Some(ChatMessage { role, content })
 }
 
@@ -653,8 +673,12 @@ fn validate_summary_payload(
     }
     if payload.target_token_budget == 0
         || payload.target_token_budget > DEFAULT_CONVERSATION_CONTEXT_TOKEN_BUDGET
-        || summary_message_tokens(payload) > payload.target_token_budget
     {
+        return Err(AirpError::BadRequest(format!(
+            "summary.target_token_budget must be between 1 and {DEFAULT_CONVERSATION_CONTEXT_TOKEN_BUDGET}"
+        )));
+    }
+    if summary_message_tokens(payload) > payload.target_token_budget {
         return Err(AirpError::BadRequest(
             "conversation summary content exceeds its target token budget".to_string(),
         ));
@@ -886,10 +910,20 @@ mod tests {
 
     #[test]
     fn oversized_latest_message_fails_without_mutating_bounded_context() {
-        let mut messages = vec![ChatMessage {
-            role: MessageRole::System,
-            content: "summary".to_string(),
-        }];
+        let mut messages = vec![
+            ChatMessage {
+                role: MessageRole::System,
+                content: "summary".to_string(),
+            },
+            ChatMessage {
+                role: MessageRole::User,
+                content: "older".to_string(),
+            },
+        ];
+        let before = messages
+            .iter()
+            .map(|message| (message.role, message.content.clone()))
+            .collect::<Vec<_>>();
         let error = push_bounded_context_message(
             &mut messages,
             ChatMessage {
@@ -903,8 +937,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, AirpError::BadRequest(_)));
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].role, MessageRole::System);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| (message.role, message.content.clone()))
+                .collect::<Vec<_>>(),
+            before
+        );
     }
 
     #[tokio::test]
@@ -1097,6 +1136,46 @@ mod tests {
             projection.messages.last().unwrap().content,
             "after-checkpoint"
         );
+    }
+
+    #[tokio::test]
+    async fn tampered_checkpoint_checksum_rebuilds_from_journal() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(create_request()).await.unwrap();
+        write_message_journal(&service, manifest.conversation_id, 1_000);
+        let budget = ConversationContextBudget::default();
+        let original = service
+            .context_projection(manifest.conversation_id, budget)
+            .await
+            .unwrap();
+        let checkpoint_path = service
+            .conversation_dir(manifest.conversation_id)
+            .join("context_checkpoint.json");
+        let mut envelope: ConversationContextCheckpointEnvelope =
+            serde_json::from_slice(&fs::read(&checkpoint_path).unwrap()).unwrap();
+        envelope.checkpoint_sha256 = "0".repeat(64);
+        fs::write(&checkpoint_path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+
+        let rebuilt = service
+            .context_projection(manifest.conversation_id, budget)
+            .await
+            .unwrap();
+        assert_eq!(
+            rebuilt
+                .messages
+                .iter()
+                .map(|message| (message.role, message.content.as_str()))
+                .collect::<Vec<_>>(),
+            original
+                .messages
+                .iter()
+                .map(|message| (message.role, message.content.as_str()))
+                .collect::<Vec<_>>()
+        );
+        let repaired: ConversationContextCheckpointEnvelope =
+            serde_json::from_slice(&fs::read(checkpoint_path).unwrap()).unwrap();
+        assert_ne!(repaired.checkpoint_sha256, "0".repeat(64));
     }
 
     #[tokio::test]

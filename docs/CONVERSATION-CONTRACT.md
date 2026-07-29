@@ -35,7 +35,7 @@ Conversation ID 复用经验证的 UUID `SessionId` 格式，但它是独立资�
 - `manifest.json` 是不可变初始身份与配置；
 - `events.jsonl` 是运行变化的唯一真相；
 - `journal_state.json` 只是经过日志长度、尾事件 ID 和 sequence 复核的加速缓存。缺失、不一致或损坏时必须扫描事件日志恢复，不能覆盖事件真相。
-- `context_checkpoint.json` 是可删除的派生偏移索引。它绑定完整 journal SHA-256 与自身校验和；缺失、损坏或 journal 变化时从 manifest + journal 重建，写入失败不阻断上下文投影。
+- `context_checkpoint.json` 是可删除的派生偏移索引。重建时记录完整 journal SHA-256，并以 checkpoint 自身校验和、journal 长度和真实尾事件边界约束 warm 读取；缺失、损坏或 journal 变化时从 manifest + journal 重建，写入失败不阻断上下文投影。
 
 ## 3. Manifest v1
 
@@ -148,10 +148,11 @@ WebUI/Tauri 截断权威历史。
 - 本轮新增 user/assistant 消息继续共用同一预算。若 summary 加最新单条消息仍超限，Engine 写入明确的 `turn.failed`，不会静默截断最新内容或留下悬空 `running`；
 - `messages_history`、context checkpoint 与 summary 都不删除或重写 `events.jsonl`，cursor/export/audit 仍能读取完整事件。
 
-`context_checkpoint.json` 只保存最新 summary 与最近 257 条合法消息的 journal byte offset、
-sequence、event ID 和保守 token units。读取前复核 checkpoint 自身 SHA-256、完整 journal
-SHA-256、journal 长度和所引用事件；任何失配都扫描 journal 重建。内存上界为
-`O(max_messages)`，而不是 `O(journal events)`。
+`context_checkpoint.json` 只保存真实尾事件、最新 summary 与最近 257 条合法消息的 journal
+byte offset、sequence、event ID 和保守 token units。warm 读取复核 checkpoint 自身 SHA-256、
+journal 长度、实际尾记录结束位置与所引用事件；任何失配都扫描 journal 重建。完整 journal
+SHA-256 在重建和 summary append 边界计算，不在每次 warm projection 线性重算。内存与 warm
+解析上界为 `O(max_messages)`，而不是 `O(journal events)`。
 
 `context.summary.created` 是保留事件。其 payload 必须带：
 
@@ -171,8 +172,8 @@ cargo test -p airp-core --release \
   conversation_context::tests::long_history_context_benchmark_and_soak \
   -- --ignored --nocapture
 
-# cold checkpoint rebuild: 78 ms
-# 50 warm projections: 1334 ms total, 26.683 ms mean
+# cold checkpoint rebuild: 150 ms
+# 50 warm projections: 116 ms total, 2.334 ms mean
 # retained_messages=128
 ```
 

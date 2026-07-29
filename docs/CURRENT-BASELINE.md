@@ -104,9 +104,9 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| Rust workspace | `cargo test --workspace --locked` | engine lib 1126 passed / 4 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1183 passed / 4 ignored |
+| Rust workspace | `cargo test --workspace --locked` | engine lib 1127 passed / 4 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1184 passed / 4 ignored |
 | Rust 静态门禁 | `cargo fmt --all -- --check`；workspace clippy `-D warnings`；rustdoc `-D warnings` | 通过 |
-| Conversation 长历史 | 50,000 events release benchmark + 50 warm projection soak；10,000 events 默认测试 | cold 78 ms；warm mean 26.683 ms；输出最多 128 messages，checkpoint 删除/失配可重建 |
+| Conversation 长历史 | 50,000 events release benchmark + 50 warm projection soak；10,000 events 默认测试 | cold 150 ms；warm mean 2.334 ms；输出最多 128 messages，checkpoint 删除/失配/篡改可重建 |
 | WebUI | `node --test webui/tests/*.test.mjs` | 67 passed |
 | Vue/Tauri UI | `npm run typecheck`；`npm test -- --run`（`ui/`） | typecheck 通过；98 passed |
 | 工程工具 | dep-governance；agent-exploration Node tests | 本批未复跑，不从历史结果外推 |
