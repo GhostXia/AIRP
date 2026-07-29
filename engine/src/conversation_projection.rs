@@ -141,12 +141,12 @@ pub fn project_conversation_messages(
 
 impl ConversationService {
     /// Rebuild the full message projection from manifest and journal truth.
-    pub fn message_projection(
+    pub async fn message_projection(
         &self,
         conversation_id: SessionId,
     ) -> Result<ConversationMessageProjection, AirpError> {
-        let manifest = self.get(conversation_id)?;
-        let events = self.all_events(conversation_id)?;
+        let manifest = self.get(conversation_id).await?;
+        let events = self.all_events(conversation_id).await?;
         Ok(project_conversation_messages(&manifest, &events))
     }
 }
@@ -364,6 +364,7 @@ mod tests {
                 }),
                 extensions: source.extensions,
             })
+            .await
             .unwrap();
         for (sequence, actor_id, role, content) in [
             (0, "human:gm", "user", "hello"),
@@ -387,10 +388,13 @@ mod tests {
                 .unwrap();
         }
 
-        let rebuilt = service.message_projection(created.conversation_id).unwrap();
+        let rebuilt = service
+            .message_projection(created.conversation_id)
+            .await
+            .unwrap();
         let direct = project_conversation_messages(
-            &service.get(created.conversation_id).unwrap(),
-            &service.all_events(created.conversation_id).unwrap(),
+            &service.get(created.conversation_id).await.unwrap(),
+            &service.all_events(created.conversation_id).await.unwrap(),
         );
 
         assert_eq!(rebuilt, direct);

@@ -34,7 +34,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 |---|---|---|---|---|
 | 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools | 已有管理、选择、导入与诊断入口 | 高级生命周期、完整导出/恢复仍未闭合 |
 | 会话与聊天 | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe | OpenAI-compatible chat SSE、continue/regen/search | 命名会话、流式聊天、编辑/删除/分支/Swipe、导出 | 长会话虚拟化、跨资源事务与完整恢复仍开放 |
-| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行 | `/v1/conversations*`、turn 状态/显式取消、`/v1/conversation-policies`；未知策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同 | 通用审计 projection、跨进程 provider reconciliation、长上下文压缩与外部策略加载仍开放 |
+| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行；文件 I/O 统一隔离到 blocking worker，per-conversation 顺序写入并可恢复损坏尾行 | `/v1/conversations*`、turn 状态/显式取消、`/v1/conversation-policies`；未知策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同 | 通用审计 projection、跨进程 provider reconciliation、长上下文压缩与外部策略加载仍开放 |
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | advisory 语义、完整 session 物化与生命周期未完成 |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 30 个内置工具；运行时还可加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径仍有开放审计项；不是通用可配置多 Agent 平台 |
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP 接口 | 屏 36–42 已接入 | 功能存在不等于真实 provider、数据恢复与用户工作流已验收 |

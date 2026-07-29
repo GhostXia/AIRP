@@ -79,6 +79,30 @@ Participant 使用 conversation 内稳定的 `participant_id`，另带开放 `ki
 
 事件 kind 和 payload 由领域 adapter 解释。Core 不把未知 kind 丢弃或强制转成消息。
 
+所有 Conversation manifest 与 journal 文件操作由 `ConversationService` 统一卸载到 blocking
+worker；HTTP handler 和 turn executor 不直接执行同步文件 I/O。追加仍由
+per-conversation 锁串行化，不存在跨 conversation 全局写锁。读取窗口在同一把会话锁下
+避开正在写入的半条记录；immutable manifest 读取不延长 turn 的写锁持有时间。
+
+恢复遵循“完整事件优先、损坏尾部可截断”：
+
+- `write_all` 中途失败留下的无换行尾部，重启后的下一次追加会截断到最后一条已验证事件；
+- `sync_data` 返回失败属于 unknown-commit 边界；若完整 JSONL 记录在重启后仍可见，恢复扫描会保留它，调用方必须按实际 next sequence 继续；
+- cache 写失败不影响 journal 真相；重启后扫描完整 journal 重建 sequence；
+- 只有超出已验证 cache 边界的尾部，或无可用 cache 时扫描认定的最后一条不完整/损坏记录可以被恢复性截断；cache 已确认范围内及中间记录损坏仍 fail-closed。
+
+当前仍保持每个事件一次 `sync_data`。2026-07-29 在维护者 Windows/D 盘环境以 release
+构建运行 64 次连续追加基准，命令和结果记录在本节下方；该单机微基准只用于判断本批
+是否有证据降低 durability，不代表生产 SLO。现阶段没有跨设备、断电与尾延迟证据支持
+批量 fsync，因此不降低资产安全边界。
+
+```text
+cargo test -p airp-core --lib conversation::tests::conversation_append_fsync_benchmark \
+  --release --locked -- --ignored --exact --nocapture
+
+# appends=64, elapsed_ms=338, mean_ms=5.288
+```
+
 ## 5. 窗口读取与性能
 
 `GET /v1/conversations/{id}/events` 支持：

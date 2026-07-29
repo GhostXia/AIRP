@@ -288,6 +288,8 @@ struct ConversationJournalState {
 #[derive(Debug, Clone)]
 pub struct ConversationService {
     data_root: PathBuf,
+    #[cfg(test)]
+    faults: Arc<Mutex<VecDeque<ConversationIoFault>>>,
 }
 
 impl ConversationService {
@@ -295,11 +297,21 @@ impl ConversationService {
     pub fn new(data_root: impl AsRef<Path>) -> Self {
         Self {
             data_root: data_root.as_ref().to_path_buf(),
+            #[cfg(test)]
+            faults: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
     /// Validate and persist an immutable conversation manifest.
-    pub fn create(
+    pub async fn create(
+        &self,
+        request: CreateConversationRequest,
+    ) -> Result<ConversationManifest, AirpError> {
+        let service = self.clone();
+        run_conversation_io("create", move || service.create_blocking(request)).await
+    }
+
+    pub(crate) fn create_blocking(
         &self,
         request: CreateConversationRequest,
     ) -> Result<ConversationManifest, AirpError> {
@@ -329,7 +341,15 @@ impl ConversationService {
     }
 
     /// Load and validate one conversation manifest.
-    pub fn get(&self, conversation_id: SessionId) -> Result<ConversationManifest, AirpError> {
+    pub async fn get(&self, conversation_id: SessionId) -> Result<ConversationManifest, AirpError> {
+        let service = self.clone();
+        run_conversation_io("get", move || service.get_blocking(conversation_id)).await
+    }
+
+    pub(crate) fn get_blocking(
+        &self,
+        conversation_id: SessionId,
+    ) -> Result<ConversationManifest, AirpError> {
         let path = self.conversation_dir(conversation_id).join("manifest.json");
         if !path.is_file() {
             return Err(AirpError::NotFound(format!(
@@ -342,7 +362,12 @@ impl ConversationService {
     }
 
     /// List valid manifests while isolating unreadable conversation entries.
-    pub fn list(&self) -> Result<Vec<ConversationManifest>, AirpError> {
+    pub async fn list(&self) -> Result<Vec<ConversationManifest>, AirpError> {
+        let service = self.clone();
+        run_conversation_io("list", move || service.list_blocking()).await
+    }
+
+    pub(crate) fn list_blocking(&self) -> Result<Vec<ConversationManifest>, AirpError> {
         let root = self.data_root.join("conversations");
         if !root.is_dir() {
             return Ok(Vec::new());
@@ -359,7 +384,7 @@ impl ConversationService {
             let Ok(conversation_id) = SessionId::parse(&name) else {
                 continue;
             };
-            match self.get(conversation_id) {
+            match self.get_blocking(conversation_id) {
                 Ok(manifest) => manifests.push(manifest),
                 Err(error) => tracing::warn!(
                     %conversation_id,
@@ -381,7 +406,8 @@ impl ConversationService {
         validate_event_request(&request)?;
         let lock = conversation_lock(&self.data_root, conversation_id);
         let _guard = lock.lock().await;
-        self.append_event_locked(conversation_id, request)
+        self.append_event_locked_async(conversation_id, request)
+            .await
     }
 
     pub(crate) async fn acquire_write(
@@ -393,13 +419,25 @@ impl ConversationService {
             .await
     }
 
-    pub(crate) fn append_event_locked(
+    pub(crate) async fn append_event_locked_async(
+        &self,
+        conversation_id: SessionId,
+        request: AppendConversationEventRequest,
+    ) -> Result<ConversationEvent, AirpError> {
+        let service = self.clone();
+        run_conversation_io("append", move || {
+            service.append_event_locked_blocking(conversation_id, request)
+        })
+        .await
+    }
+
+    fn append_event_locked_blocking(
         &self,
         conversation_id: SessionId,
         request: AppendConversationEventRequest,
     ) -> Result<ConversationEvent, AirpError> {
         validate_event_request(&request)?;
-        let _ = self.get(conversation_id)?;
+        let _ = self.get_blocking(conversation_id)?;
         if let Some(actor_id) = request.actor_id.as_deref() {
             validate_nonempty("event.actor_id", actor_id)?;
         }
@@ -434,7 +472,23 @@ impl ConversationService {
             .ok_or_else(|| AirpError::Internal("event journal has no parent".to_string()))?;
         fs::create_dir_all(parent)?;
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        #[cfg(test)]
+        let fault = self.take_fault();
+        #[cfg(test)]
+        if let Some(ConversationIoFault::Delay(duration)) = fault {
+            std::thread::sleep(duration);
+        }
+        #[cfg(test)]
+        if fault == Some(ConversationIoFault::ShortWrite) {
+            file.write_all(&encoded[..encoded.len().max(2) / 2])?;
+            file.sync_data()?;
+            return Err(std::io::Error::other("injected conversation short write").into());
+        }
         file.write_all(&encoded)?;
+        #[cfg(test)]
+        if fault == Some(ConversationIoFault::SyncData) {
+            return Err(std::io::Error::other("injected conversation sync_data failure").into());
+        }
         file.sync_data()?;
         let journal_state = ConversationJournalState {
             schema_version: CONVERSATION_EVENT_SCHEMA_VERSION,
@@ -445,12 +499,27 @@ impl ConversationService {
             last_event_id: event.event_id.clone(),
         };
         let state_bytes = serde_json::to_vec(&journal_state)?;
-        if let Err(error) = crate::data_dir::replace_file(
+        #[cfg(test)]
+        let cache_result = if fault == Some(ConversationIoFault::CacheWrite) {
+            Err(AirpError::Io(std::io::Error::other(
+                "injected conversation cache write failure",
+            )))
+        } else {
+            crate::data_dir::replace_file(
+                &self
+                    .conversation_dir(conversation_id)
+                    .join("journal_state.json"),
+                &state_bytes,
+            )
+        };
+        #[cfg(not(test))]
+        let cache_result = crate::data_dir::replace_file(
             &self
                 .conversation_dir(conversation_id)
                 .join("journal_state.json"),
             &state_bytes,
-        ) {
+        );
+        if let Err(error) = cache_result {
             // The journal append is already durable. This file is only a
             // verified acceleration cache; later writes can recover by scan.
             tracing::warn!(
@@ -463,13 +532,29 @@ impl ConversationService {
     }
 
     /// Read a bounded reverse-cursor window from the authoritative journal.
-    pub fn events(
+    pub async fn events(
         &self,
         conversation_id: SessionId,
         limit: Option<usize>,
         before: Option<&str>,
     ) -> Result<ConversationEventWindow, AirpError> {
-        let _ = self.get(conversation_id)?;
+        let lock = conversation_lock(&self.data_root, conversation_id);
+        let _guard = lock.lock().await;
+        let service = self.clone();
+        let before = before.map(str::to_owned);
+        run_conversation_io("events", move || {
+            service.events_blocking(conversation_id, limit, before.as_deref())
+        })
+        .await
+    }
+
+    pub(crate) fn events_blocking(
+        &self,
+        conversation_id: SessionId,
+        limit: Option<usize>,
+        before: Option<&str>,
+    ) -> Result<ConversationEventWindow, AirpError> {
+        let _ = self.get_blocking(conversation_id)?;
         let limit = limit
             .unwrap_or(DEFAULT_WINDOW_LIMIT)
             .clamp(1, MAX_WINDOW_LIMIT);
@@ -553,11 +638,31 @@ impl ConversationService {
     ///
     /// Unlike the paginated HTTP view, this internal path has no UI-oriented
     /// page cap. Context compaction belongs to execution policy, not storage.
-    pub(crate) fn all_events(
+    pub(crate) async fn all_events(
         &self,
         conversation_id: SessionId,
     ) -> Result<Vec<ConversationEvent>, AirpError> {
-        let _ = self.get(conversation_id)?;
+        let lock = conversation_lock(&self.data_root, conversation_id);
+        let _guard = lock.lock().await;
+        self.all_events_locked_async(conversation_id).await
+    }
+
+    pub(crate) async fn all_events_locked_async(
+        &self,
+        conversation_id: SessionId,
+    ) -> Result<Vec<ConversationEvent>, AirpError> {
+        let service = self.clone();
+        run_conversation_io("read journal", move || {
+            service.all_events_blocking(conversation_id)
+        })
+        .await
+    }
+
+    pub(crate) fn all_events_blocking(
+        &self,
+        conversation_id: SessionId,
+    ) -> Result<Vec<ConversationEvent>, AirpError> {
+        let _ = self.get_blocking(conversation_id)?;
         let path = self.events_path(conversation_id);
         if !path.is_file() {
             return Ok(Vec::new());
@@ -602,29 +707,67 @@ impl ConversationService {
         let state_path = self
             .conversation_dir(conversation_id)
             .join("journal_state.json");
-        if let Ok(bytes) = fs::read(state_path) {
-            if let Ok(state) = serde_json::from_slice::<ConversationJournalState>(&bytes) {
-                if state.schema_version == CONVERSATION_EVENT_SCHEMA_VERSION
-                    && state.committed_bytes == committed_bytes
+        let state = fs::read(state_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<ConversationJournalState>(&bytes).ok())
+            .filter(|state| {
+                state.schema_version == CONVERSATION_EVENT_SCHEMA_VERSION
                     && state.next_sequence > 0
-                {
-                    if let Some(last_event) = read_last_event(events_path)? {
-                        if last_event.conversation_id == conversation_id
-                            && last_event.schema_version == CONVERSATION_EVENT_SCHEMA_VERSION
-                            && last_event.event_id == state.last_event_id
-                            && last_event
-                                .sequence
-                                .checked_add(1)
-                                .is_some_and(|next| next == state.next_sequence)
-                        {
-                            return Ok(state.next_sequence);
-                        }
+                    && state.committed_bytes <= committed_bytes
+            });
+        if let Some(state) = state.as_ref() {
+            if state.committed_bytes == committed_bytes {
+                if let Some(last_event) = read_last_event(events_path)? {
+                    if last_event.conversation_id == conversation_id
+                        && last_event.schema_version == CONVERSATION_EVENT_SCHEMA_VERSION
+                        && last_event.event_id == state.last_event_id
+                        && last_event
+                            .sequence
+                            .checked_add(1)
+                            .is_some_and(|next| next == state.next_sequence)
+                    {
+                        return Ok(state.next_sequence);
                     }
                 }
             }
         }
-        scan_next_sequence(events_path, conversation_id)
+        recover_next_sequence(events_path, conversation_id, state.as_ref())
     }
+
+    #[cfg(test)]
+    fn inject_fault(&self, fault: ConversationIoFault) {
+        self.faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(fault);
+    }
+
+    #[cfg(test)]
+    fn take_fault(&self) -> Option<ConversationIoFault> {
+        self.faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop_front()
+    }
+}
+
+async fn run_conversation_io<T, F>(operation: &'static str, task: F) -> Result<T, AirpError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AirpError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task).await.map_err(|error| {
+        AirpError::Internal(format!("conversation {operation} task failed: {error}"))
+    })?
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConversationIoFault {
+    ShortWrite,
+    SyncData,
+    CacheWrite,
+    Delay(std::time::Duration),
 }
 
 fn validate_nonempty(field: &str, value: &str) -> Result<(), AirpError> {
@@ -710,21 +853,93 @@ fn validate_event_identity(
     Ok(())
 }
 
-fn scan_next_sequence(path: &Path, conversation_id: SessionId) -> Result<u64, AirpError> {
+fn recover_next_sequence(
+    path: &Path,
+    conversation_id: SessionId,
+    cached_state: Option<&ConversationJournalState>,
+) -> Result<u64, AirpError> {
     if !path.is_file() {
         return Ok(0);
     }
+    let file = OpenOptions::new().read(true).write(true).open(path)?;
     let mut expected = 0u64;
-    for line in BufReader::new(File::open(path)?).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
+    let mut valid_bytes = 0u64;
+    let mut cached_boundary_verified = false;
+    let mut reader = BufReader::new(file.try_clone()?);
+    loop {
+        let mut encoded = Vec::new();
+        let bytes_read = reader.read_until(b'\n', &mut encoded)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let terminated = encoded.last() == Some(&b'\n');
+        let mut line = encoded.as_slice();
+        if line.ends_with(b"\n") {
+            line = &line[..line.len() - 1];
+        }
+        if line.ends_with(b"\r") {
+            line = &line[..line.len() - 1];
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
+            if !terminated {
+                file.set_len(valid_bytes)?;
+                file.sync_all()?;
+                break;
+            }
+            valid_bytes = valid_bytes
+                .checked_add(u64::try_from(bytes_read).map_err(|_| {
+                    AirpError::Internal("conversation journal offset overflow".to_string())
+                })?)
+                .ok_or_else(|| {
+                    AirpError::Internal("conversation journal offset overflow".to_string())
+                })?;
             continue;
         }
-        let event: ConversationEvent = serde_json::from_str(&line)?;
+        let event = match serde_json::from_slice::<ConversationEvent>(line) {
+            Ok(event) if terminated => event,
+            Ok(_) => {
+                file.set_len(valid_bytes)?;
+                file.sync_all()?;
+                break;
+            }
+            Err(_) if !terminated && reader.fill_buf()?.is_empty() => {
+                file.set_len(valid_bytes)?;
+                file.sync_all()?;
+                break;
+            }
+            Err(_) if cached_boundary_verified && reader.fill_buf()?.is_empty() => {
+                file.set_len(valid_bytes)?;
+                file.sync_all()?;
+                break;
+            }
+            Err(error) => return Err(error.into()),
+        };
         validate_event_identity(&event, conversation_id, expected)?;
         expected = expected
             .checked_add(1)
             .ok_or_else(|| AirpError::Internal("conversation sequence exhausted".to_string()))?;
+        valid_bytes = valid_bytes
+            .checked_add(u64::try_from(bytes_read).map_err(|_| {
+                AirpError::Internal("conversation journal offset overflow".to_string())
+            })?)
+            .ok_or_else(|| {
+                AirpError::Internal("conversation journal offset overflow".to_string())
+            })?;
+        if let Some(state) = cached_state {
+            if valid_bytes == state.committed_bytes {
+                if event.event_id == state.last_event_id && expected == state.next_sequence {
+                    cached_boundary_verified = true;
+                } else {
+                    return Err(AirpError::Internal(
+                        "conversation journal cache boundary mismatch".to_string(),
+                    ));
+                }
+            } else if valid_bytes > state.committed_bytes && !cached_boundary_verified {
+                return Err(AirpError::Internal(
+                    "conversation journal cache boundary is not an event boundary".to_string(),
+                ));
+            }
+        }
     }
     Ok(expected)
 }
@@ -889,28 +1104,31 @@ mod tests {
     fn manifest_and_namespaced_extensions_round_trip() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
-        let created = service.create(request()).unwrap();
-        let loaded = service.get(created.conversation_id).unwrap();
+        let created = service.create_blocking(request()).unwrap();
+        let loaded = service.get_blocking(created.conversation_id).unwrap();
         assert_eq!(created, loaded);
         assert_eq!(
             loaded.extensions["example.future"]["enabled"],
             serde_json::json!(true)
         );
-        assert_eq!(service.list().unwrap(), vec![created]);
+        assert_eq!(service.list_blocking().unwrap(), vec![created]);
     }
 
     #[test]
     fn list_skips_an_unreadable_manifest_without_hiding_valid_conversations() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
-        let created = service.create(request()).unwrap();
+        let created = service.create_blocking(request()).unwrap();
         let corrupt_id = SessionId::new();
         let corrupt_dir = service.conversation_dir(corrupt_id);
         fs::create_dir_all(&corrupt_dir).unwrap();
         fs::write(corrupt_dir.join("manifest.json"), b"{not-json").unwrap();
 
-        assert_eq!(service.list().unwrap(), vec![created]);
-        assert!(matches!(service.get(corrupt_id), Err(AirpError::Json(_))));
+        assert_eq!(service.list_blocking().unwrap(), vec![created]);
+        assert!(matches!(
+            service.get_blocking(corrupt_id),
+            Err(AirpError::Json(_))
+        ));
     }
 
     #[test]
@@ -919,7 +1137,7 @@ mod tests {
         let service = ConversationService::new(tmp.path());
         let mut request = request();
         request.participants.push(request.participants[0].clone());
-        let error = service.create(request).unwrap_err();
+        let error = service.create_blocking(request).unwrap_err();
         assert!(matches!(error, AirpError::BadRequest(_)));
     }
 
@@ -927,7 +1145,7 @@ mod tests {
     async fn append_is_ordered_and_optimistic_conflicts_are_explicit() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
-        let manifest = service.create(request()).unwrap();
+        let manifest = service.create_blocking(request()).unwrap();
         let first = service
             .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
             .await
@@ -947,10 +1165,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_appends_are_serialized_per_conversation() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let service = service.clone();
+            tasks.push(tokio::spawn(async move {
+                service
+                    .append_event(manifest.conversation_id, append(Some("user"), None))
+                    .await
+                    .unwrap()
+            }));
+        }
+        let mut sequences = Vec::new();
+        for task in tasks {
+            sequences.push(task.await.unwrap().sequence);
+        }
+        sequences.sort_unstable();
+        assert_eq!(sequences, (0..16).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn slow_append_does_not_take_a_cross_conversation_lock() {
+        let tmp = tempdir().unwrap();
+        let setup = ConversationService::new(tmp.path());
+        let slow_manifest = setup.create(request()).await.unwrap();
+        let fast_manifest = setup.create(request()).await.unwrap();
+        let slow_service = ConversationService::new(tmp.path());
+        slow_service.inject_fault(ConversationIoFault::Delay(
+            std::time::Duration::from_millis(100),
+        ));
+        let slow = tokio::spawn(async move {
+            slow_service
+                .append_event(slow_manifest.conversation_id, append(Some("user"), Some(0)))
+                .await
+                .unwrap()
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let started = std::time::Instant::now();
+        setup
+            .append_event(fast_manifest.conversation_id, append(Some("user"), Some(0)))
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(80),
+            "a different conversation was blocked by unrelated file work"
+        );
+        slow.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn unknown_actor_and_event_kind_round_trip_for_domain_adapters() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
-        let manifest = service.create(request()).unwrap();
+        let manifest = service.create_blocking(request()).unwrap();
         let mut request = append(Some("external-agent-42"), None);
         request.kind = "vendor.example/custom-event.v9".to_string();
         request.extensions.insert(
@@ -973,7 +1244,7 @@ mod tests {
     async fn event_window_uses_bounded_tail_and_strict_before_cursor() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
-        let manifest = service.create(request()).unwrap();
+        let manifest = service.create_blocking(request()).unwrap();
         let mut ids = Vec::new();
         for sequence in 0..6 {
             let event = service
@@ -987,7 +1258,7 @@ mod tests {
         }
 
         let tail = service
-            .events(manifest.conversation_id, Some(2), None)
+            .events_blocking(manifest.conversation_id, Some(2), None)
             .unwrap();
         assert_eq!(
             tail.events
@@ -1001,7 +1272,7 @@ mod tests {
         assert_eq!(tail.next_sequence, 6);
 
         let earlier = service
-            .events(manifest.conversation_id, Some(2), Some(&ids[4]))
+            .events_blocking(manifest.conversation_id, Some(2), Some(&ids[4]))
             .unwrap();
         assert_eq!(
             earlier
@@ -1018,14 +1289,14 @@ mod tests {
     async fn cursor_cannot_cross_conversations() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
-        let first = service.create(request()).unwrap();
-        let second = service.create(request()).unwrap();
+        let first = service.create_blocking(request()).unwrap();
+        let second = service.create_blocking(request()).unwrap();
         let foreign = service
             .append_event(first.conversation_id, append(Some("user"), None))
             .await
             .unwrap();
         let error = service
-            .events(second.conversation_id, Some(10), Some(&foreign.event_id))
+            .events_blocking(second.conversation_id, Some(10), Some(&foreign.event_id))
             .unwrap_err();
         assert!(matches!(error, AirpError::BadRequest(_)));
     }
@@ -1034,7 +1305,7 @@ mod tests {
     async fn missing_journal_cache_recovers_from_event_truth() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
-        let manifest = service.create(request()).unwrap();
+        let manifest = service.create_blocking(request()).unwrap();
         service
             .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
             .await
@@ -1052,6 +1323,189 @@ mod tests {
         assert_eq!(second.sequence, 1);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn conversation_file_io_does_not_block_the_async_runtime_worker() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        service.inject_fault(ConversationIoFault::Delay(
+            std::time::Duration::from_millis(100),
+        ));
+
+        let append = service.append_event(manifest.conversation_id, append(Some("user"), Some(0)));
+        tokio::pin!(append);
+        let started = std::time::Instant::now();
+        tokio::select! {
+            result = &mut append => panic!("injected blocking append completed early: {result:?}"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(80),
+            "blocking file work stalled the current-thread runtime"
+        );
+        append.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn short_write_tail_is_truncated_before_restart_append() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        service.inject_fault(ConversationIoFault::ShortWrite);
+        assert!(matches!(
+            service
+                .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
+                .await,
+            Err(AirpError::Io(_))
+        ));
+
+        let restarted = ConversationService::new(tmp.path());
+        let recovered = restarted
+            .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
+            .await
+            .unwrap();
+        assert_eq!(recovered.sequence, 0);
+        assert_eq!(
+            restarted
+                .all_events(manifest.conversation_id)
+                .await
+                .unwrap(),
+            vec![recovered]
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_failure_preserves_a_complete_visible_event_for_restart_recovery() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        service.inject_fault(ConversationIoFault::SyncData);
+        assert!(matches!(
+            service
+                .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
+                .await,
+            Err(AirpError::Io(_))
+        ));
+
+        let restarted = ConversationService::new(tmp.path());
+        let second = restarted
+            .append_event(manifest.conversation_id, append(Some("alice"), Some(1)))
+            .await
+            .unwrap();
+        assert_eq!(second.sequence, 1);
+        assert_eq!(
+            restarted
+                .all_events(manifest.conversation_id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_write_failure_recovers_from_the_authoritative_journal_after_restart() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        service.inject_fault(ConversationIoFault::CacheWrite);
+        let first = service
+            .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
+            .await
+            .unwrap();
+        assert_eq!(first.sequence, 0);
+
+        let restarted = ConversationService::new(tmp.path());
+        let second = restarted
+            .append_event(manifest.conversation_id, append(Some("alice"), Some(1)))
+            .await
+            .unwrap();
+        assert_eq!(second.sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn corrupt_final_line_is_removed_without_discarding_committed_events() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        let first = service
+            .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
+            .await
+            .unwrap();
+        let mut journal = OpenOptions::new()
+            .append(true)
+            .open(service.events_path(manifest.conversation_id))
+            .unwrap();
+        journal.write_all(b"{corrupt-tail}\n").unwrap();
+        journal.sync_data().unwrap();
+        drop(journal);
+
+        let restarted = ConversationService::new(tmp.path());
+        let second = restarted
+            .append_event(manifest.conversation_id, append(Some("alice"), Some(1)))
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted
+                .all_events(manifest.conversation_id)
+                .await
+                .unwrap(),
+            vec![first, second]
+        );
+    }
+
+    #[tokio::test]
+    async fn corruption_inside_the_committed_cache_boundary_fails_closed() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        service
+            .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
+            .await
+            .unwrap();
+        let path = service.events_path(manifest.conversation_id);
+        let mut bytes = fs::read(&path).unwrap();
+        let payload_byte = bytes
+            .iter_mut()
+            .find(|byte| **byte == b'{')
+            .expect("event JSON must contain an object");
+        *payload_byte = b'[';
+        fs::write(path, bytes).unwrap();
+
+        let restarted = ConversationService::new(tmp.path());
+        assert!(matches!(
+            restarted
+                .append_event(manifest.conversation_id, append(Some("alice"), Some(1)))
+                .await,
+            Err(AirpError::Json(_))
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "durability benchmark; run explicitly with --release --ignored --nocapture"]
+    async fn conversation_append_fsync_benchmark() {
+        const APPENDS: u64 = 64;
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        let started = std::time::Instant::now();
+        for sequence in 0..APPENDS {
+            service
+                .append_event(
+                    manifest.conversation_id,
+                    append(Some("user"), Some(sequence)),
+                )
+                .await
+                .unwrap();
+        }
+        let elapsed = started.elapsed();
+        eprintln!(
+            "conversation append durability benchmark: appends={APPENDS} elapsed_ms={} mean_ms={:.3}",
+            elapsed.as_millis(),
+            elapsed.as_secs_f64() * 1000.0 / APPENDS as f64
+        );
+    }
+
     #[test]
     fn per_user_roots_are_isolated() {
         let tmp = tempdir().unwrap();
@@ -1060,10 +1514,10 @@ mod tests {
         let alice_root = effective_conversation_root(tmp.path(), Some(&alice)).unwrap();
         let bob_root = effective_conversation_root(tmp.path(), Some(&bob)).unwrap();
         let created = ConversationService::new(&alice_root)
-            .create(request())
+            .create_blocking(request())
             .unwrap();
         assert!(ConversationService::new(&bob_root)
-            .get(created.conversation_id)
+            .get_blocking(created.conversation_id)
             .is_err());
     }
 
