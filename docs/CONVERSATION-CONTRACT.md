@@ -1,8 +1,8 @@
 # Engine Conversation 合同
 
-> 状态：v1 基础、策略注册表、`airp.scene.round_robin.v1` 回合执行与可重建 message projection 已实现；旧 chat/scene 迁移仍待后续切片
+> 状态：v1 基础、策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message projection 与 durable turn lifecycle 已实现；旧 chat/scene 迁移仍待后续切片
 >
-> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_projection.rs` 与 `/v1/conversations*`
+> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
 
 ## 1. 定位
 
@@ -117,6 +117,8 @@ projection 是 derived view，不落盘为第二真相。统计字段仅解释�
 | `POST` | `/v1/conversations/{id}/events` | 追加一个开放事件 |
 | `GET` | `/v1/conversations/{id}/events` | cursor 窗口读取 |
 | `POST` | `/v1/conversations/{id}/turns` | 由 Engine 执行并持久化一个场景回合 |
+| `GET` | `/v1/conversations/{id}/turns/{turn_id}` | 从 journal 重建回合生命周期；重启后悬空回合收敛为 `unknown_commit` |
+| `POST` | `/v1/conversations/{id}/turns/{turn_id}/cancel` | 显式请求 Engine 协作式取消在途回合 |
 | `GET` | `/v1/conversation-policies` | 列出已注册策略及其配置 schema |
 | `POST` | `/v1/scenes/{scene_id}/conversations` | 把 scene 快照成通用 conversation |
 
@@ -131,11 +133,16 @@ scene adapter 会：
 
 `POST /v1/conversations/{id}/turns` 当前内置注册 `airp.scene.round_robin.v1`，并按 manifest 中角色 participant 的稳定顺序执行：
 
-1. 在整轮共享的异步 conversation 写边界内校验 `expected_next_sequence`；
-2. 先持久化调用者归属明确的 `message.created`；
-3. 从权威 event journal 投影历史，Engine 逐角色组装 prompt 并调用 provider；
+1. 客户端可提供稳定 `turn_id`。相同 ID 与相同语义请求只执行一次并重放原结果；相同 ID 的不同请求返回 `409 Conflict`。省略 ID 保留旧的一次性提交兼容路径；
+2. 在整轮共享的异步 conversation 写边界内校验 `expected_next_sequence`，依次写入 `turn.accepted`、`turn.started`，request fingerprint 仅用于幂等冲突检测；
+3. 持久化调用者归属明确的 `message.created`，再从权威 event journal 投影历史，由 Engine 逐角色组装 prompt 并调用 provider；
 4. 每个角色结果立即以其 participant ID 持久化，后续角色可以看到本轮先前角色的输出；
-5. 成功写入 `turn.completed`；provider 或组装失败则写入 `turn.failed`，返回 `partially_committed`，不伪造回滚或泄漏上游错误正文。
+5. 成功写入 `turn.completed`；provider 或组装失败写入 `turn.failed`；显式取消写入 `turn.cancelled`；
+6. 若进程重启后发现 `accepted` 或 `running` 而无终态，Engine 写入 `turn.unknown_commit`。这表示 provider 侧结果不可证明，不会自动重调 provider、删除已提交事件或伪造原子回滚。
+
+精确生命周期为 `accepted → running → completed | failed | cancelled | unknown_commit`；`accepted` 也可在启动前直接进入 `failed | cancelled | unknown_commit`。原响应字段 `status=completed|partially_committed` 为兼容保留，调用方应使用新增的 `lifecycle_state` 区分失败、取消和未知提交。
+
+取消是 Engine endpoint 驱动的显式协作协议。HTTP 客户端断线或丢弃响应不会被解释为回滚命令；如果执行 future 因断线/进程退出而消失，已写事件仍可读，下一次状态查询将其收敛为 `unknown_commit`。取消 provider 请求 future 也不证明上游未接收请求，因此 journal 终态只陈述 Engine 可证明的事实。
 
 participant 总量不设产品级上限，但单回合 speaker plan 最多执行 16 个 provider 调用，并在写入用户事件前原子预留对应的请求配额。整轮 provider 调用共享 120 秒绝对 deadline；超时会取消当前调用并 durable 写入 `turn.failed`。历史扫描、解析和 journal durable append 在 blocking pool 中执行，不占用 async runtime worker。
 
@@ -152,8 +159,8 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 ## 9. 后续实现门
 
 1. Policy registry 后续：在现有注册/解析/descriptor 边界上增加经过 capability 校验的外部策略装载，以及可配置停止条件；不得让任意配置变成代码执行。
-2. Projection 后续：在已交付的 message/history projection 上增加运行状态与审计视图；所有投影继续保持可重建，不成为第二真相。
-3. Turn executor 后续：增加取消协议、未知提交状态恢复、可配置停止条件，以及不改变 journal 真相的长上下文压缩策略。
+2. Projection 后续：在已交付的 message/history 与 turn lifecycle projection 上增加通用审计视图；所有投影继续保持可重建，不成为第二真相。
+3. Turn executor 后续：增加可配置停止条件、跨进程 provider operation reconciliation，以及不改变 journal 真相的长上下文压缩策略。
 4. Compatibility adapters：让角色 chat、scene/group 和 Council 逐步消费通用内核；旧 API 在兼容期保持响应形状。
 5. Recovery/export：纳入统一备份 manifest、完整性校验与恢复演练。
 

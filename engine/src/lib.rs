@@ -30,6 +30,7 @@ mod context_limit;
 pub mod conversation;
 pub mod conversation_policy;
 pub mod conversation_projection;
+pub mod conversation_turn;
 pub mod daemon;
 pub mod data_dir;
 pub mod decompose;

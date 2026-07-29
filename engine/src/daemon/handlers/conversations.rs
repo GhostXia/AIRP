@@ -94,6 +94,91 @@ pub(in crate::daemon) async fn list_conversation_policies_endpoint(
     Json(crate::conversation_policy::builtin_conversation_policy_registry().list())
 }
 
+/// Read durable turn state. A non-terminal turn with no active executor is
+/// closed as `unknown_commit` while holding the Conversation write lock.
+pub(in crate::daemon) async fn get_conversation_turn_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path((conversation_id, turn_id)): axum::extract::Path<(String, String)>,
+    Query(query): Query<ConversationScopeQuery>,
+) -> Result<Json<crate::conversation_turn::ConversationTurnSnapshot>, AirpError> {
+    let conversation_id = SessionId::parse(&conversation_id)?;
+    validate_turn_id(&turn_id)?;
+    let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
+    let service = ConversationService::new(&root);
+    service.get(conversation_id)?;
+    if let Some(snapshot) =
+        crate::conversation_turn::active_turn_snapshot(&root, conversation_id, &turn_id)
+    {
+        return Ok(Json(snapshot));
+    }
+    let events = all_events_blocking(service.clone(), conversation_id).await?;
+    let snapshot = crate::conversation_turn::project_turn(&events, &turn_id)?
+        .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?;
+    if snapshot.lifecycle_state.is_terminal() {
+        return Ok(Json(snapshot));
+    }
+    let _write_guard = service.acquire_write(conversation_id).await;
+    let events = all_events_blocking(service.clone(), conversation_id).await?;
+    let snapshot = crate::conversation_turn::project_turn(&events, &turn_id)?
+        .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?;
+    if snapshot.lifecycle_state.is_terminal() {
+        return Ok(Json(snapshot));
+    }
+    let expected_next_sequence = events
+        .last()
+        .map_or(0, |event| event.sequence.saturating_add(1));
+    Ok(Json(
+        reconcile_unknown_commit(service, conversation_id, snapshot, expected_next_sequence)
+            .await?,
+    ))
+}
+
+/// Explicitly request cooperative cancellation of process-local turn work.
+///
+/// The executor records the terminal `turn.cancelled` event. If no executor
+/// survives (for example after restart), this endpoint reconciles a dangling
+/// journal lifecycle to `unknown_commit` instead of pretending rollback.
+pub(in crate::daemon) async fn cancel_conversation_turn_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path((conversation_id, turn_id)): axum::extract::Path<(String, String)>,
+    Query(query): Query<ConversationScopeQuery>,
+) -> Result<Json<crate::conversation_turn::ConversationTurnCancelResponse>, AirpError> {
+    let conversation_id = SessionId::parse(&conversation_id)?;
+    validate_turn_id(&turn_id)?;
+    let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
+    let service = ConversationService::new(&root);
+    service.get(conversation_id)?;
+    if crate::conversation_turn::cancel_active_turn(&root, conversation_id, &turn_id) {
+        return Ok(Json(
+            crate::conversation_turn::ConversationTurnCancelResponse {
+                turn_id,
+                cancel_requested: true,
+                lifecycle_state: None,
+            },
+        ));
+    }
+
+    let _write_guard = service.acquire_write(conversation_id).await;
+    let events = all_events_blocking(service.clone(), conversation_id).await?;
+    let snapshot = crate::conversation_turn::project_turn(&events, &turn_id)?
+        .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?;
+    let snapshot = if snapshot.lifecycle_state.is_terminal() {
+        snapshot
+    } else {
+        let expected_next_sequence = events
+            .last()
+            .map_or(0, |event| event.sequence.saturating_add(1));
+        reconcile_unknown_commit(service, conversation_id, snapshot, expected_next_sequence).await?
+    };
+    Ok(Json(
+        crate::conversation_turn::ConversationTurnCancelResponse {
+            turn_id,
+            cancel_requested: false,
+            lifecycle_state: Some(snapshot.lifecycle_state),
+        },
+    ))
+}
+
 /// Execute and durably record one bounded Engine-owned Conversation turn.
 pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
@@ -103,9 +188,48 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     let conversation_id = SessionId::parse(&conversation_id)?;
     validate_turn_base(&request)?;
     let root = effective_conversation_root(&state.data_root, request.user_id.as_ref())?;
+    let turn_id = request.turn_id.clone().unwrap_or_else(crate::ulid::new_id);
+    if !crate::ulid::is_valid_id(&turn_id) {
+        return Err(AirpError::BadRequest(
+            "turn_id must be a valid durable Engine ID".to_string(),
+        ));
+    }
+    let fingerprint = crate::conversation_turn::request_fingerprint(&request)?;
+    let registration =
+        crate::conversation_turn::register_active_turn(&root, conversation_id, &turn_id);
     let service = ConversationService::new(&root);
     let _write_guard = service.acquire_write(conversation_id).await;
     let manifest = service.get(conversation_id)?;
+    let existing_events = all_events_blocking(service.clone(), conversation_id).await?;
+    if let Some(snapshot) = crate::conversation_turn::project_turn(&existing_events, &turn_id)? {
+        let Some(stored_fingerprint) = crate::conversation_turn::accepted_fingerprint(&snapshot)
+        else {
+            return Err(AirpError::Conflict(format!(
+                "turn_id {turn_id} is already used by a legacy turn without an idempotency record"
+            )));
+        };
+        if stored_fingerprint != fingerprint {
+            return Err(AirpError::Conflict(format!(
+                "turn_id {turn_id} was already submitted with a different request"
+            )));
+        }
+        if snapshot.lifecycle_state.is_terminal() {
+            return Ok(Json(snapshot.into_outcome()));
+        }
+        return Ok(Json(
+            reconcile_unknown_commit(
+                service,
+                conversation_id,
+                snapshot,
+                existing_events
+                    .last()
+                    .map_or(0, |event| event.sequence.saturating_add(1)),
+            )
+            .await?
+            .into_outcome(),
+        ));
+    }
+
     let plan = crate::conversation_policy::builtin_conversation_policy_registry()
         .plan_turn(&manifest, &request.user_actor_id)?;
     if plan.speakers.len() > crate::conversation_policy::MAX_CONVERSATION_SPEAKERS_PER_TURN {
@@ -125,23 +249,120 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
         .quota
         .clone();
     crate::quota::check_and_increment_by(&root, &quota, provider_call_count)?;
+    let result = execute_new_turn(
+        &state,
+        &root,
+        service,
+        conversation_id,
+        manifest,
+        request,
+        plan,
+        turn_id.clone(),
+        fingerprint,
+        &registration,
+    )
+    .await;
+    if let Ok(outcome) = &result {
+        registration.publish_outcome(outcome);
+    }
+    result.map(Json)
+}
 
-    let turn_id = crate::ulid::new_id();
-    let history_service = service.clone();
-    let history_manifest = manifest.clone();
-    let mut history = tokio::task::spawn_blocking(move || {
-        let events = history_service.all_events(conversation_id)?;
-        Ok::<_, AirpError>(
-            crate::conversation_projection::project_conversation_messages(
-                &history_manifest,
-                &events,
-            )
-            .into_chat_messages(),
-        )
-    })
-    .await
-    .map_err(|error| AirpError::Internal(format!("conversation history task failed: {error}")))??;
+#[allow(clippy::too_many_arguments)]
+async fn execute_new_turn(
+    state: &Arc<DaemonState>,
+    root: &std::path::Path,
+    service: ConversationService,
+    conversation_id: SessionId,
+    manifest: crate::conversation::ConversationManifest,
+    request: ConversationTurnRequest,
+    plan: crate::conversation_policy::ConversationTurnPlan,
+    turn_id: String,
+    fingerprint: String,
+    registration: &crate::conversation_turn::ActiveTurnRegistration,
+) -> Result<ConversationTurnOutcome, AirpError> {
+    let cancellation = registration.cancellation();
     let mut committed = Vec::new();
+    let accepted = append_event_locked_blocking(
+        service.clone(),
+        conversation_id,
+        AppendConversationEventRequest {
+            user_id: None,
+            kind: crate::conversation_turn::TURN_ACCEPTED.to_string(),
+            actor_id: Some(request.user_actor_id.clone()),
+            causation_id: None,
+            correlation_id: Some(turn_id.clone()),
+            payload: serde_json::json!({
+                "request_fingerprint": fingerprint,
+                "expected_next_sequence": request.expected_next_sequence,
+            }),
+            extensions: request.extensions.clone(),
+            expected_next_sequence: Some(request.expected_next_sequence),
+        },
+    )
+    .await?;
+    let accepted_id = accepted.event_id.clone();
+    let mut next_sequence = accepted.sequence + 1;
+    committed.push(accepted);
+    registration.publish(
+        crate::conversation_turn::ConversationTurnLifecycleState::Accepted,
+        &committed,
+    );
+    if cancellation.is_cancelled() {
+        return commit_turn_terminal(
+            service,
+            conversation_id,
+            turn_id,
+            crate::conversation_turn::TURN_CANCELLED,
+            None,
+            "turn_cancelled",
+            accepted_id,
+            next_sequence,
+            committed,
+        )
+        .await;
+    }
+    let started = append_event_locked_blocking(
+        service.clone(),
+        conversation_id,
+        AppendConversationEventRequest {
+            user_id: None,
+            kind: crate::conversation_turn::TURN_STARTED.to_string(),
+            actor_id: None,
+            causation_id: Some(accepted_id),
+            correlation_id: Some(turn_id.clone()),
+            payload: serde_json::json!({}),
+            extensions: BTreeMap::new(),
+            expected_next_sequence: Some(next_sequence),
+        },
+    )
+    .await?;
+    next_sequence += 1;
+    let started_id = started.event_id.clone();
+    committed.push(started);
+    registration.publish(
+        crate::conversation_turn::ConversationTurnLifecycleState::Running,
+        &committed,
+    );
+    if cancellation.is_cancelled() {
+        return commit_turn_terminal(
+            service,
+            conversation_id,
+            turn_id,
+            crate::conversation_turn::TURN_CANCELLED,
+            None,
+            "turn_cancelled",
+            started_id,
+            next_sequence,
+            committed,
+        )
+        .await;
+    }
+
+    let history_events = all_events_blocking(service.clone(), conversation_id).await?;
+    let mut history =
+        crate::conversation_projection::project_conversation_messages(&manifest, &history_events)
+            .into_chat_messages();
     let user_event = append_event_locked_blocking(
         service.clone(),
         conversation_id,
@@ -149,14 +370,14 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
             user_id: None,
             kind: "message.created".to_string(),
             actor_id: Some(request.user_actor_id.clone()),
-            causation_id: None,
+            causation_id: Some(started_id),
             correlation_id: Some(turn_id.clone()),
             payload: serde_json::json!({
                 "role": "user",
                 "content": request.base.message,
             }),
             extensions: request.extensions.clone(),
-            expected_next_sequence: Some(request.expected_next_sequence),
+            expected_next_sequence: Some(next_sequence),
         },
     )
     .await?;
@@ -164,9 +385,13 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
         role: crate::adapter::MessageRole::User,
         content: request.base.message.clone(),
     });
-    let mut next_sequence = user_event.sequence + 1;
+    next_sequence = user_event.sequence + 1;
     let user_event_id = user_event.event_id.clone();
     committed.push(user_event);
+    registration.publish(
+        crate::conversation_turn::ConversationTurnLifecycleState::Running,
+        &committed,
+    );
     let turn_deadline = tokio::time::Instant::now() + CONVERSATION_TURN_TIMEOUT;
 
     for speaker in plan.speakers {
@@ -178,7 +403,7 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
         payload.messages_history = None;
         let pipeline = match crate::chat_pipeline::prepare_scene_participant_pipeline(
             &payload,
-            &state,
+            state,
             &character_id,
             history.clone(),
         ) {
@@ -191,29 +416,47 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
                     %error,
                     "conversation turn preparation failed after user event commit"
                 );
-                return Ok(Json(
-                    commit_turn_failure(
-                        service.clone(),
-                        conversation_id,
-                        turn_id,
-                        Some(participant_id),
-                        "generation_preparation_failed",
-                        user_event_id,
-                        next_sequence,
-                        committed,
-                    )
-                    .await?,
-                ));
+                return commit_turn_terminal(
+                    service,
+                    conversation_id,
+                    turn_id,
+                    crate::conversation_turn::TURN_FAILED,
+                    Some(participant_id),
+                    "generation_preparation_failed",
+                    user_event_id,
+                    next_sequence,
+                    committed,
+                )
+                .await;
             }
         };
-        let result = match tokio::time::timeout_at(
-            turn_deadline,
-            crate::chat_pipeline::run_generation_step(pipeline),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => {
+        let result = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                tracing::info!(
+                    %conversation_id,
+                    %turn_id,
+                    %participant_id,
+                    "conversation turn explicitly cancelled"
+                );
+                return commit_turn_terminal(
+                    service,
+                    conversation_id,
+                    turn_id,
+                    crate::conversation_turn::TURN_CANCELLED,
+                    Some(participant_id),
+                    "turn_cancelled",
+                    user_event_id,
+                    next_sequence,
+                    committed,
+                ).await;
+            }
+            timed = tokio::time::timeout_at(
+                turn_deadline,
+                crate::chat_pipeline::run_generation_step(pipeline),
+            ) => match timed {
+                Ok(result) => result,
+                Err(_) => {
                 tracing::error!(
                     %conversation_id,
                     %turn_id,
@@ -221,23 +464,37 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
                     timeout_secs = CONVERSATION_TURN_TIMEOUT.as_secs(),
                     "conversation turn timed out after user event commit"
                 );
-                return Ok(Json(
-                    commit_turn_failure(
-                        service.clone(),
-                        conversation_id,
-                        turn_id,
-                        Some(participant_id),
-                        "turn_timeout",
-                        user_event_id,
-                        next_sequence,
-                        committed,
-                    )
-                    .await?,
-                ));
+                return commit_turn_terminal(
+                    service,
+                    conversation_id,
+                    turn_id,
+                    crate::conversation_turn::TURN_FAILED,
+                    Some(participant_id),
+                    "turn_timeout",
+                    user_event_id,
+                    next_sequence,
+                    committed,
+                )
+                .await;
+                }
             }
         };
+        if cancellation.is_cancelled() {
+            return commit_turn_terminal(
+                service,
+                conversation_id,
+                turn_id,
+                crate::conversation_turn::TURN_CANCELLED,
+                Some(participant_id),
+                "turn_cancelled",
+                user_event_id,
+                next_sequence,
+                committed,
+            )
+            .await;
+        }
         crate::quota::record_tokens(
-            &root,
+            root,
             crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32,
         );
         if let Some(error) = result.error {
@@ -248,19 +505,18 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
                 %error,
                 "conversation participant generation failed after user event commit"
             );
-            return Ok(Json(
-                commit_turn_failure(
-                    service.clone(),
-                    conversation_id,
-                    turn_id,
-                    Some(participant_id),
-                    "generation_failed",
-                    user_event_id,
-                    next_sequence,
-                    committed,
-                )
-                .await?,
-            ));
+            return commit_turn_terminal(
+                service,
+                conversation_id,
+                turn_id,
+                crate::conversation_turn::TURN_FAILED,
+                Some(participant_id),
+                "generation_failed",
+                user_event_id,
+                next_sequence,
+                committed,
+            )
+            .await;
         }
         let (content, live_state) =
             crate::chat_pipeline::extract_conversation_state(&result.cleaned_acc);
@@ -271,19 +527,18 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
                 %participant_id,
                 "conversation participant returned an empty generation after user event commit"
             );
-            return Ok(Json(
-                commit_turn_failure(
-                    service.clone(),
-                    conversation_id,
-                    turn_id,
-                    Some(participant_id),
-                    "empty_generation",
-                    user_event_id,
-                    next_sequence,
-                    committed,
-                )
-                .await?,
-            ));
+            return commit_turn_terminal(
+                service,
+                conversation_id,
+                turn_id,
+                crate::conversation_turn::TURN_FAILED,
+                Some(participant_id),
+                "empty_generation",
+                user_event_id,
+                next_sequence,
+                committed,
+            )
+            .await;
         }
         let mut unpacker = crate::xml_unpacker::StreamingXmlUnpacker::new();
         let mut chunks = unpacker.process_chunk(&content);
@@ -316,14 +571,32 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
             content: format!("[{participant_id}] {content}"),
         });
         committed.push(assistant_event);
+        registration.publish(
+            crate::conversation_turn::ConversationTurnLifecycleState::Running,
+            &committed,
+        );
     }
 
+    if cancellation.is_cancelled() {
+        return commit_turn_terminal(
+            service,
+            conversation_id,
+            turn_id,
+            crate::conversation_turn::TURN_CANCELLED,
+            None,
+            "turn_cancelled",
+            user_event_id,
+            next_sequence,
+            committed,
+        )
+        .await;
+    }
     let completed = append_event_locked_blocking(
         service.clone(),
         conversation_id,
         AppendConversationEventRequest {
             user_id: None,
-            kind: "turn.completed".to_string(),
+            kind: crate::conversation_turn::TURN_COMPLETED.to_string(),
             actor_id: None,
             causation_id: Some(user_event_id),
             correlation_id: Some(turn_id.clone()),
@@ -337,13 +610,14 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     .await?;
     next_sequence += 1;
     committed.push(completed);
-    Ok(Json(ConversationTurnOutcome {
+    Ok(ConversationTurnOutcome {
         turn_id,
         status: ConversationTurnStatus::Completed,
+        lifecycle_state: crate::conversation_turn::ConversationTurnLifecycleState::Completed,
         events: committed,
         next_sequence,
         failure: None,
-    }))
+    })
 }
 
 fn validate_turn_base(request: &ConversationTurnRequest) -> Result<(), AirpError> {
@@ -371,22 +645,23 @@ fn validate_turn_base(request: &ConversationTurnRequest) -> Result<(), AirpError
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn commit_turn_failure(
+async fn commit_turn_terminal(
     service: ConversationService,
     conversation_id: SessionId,
     turn_id: String,
+    event_kind: &str,
     participant_id: Option<String>,
     code: &str,
     causation_id: String,
     next_sequence: u64,
     mut committed: Vec<crate::conversation::ConversationEvent>,
 ) -> Result<ConversationTurnOutcome, AirpError> {
-    let failed = append_event_locked_blocking(
+    let terminal = append_event_locked_blocking(
         service,
         conversation_id,
         AppendConversationEventRequest {
             user_id: None,
-            kind: "turn.failed".to_string(),
+            kind: event_kind.to_string(),
             actor_id: None,
             causation_id: Some(causation_id),
             correlation_id: Some(turn_id.clone()),
@@ -400,10 +675,27 @@ async fn commit_turn_failure(
         },
     )
     .await?;
-    committed.push(failed);
+    committed.push(terminal);
+    let lifecycle_state = match event_kind {
+        crate::conversation_turn::TURN_FAILED => {
+            crate::conversation_turn::ConversationTurnLifecycleState::Failed
+        }
+        crate::conversation_turn::TURN_CANCELLED => {
+            crate::conversation_turn::ConversationTurnLifecycleState::Cancelled
+        }
+        crate::conversation_turn::TURN_UNKNOWN_COMMIT => {
+            crate::conversation_turn::ConversationTurnLifecycleState::UnknownCommit
+        }
+        _ => {
+            return Err(AirpError::Internal(format!(
+                "unsupported terminal turn event kind: {event_kind}"
+            )))
+        }
+    };
     Ok(ConversationTurnOutcome {
         turn_id,
         status: ConversationTurnStatus::PartiallyCommitted,
+        lifecycle_state,
         events: committed,
         next_sequence: next_sequence + 1,
         failure: Some(ConversationTurnFailure {
@@ -411,6 +703,64 @@ async fn commit_turn_failure(
             participant_id,
         }),
     })
+}
+
+fn validate_turn_id(turn_id: &str) -> Result<(), AirpError> {
+    if crate::ulid::is_valid_id(turn_id) {
+        Ok(())
+    } else {
+        Err(AirpError::BadRequest(
+            "turn_id must be a valid durable Engine ID".to_string(),
+        ))
+    }
+}
+
+async fn reconcile_unknown_commit(
+    service: ConversationService,
+    conversation_id: SessionId,
+    snapshot: crate::conversation_turn::ConversationTurnSnapshot,
+    expected_next_sequence: u64,
+) -> Result<crate::conversation_turn::ConversationTurnSnapshot, AirpError> {
+    let causation_id = snapshot
+        .events
+        .last()
+        .map(|event| event.event_id.clone())
+        .ok_or_else(|| AirpError::Internal("turn snapshot has no events".to_string()))?;
+    let terminal = append_event_locked_blocking(
+        service,
+        conversation_id,
+        AppendConversationEventRequest {
+            user_id: None,
+            kind: crate::conversation_turn::TURN_UNKNOWN_COMMIT.to_string(),
+            actor_id: None,
+            causation_id: Some(causation_id),
+            correlation_id: Some(snapshot.turn_id.clone()),
+            payload: serde_json::json!({
+                "code": "unknown_commit",
+                "commit_state": "partially_committed",
+                "recovery": "manual_retry_or_continue",
+            }),
+            extensions: BTreeMap::new(),
+            expected_next_sequence: Some(expected_next_sequence),
+        },
+    )
+    .await?;
+    let mut events = snapshot.events;
+    events.push(terminal);
+    crate::conversation_turn::project_turn(&events, &snapshot.turn_id)?.ok_or_else(|| {
+        AirpError::Internal("reconciled turn disappeared from its journal projection".to_string())
+    })
+}
+
+async fn all_events_blocking(
+    service: ConversationService,
+    conversation_id: SessionId,
+) -> Result<Vec<crate::conversation::ConversationEvent>, AirpError> {
+    tokio::task::spawn_blocking(move || service.all_events(conversation_id))
+        .await
+        .map_err(|error| {
+            AirpError::Internal(format!("conversation journal task failed: {error}"))
+        })?
 }
 
 async fn append_event_locked_blocking(

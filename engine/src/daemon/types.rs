@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 /// `POST /v1/chat/completions` 请求体。除 `message` 与 `user_profile` 必填外，
 /// 其余字段均可省略；缺失字段由 daemon 三层合并配置补齐（见 [`crate::config::AppConfig`]）。
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatCompletionRequest {
     /// 角色目录名（data/characters/{id}/）。M5.0a：用 `CharacterId` 类型
     /// 替代裸 String，反序列化时自动调用 `validate_id_segment`。
@@ -77,7 +77,7 @@ pub struct ChatCompletionRequest {
 }
 
 /// 用户画像：用于 `{{user}}` 等变量替换。
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct UserProfile {
     /// 用户显示名。
