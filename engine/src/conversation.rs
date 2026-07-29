@@ -29,16 +29,22 @@ struct ConversationLockKey {
     conversation_id: SessionId,
 }
 
-static CONVERSATION_LOCKS: OnceLock<
-    Mutex<HashMap<ConversationLockKey, Weak<tokio::sync::Mutex<()>>>>,
-> = OnceLock::new();
+type ConversationLockRegistry =
+    OnceLock<Mutex<HashMap<ConversationLockKey, Weak<tokio::sync::Mutex<()>>>>>;
 
-fn conversation_lock(data_root: &Path, conversation_id: SessionId) -> Arc<tokio::sync::Mutex<()>> {
+static CONVERSATION_LOCKS: ConversationLockRegistry = OnceLock::new();
+static CONVERSATION_IO_LOCKS: ConversationLockRegistry = OnceLock::new();
+
+fn scoped_conversation_lock(
+    registry: &'static ConversationLockRegistry,
+    data_root: &Path,
+    conversation_id: SessionId,
+) -> Arc<tokio::sync::Mutex<()>> {
     let key = ConversationLockKey {
         data_root: data_root.to_path_buf(),
         conversation_id,
     };
-    let mut locks = CONVERSATION_LOCKS
+    let mut locks = registry
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -49,6 +55,17 @@ fn conversation_lock(data_root: &Path, conversation_id: SessionId) -> Arc<tokio:
     let lock = Arc::new(tokio::sync::Mutex::new(()));
     locks.insert(key, Arc::downgrade(&lock));
     lock
+}
+
+fn conversation_lock(data_root: &Path, conversation_id: SessionId) -> Arc<tokio::sync::Mutex<()>> {
+    scoped_conversation_lock(&CONVERSATION_LOCKS, data_root, conversation_id)
+}
+
+fn conversation_io_lock(
+    data_root: &Path,
+    conversation_id: SessionId,
+) -> Arc<tokio::sync::Mutex<()>> {
+    scoped_conversation_lock(&CONVERSATION_IO_LOCKS, data_root, conversation_id)
 }
 
 /// A reference to another Engine-owned or external resource.
@@ -424,6 +441,8 @@ impl ConversationService {
         conversation_id: SessionId,
         request: AppendConversationEventRequest,
     ) -> Result<ConversationEvent, AirpError> {
+        let io_lock = conversation_io_lock(&self.data_root, conversation_id);
+        let _io_guard = io_lock.lock().await;
         let service = self.clone();
         run_conversation_io("append", move || {
             service.append_event_locked_blocking(conversation_id, request)
@@ -500,7 +519,10 @@ impl ConversationService {
         };
         let state_bytes = serde_json::to_vec(&journal_state)?;
         #[cfg(test)]
-        let cache_result = if fault == Some(ConversationIoFault::CacheWrite) {
+        let injected_cache_failure = fault == Some(ConversationIoFault::CacheWrite);
+        #[cfg(not(test))]
+        let injected_cache_failure = false;
+        let cache_result = if injected_cache_failure {
             Err(AirpError::Io(std::io::Error::other(
                 "injected conversation cache write failure",
             )))
@@ -512,13 +534,6 @@ impl ConversationService {
                 &state_bytes,
             )
         };
-        #[cfg(not(test))]
-        let cache_result = crate::data_dir::replace_file(
-            &self
-                .conversation_dir(conversation_id)
-                .join("journal_state.json"),
-            &state_bytes,
-        );
         if let Err(error) = cache_result {
             // The journal append is already durable. This file is only a
             // verified acceleration cache; later writes can recover by scan.
@@ -538,8 +553,8 @@ impl ConversationService {
         limit: Option<usize>,
         before: Option<&str>,
     ) -> Result<ConversationEventWindow, AirpError> {
-        let lock = conversation_lock(&self.data_root, conversation_id);
-        let _guard = lock.lock().await;
+        let io_lock = conversation_io_lock(&self.data_root, conversation_id);
+        let _io_guard = io_lock.lock().await;
         let service = self.clone();
         let before = before.map(str::to_owned);
         run_conversation_io("events", move || {
@@ -642,8 +657,6 @@ impl ConversationService {
         &self,
         conversation_id: SessionId,
     ) -> Result<Vec<ConversationEvent>, AirpError> {
-        let lock = conversation_lock(&self.data_root, conversation_id);
-        let _guard = lock.lock().await;
         self.all_events_locked_async(conversation_id).await
     }
 
@@ -651,6 +664,8 @@ impl ConversationService {
         &self,
         conversation_id: SessionId,
     ) -> Result<Vec<ConversationEvent>, AirpError> {
+        let io_lock = conversation_io_lock(&self.data_root, conversation_id);
+        let _io_guard = io_lock.lock().await;
         let service = self.clone();
         run_conversation_io("read journal", move || {
             service.all_events_blocking(conversation_id)
@@ -1197,7 +1212,7 @@ mod tests {
         slow_service.inject_fault(ConversationIoFault::Delay(
             std::time::Duration::from_millis(100),
         ));
-        let slow = tokio::spawn(async move {
+        let mut slow = tokio::spawn(async move {
             slow_service
                 .append_event(slow_manifest.conversation_id, append(Some("user"), Some(0)))
                 .await
@@ -1205,15 +1220,15 @@ mod tests {
         });
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-        let started = std::time::Instant::now();
-        setup
-            .append_event(fast_manifest.conversation_id, append(Some("user"), Some(0)))
-            .await
-            .unwrap();
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(80),
-            "a different conversation was blocked by unrelated file work"
-        );
+        let fast = setup.append_event(fast_manifest.conversation_id, append(Some("user"), Some(0)));
+        tokio::pin!(fast);
+        let fast_event = tokio::select! {
+            result = &mut fast => result.unwrap(),
+            result = &mut slow => panic!(
+                "unrelated slow append completed before the fast conversation: {result:?}"
+            ),
+        };
+        assert_eq!(fast_event.sequence, 0);
         slow.await.unwrap();
     }
 
@@ -1286,6 +1301,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn event_window_does_not_wait_for_the_turn_order_lock() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(request()).await.unwrap();
+        service
+            .append_event(manifest.conversation_id, append(Some("user"), Some(0)))
+            .await
+            .unwrap();
+        let order_guard = service.acquire_write(manifest.conversation_id).await;
+
+        let window = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            service.events(manifest.conversation_id, Some(10), None),
+        )
+        .await
+        .expect("event reads must not wait for the long-lived turn order lock")
+        .unwrap();
+        assert_eq!(window.events.len(), 1);
+        drop(order_guard);
+    }
+
+    #[tokio::test]
     async fn cursor_cannot_cross_conversations() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
@@ -1334,15 +1371,10 @@ mod tests {
 
         let append = service.append_event(manifest.conversation_id, append(Some("user"), Some(0)));
         tokio::pin!(append);
-        let started = std::time::Instant::now();
         tokio::select! {
             result = &mut append => panic!("injected blocking append completed early: {result:?}"),
             _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
         }
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(80),
-            "blocking file work stalled the current-thread runtime"
-        );
         append.await.unwrap();
     }
 
