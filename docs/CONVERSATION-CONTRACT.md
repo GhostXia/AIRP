@@ -196,6 +196,10 @@ checkpoint 删除与 stale 增量扩展、错误 summary 边界、原事件保�
 | `POST` | `/v1/conversations/{id}/turns/{turn_id}/cancel` | 显式请求 Engine 协作式取消在途回合 |
 | `GET` | `/v1/conversation-policies` | 列出已注册策略及其配置 schema |
 | `POST` | `/v1/scenes/{scene_id}/conversations` | 把 scene 快照成通用 conversation |
+| `POST` | `/v1/conversation-migrations/plan` | 只读分析 legacy chat、scene/group 或 Council；返回来源摘要与 `ready/needs_review` |
+| `POST` | `/v1/conversation-migrations` | 以 `migration_id`、plan 返回的 source SHA-256 和 `confirm=true` 显式执行复制迁移 |
+| `GET` | `/v1/conversation-migrations/{migration_id}/export` | 完整性校验后返回可读的 legacy 来源导出 |
+| `POST` | `/v1/conversation-migrations/{migration_id}/rollback` | 仅在生成的 Conversation 未被后续修改时删除该副本；保留 legacy 来源和导出 |
 
 scene adapter 会：
 
@@ -241,14 +245,25 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 - 未提供 `session_id` 的 legacy 角色聊天继续使用原角色级 history/memory；
 - 既有 scene prompt 与 scene memory 不自动迁移；
 - 现有 WebUI “多人场景”没有权威共享历史，不能把其多个角色轮询自动导入为真实 conversation；
-- 迁移只能显式执行，并生成可读报告；没有可靠消息归属的数据不得猜测 speaker。
+- Council 只在每条 turn 的 speaker 都能由 participant list 或显式 intervention 证明时自动迁移；其历史调度配置进入可读导出，不推断成新的执行 policy；
+- 角色 chat 的 user 与单角色 assistant 归属可证明。active branch 消息进入 `message.created`；inactive branch、候选/swipe、parent 和 source timestamp 仍完整保存在 legacy 事件 extension 与可读导出中，不伪装成当前 active history；system message 因没有 speaker 而保存为非 projection 事件；
+- plan 是严格只读操作，不创建、修复、重排或删除 legacy 文件。execute 会再次计算 source SHA-256；plan 后数据变化返回 `409`，不会迁移旧快照；
+- execute 是 copy-only：legacy API、响应形状和源文件继续有效。迁移目录保存 versioned report、可读 source export 及 SHA-256；生成的 manifest + authoritative journal 另有摘要校验；
+- rollback 只删除本次迁移生成且摘要仍匹配的 Conversation。若迁移后又有事件写入则返回 `409`，避免静默删除新用户资产；source export 与原 legacy 数据始终保留；
+- 相同 `migration_id` 与相同已完成迁移幂等返回；ID 被不同来源占用则冲突。迁移只能显式执行，没有可靠消息归属的数据不得猜测 speaker。
+
+兼容 API 只提供 Engine 合同，不要求 WebUI/Tauri 同步改写。scene/group 的
+`needs_review` 不是失败降级：旧 scene memory 没有逐消息 speaker 证据，当前唯一安全行为是
+拒绝自动导入历史；需要新 conversation 时继续使用
+`POST /v1/scenes/{scene_id}/conversations` 创建 scene snapshot。
 
 ## 10. 后续实现门
 
 1. Policy registry 后续：若需要跨进程、WASM 或动态库 policy，必须另行设计签名/provenance、进程隔离、取消与资源回收合同；当前只允许宿主显式注入受信任的进程内 Rust 实现，不宣称存在任意插件沙箱。
 2. Projection 后续：在已交付的 message/history 与 turn lifecycle projection 上增加通用审计视图；所有投影继续保持可重建，不成为第二真相。
 3. Turn executor 后续：增加基于受控结构化结果的内容停止条件、跨进程 provider operation reconciliation，以及 summary 生成 policy；现有停止条件仅为规划期消息数量上限，summary v1 也只交付可验证事件与有界消费合同，不宣称已自动调用模型生成 summary。
-4. Compatibility adapters：让角色 chat、scene/group 和 Council 逐步消费通用内核；旧 API 在兼容期保持响应形状。
-5. Recovery/export：纳入统一备份 manifest、完整性校验与恢复演练。
+4. Compatibility adapters 后续：只有新证据格式能够证明 scene/group 历史逐消息归属后，才允许其从 `needs_review` 进入自动迁移；产品 UI/工作流仍由 #343/#344 验收。
+5. Recovery/export 后续：当前 Conversation migration 已有专用 versioned report、source export、SHA-256 与回滚演练，但不是全仓统一 migration registry、自动定时备份或跨资源恢复系统。
 
-新的 Conversation 场景回合已经由 Engine 闭合；既有 WebUI/legacy scene 路径尚未迁移，因此不得宣称所有旧群聊入口已经闭合。
+新的 Conversation 场景回合和显式兼容迁移合同已经由 Engine 闭合；既有
+WebUI/legacy scene 的无归属历史仍明确停在 `needs_review`，因此不得宣称所有旧群聊历史已经迁移。

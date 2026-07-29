@@ -53,9 +53,11 @@ pub(super) use chat::{
 pub(super) use conversations::{
     append_conversation_event_endpoint, cancel_conversation_turn_endpoint,
     create_conversation_endpoint, create_scene_conversation_endpoint,
-    execute_conversation_turn_endpoint, get_conversation_endpoint,
-    get_conversation_events_endpoint, get_conversation_turn_endpoint,
+    execute_conversation_migration_endpoint, execute_conversation_turn_endpoint,
+    get_conversation_endpoint, get_conversation_events_endpoint,
+    get_conversation_migration_export_endpoint, get_conversation_turn_endpoint,
     list_conversation_policies_endpoint, list_conversations_endpoint,
+    plan_conversation_migration_endpoint, rollback_conversation_migration_endpoint,
 };
 pub(super) use dialogue_gen::generate_dialogue_examples_endpoint;
 pub(super) use image_gen::{

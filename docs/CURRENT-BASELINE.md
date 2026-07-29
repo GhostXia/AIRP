@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
 > 基线日期：2026-07-29
-> 代码基线：PR #368 Batch 5 工作树（基于 `main@66abbd6`）
+> 代码基线：Conversation Batch 6 工作树（基于 `main@f908b03`）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -34,7 +34,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 |---|---|---|---|---|
 | 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools | 已有管理、选择、导入与诊断入口 | 高级生命周期、完整导出/恢复仍未闭合 |
 | 会话与聊天 | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe | OpenAI-compatible chat SSE、continue/regen/search | 命名会话、流式聊天、编辑/删除/分支/Swipe、导出 | 长会话虚拟化、跨资源事务与完整恢复仍开放 |
-| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行；受控外部 Rust policy 可运行时注入并受 provenance/capability/lifecycle/resource gate 约束；支持确定性提交的串行/并行 plan 与 speaker 数量停止条件；同步 I/O 隔离到 blocking worker；长历史 prompt 由 Engine 预算、可重建 checkpoint 与可验证 summary 前缀有界投影 | `/v1/conversations*`、turn 状态/显式取消、descriptor v2 `/v1/conversation-policies`；未知、停用、失败、panic 或超时策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同且不能注入 history、代码或调度语义 | 自动 summary 生成 policy、内容型停止条件、通用审计 projection、跨进程 provider reconciliation 与沙箱化跨进程/动态策略仍开放 |
+| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行；受控外部 Rust policy 可运行时注入并受 provenance/capability/lifecycle/resource gate 约束；支持确定性提交的串行/并行 plan 与 speaker 数量停止条件；同步 I/O 隔离到 blocking worker；长历史 prompt 由 Engine 预算、可重建 checkpoint 与可验证 summary 前缀有界投影；legacy character chat 与 Council 可通过 versioned、copy-only、digest-verified adapter 显式迁移，scene/group 无 speaker 证据时停在 `needs_review` | `/v1/conversations*`、turn 状态/显式取消、descriptor v2 `/v1/conversation-policies`；migration plan/execute/export/rollback；旧 chat/session/scene API 形状不变；未知、停用、失败、panic 或超时策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同且不能注入 history、代码或调度语义 | 自动 summary 生成 policy、内容型停止条件、通用审计 projection、全仓统一 migration registry、跨进程 provider reconciliation 与沙箱化跨进程/动态策略仍开放 |
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | advisory 语义、完整 session 物化与生命周期未完成 |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 30 个内置工具；运行时还可加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径仍有开放审计项；不是通用可配置多 Agent 平台 |
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP 接口 | 屏 36–42 已接入 | 功能存在不等于真实 provider、数据恢复与用户工作流已验收 |
@@ -81,7 +81,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 - 不能宣称 AIRP 已正式发布、适合公网多租户、通过完整 P1/P2/P3，或已经获得市场验证。
 - 不能用 44 个页面、30 个内置工具或 Phase 1–5.3 的合入数量替代黄金路径成功率、恢复能力、稳定性和继续使用意愿。
-- 不能宣称完整 session 自包含、跨资源事务、统一 migration registry、自动备份/恢复、可恢复删除、升级回滚、浏览器矩阵或长会话 soak 已交付。
+- 不能宣称完整 session 自包含、跨资源事务、全仓统一 migration registry、自动定时备份/恢复、浏览器矩阵或长会话 soak 已交付。Conversation 专用 copy migration 的可读导出与有条件回滚不能外推为其他资产也已具备同等恢复能力。
 - 不能宣称完整 MCP client/服务器生态、任意插件沙箱、跨设备同步、多语言 UI 或正式资产规格已交付。
 - 不能把桌面 Tauri 资产、production preview、Windows/Linux 便携包之间的测试结果互相外推。
 - 不能把保留的 Worldbook advisory 字段写成已执行语义；当前 runtime 合同以 [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md) 为准。
@@ -100,11 +100,11 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 6. 验证快照
 
-本次文档校准针对 PR #368 Conversation Batch 5 工作树（基于 `main@66abbd6`）于 2026-07-29 运行以下本地验证；该批在合并前不冒充 `main`：
+本次文档校准针对 Conversation Batch 6 工作树（基于 `main@f908b03`）于 2026-07-29 运行以下本地验证；该批在合并前不冒充 `main`：
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| Rust workspace | `cargo test --workspace --locked` | engine lib 1129 passed / 4 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1186 passed / 4 ignored |
+| Rust workspace | `cargo test --workspace --locked` | engine lib 1136 passed / 4 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1193 passed / 4 ignored |
 | Rust 静态门禁 | `cargo fmt --all -- --check`；workspace clippy `-D warnings`；rustdoc `-D warnings` | 通过 |
 | Conversation 长历史（Batch 4 历史基准，Batch 5 未重跑 release benchmark） | 50,000 events release benchmark + 50 次 append-aware projection soak；10,000 events 默认测试 | PR #367 / `main@66abbd6` 证据：cold 117 ms；每次先 append 再 projection 的均值 5.329 ms；输出最多 128 messages，checkpoint 普通 suffix 增量扩展，删除/失配/篡改可重建 |
 | WebUI | `node --test webui/tests/*.test.mjs` | 67 passed |

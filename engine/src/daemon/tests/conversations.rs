@@ -1508,3 +1508,139 @@ async fn client_disconnect_preserves_partial_journal_for_unknown_commit_recovery
     let journal: serde_json::Value = serde_json::from_slice(&journal).unwrap();
     assert_eq!(journal["events"], status["events"]);
 }
+
+#[tokio::test]
+async fn compatibility_migration_keeps_legacy_http_shape_and_supports_export_rollback() {
+    let (state, _tmp) = make_state_with_key(None);
+    let root = state.data_root.clone();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let mut log = crate::chat_store::ChatLog::new(character.as_str());
+    log.append(
+        &root,
+        crate::adapter::ChatMessage {
+            role: crate::adapter::MessageRole::User,
+            content: "hello".to_string(),
+        },
+    )
+    .unwrap();
+    log.append(
+        &root,
+        crate::adapter::ChatMessage {
+            role: crate::adapter::MessageRole::Assistant,
+            content: "hi".to_string(),
+        },
+    )
+    .unwrap();
+    let app = create_router(state);
+    let history_request = || {
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/chat/history")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"character_id":"alice"}"#))
+            .unwrap()
+    };
+    let before = app.clone().oneshot(history_request()).await.unwrap();
+    assert_eq!(before.status(), StatusCode::OK);
+    let before = axum::body::to_bytes(before.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+
+    let source = serde_json::json!({
+        "kind": "character_chat",
+        "character_id": "alice"
+    });
+    let plan = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/conversation-migrations/plan")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"source": source}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan.status(), StatusCode::OK);
+    let plan = axum::body::to_bytes(plan.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let plan: serde_json::Value = serde_json::from_slice(&plan).unwrap();
+    assert_eq!(plan["status"], "ready");
+    let migration_id = crate::ulid::new_id();
+    let execute = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/conversation-migrations")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "migration_id": migration_id,
+                        "source": {
+                            "kind": "character_chat",
+                            "character_id": "alice"
+                        },
+                        "expected_source_sha256": plan["source_sha256"],
+                        "confirm": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute.status(), StatusCode::OK);
+    let execute = axum::body::to_bytes(execute.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let execute: serde_json::Value = serde_json::from_slice(&execute).unwrap();
+    assert_eq!(execute["status"], "completed");
+
+    let export = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/v1/conversation-migrations/{migration_id}/export"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export.status(), StatusCode::OK);
+    let export = axum::body::to_bytes(export.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let export: serde_json::Value = serde_json::from_slice(&export).unwrap();
+    assert_eq!(export["records"].as_array().unwrap().len(), 2);
+
+    let after = app.clone().oneshot(history_request()).await.unwrap();
+    assert_eq!(after.status(), StatusCode::OK);
+    let after = axum::body::to_bytes(after.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(after, before, "legacy response shape and content changed");
+
+    let rollback = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/conversation-migrations/{migration_id}/rollback"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rollback.status(), StatusCode::OK);
+    let rollback = axum::body::to_bytes(rollback.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let rollback: serde_json::Value = serde_json::from_slice(&rollback).unwrap();
+    assert_eq!(rollback["status"], "rolled_back");
+}
