@@ -36,6 +36,7 @@ dependencies = [
  "aho-corasick",
  "airp-state-protocol",
  "async-stream",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",

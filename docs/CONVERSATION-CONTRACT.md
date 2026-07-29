@@ -1,8 +1,8 @@
 # Engine Conversation 合同
 
-> 状态：v1 基础、策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message/turn projection 与有界长历史 context 已实现；旧 chat/scene 迁移仍待后续切片
+> 状态：v1 基础、可运行时注入的受控策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message/turn projection 与有界长历史 context 已实现；旧 chat/scene 迁移仍待后续切片
 >
-> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_context.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
+> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_context.rs`、`engine/src/conversation_policy.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
 
 ## 1. 定位
 
@@ -204,14 +204,26 @@ scene adapter 会：
 - 保留调用方新增的其他 participant 类型；
 - 缺省引用 `airp.scene.round_robin.v1` 策略。
 
-执行路径通过 Engine `ConversationPolicyRegistry` 解析 manifest 中的开放 policy ID。存储允许未知 ID 无损往返，但执行只接受已注册策略；重复注册、空 ID 和未知策略均 fail-closed。每个策略公开带 `schema_version` 的 descriptor 与配置 schema，因此客户端可以发现能力，但不能自行定义调度语义。
+执行路径通过 Engine `ConversationPolicyRegistry` 解析 manifest 中的开放 policy ID。存储允许未知 ID 无损往返，但执行只接受已注册且处于 `active` 生命周期的策略；重复注册、空 ID、未知策略和 `disabled` 策略均 fail-closed。descriptor schema v2 公开稳定 policy ID/version、built-in/external provenance、实现身份、配置 schema、串行/并行与消息上限能力、资源预算和生命周期，因此客户端可以发现能力，但不能自行定义调度语义。
+
+宿主可创建共享 registry，并通过 `create_router_with_conversation_policy_registry` 注入 daemon；之后注册、停用、启用或卸载受信任的外部 Rust policy 不要求修改 HTTP handler 或任何 UI。该入口不是脚本、动态库或 manifest 代码加载器：policy config 始终只是 JSON 数据，外部实现必须通过显式 `register_external` 注入并实现 `validate_config`。外部实现不能占用保留的 `airp.` namespace，也不能把自己登记成 built-in。停用/卸载只影响随后开始规划的 turn；已经取得不可变 registration snapshot 的在途规划/执行继续按该快照完成并在 journal 留证。
+
+Engine 不信任外部实现返回的 plan。registry 在配额预留和事件提交前统一验证 user actor、scene、每个 speaker 的 participant/resource 归属、声明的执行模式、消息停止上限及所有资源预算。同一 participant 可在串行 plan 中重复出现，但每次 provider 调用都独立计入顺序、配额与事件归属。全局上界为 16 speakers、并行度 4、配置 16 KiB、规划 2 秒；每个 descriptor 只能声明更小或相等的预算。策略返回错误、panic 或规划超时均在任何 turn 事件与 provider 调用前 fail-closed，私有错误正文只写 Engine 日志，不越过 API。
+
+当前通用执行合同支持：
+
+- `serial`：按 plan 顺序生成和提交；后续 speaker 可见本轮先前已提交输出。
+- `parallel`：最多按 descriptor 的 `max_parallelism` 并发生成，所有 speaker 使用同一个批前历史快照；无论 provider 返回先后，结果仍按 plan 顺序验证和提交。
+- `stop_after_speakers`：受控声明式停止条件；registry 在配额和执行前截短有序 speaker plan。当前不支持将模型输出、表达式或任意配置解释为可执行停止代码。
+
+`turn.accepted.payload.policy` 固化本次实际使用的 policy ID/version、provenance、执行模式、speaker 停止条件、并行预算、scene 与有序 speaker/resource plan。后续 registry 热更新不会重写历史证据。
 
 `POST /v1/conversations/{id}/turns` 当前内置注册 `airp.scene.round_robin.v1`，并按 manifest 中角色 participant 的稳定顺序执行：
 
 1. 客户端可提供稳定 `turn_id`，其值必须符合 Engine durable ID（ULID）格式；非法 ID 在提交、状态查询和取消入口均返回 `400 Bad Request`。相同 ID 与相同语义请求只执行一次并重放原结果；相同 ID 的不同请求返回 `409 Conflict`。省略 ID 保留旧的一次性提交兼容路径；
 2. 在整轮共享的异步 conversation 写边界内校验 `expected_next_sequence`，依次写入 `turn.accepted`、`turn.started`。request fingerprint 仅用于幂等冲突检测，覆盖业务语义，但排除 `turn_id`、provider endpoint 和 API credential；因此凭据轮换或等价传输地址变化不会把已完成回合误判为新语义；
 3. 持久化调用者归属明确的 `message.created`，再从权威 event journal 投影历史，由 Engine 逐角色组装 prompt 并调用 provider；
-4. 每个角色结果立即以其 participant ID 持久化，后续角色可以看到本轮先前角色的输出；
+4. 串行策略的每个角色结果立即以其 participant ID 持久化，后续角色可以看到本轮先前角色的输出；并行策略从同一批前快照生成，但仍按 plan 顺序提交；
 5. 成功写入 `turn.completed`；provider 或组装失败写入 `turn.failed`；显式取消写入 `turn.cancelled`；
 6. 若进程重启后发现 `accepted` 或 `running` 而无终态，Engine 写入 `turn.unknown_commit`。这表示 provider 侧结果不可证明，不会自动重调 provider、删除已提交事件或伪造原子回滚。
 
@@ -219,7 +231,7 @@ scene adapter 会：
 
 取消是 Engine endpoint 驱动的显式协作协议。HTTP 客户端断线或丢弃响应不会被解释为回滚命令；如果执行 future 因断线/进程退出而消失，已写事件仍可读，下一次状态查询将其收敛为 `unknown_commit`。取消 provider 请求 future 也不证明上游未接收请求，因此 journal 终态只陈述 Engine 可证明的事实。若 provider 已返回内容后才观察到取消，Engine 仍记录实际消耗的 token，但丢弃未持久化的生成内容并写入 `turn.cancelled`，避免把取消后的内容伪装为已提交消息。
 
-participant 总量不设产品级上限，但单回合 speaker plan 最多执行 16 个 provider 调用，并在写入用户事件前原子预留对应的请求配额。整轮 provider 调用共享 120 秒绝对 deadline；超时会取消当前调用并 durable 写入 `turn.failed`。历史扫描、解析和 journal durable append 在 blocking pool 中执行，不占用 async runtime worker。
+participant 总量不设产品级上限，但单回合 speaker plan 最多执行 16 个 provider 调用，并在写入用户事件前原子预留对应的请求配额。外部 policy 并行度最多为 4，实际值还受 descriptor 自身更小预算约束。整轮 provider 调用共享 120 秒绝对 deadline；超时会取消当前调用并 durable 写入 `turn.failed`。历史扫描、解析和 journal durable append 在 blocking pool 中执行，不占用 async runtime worker。
 
 客户端不能在 turn 请求中注入 `scene_id`、`session_id`、`character_id`、history 或 legacy branch/swipe 控制。provider、model、preset、persona 和采样参数继续复用既有 chat pipeline 合同，因此 UI 只是能力调用方，不决定 Engine 的作用域、历史或调度。
 
@@ -233,9 +245,9 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 
 ## 10. 后续实现门
 
-1. Policy registry 后续：在现有注册/解析/descriptor 边界上增加经过 capability 校验的外部策略装载，以及可配置停止条件；不得让任意配置变成代码执行。
+1. Policy registry 后续：若需要跨进程、WASM 或动态库 policy，必须另行设计签名/provenance、进程隔离、取消与资源回收合同；当前只允许宿主显式注入受信任的进程内 Rust 实现，不宣称存在任意插件沙箱。
 2. Projection 后续：在已交付的 message/history 与 turn lifecycle projection 上增加通用审计视图；所有投影继续保持可重建，不成为第二真相。
-3. Turn executor 后续：增加可配置停止条件、跨进程 provider operation reconciliation，以及 summary 生成 policy；现有 v1 只交付可验证的 summary 事件与有界消费合同，不宣称已自动调用模型生成 summary。
+3. Turn executor 后续：增加基于受控结构化结果的内容停止条件、跨进程 provider operation reconciliation，以及 summary 生成 policy；现有停止条件仅为规划期消息数量上限，summary v1 也只交付可验证事件与有界消费合同，不宣称已自动调用模型生成 summary。
 4. Compatibility adapters：让角色 chat、scene/group 和 Council 逐步消费通用内核；旧 API 在兼容期保持响应形状。
 5. Recovery/export：纳入统一备份 manifest、完整性校验与恢复演练。
 
