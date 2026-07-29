@@ -230,7 +230,7 @@ pub struct ConversationEventWindow {
 /// `base` carries provider, model, persona, preset, and generation controls
 /// already supported by the chat pipeline. Conversation scope and history are
 /// deliberately excluded from client control and are derived by the Engine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationTurnRequest {
     #[serde(default)]

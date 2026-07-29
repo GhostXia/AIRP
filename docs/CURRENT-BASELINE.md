@@ -100,16 +100,16 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 6. 验证快照
 
-本次文档校准针对 `main@200fed9` 运行以下本地验证：
+本次文档校准针对 PR #364 工作树（基于 `main@e33356a`）运行以下本地验证；该 PR 在合并前不冒充 `main`：
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| Rust workspace | `cargo test --workspace --locked` | engine lib 1056 passed / 2 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed |
+| Rust workspace | `cargo test --workspace --locked` | engine lib 1111 passed / 2 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1168 passed / 2 ignored |
 | Rust 静态门禁 | `cargo fmt --all -- --check`；workspace clippy `-D warnings`；rustdoc `-D warnings` | 通过 |
-| WebUI | `node --test webui/tests/*.test.mjs` | 50 passed |
+| WebUI | `node --test webui/tests/*.test.mjs` | 66 passed |
 | Vue/Tauri UI | `npm run typecheck`；`npm test -- --run`（`ui/`） | typecheck 通过；98 passed |
-| 工程工具 | dep-governance；agent-exploration Node tests | 91 passed；38 passed |
-| 仓库/文档 | Provider/插件 ignore 合同、相对 `.md` 链接、陈旧基线扫描、`git diff --check` | 通过；ignore 合同已加入 PR gate |
+| 工程工具 | dep-governance；agent-exploration Node tests | 本批未复跑，不从历史结果外推 |
+| 仓库/文档 | `git diff --check` | 通过 |
 
 未在本次校准中运行的 production topology、Windows/Linux artifact、真实 provider/browser、网络故障、崩溃注入和长会话测试，不得由本表推断为通过。
 

@@ -19,11 +19,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio_util::sync::CancellationToken;
 
+/// The Engine accepted a semantic turn request and its idempotency record.
 pub const TURN_ACCEPTED: &str = "turn.accepted";
+/// The Engine began executing the accepted turn.
 pub const TURN_STARTED: &str = "turn.started";
+/// The Engine durably committed every planned message.
 pub const TURN_COMPLETED: &str = "turn.completed";
+/// The Engine stopped the turn after a durable failure.
 pub const TURN_FAILED: &str = "turn.failed";
+/// The Engine honored an explicit cooperative cancellation request.
 pub const TURN_CANCELLED: &str = "turn.cancelled";
+/// Recovery found a started turn whose final provider outcome is unknowable.
 pub const TURN_UNKNOWN_COMMIT: &str = "turn.unknown_commit";
 
 /// Durable lifecycle states and their legal forward transitions.
@@ -43,6 +49,7 @@ pub enum ConversationTurnLifecycleState {
 }
 
 impl ConversationTurnLifecycleState {
+    /// Whether no legal forward lifecycle transition remains.
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -53,7 +60,6 @@ impl ConversationTurnLifecycleState {
 
 /// Journal-derived view returned by the turn status and cancel endpoints.
 #[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationTurnSnapshot {
     pub turn_id: String,
     pub lifecycle_state: ConversationTurnLifecycleState,
@@ -65,7 +71,6 @@ pub struct ConversationTurnSnapshot {
 
 /// Acknowledgement for an explicit cooperative cancellation request.
 #[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationTurnCancelResponse {
     pub turn_id: String,
     pub cancel_requested: bool,
@@ -74,6 +79,7 @@ pub struct ConversationTurnCancelResponse {
 }
 
 impl ConversationTurnSnapshot {
+    /// Convert the precise lifecycle projection to the additive legacy outcome.
     pub fn into_outcome(self) -> ConversationTurnOutcome {
         let status = if self.lifecycle_state == ConversationTurnLifecycleState::Completed {
             ConversationTurnStatus::Completed
@@ -93,12 +99,31 @@ impl ConversationTurnSnapshot {
     }
 }
 
-/// Stable digest of the semantic request, excluding its retry identity.
+/// Stable digest of turn intent, excluding retry identity, credentials, and
+/// provider transport location.
 pub fn request_fingerprint(request: &ConversationTurnRequest) -> Result<String, AirpError> {
-    let mut value = serde_json::to_value(request)?;
-    if let Value::Object(object) = &mut value {
-        object.remove("turn_id");
-    }
+    let base = &request.base;
+    let mut value = serde_json::json!({
+        "user_id": request.user_id,
+        "user_actor_id": request.user_actor_id,
+        "expected_next_sequence": request.expected_next_sequence,
+        "extensions": request.extensions,
+        "base": {
+            "user_profile": {
+                "name": base.user_profile.name,
+                "variables": base.user_profile.variables,
+            },
+            "message": base.message,
+            "regex_filters": base.regex_filters,
+            "preset_id": base.preset_id,
+            "enabled_presets": base.enabled_presets,
+            "provider": base.provider,
+            "model": base.model,
+            "temperature": base.temperature,
+            "max_tokens": base.max_tokens,
+            "persona_id": base.persona_id,
+        },
+    });
     canonicalize_json(&mut value);
     let bytes = serde_json::to_vec(&value)?;
     let digest = Sha256::digest(bytes);
@@ -170,7 +195,7 @@ pub fn project_turn(
             "turn {turn_id} has correlated events but no lifecycle record"
         )));
     };
-    let next_sequence = correlated
+    let next_sequence = events
         .last()
         .map_or(0, |event| event.sequence.saturating_add(1));
     Ok(Some(ConversationTurnSnapshot {
@@ -225,6 +250,7 @@ fn failure_from_event(event: &ConversationEvent, default_code: &str) -> Conversa
     }
 }
 
+/// Return the semantic request digest recorded by `turn.accepted`.
 pub fn accepted_fingerprint(snapshot: &ConversationTurnSnapshot) -> Option<&str> {
     snapshot
         .events
@@ -325,6 +351,7 @@ pub(crate) fn register_active_turn(
     data_root: &Path,
     conversation_id: SessionId,
     turn_id: &str,
+    expected_next_sequence: u64,
 ) -> ActiveTurnRegistration {
     let key = active_key(data_root, conversation_id, turn_id);
     let mut active = ACTIVE_TURNS
@@ -333,7 +360,13 @@ pub(crate) fn register_active_turn(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let entry = active.entry(key.clone()).or_insert_with(|| ActiveTurn {
         cancellation: CancellationToken::new(),
-        snapshot: Arc::new(Mutex::new(None)),
+        snapshot: Arc::new(Mutex::new(Some(ConversationTurnSnapshot {
+            turn_id: turn_id.to_string(),
+            lifecycle_state: ConversationTurnLifecycleState::Accepted,
+            events: Vec::new(),
+            next_sequence: expected_next_sequence,
+            failure: None,
+        }))),
         registrations: 0,
     });
     entry.registrations = entry.registrations.saturating_add(1);
@@ -342,6 +375,15 @@ pub(crate) fn register_active_turn(
         cancellation: entry.cancellation.clone(),
         snapshot: Arc::clone(&entry.snapshot),
     }
+}
+
+/// Whether this daemon process currently owns work for the turn.
+pub(crate) fn has_active_turn(data_root: &Path, conversation_id: SessionId, turn_id: &str) -> bool {
+    ACTIVE_TURNS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains_key(&active_key(data_root, conversation_id, turn_id))
 }
 
 pub(crate) fn cancel_active_turn(
@@ -403,18 +445,24 @@ mod tests {
 
     #[test]
     fn legal_lifecycle_reconstructs_terminal_state() {
+        let mut unrelated = event(4, "message.created");
+        unrelated.correlation_id = Some("other-turn".to_string());
         let events = vec![
             event(0, TURN_ACCEPTED),
             event(1, TURN_STARTED),
             event(2, "message.created"),
             event(3, TURN_COMPLETED),
+            unrelated,
         ];
         let snapshot = project_turn(&events, "turn").unwrap().unwrap();
         assert_eq!(
             snapshot.lifecycle_state,
             ConversationTurnLifecycleState::Completed
         );
-        assert_eq!(snapshot.next_sequence, 4);
+        assert_eq!(
+            snapshot.next_sequence, 5,
+            "next_sequence belongs to the global journal, not the correlated subset"
+        );
     }
 
     #[test]

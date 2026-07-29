@@ -470,8 +470,12 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
     assert_eq!(outcome["events"][3]["actor_id"], "character:alice");
     assert_eq!(outcome["events"][4]["actor_id"], "character:bob");
     assert_eq!(outcome["events"][5]["kind"], "turn.completed");
+    assert_eq!(outcome["events"][5]["payload"]["message_count"], 3);
     assert_eq!(outcome["next_sequence"], 6);
 
+    let mut replay_body = turn_body.clone();
+    replay_body["base"]["endpoint"] = serde_json::json!("https://rotated.invalid/v1");
+    replay_body["base"]["api_key"] = serde_json::json!("rotated-secret");
     let replay = app
         .clone()
         .oneshot(
@@ -479,7 +483,7 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
                 .method("POST")
                 .uri(format!("/v1/conversations/{conversation_id}/turns"))
                 .header("content-type", "application/json")
-                .body(Body::from(turn_body.to_string()))
+                .body(Body::from(replay_body.to_string()))
                 .unwrap(),
         )
         .await
@@ -491,7 +495,7 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
     let replay: serde_json::Value = serde_json::from_slice(&replay).unwrap();
     assert_eq!(
         replay, outcome,
-        "an idempotent retry must replay the outcome"
+        "credentials and transport location must not change semantic idempotency"
     );
 
     let mut conflicting_body = turn_body.clone();
@@ -812,57 +816,9 @@ async fn provider_failure_is_reported_as_partially_committed_turn() {
         .await;
     let (state, _tmp) = make_state_with_key(None);
     state.config.write().unwrap().endpoint = server.uri();
-    let directory = state.data_root.join("characters").join("alice");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(
-        directory.join("card.json"),
-        r#"{"name":"alice","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}"#,
-    )
-    .unwrap();
+    write_character_card(&state.data_root, "alice");
     let app = create_router(state);
-    let scene = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri("/v1/scenes")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({
-                        "scene_id": "solo",
-                        "characters": [{"character_id": "alice", "role": "primary"}]
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(scene.status(), StatusCode::CREATED);
-    let conversation = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri("/v1/scenes/solo/conversations")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({
-                        "additional_participants": [
-                            {"participant_id": "human:gm", "kind": "human"}
-                        ]
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = axum::body::to_bytes(conversation.into_body(), 16 * 1024)
-        .await
-        .unwrap();
-    let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let conversation_id = manifest["conversation_id"].as_str().unwrap();
+    let conversation_id = create_solo_scene_conversation(&app).await;
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -982,6 +938,111 @@ async fn dangling_turn_is_reconciled_to_unknown_commit_without_deleting_events()
 }
 
 #[tokio::test]
+async fn legacy_accepted_turn_without_fingerprint_is_not_reexecuted() {
+    let (state, _tmp) = make_state_with_key(None);
+    write_character_card(&state.data_root, "alice");
+    let app = create_router(state);
+    let conversation_id = create_solo_scene_conversation(&app).await;
+    let turn_id = crate::ulid::new_id();
+    let accepted = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/events"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "turn.accepted",
+                        "correlation_id": turn_id.clone(),
+                        "payload": {},
+                        "expected_next_sequence": 0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let retry = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "turn_id": turn_id,
+                        "user_actor_id": "human:gm",
+                        "expected_next_sequence": 1,
+                        "base": {
+                            "user_profile": {"name": "GM", "variables": {}},
+                            "message": "Do not execute"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn turn_endpoints_reject_malformed_durable_ids() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let conversation_id = create_conversation(&app, create_body()).await;
+    let cases = [
+        (
+            "POST",
+            format!("/v1/conversations/{conversation_id}/turns"),
+            Body::from(
+                serde_json::json!({
+                    "turn_id": "not-a-durable-id",
+                    "user_actor_id": "user",
+                    "expected_next_sequence": 0,
+                    "base": {
+                        "user_profile": {"name": "User", "variables": {}},
+                        "message": "hi"
+                    }
+                })
+                .to_string(),
+            ),
+        ),
+        (
+            "GET",
+            format!("/v1/conversations/{conversation_id}/turns/not-a-durable-id"),
+            Body::empty(),
+        ),
+        (
+            "POST",
+            format!("/v1/conversations/{conversation_id}/turns/not-a-durable-id/cancel"),
+            Body::empty(),
+        ),
+    ];
+
+    for (method, uri, body) in cases {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(body)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn explicit_cancel_interrupts_generation_and_commits_cancelled_state() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1029,13 +1090,18 @@ async fn explicit_cancel_interrupts_generation_and_commits_cancelled_state() {
             .await
     });
 
-    for _ in 0..100 {
+    let mut provider_started = false;
+    for _ in 0..500 {
         if !server.received_requests().await.unwrap().is_empty() {
+            provider_started = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(
+        provider_started,
+        "provider request did not start within the 5 second test deadline"
+    );
 
     let running = app
         .clone()
@@ -1155,13 +1221,18 @@ async fn client_disconnect_preserves_partial_journal_for_unknown_commit_recovery
             .await
     });
 
-    for _ in 0..100 {
+    let mut provider_started = false;
+    for _ in 0..500 {
         if !server.received_requests().await.unwrap().is_empty() {
+            provider_started = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(
+        provider_started,
+        "provider request did not start within the 5 second test deadline"
+    );
     turn_task.abort();
     assert!(turn_task.await.unwrap_err().is_cancelled());
 

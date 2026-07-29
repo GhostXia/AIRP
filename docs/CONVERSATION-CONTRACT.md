@@ -133,8 +133,8 @@ scene adapter 会：
 
 `POST /v1/conversations/{id}/turns` 当前内置注册 `airp.scene.round_robin.v1`，并按 manifest 中角色 participant 的稳定顺序执行：
 
-1. 客户端可提供稳定 `turn_id`。相同 ID 与相同语义请求只执行一次并重放原结果；相同 ID 的不同请求返回 `409 Conflict`。省略 ID 保留旧的一次性提交兼容路径；
-2. 在整轮共享的异步 conversation 写边界内校验 `expected_next_sequence`，依次写入 `turn.accepted`、`turn.started`，request fingerprint 仅用于幂等冲突检测；
+1. 客户端可提供稳定 `turn_id`，其值必须符合 Engine durable ID（ULID）格式；非法 ID 在提交、状态查询和取消入口均返回 `400 Bad Request`。相同 ID 与相同语义请求只执行一次并重放原结果；相同 ID 的不同请求返回 `409 Conflict`。省略 ID 保留旧的一次性提交兼容路径；
+2. 在整轮共享的异步 conversation 写边界内校验 `expected_next_sequence`，依次写入 `turn.accepted`、`turn.started`。request fingerprint 仅用于幂等冲突检测，覆盖业务语义，但排除 `turn_id`、provider endpoint 和 API credential；因此凭据轮换或等价传输地址变化不会把已完成回合误判为新语义；
 3. 持久化调用者归属明确的 `message.created`，再从权威 event journal 投影历史，由 Engine 逐角色组装 prompt 并调用 provider；
 4. 每个角色结果立即以其 participant ID 持久化，后续角色可以看到本轮先前角色的输出；
 5. 成功写入 `turn.completed`；provider 或组装失败写入 `turn.failed`；显式取消写入 `turn.cancelled`；
@@ -142,7 +142,7 @@ scene adapter 会：
 
 精确生命周期为 `accepted → running → completed | failed | cancelled | unknown_commit`；`accepted` 也可在启动前直接进入 `failed | cancelled | unknown_commit`。原响应字段 `status=completed|partially_committed` 为兼容保留，调用方应使用新增的 `lifecycle_state` 区分失败、取消和未知提交。
 
-取消是 Engine endpoint 驱动的显式协作协议。HTTP 客户端断线或丢弃响应不会被解释为回滚命令；如果执行 future 因断线/进程退出而消失，已写事件仍可读，下一次状态查询将其收敛为 `unknown_commit`。取消 provider 请求 future 也不证明上游未接收请求，因此 journal 终态只陈述 Engine 可证明的事实。
+取消是 Engine endpoint 驱动的显式协作协议。HTTP 客户端断线或丢弃响应不会被解释为回滚命令；如果执行 future 因断线/进程退出而消失，已写事件仍可读，下一次状态查询将其收敛为 `unknown_commit`。取消 provider 请求 future 也不证明上游未接收请求，因此 journal 终态只陈述 Engine 可证明的事实。若 provider 已返回内容后才观察到取消，Engine 仍记录实际消耗的 token，但丢弃未持久化的生成内容并写入 `turn.cancelled`，避免把取消后的内容伪装为已提交消息。
 
 participant 总量不设产品级上限，但单回合 speaker plan 最多执行 16 个 provider 调用，并在写入用户事件前原子预留对应的请求配额。整轮 provider 调用共享 120 秒绝对 deadline；超时会取消当前调用并 durable 写入 `turn.failed`。历史扫描、解析和 journal durable append 在 blocking pool 中执行，不占用 async runtime worker。
 

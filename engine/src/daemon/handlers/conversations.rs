@@ -16,6 +16,14 @@ use std::time::Duration;
 
 const CONVERSATION_TURN_TIMEOUT: Duration = Duration::from_secs(120);
 
+struct TurnExecution<'a> {
+    root: &'a std::path::Path,
+    conversation_id: SessionId,
+    turn_id: String,
+    fingerprint: String,
+    registration: &'a crate::conversation_turn::ActiveTurnRegistration,
+}
+
 /// Create a generic Engine-owned Conversation manifest.
 pub(in crate::daemon) async fn create_conversation_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
@@ -114,7 +122,9 @@ pub(in crate::daemon) async fn get_conversation_turn_endpoint(
     let events = all_events_blocking(service.clone(), conversation_id).await?;
     let snapshot = crate::conversation_turn::project_turn(&events, &turn_id)?
         .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?;
-    if snapshot.lifecycle_state.is_terminal() {
+    if snapshot.lifecycle_state.is_terminal()
+        || crate::conversation_turn::has_active_turn(&root, conversation_id, &turn_id)
+    {
         return Ok(Json(snapshot));
     }
     let _write_guard = service.acquire_write(conversation_id).await;
@@ -189,14 +199,14 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     validate_turn_base(&request)?;
     let root = effective_conversation_root(&state.data_root, request.user_id.as_ref())?;
     let turn_id = request.turn_id.clone().unwrap_or_else(crate::ulid::new_id);
-    if !crate::ulid::is_valid_id(&turn_id) {
-        return Err(AirpError::BadRequest(
-            "turn_id must be a valid durable Engine ID".to_string(),
-        ));
-    }
+    validate_turn_id(&turn_id)?;
     let fingerprint = crate::conversation_turn::request_fingerprint(&request)?;
-    let registration =
-        crate::conversation_turn::register_active_turn(&root, conversation_id, &turn_id);
+    let registration = crate::conversation_turn::register_active_turn(
+        &root,
+        conversation_id,
+        &turn_id,
+        request.expected_next_sequence,
+    );
     let service = ConversationService::new(&root);
     let _write_guard = service.acquire_write(conversation_id).await;
     let manifest = service.get(conversation_id)?;
@@ -251,15 +261,17 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     crate::quota::check_and_increment_by(&root, &quota, provider_call_count)?;
     let result = execute_new_turn(
         &state,
-        &root,
         service,
-        conversation_id,
         manifest,
         request,
         plan,
-        turn_id.clone(),
-        fingerprint,
-        &registration,
+        TurnExecution {
+            root: &root,
+            conversation_id,
+            turn_id,
+            fingerprint,
+            registration: &registration,
+        },
     )
     .await;
     if let Ok(outcome) = &result {
@@ -268,19 +280,21 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     result.map(Json)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn execute_new_turn(
     state: &Arc<DaemonState>,
-    root: &std::path::Path,
     service: ConversationService,
-    conversation_id: SessionId,
     manifest: crate::conversation::ConversationManifest,
     request: ConversationTurnRequest,
     plan: crate::conversation_policy::ConversationTurnPlan,
-    turn_id: String,
-    fingerprint: String,
-    registration: &crate::conversation_turn::ActiveTurnRegistration,
+    execution: TurnExecution<'_>,
 ) -> Result<ConversationTurnOutcome, AirpError> {
+    let TurnExecution {
+        root,
+        conversation_id,
+        turn_id,
+        fingerprint,
+        registration,
+    } = execution;
     let cancellation = registration.cancellation();
     let mut committed = Vec::new();
     let accepted = append_event_locked_blocking(
@@ -479,6 +493,10 @@ async fn execute_new_turn(
                 }
             }
         };
+        crate::quota::record_tokens(
+            root,
+            crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32,
+        );
         if cancellation.is_cancelled() {
             return commit_turn_terminal(
                 service,
@@ -493,10 +511,6 @@ async fn execute_new_turn(
             )
             .await;
         }
-        crate::quota::record_tokens(
-            root,
-            crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32,
-        );
         if let Some(error) = result.error {
             tracing::error!(
                 %conversation_id,
@@ -601,7 +615,10 @@ async fn execute_new_turn(
             causation_id: Some(user_event_id),
             correlation_id: Some(turn_id.clone()),
             payload: serde_json::json!({
-                "message_count": committed.len(),
+                "message_count": committed
+                    .iter()
+                    .filter(|event| event.kind == "message.created")
+                    .count(),
             }),
             extensions: BTreeMap::new(),
             expected_next_sequence: Some(next_sequence),
@@ -656,26 +673,6 @@ async fn commit_turn_terminal(
     next_sequence: u64,
     mut committed: Vec<crate::conversation::ConversationEvent>,
 ) -> Result<ConversationTurnOutcome, AirpError> {
-    let terminal = append_event_locked_blocking(
-        service,
-        conversation_id,
-        AppendConversationEventRequest {
-            user_id: None,
-            kind: event_kind.to_string(),
-            actor_id: None,
-            causation_id: Some(causation_id),
-            correlation_id: Some(turn_id.clone()),
-            payload: serde_json::json!({
-                "code": code,
-                "participant_id": participant_id,
-                "commit_state": "partially_committed",
-            }),
-            extensions: BTreeMap::new(),
-            expected_next_sequence: Some(next_sequence),
-        },
-    )
-    .await?;
-    committed.push(terminal);
     let lifecycle_state = match event_kind {
         crate::conversation_turn::TURN_FAILED => {
             crate::conversation_turn::ConversationTurnLifecycleState::Failed
@@ -692,6 +689,27 @@ async fn commit_turn_terminal(
             )))
         }
     };
+    let commit_state = turn_commit_state(&committed);
+    let terminal = append_event_locked_blocking(
+        service,
+        conversation_id,
+        AppendConversationEventRequest {
+            user_id: None,
+            kind: event_kind.to_string(),
+            actor_id: None,
+            causation_id: Some(causation_id),
+            correlation_id: Some(turn_id.clone()),
+            payload: serde_json::json!({
+                "code": code,
+                "participant_id": participant_id,
+                "commit_state": commit_state,
+            }),
+            extensions: BTreeMap::new(),
+            expected_next_sequence: Some(next_sequence),
+        },
+    )
+    .await?;
+    committed.push(terminal);
     Ok(ConversationTurnOutcome {
         turn_id,
         status: ConversationTurnStatus::PartiallyCommitted,
@@ -703,6 +721,14 @@ async fn commit_turn_terminal(
             participant_id,
         }),
     })
+}
+
+fn turn_commit_state(events: &[crate::conversation::ConversationEvent]) -> &'static str {
+    if events.iter().any(|event| event.kind == "message.created") {
+        "partially_committed"
+    } else {
+        "no_message_committed"
+    }
 }
 
 fn validate_turn_id(turn_id: &str) -> Result<(), AirpError> {
@@ -726,6 +752,7 @@ async fn reconcile_unknown_commit(
         .last()
         .map(|event| event.event_id.clone())
         .ok_or_else(|| AirpError::Internal("turn snapshot has no events".to_string()))?;
+    let commit_state = turn_commit_state(&snapshot.events);
     let terminal = append_event_locked_blocking(
         service,
         conversation_id,
@@ -737,7 +764,7 @@ async fn reconcile_unknown_commit(
             correlation_id: Some(snapshot.turn_id.clone()),
             payload: serde_json::json!({
                 "code": "unknown_commit",
-                "commit_state": "partially_committed",
+                "commit_state": commit_state,
                 "recovery": "manual_retry_or_continue",
             }),
             extensions: BTreeMap::new(),
