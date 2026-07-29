@@ -17,6 +17,7 @@ use tower::util::ServiceExt;
 
 mod catalog;
 mod chat;
+mod conversations;
 mod health_settings;
 mod images;
 mod local_webui;

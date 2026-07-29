@@ -33,20 +33,24 @@ use decompose_handlers::{
     get_character_analysis_file, list_character_analysis,
 };
 use handlers::{
-    add_scene_character_endpoint, agent_run, bind_persona_endpoint, chat_completion, chat_search,
-    continue_chat, create_persona_endpoint, create_scene_endpoint, create_session_endpoint,
+    add_scene_character_endpoint, agent_run, append_conversation_event_endpoint,
+    bind_persona_endpoint, cancel_conversation_turn_endpoint, chat_completion, chat_search,
+    continue_chat, create_conversation_endpoint, create_persona_endpoint,
+    create_scene_conversation_endpoint, create_scene_endpoint, create_session_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
     delete_plugin_tool_endpoint, delete_session_endpoint, diff_character_revisions_endpoint,
-    edit_message, export_session_timeline_endpoint, generate_dialogue_examples_endpoint,
-    generate_image_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
-    get_character_revision_endpoint, get_character_state, get_character_state_history,
-    get_character_state_schema, get_chat_history, get_drift, get_effective_persona_endpoint,
-    get_lorebook_graph_endpoint, get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc,
-    get_preset_endpoint, get_resident_memory, get_routing_endpoint, get_scene_endpoint,
-    get_session_timeline_endpoint, get_settings, get_style_profile, get_template_endpoint,
-    get_user_model, get_world_events, import_character, import_preset_endpoint,
-    instantiate_template_endpoint, list_agent_tools, list_character_revisions_endpoint,
-    list_characters, list_images_endpoint, list_models, list_personas_endpoint,
+    edit_message, execute_conversation_turn_endpoint, export_session_timeline_endpoint,
+    generate_dialogue_examples_endpoint, generate_image_endpoint, get_character_avatar,
+    get_character_card, get_character_lorebook, get_character_revision_endpoint,
+    get_character_state, get_character_state_history, get_character_state_schema, get_chat_history,
+    get_conversation_endpoint, get_conversation_events_endpoint, get_conversation_turn_endpoint,
+    get_drift, get_effective_persona_endpoint, get_lorebook_graph_endpoint, get_persona_endpoint,
+    get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint, get_resident_memory,
+    get_routing_endpoint, get_scene_endpoint, get_session_timeline_endpoint, get_settings,
+    get_style_profile, get_template_endpoint, get_user_model, get_world_events, import_character,
+    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
+    list_character_revisions_endpoint, list_characters, list_conversation_policies_endpoint,
+    list_conversations_endpoint, list_images_endpoint, list_models, list_personas_endpoint,
     list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
     preview_chat_assembly, reextract_character_assets, regen_chat, resolve_provider_endpoint,
@@ -464,6 +468,42 @@ pub fn create_router(state: Arc<DaemonState>) -> Router {
         .route(
             "/v1/sessions/:character_id/:session_id",
             axum::routing::delete(delete_session_endpoint),
+        )
+        // ── UI-independent Conversation aggregate ───────────────────────────
+        .route(
+            "/v1/conversations",
+            get(list_conversations_endpoint)
+                .post(create_conversation_endpoint.layer(DefaultBodyLimit::max(2 * 1024 * 1024))),
+        )
+        .route(
+            "/v1/conversation-policies",
+            get(list_conversation_policies_endpoint),
+        )
+        .route(
+            "/v1/conversations/:conversation_id",
+            get(get_conversation_endpoint),
+        )
+        .route(
+            "/v1/conversations/:conversation_id/events",
+            get(get_conversation_events_endpoint).post(
+                append_conversation_event_endpoint.layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+            ),
+        )
+        .route(
+            "/v1/conversations/:conversation_id/turns",
+            post(execute_conversation_turn_endpoint).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/conversations/:conversation_id/turns/:turn_id",
+            get(get_conversation_turn_endpoint),
+        )
+        .route(
+            "/v1/conversations/:conversation_id/turns/:turn_id/cancel",
+            post(cancel_conversation_turn_endpoint),
+        )
+        .route(
+            "/v1/scenes/:scene_id/conversations",
+            post(create_scene_conversation_endpoint).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         // ── Phase 4.5: 剧情时间线导出 API ──────────────────────────────
         .route(

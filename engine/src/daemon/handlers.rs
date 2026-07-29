@@ -13,6 +13,7 @@ mod card_diff;
 mod character_templates;
 mod characters;
 mod chat;
+mod conversations;
 mod dialogue_gen;
 mod image_gen;
 mod lorebook;
@@ -48,6 +49,13 @@ pub(super) use characters::{
 pub(super) use chat::{
     chat_completion, continue_chat, delete_message, edit_message, get_chat_history,
     preview_chat_assembly, regen_chat, rollback_chat, swipe_chat, switch_branch,
+};
+pub(super) use conversations::{
+    append_conversation_event_endpoint, cancel_conversation_turn_endpoint,
+    create_conversation_endpoint, create_scene_conversation_endpoint,
+    execute_conversation_turn_endpoint, get_conversation_endpoint,
+    get_conversation_events_endpoint, get_conversation_turn_endpoint,
+    list_conversation_policies_endpoint, list_conversations_endpoint,
 };
 pub(super) use dialogue_gen::generate_dialogue_examples_endpoint;
 pub(super) use image_gen::{
