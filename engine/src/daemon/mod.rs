@@ -39,24 +39,27 @@ use handlers::{
     create_scene_conversation_endpoint, create_scene_endpoint, create_session_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
     delete_plugin_tool_endpoint, delete_session_endpoint, diff_character_revisions_endpoint,
-    edit_message, execute_conversation_turn_endpoint, export_session_timeline_endpoint,
-    generate_dialogue_examples_endpoint, generate_image_endpoint, get_character_avatar,
-    get_character_card, get_character_lorebook, get_character_revision_endpoint,
-    get_character_state, get_character_state_history, get_character_state_schema, get_chat_history,
-    get_conversation_endpoint, get_conversation_events_endpoint, get_conversation_turn_endpoint,
-    get_drift, get_effective_persona_endpoint, get_lorebook_graph_endpoint, get_persona_endpoint,
-    get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint, get_resident_memory,
-    get_routing_endpoint, get_scene_endpoint, get_session_timeline_endpoint, get_settings,
-    get_style_profile, get_template_endpoint, get_user_model, get_world_events, import_character,
-    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
-    list_character_revisions_endpoint, list_characters, list_conversation_policies_endpoint,
-    list_conversations_endpoint, list_images_endpoint, list_models, list_personas_endpoint,
-    list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
-    list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
+    edit_message, execute_conversation_migration_endpoint, execute_conversation_turn_endpoint,
+    export_session_timeline_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
+    get_character_avatar, get_character_card, get_character_lorebook,
+    get_character_revision_endpoint, get_character_state, get_character_state_history,
+    get_character_state_schema, get_chat_history, get_conversation_endpoint,
+    get_conversation_events_endpoint, get_conversation_migration_export_endpoint,
+    get_conversation_turn_endpoint, get_drift, get_effective_persona_endpoint,
+    get_lorebook_graph_endpoint, get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc,
+    get_preset_endpoint, get_resident_memory, get_routing_endpoint, get_scene_endpoint,
+    get_session_timeline_endpoint, get_settings, get_style_profile, get_template_endpoint,
+    get_user_model, get_world_events, import_character, import_preset_endpoint,
+    instantiate_template_endpoint, list_agent_tools, list_character_revisions_endpoint,
+    list_characters, list_conversation_policies_endpoint, list_conversations_endpoint,
+    list_images_endpoint, list_models, list_personas_endpoint, list_plugin_tools_endpoint,
+    list_presets_endpoint, list_providers_endpoint, list_scenes_endpoint, list_sessions_endpoint,
+    list_style_profiles, list_templates_endpoint, plan_conversation_migration_endpoint,
     preview_chat_assembly, reextract_character_assets, regen_chat, resolve_provider_endpoint,
-    rollback_chat, rollback_drift, serve_image_endpoint, serve_session_image_endpoint, style_learn,
-    style_review, swipe_chat, switch_branch, test_plugin_tool_endpoint, unbind_persona_endpoint,
-    update_character_card, update_character_lorebook, update_drift, update_persona_endpoint,
+    rollback_chat, rollback_conversation_migration_endpoint, rollback_drift, serve_image_endpoint,
+    serve_session_image_endpoint, style_learn, style_review, swipe_chat, switch_branch,
+    test_plugin_tool_endpoint, unbind_persona_endpoint, update_character_card,
+    update_character_lorebook, update_drift, update_persona_endpoint,
     update_persona_multi_endpoint, update_plot_arc, update_providers_endpoint,
     update_resident_memory, update_routing_endpoint, update_settings, update_user_model,
     upsert_plugin_tool_endpoint,
@@ -490,6 +493,24 @@ pub fn create_router_with_conversation_policy_registry(
         .route(
             "/v1/conversation-policies",
             get(list_conversation_policies_endpoint),
+        )
+        .route(
+            "/v1/conversation-migrations/plan",
+            post(plan_conversation_migration_endpoint)
+                .layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/conversation-migrations",
+            post(execute_conversation_migration_endpoint)
+                .layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/conversation-migrations/:migration_id/export",
+            get(get_conversation_migration_export_endpoint),
+        )
+        .route(
+            "/v1/conversation-migrations/:migration_id/rollback",
+            post(rollback_conversation_migration_endpoint),
         )
         .route(
             "/v1/conversations/:conversation_id",

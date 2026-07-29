@@ -510,6 +510,106 @@ impl ChatLog {
         )?))
     }
 
+    /// Load an existing chat log without creating, migrating, repairing, or
+    /// deleting any source file.
+    ///
+    /// Explicit Conversation migrations use this path so their plan and backup
+    /// are computed from the original legacy bytes before any write occurs.
+    pub fn load_existing_read_only(
+        data_root: &Path,
+        character_id: &str,
+        session_id: Option<&SessionId>,
+    ) -> Result<Option<Self>, AirpError> {
+        let character_id = crate::types::CharacterId::new(character_id)?;
+        let character_id = character_id.as_str();
+        let scope = session_id.map(ToString::to_string);
+        let canonical = Self::scoped_jsonl_path(data_root, character_id, scope.as_deref());
+        if canonical.is_file() {
+            let salt = Self::legacy_scope_salt(character_id, scope.as_deref());
+            let parsed = Self::read_messages_jsonl(&canonical, &salt)?;
+            let meta_path = Self::scoped_meta_path(data_root, character_id, scope.as_deref());
+            let metadata = fs::read(&meta_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<ChatLogMeta>(&bytes).ok())
+                .unwrap_or_else(|| Self::derive_meta(character_id, scope.as_deref(), &canonical));
+            return Ok(Some(Self {
+                session_id: scope.clone().unwrap_or(metadata.session_id),
+                character_id: metadata.character_id,
+                messages: parsed.messages,
+                message_ids: parsed.message_ids,
+                message_timestamps: parsed.message_timestamps,
+                message_candidates: parsed.message_candidates,
+                message_swipe_index: parsed.message_swipe_index,
+                message_parents: parsed.message_parents,
+                active_leaf: metadata.active_leaf,
+                created_at: metadata.created_at,
+                updated_at: metadata.updated_at,
+                scope_session_id: scope,
+            }));
+        }
+        if session_id.is_some() {
+            return Ok(None);
+        }
+
+        let pre_cf2 = Self::pre_cf2_jsonl_path(data_root, character_id);
+        if pre_cf2.is_file() {
+            let salt = Self::legacy_scope_salt(character_id, None);
+            let parsed = Self::read_messages_jsonl(&pre_cf2, &salt)?;
+            let meta_path = Self::pre_cf2_meta_path(data_root, character_id);
+            let metadata = fs::read(&meta_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<ChatLogMeta>(&bytes).ok())
+                .unwrap_or_else(|| Self::derive_meta(character_id, None, &pre_cf2));
+            return Ok(Some(Self {
+                session_id: metadata.session_id,
+                character_id: metadata.character_id,
+                messages: parsed.messages,
+                message_ids: parsed.message_ids,
+                message_timestamps: parsed.message_timestamps,
+                message_candidates: parsed.message_candidates,
+                message_swipe_index: parsed.message_swipe_index,
+                message_parents: parsed.message_parents,
+                active_leaf: metadata.active_leaf,
+                created_at: metadata.created_at,
+                updated_at: metadata.updated_at,
+                scope_session_id: None,
+            }));
+        }
+
+        let legacy = Self::legacy_path(data_root, character_id);
+        if !legacy.is_file() {
+            return Ok(None);
+        }
+        let mut log: ChatLog = serde_json::from_slice(&fs::read(legacy)?)?;
+        log.scope_session_id = None;
+        log.normalize_legacy_vectors(character_id);
+        Ok(Some(log))
+    }
+
+    fn normalize_legacy_vectors(&mut self, character_id: &str) {
+        if self.message_timestamps.len() != self.messages.len() {
+            self.message_timestamps = self.messages.iter().map(|_| None).collect();
+        }
+        if self.message_ids.len() != self.messages.len() {
+            let salt = Self::legacy_scope_salt(character_id, None);
+            self.message_ids = self
+                .messages
+                .iter()
+                .enumerate()
+                .map(|(index, _)| ulid::derive_legacy_id(&salt, index))
+                .collect();
+        }
+        if self.message_candidates.len() != self.messages.len() {
+            self.message_candidates = self.messages.iter().map(|_| Vec::new()).collect();
+        }
+        if self.message_swipe_index.len() != self.messages.len() {
+            self.message_swipe_index = self.messages.iter().map(|_| 0).collect();
+        }
+        if self.message_parents.len() != self.messages.len() {
+            self.message_parents = self.messages.iter().map(|_| None).collect();
+        }
+    }
+
     /// Read recent messages without creating directories, migrating files, or repairing metadata.
     /// Used by request previews where observational reads must remain side-effect free.
     pub fn recent_existing_for_session(

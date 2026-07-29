@@ -6,6 +6,10 @@ use crate::conversation::{
     ConversationTurnRequest, ConversationTurnStatus, CreateConversationRequest,
     CreateSceneConversationRequest,
 };
+use crate::conversation_compat::{
+    ConversationMigrationScope, ExecuteConversationMigrationRequest,
+    PlanConversationMigrationRequest,
+};
 use crate::daemon::DaemonState;
 use crate::error::AirpError;
 use crate::types::SessionId;
@@ -23,6 +27,62 @@ struct TurnExecution<'a> {
     turn_id: String,
     fingerprint: String,
     registration: &'a crate::conversation_turn::ActiveTurnRegistration,
+}
+
+/// Read-only compatibility analysis. This endpoint never creates or repairs
+/// legacy files and returns `needs_review` when attribution is not provable.
+pub(in crate::daemon) async fn plan_conversation_migration_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(request): Json<PlanConversationMigrationRequest>,
+) -> Result<Json<crate::conversation_compat::ConversationMigrationReport>, AirpError> {
+    let root = effective_conversation_root(&state.data_root, request.user_id.as_ref())?;
+    let report = tokio::task::spawn_blocking(move || {
+        crate::conversation_compat::plan_conversation_migration(&root, request)
+    })
+    .await
+    .map_err(|error| AirpError::Internal(format!("migration planning task failed: {error}")))??;
+    Ok(Json(report))
+}
+
+/// Execute an explicitly confirmed copy migration after verifying the source
+/// digest returned by the planning endpoint.
+pub(in crate::daemon) async fn execute_conversation_migration_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(request): Json<ExecuteConversationMigrationRequest>,
+) -> Result<Json<crate::conversation_compat::ConversationMigrationReport>, AirpError> {
+    let root = effective_conversation_root(&state.data_root, request.user_id.as_ref())?;
+    Ok(Json(
+        crate::conversation_compat::execute_conversation_migration(root, request).await?,
+    ))
+}
+
+/// Remove the unmodified Conversation produced by one migration while keeping
+/// its verified readable backup and the untouched legacy source.
+pub(in crate::daemon) async fn rollback_conversation_migration_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(migration_id): axum::extract::Path<String>,
+    Query(query): Query<ConversationMigrationScope>,
+) -> Result<Json<crate::conversation_compat::ConversationMigrationReport>, AirpError> {
+    let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
+    Ok(Json(
+        crate::conversation_compat::rollback_conversation_migration(root, &migration_id).await?,
+    ))
+}
+
+/// Return the integrity-checked, human-readable source export retained for a
+/// completed or rolled-back migration.
+pub(in crate::daemon) async fn get_conversation_migration_export_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path(migration_id): axum::extract::Path<String>,
+    Query(query): Query<ConversationMigrationScope>,
+) -> Result<Json<crate::conversation_compat::LegacyConversationExport>, AirpError> {
+    let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
+    let export = tokio::task::spawn_blocking(move || {
+        crate::conversation_compat::load_migration_export(&root, &migration_id)
+    })
+    .await
+    .map_err(|error| AirpError::Internal(format!("migration export task failed: {error}")))??;
+    Ok(Json(export))
 }
 
 /// Create a generic Engine-owned Conversation manifest.
