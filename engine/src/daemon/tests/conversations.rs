@@ -43,6 +43,65 @@ async fn create_conversation(app: &Router, body: serde_json::Value) -> String {
     manifest["conversation_id"].as_str().unwrap().to_string()
 }
 
+fn write_character_card(data_root: &std::path::Path, character_id: &str) {
+    let directory = data_root.join("characters").join(character_id);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("card.json"),
+        format!(
+            r#"{{"name":"{character_id}","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}}"#
+        ),
+    )
+    .unwrap();
+}
+
+async fn create_solo_scene_conversation(app: &Router) -> String {
+    let scene = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/scenes")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "scene_id": "solo",
+                        "characters": [{"character_id": "alice", "role": "primary"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scene.status(), StatusCode::CREATED);
+    let conversation = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/scenes/solo/conversations")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "additional_participants": [
+                            {"participant_id": "human:gm", "kind": "human"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conversation.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(conversation.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    manifest["conversation_id"].as_str().unwrap().to_string()
+}
+
 #[tokio::test]
 async fn create_list_and_get_preserve_open_contract() {
     let (state, _tmp) = make_state_with_key(None);
@@ -376,6 +435,16 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
     let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let conversation_id = manifest["conversation_id"].as_str().unwrap();
 
+    let turn_id = crate::ulid::new_id();
+    let turn_body = serde_json::json!({
+        "turn_id": turn_id.clone(),
+        "user_actor_id": "human:gm",
+        "expected_next_sequence": 0,
+        "base": {
+            "user_profile": {"name": "GM", "variables": {}},
+            "message": "Welcome"
+        }
+    });
     let response = app
         .clone()
         .oneshot(
@@ -383,17 +452,7 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
                 .method("POST")
                 .uri(format!("/v1/conversations/{conversation_id}/turns"))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({
-                        "user_actor_id": "human:gm",
-                        "expected_next_sequence": 0,
-                        "base": {
-                            "user_profile": {"name": "GM", "variables": {}},
-                            "message": "Welcome"
-                        }
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(turn_body.to_string()))
                 .unwrap(),
         )
         .await
@@ -404,11 +463,76 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
         .unwrap();
     let outcome: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(outcome["status"], "completed");
-    assert_eq!(outcome["events"][0]["actor_id"], "human:gm");
-    assert_eq!(outcome["events"][1]["actor_id"], "character:alice");
-    assert_eq!(outcome["events"][2]["actor_id"], "character:bob");
-    assert_eq!(outcome["events"][3]["kind"], "turn.completed");
-    assert_eq!(outcome["next_sequence"], 4);
+    assert_eq!(outcome["lifecycle_state"], "completed");
+    assert_eq!(outcome["events"][0]["kind"], "turn.accepted");
+    assert_eq!(outcome["events"][1]["kind"], "turn.started");
+    assert_eq!(outcome["events"][2]["actor_id"], "human:gm");
+    assert_eq!(outcome["events"][3]["actor_id"], "character:alice");
+    assert_eq!(outcome["events"][4]["actor_id"], "character:bob");
+    assert_eq!(outcome["events"][5]["kind"], "turn.completed");
+    assert_eq!(outcome["events"][5]["payload"]["message_count"], 3);
+    assert_eq!(outcome["next_sequence"], 6);
+
+    let mut replay_body = turn_body.clone();
+    replay_body["base"]["endpoint"] = serde_json::json!("https://rotated.invalid/v1");
+    replay_body["base"]["api_key"] = serde_json::json!("rotated-secret");
+    let replay = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(replay_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = axum::body::to_bytes(replay.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let replay: serde_json::Value = serde_json::from_slice(&replay).unwrap();
+    assert_eq!(
+        replay, outcome,
+        "credentials and transport location must not change semantic idempotency"
+    );
+
+    let mut conflicting_body = turn_body.clone();
+    conflicting_body["base"]["message"] = serde_json::json!("Different");
+    let conflict = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(conflicting_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+
+    let status = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status = axum::body::to_bytes(status.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let status: serde_json::Value = serde_json::from_slice(&status).unwrap();
+    assert_eq!(status["lifecycle_state"], "completed");
+    assert_eq!(status["events"], outcome["events"]);
 
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2);
@@ -692,57 +816,9 @@ async fn provider_failure_is_reported_as_partially_committed_turn() {
         .await;
     let (state, _tmp) = make_state_with_key(None);
     state.config.write().unwrap().endpoint = server.uri();
-    let directory = state.data_root.join("characters").join("alice");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(
-        directory.join("card.json"),
-        r#"{"name":"alice","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}"#,
-    )
-    .unwrap();
+    write_character_card(&state.data_root, "alice");
     let app = create_router(state);
-    let scene = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri("/v1/scenes")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({
-                        "scene_id": "solo",
-                        "characters": [{"character_id": "alice", "role": "primary"}]
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(scene.status(), StatusCode::CREATED);
-    let conversation = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri("/v1/scenes/solo/conversations")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({
-                        "additional_participants": [
-                            {"participant_id": "human:gm", "kind": "human"}
-                        ]
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = axum::body::to_bytes(conversation.into_body(), 16 * 1024)
-        .await
-        .unwrap();
-    let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let conversation_id = manifest["conversation_id"].as_str().unwrap();
+    let conversation_id = create_solo_scene_conversation(&app).await;
     let response = app
         .oneshot(
             axum::http::Request::builder()
@@ -770,15 +846,448 @@ async fn provider_failure_is_reported_as_partially_committed_turn() {
         .unwrap();
     let outcome: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(outcome["status"], "partially_committed");
+    assert_eq!(outcome["lifecycle_state"], "failed");
     assert_eq!(outcome["failure"]["code"], "generation_failed");
-    assert_eq!(outcome["events"][0]["kind"], "message.created");
-    assert_eq!(outcome["events"][1]["kind"], "turn.failed");
+    assert_eq!(outcome["events"][0]["kind"], "turn.accepted");
+    assert_eq!(outcome["events"][1]["kind"], "turn.started");
+    assert_eq!(outcome["events"][2]["kind"], "message.created");
+    assert_eq!(outcome["events"][3]["kind"], "turn.failed");
     assert_eq!(
-        outcome["events"][1]["payload"]["commit_state"],
+        outcome["events"][3]["payload"]["commit_state"],
         "partially_committed"
     );
     assert!(
         !String::from_utf8_lossy(&body).contains("private upstream detail"),
         "upstream details must not cross the Engine API boundary"
     );
+}
+
+#[tokio::test]
+async fn dangling_turn_is_reconciled_to_unknown_commit_without_deleting_events() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let conversation_id = create_conversation(&app, create_body()).await;
+    let turn_id = crate::ulid::new_id();
+
+    for (sequence, kind) in [(0, "turn.accepted"), (1, "turn.started")] {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/conversations/{conversation_id}/events"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": kind,
+                            "correlation_id": turn_id.clone(),
+                            "payload": if sequence == 0 {
+                                serde_json::json!({"request_fingerprint": "stale"})
+                            } else {
+                                serde_json::json!({})
+                            },
+                            "expected_next_sequence": sequence
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let snapshot: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(snapshot["lifecycle_state"], "unknown_commit");
+    assert_eq!(snapshot["events"].as_array().unwrap().len(), 3);
+    assert_eq!(snapshot["events"][2]["kind"], "turn.unknown_commit");
+    assert_eq!(snapshot["next_sequence"], 3);
+
+    let second = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let second = axum::body::to_bytes(second.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let second: serde_json::Value = serde_json::from_slice(&second).unwrap();
+    assert_eq!(second, snapshot, "recovery must itself be idempotent");
+}
+
+#[tokio::test]
+async fn legacy_accepted_turn_without_fingerprint_is_not_reexecuted() {
+    let (state, _tmp) = make_state_with_key(None);
+    write_character_card(&state.data_root, "alice");
+    let app = create_router(state);
+    let conversation_id = create_solo_scene_conversation(&app).await;
+    let turn_id = crate::ulid::new_id();
+    let accepted = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/events"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "turn.accepted",
+                        "correlation_id": turn_id.clone(),
+                        "payload": {},
+                        "expected_next_sequence": 0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let retry = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/conversations/{conversation_id}/turns"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "turn_id": turn_id,
+                        "user_actor_id": "human:gm",
+                        "expected_next_sequence": 1,
+                        "base": {
+                            "user_profile": {"name": "GM", "variables": {}},
+                            "message": "Do not execute"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn turn_endpoints_reject_malformed_durable_ids() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let conversation_id = create_conversation(&app, create_body()).await;
+    let cases = [
+        (
+            "POST",
+            format!("/v1/conversations/{conversation_id}/turns"),
+            Body::from(
+                serde_json::json!({
+                    "turn_id": "not-a-durable-id",
+                    "user_actor_id": "user",
+                    "expected_next_sequence": 0,
+                    "base": {
+                        "user_profile": {"name": "User", "variables": {}},
+                        "message": "hi"
+                    }
+                })
+                .to_string(),
+            ),
+        ),
+        (
+            "GET",
+            format!("/v1/conversations/{conversation_id}/turns/not-a-durable-id"),
+            Body::empty(),
+        ),
+        (
+            "POST",
+            format!("/v1/conversations/{conversation_id}/turns/not-a-durable-id/cancel"),
+            Body::empty(),
+        ),
+    ];
+
+    for (method, uri, body) in cases {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(body)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn explicit_cancel_interrupts_generation_and_commits_cancelled_state() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_delay(std::time::Duration::from_secs(5))
+                .set_body_raw(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"late\"}}]}\n\n\
+                     data: [DONE]\n\n",
+                    "text/event-stream",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (state, _tmp) = make_state_with_key(None);
+    state.config.write().unwrap().endpoint = server.uri();
+    write_character_card(&state.data_root, "alice");
+    let app = create_router(state);
+    let conversation_id = create_solo_scene_conversation(&app).await;
+    let turn_id = crate::ulid::new_id();
+    let turn_app = app.clone();
+    let turn_uri = format!("/v1/conversations/{conversation_id}/turns");
+    let turn_body = serde_json::json!({
+        "turn_id": turn_id.clone(),
+        "user_actor_id": "human:gm",
+        "expected_next_sequence": 0,
+        "base": {
+            "user_profile": {"name": "GM", "variables": {}},
+            "message": "Stop this"
+        }
+    });
+    let turn_task = tokio::spawn(async move {
+        turn_app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(turn_uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(turn_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+    });
+
+    let mut provider_started = false;
+    for _ in 0..500 {
+        if !server.received_requests().await.unwrap().is_empty() {
+            provider_started = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        provider_started,
+        "provider request did not start within the 5 second test deadline"
+    );
+
+    let running = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(running.status(), StatusCode::OK);
+    let running = axum::body::to_bytes(running.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let running: serde_json::Value = serde_json::from_slice(&running).unwrap();
+    assert_eq!(running["lifecycle_state"], "running");
+
+    let cancel = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}/cancel"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let cancel = axum::body::to_bytes(cancel.into_body(), 4096)
+        .await
+        .unwrap();
+    let cancel: serde_json::Value = serde_json::from_slice(&cancel).unwrap();
+    assert_eq!(cancel["cancel_requested"], true);
+
+    let response = turn_task.await.unwrap().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let outcome: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(outcome["status"], "partially_committed");
+    assert_eq!(outcome["lifecycle_state"], "cancelled");
+    assert_eq!(
+        outcome["events"].as_array().unwrap().last().unwrap()["kind"],
+        "turn.cancelled"
+    );
+
+    let status = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = axum::body::to_bytes(status.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let status: serde_json::Value = serde_json::from_slice(&status).unwrap();
+    assert_eq!(status["lifecycle_state"], "cancelled");
+}
+
+#[tokio::test]
+async fn client_disconnect_preserves_partial_journal_for_unknown_commit_recovery() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_delay(std::time::Duration::from_secs(5))
+                .set_body_raw(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"late\"}}]}\n\n\
+                     data: [DONE]\n\n",
+                    "text/event-stream",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (state, _tmp) = make_state_with_key(None);
+    state.config.write().unwrap().endpoint = server.uri();
+    write_character_card(&state.data_root, "alice");
+    let app = create_router(state);
+    let conversation_id = create_solo_scene_conversation(&app).await;
+    let turn_id = crate::ulid::new_id();
+    let turn_app = app.clone();
+    let turn_uri = format!("/v1/conversations/{conversation_id}/turns");
+    let turn_body = serde_json::json!({
+        "turn_id": turn_id.clone(),
+        "user_actor_id": "human:gm",
+        "expected_next_sequence": 0,
+        "base": {
+            "user_profile": {"name": "GM", "variables": {}},
+            "message": "Keep the durable part"
+        }
+    });
+    let turn_task = tokio::spawn(async move {
+        turn_app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(turn_uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(turn_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+    });
+
+    let mut provider_started = false;
+    for _ in 0..500 {
+        if !server.received_requests().await.unwrap().is_empty() {
+            provider_started = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        provider_started,
+        "provider request did not start within the 5 second test deadline"
+    );
+    turn_task.abort();
+    assert!(turn_task.await.unwrap_err().is_cancelled());
+
+    let status = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status = axum::body::to_bytes(status.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let status: serde_json::Value = serde_json::from_slice(&status).unwrap();
+    assert_eq!(status["lifecycle_state"], "unknown_commit");
+    let kinds: Vec<_> = status["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "turn.accepted",
+            "turn.started",
+            "message.created",
+            "turn.unknown_commit"
+        ]
+    );
+    assert_eq!(
+        status["events"][2]["payload"]["content"],
+        "Keep the durable part"
+    );
+
+    let journal = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/events?limit=10"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let journal = axum::body::to_bytes(journal.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let journal: serde_json::Value = serde_json::from_slice(&journal).unwrap();
+    assert_eq!(journal["events"], status["events"]);
 }

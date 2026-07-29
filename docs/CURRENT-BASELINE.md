@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
 > 基线日期：2026-07-29
-> 代码基线：`main@8d4270e`
+> 代码基线：`main@e33356a`
 > 用途：冷启动开发、审计和产品判断的第一事实入口。
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -34,7 +34,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 |---|---|---|---|---|
 | 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools | 已有管理、选择、导入与诊断入口 | 高级生命周期、完整导出/恢复仍未闭合 |
 | 会话与聊天 | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe | OpenAI-compatible chat SSE、continue/regen/search | 命名会话、流式聊天、编辑/删除/分支/Swipe、导出 | 长会话虚拟化、跨资源事务与完整恢复仍开放 |
-| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message projection、policy registry、scene round-robin 回合执行 | `/v1/conversations*`、`/v1/conversation-policies`；未知策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同 | 运行状态/审计 projection、取消/未知提交恢复、长上下文压缩与外部策略加载仍开放 |
+| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行 | `/v1/conversations*`、turn 状态/显式取消、`/v1/conversation-policies`；未知策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同 | 通用审计 projection、跨进程 provider reconciliation、长上下文压缩与外部策略加载仍开放 |
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | advisory 语义、完整 session 物化与生命周期未完成 |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 30 个内置工具；运行时还可加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径仍有开放审计项；不是通用可配置多 Agent 平台 |
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP 接口 | 屏 36–42 已接入 | 功能存在不等于真实 provider、数据恢复与用户工作流已验收 |
@@ -100,16 +100,16 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 6. 验证快照
 
-本次文档校准针对 `main@200fed9` 运行以下本地验证：
+本次文档校准针对 PR #364 工作树（基于 `main@e33356a`）运行以下本地验证；该 PR 在合并前不冒充 `main`：
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| Rust workspace | `cargo test --workspace --locked` | engine lib 1056 passed / 2 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed |
+| Rust workspace | `cargo test --workspace --locked` | engine lib 1111 passed / 2 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1168 passed / 2 ignored |
 | Rust 静态门禁 | `cargo fmt --all -- --check`；workspace clippy `-D warnings`；rustdoc `-D warnings` | 通过 |
-| WebUI | `node --test webui/tests/*.test.mjs` | 50 passed |
+| WebUI | `node --test webui/tests/*.test.mjs` | 66 passed |
 | Vue/Tauri UI | `npm run typecheck`；`npm test -- --run`（`ui/`） | typecheck 通过；98 passed |
-| 工程工具 | dep-governance；agent-exploration Node tests | 91 passed；38 passed |
-| 仓库/文档 | Provider/插件 ignore 合同、相对 `.md` 链接、陈旧基线扫描、`git diff --check` | 通过；ignore 合同已加入 PR gate |
+| 工程工具 | dep-governance；agent-exploration Node tests | 本批未复跑，不从历史结果外推 |
+| 仓库/文档 | `git diff --check` | 通过 |
 
 未在本次校准中运行的 production topology、Windows/Linux artifact、真实 provider/browser、网络故障、崩溃注入和长会话测试，不得由本表推断为通过。
 

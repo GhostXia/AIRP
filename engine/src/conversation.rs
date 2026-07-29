@@ -235,6 +235,10 @@ pub struct ConversationEventWindow {
 pub struct ConversationTurnRequest {
     #[serde(default)]
     pub user_id: Option<UserId>,
+    /// Stable client-supplied identity for retries, status reads, and explicit
+    /// cancellation. Omission preserves the legacy one-shot submission path.
+    #[serde(default)]
+    pub turn_id: Option<String>,
     pub user_actor_id: String,
     pub expected_next_sequence: u64,
     pub base: crate::daemon::ChatCompletionRequest,
@@ -264,6 +268,7 @@ pub struct ConversationTurnFailure {
 pub struct ConversationTurnOutcome {
     pub turn_id: String,
     pub status: ConversationTurnStatus,
+    pub lifecycle_state: crate::conversation_turn::ConversationTurnLifecycleState,
     pub events: Vec<ConversationEvent>,
     pub next_sequence: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
