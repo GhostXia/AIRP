@@ -163,12 +163,18 @@
         { mes_example: lastGenerated },
         append,
       );
-      renderResult(resp);
-      setStatus('已写入角色卡（' + resp.turns_generated + ' 轮）');
-      $('#gen-current-content').textContent = current.mesExample || '（角色卡尚未设置 mes_example）';
-      $('#gen-current').hidden = false;
+      // 写入已提交——立即作废一次性凭证，防止网络抖动后重试导致 append 重复。
       lastGenerated = '';
       written = true;
+      renderResult(resp);
+      setStatus('已写入角色卡（' + resp.turns_generated + ' 轮）');
+      if (current) {
+        $('#gen-current-content').textContent = current.mesExample || '（角色卡尚未设置 mes_example）';
+        $('#gen-current').hidden = false;
+      } else {
+        // reload 失败但写入已成功，后台刷新当前 mes_example 展示。
+        loadCurrentMesExample();
+      }
     } catch (error) {
       setStatus('写入失败：' + AIRPApi.errorMessage(error.data, error.message), true);
     } finally {
