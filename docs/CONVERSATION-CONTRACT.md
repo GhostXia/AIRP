@@ -1,8 +1,8 @@
 # Engine Conversation 合同
 
-> 状态：v1 基础、策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message projection 与 durable turn lifecycle 已实现；旧 chat/scene 迁移仍待后续切片
+> 状态：v1 基础、策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message/turn projection 与有界长历史 context 已实现；旧 chat/scene 迁移仍待后续切片
 >
-> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
+> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_context.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
 
 ## 1. 定位
 
@@ -26,7 +26,8 @@ Conversation ID 复用经验证的 UUID `SessionId` 格式，但它是独立资�
 <effective-root>/conversations/{conversation_id}/
 ├── manifest.json
 ├── events.jsonl
-└── journal_state.json
+├── journal_state.json
+└── context_checkpoint.json
 ```
 
 - 单用户请求的 effective root 是 `data/`；
@@ -34,6 +35,7 @@ Conversation ID 复用经验证的 UUID `SessionId` 格式，但它是独立资�
 - `manifest.json` 是不可变初始身份与配置；
 - `events.jsonl` 是运行变化的唯一真相；
 - `journal_state.json` 只是经过日志长度、尾事件 ID 和 sequence 复核的加速缓存。缺失、不一致或损坏时必须扫描事件日志恢复，不能覆盖事件真相。
+- `context_checkpoint.json` 是可删除的派生偏移索引。它绑定完整 journal SHA-256 与自身校验和；缺失、损坏或 journal 变化时从 manifest + journal 重建，写入失败不阻断上下文投影。
 
 ## 3. Manifest v1
 
@@ -132,7 +134,52 @@ cursor 必须属于当前 conversation，跨 conversation 使用返回 `400`。�
 
 projection 是 derived view，不落盘为第二真相。统计字段仅解释本次重建结果，删除后可由相同输入恢复。
 
-## 7. HTTP API
+## 7. 长历史 context、checkpoint 与 summary
+
+`ConversationService::context_projection` 是 turn executor 使用的 Engine-owned 派生视图。客户端提交
+turn 时不能注入 `messages_history`；历史预算、淘汰顺序和 summary 选择均由 Engine 决定，不由
+WebUI/Tauri 截断权威历史。
+
+当前 v1 预算为：
+
+- 默认最多 12,000 个保守 token units、128 条普通消息；普通消息硬上界为 256 条；
+- token unit 以 UTF-8 byte 数计量，作为 provider-neutral 的 byte-fallback 上界，不复用仅适合卷系统软压力提示的粗略 token estimator；
+- 已验证 summary 作为 system message 固定保留；旧的普通消息从派生 prompt 头部淘汰；
+- 本轮新增 user/assistant 消息继续共用同一预算。若 summary 加最新单条消息仍超限，Engine 写入明确的 `turn.failed`，不会静默截断最新内容或留下悬空 `running`；
+- `messages_history`、context checkpoint 与 summary 都不删除或重写 `events.jsonl`，cursor/export/audit 仍能读取完整事件。
+
+`context_checkpoint.json` 只保存最新 summary 与最近 257 条合法消息的 journal byte offset、
+sequence、event ID 和保守 token units。读取前复核 checkpoint 自身 SHA-256、完整 journal
+SHA-256、journal 长度和所引用事件；任何失配都扫描 journal 重建。内存上界为
+`O(max_messages)`，而不是 `O(journal events)`。
+
+`context.summary.created` 是保留事件。其 payload 必须带：
+
+- `schema_version = 1` 与非空 `content`；
+- 覆盖当前完整前缀的 `first_sequence/last_sequence/event_count`、首尾 event ID 和原始 journal bytes 的 SHA-256；
+- 非空 `policy_id/policy_version/provider/model/operation_id` provenance；
+- 不高于 Engine 默认 context 上界的 `target_token_budget`。
+
+summary 只能总结 append 前的完整连续前缀，Engine 在同一 per-conversation 写边界内重新扫描并
+验证来源；错误 digest、过期边界、空来源或缺失 provenance 在追加前 fail-closed。summary 是
+可审计的新增事实，不是删除、覆盖或压缩原事件的许可。
+
+2026-07-29 在维护者 Windows/D 盘环境的 release 基准使用 50,000 条 message journal：
+
+```text
+cargo test -p airp-core --release \
+  conversation_context::tests::long_history_context_benchmark_and_soak \
+  -- --ignored --nocapture
+
+# cold checkpoint rebuild: 78 ms
+# 50 warm projections: 1334 ms total, 26.683 ms mean
+# retained_messages=128
+```
+
+该数据是单机回归证据，不是生产 SLO。测试还覆盖 10,000 条 journal 的有界窗口/投影、
+checkpoint 删除与 stale 重建、错误 summary 边界、原事件保留，以及 50 次 warm soak。
+
+## 8. HTTP API
 
 | Method | Path | 当前语义 |
 |---|---|---|
@@ -173,7 +220,7 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 
 客户端不能在 turn 请求中注入 `scene_id`、`session_id`、`character_id`、history 或 legacy branch/swipe 控制。provider、model、preset、persona 和采样参数继续复用既有 chat pipeline 合同，因此 UI 只是能力调用方，不决定 Engine 的作用域、历史或调度。
 
-## 8. 兼容边界
+## 9. 兼容边界
 
 - 旧 `/v1/chat/completions`、`/v1/chat/*`、`/v1/sessions/*` 和角色目录布局不变；
 - 未提供 `session_id` 的 legacy 角色聊天继续使用原角色级 history/memory；
@@ -181,11 +228,11 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 - 现有 WebUI “多人场景”没有权威共享历史，不能把其多个角色轮询自动导入为真实 conversation；
 - 迁移只能显式执行，并生成可读报告；没有可靠消息归属的数据不得猜测 speaker。
 
-## 9. 后续实现门
+## 10. 后续实现门
 
 1. Policy registry 后续：在现有注册/解析/descriptor 边界上增加经过 capability 校验的外部策略装载，以及可配置停止条件；不得让任意配置变成代码执行。
 2. Projection 后续：在已交付的 message/history 与 turn lifecycle projection 上增加通用审计视图；所有投影继续保持可重建，不成为第二真相。
-3. Turn executor 后续：增加可配置停止条件、跨进程 provider operation reconciliation，以及不改变 journal 真相的长上下文压缩策略。
+3. Turn executor 后续：增加可配置停止条件、跨进程 provider operation reconciliation，以及 summary 生成 policy；现有 v1 只交付可验证的 summary 事件与有界消费合同，不宣称已自动调用模型生成 summary。
 4. Compatibility adapters：让角色 chat、scene/group 和 Council 逐步消费通用内核；旧 API 在兼容期保持响应形状。
 5. Recovery/export：纳入统一备份 manifest、完整性校验与恢复演练。
 
