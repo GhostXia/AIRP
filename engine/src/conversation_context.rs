@@ -184,6 +184,8 @@ impl ConversationService {
         .await
     }
 
+    /// Load, extend, or rebuild the derived checkpoint under the caller-held
+    /// conversation I/O lock, then project the requested bounded history.
     fn context_projection_blocking(
         &self,
         conversation_id: SessionId,
@@ -401,6 +403,8 @@ fn rebuild_checkpoint(
     })
 }
 
+/// Verify a checkpoint against its indexed journal prefix and referenced
+/// records, extending it when the journal contains only an appended suffix.
 fn load_verified_checkpoint(
     manifest: &ConversationManifest,
     checkpoint_path: &Path,
@@ -489,6 +493,10 @@ fn load_verified_checkpoint(
     }))
 }
 
+/// Scan events appended after a verified checkpoint.
+///
+/// Summary events deliberately return `None` so the caller performs a full
+/// rebuild and validates the summary's complete-prefix digest and IDs.
 fn extend_checkpoint(
     manifest: &ConversationManifest,
     journal_path: &Path,
@@ -554,6 +562,7 @@ fn extend_checkpoint(
     Ok(Some(checkpoint))
 }
 
+/// Atomically persist the derived checkpoint with a checksum over its payload.
 fn write_checkpoint(
     path: &Path,
     checkpoint: &ConversationContextCheckpoint,
@@ -566,6 +575,8 @@ fn write_checkpoint(
     crate::data_dir::replace_file(path, &serde_json::to_vec(&envelope)?)
 }
 
+/// Select the newest messages that fit the Engine-owned token and message
+/// limits from a checkpoint whose references were already verified.
 fn project_from_checkpoint(
     manifest: &ConversationManifest,
     path: &Path,
