@@ -61,7 +61,7 @@ fn conversation_lock(data_root: &Path, conversation_id: SessionId) -> Arc<tokio:
     scoped_conversation_lock(&CONVERSATION_LOCKS, data_root, conversation_id)
 }
 
-fn conversation_io_lock(
+pub(crate) fn conversation_io_lock(
     data_root: &Path,
     conversation_id: SessionId,
 ) -> Arc<tokio::sync::Mutex<()>> {
@@ -470,6 +470,14 @@ impl ConversationService {
                 )));
             }
         }
+        if request.kind == crate::conversation_context::CONVERSATION_CONTEXT_SUMMARY_EVENT {
+            crate::conversation_context::validate_summary_append(
+                &path,
+                conversation_id,
+                next_sequence,
+                &request.payload,
+            )?;
+        }
 
         let event = ConversationEvent {
             schema_version: CONVERSATION_EVENT_SCHEMA_VERSION,
@@ -699,13 +707,17 @@ impl ConversationService {
         Ok(events)
     }
 
-    fn conversation_dir(&self, conversation_id: SessionId) -> PathBuf {
+    pub(crate) fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+
+    pub(crate) fn conversation_dir(&self, conversation_id: SessionId) -> PathBuf {
         self.data_root
             .join("conversations")
             .join(conversation_id.to_string())
     }
 
-    fn events_path(&self, conversation_id: SessionId) -> PathBuf {
+    pub(crate) fn events_path(&self, conversation_id: SessionId) -> PathBuf {
         self.conversation_dir(conversation_id).join("events.jsonl")
     }
 
@@ -766,7 +778,10 @@ impl ConversationService {
     }
 }
 
-async fn run_conversation_io<T, F>(operation: &'static str, task: F) -> Result<T, AirpError>
+pub(crate) async fn run_conversation_io<T, F>(
+    operation: &'static str,
+    task: F,
+) -> Result<T, AirpError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, AirpError> + Send + 'static,
@@ -844,7 +859,7 @@ fn validate_manifest_identity(
     Ok(())
 }
 
-fn validate_event_identity(
+pub(crate) fn validate_event_identity(
     event: &ConversationEvent,
     conversation_id: SessionId,
     expected_sequence: u64,

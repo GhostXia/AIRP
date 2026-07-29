@@ -264,7 +264,6 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     let result = execute_new_turn(
         &state,
         service,
-        manifest,
         request,
         plan,
         TurnExecution {
@@ -285,7 +284,6 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
 async fn execute_new_turn(
     state: &Arc<DaemonState>,
     service: ConversationService,
-    manifest: crate::conversation::ConversationManifest,
     request: ConversationTurnRequest,
     plan: crate::conversation_policy::ConversationTurnPlan,
     execution: TurnExecution<'_>,
@@ -375,10 +373,60 @@ async fn execute_new_turn(
         .await;
     }
 
-    let history_events = service.all_events_locked_async(conversation_id).await?;
-    let mut history =
-        crate::conversation_projection::project_conversation_messages(&manifest, &history_events)
-            .into_chat_messages();
+    let context_budget = crate::conversation_context::ConversationContextBudget::default();
+    let mut history = match service
+        .context_projection(conversation_id, context_budget)
+        .await
+    {
+        Ok(projection) => projection.messages,
+        Err(error) => {
+            tracing::error!(
+                %conversation_id,
+                %turn_id,
+                %error,
+                "conversation context projection failed before user event commit"
+            );
+            return commit_turn_terminal(
+                service,
+                conversation_id,
+                turn_id,
+                crate::conversation_turn::TURN_FAILED,
+                None,
+                "context_projection_failed",
+                started_id,
+                next_sequence,
+                committed,
+            )
+            .await;
+        }
+    };
+    if let Err(error) = crate::conversation_context::push_bounded_context_message(
+        &mut history,
+        crate::adapter::ChatMessage {
+            role: crate::adapter::MessageRole::User,
+            content: request.base.message.clone(),
+        },
+        context_budget,
+    ) {
+        tracing::error!(
+            %conversation_id,
+            %turn_id,
+            %error,
+            "conversation user message exceeds context budget"
+        );
+        return commit_turn_terminal(
+            service,
+            conversation_id,
+            turn_id,
+            crate::conversation_turn::TURN_FAILED,
+            None,
+            "context_budget_exceeded",
+            started_id,
+            next_sequence,
+            committed,
+        )
+        .await;
+    }
     let user_event = service
         .append_event_locked_async(
             conversation_id,
@@ -397,10 +445,6 @@ async fn execute_new_turn(
             },
         )
         .await?;
-    history.push(crate::adapter::ChatMessage {
-        role: crate::adapter::MessageRole::User,
-        content: request.base.message.clone(),
-    });
     next_sequence = user_event.sequence + 1;
     let user_event_id = user_event.event_id.clone();
     committed.push(user_event);
@@ -582,11 +626,35 @@ async fn execute_new_turn(
             )
             .await?;
         next_sequence += 1;
-        history.push(crate::adapter::ChatMessage {
-            role: crate::adapter::MessageRole::Assistant,
-            content: format!("[{participant_id}] {content}"),
-        });
         committed.push(assistant_event);
+        if let Err(error) = crate::conversation_context::push_bounded_context_message(
+            &mut history,
+            crate::adapter::ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content: format!("[{participant_id}] {content}"),
+            },
+            context_budget,
+        ) {
+            tracing::error!(
+                %conversation_id,
+                %turn_id,
+                %participant_id,
+                %error,
+                "conversation assistant message exceeds context budget"
+            );
+            return commit_turn_terminal(
+                service,
+                conversation_id,
+                turn_id,
+                crate::conversation_turn::TURN_FAILED,
+                Some(participant_id),
+                "context_budget_exceeded",
+                user_event_id,
+                next_sequence,
+                committed,
+            )
+            .await;
+        }
         registration.publish(
             crate::conversation_turn::ConversationTurnLifecycleState::Running,
             &committed,
