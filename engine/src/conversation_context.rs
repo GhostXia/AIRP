@@ -21,7 +21,7 @@ pub const DEFAULT_CONVERSATION_CONTEXT_TOKEN_BUDGET: usize = 12_000;
 pub const DEFAULT_CONVERSATION_CONTEXT_MESSAGE_BUDGET: usize = 128;
 pub const MAX_CONVERSATION_CONTEXT_MESSAGE_BUDGET: usize = 256;
 
-const CONTEXT_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+const CONTEXT_CHECKPOINT_SCHEMA_VERSION: u32 = 2;
 const RECENT_MESSAGE_INDEX_LIMIT: usize = MAX_CONVERSATION_CONTEXT_MESSAGE_BUDGET + 1;
 
 /// Engine-owned limits for the derived prompt history.
@@ -148,7 +148,6 @@ struct ContextEventRef {
 struct ConversationContextCheckpoint {
     schema_version: u32,
     journal_bytes: u64,
-    journal_sha256: String,
     source_next_sequence: u64,
     total_message_count: u64,
     tail_event: Option<ContextEventRef>,
@@ -161,6 +160,11 @@ struct ConversationContextCheckpoint {
 struct ConversationContextCheckpointEnvelope {
     checkpoint: ConversationContextCheckpoint,
     checkpoint_sha256: String,
+}
+
+struct LoadedCheckpoint {
+    checkpoint: ConversationContextCheckpoint,
+    changed: bool,
 }
 
 impl ConversationService {
@@ -202,21 +206,26 @@ impl ConversationService {
         let checkpoint_path = self
             .conversation_dir(conversation_id)
             .join("context_checkpoint.json");
-        let checkpoint = match load_verified_checkpoint(&checkpoint_path, &journal_path)? {
-            Some(checkpoint) => checkpoint,
+        let loaded = match load_verified_checkpoint(&manifest, &checkpoint_path, &journal_path)? {
+            Some(loaded) => loaded,
             None => {
                 let checkpoint = rebuild_checkpoint(&manifest, &journal_path)?;
-                if let Err(error) = write_checkpoint(&checkpoint_path, &checkpoint) {
-                    tracing::warn!(
-                        %conversation_id,
-                        %error,
-                        "conversation context checkpoint write failed; using journal-derived projection"
-                    );
+                LoadedCheckpoint {
+                    checkpoint,
+                    changed: true,
                 }
-                checkpoint
             }
         };
-        project_from_checkpoint(&manifest, &journal_path, checkpoint, budget)
+        if loaded.changed {
+            if let Err(error) = write_checkpoint(&checkpoint_path, &loaded.checkpoint) {
+                tracing::warn!(
+                    %conversation_id,
+                    %error,
+                    "conversation context checkpoint write failed; using journal-derived projection"
+                );
+            }
+        }
+        project_from_checkpoint(&manifest, &journal_path, loaded.checkpoint, budget)
     }
 }
 
@@ -384,7 +393,6 @@ fn rebuild_checkpoint(
     Ok(ConversationContextCheckpoint {
         schema_version: CONTEXT_CHECKPOINT_SCHEMA_VERSION,
         journal_bytes: offset,
-        journal_sha256: hex_digest(hasher.finalize()),
         source_next_sequence: expected_sequence,
         total_message_count,
         tail_event,
@@ -394,9 +402,10 @@ fn rebuild_checkpoint(
 }
 
 fn load_verified_checkpoint(
+    manifest: &ConversationManifest,
     checkpoint_path: &Path,
     journal_path: &Path,
-) -> Result<Option<ConversationContextCheckpoint>, AirpError> {
+) -> Result<Option<LoadedCheckpoint>, AirpError> {
     let Ok(bytes) = std::fs::read(checkpoint_path) else {
         return Ok(None);
     };
@@ -412,23 +421,31 @@ fn load_verified_checkpoint(
         return Ok(None);
     }
     let journal_bytes = journal_path.metadata()?.len();
-    if journal_bytes != envelope.checkpoint.journal_bytes {
+    if journal_bytes < envelope.checkpoint.journal_bytes {
         return Ok(None);
     }
-    let Some(tail_reference) = envelope.checkpoint.tail_event.as_ref() else {
-        return Ok(None);
-    };
     let mut reader = BufReader::new(File::open(journal_path)?);
-    let Ok((tail_event, tail_end)) = read_event_ref(&mut reader, tail_reference) else {
-        return Ok(None);
-    };
-    if tail_end != journal_bytes
-        || tail_event
-            .sequence
-            .checked_add(1)
-            .is_none_or(|next| next != envelope.checkpoint.source_next_sequence)
-    {
-        return Ok(None);
+    match envelope.checkpoint.tail_event.as_ref() {
+        Some(tail_reference) => {
+            let Ok((tail_event, tail_end)) = read_event_ref(&mut reader, tail_reference) else {
+                return Ok(None);
+            };
+            if tail_end != envelope.checkpoint.journal_bytes
+                || tail_event
+                    .sequence
+                    .checked_add(1)
+                    .is_none_or(|next| next != envelope.checkpoint.source_next_sequence)
+            {
+                return Ok(None);
+            }
+        }
+        None => {
+            if envelope.checkpoint.journal_bytes != 0
+                || envelope.checkpoint.source_next_sequence != 0
+            {
+                return Ok(None);
+            }
+        }
     }
     if let Some(reference) = envelope.checkpoint.latest_summary.as_ref() {
         let Ok((event, _)) = read_event_ref(&mut reader, reference) else {
@@ -455,7 +472,86 @@ fn load_verified_checkpoint(
             return Ok(None);
         }
     }
-    Ok(Some(envelope.checkpoint))
+    if journal_bytes == envelope.checkpoint.journal_bytes {
+        return Ok(Some(LoadedCheckpoint {
+            checkpoint: envelope.checkpoint,
+            changed: false,
+        }));
+    }
+    let Some(checkpoint) =
+        extend_checkpoint(manifest, journal_path, envelope.checkpoint, journal_bytes)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(LoadedCheckpoint {
+        checkpoint,
+        changed: true,
+    }))
+}
+
+fn extend_checkpoint(
+    manifest: &ConversationManifest,
+    journal_path: &Path,
+    mut checkpoint: ConversationContextCheckpoint,
+    journal_bytes: u64,
+) -> Result<Option<ConversationContextCheckpoint>, AirpError> {
+    let mut reader = BufReader::new(File::open(journal_path)?);
+    reader.seek(SeekFrom::Start(checkpoint.journal_bytes))?;
+    let mut buffer = Vec::new();
+    let mut offset = checkpoint.journal_bytes;
+    let mut expected_sequence = checkpoint.source_next_sequence;
+
+    loop {
+        buffer.clear();
+        let bytes_read = reader.read_until(b'\n', &mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let event = parse_event_line(&buffer)?;
+        validate_event_identity(&event, manifest.conversation_id, expected_sequence)?;
+        if event.kind == CONVERSATION_CONTEXT_SUMMARY_EVENT {
+            // A summary validates a digest and IDs for the complete preceding
+            // prefix. Rebuild once at this uncommon boundary rather than
+            // weakening that validation for the incremental hot path.
+            return Ok(None);
+        }
+        if let Some(message) = project_message(&event) {
+            checkpoint.total_message_count = checkpoint.total_message_count.saturating_add(1);
+            if checkpoint.recent_messages.len() == RECENT_MESSAGE_INDEX_LIMIT {
+                checkpoint.recent_messages.remove(0);
+            }
+            checkpoint.recent_messages.push(ContextEventRef {
+                offset,
+                sequence: event.sequence,
+                event_id: event.event_id.clone(),
+                estimated_tokens: message_tokens(&message),
+            });
+        }
+        checkpoint.tail_event = Some(ContextEventRef {
+            offset,
+            sequence: event.sequence,
+            event_id: event.event_id,
+            estimated_tokens: 0,
+        });
+        expected_sequence = expected_sequence
+            .checked_add(1)
+            .ok_or_else(|| AirpError::Internal("conversation sequence exhausted".to_string()))?;
+        offset = offset
+            .checked_add(u64::try_from(bytes_read).map_err(|_| {
+                AirpError::Internal("conversation journal offset overflow".to_string())
+            })?)
+            .ok_or_else(|| {
+                AirpError::Internal("conversation journal offset overflow".to_string())
+            })?;
+    }
+    if offset != journal_bytes {
+        return Err(AirpError::Internal(
+            "conversation journal changed while extending context checkpoint".to_string(),
+        ));
+    }
+    checkpoint.journal_bytes = offset;
+    checkpoint.source_next_sequence = expected_sequence;
+    Ok(Some(checkpoint))
 }
 
 fn write_checkpoint(
@@ -749,7 +845,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs::{self, File};
     use std::io::{BufWriter, Write};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     struct JournalFixture {
@@ -1099,7 +1195,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stale_checkpoint_rebuilds_after_journal_append() {
+    async fn stale_checkpoint_extends_after_journal_append() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
         let manifest = service.create(create_request()).await.unwrap();
@@ -1124,6 +1220,22 @@ mod tests {
             )
             .await
             .unwrap();
+        let checkpoint_path = service
+            .conversation_dir(manifest.conversation_id)
+            .join("context_checkpoint.json");
+        let journal_path = service.events_path(manifest.conversation_id);
+        let extended = load_verified_checkpoint(&manifest, &checkpoint_path, &journal_path)
+            .unwrap()
+            .unwrap();
+        assert!(extended.changed);
+        assert_eq!(
+            extended.checkpoint.source_next_sequence,
+            fixture.event_count + 1
+        );
+        assert_eq!(
+            extended.checkpoint.recent_messages.last().unwrap().sequence,
+            fixture.event_count
+        );
         let projection = service
             .context_projection(
                 manifest.conversation_id,
@@ -1195,21 +1307,39 @@ mod tests {
             .await
             .unwrap();
         let cold_elapsed = cold_started.elapsed();
-        let warm_started = Instant::now();
-        for _ in 0..WARM_READS {
+        let mut append_aware_elapsed = Duration::ZERO;
+        for index in 0..WARM_READS {
+            let expected_next_sequence = EVENTS + index as u64;
+            service
+                .append_event(
+                    manifest.conversation_id,
+                    append_request(
+                        "message.created",
+                        Some("human:gm"),
+                        json!({
+                            "role": "user",
+                            "content": format!("append-aware-{index}")
+                        }),
+                        expected_next_sequence,
+                    ),
+                )
+                .await
+                .unwrap();
+            let projection_started = Instant::now();
             let projection = service
                 .context_projection(manifest.conversation_id, budget)
                 .await
                 .unwrap();
+            append_aware_elapsed += projection_started.elapsed();
             assert!(projection.messages.len() <= budget.max_messages);
             assert!(projection.estimated_tokens <= budget.max_estimated_tokens);
+            assert_eq!(projection.source_next_sequence, expected_next_sequence + 1);
         }
-        let warm_elapsed = warm_started.elapsed();
         eprintln!(
-            "conversation context benchmark: events={EVENTS} cold_ms={} warm_reads={WARM_READS} warm_total_ms={} warm_mean_ms={:.3} retained_messages={}",
+            "conversation context benchmark: events={EVENTS} cold_ms={} append_aware_reads={WARM_READS} append_aware_total_ms={} append_aware_mean_ms={:.3} retained_messages={}",
             cold_elapsed.as_millis(),
-            warm_elapsed.as_millis(),
-            warm_elapsed.as_secs_f64() * 1000.0 / WARM_READS as f64,
+            append_aware_elapsed.as_millis(),
+            append_aware_elapsed.as_secs_f64() * 1000.0 / WARM_READS as f64,
             cold.messages.len()
         );
     }
