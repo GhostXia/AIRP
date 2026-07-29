@@ -267,7 +267,7 @@ mod tests {
 
     fn manifest(policy_id: &str, config: Value) -> ConversationManifest {
         crate::conversation::ConversationService::new(tempdir().unwrap().path())
-            .create(CreateConversationRequest {
+            .create_blocking(CreateConversationRequest {
                 user_id: None,
                 title: None,
                 participants: vec![

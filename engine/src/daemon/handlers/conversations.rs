@@ -30,7 +30,7 @@ pub(in crate::daemon) async fn create_conversation_endpoint(
     Json(request): Json<CreateConversationRequest>,
 ) -> Result<Json<crate::conversation::ConversationManifest>, AirpError> {
     let root = effective_conversation_root(&state.data_root, request.user_id.as_ref())?;
-    Ok(Json(ConversationService::new(root).create(request)?))
+    Ok(Json(ConversationService::new(root).create(request).await?))
 }
 
 /// Snapshot a scene into a generic Conversation manifest.
@@ -43,7 +43,7 @@ pub(in crate::daemon) async fn create_scene_conversation_endpoint(
     let root = effective_conversation_root(&state.data_root, request.user_id.as_ref())?;
     let scene = crate::scene::SceneConfig::load(&root, &scene_id)?;
     let create = crate::conversation::request_from_scene(&scene, request);
-    Ok(Json(ConversationService::new(root).create(create)?))
+    Ok(Json(ConversationService::new(root).create(create).await?))
 }
 
 /// List readable Conversation manifests within the selected user scope.
@@ -52,7 +52,7 @@ pub(in crate::daemon) async fn list_conversations_endpoint(
     Query(query): Query<ConversationScopeQuery>,
 ) -> Result<Json<Vec<crate::conversation::ConversationManifest>>, AirpError> {
     let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
-    Ok(Json(ConversationService::new(root).list()?))
+    Ok(Json(ConversationService::new(root).list().await?))
 }
 
 /// Load one Conversation manifest from the selected user scope.
@@ -63,7 +63,9 @@ pub(in crate::daemon) async fn get_conversation_endpoint(
 ) -> Result<Json<crate::conversation::ConversationManifest>, AirpError> {
     let conversation_id = SessionId::parse(&conversation_id)?;
     let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
-    Ok(Json(ConversationService::new(root).get(conversation_id)?))
+    Ok(Json(
+        ConversationService::new(root).get(conversation_id).await?,
+    ))
 }
 
 /// Append one caller-supplied event through the durable journal service.
@@ -89,11 +91,11 @@ pub(in crate::daemon) async fn get_conversation_events_endpoint(
 ) -> Result<Json<crate::conversation::ConversationEventWindow>, AirpError> {
     let conversation_id = SessionId::parse(&conversation_id)?;
     let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
-    Ok(Json(ConversationService::new(root).events(
-        conversation_id,
-        query.limit,
-        query.before.as_deref(),
-    )?))
+    Ok(Json(
+        ConversationService::new(root)
+            .events(conversation_id, query.limit, query.before.as_deref())
+            .await?,
+    ))
 }
 
 /// Discover registered Engine policy descriptors.
@@ -113,13 +115,13 @@ pub(in crate::daemon) async fn get_conversation_turn_endpoint(
     validate_turn_id(&turn_id)?;
     let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
     let service = ConversationService::new(&root);
-    service.get(conversation_id)?;
+    service.get(conversation_id).await?;
     if let Some(snapshot) =
         crate::conversation_turn::active_turn_snapshot(&root, conversation_id, &turn_id)
     {
         return Ok(Json(snapshot));
     }
-    let events = all_events_blocking(service.clone(), conversation_id).await?;
+    let events = service.all_events(conversation_id).await?;
     let snapshot = crate::conversation_turn::project_turn(&events, &turn_id)?
         .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?;
     if snapshot.lifecycle_state.is_terminal()
@@ -128,7 +130,7 @@ pub(in crate::daemon) async fn get_conversation_turn_endpoint(
         return Ok(Json(snapshot));
     }
     let _write_guard = service.acquire_write(conversation_id).await;
-    let events = all_events_blocking(service.clone(), conversation_id).await?;
+    let events = service.all_events_locked_async(conversation_id).await?;
     let snapshot = crate::conversation_turn::project_turn(&events, &turn_id)?
         .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?;
     if snapshot.lifecycle_state.is_terminal() {
@@ -157,7 +159,7 @@ pub(in crate::daemon) async fn cancel_conversation_turn_endpoint(
     validate_turn_id(&turn_id)?;
     let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
     let service = ConversationService::new(&root);
-    service.get(conversation_id)?;
+    service.get(conversation_id).await?;
     if crate::conversation_turn::cancel_active_turn(&root, conversation_id, &turn_id) {
         return Ok(Json(
             crate::conversation_turn::ConversationTurnCancelResponse {
@@ -169,7 +171,7 @@ pub(in crate::daemon) async fn cancel_conversation_turn_endpoint(
     }
 
     let _write_guard = service.acquire_write(conversation_id).await;
-    let events = all_events_blocking(service.clone(), conversation_id).await?;
+    let events = service.all_events_locked_async(conversation_id).await?;
     let snapshot = crate::conversation_turn::project_turn(&events, &turn_id)?
         .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?;
     let snapshot = if snapshot.lifecycle_state.is_terminal() {
@@ -209,8 +211,8 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     );
     let service = ConversationService::new(&root);
     let _write_guard = service.acquire_write(conversation_id).await;
-    let manifest = service.get(conversation_id)?;
-    let existing_events = all_events_blocking(service.clone(), conversation_id).await?;
+    let manifest = service.get(conversation_id).await?;
+    let existing_events = service.all_events_locked_async(conversation_id).await?;
     if let Some(snapshot) = crate::conversation_turn::project_turn(&existing_events, &turn_id)? {
         let Some(stored_fingerprint) = crate::conversation_turn::accepted_fingerprint(&snapshot)
         else {
@@ -297,24 +299,24 @@ async fn execute_new_turn(
     } = execution;
     let cancellation = registration.cancellation();
     let mut committed = Vec::new();
-    let accepted = append_event_locked_blocking(
-        service.clone(),
-        conversation_id,
-        AppendConversationEventRequest {
-            user_id: None,
-            kind: crate::conversation_turn::TURN_ACCEPTED.to_string(),
-            actor_id: Some(request.user_actor_id.clone()),
-            causation_id: None,
-            correlation_id: Some(turn_id.clone()),
-            payload: serde_json::json!({
-                "request_fingerprint": fingerprint,
-                "expected_next_sequence": request.expected_next_sequence,
-            }),
-            extensions: request.extensions.clone(),
-            expected_next_sequence: Some(request.expected_next_sequence),
-        },
-    )
-    .await?;
+    let accepted = service
+        .append_event_locked_async(
+            conversation_id,
+            AppendConversationEventRequest {
+                user_id: None,
+                kind: crate::conversation_turn::TURN_ACCEPTED.to_string(),
+                actor_id: Some(request.user_actor_id.clone()),
+                causation_id: None,
+                correlation_id: Some(turn_id.clone()),
+                payload: serde_json::json!({
+                    "request_fingerprint": fingerprint,
+                    "expected_next_sequence": request.expected_next_sequence,
+                }),
+                extensions: request.extensions.clone(),
+                expected_next_sequence: Some(request.expected_next_sequence),
+            },
+        )
+        .await?;
     let accepted_id = accepted.event_id.clone();
     let mut next_sequence = accepted.sequence + 1;
     committed.push(accepted);
@@ -336,21 +338,21 @@ async fn execute_new_turn(
         )
         .await;
     }
-    let started = append_event_locked_blocking(
-        service.clone(),
-        conversation_id,
-        AppendConversationEventRequest {
-            user_id: None,
-            kind: crate::conversation_turn::TURN_STARTED.to_string(),
-            actor_id: None,
-            causation_id: Some(accepted_id),
-            correlation_id: Some(turn_id.clone()),
-            payload: serde_json::json!({}),
-            extensions: BTreeMap::new(),
-            expected_next_sequence: Some(next_sequence),
-        },
-    )
-    .await?;
+    let started = service
+        .append_event_locked_async(
+            conversation_id,
+            AppendConversationEventRequest {
+                user_id: None,
+                kind: crate::conversation_turn::TURN_STARTED.to_string(),
+                actor_id: None,
+                causation_id: Some(accepted_id),
+                correlation_id: Some(turn_id.clone()),
+                payload: serde_json::json!({}),
+                extensions: BTreeMap::new(),
+                expected_next_sequence: Some(next_sequence),
+            },
+        )
+        .await?;
     next_sequence += 1;
     let started_id = started.event_id.clone();
     committed.push(started);
@@ -373,28 +375,28 @@ async fn execute_new_turn(
         .await;
     }
 
-    let history_events = all_events_blocking(service.clone(), conversation_id).await?;
+    let history_events = service.all_events_locked_async(conversation_id).await?;
     let mut history =
         crate::conversation_projection::project_conversation_messages(&manifest, &history_events)
             .into_chat_messages();
-    let user_event = append_event_locked_blocking(
-        service.clone(),
-        conversation_id,
-        AppendConversationEventRequest {
-            user_id: None,
-            kind: "message.created".to_string(),
-            actor_id: Some(request.user_actor_id.clone()),
-            causation_id: Some(started_id),
-            correlation_id: Some(turn_id.clone()),
-            payload: serde_json::json!({
-                "role": "user",
-                "content": request.base.message,
-            }),
-            extensions: request.extensions.clone(),
-            expected_next_sequence: Some(next_sequence),
-        },
-    )
-    .await?;
+    let user_event = service
+        .append_event_locked_async(
+            conversation_id,
+            AppendConversationEventRequest {
+                user_id: None,
+                kind: "message.created".to_string(),
+                actor_id: Some(request.user_actor_id.clone()),
+                causation_id: Some(started_id),
+                correlation_id: Some(turn_id.clone()),
+                payload: serde_json::json!({
+                    "role": "user",
+                    "content": request.base.message,
+                }),
+                extensions: request.extensions.clone(),
+                expected_next_sequence: Some(next_sequence),
+            },
+        )
+        .await?;
     history.push(crate::adapter::ChatMessage {
         role: crate::adapter::MessageRole::User,
         content: request.base.message.clone(),
@@ -558,27 +560,27 @@ async fn execute_new_turn(
         let mut chunks = unpacker.process_chunk(&content);
         chunks.extend(unpacker.finish());
         let chunks = serde_json::to_value(chunks)?;
-        let assistant_event = append_event_locked_blocking(
-            service.clone(),
-            conversation_id,
-            AppendConversationEventRequest {
-                user_id: None,
-                kind: "message.created".to_string(),
-                actor_id: Some(participant_id.clone()),
-                causation_id: Some(user_event_id.clone()),
-                correlation_id: Some(turn_id.clone()),
-                payload: serde_json::json!({
-                    "role": "assistant",
-                    "content": content,
-                    "resource": {"kind": "character", "id": character_id},
-                    "chunks": chunks,
-                    "state": live_state,
-                }),
-                extensions: BTreeMap::new(),
-                expected_next_sequence: Some(next_sequence),
-            },
-        )
-        .await?;
+        let assistant_event = service
+            .append_event_locked_async(
+                conversation_id,
+                AppendConversationEventRequest {
+                    user_id: None,
+                    kind: "message.created".to_string(),
+                    actor_id: Some(participant_id.clone()),
+                    causation_id: Some(user_event_id.clone()),
+                    correlation_id: Some(turn_id.clone()),
+                    payload: serde_json::json!({
+                        "role": "assistant",
+                        "content": content,
+                        "resource": {"kind": "character", "id": character_id},
+                        "chunks": chunks,
+                        "state": live_state,
+                    }),
+                    extensions: BTreeMap::new(),
+                    expected_next_sequence: Some(next_sequence),
+                },
+            )
+            .await?;
         next_sequence += 1;
         history.push(crate::adapter::ChatMessage {
             role: crate::adapter::MessageRole::Assistant,
@@ -605,26 +607,26 @@ async fn execute_new_turn(
         )
         .await;
     }
-    let completed = append_event_locked_blocking(
-        service.clone(),
-        conversation_id,
-        AppendConversationEventRequest {
-            user_id: None,
-            kind: crate::conversation_turn::TURN_COMPLETED.to_string(),
-            actor_id: None,
-            causation_id: Some(user_event_id),
-            correlation_id: Some(turn_id.clone()),
-            payload: serde_json::json!({
-                "message_count": committed
-                    .iter()
-                    .filter(|event| event.kind == "message.created")
-                    .count(),
-            }),
-            extensions: BTreeMap::new(),
-            expected_next_sequence: Some(next_sequence),
-        },
-    )
-    .await?;
+    let completed = service
+        .append_event_locked_async(
+            conversation_id,
+            AppendConversationEventRequest {
+                user_id: None,
+                kind: crate::conversation_turn::TURN_COMPLETED.to_string(),
+                actor_id: None,
+                causation_id: Some(user_event_id),
+                correlation_id: Some(turn_id.clone()),
+                payload: serde_json::json!({
+                    "message_count": committed
+                        .iter()
+                        .filter(|event| event.kind == "message.created")
+                        .count(),
+                }),
+                extensions: BTreeMap::new(),
+                expected_next_sequence: Some(next_sequence),
+            },
+        )
+        .await?;
     next_sequence += 1;
     committed.push(completed);
     Ok(ConversationTurnOutcome {
@@ -690,25 +692,25 @@ async fn commit_turn_terminal(
         }
     };
     let commit_state = turn_commit_state(&committed);
-    let terminal = append_event_locked_blocking(
-        service,
-        conversation_id,
-        AppendConversationEventRequest {
-            user_id: None,
-            kind: event_kind.to_string(),
-            actor_id: None,
-            causation_id: Some(causation_id),
-            correlation_id: Some(turn_id.clone()),
-            payload: serde_json::json!({
-                "code": code,
-                "participant_id": participant_id,
-                "commit_state": commit_state,
-            }),
-            extensions: BTreeMap::new(),
-            expected_next_sequence: Some(next_sequence),
-        },
-    )
-    .await?;
+    let terminal = service
+        .append_event_locked_async(
+            conversation_id,
+            AppendConversationEventRequest {
+                user_id: None,
+                kind: event_kind.to_string(),
+                actor_id: None,
+                causation_id: Some(causation_id),
+                correlation_id: Some(turn_id.clone()),
+                payload: serde_json::json!({
+                    "code": code,
+                    "participant_id": participant_id,
+                    "commit_state": commit_state,
+                }),
+                extensions: BTreeMap::new(),
+                expected_next_sequence: Some(next_sequence),
+            },
+        )
+        .await?;
     committed.push(terminal);
     Ok(ConversationTurnOutcome {
         turn_id,
@@ -753,51 +755,28 @@ async fn reconcile_unknown_commit(
         .map(|event| event.event_id.clone())
         .ok_or_else(|| AirpError::Internal("turn snapshot has no events".to_string()))?;
     let commit_state = turn_commit_state(&snapshot.events);
-    let terminal = append_event_locked_blocking(
-        service,
-        conversation_id,
-        AppendConversationEventRequest {
-            user_id: None,
-            kind: crate::conversation_turn::TURN_UNKNOWN_COMMIT.to_string(),
-            actor_id: None,
-            causation_id: Some(causation_id),
-            correlation_id: Some(snapshot.turn_id.clone()),
-            payload: serde_json::json!({
-                "code": "unknown_commit",
-                "commit_state": commit_state,
-                "recovery": "manual_retry_or_continue",
-            }),
-            extensions: BTreeMap::new(),
-            expected_next_sequence: Some(expected_next_sequence),
-        },
-    )
-    .await?;
+    let terminal = service
+        .append_event_locked_async(
+            conversation_id,
+            AppendConversationEventRequest {
+                user_id: None,
+                kind: crate::conversation_turn::TURN_UNKNOWN_COMMIT.to_string(),
+                actor_id: None,
+                causation_id: Some(causation_id),
+                correlation_id: Some(snapshot.turn_id.clone()),
+                payload: serde_json::json!({
+                    "code": "unknown_commit",
+                    "commit_state": commit_state,
+                    "recovery": "manual_retry_or_continue",
+                }),
+                extensions: BTreeMap::new(),
+                expected_next_sequence: Some(expected_next_sequence),
+            },
+        )
+        .await?;
     let mut events = snapshot.events;
     events.push(terminal);
     crate::conversation_turn::project_turn(&events, &snapshot.turn_id)?.ok_or_else(|| {
         AirpError::Internal("reconciled turn disappeared from its journal projection".to_string())
     })
-}
-
-async fn all_events_blocking(
-    service: ConversationService,
-    conversation_id: SessionId,
-) -> Result<Vec<crate::conversation::ConversationEvent>, AirpError> {
-    tokio::task::spawn_blocking(move || service.all_events(conversation_id))
-        .await
-        .map_err(|error| {
-            AirpError::Internal(format!("conversation journal task failed: {error}"))
-        })?
-}
-
-async fn append_event_locked_blocking(
-    service: ConversationService,
-    conversation_id: SessionId,
-    request: AppendConversationEventRequest,
-) -> Result<crate::conversation::ConversationEvent, AirpError> {
-    tokio::task::spawn_blocking(move || service.append_event_locked(conversation_id, request))
-        .await
-        .map_err(|error| {
-            AirpError::Internal(format!("conversation journal task failed: {error}"))
-        })?
 }
