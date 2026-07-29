@@ -1,8 +1,8 @@
 # Engine Conversation 合同
 
-> 状态：v1 基础、策略注册表与 `airp.scene.round_robin.v1` 回合执行已实现；可重建投影和旧 chat/scene 迁移仍待后续切片
+> 状态：v1 基础、策略注册表、`airp.scene.round_robin.v1` 回合执行与可重建 message projection 已实现；旧 chat/scene 迁移仍待后续切片
 >
-> 适用范围：`engine/src/conversation.rs` 与 `/v1/conversations*`
+> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_projection.rs` 与 `/v1/conversations*`
 
 ## 1. 定位
 
@@ -91,7 +91,23 @@ cursor 必须属于当前 conversation，跨 conversation 使用返回 `400`。�
 
 后续若引入索引，索引只能是可重建加速结构，不能替代 JSONL 真相或改变 cursor 语义。
 
-## 6. HTTP API
+## 6. Message projection v1
+
+`conversation_projection` 是 Engine-owned 的纯投影模块。`ConversationService::message_projection` 只读取当前 conversation 的 immutable manifest 与完整 event journal；不会读取 WebUI 状态、实时角色卡、scene 文件或其他可变资源。输出带 `schema_version = 1`，相同 manifest 与 events 必须产生逐字段相同的结果。
+
+投影语义：
+
+- 只解释 `message.created`；其他 event（包括未知 kind）保留在 journal 中，但不进入 message view，并计入 `ignored_non_message_event_count`。
+- `message.created.payload` 必须包含字符串 `content` 与显式 `role: "user" | "assistant"`，且 event 必须带非空 `actor_id`；不满足时不猜测，跳过并计入 `ignored_invalid_message_count`。
+- role 是消息发生时写入 event 的快照，不从 participant 当前 `kind` 或资源状态反推。因此同一 participant 在不同时点的 role 变化不会重写旧消息。
+- manifest 中不存在的 actor 只要 payload 合法仍保留归属，并计入 `unresolved_actor_count`；未知 actor 不会被静默猜成 user 或 assistant。
+- 多个 participant 即使引用同一角色资源，仍按各自稳定 `actor_id` 保持消息归属。
+- 角色卡、scene 或外部资源后续修改/删除不会改变历史投影；manifest snapshot 与 journal 足以重建。
+- 转换为 provider history 时，assistant 消息使用 `[actor_id] content` 保持多 speaker 可辨识，user 消息保持原 content。
+
+projection 是 derived view，不落盘为第二真相。统计字段仅解释本次重建结果，删除后可由相同输入恢复。
+
+## 7. HTTP API
 
 | Method | Path | 当前语义 |
 |---|---|---|
@@ -125,7 +141,7 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 
 客户端不能在 turn 请求中注入 `scene_id`、`session_id`、`character_id`、history 或 legacy branch/swipe 控制。provider、model、preset、persona 和采样参数继续复用既有 chat pipeline 合同，因此 UI 只是能力调用方，不决定 Engine 的作用域、历史或调度。
 
-## 7. 兼容边界
+## 8. 兼容边界
 
 - 旧 `/v1/chat/completions`、`/v1/chat/*`、`/v1/sessions/*` 和角色目录布局不变；
 - 未提供 `session_id` 的 legacy 角色聊天继续使用原角色级 history/memory；
@@ -133,10 +149,10 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 - 现有 WebUI “多人场景”没有权威共享历史，不能把其多个角色轮询自动导入为真实 conversation；
 - 迁移只能显式执行，并生成可读报告；没有可靠消息归属的数据不得猜测 speaker。
 
-## 8. 后续实现门
+## 9. 后续实现门
 
 1. Policy registry 后续：在现有注册/解析/descriptor 边界上增加经过 capability 校验的外部策略装载，以及可配置停止条件；不得让任意配置变成代码执行。
-2. Projection：从开放事件流生成 message/history、运行状态和审计视图；投影可重建，不成为第二真相。
+2. Projection 后续：在已交付的 message/history projection 上增加运行状态与审计视图；所有投影继续保持可重建，不成为第二真相。
 3. Turn executor 后续：增加取消协议、未知提交状态恢复、可配置停止条件，以及不改变 journal 真相的长上下文压缩策略。
 4. Compatibility adapters：让角色 chat、scene/group 和 Council 逐步消费通用内核；旧 API 在兼容期保持响应形状。
 5. Recovery/export：纳入统一备份 manifest、完整性校验与恢复演练。
