@@ -325,7 +325,7 @@ async fn execute_new_turn(
                         "policy_version": &policy.policy_version,
                         "provenance": &policy.provenance,
                         "execution_mode": plan.execution_mode,
-                        "stop_after_messages": plan.stop_after_messages,
+                        "stop_after_speakers": plan.stop_after_speakers,
                         "max_parallelism": policy.resource_limits.max_parallelism,
                         "scene_id": &plan.scene_id,
                         "speakers": &plan.speakers,
@@ -557,10 +557,34 @@ async fn execute_new_turn(
             .buffered(max_parallelism)
             .collect::<Vec<_>>()
             .await;
-            for generated in generations {
+            let mut generations = generations.into_iter();
+            while let Some(generated) = generations.next() {
                 let output = match generated {
                     Ok(output) => output,
                     Err(failure) => {
+                        let dropped = generations
+                            .filter_map(Result::ok)
+                            .map(|output| (output.participant_id, output.recorded_tokens))
+                            .collect::<Vec<_>>();
+                        if !dropped.is_empty() {
+                            let dropped_participants = dropped
+                                .iter()
+                                .map(|(participant_id, _)| participant_id.as_str())
+                                .collect::<Vec<_>>();
+                            let dropped_recorded_tokens = dropped
+                                .iter()
+                                .map(|(_, tokens)| u64::from(*tokens))
+                                .sum::<u64>();
+                            tracing::warn!(
+                                %conversation_id,
+                                %turn_id,
+                                failed_participant_id = %failure.participant_id,
+                                code = failure.code,
+                                ?dropped_participants,
+                                dropped_recorded_tokens,
+                                "parallel turn failed closed after later speaker outputs were generated and billed but not committed"
+                            );
+                        }
                         return commit_turn_terminal(
                             service,
                             conversation_id,
@@ -658,6 +682,7 @@ struct GeneratedConversationSpeaker {
     content: String,
     live_state: Option<serde_json::Value>,
     chunks: serde_json::Value,
+    recorded_tokens: u32,
 }
 
 struct ConversationSpeakerFailure {
@@ -743,10 +768,9 @@ async fn generate_conversation_speaker(
             }
         }
     };
-    crate::quota::record_tokens(
-        root,
-        crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32,
-    );
+    let recorded_tokens =
+        crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32;
+    crate::quota::record_tokens(root, recorded_tokens);
     if cancellation.is_cancelled() {
         return Err(ConversationSpeakerFailure {
             participant_id,
@@ -806,6 +830,7 @@ async fn generate_conversation_speaker(
         content,
         live_state,
         chunks,
+        recorded_tokens,
     })
 }
 

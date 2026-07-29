@@ -23,7 +23,7 @@ impl crate::conversation_policy::ConversationPolicy for ParallelTestPolicy {
                 execution_modes: vec![
                     crate::conversation_policy::ConversationExecutionMode::Parallel,
                 ],
-                supports_message_limit: false,
+                supports_speaker_limit: false,
             },
             resource_limits: crate::conversation_policy::ConversationPolicyResourceLimits {
                 max_speakers_per_turn: 4,
@@ -72,7 +72,7 @@ impl crate::conversation_policy::ConversationPolicy for ParallelTestPolicy {
             scene_id: "tavern".to_string(),
             speakers,
             execution_mode: crate::conversation_policy::ConversationExecutionMode::Parallel,
-            stop_after_messages: None,
+            stop_after_speakers: None,
         })
     }
 }
@@ -749,6 +749,7 @@ async fn injected_parallel_policy_generates_from_one_snapshot_and_commits_in_pla
         .await
         .unwrap();
     let outcome: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(outcome["status"], "completed");
     assert_eq!(
         outcome["events"][0]["payload"]["policy"]["policy_id"],
         "test.parallel.v1"
@@ -756,6 +757,10 @@ async fn injected_parallel_policy_generates_from_one_snapshot_and_commits_in_pla
     assert_eq!(
         outcome["events"][0]["payload"]["policy"]["execution_mode"],
         "parallel"
+    );
+    assert_eq!(
+        outcome["events"][0]["payload"]["policy"]["max_parallelism"],
+        2
     );
     assert_eq!(
         outcome["events"][0]["payload"]["policy"]["speakers"][0]["participant_id"],

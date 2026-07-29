@@ -214,9 +214,9 @@ Engine 不信任外部实现返回的 plan。registry 在配额预留和事件�
 
 - `serial`：按 plan 顺序生成和提交；后续 speaker 可见本轮先前已提交输出。
 - `parallel`：最多按 descriptor 的 `max_parallelism` 并发生成，所有 speaker 使用同一个批前历史快照；无论 provider 返回先后，结果仍按 plan 顺序验证和提交。
-- `stop_after_messages`：受控声明式停止条件；registry 在配额和执行前截短 speaker plan。当前不支持把模型输出、表达式或任意配置解释成可执行停止代码。
+- `stop_after_speakers`：受控声明式停止条件；registry 在配额和执行前截短有序 speaker plan。当前不支持将模型输出、表达式或任意配置解释为可执行停止代码。
 
-`turn.accepted.payload.policy` 固化本次实际使用的 policy ID/version、provenance、执行模式、停止条件、并行预算、scene 与有序 speaker/resource plan。后续 registry 热更新不会重写历史证据。
+`turn.accepted.payload.policy` 固化本次实际使用的 policy ID/version、provenance、执行模式、speaker 停止条件、并行预算、scene 与有序 speaker/resource plan。后续 registry 热更新不会重写历史证据。
 
 `POST /v1/conversations/{id}/turns` 当前内置注册 `airp.scene.round_robin.v1`，并按 manifest 中角色 participant 的稳定顺序执行：
 

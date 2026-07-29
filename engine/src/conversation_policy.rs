@@ -67,7 +67,7 @@ pub struct ConversationPolicyProvenance {
 #[serde(deny_unknown_fields)]
 pub struct ConversationPolicyCapabilities {
     pub execution_modes: Vec<ConversationExecutionMode>,
-    pub supports_message_limit: bool,
+    pub supports_speaker_limit: bool,
 }
 
 /// Engine-enforced resource budget for one policy.
@@ -110,7 +110,7 @@ pub struct ConversationTurnPlan {
     pub execution_mode: ConversationExecutionMode,
     /// Declarative stop condition. The registry truncates the plan to this
     /// bound before quota reservation or provider execution.
-    pub stop_after_messages: Option<usize>,
+    pub stop_after_speakers: Option<usize>,
 }
 
 /// Engine-validated plan plus immutable registration evidence.
@@ -455,10 +455,10 @@ fn validate_and_bound_plan(
             "conversation policy returned an undeclared execution mode".to_string(),
         ));
     }
-    if let Some(limit) = plan.stop_after_messages {
-        if !descriptor.capabilities.supports_message_limit || limit == 0 {
+    if let Some(limit) = plan.stop_after_speakers {
+        if !descriptor.capabilities.supports_speaker_limit || limit == 0 {
             return Err(AirpError::BadRequest(
-                "conversation policy returned an invalid message stop condition".to_string(),
+                "conversation policy returned an invalid speaker stop condition".to_string(),
             ));
         }
         plan.speakers.truncate(limit);
@@ -518,12 +518,12 @@ impl ConversationPolicy for SceneRoundRobinV1 {
             },
             capabilities: ConversationPolicyCapabilities {
                 execution_modes: vec![ConversationExecutionMode::Serial],
-                supports_message_limit: false,
+                supports_speaker_limit: false,
             },
             resource_limits: ConversationPolicyResourceLimits {
                 max_speakers_per_turn: MAX_CONVERSATION_SPEAKERS_PER_TURN,
                 max_parallelism: 1,
-                max_config_bytes: 4,
+                max_config_bytes: 64,
                 planning_timeout_ms: 100,
             },
             lifecycle_state: ConversationPolicyLifecycleState::Active,
@@ -586,7 +586,7 @@ impl ConversationPolicy for SceneRoundRobinV1 {
             scene_id: scene_ids.into_iter().next().expect("length checked"),
             speakers,
             execution_mode: ConversationExecutionMode::Serial,
-            stop_after_messages: None,
+            stop_after_speakers: None,
         })
     }
 }
@@ -604,7 +604,7 @@ mod tests {
     struct TestPolicy {
         descriptor_calls: AtomicUsize,
         mode: ConversationExecutionMode,
-        stop_after_messages: Option<usize>,
+        stop_after_speakers: Option<usize>,
         delay: Option<Duration>,
         panic_on_plan: bool,
     }
@@ -614,7 +614,7 @@ mod tests {
             Self {
                 descriptor_calls: AtomicUsize::new(0),
                 mode,
-                stop_after_messages: None,
+                stop_after_speakers: None,
                 delay: None,
                 panic_on_plan: false,
             }
@@ -664,7 +664,7 @@ mod tests {
                     },
                 ],
                 execution_mode: self.mode,
-                stop_after_messages: self.stop_after_messages,
+                stop_after_speakers: self.stop_after_speakers,
             })
         }
     }
@@ -685,7 +685,7 @@ mod tests {
                     ConversationExecutionMode::Serial,
                     ConversationExecutionMode::Parallel,
                 ],
-                supports_message_limit: true,
+                supports_speaker_limit: true,
             },
             resource_limits: ConversationPolicyResourceLimits {
                 max_speakers_per_turn: 4,
@@ -780,6 +780,17 @@ mod tests {
             .plan_turn(&manifest(SCENE_ROUND_ROBIN_V1, Value::Null), "human:gm")
             .await
             .unwrap();
+        let unsupported_config = registry
+            .plan_turn(
+                &manifest(SCENE_ROUND_ROBIN_V1, serde_json::json!({"future": true})),
+                "human:gm",
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            !unsupported_config.to_string().contains("maximum"),
+            "policy config validation must own unsupported-config rejection"
+        );
     }
 
     #[tokio::test]
@@ -807,10 +818,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_parallel_plan_and_message_stop_are_engine_bounded() {
+    async fn external_parallel_plan_and_speaker_stop_are_engine_bounded() {
         let registry = ConversationPolicyRegistry::new();
         let mut policy = TestPolicy::external(ConversationExecutionMode::Parallel);
-        policy.stop_after_messages = Some(1);
+        policy.stop_after_speakers = Some(1);
         registry.register_external(Arc::new(policy)).unwrap();
         let resolved = registry
             .plan_turn(
@@ -831,7 +842,7 @@ mod tests {
     async fn unknown_config_and_planning_timeout_fail_closed() {
         let registry = ConversationPolicyRegistry::new();
         let mut policy = TestPolicy::external(ConversationExecutionMode::Serial);
-        policy.delay = Some(Duration::from_millis(100));
+        policy.delay = Some(Duration::from_secs(5));
         registry.register_external(Arc::new(policy)).unwrap();
 
         let config_error = registry
