@@ -152,7 +152,7 @@ struct ConversationContextCheckpoint {
     total_message_count: u64,
     tail_event: Option<ContextEventRef>,
     latest_summary: Option<ContextEventRef>,
-    recent_messages: Vec<ContextEventRef>,
+    recent_messages: VecDeque<ContextEventRef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -518,9 +518,9 @@ fn extend_checkpoint(
         if let Some(message) = project_message(&event) {
             checkpoint.total_message_count = checkpoint.total_message_count.saturating_add(1);
             if checkpoint.recent_messages.len() == RECENT_MESSAGE_INDEX_LIMIT {
-                checkpoint.recent_messages.remove(0);
+                checkpoint.recent_messages.pop_front();
             }
-            checkpoint.recent_messages.push(ContextEventRef {
+            checkpoint.recent_messages.push_back(ContextEventRef {
                 offset,
                 sequence: event.sequence,
                 event_id: event.event_id.clone(),
@@ -1163,6 +1163,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn summary_appended_after_checkpoint_forces_verified_full_rebuild() {
+        let tmp = tempdir().unwrap();
+        let service = ConversationService::new(tmp.path());
+        let manifest = service.create(create_request()).await.unwrap();
+        let fixture = write_message_journal(&service, manifest.conversation_id, 20);
+        let budget = ConversationContextBudget::default();
+        service
+            .context_projection(manifest.conversation_id, budget)
+            .await
+            .unwrap();
+
+        let payload = summary_payload(&fixture);
+        let summary = service
+            .append_event(
+                manifest.conversation_id,
+                append_request(
+                    CONVERSATION_CONTEXT_SUMMARY_EVENT,
+                    None,
+                    serde_json::to_value(&payload).unwrap(),
+                    fixture.event_count,
+                ),
+            )
+            .await
+            .unwrap();
+        service
+            .append_event(
+                manifest.conversation_id,
+                append_request(
+                    "message.created",
+                    Some("alice"),
+                    json!({"role": "assistant", "content": "post-summary"}),
+                    fixture.event_count + 1,
+                ),
+            )
+            .await
+            .unwrap();
+
+        let projection = service
+            .context_projection(manifest.conversation_id, budget)
+            .await
+            .unwrap();
+        assert_eq!(
+            projection.summary.as_ref().unwrap().event_id,
+            summary.event_id
+        );
+        assert_eq!(projection.messages.len(), 2);
+        assert_eq!(
+            projection.messages.last().unwrap().content,
+            "[alice] post-summary"
+        );
+
+        let checkpoint_path = service
+            .conversation_dir(manifest.conversation_id)
+            .join("context_checkpoint.json");
+        let envelope: ConversationContextCheckpointEnvelope =
+            serde_json::from_slice(&fs::read(checkpoint_path).unwrap()).unwrap();
+        assert_eq!(
+            envelope
+                .checkpoint
+                .latest_summary
+                .as_ref()
+                .unwrap()
+                .sequence,
+            fixture.event_count
+        );
+        assert_eq!(
+            envelope.checkpoint.recent_messages.back().unwrap().sequence,
+            fixture.event_count + 1
+        );
+    }
+
+    #[tokio::test]
     async fn invalid_summary_boundary_fails_before_append() {
         let tmp = tempdir().unwrap();
         let service = ConversationService::new(tmp.path());
@@ -1233,7 +1305,7 @@ mod tests {
             fixture.event_count + 1
         );
         assert_eq!(
-            extended.checkpoint.recent_messages.last().unwrap().sequence,
+            extended.checkpoint.recent_messages.back().unwrap().sequence,
             fixture.event_count
         );
         let projection = service

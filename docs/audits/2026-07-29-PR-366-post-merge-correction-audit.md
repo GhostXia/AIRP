@@ -1,11 +1,16 @@
-# PR #366 合并后纠正审计
+# 已归档：PR #366 合并后纠正审计
+
+> 本文件只记录 PR [#366](https://github.com/GhostXia/AIRP/pull/366) 在误合并时的历史事实与纠正依据。
+> 后续实现由 PR [#367](https://github.com/GhostXia/AIRP/pull/367) 承接；当前有效能力与边界以
+> [`CURRENT-BASELINE.md`](../CURRENT-BASELINE.md) 和
+> [`CONVERSATION-CONTRACT.md`](../CONVERSATION-CONTRACT.md) 为准。
 
 - 日期：2026-07-29
 - 原 PR：#366 `engine: bound Conversation long-history context`
 - 被审计提交：`a968b26`
 - 误合并提交：`a121252`
 - 审计性质：合并后独立复核；不把原开发结论、自动 resolved 或 CI success 当作审计证据
-- 当前裁决：**PR #366 的审计门禁未完成；纠正 PR 合并前不得宣称闭环**
+- 历史裁决：**PR #366 的审计门禁未完成；该结论促成 #367 的纠正实现与重新审计**
 
 ## 1. 时序事实
 
@@ -32,9 +37,9 @@ SUCCESS。开发流程错误地把这些自动状态解释为“修复提交已�
 
 这只能证明修改存在，不能补造 CodeRabbit 对 `a968b26` 的复审通过记录。
 
-## 3. 独立审计新增阻塞项
+## 3. 独立审计历史阻塞项
 
-### A1｜P1｜真实 turn 仍是全 journal 扫描
+### 历史发现 A1｜P1｜真实 turn 仍是全 journal 扫描
 
 `load_verified_checkpoint` 在 `events.jsonl` 长度变化时直接丢弃 checkpoint 并调用
 `rebuild_checkpoint`。Conversation turn 在 projection 之间必然追加 lifecycle/message
@@ -55,7 +60,7 @@ SUCCESS。开发流程错误地把这些自动状态解释为“修复提交已�
 - 50 次 append-aware projection：266 ms total / 5.329 ms mean；
 - retained messages：128。
 
-## 4. 关闭条件
+## 4. 历史关闭条件（由 PR #367 承接）
 
 1. 纠正实现、合同和本审计记录进入独立 PR；
 2. 完整 workspace、神圣 prompt-boundary、UI/WebUI、rustdoc/clippy 与生产/Windows 门禁通过；
