@@ -131,7 +131,13 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
     let history_manifest = manifest.clone();
     let mut history = tokio::task::spawn_blocking(move || {
         let events = history_service.all_events(conversation_id)?;
-        Ok::<_, AirpError>(project_messages(&history_manifest, &events))
+        Ok::<_, AirpError>(
+            crate::conversation_projection::project_conversation_messages(
+                &history_manifest,
+                &events,
+            )
+            .into_chat_messages(),
+        )
     })
     .await
     .map_err(|error| AirpError::Internal(format!("conversation history task failed: {error}")))??;
@@ -362,38 +368,6 @@ fn validate_turn_base(request: &ConversationTurnRequest) -> Result<(), AirpError
         ));
     }
     Ok(())
-}
-
-fn project_messages(
-    manifest: &crate::conversation::ConversationManifest,
-    events: &[crate::conversation::ConversationEvent],
-) -> Vec<crate::adapter::ChatMessage> {
-    events
-        .iter()
-        .filter(|event| event.kind == "message.created")
-        .filter_map(|event| {
-            let content = event.payload.get("content")?.as_str()?;
-            let actor_id = event.actor_id.as_deref()?;
-            let participant = manifest
-                .participants
-                .iter()
-                .find(|participant| participant.participant_id == actor_id);
-            let is_character =
-                participant.is_some_and(|participant| participant.kind == "character");
-            Some(crate::adapter::ChatMessage {
-                role: if is_character {
-                    crate::adapter::MessageRole::Assistant
-                } else {
-                    crate::adapter::MessageRole::User
-                },
-                content: if is_character {
-                    format!("[{actor_id}] {content}")
-                } else {
-                    content.to_string()
-                },
-            })
-        })
-        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
