@@ -20,7 +20,6 @@ pub enum ConversationProjectedRole {
 
 /// One valid `message.created` event projected for history consumers.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ProjectedConversationMessage {
     pub event_id: String,
     pub sequence: u64,
@@ -31,7 +30,6 @@ pub struct ProjectedConversationMessage {
 
 /// Deterministic counters explaining how the source journal was projected.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationMessageProjectionStats {
     pub source_event_count: usize,
     pub ignored_non_message_event_count: usize,
@@ -41,7 +39,6 @@ pub struct ConversationMessageProjectionStats {
 
 /// Versioned message view rebuilt from authoritative Conversation inputs.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationMessageProjection {
     pub schema_version: u32,
     pub conversation_id: SessionId,
@@ -54,17 +51,15 @@ impl ConversationMessageProjection {
     pub fn into_chat_messages(self) -> Vec<ChatMessage> {
         self.messages
             .into_iter()
-            .map(|message| ChatMessage {
-                role: match message.role {
-                    ConversationProjectedRole::User => MessageRole::User,
-                    ConversationProjectedRole::Assistant => MessageRole::Assistant,
-                },
-                content: match message.role {
-                    ConversationProjectedRole::User => message.content,
-                    ConversationProjectedRole::Assistant => {
-                        format!("[{}] {}", message.actor_id, message.content)
-                    }
-                },
+            .map(|message| {
+                let (role, content) = match message.role {
+                    ConversationProjectedRole::User => (MessageRole::User, message.content),
+                    ConversationProjectedRole::Assistant => (
+                        MessageRole::Assistant,
+                        format!("[{}] {}", message.actor_id, message.content),
+                    ),
+                };
+                ChatMessage { role, content }
             })
             .collect()
     }

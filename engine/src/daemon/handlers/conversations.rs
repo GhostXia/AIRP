@@ -128,11 +128,15 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
 
     let turn_id = crate::ulid::new_id();
     let history_service = service.clone();
+    let history_manifest = manifest.clone();
     let mut history = tokio::task::spawn_blocking(move || {
+        let events = history_service.all_events(conversation_id)?;
         Ok::<_, AirpError>(
-            history_service
-                .message_projection(conversation_id)?
-                .into_chat_messages(),
+            crate::conversation_projection::project_conversation_messages(
+                &history_manifest,
+                &events,
+            )
+            .into_chat_messages(),
         )
     })
     .await
