@@ -676,13 +676,13 @@ async fn execute_new_turn(
                                 Ok(output) => UncommittedSpeakerObservation {
                                     participant_id: output.participant_id,
                                     outcome: crate::conversation_observability::ConversationSpeakerOutcome::GeneratedNotCommitted,
-                                    speaker_latency_ms: output.latency_ms,
+                                    speaker_latency_ms: Some(output.latency_ms),
                                     recorded_output_tokens: Some(output.recorded_tokens),
                                 },
                                 Err(failure) => UncommittedSpeakerObservation {
                                     participant_id: failure.participant_id,
                                     outcome: crate::conversation_observability::ConversationSpeakerOutcome::Failed,
-                                    speaker_latency_ms: failure.latency_ms,
+                                    speaker_latency_ms: Some(failure.latency_ms),
                                     recorded_output_tokens: failure.recorded_tokens,
                                 },
                             })
@@ -702,6 +702,7 @@ async fn execute_new_turn(
                                 %turn_id,
                                 failed_participant_id = %failure.participant_id,
                                 code = failure.code,
+                                failed_recorded_tokens = failure.recorded_tokens,
                                 ?dropped_participants,
                                 dropped_recorded_tokens,
                                 "parallel turn failed closed after later speaker outputs were generated and billed but not committed"
@@ -828,7 +829,7 @@ struct ConversationSpeakerFailure {
 struct UncommittedSpeakerObservation {
     participant_id: String,
     outcome: crate::conversation_observability::ConversationSpeakerOutcome,
-    speaker_latency_ms: u64,
+    speaker_latency_ms: Option<u64>,
     recorded_output_tokens: Option<u32>,
 }
 

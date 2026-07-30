@@ -39,7 +39,6 @@ pub enum ConversationRecoveryAction {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationErrorDescriptor {
     pub code: String,
     pub schema_version: u32,
@@ -47,7 +46,6 @@ pub struct ConversationErrorDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationSchemaCapabilities {
     pub http_error: u32,
     pub manifest: u32,
@@ -60,13 +58,11 @@ pub struct ConversationSchemaCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationAdapterCapabilities {
     pub legacy_migration: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationExecutionLimits {
     pub max_speakers_per_turn: usize,
     pub max_parallelism: usize,
@@ -78,7 +74,6 @@ pub struct ConversationExecutionLimits {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationObservabilityCapabilities {
     pub source: String,
     pub trace_identity: String,
@@ -87,7 +82,6 @@ pub struct ConversationObservabilityCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationCapabilities {
     pub schema_version: u32,
     pub contract_version: String,
@@ -173,6 +167,8 @@ pub fn recovery_for_code(code: &str) -> ConversationRecoveryAction {
     match code {
         "turn_cancelled" => ConversationRecoveryAction::ResubmitNewTurn,
         "unknown_commit" => ConversationRecoveryAction::ManualRetryOrContinue,
+        // Known fail-closed errors are listed explicitly so adding a new
+        // recovery category cannot silently change their public contract.
         "context_budget_exceeded"
         | "context_projection_failed"
         | "empty_generation"
@@ -195,7 +191,6 @@ pub enum ConversationSpeakerOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationPolicyObservation {
     pub policy_id: String,
     pub policy_version: String,
@@ -204,7 +199,6 @@ pub struct ConversationPolicyObservation {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationSpeakerObservation {
     pub speaker_index: usize,
     pub participant_id: String,
@@ -214,7 +208,6 @@ pub struct ConversationSpeakerObservation {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ConversationTurnObservability {
     pub schema_version: u32,
     pub trace_id: String,

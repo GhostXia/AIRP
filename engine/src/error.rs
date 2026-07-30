@@ -165,7 +165,7 @@ impl AirpError {
                 "correct_request"
             }
             AirpError::Conflict(_) => "refresh_and_retry",
-            AirpError::Upstream { .. } | AirpError::Http(_) => "retry_with_backoff",
+            AirpError::Upstream { .. } => "retry_with_backoff",
             AirpError::QuotaExceeded(_) => "wait_or_reduce_usage",
             AirpError::Io(_)
             | AirpError::Json(_)
@@ -175,6 +175,7 @@ impl AirpError {
             | AirpError::Volume(_)
             | AirpError::Fsm(_)
             | AirpError::Sqlite(_)
+            | AirpError::Http(_)
             | AirpError::Internal(_) => "inspect_server_logs",
         }
     }
@@ -211,26 +212,16 @@ impl IntoResponse for AirpError {
         let message = self.public_message();
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(err = %internal_message, "internal error");
-            let body = AirpErrorResponse {
-                error: AirpErrorBody {
-                    schema_version: AIRP_ERROR_SCHEMA_VERSION,
-                    code,
-                    message,
-                    recovery,
-                },
-            };
-            (status, Json(body)).into_response()
-        } else {
-            let body = AirpErrorResponse {
-                error: AirpErrorBody {
-                    schema_version: AIRP_ERROR_SCHEMA_VERSION,
-                    code,
-                    message,
-                    recovery,
-                },
-            };
-            (status, Json(body)).into_response()
         }
+        let body = AirpErrorResponse {
+            error: AirpErrorBody {
+                schema_version: AIRP_ERROR_SCHEMA_VERSION,
+                code,
+                message,
+                recovery,
+            },
+        };
+        (status, Json(body)).into_response()
     }
 }
 
@@ -301,6 +292,7 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["error"]["code"], "internal_error");
+        assert_eq!(v["error"]["recovery"], "inspect_server_logs");
         assert_eq!(v["error"]["message"], "internal error");
         assert!(
             !bytes.windows(b"hunter2".len()).any(|w| w == b"hunter2"),
