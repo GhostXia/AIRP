@@ -24,17 +24,23 @@
 //! - `load_world_events` 的 JSON parse 错误原本通过 `?` 上抛（行为正确），
 //!   本审计未改动其错误传播策略，仅修复写路径。
 //!
-//! 注：world_events.json 当前未接入 #115 Phase 2e revision 合同（缺少
-//! AssetKind::WorldEvents 枚举与 revision 目录约定）。该缺失属于设计
-//! 扩展项，已记入审计报告遗留项，不阻塞本 PR。
+//! 注：world_events.json 已接入 #115 Phase 2e revision 合同（#280）。
+//! asset_dir = `characters/{id}/world_events/`，批准文件 = `world_events.json`。
+//! 工作副本 `characters/{id}/world_events.json` 通过 `data_dir::replace_file` 原子写，
+//! revision 快照通过 `commit_revision` 写入 `characters/{id}/world_events/revisions/{n}/`。
 
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
 use crate::domain::{session_lock, state_lock};
 use crate::error::AirpError;
+use crate::revision::atomic::{
+    commit_revision, next_content_revision, read_current_revision, CommitOptions, StagedRevision,
+};
+use crate::revision::manifest::{AssetKind, AssetSource};
 use serde_json::Value;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -67,6 +73,64 @@ fn world_events_path(data_root: &std::path::Path, character_id: &str) -> std::pa
         .join("world_events.json")
 }
 
+/// #280: world_events 的 revision asset_dir，与工作副本 `world_events.json` 分离。
+/// 参考 SoulDrift 模式（`characters/{id}/soul_drift/`），避免 `characters/{id}/revisions/`
+/// 与 character card 的 revisions 混淆。
+fn world_events_asset_dir(data_root: &Path, character_id: &str) -> std::path::PathBuf {
+    data_root
+        .join("characters")
+        .join(character_id)
+        .join("world_events")
+}
+
+/// #280: 将 world_events 写入 revision 快照目录。
+/// 参考 `commit_soul_drift_unlocked` 模式：构造 `StagedRevision` + `CommitOptions`，
+/// 调用统一 `commit_revision` 入口。
+fn commit_world_events_revision(
+    data_root: &Path,
+    character_id: &str,
+    content: &[u8],
+    source_kind: &str,
+    parent_revision: Option<u64>,
+) -> Result<u64, AirpError> {
+    let asset_dir = world_events_asset_dir(data_root, character_id);
+    let revision = next_content_revision(&asset_dir)?;
+    let staged = StagedRevision {
+        content_revision: revision,
+        asset_kind: AssetKind::WorldEvents,
+        asset_id: character_id.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        source: AssetSource {
+            source_kind: source_kind.to_string(),
+            parent_revision,
+            ..Default::default()
+        },
+        files: vec![("world_events.json".to_string(), content.to_vec())],
+    };
+    commit_revision(&staged, &CommitOptions::new(asset_dir))?;
+    Ok(revision)
+}
+
+/// #280: legacy migration——若 `world_events.json` 存在但无 revision 快照，
+/// 首次 commit 为 revision 1。参考 `ensure_legacy_revision_unlocked`（SoulDrift）。
+/// 调用方已在 `state_lock` 临界区内，无需额外加锁。
+fn ensure_legacy_world_events_revision(
+    data_root: &Path,
+    character_id: &str,
+) -> Result<(), AirpError> {
+    let asset_dir = world_events_asset_dir(data_root, character_id);
+    if read_current_revision(&asset_dir)?.is_some() {
+        return Ok(());
+    }
+    let path = world_events_path(data_root, character_id);
+    if !path.exists() {
+        return Ok(());
+    }
+    let legacy = std::fs::read(&path)?;
+    commit_world_events_revision(data_root, character_id, &legacy, "legacy_migration", None)?;
+    Ok(())
+}
+
 /// 读取世界事件列表。不存在返回空 Vec。
 ///
 /// Phase 4.5：本函数从私有提升为 `pub(crate)`，供 `timeline_export` 模块复用
@@ -96,9 +160,28 @@ fn save_world_events(
         std::fs::create_dir_all(parent)?;
     }
     let content = serde_json::to_vec_pretty(events)?;
-    // 原子写：替换旧版 std::fs::write，避免半写状态被并发 reader 看到。
+
+    // #280: 接入 revision 合同。顺序参考 SoulDrift（drift.rs:144-150）：
+    // 1. legacy migration 必须在 replace_file 之前，确保读到的是真正的 legacy 内容
+    //    而非刚写入的新内容
+    // 2. read_current_revision 获取 parent（migration 后可能为 Some(1)）
+    // 3. replace_file 写工作副本（供 reader 并发读）
+    // 4. commit_revision 写不可变快照
+    ensure_legacy_world_events_revision(data_root, character_id)?;
+    let asset_dir = world_events_asset_dir(data_root, character_id);
+    let parent_revision = read_current_revision(&asset_dir)?;
+
+    // 原子写工作副本：替换旧版 std::fs::write，避免半写状态被并发 reader 看到。
     // data_dir::replace_file 内部走 tmp + rename + fsync(parent)。
     crate::data_dir::replace_file(&path, &content)?;
+
+    commit_world_events_revision(
+        data_root,
+        character_id,
+        &content,
+        "tool_triggered",
+        parent_revision,
+    )?;
     Ok(())
 }
 
