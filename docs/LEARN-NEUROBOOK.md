@@ -5,7 +5,7 @@
 > 对象：https://github.com/notnotype/neuro-book —— 本地 AI 工作台 IDE，长篇小说写作 + AI RP。Nuxt/Vue/Bun/SQLite/Prisma。许可证记录已于 2026-07-11 复核为 AGPL-3.0；此前 PolyForm Noncommercial 的记录已经过时。本文仍仅参考理念，不搬代码。
 > topics 直接含 `airp` / `rp` / `sillytavern` / `harness` / `agent`——与我们**高度同域**，且它**独立收敛出与我们相同的多个核心设计**，佐证方向、并提供可借鉴的具体形态。
 > 性质：学习参考。一切以 AIRP 实际需求与 [PLAN.md](PLAN.md) §1 为准。
-> 研究更新：2026-07-11；状态复核：2026-07-26，`main@200fed9`
+> 研究更新：2026-07-11；状态复核：2026-07-30，`main@4f3f792`
 
 ---
 
@@ -78,3 +78,4 @@
 - **Phase 2 orchestrator 重构（非新增）**：借鉴 **TSX 三层 + 运行时合同的形态**（点 1·半新）重构 Core orchestrator 装配——**不建平行装配系统**，避免与现有 orchestrator 冲突。
 - **可观测（小）**：SSE 事件包装成用户可读 **walkthrough** + 支持 loop 中途 pause 问人（点 6·半新）。
 - **不做**：三段导入（点 7 已有 `validate_card`/`decompose_character`/`import_card`，Task 1.1 直接复用）、内容边界断言（点 4 已有 CI 不变式）、重建/分层记忆（点 5 已有 + Hermes 已定）、retrieval/inject 语义（点 3 §5 已定）——**这些 NeuroBook 只作外部佐证，不重造。**
+

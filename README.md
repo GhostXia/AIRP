@@ -2,7 +2,7 @@
 
 AIRP 是专精 Role Play 的 AI Agent 客户端。项目采用“无头 Engine + 可换 UI”结构，把角色、Persona、Preset、Worldbook、会话、记忆、Agent 执行和安全边界集中在一个可审计的本地数据面。
 
-> 当前基线：2026-07-26，`main@200fed9`。
+> 当前基线：2026-07-30，`main@4f3f792`。
 > 本页只提供产品入口；准确能力、缺口和验证边界见 [当前开发基线](docs/CURRENT-BASELINE.md)。
 
 ## 仓库结构

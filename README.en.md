@@ -2,7 +2,7 @@
 
 AIRP is an AI Agent client specialized for role play. It uses a headless Engine with replaceable UIs and keeps characters, personas, presets, worldbooks, sessions, memory, Agent execution, and security boundaries in one auditable local data plane.
 
-> Current baseline: 2026-07-26, `main@200fed9`.
+> Current baseline: 2026-07-30, `main@4f3f792`.
 > This page is an entry point. See the [current development baseline](docs/CURRENT-BASELINE.md) for exact capabilities, gaps, and evidence boundaries.
 
 ## Repository layout

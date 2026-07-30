@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-12
 >
-> 实现基线：PR #124/#125；2026-07-26 在 `main@200fed9` 复核，durable ID/cursor/rollback 合同未变。后续 branch/Swipe、timeline export、PR #333 finalize 顺序和 PR #334 seal 后维护修复继续使用该合同；跨资源事务与完整崩溃恢复仍不由本文宣称完成。
+> 实现基线：PR #124/#125；2026-07-30 在 `main@4f3f792` 复核，durable ID/cursor/rollback 合同未变。后续 branch/Swipe、timeline export、PR #333 finalize 顺序和 PR #334 seal 后维护修复继续使用该合同；跨资源事务与完整崩溃恢复仍不由本文宣称完成。
 >
 > 关联 issue：#37（durable message-id contract）、#122（WebUI 窗口化）。
 >

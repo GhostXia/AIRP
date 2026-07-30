@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-26，`main@200fed9`
+> 最后校准：2026-07-30，`main@4f3f792`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -49,6 +49,8 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-MCP-Se
 - `provider_routing.rs`、`plugin_tool.rs`：多 Provider 选择和动态插件工具；
 - `daemon/handlers/`：HTTP adapter，handler 不应重新实现 domain 规则；
 - `daemon/tests/`：route 合同与安全测试。
+- `conversation*.rs`：Engine 级 Conversation 合同（**产品 WebUI 尚未绑定**；与 `chat_store`/`ChatService` 双轨，见基线 §2.1 与 #381）；
+- 锁与写路径：优先经 `domain` shared service；新增写路径不得在 handler/tool 内旁路持久化规则。
 
 新增能力先进入 shared service，再由 HTTP、Agent tool 和 UI 暴露。不要把“底层有函数”混写成“HTTP 可用”“Agent 可调用”或“UI 已交付”。
 
@@ -253,7 +255,7 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. `main@200fed9` 已包含 PR #314/#316/#317/#323/#328 的 Phase 1–5.3 功能，以及 PR #333/#334/#335/#338 的 finalize/world-event 并发修复；
+1. `main@4f3f792` 已包含 PR #314/#316/#317/#323/#328 的 Phase 1–5.3 功能，以及 PR #333/#334/#335/#338 的 finalize/world-event 并发修复；
 2. 优先处理 #320–#339 中仍开放且会影响数据正确性、失败行为或 WebUI 验收的审计遗留；不要只因 issue 编号较新就机械排序；
 3. 用真实 provider + 真实浏览器闭合 onboarding → 首聊 → 多轮 → 页面刷新 → 服务重启；分别记录传输失败、commit state、恢复动作和资产一致性；
 4. screen 34–44 已存在，需逐页校准 runtime contract、空/错/慢状态、视觉样板一致性和 browser smoke；
@@ -261,3 +263,5 @@ Remove-Item Env:RUSTDOCFLAGS
 6. issue #312 是历史功能池，不是自动执行队列；外部 MCP、多语言、跨设备同步等扩展不得抢占 P1 收敛。
 
 动手前重新查询 issues、开放 PR 和 `main`。本节只给稳定的接手顺序，不复制实时 backlog。
+
+

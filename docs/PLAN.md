@@ -1,7 +1,7 @@
 # AIRP 产品与架构计划
 
 > 状态：活路线原则
-> 校准：2026-07-26，`main@200fed9`
+> 校准：2026-07-30，`main@4f3f792`
 > 当前能力与开放缺口以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 和 GitHub issues 为准。
 
 ## 1. 产品目标
@@ -16,7 +16,19 @@ AIRP 要成为可本地拥有、可审计、可恢复的 Role Play Agent 客户�
 
 ## 2. 当前阶段：P1 收敛
 
-Phase 1–5.3 的大量功能已在 2026-07-25 至 2026-07-26 合入。当前约束已从“缺功能”转为“功能面超过验证面”。在 P1 证据闭合前，默认冻结无直接用户证据的新子系统扩张。
+Phase 1–5.3 的大量功能已在 2026-07-25 至 2026-07-26 合入；此后 Conversation 合同与多批修复继续进入 `main`（当前锚点见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)）。约束已从“缺功能”转为“功能面超过验证面”。在 P1 证据闭合前，默认冻结无直接用户证据的新子系统扩张。
+
+### 2.1 Engine 收敛门（2026-07-30）
+
+在继续 5.4+ 功能扩张前，必须先处理 [issue #381](https://github.com/GhostXia/AIRP/issues/381) 指出的一致性问题：
+
+1. **Chat vs Conversation 双轨**：产品 WebUI 仍只绑定 legacy `/v1/chat/*`；Conversation runtime 不得在无切流决策下与 Chat 对称堆功能（切流或冻结二选一）。
+2. **Turn 级跨资源提交 / 恢复**：单资源原子写不等于跨资源事务（见 #286/#342）。
+3. **插件 DNS 与锁/async 模型**：安全残差与并发正确性优先于新工具/新页面。
+
+详细排序与去重挂接以 #381 与 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §5 为准。
+
+### 2.2 P1 通过条件
 
 P1 通过需要同时满足：
 
@@ -81,3 +93,5 @@ issue #312 保留了历史功能路线图。5.4 外部 MCP、5.5 多语言、5.6
 - **证据分层**：单元、route、browser、artifact、production、人工与市场证据各自只证明自身覆盖面。
 
 专题合同见 [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)、[WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)、[SECURITY.md](SECURITY.md) 和 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。
+
+

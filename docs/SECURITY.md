@@ -1,6 +1,6 @@
 # Security and deployment boundary
 
-> Baseline reviewed: 2026-07-26 at `main@200fed9`. Multi-provider routing and plugin tools are now implemented surfaces; current implementation status and release gates are in [CURRENT-BASELINE.md](CURRENT-BASELINE.md).
+> Baseline reviewed: 2026-07-30 at `main@4f3f792`. Plugin DNS fail-open and request-time revalidation remain open residuals (RR-014, issue #381 E-P0-3 / #329 N3); see RISK-REGISTER and CURRENT-BASELINE.
 
 AIRP defaults to a single-user local topology. The current priority artifact is a portable Windows WebUI package; Tauri remains a long-term client line.
 
@@ -71,3 +71,8 @@ Plugin tools are trusted-user extensions, not a security sandbox for untrusted c
 - Webhook headers and provider keys are separately persisted and redacted from list APIs. Error/log paths must not print header values, provider keys, full private responses, or script environment data.
 
 Production and portable packages must not enable preinstalled custom tools silently. Adding or enabling a plugin is an explicit trusted-user action; broader plugin distribution, signing, permission manifests, isolation, and revocation remain release work.
+
+### Plugin DNS residual (2026-07-30)
+
+Webhook HTTPS host checks currently fail open when DNS resolution errors, and do not re-resolve/pin at request time. Tracked as RR-014 residual and issue #381 E-P0-3 / #329 N3. Do not describe plugins as a multi-tenant sandbox.
+

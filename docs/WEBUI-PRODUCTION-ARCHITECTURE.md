@@ -4,7 +4,7 @@
 >
 > Decision date: 2026-07-13
 >
-> Last baseline check: 2026-07-26 (`main@200fed9`; later product features, provider routing, plugin tools, and finalize/world-event fixes do not change this accepted P0 topology boundary)
+> Last baseline check: 2026-07-30 (`main@4f3f792`; later product features, provider routing, plugin tools, and finalize/world-event fixes do not change this accepted P0 topology boundary)
 >
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)

@@ -737,5 +737,5 @@ function makeMockPort(overrides = {}) {
 - 上层 umbrella：[#130](https://github.com/GhostXia/AIRP/issues/130) WebUI production launch
 - 门禁合同：`docs/WEBUI-PRODUCTION-PLAN.md` §2.2
 - 架构约束：`docs/WEBUI-PRODUCTION-ARCHITECTURE.md`
-- Persona 契约：`docs/PERSONA-HTTP-API-PLAN.md`
+- Persona 契约：`docs/archive/2026-07-persona-http-api-plan.md`
 - 现有 harness（非向导）：`webui/app.js`（M1 backend validation）

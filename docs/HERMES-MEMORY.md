@@ -4,7 +4,7 @@
 > 研究对象：Hermes Agent（Nous Research 开源自进化 agent）。"随使用时长能力提升"的核心=持久记忆+技能自建+用户建模的自我进化闭环。
 > 来源：hermes-agent.nousresearch.com/docs、mindstudio 5-支柱解析、glukhov 记忆系统技术贴（2026-07 实读）。
 > 结论先行：这套机制**极适合 RP**，且**主要靠扩展我们已有的件即可实现**，是相对酒馆（每轮重灌静态卡+世界书、无跨会话学习）的**核心差异化**。
-> 研究日期：2026-07-01；状态复核：2026-07-26，`main@200fed9`
+> 研究日期：2026-07-01；状态复核：2026-07-30，`main@4f3f792`
 
 ---
 
@@ -99,3 +99,4 @@
 - **OpenClaw 迁移**：一键导入 settings/memories/skills/keys/personas/TTS/workspace——对标我们酒馆导入思路（迁移旧资产）。
 
 **核对结论**：我的映射（三层记忆 + 用户自动抽取 + FTS 检索 + 技能自建）方向无误；主要补两条**对我们尤其重要**——① 兼容 agentskills.io 开放技能标准（白捡第三方生态）；② subagent+RPC 零上下文成本工具调用（印证干净 prompt + agent 脊柱，值得设计时纳入）。多平台 headless 也强印证引擎架构。
+

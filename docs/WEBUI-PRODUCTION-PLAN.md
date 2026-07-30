@@ -2,7 +2,7 @@
 
 > 状态：发布门与验收计划；近期优先级总览以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准
 >
-> 基线日期：2026-07-26，`main@200fed9`
+> 基线日期：2026-07-30，`main@4f3f792`
 >
 > 产品目标：在 Phase 1–5.3 功能扩张后，暂停用页面/功能数量替代发布证据；先把真实首聊、刷新/重启恢复、失败关闭、视觉一致性和用户资产安全收敛为可重复验收的 P1 有限试用版，再推进可升级、可恢复的正式 Web 产品。
 
@@ -192,3 +192,4 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 6. #114/#115/#190/#192 的关闭状态与原验收项存在偏差，按 [#231](https://github.com/GhostXia/AIRP/issues/231) 核对后重新打开或拆分剩余项；该流程修正不阻塞产品主线；
 7. Persona/Preset 高级生命周期、完整 revision 恢复 vertical slice、#220 非阻塞项、工程治理自动化、release pipeline 强制度量与发布签名后移到 P2/P3；
 8. [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 只在能力边界、执行顺序或 release batch 发生实质变化时统一校准。
+

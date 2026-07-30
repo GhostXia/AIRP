@@ -1,5 +1,6 @@
 # Engine Conversation 合同
 
+> 产品绑定：WebUI **未**绑定本合同；产品主聊天仍为 /v1/chat/*（见 CURRENT-BASELINE §2.1、#381）。
 > 状态：v1 基础、可运行时注入的受控策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message/turn/observability projection、有界长历史 context 与显式 legacy migration 已实现
 >
 > 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_context.rs`、`engine/src/conversation_observability.rs`、`engine/src/conversation_policy.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
@@ -319,3 +320,4 @@ observability: journal_events=50003, 50 reads=11 ms, mean=0.236 ms
 
 新的 Conversation 场景回合和显式兼容迁移合同已经由 Engine 闭合；既有
 WebUI/legacy scene 的无归属历史仍明确停在 `needs_review`，因此不得宣称所有旧群聊历史已经迁移。
+
