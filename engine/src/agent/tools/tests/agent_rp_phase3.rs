@@ -139,6 +139,103 @@ async fn advance_plot_appends_plot_history_under_revision_contract() {
     assert_eq!(history[0]["development"], "The tower doors swung open");
 }
 
+/// #281: `update_relationship` 在 confirm=false 时返回 dry-run preview，不落盘。
+#[tokio::test]
+async fn update_relationship_dry_run_returns_preview_without_persisting() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "upd_rel_dry");
+    let reg = default_registry(state.clone());
+
+    let tool = reg.get("update_relationship").unwrap();
+    let result = tool
+        .call(
+            serde_json::json!({
+                "character_id": "upd_rel_dry",
+                "from": "upd_rel_dry",
+                "to": "bob",
+                "relation_type": "rival",
+                "intensity": 0.9
+            }),
+            false, // confirm=false → dry-run
+        )
+        .await
+        .unwrap();
+
+    assert!(result.dry_run);
+    assert_eq!(result.output["dry_run"].as_bool(), Some(true));
+    assert_eq!(result.output["would_update"]["from"], "upd_rel_dry");
+    assert_eq!(result.output["would_update"]["to"], "bob");
+    assert_eq!(result.output["would_update"]["relation_type"], "rival");
+    assert_eq!(result.output["would_update"]["intensity"], 0.9);
+    assert_eq!(result.output["character_id"], "upd_rel_dry");
+
+    // dry-run 不落盘：live.json 不应存在（seed_character 不写 state/live.json）。
+    let live_path = state
+        .data_root
+        .join("characters/upd_rel_dry/state/live.json");
+    assert!(
+        !live_path.exists(),
+        "dry-run must not persist live.json, but found at {}",
+        live_path.display()
+    );
+    // history.jsonl 也不应存在。
+    let history_path = state
+        .data_root
+        .join("characters/upd_rel_dry/state/history.jsonl");
+    assert!(!history_path.exists());
+}
+
+/// #281: `advance_plot` 在 confirm=false 时返回 dry-run preview，不落盘。
+#[tokio::test]
+async fn advance_plot_dry_run_returns_preview_without_persisting() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "adv_plot_dry");
+    let reg = default_registry(state.clone());
+
+    let tool = reg.get("advance_plot").unwrap();
+    let result = tool
+        .call(
+            serde_json::json!({
+                "character_id": "adv_plot_dry",
+                "development": "The gate crumbled",
+                "type": "climax"
+            }),
+            false, // confirm=false → dry-run
+        )
+        .await
+        .unwrap();
+
+    assert!(result.dry_run);
+    assert_eq!(result.output["dry_run"].as_bool(), Some(true));
+    assert_eq!(
+        result.output["would_inject"],
+        "[剧情推进: climax] The gate crumbled"
+    );
+    assert_eq!(result.output["character_id"], "adv_plot_dry");
+
+    // dry-run 不落盘：live.json 不应存在。
+    let live_path = state
+        .data_root
+        .join("characters/adv_plot_dry/state/live.json");
+    assert!(
+        !live_path.exists(),
+        "dry-run must not persist live.json, but found at {}",
+        live_path.display()
+    );
+    // current.md 不应被注入剧情 entry。
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "adv_plot_dry", None).unwrap();
+    let current = crate::volume_store::read_current(&session_dir).unwrap();
+    assert!(
+        !current.contains("[剧情推进: climax]"),
+        "dry-run must not inject plot entry into current.md"
+    );
+}
+
 #[tokio::test]
 async fn get_plot_status_returns_history_and_pending_clues() {
     let tmp = tempdir().unwrap();
