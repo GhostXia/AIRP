@@ -1,8 +1,8 @@
 # Engine Conversation 合同
 
-> 状态：v1 基础、可运行时注入的受控策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message/turn projection 与有界长历史 context 已实现；旧 chat/scene 迁移仍待后续切片
+> 状态：v1 基础、可运行时注入的受控策略注册表、`airp.scene.round_robin.v1` 回合执行、可重建 message/turn/observability projection、有界长历史 context 与显式 legacy migration 已实现
 >
-> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_context.rs`、`engine/src/conversation_policy.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
+> 适用范围：`engine/src/conversation.rs`、`engine/src/conversation_context.rs`、`engine/src/conversation_observability.rs`、`engine/src/conversation_policy.rs`、`engine/src/conversation_projection.rs`、`engine/src/conversation_turn.rs` 与 `/v1/conversations*`
 
 ## 1. 定位
 
@@ -193,7 +193,9 @@ checkpoint 删除与 stale 增量扩展、错误 summary 边界、原事件保�
 | `GET` | `/v1/conversations/{id}/events` | cursor 窗口读取 |
 | `POST` | `/v1/conversations/{id}/turns` | 由 Engine 执行并持久化一个场景回合 |
 | `GET` | `/v1/conversations/{id}/turns/{turn_id}` | 从 journal 重建回合生命周期；重启后悬空回合收敛为 `unknown_commit` |
+| `GET` | `/v1/conversations/{id}/turns/{turn_id}/observability` | 从权威 journal 投影脱敏的 turn/policy/speaker trace 与数值指标 |
 | `POST` | `/v1/conversations/{id}/turns/{turn_id}/cancel` | 显式请求 Engine 协作式取消在途回合 |
+| `GET` | `/v1/conversation-capabilities` | 返回 Conversation 合同/schema 版本、全局执行上界、观测字段与稳定恢复码 |
 | `GET` | `/v1/conversation-policies` | 列出已注册策略及其配置 schema |
 | `POST` | `/v1/scenes/{scene_id}/conversations` | 把 scene 快照成通用 conversation |
 | `POST` | `/v1/conversation-migrations/plan` | 只读分析 legacy chat、scene/group 或 Council；返回来源摘要与 `ready/needs_review` |
@@ -239,7 +241,57 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 
 客户端不能在 turn 请求中注入 `scene_id`、`session_id`、`character_id`、history 或 legacy branch/swipe 控制。provider、model、preset、persona 和采样参数继续复用既有 chat pipeline 合同，因此 UI 只是能力调用方，不决定 Engine 的作用域、历史或调度。
 
-## 9. 兼容边界
+## 9. 可观察性、错误与能力发现
+
+`GET /v1/conversation-capabilities` 是客户端发现全局 Conversation 执行合同的入口。schema v1
+公开统一 HTTP error envelope、manifest/event/context/policy descriptor/migration report/turn
+error/observability 的兼容版本和 legacy migration adapter version，以及单回合
+speaker、并行度、policy config、规划时间、整轮 deadline 和默认 context 的 Engine 上界。
+客户端应把它与 `/v1/conversation-policies` 的逐策略 descriptor 合并消费，不硬编码某个策略的
+执行模式或较小预算。
+
+`GET /v1/conversations/{id}/turns/{turn_id}/observability` 返回 schema v1 的 journal-derived
+投影：
+
+- `trace_id` 固定等于 durable `turn_id`，不生成第二套关联身份；
+- policy ID/version、执行模式与 planning latency 来自 `turn.accepted` 的不可变快照；
+- speaker 只公开 plan ordinal、participant ID、`planned/committed/failed/cancelled/generated_not_committed`
+  结果、耗时和已记录 output token 数；同一 participant 的重复调用不会被合并；
+- quota 指标区分规划期原子预留的 request 数和 provider 返回后实际记录的 output token；
+- terminal 状态公开总 latency、`commit_state`、cancel/partial-commit 布尔值与版本化 failure；
+- 并行 fail-closed 后已生成、已计费但未提交的结果只记录 participant、耗时和 token，不记录内容。
+
+该投影不复制 message content、prompt、provider response/error body、credential、model config，
+也不写入独立 telemetry 数据库。原始事件仍是唯一真相；相同 snapshot 必须得到确定性相同输出。
+provider 私有错误可进入受控 Engine 日志，但公开 turn failure 只返回稳定 code、error schema version、
+participant（如可证明）与 recovery action。turn 提交前的统一 `AirpError` envelope 同样增量返回
+`schema_version = 1` 和稳定 recovery category；既有 HTTP status、code、message 保持兼容。当前
+turn recovery action 为 `inspect_and_continue`、`resubmit_new_turn` 或
+`manual_retry_or_continue`；未知 code 默认要求检查
+journal 后继续，不把未知失败伪装成安全自动重试。
+
+Batch 7 的重复回归矩阵由以下既有和新增门禁共同组成：
+
+| 边界 | 默认回归/重复基准 |
+|---|---|
+| 并发写入 | `conversation::tests::concurrent_appends_are_serialized_per_conversation` |
+| 多用户隔离 | `daemon::tests::conversations::per_user_conversation_roots_are_not_cross_visible` |
+| 慢 provider / cancel | `daemon::tests::conversations::explicit_cancel_interrupts_generation_and_commits_cancelled_state` |
+| provider 失败与脱敏 | `daemon::tests::conversations::provider_failure_is_reported_as_partially_committed_turn` |
+| 长历史 | `conversation_context::tests::long_history_context_benchmark_and_soak`（release ignored benchmark） |
+| 长 journal 观测 | `conversation_observability::tests::long_journal_turn_observability_benchmark`（release ignored benchmark） |
+
+ignored benchmark 是单机趋势证据而非生产 SLO；默认测试负责语义门禁，release benchmark 用固定
+50,000-event/50-read workload 检查代际回归。
+
+2026-07-30 维护者 Windows/D 盘环境的本批 release 结果：
+
+```text
+context: events=50000, cold=90 ms, 50 append-aware reads=289 ms, mean=5.798 ms
+observability: journal_events=50003, 50 reads=11 ms, mean=0.236 ms
+```
+
+## 10. 兼容边界
 
 - 旧 `/v1/chat/completions`、`/v1/chat/*`、`/v1/sessions/*` 和角色目录布局不变；
 - 未提供 `session_id` 的 legacy 角色聊天继续使用原角色级 history/memory；
@@ -257,12 +309,12 @@ participant 总量不设产品级上限，但单回合 speaker plan 最多执行
 拒绝自动导入历史；需要新 conversation 时继续使用
 `POST /v1/scenes/{scene_id}/conversations` 创建 scene snapshot。
 
-## 10. 后续实现门
+## 11. 后续实现门
 
 1. Policy registry 后续：若需要跨进程、WASM 或动态库 policy，必须另行设计签名/provenance、进程隔离、取消与资源回收合同；当前只允许宿主显式注入受信任的进程内 Rust 实现，不宣称存在任意插件沙箱。
-2. Projection 后续：在已交付的 message/history 与 turn lifecycle projection 上增加通用审计视图；所有投影继续保持可重建，不成为第二真相。
+2. Projection 后续：已交付单 turn 脱敏 observability；若增加跨 conversation 聚合、外部 metrics exporter 或通用审计视图，仍须从权威事件可重建、保持用户隔离，并显式定义 retention/cardinality，不成为第二真相。
 3. Turn executor 后续：增加基于受控结构化结果的内容停止条件、跨进程 provider operation reconciliation，以及 summary 生成 policy；现有停止条件仅为规划期消息数量上限，summary v1 也只交付可验证事件与有界消费合同，不宣称已自动调用模型生成 summary。
-4. Compatibility adapters 后续：只有新证据格式能够证明 scene/group 历史逐消息归属后，才允许其从 `needs_review` 进入自动迁移；产品 UI/工作流仍由 #343/#344 验收。
+4. Compatibility adapters 后续：只有新证据格式能够证明 scene/group 历史逐消息归属后，才允许其从 `needs_review` 进入自动迁移；来源 adapter、迁移编排/状态持久化与 Conversation target writer 的结构解耦由 #371 跟踪；产品 UI/工作流仍由 #343/#344 验收。
 5. Recovery/export 后续：当前 Conversation migration 已有专用 versioned report、source export、SHA-256 与回滚演练，但不是全仓统一 migration registry、自动定时备份或跨资源恢复系统。
 
 新的 Conversation 场景回合和显式兼容迁移合同已经由 Engine 闭合；既有

@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-07-29
-> 代码基线：Conversation Batch 6 工作树（基于 `main@f908b03`）
+> 基线日期：2026-07-30
+> 代码基线：Conversation Batch 7 工作树（基于 `main@449a685`）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -34,7 +34,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 |---|---|---|---|---|
 | 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools | 已有管理、选择、导入与诊断入口 | 高级生命周期、完整导出/恢复仍未闭合 |
 | 会话与聊天 | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe | OpenAI-compatible chat SSE、continue/regen/search | 命名会话、流式聊天、编辑/删除/分支/Swipe、导出 | 长会话虚拟化、跨资源事务与完整恢复仍开放 |
-| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle projection、幂等 scene round-robin 回合执行；受控外部 Rust policy 可运行时注入并受 provenance/capability/lifecycle/resource gate 约束；支持确定性提交的串行/并行 plan 与 speaker 数量停止条件；同步 I/O 隔离到 blocking worker；长历史 prompt 由 Engine 预算、可重建 checkpoint 与可验证 summary 前缀有界投影；legacy character chat 与 Council 可通过 versioned、copy-only、digest-verified adapter 显式迁移，scene/group 无 speaker 证据时停在 `needs_review` | `/v1/conversations*`、turn 状态/显式取消、descriptor v2 `/v1/conversation-policies`；migration plan/execute/export/rollback；旧 chat/session/scene API 形状不变；未知、停用、失败、panic 或超时策略执行 fail-closed | 尚未绑定具体 UI，客户端只消费 Engine 合同且不能注入 history、代码或调度语义 | 自动 summary 生成 policy、内容型停止条件、通用审计 projection、全仓统一 migration registry、跨进程 provider reconciliation 与沙箱化跨进程/动态策略仍开放 |
+| Conversation runtime | UI 无关的 versioned manifest、append-only event journal、可重建 message/turn lifecycle/observability projection、幂等 scene round-robin 回合执行；受控外部 Rust policy 可运行时注入并受 provenance/capability/lifecycle/resource gate 约束；支持确定性提交的串行/并行 plan 与 speaker 数量停止条件；同步 I/O 隔离到 blocking worker；长历史 prompt 由 Engine 预算、可重建 checkpoint 与可验证 summary 前缀有界投影；legacy character chat 与 Council 可通过 versioned、copy-only、digest-verified adapter 显式迁移，scene/group 无 speaker 证据时停在 `needs_review` | `/v1/conversations*`、turn 状态/显式取消/脱敏观测、全局 `/v1/conversation-capabilities`、descriptor v2 `/v1/conversation-policies`；统一 HTTP error 与 terminal failure 均有版本化 recovery；migration plan/execute/export/rollback；旧 chat/session/scene API 形状不变；未知、停用、失败、panic 或超时策略执行 fail-closed | 尚未绑定具体 UI，客户端通过 capability discovery 消费 Engine 合同且不能注入 history、代码或调度语义 | 自动 summary 生成 policy、内容型停止条件、跨 Conversation 聚合审计/外部 metrics exporter、全仓统一 migration registry、跨进程 provider reconciliation 与沙箱化跨进程/动态策略仍开放 |
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | advisory 语义、完整 session 物化与生命周期未完成 |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 30 个内置工具；运行时还可加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径仍有开放审计项；不是通用可配置多 Agent 平台 |
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP 接口 | 屏 36–42 已接入 | 功能存在不等于真实 provider、数据恢复与用户工作流已验收 |
@@ -100,13 +100,13 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 6. 验证快照
 
-本次文档校准针对 Conversation Batch 6 工作树（基于 `main@f908b03`）于 2026-07-29 运行以下本地验证；该批在合并前不冒充 `main`：
+本次文档校准针对 Conversation Batch 7 工作树（基于 `main@449a685`）于 2026-07-30 运行以下本地验证；该批在合并前不冒充 `main`：
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| Rust workspace | `cargo test --workspace --locked` | engine lib 1136 passed / 4 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1193 passed / 4 ignored |
+| Rust workspace | `cargo test --workspace --locked` | engine lib 1142 passed / 5 ignored；engine main 4 passed；6 个 integration binaries 合计 38 passed；protocol 6 passed；Tauri shell 9 passed；总计 1199 passed / 5 ignored |
 | Rust 静态门禁 | `cargo fmt --all -- --check`；workspace clippy `-D warnings`；rustdoc `-D warnings` | 通过 |
-| Conversation 长历史（Batch 4 历史基准，Batch 5 未重跑 release benchmark） | 50,000 events release benchmark + 50 次 append-aware projection soak；10,000 events 默认测试 | PR #367 / `main@66abbd6` 证据：cold 117 ms；每次先 append 再 projection 的均值 5.329 ms；输出最多 128 messages，checkpoint 普通 suffix 增量扩展，删除/失配/篡改可重建 |
+| Conversation 稳定性矩阵 | 并发 append、多用户隔离、慢/失败 provider、cancel/unknown commit、50,000-event 长历史与 observability 重复基准 | 默认语义门禁已覆盖；release：context cold 90 ms，50 次 append-aware 共 289 ms、均值 5.798 ms；observability 50,003 events、50 次读取共 11 ms、均值 0.236 ms |
 | WebUI | `node --test webui/tests/*.test.mjs` | 67 passed |
 | Vue/Tauri UI | `npm run typecheck`；`npm test -- --run`（`ui/`） | typecheck 通过；98 passed |
 | 工程工具 | dep-governance；agent-exploration Node tests | 本批未复跑，不从历史结果外推 |

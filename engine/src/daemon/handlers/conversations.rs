@@ -19,13 +19,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-const CONVERSATION_TURN_TIMEOUT: Duration = Duration::from_secs(120);
+const CONVERSATION_TURN_TIMEOUT: Duration =
+    Duration::from_secs(crate::conversation_observability::CONVERSATION_TURN_TIMEOUT_SECS);
 
 struct TurnExecution<'a> {
     root: &'a std::path::Path,
     conversation_id: SessionId,
     turn_id: String,
     fingerprint: String,
+    planning_ms: u64,
     registration: &'a crate::conversation_turn::ActiveTurnRegistration,
 }
 
@@ -166,6 +168,38 @@ pub(in crate::daemon) async fn list_conversation_policies_endpoint(
     >,
 ) -> Json<Vec<crate::conversation_policy::ConversationPolicyDescriptor>> {
     Json(registry.list())
+}
+
+/// Discover the versioned Conversation schemas, execution limits, redacted
+/// observability fields, and stable turn recovery codes.
+pub(in crate::daemon) async fn get_conversation_capabilities_endpoint(
+) -> Json<crate::conversation_observability::ConversationCapabilities> {
+    Json(crate::conversation_observability::conversation_capabilities())
+}
+
+/// Project a redacted turn trace from authoritative journal evidence.
+pub(in crate::daemon) async fn get_conversation_turn_observability_endpoint(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    axum::extract::Path((conversation_id, turn_id)): axum::extract::Path<(String, String)>,
+    Query(query): Query<ConversationScopeQuery>,
+) -> Result<Json<crate::conversation_observability::ConversationTurnObservability>, AirpError> {
+    let conversation_id = SessionId::parse(&conversation_id)?;
+    validate_turn_id(&turn_id)?;
+    let root = effective_conversation_root(&state.data_root, query.user_id.as_ref())?;
+    let service = ConversationService::new(&root);
+    service.get(conversation_id).await?;
+    let snapshot = if let Some(active) =
+        crate::conversation_turn::active_turn_snapshot(&root, conversation_id, &turn_id)
+    {
+        active
+    } else {
+        let events = service.all_events(conversation_id).await?;
+        crate::conversation_turn::project_turn(&events, &turn_id)?
+            .ok_or_else(|| AirpError::NotFound(format!("turn {turn_id} not found")))?
+    };
+    Ok(Json(
+        crate::conversation_observability::project_turn_observability(&snapshot),
+    ))
 }
 
 /// Read durable turn state. A non-terminal turn with no active executor is
@@ -309,9 +343,11 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
         ));
     }
 
+    let planning_started = tokio::time::Instant::now();
     let resolved_plan = conversation_policies
         .plan_turn(&manifest, &request.user_actor_id)
         .await?;
+    let planning_ms = u64::try_from(planning_started.elapsed().as_millis()).unwrap_or(u64::MAX);
     if resolved_plan.plan.speakers.len()
         > crate::conversation_policy::MAX_CONVERSATION_SPEAKERS_PER_TURN
     {
@@ -341,6 +377,7 @@ pub(in crate::daemon) async fn execute_conversation_turn_endpoint(
             conversation_id,
             turn_id,
             fingerprint,
+            planning_ms,
             registration: &registration,
         },
     )
@@ -364,6 +401,7 @@ async fn execute_new_turn(
         conversation_id,
         turn_id,
         fingerprint,
+        planning_ms,
         registration,
     } = execution;
     let cancellation = registration.cancellation();
@@ -390,6 +428,11 @@ async fn execute_new_turn(
                         "scene_id": &plan.scene_id,
                         "speakers": &plan.speakers,
                     },
+                    "observability": {
+                        "schema_version": crate::conversation_observability::CONVERSATION_OBSERVABILITY_SCHEMA_VERSION,
+                        "planning_ms": planning_ms,
+                        "quota_reserved_requests": plan.speakers.len(),
+                    },
                 }),
                 extensions: request.extensions.clone(),
                 expected_next_sequence: Some(request.expected_next_sequence),
@@ -411,6 +454,7 @@ async fn execute_new_turn(
             crate::conversation_turn::TURN_CANCELLED,
             None,
             "turn_cancelled",
+            TurnTerminalObservability::default(),
             accepted_id,
             next_sequence,
             committed,
@@ -447,6 +491,7 @@ async fn execute_new_turn(
             crate::conversation_turn::TURN_CANCELLED,
             None,
             "turn_cancelled",
+            TurnTerminalObservability::default(),
             started_id,
             next_sequence,
             committed,
@@ -474,6 +519,7 @@ async fn execute_new_turn(
                 crate::conversation_turn::TURN_FAILED,
                 None,
                 "context_projection_failed",
+                TurnTerminalObservability::default(),
                 started_id,
                 next_sequence,
                 committed,
@@ -502,6 +548,7 @@ async fn execute_new_turn(
             crate::conversation_turn::TURN_FAILED,
             None,
             "context_budget_exceeded",
+            TurnTerminalObservability::default(),
             started_id,
             next_sequence,
             committed,
@@ -559,8 +606,9 @@ async fn execute_new_turn(
                             conversation_id,
                             turn_id,
                             failure.event_kind,
-                            Some(failure.participant_id),
+                            Some(failure.participant_id.clone()),
                             failure.code,
+                            TurnTerminalObservability::from_failure(&failure),
                             user_event_id,
                             next_sequence,
                             committed,
@@ -589,6 +637,7 @@ async fn execute_new_turn(
                         crate::conversation_turn::TURN_FAILED,
                         Some(participant_id),
                         "context_budget_exceeded",
+                        TurnTerminalObservability::default(),
                         user_event_id,
                         next_sequence,
                         committed,
@@ -623,17 +672,30 @@ async fn execute_new_turn(
                     Ok(output) => output,
                     Err(failure) => {
                         let dropped = generations
-                            .filter_map(Result::ok)
-                            .map(|output| (output.participant_id, output.recorded_tokens))
+                            .map(|generated| match generated {
+                                Ok(output) => UncommittedSpeakerObservation {
+                                    participant_id: output.participant_id,
+                                    outcome: crate::conversation_observability::ConversationSpeakerOutcome::GeneratedNotCommitted,
+                                    speaker_latency_ms: output.latency_ms,
+                                    recorded_output_tokens: Some(output.recorded_tokens),
+                                },
+                                Err(failure) => UncommittedSpeakerObservation {
+                                    participant_id: failure.participant_id,
+                                    outcome: crate::conversation_observability::ConversationSpeakerOutcome::Failed,
+                                    speaker_latency_ms: failure.latency_ms,
+                                    recorded_output_tokens: failure.recorded_tokens,
+                                },
+                            })
                             .collect::<Vec<_>>();
                         if !dropped.is_empty() {
                             let dropped_participants = dropped
                                 .iter()
-                                .map(|(participant_id, _)| participant_id.as_str())
+                                .map(|speaker| speaker.participant_id.as_str())
                                 .collect::<Vec<_>>();
                             let dropped_recorded_tokens = dropped
                                 .iter()
-                                .map(|(_, tokens)| u64::from(*tokens))
+                                .filter_map(|speaker| speaker.recorded_output_tokens)
+                                .map(u64::from)
                                 .sum::<u64>();
                             tracing::warn!(
                                 %conversation_id,
@@ -650,8 +712,14 @@ async fn execute_new_turn(
                             conversation_id,
                             turn_id,
                             failure.event_kind,
-                            Some(failure.participant_id),
+                            Some(failure.participant_id.clone()),
                             failure.code,
+                            TurnTerminalObservability {
+                                speaker_latency_ms: Some(failure.latency_ms),
+                                recorded_output_tokens: failure.recorded_tokens,
+                                uncommitted_speakers: dropped,
+                                ..TurnTerminalObservability::default()
+                            },
                             user_event_id,
                             next_sequence,
                             committed,
@@ -680,6 +748,7 @@ async fn execute_new_turn(
                         crate::conversation_turn::TURN_FAILED,
                         Some(participant_id),
                         "context_budget_exceeded",
+                        TurnTerminalObservability::default(),
                         user_event_id,
                         next_sequence,
                         committed,
@@ -698,6 +767,7 @@ async fn execute_new_turn(
             crate::conversation_turn::TURN_CANCELLED,
             None,
             "turn_cancelled",
+            TurnTerminalObservability::default(),
             user_event_id,
             next_sequence,
             committed,
@@ -743,12 +813,53 @@ struct GeneratedConversationSpeaker {
     live_state: Option<serde_json::Value>,
     chunks: serde_json::Value,
     recorded_tokens: u32,
+    latency_ms: u64,
 }
 
 struct ConversationSpeakerFailure {
     participant_id: String,
     event_kind: &'static str,
     code: &'static str,
+    latency_ms: u64,
+    recorded_tokens: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct UncommittedSpeakerObservation {
+    participant_id: String,
+    outcome: crate::conversation_observability::ConversationSpeakerOutcome,
+    speaker_latency_ms: u64,
+    recorded_output_tokens: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct TurnTerminalObservability {
+    schema_version: u32,
+    speaker_latency_ms: Option<u64>,
+    recorded_output_tokens: Option<u32>,
+    uncommitted_speakers: Vec<UncommittedSpeakerObservation>,
+}
+
+impl TurnTerminalObservability {
+    fn from_failure(failure: &ConversationSpeakerFailure) -> Self {
+        Self {
+            speaker_latency_ms: Some(failure.latency_ms),
+            recorded_output_tokens: failure.recorded_tokens,
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for TurnTerminalObservability {
+    fn default() -> Self {
+        Self {
+            schema_version:
+                crate::conversation_observability::CONVERSATION_OBSERVABILITY_SCHEMA_VERSION,
+            speaker_latency_ms: None,
+            recorded_output_tokens: None,
+            uncommitted_speakers: Vec::new(),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -764,6 +875,7 @@ async fn generate_conversation_speaker(
     conversation_id: SessionId,
     turn_id: &str,
 ) -> Result<GeneratedConversationSpeaker, ConversationSpeakerFailure> {
+    let speaker_started = tokio::time::Instant::now();
     let participant_id = speaker.participant_id;
     let character_id = speaker.resource_id;
     let mut payload = request.base.clone();
@@ -789,6 +901,8 @@ async fn generate_conversation_speaker(
                 participant_id,
                 event_kind: crate::conversation_turn::TURN_FAILED,
                 code: "generation_preparation_failed",
+                latency_ms: elapsed_millis(speaker_started),
+                recorded_tokens: None,
             });
         }
     };
@@ -805,6 +919,8 @@ async fn generate_conversation_speaker(
                 participant_id,
                 event_kind: crate::conversation_turn::TURN_CANCELLED,
                 code: "turn_cancelled",
+                latency_ms: elapsed_millis(speaker_started),
+                recorded_tokens: None,
             });
         }
         timed = tokio::time::timeout_at(
@@ -824,6 +940,8 @@ async fn generate_conversation_speaker(
                     participant_id,
                     event_kind: crate::conversation_turn::TURN_FAILED,
                     code: "turn_timeout",
+                    latency_ms: elapsed_millis(speaker_started),
+                    recorded_tokens: None,
                 });
             }
         }
@@ -836,6 +954,8 @@ async fn generate_conversation_speaker(
             participant_id,
             event_kind: crate::conversation_turn::TURN_CANCELLED,
             code: "turn_cancelled",
+            latency_ms: elapsed_millis(speaker_started),
+            recorded_tokens: Some(recorded_tokens),
         });
     }
     if let Some(error) = result.error {
@@ -850,6 +970,8 @@ async fn generate_conversation_speaker(
             participant_id,
             event_kind: crate::conversation_turn::TURN_FAILED,
             code: "generation_failed",
+            latency_ms: elapsed_millis(speaker_started),
+            recorded_tokens: Some(recorded_tokens),
         });
     }
     let (content, live_state) =
@@ -865,6 +987,8 @@ async fn generate_conversation_speaker(
             participant_id,
             event_kind: crate::conversation_turn::TURN_FAILED,
             code: "empty_generation",
+            latency_ms: elapsed_millis(speaker_started),
+            recorded_tokens: Some(recorded_tokens),
         });
     }
     let mut unpacker = crate::xml_unpacker::StreamingXmlUnpacker::new();
@@ -882,6 +1006,8 @@ async fn generate_conversation_speaker(
             participant_id: participant_id.clone(),
             event_kind: crate::conversation_turn::TURN_FAILED,
             code: "response_serialization_failed",
+            latency_ms: elapsed_millis(speaker_started),
+            recorded_tokens: Some(recorded_tokens),
         }
     })?;
     Ok(GeneratedConversationSpeaker {
@@ -891,7 +1017,12 @@ async fn generate_conversation_speaker(
         live_state,
         chunks,
         recorded_tokens,
+        latency_ms: elapsed_millis(speaker_started),
     })
+}
+
+fn elapsed_millis(started: tokio::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -922,6 +1053,11 @@ async fn commit_speaker_output(
                     "resource": {"kind": "character", "id": &output.character_id},
                     "chunks": &output.chunks,
                     "state": &output.live_state,
+                    "observability": {
+                        "schema_version": crate::conversation_observability::CONVERSATION_OBSERVABILITY_SCHEMA_VERSION,
+                        "speaker_latency_ms": output.latency_ms,
+                        "recorded_output_tokens": output.recorded_tokens,
+                    },
                 }),
                 extensions: BTreeMap::new(),
                 expected_next_sequence: Some(*next_sequence),
@@ -986,6 +1122,7 @@ async fn commit_turn_terminal(
     event_kind: &str,
     participant_id: Option<String>,
     code: &str,
+    observability: TurnTerminalObservability,
     causation_id: String,
     next_sequence: u64,
     mut committed: Vec<crate::conversation::ConversationEvent>,
@@ -1020,6 +1157,7 @@ async fn commit_turn_terminal(
                     "code": code,
                     "participant_id": participant_id,
                     "commit_state": commit_state,
+                    "observability": observability,
                 }),
                 extensions: BTreeMap::new(),
                 expected_next_sequence: Some(next_sequence),
@@ -1034,8 +1172,11 @@ async fn commit_turn_terminal(
         events: committed,
         next_sequence: next_sequence + 1,
         failure: Some(ConversationTurnFailure {
+            schema_version:
+                crate::conversation_observability::CONVERSATION_TURN_ERROR_SCHEMA_VERSION,
             code: code.to_string(),
             participant_id,
+            recovery: crate::conversation_observability::recovery_for_code(code),
         }),
     })
 }

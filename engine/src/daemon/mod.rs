@@ -43,9 +43,10 @@ use handlers::{
     export_session_timeline_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
     get_character_avatar, get_character_card, get_character_lorebook,
     get_character_revision_endpoint, get_character_state, get_character_state_history,
-    get_character_state_schema, get_chat_history, get_conversation_endpoint,
-    get_conversation_events_endpoint, get_conversation_migration_export_endpoint,
-    get_conversation_turn_endpoint, get_drift, get_effective_persona_endpoint,
+    get_character_state_schema, get_chat_history, get_conversation_capabilities_endpoint,
+    get_conversation_endpoint, get_conversation_events_endpoint,
+    get_conversation_migration_export_endpoint, get_conversation_turn_endpoint,
+    get_conversation_turn_observability_endpoint, get_drift, get_effective_persona_endpoint,
     get_lorebook_graph_endpoint, get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc,
     get_preset_endpoint, get_resident_memory, get_routing_endpoint, get_scene_endpoint,
     get_session_timeline_endpoint, get_settings, get_style_profile, get_template_endpoint,
@@ -495,6 +496,10 @@ pub fn create_router_with_conversation_policy_registry(
             get(list_conversation_policies_endpoint),
         )
         .route(
+            "/v1/conversation-capabilities",
+            get(get_conversation_capabilities_endpoint),
+        )
+        .route(
             "/v1/conversation-migrations/plan",
             post(plan_conversation_migration_endpoint)
                 .layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
@@ -529,6 +534,10 @@ pub fn create_router_with_conversation_policy_registry(
         .route(
             "/v1/conversations/:conversation_id/turns/:turn_id",
             get(get_conversation_turn_endpoint),
+        )
+        .route(
+            "/v1/conversations/:conversation_id/turns/:turn_id/observability",
+            get(get_conversation_turn_observability_endpoint),
         )
         .route(
             "/v1/conversations/:conversation_id/turns/:turn_id/cancel",
