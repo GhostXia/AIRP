@@ -226,8 +226,14 @@ pub async fn run_seal_flow(
         return Ok(None); // 没有内容可封
     }
     // #283：记录 baseline，LLM streaming 后在 session_lock 内重新校验。
+    // baseline 同时覆盖 current.md 与 index.md：SealVolumeTool 路径与 finalize
+    // 路径不同，agent 主动调 seal_volume 时另一轮 finalize 的 run_maintenance
+    // 可能在 streaming 期间改写 index.md（finalize 仅在 should_seal 时跳过
+    // maintenance，不覆盖 agent 触发的 seal）。校验 index.md 防止跨卷实体
+    // 晋升被静默覆盖。
     let baseline = current.clone();
     let index = volume_store::read_index(session_dir)?;
+    let index_baseline = index.clone();
     let next_n = volume_store::next_volume_number(session_dir);
 
     let system_prompt = build_seal_system_prompt();
@@ -286,16 +292,19 @@ pub async fn run_seal_flow(
     // #283 方案 J：写盘段持 session_lock + baseline 校验。
     // guard 不跨 await（write_volume / write_index / clear_current 全为 sync），
     // 因此 std::sync::Mutex 合法。校验失败返回 Conflict，调用方可重试；
-    // current.md 保留不变，下一轮硬阈值会重新触发封卷，不损坏数据。
+    // current.md + index.md 保留不变，下一轮硬阈值会重新触发封卷，不损坏数据。
     let diff = index_parser::parse_index_diff(&diff_block);
     let new_index = index_parser::apply_diff(&index, &diff);
     if let Some(cid) = character_id {
         let lock = crate::domain::session_lock(cid, session_id);
         let _guard = lock.lock().expect("session lock poisoned");
-        let recheck = volume_store::read_current(session_dir)?;
-        if recheck != baseline {
+        // 双 baseline 校验：current.md 防止并发 append 被销毁，index.md 防止
+        // 并发 run_maintenance 的跨卷实体晋升被覆盖。
+        let recheck_current = volume_store::read_current(session_dir)?;
+        let recheck_index = volume_store::read_index(session_dir)?;
+        if recheck_current != baseline || recheck_index != index_baseline {
             return Err(AirpError::Conflict(format!(
-                "seal_volume aborted: current.md was modified concurrently during seal of volume {}",
+                "seal_volume aborted: session memory was modified concurrently during seal of volume {}",
                 next_n
             )));
         }
