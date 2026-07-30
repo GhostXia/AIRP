@@ -291,16 +291,14 @@ async fn run_style_learn_handler(
         // 角色专属 profile 只保留 feature 条目部分，去掉全局 profile_md 的
         // `# Style Profile: {profile_id}` 头部和 `来源：...（{timestamp}）` 行，
         // 改用角色专属头部。否则会出现两层 # 头部和两个来源时间戳，污染 prompt。
-        let entries = profile_md
-            .find("\n- ")
-            .map(|i| &profile_md[i + 1..])
-            .unwrap_or(profile_md.as_str());
+        // #324 N4: 改用 render_profile_entries 直接获取条目部分，避免脆弱的字符串切分。
+        let entries = crate::style::render_profile_entries(&features);
         let char_md = {
             let now = chrono::Utc::now().to_rfc3339();
             let mut md = String::with_capacity(512);
             md.push_str(&format!("# Character Style Profile: {}\n\n", cid));
             md.push_str(&format!("来源：用户文本样本学习（{}）\n\n", now));
-            md.push_str(entries);
+            md.push_str(&entries);
             md
         };
         // R1: propagate write failure — requests with character_id must not report

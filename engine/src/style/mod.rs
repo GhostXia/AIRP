@@ -26,8 +26,8 @@ pub use drift::{
     write_soul_drift, SoulDriftConfig, SOUL_DRIFT_DEFAULT_CAP,
 };
 pub use learn::{
-    character_profile_path, features_count, global_profile_path, render_profile_markdown,
-    run_style_learn, validate_profile_id, write_profile, StyleFeatures, StyleLearnRequest,
-    StyleLearnResponse,
+    character_profile_path, features_count, global_profile_path, render_profile_entries,
+    render_profile_header, render_profile_markdown, run_style_learn, validate_profile_id,
+    write_profile, StyleFeatures, StyleLearnRequest, StyleLearnResponse,
 };
 pub use review::{run_style_review, run_style_review_for_character, StyleReviewReport};

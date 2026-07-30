@@ -109,6 +109,11 @@ pub struct GraphQuery {
     /// 最小权重阈值（默认 1，即至少 1 次共享/引用）。
     #[serde(default = "default_min_weight")]
     pub min_weight: usize,
+    /// #324 N8: lorebook 条目数上限（默认 500）。
+    /// 超过此上限的图谱分析请求返回 400 BadRequest，防止 O(n²) 图谱分析 DoS。
+    /// 调用方可通过 query 参数 `max_entries=N` 调整（例如分析大 lorebook 时调高）。
+    #[serde(default = "default_max_entries")]
+    pub max_entries: usize,
 }
 
 impl Default for GraphQuery {
@@ -118,6 +123,7 @@ impl Default for GraphQuery {
             include_key_overlap: true,
             detect_conflicts: true,
             min_weight: 1,
+            max_entries: DEFAULT_MAX_ENTRIES,
         }
     }
 }
@@ -130,6 +136,13 @@ fn default_min_weight() -> usize {
     1
 }
 
+/// #324 N8: 默认 lorebook 条目数上限。
+const DEFAULT_MAX_ENTRIES: usize = 500;
+
+fn default_max_entries() -> usize {
+    DEFAULT_MAX_ENTRIES
+}
+
 /// 从 Lorebook 构建知识图谱。
 pub fn build_graph(
     character_id: &str,
@@ -137,10 +150,12 @@ pub fn build_graph(
     query: &GraphQuery,
 ) -> Result<WorldbookGraph, AirpError> {
     let entries = &lorebook.entries;
-    if entries.len() > 500 {
+    // #324 N8: 上限从 hardcoded 500 改为 query.max_entries（默认 500，可调）。
+    if entries.len() > query.max_entries {
         return Err(AirpError::BadRequest(format!(
-            "lorebook 条目数过多（{}），知识图谱分析上限 500",
-            entries.len()
+            "lorebook 条目数过多（{}），知识图谱分析上限 {}",
+            entries.len(),
+            query.max_entries
         )));
     }
 
@@ -508,6 +523,60 @@ mod tests {
         let lb = Lorebook { entries };
         let result = build_graph("hero", &lb, &GraphQuery::default());
         assert!(matches!(result, Err(AirpError::BadRequest(_))));
+    }
+
+    /// #324 N8: 默认上限 500，但调用方可通过 `max_entries` 调高。
+    /// 501 条 lorebook 在默认配置下会被拒绝，但把 max_entries 调到 600 应当通过。
+    #[test]
+    fn max_entries_configurable_allows_larger_lorebook() {
+        let entries: Vec<LorebookEntry> = (0..501)
+            .map(|i| make_entry_string_keys(vec![format!("k{}", i)], "content", None))
+            .collect();
+        let lb = Lorebook { entries };
+
+        // 默认 max_entries=500 → 拒绝
+        let result_default = build_graph("hero", &lb, &GraphQuery::default());
+        assert!(
+            matches!(result_default, Err(AirpError::BadRequest(_))),
+            "default max_entries=500 should reject 501 entries"
+        );
+
+        // 调高 max_entries=600 → 通过
+        let query = GraphQuery {
+            max_entries: 600,
+            ..Default::default()
+        };
+        let graph = build_graph("hero", &lb, &query).unwrap();
+        assert_eq!(graph.node_count, 501);
+        // 501 个独立 key，无重叠、无引用，应无边
+        assert_eq!(graph.edge_count, 0);
+    }
+
+    /// #324 N8: max_entries 也可调低，超过自定义下限的请求应被拒绝。
+    #[test]
+    fn max_entries_configurable_rejects_when_exceeded() {
+        let entries: Vec<LorebookEntry> = (0..11)
+            .map(|i| make_entry_string_keys(vec![format!("k{}", i)], "content", None))
+            .collect();
+        let lb = Lorebook { entries };
+
+        // 调低 max_entries=10 → 11 条应被拒绝
+        let query = GraphQuery {
+            max_entries: 10,
+            ..Default::default()
+        };
+        let result = build_graph("hero", &lb, &query);
+        assert!(
+            matches!(result, Err(AirpError::BadRequest(_))),
+            "max_entries=10 should reject 11 entries"
+        );
+    }
+
+    /// #324 N8: GraphQuery::default() 的 max_entries 应为 500（向后兼容）。
+    #[test]
+    fn default_max_entries_is_500() {
+        let q = GraphQuery::default();
+        assert_eq!(q.max_entries, 500);
     }
 
     #[test]

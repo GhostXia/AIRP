@@ -185,11 +185,27 @@ fn parse_style_features(text: &str) -> Result<StyleFeatures, AirpError> {
 /// - 其他：对话简洁，避免感叹号
 /// ```
 pub fn render_profile_markdown(features: &StyleFeatures, profile_id: &str) -> String {
+    let mut md = render_profile_header(profile_id);
+    md.push_str(&render_profile_entries(features));
+    md
+}
+
+/// #324 N4: 渲染 profile 头部（`# Style Profile: {id}` + 来源时间戳）。
+///
+/// 拆出为独立函数，避免 handler 用脆弱的字符串切分提取 entries 部分。
+pub fn render_profile_header(profile_id: &str) -> String {
     let now = chrono::Utc::now().to_rfc3339();
-    let mut md = String::with_capacity(512);
+    let mut md = String::with_capacity(128);
     md.push_str(&format!("# Style Profile: {}\n\n", profile_id));
     md.push_str(&format!("来源：用户文本样本学习（{}）\n\n", now));
+    md
+}
 
+/// #324 N4: 渲染 profile 条目部分（`- 语气：...` 等）。
+///
+/// 拆出为独立函数，handler 可直接调用获取条目部分，无需字符串切分。
+pub fn render_profile_entries(features: &StyleFeatures) -> String {
+    let mut md = String::with_capacity(384);
     if !features.tone.is_empty() {
         md.push_str(&format!("- 语气：{}\n", features.tone));
     }
@@ -358,6 +374,107 @@ mod tests {
         assert!(md.contains("- 视角：第三人称"));
         assert!(!md.contains("- 节奏"));
         assert!(md.contains("- 其他：对话简洁"));
+    }
+
+    /// #324 N4: 验证拆分后的 render_profile_entries 与 render_profile_markdown
+    /// 条目部分语义一致 —— 同一份 features 应当产出相同的条目字符串。
+    /// 防止 handler 切换到 render_profile_entries 后悄悄改变输出格式。
+    #[test]
+    fn test_render_profile_entries_matches_markdown_entries_section() {
+        let features = StyleFeatures {
+            tone: "冷峻".to_string(),
+            perspective: "第三人称".to_string(),
+            pacing: "紧凑".to_string(),
+            rhetoric: String::new(),
+            vocabulary: "书面".to_string(),
+            other_notes: vec![
+                "对话简洁".to_string(),
+                "  ".to_string(),
+                "无感叹号".to_string(),
+            ],
+        };
+        let full_md = render_profile_markdown(&features, "default");
+        let entries_only = render_profile_entries(&features);
+
+        // entries_only 必须是 full_md 的后缀（header 之后即 entries）
+        // header 由 "# Style Profile: default\n\n来源：...（<timestamp>）\n\n" 组成
+        assert!(
+            full_md.ends_with(&entries_only),
+            "render_profile_entries output must be the entries suffix of render_profile_markdown.\n\
+             full_md = {:?}\nentries_only = {:?}",
+            full_md,
+            entries_only
+        );
+
+        // 逐条核对：非空字段都出现，空字段不出现
+        assert!(entries_only.contains("- 语气：冷峻"));
+        assert!(entries_only.contains("- 视角：第三人称"));
+        assert!(entries_only.contains("- 节奏：紧凑"));
+        assert!(!entries_only.contains("- 修辞"));
+        assert!(entries_only.contains("- 词汇：书面"));
+        // other_notes 中的空白条目应被过滤掉
+        assert!(entries_only.contains("- 其他：对话简洁"));
+        assert!(entries_only.contains("- 其他：无感叹号"));
+        assert!(!entries_only.contains("- 其他：  "));
+        // entries_only 不应包含 header 内容
+        assert!(!entries_only.contains("# Style Profile"));
+        assert!(!entries_only.contains("来源："));
+    }
+
+    /// #324 N4: 空特征的 entries 应为空字符串，header 仍由 render_profile_header 独立提供。
+    #[test]
+    fn test_render_profile_entries_empty_features() {
+        let features = StyleFeatures::default();
+        let entries = render_profile_entries(&features);
+        assert!(
+            entries.is_empty(),
+            "empty features should produce empty entries"
+        );
+
+        let header = render_profile_header("default");
+        assert!(header.contains("# Style Profile: default"));
+        assert!(header.contains("来源："));
+        assert!(!header.contains("- 语气"));
+    }
+
+    /// #324 N4: render_profile_header 应包含 profile_id 与来源行，且不包含任何条目。
+    #[test]
+    fn test_render_profile_header_only() {
+        let header = render_profile_header("my-style-1");
+        assert!(header.contains("# Style Profile: my-style-1"));
+        assert!(header.contains("来源：用户文本样本学习"));
+        // 不应包含任何条目
+        assert!(!header.contains("- 语气"));
+        assert!(!header.contains("- 视角"));
+    }
+
+    /// #324 N4: render_profile_markdown 应为 header + entries 的拼接。
+    /// 由于 header 含 RFC3339 时间戳，两次独立调用时间戳可能不同，
+    /// 这里只验证结构关系，不做精确字符串相等。
+    #[test]
+    fn test_render_profile_markdown_is_header_plus_entries() {
+        let features = StyleFeatures {
+            tone: "test".to_string(),
+            perspective: String::new(),
+            pacing: String::new(),
+            rhetoric: String::new(),
+            vocabulary: String::new(),
+            other_notes: vec![],
+        };
+        let entries = render_profile_entries(&features);
+        let full = render_profile_markdown(&features, "default");
+        // full 应以 header 开头（profile_id 行 + 来源行），以 entries 结尾
+        assert!(full.starts_with("# Style Profile: default\n\n"));
+        assert!(full.contains("来源：用户文本样本学习"));
+        // header 与 entries 之间应有 "\n\n" 分隔，且 full 以 entries 结尾
+        assert!(
+            full.ends_with(&entries),
+            "full_md should end with entries; full = {:?}, entries = {:?}",
+            full,
+            entries
+        );
+        // 条目部分必须出现
+        assert!(full.contains("- 语气：test"));
     }
 
     #[test]
