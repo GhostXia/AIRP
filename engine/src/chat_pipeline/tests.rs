@@ -692,6 +692,7 @@ mod tests {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         scene.save(tmp.path()).unwrap();
 
@@ -1073,6 +1074,7 @@ mod tests_ms6 {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         scene.save(tmp.path()).unwrap();
 
@@ -1117,6 +1119,7 @@ mod tests_ms6 {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         scene.save(tmp.path()).unwrap();
 
@@ -1146,6 +1149,7 @@ mod tests_ms6 {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         }
         .save(tmp.path())
         .unwrap();
@@ -1314,6 +1318,7 @@ mod tests_issue27 {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         scene.save(tmp.path()).unwrap();
 
@@ -1356,6 +1361,7 @@ mod tests_issue27 {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         scene.save(tmp.path()).unwrap();
 
@@ -2192,6 +2198,7 @@ mod tests_a1b_pipeline_e2e {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         }
         .save(&effective_root)
         .unwrap();

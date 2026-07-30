@@ -1114,6 +1114,7 @@ mod tests {
             narrator_style: String::new(),
             lorebook_merge: crate::scene::LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         scene.save(temp.path()).unwrap();
         let report = plan_conversation_migration(
