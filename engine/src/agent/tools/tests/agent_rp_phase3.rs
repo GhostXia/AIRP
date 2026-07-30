@@ -21,7 +21,8 @@
 // 各测试的 data_root 本来就独立（tempdir），所以 character_id 唯一化不影响
 // 测试隔离性，只消除锁争用。
 //
-// 不覆盖：world_events.json 的 revision 合同（审计遗留项，本 PR 未接入）。
+// 不覆盖：world_events.json 的 revision 合同已在 #280 接入，下方
+// `trigger_world_event_writes_revision_contract` 测试覆盖。
 
 use super::*;
 use tempfile::tempdir;
@@ -226,6 +227,145 @@ async fn trigger_world_event_injects_and_marks_triggered() {
     let events: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&events_path).unwrap()).unwrap();
     assert_eq!(events[0]["triggered"], true);
+}
+
+/// #280: trigger_world_event 必须接入 revision 合同。
+/// legacy world_events.json 存在时，trigger 后产生：
+/// - revision 1：legacy_migration 快照（triggered=false 的原始内容）
+/// - revision 2：tool_triggered 快照（triggered=true 的新内容）
+/// - current_revision 指针 = 2
+#[tokio::test]
+async fn trigger_world_event_writes_revision_contract() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "trig_evt_rev");
+    let reg = default_registry(state.clone());
+
+    // 准备 legacy world_events.json（无 revision 快照）
+    let events_path = state
+        .data_root
+        .join("characters/trig_evt_rev/world_events.json");
+    let legacy_content = serde_json::json!([{
+        "id": "evt_rev_001",
+        "name": "Eclipse",
+        "description": "A solar eclipse",
+        "trigger_keywords": ["eclipse"],
+        "content": "The sun vanished."
+    }])
+    .to_string();
+    std::fs::write(&events_path, &legacy_content).unwrap();
+
+    let tool = reg.get("trigger_world_event").unwrap();
+    let result = tool
+        .call(
+            serde_json::json!({"character_id": "trig_evt_rev", "event_id": "evt_rev_001"}),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.output["success"], true);
+
+    // revision 合同产物路径
+    let asset_dir = state.data_root.join("characters/trig_evt_rev/world_events");
+
+    // revision 1：legacy_migration（triggered=false）
+    let rev1_dir = asset_dir.join("revisions/1");
+    let rev1_events: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rev1_dir.join("world_events.json")).unwrap())
+            .unwrap();
+    assert_eq!(rev1_events[0]["triggered"], serde_json::Value::Null);
+
+    // revision 2：tool_triggered（triggered=true）
+    let rev2_dir = asset_dir.join("revisions/2");
+    let rev2_events: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rev2_dir.join("world_events.json")).unwrap())
+            .unwrap();
+    assert_eq!(rev2_events[0]["triggered"], true);
+
+    // manifest.json 校验
+    let manifest1: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rev1_dir.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest1["asset_kind"], "world_events");
+    assert_eq!(manifest1["asset_id"], "trig_evt_rev");
+    assert_eq!(manifest1["source"]["source_kind"], "legacy_migration");
+
+    let manifest2: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rev2_dir.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest2["asset_kind"], "world_events");
+    assert_eq!(manifest2["source"]["source_kind"], "tool_triggered");
+    assert_eq!(manifest2["source"]["parent_revision"], 1);
+
+    // current_revision 指针 = 2
+    let current_rev = std::fs::read_to_string(asset_dir.join("current_revision")).unwrap();
+    assert_eq!(current_rev.trim(), "2");
+
+    // 工作副本 world_events.json 的 triggered=true
+    let work_events: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&events_path).unwrap()).unwrap();
+    assert_eq!(work_events[0]["triggered"], true);
+}
+
+/// #280: 第二次 trigger 不同事件产生 revision 3，parent_revision=2（增量 revision 链）。
+#[tokio::test]
+async fn trigger_world_event_increments_revision_chain() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "trig_evt_chain");
+    let reg = default_registry(state.clone());
+
+    // 准备含 2 个事件的 legacy world_events.json
+    let events_path = state
+        .data_root
+        .join("characters/trig_evt_chain/world_events.json");
+    std::fs::write(
+        &events_path,
+        serde_json::json!([
+            {"id": "evt_chain_1", "name": "Storm", "description": "", "trigger_keywords": ["storm"], "content": "Rain."},
+            {"id": "evt_chain_2", "name": "Quake", "description": "", "trigger_keywords": ["quake"], "content": "Shake."}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    // 第一次 trigger：产生 revision 1（legacy）+ revision 2（evt_chain_1 triggered）
+    let tool = reg.get("trigger_world_event").unwrap();
+    tool.call(
+        serde_json::json!({"character_id": "trig_evt_chain", "event_id": "evt_chain_1"}),
+        false,
+    )
+    .await
+    .unwrap();
+
+    // 第二次 trigger：产生 revision 3（evt_chain_2 也 triggered）
+    tool.call(
+        serde_json::json!({"character_id": "trig_evt_chain", "event_id": "evt_chain_2"}),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let asset_dir = state
+        .data_root
+        .join("characters/trig_evt_chain/world_events");
+    let current_rev = std::fs::read_to_string(asset_dir.join("current_revision")).unwrap();
+    assert_eq!(current_rev.trim(), "3");
+
+    // revision 3 的 parent_revision = 2
+    let manifest3: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(asset_dir.join("revisions/3/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest3["source"]["parent_revision"], 2);
+
+    // revision 3 的两个事件都 triggered
+    let rev3_events: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(asset_dir.join("revisions/3/world_events.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rev3_events[0]["triggered"], true);
+    assert_eq!(rev3_events[1]["triggered"], true);
 }
 
 #[tokio::test]

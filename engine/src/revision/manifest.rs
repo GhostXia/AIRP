@@ -38,6 +38,11 @@ pub(crate) enum AssetKind {
     Memory,
     Persona,
     SoulDrift,
+    /// #280: world_events.json 接入 revision 合同。
+    /// asset_dir = `characters/{id}/world_events/`，批准文件 = `world_events.json`。
+    /// 注意：`rename_all = "lowercase"` 不插入下划线，需单独 `rename` 为 `"world_events"`。
+    #[serde(rename = "world_events")]
+    WorldEvents,
 }
 
 impl AssetKind {
@@ -50,6 +55,7 @@ impl AssetKind {
             AssetKind::Memory => "memory",
             AssetKind::Persona => "persona",
             AssetKind::SoulDrift => "soul_drift",
+            AssetKind::WorldEvents => "world_events",
         }
     }
 }
@@ -507,6 +513,18 @@ mod tests {
         let manifest = sample_manifest();
         let value = serde_json::to_value(&manifest).unwrap();
         assert_eq!(value["asset_kind"], "character");
+    }
+
+    // #280: WorldEvents 枚举变体序列化为 "world_events"。
+    #[test]
+    fn asset_kind_world_events_serializes_lowercase() {
+        let mut manifest = sample_manifest();
+        manifest.asset_kind = AssetKind::WorldEvents;
+        let value = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(value["asset_kind"], "world_events");
+        // roundtrip
+        let back: RevisionManifest = serde_json::from_value(value).unwrap();
+        assert_eq!(back.asset_kind, AssetKind::WorldEvents);
     }
 
     #[test]
