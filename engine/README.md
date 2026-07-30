@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-26 的 `main@200fed9` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-30 的 `main@4f3f792` 复核。
 
 ## 当前能力
 
@@ -177,7 +177,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-2026-07-26 在 `main@200fed9` 本地运行 `cargo test --workspace --locked`：engine lib 1056 passed / 2 ignored，engine main 4 passed，6 个 integration binaries 合计 38 passed，protocol 6 passed，Tauri shell 9 passed。该结果不覆盖 production topology、真实 provider/browser、artifact、崩溃注入或长会话；最新完整边界见 [当前基线](../docs/CURRENT-BASELINE.md)。
+2026-07-30 在 `main@4f3f792` 本地运行 `cargo test --workspace --locked`：engine lib 1056 passed / 2 ignored，engine main 4 passed，6 个 integration binaries 合计 38 passed，protocol 6 passed，Tauri shell 9 passed。该结果不覆盖 production topology、真实 provider/browser、artifact、崩溃注入或长会话；最新完整边界见 [当前基线](../docs/CURRENT-BASELINE.md)。
 
 ## License
 

@@ -1,7 +1,7 @@
 # UI 协议与 Widget 决策
 
 > 状态：已接受
-> 决策日期：2026-07-03；边界复核：2026-07-26，`main@200fed9`
+> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`
 > 上位决策：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)
 
 ## 结论
@@ -69,3 +69,4 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 > 积极吸收 Blueprint 与 Widget 架构，但让 AIRP 的产品闭环掌握方向。
 
 UI 应该成为强大、可扩展的 AIRP 客户端，而不是一个刚好能跑 RP 的通用协议 demo。
+

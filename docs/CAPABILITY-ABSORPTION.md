@@ -4,7 +4,7 @@
 > 用户 2026-07-02：**四个源仓库里凡有"好能力"的，都应融入 agent 客户端**（不止 MCP-Server）。
 > 原则：客户端 = engine（agent 内核 + 数据层 + 工具/工作流）+ UI（Tauri+Vue）两盒。四仓库的好能力**拆解重组进这两盒当原生能力**，而非当外部服务连、也非保留其"独立分发"的自我约束。
 > 参见：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)（四源项目资产吸收/北极星降级）· [MCP-SERVER-ABSORPTION.md](MCP-SERVER-ABSORPTION.md)（MCP 详细 catalog）· [PLAN.md](PLAN.md) · [DEV-GUIDE.md](DEV-GUIDE.md)。
-> 最后分类复核：2026-07-26，`main@200fed9`。本文是第一方来源研究，不再维护逐项交付状态；能力事实只看 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
+> 最后分类复核：2026-07-30，`main@4f3f792`。本文是第一方来源研究，不再维护逐项交付状态；能力事实只看 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 ---
 
@@ -53,3 +53,4 @@ Gateway 的好能力融进 engine 的**服务层 + MCP-client 子系统 + UI↔e
 - Gateway 的 MCP-client、安全硬化与 SSE 经验分别随第三方工具接入、Web production 边界和客户端传输需求吸收，不必一次全搬。
 - UI/协议直接用 `ui/`+`protocol/`。
 - 原则：**看需求融能力，不搬约束、不建平行系统**（凡 engine/UI 已有等价的，不重造）。
+

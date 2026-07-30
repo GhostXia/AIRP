@@ -1,3 +1,5 @@
+> **已归档（2026-07-30）**：原活文档 `docs/PERSONA-HTTP-API-PLAN.md`。实施已完成；当前能力以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 与源码为准。
+
 # Multi-Persona HTTP API
 
 > Status: A1a (PR #151), A1b (PR #152), A2a (PR #154), and the A2b/A2c WebUI closure (PR #180) delivered.
