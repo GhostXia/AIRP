@@ -57,7 +57,10 @@ try {
   await page.getByRole('button', { name: '下一步 →' }).click();
   await page.getByLabel('给角色的第一句话').fill('onboarding production smoke ' + Date.now());
   await page.getByRole('button', { name: '发送首轮消息' }).click();
-  await page.getByRole('button', { name: '进入对话空间 →' }).waitFor({ state: 'visible', timeout: 20_000 });
+  // 容器重启后 engine 冷启动，首次 /v1/chat/completions 流式回复可能比热路径慢。
+  // 20s 在繁忙 runner 上偶发超时（main CI #30537244131 flaky failure），
+  // 调到 40s 给冷启动更多余量。按钮在流式回复完成后才由 onboarding.js 注入。
+  await page.getByRole('button', { name: '进入对话空间 →' }).waitFor({ state: 'visible', timeout: 40_000 });
 
   const chatUrl = origin + '/screens/02-chat-space.html?character=' + encodeURIComponent(characterId) + '&session=' + encodeURIComponent(sessionId);
   const response = await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
