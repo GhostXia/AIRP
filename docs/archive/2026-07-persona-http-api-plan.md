@@ -1,4 +1,4 @@
-> **已归档（2026-07-30）**：原活文档 `docs/2026-07-persona-http-api-plan.md`。实施已完成；当前能力以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 与源码为准。
+> **已归档（2026-07-30）**：原活文档 `docs/PERSONA-HTTP-API-PLAN.md`。实施已完成；当前能力以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 与源码为准。
 
 # Multi-Persona HTTP API
 
