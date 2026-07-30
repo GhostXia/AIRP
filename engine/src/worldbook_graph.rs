@@ -112,6 +112,8 @@ pub struct GraphQuery {
     /// #324 N8: lorebook 条目数上限（默认 500）。
     /// 超过此上限的图谱分析请求返回 400 BadRequest，防止 O(n²) 图谱分析 DoS。
     /// 调用方可通过 query 参数 `max_entries=N` 调整（例如分析大 lorebook 时调高）。
+    /// 服务器端强制上限 `ABSOLUTE_MAX_ENTRIES`（5000）：超过此值的请求会被
+    /// 钳制到该值，防止恶意调用方设任意大的 max_entries 绕过 DoS 保护。
     #[serde(default = "default_max_entries")]
     pub max_entries: usize,
 }
@@ -139,6 +141,12 @@ fn default_min_weight() -> usize {
 /// #324 N8: 默认 lorebook 条目数上限。
 const DEFAULT_MAX_ENTRIES: usize = 500;
 
+/// #324 N8: 服务器端绝对上限。即使调用方通过 `?max_entries=N` 调高，
+/// 也会被钳制到这个值，防止恶意调用方设任意大的 max_entries 绕过 DoS 保护。
+/// 5000 是 10x 默认值，覆盖合理的大 lorebook 场景（如导入的 mega lorebook），
+/// 同时把 O(n²) 图谱构建的最坏情况约束在可控范围。
+const ABSOLUTE_MAX_ENTRIES: usize = 5000;
+
 fn default_max_entries() -> usize {
     DEFAULT_MAX_ENTRIES
 }
@@ -150,12 +158,16 @@ pub fn build_graph(
     query: &GraphQuery,
 ) -> Result<WorldbookGraph, AirpError> {
     let entries = &lorebook.entries;
-    // #324 N8: 上限从 hardcoded 500 改为 query.max_entries（默认 500，可调）。
-    if entries.len() > query.max_entries {
+    // #324 N8 + CodeRabbit review: 上限从 hardcoded 500 改为 query.max_entries
+    //（默认 500，可调），但服务器端强制 ABSOLUTE_MAX_ENTRIES（5000）天花板。
+    // 调用方传入的 max_entries 会被钳制到天花板，防止恶意调用方设任意大值绕过 DoS 保护。
+    let effective_max = query.max_entries.min(ABSOLUTE_MAX_ENTRIES);
+    if entries.len() > effective_max {
         return Err(AirpError::BadRequest(format!(
-            "lorebook 条目数过多（{}），知识图谱分析上限 {}",
+            "lorebook 条目数过多（{}），知识图谱分析上限 {}（服务器端绝对上限 {}）",
             entries.len(),
-            query.max_entries
+            effective_max,
+            ABSOLUTE_MAX_ENTRIES
         )));
     }
 
@@ -577,6 +589,43 @@ mod tests {
     fn default_max_entries_is_500() {
         let q = GraphQuery::default();
         assert_eq!(q.max_entries, 500);
+    }
+
+    /// #324 N8 + CodeRabbit review: 服务器端强制 ABSOLUTE_MAX_ENTRIES（5000）天花板。
+    /// 调用方传入 max_entries=99999 试图绕过 DoS 保护时，5001 条 lorebook 应被拒绝
+    ///（effective_max 被钳制到 5000），而不是被放行。600 条仍在天花板内 → 通过。
+    #[test]
+    fn max_entries_above_absolute_ceiling_is_clamped() {
+        // 5001 条 lorebook + max_entries=99999 → effective_max=5000 → 拒绝
+        let entries: Vec<LorebookEntry> = (0..5001)
+            .map(|i| make_entry_string_keys(vec![format!("k{}", i)], "content", None))
+            .collect();
+        let lb = Lorebook { entries };
+        let query = GraphQuery {
+            max_entries: 99_999,
+            ..Default::default()
+        };
+        let result = build_graph("hero", &lb, &query);
+        assert!(
+            matches!(result, Err(AirpError::BadRequest(_))),
+            "max_entries=99999 应被钳制到 ABSOLUTE_MAX_ENTRIES=5000，5001 条应被拒绝"
+        );
+
+        // 600 条 + max_entries=99999 → effective_max=5000 → 通过（600 < 5000）
+        let entries_600: Vec<LorebookEntry> = (0..600)
+            .map(|i| make_entry_string_keys(vec![format!("k{}", i)], "content", None))
+            .collect();
+        let lb_600 = Lorebook {
+            entries: entries_600,
+        };
+        let graph = build_graph("hero", &lb_600, &query).unwrap();
+        assert_eq!(graph.node_count, 600);
+    }
+
+    /// #324 N8: ABSOLUTE_MAX_ENTRIES 常量应为 5000（防止误改）。
+    #[test]
+    fn absolute_max_entries_is_5000() {
+        assert_eq!(ABSOLUTE_MAX_ENTRIES, 5000);
     }
 
     #[test]
