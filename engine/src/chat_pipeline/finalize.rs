@@ -132,10 +132,17 @@ pub(super) async fn run_finalize(
             }
             let seal_provider = ctx.provider_config.clone();
             let seal_client = ctx.http_client.clone();
+            // #283：传 character_id + session_id 给 run_seal_flow，使其能在写盘段
+            // 持 session_lock + baseline 校验。scene 模式（character_id=None）时
+            // run_seal_flow 内部跳过持锁，保持既有行为。
+            let seal_character_id = ctx.character_id.as_ref().map(|c| c.as_str().to_string());
+            let seal_session_id = ctx.session_id;
             join_set.spawn(async move {
                 if let Err(e) = volume_manager::run_seal_flow(
                     &seal_client,
                     &sd_clone,
+                    seal_character_id.as_deref(),
+                    seal_session_id.as_ref(),
                     seal_provider,
                     seal_params,
                 )

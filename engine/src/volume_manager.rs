@@ -14,6 +14,7 @@ use std::sync::Arc;
 use crate::adapter::{self, ChatMessage, GenerationParams, ProviderConfig};
 use crate::error::AirpError;
 use crate::index_parser;
+use crate::types::SessionId;
 use crate::volume_store;
 
 /// 跨卷实体提升阈值：实体在多少个不同卷的 `[卷索引]` 中出现后自动晋升 index.md。
@@ -206,9 +207,17 @@ fn substitute_volume_placeholder(diff_block: &str, volume_number: u32) -> String
 /// **M0 F-01**：`client` 由调用方注入以复用 daemon 的连接池。
 /// **M4.2**：`provider` 用 `Arc` 共享，`params` 已由调用方派生（覆盖 seal_temperature
 /// / seal_model），此处直接传给 adapter。
+/// **#283（方案 J）**：`character_id` + `session_id` 用于获取 per-session 锁。
+/// LLM streaming（秒级）不持锁；在 `write_volume` / `write_index` / `clear_current`
+/// 这段 sync 写盘前，持 `session_lock` 并重新校验 `current.md` 与 baseline 一致，
+/// 防止并发 `npc_action` / `advance_plot` 的 append 被 `clear_current` 静默销毁。
+/// `character_id` 为 `None`（scene 模式）时不持锁，保持既有行为；per-character
+/// 路径（agent tool + finalize 带 character_id）必须传 `Some`。
 pub async fn run_seal_flow(
     client: &reqwest::Client,
     session_dir: &Path,
+    character_id: Option<&str>,
+    session_id: Option<&SessionId>,
     provider: Arc<ProviderConfig>,
     params: GenerationParams,
 ) -> Result<Option<u32>, AirpError> {
@@ -216,7 +225,15 @@ pub async fn run_seal_flow(
     if current.trim().is_empty() {
         return Ok(None); // 没有内容可封
     }
+    // #283：记录 baseline，LLM streaming 后在 session_lock 内重新校验。
+    // baseline 同时覆盖 current.md 与 index.md：SealVolumeTool 路径与 finalize
+    // 路径不同，agent 主动调 seal_volume 时另一轮 finalize 的 run_maintenance
+    // 可能在 streaming 期间改写 index.md（finalize 仅在 should_seal 时跳过
+    // maintenance，不覆盖 agent 触发的 seal）。校验 index.md 防止跨卷实体
+    // 晋升被静默覆盖。
+    let baseline = current.clone();
     let index = volume_store::read_index(session_dir)?;
+    let index_baseline = index.clone();
     let next_n = volume_store::next_volume_number(session_dir);
 
     let system_prompt = build_seal_system_prompt();
@@ -272,15 +289,34 @@ pub async fn run_seal_flow(
         next_n, title, header_block, content_block
     );
 
-    volume_store::write_volume(session_dir, next_n, &volume_md)?;
-
-    // 合并 index
+    // #283 方案 J：写盘段持 session_lock + baseline 校验。
+    // guard 不跨 await（write_volume / write_index / clear_current 全为 sync），
+    // 因此 std::sync::Mutex 合法。校验失败返回 Conflict，调用方可重试；
+    // current.md + index.md 保留不变，下一轮硬阈值会重新触发封卷，不损坏数据。
     let diff = index_parser::parse_index_diff(&diff_block);
     let new_index = index_parser::apply_diff(&index, &diff);
-    volume_store::write_index(session_dir, &new_index)?;
-
-    // 清空 current.md
-    volume_store::clear_current(session_dir)?;
+    if let Some(cid) = character_id {
+        let lock = crate::domain::session_lock(cid, session_id);
+        let _guard = lock.lock().expect("session lock poisoned");
+        // 双 baseline 校验：current.md 防止并发 append 被销毁，index.md 防止
+        // 并发 run_maintenance 的跨卷实体晋升被覆盖。
+        let recheck_current = volume_store::read_current(session_dir)?;
+        let recheck_index = volume_store::read_index(session_dir)?;
+        if recheck_current != baseline || recheck_index != index_baseline {
+            return Err(AirpError::Conflict(format!(
+                "seal_volume aborted: session memory was modified concurrently during seal of volume {}",
+                next_n
+            )));
+        }
+        volume_store::write_volume(session_dir, next_n, &volume_md)?;
+        volume_store::write_index(session_dir, &new_index)?;
+        volume_store::clear_current(session_dir)?;
+    } else {
+        // scene 模式无 character_id：保持既有行为，不持锁（#283 只覆盖 per-character 路径）。
+        volume_store::write_volume(session_dir, next_n, &volume_md)?;
+        volume_store::write_index(session_dir, &new_index)?;
+        volume_store::clear_current(session_dir)?;
+    }
 
     // 阶段三补全 D3：封卷后评估剧情进度，生成下卷悬念/方向（best-effort）。
     // CodeRabbit #7：先清除旧 plot_direction，防止评估失败时残留上卷方向
