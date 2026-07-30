@@ -107,6 +107,8 @@ impl Tool for SealVolumeTool {
             let written_volume = crate::volume_manager::run_seal_flow(
                 &state.http_client,
                 &session_dir,
+                Some(character.as_str()),
+                session_id.as_ref(),
                 provider,
                 params,
             )

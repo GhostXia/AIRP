@@ -227,3 +227,94 @@ async fn seal_volume_dry_run_then_confirm() {
         .unwrap()
         .is_empty());
 }
+
+/// #283 回归测试：seal_volume 在 LLM streaming 期间若有并发 append（模拟
+/// npc_action），baseline 校验必须返回 Conflict，且 current.md 保留全部内容
+/// （不执行 clear_current），不产生孤儿卷。
+///
+/// 时序：run_seal_flow 先 sync read_current 记录 baseline → 进入 LLM streaming
+/// （mock 延迟 150ms）→ 主 task 在 50ms 时 append_to_current（模拟 npc_action）
+/// → LLM 返回后 baseline 校验发现 current.md 已变 → 返回 Conflict。
+#[tokio::test]
+async fn seal_volume_returns_conflict_on_concurrent_modification() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let archive = "<卷索引>\n- 卷标题: Test\n</卷索引>\n<卷内容>\nArchived scene\n</卷内容>\n<全局index更新>\n</全局index更新>";
+    let event = serde_json::json!({"choices": [{"delta": {"content": archive}}]});
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("data: {event}\n\ndata: [DONE]\n\n"))
+                .set_delay(Duration::from_millis(150)),
+        )
+        .mount(&server)
+        .await;
+
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    let card_dir = state.data_root.join("characters/alice/card");
+    std::fs::create_dir_all(&card_dir).unwrap();
+    std::fs::write(card_dir.join("card.json"), r#"{"name":"Alice"}"#).unwrap();
+    let memory = crate::data_dir::resolve_session_dir(&state.data_root, "alice", None).unwrap();
+    crate::volume_store::append_to_current(&memory, "A scene to archive").unwrap();
+
+    let provider = Arc::new(crate::adapter::ProviderConfig {
+        provider: crate::adapter::Provider::OpenAI,
+        endpoint: format!("{}/v1/chat/completions", server.uri()),
+        api_key: Some("test-key".to_string()),
+    });
+    let params = crate::adapter::GenerationParams {
+        model: "test-model".to_string(),
+        temperature: Some(0.7),
+        max_tokens: None,
+    };
+    let client = state.http_client.clone();
+    let memory_for_seal = memory.clone();
+
+    let seal_handle = tokio::spawn(async move {
+        crate::volume_manager::run_seal_flow(
+            &client,
+            &memory_for_seal,
+            Some("alice"),
+            None,
+            provider,
+            params,
+        )
+        .await
+    });
+
+    // 等 run_seal_flow 完成 sync read_current（记录 baseline）后进入 LLM streaming。
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 模拟 npc_action 在 LLM streaming 期间并发 append。
+    crate::volume_store::append_to_current(&memory, "\n[NPC行动: 盗贼] 潜行\n").unwrap();
+
+    let result = seal_handle.await.unwrap();
+    assert!(
+        matches!(result, Err(crate::error::AirpError::Conflict(_))),
+        "expected Conflict on concurrent modification, got {:?}",
+        result
+    );
+
+    // current.md 必须保留原始内容 + NPC append（clear_current 未执行）。
+    let remaining = crate::volume_store::read_current(&memory).unwrap();
+    assert!(
+        remaining.contains("A scene to archive"),
+        "original content lost: {remaining}"
+    );
+    assert!(
+        remaining.contains("[NPC行动: 盗贼]"),
+        "NPC append lost: {remaining}"
+    );
+    assert!(
+        crate::volume_store::list_volume_numbers(&memory).is_empty(),
+        "no volume should be written on Conflict"
+    );
+}
