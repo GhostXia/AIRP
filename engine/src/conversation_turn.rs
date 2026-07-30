@@ -235,18 +235,20 @@ fn validate_transition(
 }
 
 fn failure_from_event(event: &ConversationEvent, default_code: &str) -> ConversationTurnFailure {
+    let code = event
+        .payload
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or(default_code);
     ConversationTurnFailure {
-        code: event
-            .payload
-            .get("code")
-            .and_then(Value::as_str)
-            .unwrap_or(default_code)
-            .to_string(),
+        schema_version: crate::conversation_observability::CONVERSATION_TURN_ERROR_SCHEMA_VERSION,
+        code: code.to_string(),
         participant_id: event
             .payload
             .get("participant_id")
             .and_then(Value::as_str)
             .map(str::to_string),
+        recovery: crate::conversation_observability::recovery_for_code(code),
     }
 }
 

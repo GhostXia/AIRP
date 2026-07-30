@@ -259,6 +259,52 @@ async fn policy_catalog_exposes_versioned_config_contract() {
 }
 
 #[tokio::test]
+async fn capability_discovery_exposes_global_limits_versions_and_redaction_contract() {
+    let (state, _tmp) = make_state_with_key(None);
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/conversation-capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let capabilities: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(capabilities["schema_version"], 1);
+    assert_eq!(capabilities["contract_version"], "airp.conversation.v1");
+    assert_eq!(capabilities["schemas"]["http_error"], 1);
+    assert_eq!(capabilities["schemas"]["migration_report"], 1);
+    assert_eq!(
+        capabilities["adapter_versions"]["legacy_migration"],
+        crate::conversation_compat::CONVERSATION_COMPAT_ADAPTER_VERSION
+    );
+    assert_eq!(
+        capabilities["execution_limits"]["max_speakers_per_turn"],
+        crate::conversation_policy::MAX_CONVERSATION_SPEAKERS_PER_TURN
+    );
+    assert_eq!(
+        capabilities["execution_limits"]["turn_timeout_secs"],
+        crate::conversation_observability::CONVERSATION_TURN_TIMEOUT_SECS
+    );
+    assert!(capabilities["observability"]["excluded_data"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("provider_error_body")));
+    assert!(capabilities["turn_errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|error| {
+            error["code"] == "unknown_commit" && error["recovery"] == "manual_retry_or_continue"
+        }));
+}
+
+#[tokio::test]
 async fn append_and_cursor_history_enforce_sequence() {
     let (state, _tmp) = make_state_with_key(None);
     let app = create_router(state);
@@ -633,6 +679,36 @@ async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
             .unwrap()["content"],
         "[character:alice] Hello"
     );
+
+    let observability = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}/observability"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(observability.status(), StatusCode::OK);
+    let observability = axum::body::to_bytes(observability.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let observation: serde_json::Value = serde_json::from_slice(&observability).unwrap();
+    assert_eq!(
+        observation["policy"]["policy_id"],
+        crate::conversation_policy::SCENE_ROUND_ROBIN_V1
+    );
+    assert_eq!(observation["quota_reserved_requests"], 2);
+    assert_eq!(observation["speakers"][0]["outcome"], "committed");
+    assert_eq!(observation["speakers"][1]["outcome"], "committed");
+    assert!(observation["recorded_output_tokens"].as_u64().unwrap() > 0);
+    assert!(observation["latency_ms"].is_number());
+    let observation_text = String::from_utf8_lossy(&observability);
+    assert!(!observation_text.contains("Welcome"));
+    assert!(!observation_text.contains("rotated-secret"));
 
     let journal = app
         .oneshot(
@@ -1037,6 +1113,7 @@ async fn provider_failure_is_reported_as_partially_committed_turn() {
     let app = create_router(state);
     let conversation_id = create_solo_scene_conversation(&app).await;
     let response = app
+        .clone()
         .oneshot(
             axum::http::Request::builder()
                 .method("POST")
@@ -1064,7 +1141,9 @@ async fn provider_failure_is_reported_as_partially_committed_turn() {
     let outcome: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(outcome["status"], "partially_committed");
     assert_eq!(outcome["lifecycle_state"], "failed");
+    assert_eq!(outcome["failure"]["schema_version"], 1);
     assert_eq!(outcome["failure"]["code"], "generation_failed");
+    assert_eq!(outcome["failure"]["recovery"], "inspect_and_continue");
     assert_eq!(outcome["events"][0]["kind"], "turn.accepted");
     assert_eq!(outcome["events"][1]["kind"], "turn.started");
     assert_eq!(outcome["events"][2]["kind"], "message.created");
@@ -1076,6 +1155,38 @@ async fn provider_failure_is_reported_as_partially_committed_turn() {
     assert!(
         !String::from_utf8_lossy(&body).contains("private upstream detail"),
         "upstream details must not cross the Engine API boundary"
+    );
+
+    let turn_id = outcome["turn_id"].as_str().unwrap();
+    let observation = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}/observability"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(observation.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(observation.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let observation: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(observation["schema_version"], 1);
+    assert_eq!(observation["trace_id"], turn_id);
+    assert_eq!(observation["lifecycle_state"], "failed");
+    assert_eq!(observation["quota_reserved_requests"], 1);
+    assert_eq!(observation["partial_commit"], true);
+    assert_eq!(
+        observation["speakers"][0]["participant_id"],
+        "character:alice"
+    );
+    assert_eq!(observation["speakers"][0]["outcome"], "failed");
+    assert!(
+        !String::from_utf8_lossy(&body).contains("private upstream detail"),
+        "observability must not copy provider-private details"
     );
 }
 
@@ -1367,12 +1478,14 @@ async fn explicit_cancel_interrupts_generation_and_commits_cancelled_state() {
     let outcome: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(outcome["status"], "partially_committed");
     assert_eq!(outcome["lifecycle_state"], "cancelled");
+    assert_eq!(outcome["failure"]["recovery"], "resubmit_new_turn");
     assert_eq!(
         outcome["events"].as_array().unwrap().last().unwrap()["kind"],
         "turn.cancelled"
     );
 
     let status = app
+        .clone()
         .oneshot(
             axum::http::Request::builder()
                 .uri(format!(
@@ -1388,6 +1501,24 @@ async fn explicit_cancel_interrupts_generation_and_commits_cancelled_state() {
         .unwrap();
     let status: serde_json::Value = serde_json::from_slice(&status).unwrap();
     assert_eq!(status["lifecycle_state"], "cancelled");
+
+    let observation = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/conversations/{conversation_id}/turns/{turn_id}/observability"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let observation = axum::body::to_bytes(observation.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let observation: serde_json::Value = serde_json::from_slice(&observation).unwrap();
+    assert_eq!(observation["cancelled"], true);
+    assert_eq!(observation["failure"]["recovery"], "resubmit_new_turn");
 }
 
 #[tokio::test]

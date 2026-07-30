@@ -30,6 +30,7 @@ mod context_limit;
 pub mod conversation;
 pub mod conversation_compat;
 pub mod conversation_context;
+pub mod conversation_observability;
 pub mod conversation_policy;
 pub mod conversation_projection;
 pub mod conversation_turn;

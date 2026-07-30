@@ -10,6 +10,9 @@ use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Schema version for the public JSON error envelope.
+pub const AIRP_ERROR_SCHEMA_VERSION: u32 = 1;
+
 /// 项目统一错误类型。所有公开 API 在 M2 收敛后均返回 `Result<T, AirpError>`。
 ///
 /// 每个变体对应一个语义类别，HTTP 映射规则由 [`AirpError::status`] 决定，
@@ -153,6 +156,29 @@ impl AirpError {
             error => error.to_string(),
         }
     }
+
+    /// Stable client recovery category. It deliberately does not include
+    /// provider-private or internal diagnostic details.
+    pub fn recovery_str(&self) -> &'static str {
+        match self {
+            AirpError::BadRequest(_) | AirpError::PathEscape(_) | AirpError::NotFound(_) => {
+                "correct_request"
+            }
+            AirpError::Conflict(_) => "refresh_and_retry",
+            AirpError::Upstream { .. } => "retry_with_backoff",
+            AirpError::QuotaExceeded(_) => "wait_or_reduce_usage",
+            AirpError::Io(_)
+            | AirpError::Json(_)
+            | AirpError::Regex(_)
+            | AirpError::Config(_)
+            | AirpError::Orchestrator(_)
+            | AirpError::Volume(_)
+            | AirpError::Fsm(_)
+            | AirpError::Sqlite(_)
+            | AirpError::Http(_)
+            | AirpError::Internal(_) => "inspect_server_logs",
+        }
+    }
 }
 
 /// #67 #9 / PR #74 方案 A：JSON envelope body。
@@ -161,8 +187,10 @@ impl AirpError {
 /// 让 webui `formatError` 白名单统一处理 engine 所有错误响应。
 #[derive(Debug, Serialize)]
 struct AirpErrorBody {
+    schema_version: u32,
     code: &'static str,
     message: String,
+    recovery: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -179,20 +207,21 @@ impl IntoResponse for AirpError {
     fn into_response(self) -> Response {
         let status = self.status();
         let code = self.code_str();
+        let recovery = self.recovery_str();
         let internal_message = self.to_string();
         let message = self.public_message();
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(err = %internal_message, "internal error");
-            let body = AirpErrorResponse {
-                error: AirpErrorBody { code, message },
-            };
-            (status, Json(body)).into_response()
-        } else {
-            let body = AirpErrorResponse {
-                error: AirpErrorBody { code, message },
-            };
-            (status, Json(body)).into_response()
         }
+        let body = AirpErrorResponse {
+            error: AirpErrorBody {
+                schema_version: AIRP_ERROR_SCHEMA_VERSION,
+                code,
+                message,
+                recovery,
+            },
+        };
+        (status, Json(body)).into_response()
     }
 }
 
@@ -245,7 +274,9 @@ mod tests {
         );
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["schema_version"], AIRP_ERROR_SCHEMA_VERSION);
         assert_eq!(v["error"]["code"], "not_found");
+        assert_eq!(v["error"]["recovery"], "correct_request");
         assert_eq!(
             v["error"]["message"],
             "资源不存在: lorebook for character foo not found"
@@ -261,6 +292,7 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["error"]["code"], "internal_error");
+        assert_eq!(v["error"]["recovery"], "inspect_server_logs");
         assert_eq!(v["error"]["message"], "internal error");
         assert!(
             !bytes.windows(b"hunter2".len()).any(|w| w == b"hunter2"),
@@ -278,5 +310,23 @@ mod tests {
         assert_eq!(value["error"]["code"], "path_escape");
         assert_eq!(value["error"]["message"], "invalid path");
         assert!(!String::from_utf8_lossy(&bytes).contains("/srv/private"));
+    }
+
+    #[tokio::test]
+    async fn upstream_error_envelope_is_versioned_recoverable_and_redacted() {
+        use axum::body::to_bytes;
+        let resp = AirpError::Upstream {
+            status: 503,
+            body: "provider request id and private body".to_string(),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["schema_version"], AIRP_ERROR_SCHEMA_VERSION);
+        assert_eq!(value["error"]["code"], "upstream");
+        assert_eq!(value["error"]["recovery"], "retry_with_backoff");
+        assert_eq!(value["error"]["message"], "upstream request failed");
+        assert!(!String::from_utf8_lossy(&bytes).contains("private body"));
     }
 }

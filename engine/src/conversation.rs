@@ -275,8 +275,10 @@ pub enum ConversationTurnStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationTurnFailure {
+    pub schema_version: u32,
     pub code: String,
     pub participant_id: Option<String>,
+    pub recovery: crate::conversation_observability::ConversationRecoveryAction,
 }
 
 /// Events and journal position produced by one Engine-owned turn.
