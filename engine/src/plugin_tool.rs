@@ -12,10 +12,14 @@
 //! ## 安全沙箱（与 AGENTS.md 硬约束对齐）
 //! - Webhook URL：只允许 `http://localhost|127.0.0.1|[::1]` 或任意 `https://`。
 //!   拒绝 `file://`、`ftp://`、null byte、非 ASCII host。
+//! - HTTPS SSRF（#329 N3 / #381 E-P0-3）：注册时与**每次请求前**均解析 DNS；
+//!   解析失败 / 无记录 / 任一地址为内网 → **fail-closed 拒绝**；域名目标在 connect
+//!   前把解析结果 pin 进专用 client（`resolve_to_addrs`），缩小 DNS rebinding 窗口。
 //! - Script path：必须在 `data_root/plugins/` 下（用 `canonicalize` + 起始前缀校验），
 //!   必须存在且为文件；拒绝 null byte 与 `..` 路径遍历。
 //! - 执行限制：超时上限 30s、stdout/响应体上限 1 MiB、HTTP 请求体上限 1 MiB。
-//! - HTTP webhook 走 daemon 共享 `reqwest::Client`（已配置 `redirect::Policy::none()`）。
+//! - HTTP webhook 默认走 daemon 共享 `reqwest::Client`（`redirect::Policy::none()`）；
+//!   需 pin 的 HTTPS 域名走同策略的一次性 client。
 //!
 //! ## 设计纪律
 //! - 工具入参/出参均为 `serde_json::Value`，与内建工具对齐（开放接入戒律）。
@@ -29,6 +33,7 @@ use crate::data_dir::replace_file;
 use crate::error::AirpError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -218,11 +223,29 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
 
 /// 校验 webhook URL：只允许 `http://localhost`、`127.0.0.1`、`[::1]` 或任意 `https://`。
 ///
-/// **SSRF 控制（Major2, 2026-07-26）**：`https://` 任意 host 都允许加密传输，
-/// 但拒绝解析到 loopback / private / link-local / unspecified 的 IP，避免
-/// 利用公网 DNS 指向内部地址进行 SSRF。允许的 host 类型仅限域名（解析后非内网）
-/// 或公网 IP。`http://` 仅允许字面量 loopback。
+/// **SSRF 控制（Major2, 2026-07-26；E-P0-3 / #329 N3, 2026-07-30）**：
+/// - `https://` 拒绝字面量或 DNS 解析到的 loopback / private / link-local / 特殊用途地址；
+/// - DNS 解析失败或无记录时 **fail-closed**（不再为可用性放行）；
+/// - 本函数供注册路径使用；执行路径见 [`inspect_webhook_url`] + pin client。
 pub fn validate_webhook_url(url: &str) -> Result<(), String> {
+    inspect_webhook_url(url).map(|_| ())
+}
+
+/// 请求连接计划：loopback HTTP / 公网字面量 HTTPS 复用共享 client；
+/// HTTPS 域名在 connect 前 pin 到本次解析得到的公网地址。
+#[derive(Debug, Clone)]
+enum WebhookConnectPlan {
+    /// `http://` loopback 或 `https://` 公网字面量 IP。
+    SharedClient,
+    /// `https://` 域名：host + 已换好目标 port 的公网 SocketAddr 列表。
+    PinnedHttps {
+        host: String,
+        addrs: Vec<SocketAddr>,
+    },
+}
+
+/// 注册时与请求时共用的 URL 检查；成功时返回 connect 计划。
+fn inspect_webhook_url(url: &str) -> Result<WebhookConnectPlan, String> {
     if url.is_empty() {
         return Err("webhook url 不能为空".to_string());
     }
@@ -230,69 +253,59 @@ pub fn validate_webhook_url(url: &str) -> Result<(), String> {
         return Err("webhook url 含 null byte".to_string());
     }
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("webhook url 解析失败: {e}"))?;
+    if parsed.username() != "" || parsed.password().is_some() {
+        return Err("webhook url 不允许携带 userinfo".to_string());
+    }
     match parsed.scheme() {
         "https" => {
-            // https 任意 host 都允许（已加密），但拒绝解析到内网 IP（SSRF 控制）。
             let host = parsed
                 .host_str()
                 .ok_or_else(|| "webhook url 缺少 host".to_string())?;
             if host.is_empty() {
                 return Err("webhook url host 为空".to_string());
             }
-            // 拒绝字面量 IP 形式的内网地址（避免 DNS 解析环节被绕过）。
+            let port = parsed
+                .port_or_known_default()
+                .ok_or_else(|| "webhook url 缺少可解析端口".to_string())?;
             if let Some(ip) = parse_literal_ip(host) {
                 if is_internal_ip(&ip) {
                     return Err(format!(
-                        "https webhook host 解析为内网 IP ({})，拒绝 SSRF 风险",
-                        ip
+                        "https webhook host 解析为内网 IP ({ip})，拒绝 SSRF 风险"
                     ));
                 }
-            } else {
-                // 域名：解析所有 A / AAAA 记录，任一为内网即拒绝。
-                // 注意：DNS 解析可能阻塞，但 validate 在 upsert handler 同步路径上
-                // 调用，且单次解析 <1s。失败时不阻断（视为未解析到内网）。
-                if resolves_to_internal_ip(host) {
-                    return Err(format!(
-                        "https webhook host '{}' 解析到内网 IP，拒绝 SSRF 风险",
-                        host
-                    ));
-                }
+                return Ok(WebhookConnectPlan::SharedClient);
             }
+            // 域名：解析全部 A/AAAA；失败/空/内网一律拒绝；成功则 pin。
+            let addrs = resolve_public_host_addrs(host, port)?;
+            Ok(WebhookConnectPlan::PinnedHttps {
+                host: host.to_string(),
+                addrs,
+            })
         }
         "http" => {
             let host = parsed
                 .host_str()
                 .ok_or_else(|| "webhook url 缺少 host".to_string())?;
-            // 仅允许 loopback。
             const ALLOWED_LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "[::1]", "::1"];
             if !ALLOWED_LOOPBACK.contains(&host) {
                 return Err(format!(
-                    "http webhook 仅允许 loopback（localhost/127.0.0.1/[::1]），实际 host: {}",
-                    host
+                    "http webhook 仅允许 loopback（localhost/127.0.0.1/[::1]），实际 host: {host}"
                 ));
             }
+            Ok(WebhookConnectPlan::SharedClient)
         }
-        other => {
-            return Err(format!(
-                "webhook url scheme 不允许（仅 http/https）: {}",
-                other
-            ));
-        }
+        other => Err(format!(
+            "webhook url scheme 不允许（仅 http/https）: {other}"
+        )),
     }
-    if parsed.username() != "" || parsed.password().is_some() {
-        return Err("webhook url 不允许携带 userinfo".to_string());
-    }
-    Ok(())
 }
 
 /// 解析字面量 IPv4 / IPv6（含 `[::1]` 形式）。失败返回 None。
 fn parse_literal_ip(host: &str) -> Option<std::net::IpAddr> {
     let trimmed = host.trim_start_matches('[').trim_end_matches(']');
-    // 先试 IPv4
     if let Ok(v4) = trimmed.parse::<std::net::Ipv4Addr>() {
         return Some(std::net::IpAddr::V4(v4));
     }
-    // 再试 IPv6
     if let Ok(v6) = trimmed.parse::<std::net::Ipv6Addr>() {
         return Some(std::net::IpAddr::V6(v6));
     }
@@ -328,22 +341,64 @@ fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-/// 解析 host 的所有 A/AAAA 记录，任一为内网 IP 返回 true。
-/// 解析失败时返回 false（保守允许，避免 DNS 暂时故障阻断合法 webhook）。
-fn resolves_to_internal_ip(host: &str) -> bool {
+/// 系统 DNS 解析（可在测试中替换）。
+fn system_lookup_host(host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
     use std::net::ToSocketAddrs;
-    // ToSocketAddrs 需要 port；用 0 占位。
-    let addr_str = format!("{}:0", host);
-    match addr_str.to_socket_addrs() {
-        Ok(iter) => {
-            for socket_addr in iter {
-                if is_internal_ip(&socket_addr.ip()) {
-                    return true;
-                }
-            }
-            false
+    // ToSocketAddrs 对裸 IPv6 需要方括号；域名与 IPv4 直接拼 port。
+    let addr_str = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    addr_str.to_socket_addrs().map(|iter| iter.collect())
+}
+
+/// 解析 host 的全部 A/AAAA，要求非空且全部为公网地址；返回带目标 port 的 SocketAddr。
+///
+/// **fail-closed**：解析错误、空记录、任一内网地址均返回 `Err`（#329 N3）。
+fn resolve_public_host_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+    resolve_public_host_addrs_with(host, port, system_lookup_host)
+}
+
+fn resolve_public_host_addrs_with<F>(
+    host: &str,
+    port: u16,
+    lookup: F,
+) -> Result<Vec<SocketAddr>, String>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>>,
+{
+    let resolved = lookup(host, port)
+        .map_err(|e| format!("https webhook host '{host}' DNS 解析失败（fail-closed）: {e}"))?;
+    if resolved.is_empty() {
+        return Err(format!(
+            "https webhook host '{host}' DNS 未返回任何地址（fail-closed）"
+        ));
+    }
+    for socket_addr in &resolved {
+        if is_internal_ip(&socket_addr.ip()) {
+            return Err(format!(
+                "https webhook host '{host}' 解析到内网 IP ({})，拒绝 SSRF 风险",
+                socket_addr.ip()
+            ));
         }
-        Err(_) => false,
+    }
+    Ok(resolved)
+}
+
+/// 按 connect 计划选择 client：共享 outbound 或 pin DNS 的一次性 client。
+fn client_for_webhook_plan(
+    shared: &reqwest::Client,
+    plan: &WebhookConnectPlan,
+) -> Result<reqwest::Client, AirpError> {
+    match plan {
+        WebhookConnectPlan::SharedClient => Ok(shared.clone()),
+        WebhookConnectPlan::PinnedHttps { host, addrs } => reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .resolve_to_addrs(host, addrs)
+            .build()
+            .map_err(|e| AirpError::Internal(format!("插件 webhook pin-DNS client 构建失败: {e}"))),
     }
 }
 
@@ -452,7 +507,10 @@ impl PluginTool {
         timeout_secs: u32,
         confirm: bool,
     ) -> Result<serde_json::Value, AirpError> {
-        let mut request = self.http_client.post(url);
+        // E-P0-3 / #329 N3：每次请求前重新解析并 fail-closed；域名 pin 到本次结果。
+        let plan = inspect_webhook_url(url).map_err(AirpError::BadRequest)?;
+        let http_client = client_for_webhook_plan(&self.http_client, &plan)?;
+        let mut request = http_client.post(url);
         for (key, value) in headers {
             // 拒绝设置 Host / Content-Length / Transfer-Encoding 等被 reqwest 保护的头。
             if is_protected_header(key) {
@@ -1030,6 +1088,101 @@ mod tests {
     #[test]
     fn validate_webhook_url_rejects_null_byte() {
         assert!(validate_webhook_url("https://example.com/hook\0evil").is_err());
+    }
+
+    #[test]
+    fn validate_webhook_url_rejects_literal_internal_https() {
+        assert!(validate_webhook_url("https://127.0.0.1/hook").is_err());
+        assert!(validate_webhook_url("https://10.0.0.5/hook").is_err());
+        assert!(validate_webhook_url("https://192.168.1.10/hook").is_err());
+        assert!(validate_webhook_url("https://[::1]/hook").is_err());
+    }
+
+    #[test]
+    fn resolve_public_host_addrs_fail_closed_on_dns_error_empty_and_internal() {
+        // 不依赖真实 DNS / ISP 劫持：注入 lookup，覆盖 fail-closed 三分支。
+        let err = resolve_public_host_addrs_with("evil.example", 443, |_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "simulated nxdomain",
+            ))
+        })
+        .expect_err("DNS io error must reject");
+        assert!(err.contains("fail-closed"), "err={err}");
+
+        let err = resolve_public_host_addrs_with("evil.example", 443, |_, _| Ok(Vec::new()))
+            .expect_err("empty answer must reject");
+        assert!(err.contains("未返回任何地址"), "err={err}");
+
+        let err = resolve_public_host_addrs_with("evil.example", 443, |_, _| {
+            Ok(vec![
+                "8.8.8.8:443".parse().unwrap(),
+                "10.0.0.1:443".parse().unwrap(),
+            ])
+        })
+        .expect_err("any internal addr must reject");
+        assert!(err.contains("内网"), "err={err}");
+
+        let ok = resolve_public_host_addrs_with("evil.example", 443, |_, _| {
+            Ok(vec![
+                "8.8.8.8:443".parse().unwrap(),
+                "1.1.1.1:443".parse().unwrap(),
+            ])
+        })
+        .expect("all-public must accept");
+        assert_eq!(ok.len(), 2);
+    }
+
+    #[test]
+    fn inspect_webhook_url_pins_public_https_domain() {
+        // example.com 应解析到公网地址并进入 pin 计划（需系统 DNS）。
+        let plan = inspect_webhook_url("https://example.com/hook")
+            .expect("example.com must resolve on CI/dev DNS");
+        match plan {
+            WebhookConnectPlan::PinnedHttps { host, addrs } => {
+                assert_eq!(host, "example.com");
+                assert!(!addrs.is_empty());
+                assert!(addrs.iter().all(|a| a.port() == 443));
+                assert!(addrs.iter().all(|a| !is_internal_ip(&a.ip())));
+            }
+            other => panic!("expected PinnedHttps, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inspect_webhook_url_loopback_http_uses_shared_client() {
+        let plan = inspect_webhook_url("http://127.0.0.1:8080/hook").unwrap();
+        assert!(matches!(plan, WebhookConnectPlan::SharedClient));
+    }
+
+    #[tokio::test]
+    async fn call_webhook_revalidates_and_rejects_internal_https() {
+        let dir = make_data_root();
+        let tool = PluginTool::new(
+            PluginToolConfig {
+                name: "ssrf_probe".to_string(),
+                description: "request-time DNS revalidation".to_string(),
+                side_effect: PluginSideEffect::Readonly,
+                enabled: true,
+                invocation: PluginInvocation::Webhook {
+                    // 字面量内网 HTTPS：注册路径本应拒绝；即使配置被塞入也要在 call 时拒绝。
+                    url: "https://127.0.0.1/hook".to_string(),
+                    headers: BTreeMap::new(),
+                    timeout_secs: Some(2),
+                },
+            },
+            crate::outbound::outbound_client(),
+            dir.path().to_path_buf(),
+        );
+        let err = tool
+            .call(serde_json::json!({"x": 1}), false)
+            .await
+            .expect_err("internal https must fail at request time");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("内网") || msg.contains("SSRF") || msg.contains("127.0.0.1"),
+            "unexpected err: {msg}"
+        );
     }
 
     #[test]

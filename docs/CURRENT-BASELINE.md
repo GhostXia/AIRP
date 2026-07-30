@@ -44,14 +44,14 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | 大量 ST 字段仅为 advisory；完整 session 物化与记忆闭环未完成（#274） |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 约 30 个内置工具 + 可动态加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径有开放审计项（#284/#344/#381）；不是通用多 Agent 平台 |
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP | 屏 36–42 等已接入 | 功能存在 ≠ 真实 provider/工作流已验收 |
-| Provider / 扩展 | 多 Provider 路由、OpenAI-compatible/Anthropic/Ollama、本地脚本/HTTP webhook 插件 | providers/routing/plugin-tools API；Agent registry 动态合并 | 设置与插件管理入口 | 插件非沙箱；DNS fail-open 与请求时不 pin 为已知 SSRF 残差（RR-014 / #381 E-P0-3 / #329 N3） |
+| Provider / 扩展 | 多 Provider 路由、OpenAI-compatible/Anthropic/Ollama、本地脚本/HTTP webhook 插件 | providers/routing/plugin-tools API；Agent registry 动态合并 | 设置与插件管理入口 | 插件非沙箱；HTTPS webhook 注册+请求 fail-closed DNS 与域名 pin 已落地（RR-014 近端修复 / #381 E-P0-3 / #329 N3）；非通用代码沙箱 |
 | 部署 | production fail-closed 校验、原子配置更新、secret 脱敏 | loopback 默认；首方 gateway 同源代理 | Windows/Linux 便携包与 production preview | 非多租户；P1/P2/P3 发布门未闭合 |
 
 ### 2.1 结构性事实（2026-07-30 审查确认）
 
 这些不是新功能承诺，而是避免误读代码树的硬事实：
 
-1. **双轨会话**：正式 WebUI 走 `/v1/chat/*` + `ChatLog`/`ChatService`；Conversation 是并行 Engine 合同与 HTTP 面，**不能**因 route/测试存在就宣称产品已切换。  
+1. **双轨会话**：正式 WebUI 走 `/v1/chat/*` + `ChatLog`/`ChatService`；Conversation 是并行 Engine 合同与 HTTP 面，**不能**因 route/测试存在就宣称产品已切换。**v0.0.3 决策（E-P0-2/B）**：冻结 Conversation 功能对称扩张，产品验收不切流。  
 2. **单资源原子写 ≠ 跨资源事务**：`finalize` 可对 message → state → volume 逐步 fail-closed，崩溃后跨资源一致性仍是 best-effort（RR-004 / #286）。  
 3. **Domain 写路径未完全闭合**：shared service 是目标边界；Agent tools 等路径仍可能直接 `replace_file` / `fs` 写（#381 E-P1-3 / #160）。  
 4. **锁模型分裂**：character/session/state/persona/conversation/decay/FTS/quota 等多套锁；async 路径上存在 std 锁 + 锁内磁盘 I/O；poison 策略不一致（#284/#220/#381）。  
@@ -80,10 +80,19 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 5. 当前优先级
 
-当前主线不是扩大功能面，而是把已合入能力收敛成可验证、可恢复的 **P1 有限试用**：
+当前主线不是扩大功能面，而是把已合入能力收敛成可验证、可恢复的 **P1 有限试用**（**v0.0.3 后端门禁窗口**）：
+
+### 5.0 v0.0.3 已拍板决策
+
+**E-P0-2 · Chat vs Conversation = 选项 B 冻结扩面（2026-07-30）**
+
+- 产品主路径与 v0.0.3 验收 **只绑定** legacy `/v1/chat/*` + `ChatLog` / `ChatService`。
+- Conversation runtime（`/v1/conversations*` 及并行合同）在本窗口内 **冻结功能对称扩张**：仅允许安全修复、既有合同 bugfix、文档/测试诚实性维护；**不得**为 WebUI 切流或与 Chat 对等堆新能力。
+- 选项 A（产品切流到 Conversation）需要独立战略决策、迁移/恢复证据与用户明确批准，**不**作为 v0.0.3 默认路径。
+- 关联：[#381](https://github.com/GhostXia/AIRP/issues/381) E-P0-2、[#371](https://github.com/GhostXia/AIRP/issues/371)、[#344](https://github.com/GhostXia/AIRP/issues/344)、[#242](https://github.com/GhostXia/AIRP/issues/242)。
 
 1. **Engine 一致性收敛**（[#381](https://github.com/GhostXia/AIRP/issues/381)）：  
-   - 拍板 Chat vs Conversation（切流或冻结，E-P0-2）；  
+   - ~~拍板 Chat vs Conversation（切流或冻结，E-P0-2）~~ → **已决策：B 冻结扩面**（见 §5.0）；  
    - Plugin DNS fail-closed + 请求时校验（E-P0-3，升权自 #329 N3）；  
    - Turn 级跨资源 commit/recovery（E-P0-1 → 执行面 #286，灾难恢复 #342）；  
    - 锁/async I/O/poison 与同 session 互斥（E-P0-4/5 → #284/#220/#160）。  

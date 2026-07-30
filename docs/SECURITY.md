@@ -1,6 +1,6 @@
 # Security and deployment boundary
 
-> Baseline reviewed: 2026-07-30 at `main@4f3f792`. Plugin DNS fail-open and request-time revalidation remain open residuals (RR-014, issue #381 E-P0-3 / #329 N3); see RISK-REGISTER and CURRENT-BASELINE.
+> Baseline reviewed: 2026-07-30 (v0.0.3 engine gate in progress). Plugin HTTPS webhook DNS is fail-closed with request-time re-resolve/pin (#381 E-P0-3 / #329 N3); plugins remain trusted-user extensions, not a code sandbox (RR-014). See RISK-REGISTER and CURRENT-BASELINE.
 
 AIRP defaults to a single-user local topology. The current priority artifact is a portable Windows WebUI package; Tauri remains a long-term client line.
 
@@ -64,7 +64,7 @@ Third-party widgets must never receive the daemon bearer key directly. The trust
 
 Plugin tools are trusted-user extensions, not a security sandbox for untrusted code:
 
-- Webhooks allow literal loopback HTTP or public HTTPS. HTTPS hostnames that successfully resolve to loopback, private, link-local, unspecified, or multicast addresses are rejected; redirects are disabled. DNS-resolution failures are currently allowed, so private-address validation fails open, and the destination is not revalidated at request time. This reduces SSRF exposure but leaves DNS failure/rebinding and later resolution changes as residual risks.
+- Webhooks allow literal loopback HTTP or public HTTPS. HTTPS hostnames are checked at registration and every request: DNS failures/empty answers fail closed; loopback/private/link-local/special-use addresses are rejected; domain targets pin the pre-connect resolution via a one-shot client. Redirects are disabled. Residual: not a code sandbox; hostile OS resolver TOCTOU remains (RR-014).
 - Local scripts must resolve beneath `data_root/plugins/` and are canonicalized both at registration and execution. The process clears inherited environment variables and passes bounded JSON through stdin/environment, but the script still executes with the AIRP process user's operating-system authority. Only install code the user trusts.
 - Input/output or response bodies are capped at 1 MiB and execution is clamped to 1–30 seconds. These are resource limits, not CPU, filesystem, network, child-process, or syscall isolation.
 - A plugin's declared side-effect class and handling of the `confirm` flag are plugin-supplied behavior. AIRP enforces registry capability/allowlist/confirmation before dispatch, but cannot prove that a plugin labeled read-only is actually read-only or that a destructive plugin implements a reversible dry-run.
@@ -72,7 +72,13 @@ Plugin tools are trusted-user extensions, not a security sandbox for untrusted c
 
 Production and portable packages must not enable preinstalled custom tools silently. Adding or enabling a plugin is an explicit trusted-user action; broader plugin distribution, signing, permission manifests, isolation, and revocation remain release work.
 
-### Plugin DNS residual (2026-07-30)
+### Plugin DNS / SSRF controls (updated 2026-07-30)
 
-Webhook HTTPS host checks currently fail open when DNS resolution errors, and do not re-resolve/pin at request time. Tracked as RR-014 residual and issue #381 E-P0-3 / #329 N3. Do not describe plugins as a multi-tenant sandbox.
+Webhook HTTPS hosts are validated at registration **and** immediately before each request:
+
+- DNS resolution errors and empty answers are **fail-closed** (request/registration rejected).
+- Any resolved loopback, private, link-local, or special-use address is rejected.
+- Domain targets pin the pre-connect resolution result into a one-shot client (`resolve_to_addrs`) so connect uses those addresses rather than a second unbound lookup.
+
+This closes #381 E-P0-3 / #329 N3 for the near-term SSRF residual. Plugins remain trusted-user extensions, not a sandbox for untrusted code (see RR-014).
 
