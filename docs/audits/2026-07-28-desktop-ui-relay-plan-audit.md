@@ -40,6 +40,7 @@ v1 让桌面端"= Tauri 壳 + webui/ 资产"，即长期交付面永久寄生在
 E3 明确"100k 桌面虚拟列表验收"**不得消失**——v1 使其在架构上不可能。
 
 ### A3（严重）丢弃扩展性架构
+
 | 机制 | 源码证据 | 价值 |
 |---|---|---|
 | Blueprint 渲染合同（agent 运行时不可写前端代码） | `protocol/types.ts:99-130`、`BlueprintRenderer.vue` | 引擎/Agent 可声明式驱动 UI，安全边界 |
@@ -73,4 +74,4 @@ v1 未引用 E1 的时序：桌面端"consume stable client-neutral contracts **
 
 **路线 B+（旗舰协议路线）**：桌面端 = Vue 3 + 协议内核（保留全部性能/扩展性机制）+ 新建 Console 壳与屏视图（从样板逐屏派生，令牌经 Blueprint `theme.tokens` 注入）+ 消费 webui 已成熟的 client-neutral 合同。webui 继续承担 P1 产品线与合同验证；桌面端按计划接管长期旗舰交付面。性能（100k 虚拟列表）与扩展性（Widget/Blueprint/沙箱）恢复为一等目标并设 CI 闸门。
 
-详见改写后的 `docs/2026-07-29-desktop-ui-canvas-relay-plan.md` v2。
+详见归档后的 `docs/archive/2026-07-29-desktop-ui-canvas-relay-plan.md`（v3.4；本审计针对 v1，其后 v2–v3.4 已在该归档文件内演进并**取代** v1/v2 作为草案正文，本审计结论仍作否决 v1 的历史证据保留）。

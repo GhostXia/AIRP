@@ -177,7 +177,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-2026-07-30 在 `main@4f3f792` 本地运行 `cargo test --workspace --locked`：engine lib 1056 passed / 2 ignored，engine main 4 passed，6 个 integration binaries 合计 38 passed，protocol 6 passed，Tauri shell 9 passed。该结果不覆盖 production topology、真实 provider/browser、artifact、崩溃注入或长会话；最新完整边界见 [当前基线](../docs/CURRENT-BASELINE.md)。
+本页命令是本地验证入口，不自动代表当前 `HEAD` 已全绿。2026-07-30 文档校准 pass（PR #382）**未**在 `main@4f3f792` 完成干净的 `cargo test --workspace --locked` 复跑；不得把历史测试数字写成该 commit 的证据。最新验证边界与缺口见 [当前基线](../docs/CURRENT-BASELINE.md)。
 
 ## License
 
