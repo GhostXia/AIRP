@@ -106,7 +106,22 @@ pub(in crate::daemon) async fn create_scene_conversation_endpoint(
     let root = effective_conversation_root(&state.data_root, request.user_id.as_ref())?;
     let scene = crate::scene::SceneConfig::load(&root, &scene_id)?;
     let create = crate::conversation::request_from_scene(&scene, request);
-    Ok(Json(ConversationService::new(root).create(create).await?))
+    let manifest = ConversationService::new(&root).create(create).await?;
+    // #343: 将新建 Conversation 标记为该 scene 的活跃群聊，供 WebUI 刷新恢复。
+    // Conversation 是权威资产，active_conversation_id 只是指向标记——标记写入失败
+    // 不应让用户看到 500（Conversation 已成功创建）。此处 log 后继续返回 manifest，
+    // 调用方可通过 GET /v1/conversations 兜底查找（manifest.resources 含 scene 引用）。
+    if let Err(e) =
+        crate::scene::set_active_conversation(&root, &scene_id, manifest.conversation_id)
+    {
+        tracing::warn!(
+            scene_id = %scene_id.as_str(),
+            conversation_id = %manifest.conversation_id,
+            error = %e,
+            "failed to mark active_conversation_id on scene manifest; conversation was created successfully and is still usable"
+        );
+    }
+    Ok(Json(manifest))
 }
 
 /// List readable Conversation manifests within the selected user scope.

@@ -125,6 +125,7 @@ async fn test_ms3_create_and_get_scene() {
         narrator_style: String::new(),
         lorebook_merge: crate::scene::LorebookMerge::Union,
         format_hint: String::new(),
+        active_conversation_id: None,
     };
 
     let app = create_router(state.clone());
@@ -185,6 +186,7 @@ async fn test_ms3_add_character_to_scene() {
         narrator_style: String::new(),
         lorebook_merge: crate::scene::LorebookMerge::Union,
         format_hint: String::new(),
+        active_conversation_id: None,
     };
     scene.save(&state.data_root).unwrap();
 

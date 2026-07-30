@@ -485,6 +485,127 @@ async fn scene_adapter_snapshots_scene_participants_into_generic_conversation() 
 }
 
 #[tokio::test]
+async fn scene_conversation_creation_records_active_conversation_id_on_scene_manifest() {
+    // #343: POST /v1/scenes/:scene_id/conversations 创建 Conversation 后，
+    // scene manifest 必须记录 active_conversation_id，供 WebUI 刷新恢复。
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state.clone());
+
+    // 1. 创建 scene
+    let create_scene = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/scenes")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "scene_id": "tavern",
+                        "description": "Night shift",
+                        "characters": [
+                            {"character_id": "alice", "role": "primary"},
+                            {"character_id": "bob", "role": "npc"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_scene.status(), StatusCode::CREATED);
+
+    // 2. 创建 Conversation
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/scenes/tavern/conversations")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let conversation_id = manifest["conversation_id"].as_str().unwrap().to_string();
+
+    // 3. GET /v1/scenes/tavern 必须返回 active_conversation_id
+    let get_scene = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/scenes/tavern")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_scene.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(get_scene.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let scene_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(scene_json["active_conversation_id"], conversation_id);
+
+    // 4. 模拟 Engine 重启：从磁盘重新 load SceneConfig
+    let reloaded = crate::scene::SceneConfig::load(
+        &state.data_root,
+        &crate::types::SceneId::new("tavern").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        reloaded.active_conversation_id.map(|id| id.to_string()),
+        Some(conversation_id.clone())
+    );
+
+    // 5. 创建第二个 Conversation，active_conversation_id 必须更新为新值
+    let response2 = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/scenes/tavern/conversations")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response2.status(), StatusCode::OK);
+    let body2 = axum::body::to_bytes(response2.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let manifest2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
+    let conversation_id2 = manifest2["conversation_id"].as_str().unwrap().to_string();
+    assert_ne!(
+        conversation_id2, conversation_id,
+        "new conversation must have different id"
+    );
+
+    let get_scene2 = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/scenes/tavern")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(get_scene2.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let scene_json2: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(scene_json2["active_conversation_id"], conversation_id2);
+}
+
+#[tokio::test]
 async fn engine_executes_scene_turn_with_ordered_attributed_messages() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

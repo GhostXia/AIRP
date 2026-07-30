@@ -1583,6 +1583,7 @@ mod tests {
             narrator_style: String::new(),
             lorebook_merge: Default::default(),
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         let request = request_from_scene(
             &scene,

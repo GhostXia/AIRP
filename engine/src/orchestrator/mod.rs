@@ -787,6 +787,7 @@ mod tests {
             narrator_style: "third_person_limited".to_string(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: "角色名：台词".to_string(),
+            active_conversation_id: None,
         };
 
         let alice_card = r#"{"spec":"chara_card_v2","data":{"name":"爱丽丝","personality":"勇敢","description":"女剑客"}}"#;
@@ -831,6 +832,7 @@ mod tests {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
 
         let prompt = super::build_multi_char_system_prompt(&scene, &[], "", "User");
@@ -856,6 +858,7 @@ mod tests {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
 
         let lore = "这里是传说中的禁地";

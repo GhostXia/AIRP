@@ -1,5 +1,5 @@
 use crate::error::AirpError;
-use crate::types::SceneId;
+use crate::types::{SceneId, SessionId};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -44,6 +44,12 @@ pub struct SceneConfig {
     pub lorebook_merge: LorebookMerge,
     #[serde(default)]
     pub format_hint: String,
+    /// #343: 指向该 scene 当前活跃的群聊 Conversation。WebUI 刷新恢复时
+    /// 优先读此字段（权威），localStorage 仅作浏览器缓存。旧 scene.json 无此
+    /// 字段时反序列化为 `None`，向后兼容。创建新 Conversation 时由
+    /// `create_scene_conversation_endpoint` 自动更新。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_conversation_id: Option<SessionId>,
 }
 
 impl SceneConfig {
@@ -67,6 +73,23 @@ impl SceneConfig {
         std::fs::write(path, json)?;
         Ok(())
     }
+}
+
+/// #343: 在 scene manifest 中记录当前活跃的群聊 Conversation。
+///
+/// 该函数执行 load → set → save 三步。scene 配置更新不频繁，未引入额外锁；
+/// 若未来 scene 配置与 active_conversation 出现并发写冲突，可在此处加文件锁。
+/// 写入失败时 scene.json 不会半写（save 是整体覆盖），但已创建的 Conversation
+/// 仍存在——调用方应将 Conversation 创建视为权威，active_conversation_id 视为
+/// 指向标记，标记失败时不影响 Conversation 本身。
+pub fn set_active_conversation(
+    root: &Path,
+    scene_id: &SceneId,
+    conversation_id: SessionId,
+) -> Result<(), AirpError> {
+    let mut scene = SceneConfig::load(root, scene_id)?;
+    scene.active_conversation_id = Some(conversation_id);
+    scene.save(root)
 }
 
 #[cfg(test)]
@@ -93,6 +116,7 @@ mod tests {
             narrator_style: "third_person_limited".to_string(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: "Name: dialogue".to_string(),
+            active_conversation_id: None,
         }
     }
 
@@ -168,6 +192,7 @@ mod tests {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         assert!(sc.primary().is_none());
     }
@@ -194,6 +219,7 @@ mod tests {
             narrator_style: String::new(),
             lorebook_merge: LorebookMerge::Union,
             format_hint: String::new(),
+            active_conversation_id: None,
         };
         assert_eq!(sc.primary().map(|c| c.character_id.as_str()), Some("first"));
     }
@@ -232,5 +258,94 @@ mod tests {
         std::fs::write(scene_dir.join("scene.json"), "{not json").unwrap();
         let result = SceneConfig::load(tmp.path(), &SceneId::new("broken").unwrap());
         assert!(result.is_err(), "malformed JSON should error");
+    }
+
+    // ── #343: active_conversation_id 持久化 ──────────────────────────────────
+
+    #[test]
+    fn test_343_active_conversation_id_roundtrip() {
+        let tmp = tempdir().unwrap();
+        let mut sc = sample_scene();
+        let conv = SessionId::new();
+        sc.active_conversation_id = Some(conv);
+        sc.save(tmp.path()).unwrap();
+
+        let loaded = SceneConfig::load(tmp.path(), &SceneId::new("tavern").unwrap()).unwrap();
+        assert_eq!(loaded.active_conversation_id, Some(conv));
+    }
+
+    #[test]
+    fn test_343_legacy_scene_json_without_active_conversation_id_loads_as_none() {
+        // 旧 scene.json 不含 active_conversation_id 字段，反序列化必须为 None。
+        let tmp = tempdir().unwrap();
+        let scene_dir = tmp.path().join("scenes").join("legacy");
+        std::fs::create_dir_all(&scene_dir).unwrap();
+        let legacy_json = r#"{
+            "scene_id": "legacy",
+            "description": "legacy scene",
+            "characters": [],
+            "narrator_style": "",
+            "lorebook_merge": "union",
+            "format_hint": ""
+        }"#;
+        std::fs::write(scene_dir.join("scene.json"), legacy_json).unwrap();
+
+        let loaded = SceneConfig::load(tmp.path(), &SceneId::new("legacy").unwrap()).unwrap();
+        assert_eq!(loaded.active_conversation_id, None);
+    }
+
+    #[test]
+    fn test_343_none_active_conversation_id_omitted_from_serialized_json() {
+        // None 时序列化不写入字段，保证旧客户端/工具不受影响。
+        let sc = sample_scene();
+        let json = serde_json::to_string(&sc).unwrap();
+        assert!(
+            !json.contains("active_conversation_id"),
+            "None active_conversation_id should be skipped, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_343_set_active_conversation_helper_updates_scene_manifest() {
+        let tmp = tempdir().unwrap();
+        let scene_id = SceneId::new("tavern").unwrap();
+        sample_scene().save(tmp.path()).unwrap();
+
+        let conv = SessionId::new();
+        set_active_conversation(tmp.path(), &scene_id, conv).unwrap();
+
+        let loaded = SceneConfig::load(tmp.path(), &scene_id).unwrap();
+        assert_eq!(loaded.active_conversation_id, Some(conv));
+        // 其他字段保持不变
+        assert_eq!(loaded.characters.len(), 2);
+        assert_eq!(loaded.description, "A tavern scene");
+    }
+
+    #[test]
+    fn test_343_set_active_conversation_overwrites_previous_value() {
+        let tmp = tempdir().unwrap();
+        let scene_id = SceneId::new("tavern").unwrap();
+        sample_scene().save(tmp.path()).unwrap();
+
+        let conv1 = SessionId::new();
+        set_active_conversation(tmp.path(), &scene_id, conv1).unwrap();
+        let conv2 = SessionId::new();
+        set_active_conversation(tmp.path(), &scene_id, conv2).unwrap();
+
+        let loaded = SceneConfig::load(tmp.path(), &scene_id).unwrap();
+        assert_eq!(loaded.active_conversation_id, Some(conv2));
+        assert_ne!(loaded.active_conversation_id, Some(conv1));
+    }
+
+    #[test]
+    fn test_343_set_active_conversation_errors_when_scene_missing() {
+        let tmp = tempdir().unwrap();
+        let scene_id = SceneId::new("no_such_scene").unwrap();
+        let conv = SessionId::new();
+        let result = set_active_conversation(tmp.path(), &scene_id, conv);
+        assert!(
+            result.is_err(),
+            "setting active conversation on missing scene should error"
+        );
     }
 }
