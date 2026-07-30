@@ -114,21 +114,26 @@ fn commit_world_events_revision(
 /// #280: legacy migration——若 `world_events.json` 存在但无 revision 快照，
 /// 首次 commit 为 revision 1。参考 `ensure_legacy_revision_unlocked`（SoulDrift）。
 /// 调用方已在 `state_lock` 临界区内，无需额外加锁。
+///
+/// 返回值：
+/// - `Ok(Some(rev))`：已有 revision 或刚 migration 产生的 revision
+/// - `Ok(None)`：无 legacy 文件，调用方应将 parent_revision 视为 None
 fn ensure_legacy_world_events_revision(
     data_root: &Path,
     character_id: &str,
-) -> Result<(), AirpError> {
+) -> Result<Option<u64>, AirpError> {
     let asset_dir = world_events_asset_dir(data_root, character_id);
-    if read_current_revision(&asset_dir)?.is_some() {
-        return Ok(());
+    if let Some(existing) = read_current_revision(&asset_dir)? {
+        return Ok(Some(existing));
     }
     let path = world_events_path(data_root, character_id);
     if !path.exists() {
-        return Ok(());
+        return Ok(None);
     }
     let legacy = std::fs::read(&path)?;
-    commit_world_events_revision(data_root, character_id, &legacy, "legacy_migration", None)?;
-    Ok(())
+    let rev =
+        commit_world_events_revision(data_root, character_id, &legacy, "legacy_migration", None)?;
+    Ok(Some(rev))
 }
 
 /// 读取世界事件列表。不存在返回空 Vec。
@@ -161,20 +166,14 @@ fn save_world_events(
     }
     let content = serde_json::to_vec_pretty(events)?;
 
-    // #280: 接入 revision 合同。顺序参考 SoulDrift（drift.rs:144-150）：
+    // #280: 接入 revision 合同。顺序（CodeRabbit review 修正）：
     // 1. legacy migration 必须在 replace_file 之前，确保读到的是真正的 legacy 内容
-    //    而非刚写入的新内容
-    // 2. read_current_revision 获取 parent（migration 后可能为 Some(1)）
-    // 3. replace_file 写工作副本（供 reader 并发读）
-    // 4. commit_revision 写不可变快照
-    ensure_legacy_world_events_revision(data_root, character_id)?;
-    let asset_dir = world_events_asset_dir(data_root, character_id);
-    let parent_revision = read_current_revision(&asset_dir)?;
-
-    // 原子写工作副本：替换旧版 std::fs::write，避免半写状态被并发 reader 看到。
-    // data_dir::replace_file 内部走 tmp + rename + fsync(parent)。
-    crate::data_dir::replace_file(&path, &content)?;
-
+    //    而非刚写入的新内容；返回值复用为 parent_revision，避免重复 read_current_revision
+    // 2. commit_revision 写不可变快照（在暴露工作副本之前）
+    // 3. replace_file 写工作副本（commit 成功后才暴露给并发 reader）
+    //
+    // 若 commit 失败，工作副本未被修改，不会产生"工作副本已更新但无 revision 快照"的不一致。
+    let parent_revision = ensure_legacy_world_events_revision(data_root, character_id)?;
     commit_world_events_revision(
         data_root,
         character_id,
@@ -182,6 +181,10 @@ fn save_world_events(
         "tool_triggered",
         parent_revision,
     )?;
+
+    // 原子写工作副本：替换旧版 std::fs::write，避免半写状态被并发 reader 看到。
+    // data_dir::replace_file 内部走 tmp + rename + fsync(parent)。
+    crate::data_dir::replace_file(&path, &content)?;
     Ok(())
 }
 
