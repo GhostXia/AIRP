@@ -225,8 +225,13 @@ pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
 ) -> Result<(StatusCode, Json<PluginToolView>), AirpError> {
     let config = upsert.into_config();
     // 校验单条配置（在持久化前）。
-    config
-        .validate(&state.data_root)
+    // N2（PR #384 审计）：validate 含同步 DNS 解析与文件 canonicalize，
+    // 必须在 spawn_blocking 中执行以免阻塞 tokio 异步运行时。
+    let data_root_for_validate = state.data_root.clone();
+    let config_for_validate = config.clone();
+    tokio::task::spawn_blocking(move || config_for_validate.validate(&data_root_for_validate))
+        .await
+        .map_err(|e| AirpError::Internal(format!("plugin_tools 校验任务失败: {e}")))?
         .map_err(|e| AirpError::BadRequest(format!("插件工具配置不合法: {e}")))?;
     // Minor2: 与内建工具命名空间冲突检查由 validate_tool_name 完成（前缀保护）。
 

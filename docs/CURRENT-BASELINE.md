@@ -92,8 +92,8 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 - 关联：[#381](https://github.com/GhostXia/AIRP/issues/381) E-P0-2、[#371](https://github.com/GhostXia/AIRP/issues/371)、[#344](https://github.com/GhostXia/AIRP/issues/344)、[#242](https://github.com/GhostXia/AIRP/issues/242)。
 
 1. **Engine 一致性收敛**（[#381](https://github.com/GhostXia/AIRP/issues/381)）：  
-   - ~~拍板 Chat vs Conversation（切流或冻结，E-P0-2）~~ → **已决策：B 冻结扩面**（见 §5.0）；  
-   - Plugin DNS fail-closed + 请求时校验（E-P0-3，升权自 #329 N3）；  
+   - ~~拍板 Chat vs Conversation（切流或冻结，E-P0-2）~~ → **已决策：B 冻结扩面**（见 §5.0）；
+   - ~~Plugin DNS fail-closed + 请求时校验（E-P0-3，升权自 #329 N3）~~ → **已落地**（PR #384 / 见 SECURITY.md）；
    - Turn 级跨资源 commit/recovery（E-P0-1 → 执行面 #286，灾难恢复 #342）；  
    - 锁/async I/O/poison 与同 session 互斥（E-P0-4/5 → #284/#220/#160）。  
 2. 用真实 provider 与真实浏览器验证：onboarding → 首聊 → 继续对话 → 刷新恢复 → 服务重启恢复。  

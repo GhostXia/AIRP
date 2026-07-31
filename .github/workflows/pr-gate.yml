@@ -91,6 +91,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Conversation freeze guard (E-P0-2)
+        shell: pwsh
+        run: |
+          # N3（PR #384 审计）：检测 Conversation 公开 API 面是否超出基线。
+          # E-P0-2 决策 B 冻结功能对称扩张；新增 pub 项需审计批准并更新基线。
+          pwsh -NoProfile -File engine/tests/conversation_freeze_check.ps1
+
   rust-test:
     name: Rust test
     runs-on: windows-latest

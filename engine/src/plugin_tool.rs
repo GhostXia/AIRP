@@ -320,6 +320,10 @@ fn parse_literal_ip(host: &str) -> Option<std::net::IpAddr> {
 }
 
 /// 判断 IP 是否为内网（loopback / private / link-local / unspecified / multicast）。
+///
+/// **CodeRabbit PR #384 CR1（2026-07-31）**：IPv4-mapped (`::ffff:a.b.c.d`) 与
+/// IPv4-compatible (`::a.b.c.d`) 地址必须先拆解为内嵌 IPv4 再判定，否则
+/// `https://[::ffff:127.0.0.1]/hook` 会绕过 SSRF 拒绝。
 fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
@@ -331,19 +335,30 @@ fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
                 || v4.is_documentation()
         }
         std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
+            // 先检查原生 IPv6 范围（::1 loopback、:: unspecified、multicast、ULA、link-local）。
+            if v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
                 // IPv6 unique local fc00::/7
-                || {
-                    let segs = v6.segments();
-                    (segs[0] & 0xfe00) == 0xfc00
-                }
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
                 // IPv6 link-local fe80::/10
-                || {
-                    let segs = v6.segments();
-                    (segs[0] & 0xffc0) == 0xfe80
-                }
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+            {
+                return true;
+            }
+            // IPv4-mapped (::ffff:a.b.c.d) — 拆解后复用 IPv4 判定。
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_internal_ip(&std::net::IpAddr::V4(v4));
+            }
+            // IPv4-compatible (::a.b.c.d, deprecated) — 前 96 位为零。
+            // :: 与 ::1 已被上面的原生检查捕获；其余 ::a.b.c.d 必须拆解，
+            // 否则 ::127.0.0.1 等可绕过内网拒绝。
+            let o = v6.octets();
+            if o[..12].iter().all(|&b| b == 0) {
+                let v4 = std::net::Ipv4Addr::new(o[12], o[13], o[14], o[15]);
+                return is_internal_ip(&std::net::IpAddr::V4(v4));
+            }
+            false
         }
     }
 }
@@ -511,7 +526,24 @@ impl PluginTool {
         confirm: bool,
     ) -> Result<serde_json::Value, AirpError> {
         // E-P0-3 / #329 N3：每次请求前重新解析并 fail-closed；域名 pin 到本次结果。
-        let plan = inspect_webhook_url(url).map_err(AirpError::BadRequest)?;
+        // CR3/CR4（CodeRabbit PR #384）：inspect_webhook_url 含同步 DNS 解析，
+        // 必须在 spawn_blocking 中执行以免阻塞 tokio 异步运行时；请求时 DNS/策略
+        // 失败属环境问题而非客户端请求格式错误，归类为 Internal（与超时/发送失败一致）。
+        let url_owned = url.to_string();
+        let plan = tokio::task::spawn_blocking(move || inspect_webhook_url(&url_owned))
+            .await
+            .map_err(|e| {
+                AirpError::Internal(format!(
+                    "插件工具 {} webhook DNS 校验任务失败: {}",
+                    self.config.name, e
+                ))
+            })?
+            .map_err(|e| {
+                AirpError::Internal(format!(
+                    "插件工具 {} webhook 目标未通过请求时 DNS 校验: {}",
+                    self.config.name, e
+                ))
+            })?;
         let http_client = client_for_webhook_plan(&self.http_client, &plan)?;
         let mut request = http_client.post(url);
         for (key, value) in headers {
@@ -1100,6 +1132,11 @@ mod tests {
         assert!(validate_webhook_url("https://10.0.0.5/hook").is_err());
         assert!(validate_webhook_url("https://192.168.1.10/hook").is_err());
         assert!(validate_webhook_url("https://[::1]/hook").is_err());
+        // CR1: IPv4-mapped / IPv4-compatible IPv6 不得绕过内网拒绝。
+        assert!(validate_webhook_url("https://[::ffff:127.0.0.1]/hook").is_err());
+        assert!(validate_webhook_url("https://[::ffff:10.0.0.5]/hook").is_err());
+        assert!(validate_webhook_url("https://[::ffff:192.168.1.10]/hook").is_err());
+        assert!(validate_webhook_url("https://[::127.0.0.1]/hook").is_err());
     }
 
     #[test]
