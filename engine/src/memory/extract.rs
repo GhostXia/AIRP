@@ -6,6 +6,7 @@
 use crate::adapter::{ChatMessage, GenerationParams, MessageRole, ProviderConfig};
 use crate::error::AirpError;
 use futures_util::StreamExt;
+use std::path::Path;
 use std::sync::Arc;
 
 /// 抽取配置。
@@ -32,7 +33,7 @@ impl Default for ExtractionConfig {
     }
 }
 
-/// 抽取 prompt 模板。
+/// 抽取 prompt 默认模板。
 const EXTRACTION_SYSTEM_PROMPT: &str = r#"你是一个记忆抽取助手。从对话中抽取关键事实，用于长期记忆。
 
 抽取规则：
@@ -47,13 +48,66 @@ const EXTRACTION_SYSTEM_PROMPT: &str = r#"你是一个记忆抽取助手。从�
 - 用户讨厌被叫"主人"
 "#;
 
+/// 用户偏好抽取 prompt 默认模板（阶段二补全 D1）。
+const USER_PREFERENCE_SYSTEM_PROMPT: &str = r#"你是一个用户偏好抽取助手。从对话中抽取用户的写作偏好和习惯，用于用户模型。
+
+抽取规则：
+1. 只抽取持久性偏好（文风喜好、雷点、习惯用语、纠正反馈）
+2. 忽略临时性内容（具体剧情讨论、角色扮演内容本身）
+3. 用简洁的条目格式输出，每条一行，以 "- " 开头
+4. 如果没有值得记录的偏好，输出空字符串
+
+输出格式示例：
+- 用户喜欢第三人称叙事
+- 用户不喜欢过多的心理描写
+- 用户偏好简洁的对话风格
+"#;
+
+/// #274 F-2：从 `data_root/prompts/{prompt_name}` 加载 prompt 覆盖文件；
+/// 文件不存在或读取失败时 fallback 到 `default`。
+///
+/// 设计决策（issue #274 F-2 验收要求"可通过 settings 或文件覆盖"）：
+/// 选择文件覆盖而非 MutableConfig 字段，因为：
+/// 1. prompt 是长文本，JSON settings 字段不利于多行编辑；
+/// 2. 文件方案让用户可用任意编辑器维护 prompt，与角色卡 prompt 同级管理；
+/// 3. fallback 到编译期默认值保证零配置可用，不增加 onboarding 负担。
+///
+/// 读取失败（权限/IO 错误）不 panic，返回 default 并 warn——记忆抽取是
+/// best-effort 控制平面，不应因 prompt 文件损坏阻塞主流程。
+pub(crate) fn load_prompt_override(data_root: &Path, prompt_name: &str, default: &str) -> String {
+    let path = data_root.join("prompts").join(prompt_name);
+    match std::fs::read_to_string(&path) {
+        Ok(content) if !content.trim().is_empty() => content,
+        Ok(_) => {
+            tracing::warn!(
+                path = %path.display(),
+                "prompt override file is empty, falling back to default"
+            );
+            default.to_string()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => default.to_string(),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to read prompt override file, falling back to default"
+            );
+            default.to_string()
+        }
+    }
+}
+
 /// 从对话中抽取关键事实。
 ///
 /// 返回抽取到的事实条目（markdown 列表格式），若无值得记录的内容则返回空字符串。
+///
+/// #274 F-2：`data_root` 用于加载 `data_root/prompts/extraction.md` 覆盖默认 prompt；
+/// 文件不存在时 fallback 到编译期默认值。
 pub async fn extract_facts(
     client: &reqwest::Client,
     provider_config: Arc<ProviderConfig>,
     gen_params: GenerationParams,
+    data_root: &Path,
     user_message: &str,
     assistant_message: &str,
     config: &ExtractionConfig,
@@ -78,12 +132,15 @@ pub async fn extract_facts(
     extract_params.temperature = Some(config.temperature);
     extract_params.max_tokens = Some(config.max_tokens);
 
+    // #274 F-2：加载 prompt 覆盖（data_root/prompts/extraction.md）
+    let system_prompt = load_prompt_override(data_root, "extraction.md", EXTRACTION_SYSTEM_PROMPT);
+
     // 调用 LLM（使用 Direct 引擎）
     let mut stream = Box::pin(crate::adapter::call_streaming_api(
         client.clone(),
         provider_config,
         extract_params,
-        EXTRACTION_SYSTEM_PROMPT.to_string(),
+        system_prompt,
         messages,
     ));
 
@@ -104,28 +161,17 @@ pub async fn extract_facts(
     Ok(cleaned.join("\n"))
 }
 
-/// 用户偏好抽取 prompt 模板（阶段二补全 D1）。
-const USER_PREFERENCE_SYSTEM_PROMPT: &str = r#"你是一个用户偏好抽取助手。从对话中抽取用户的写作偏好和习惯，用于用户模型。
-
-抽取规则：
-1. 只抽取持久性偏好（文风喜好、雷点、习惯用语、纠正反馈）
-2. 忽略临时性内容（具体剧情讨论、角色扮演内容本身）
-3. 用简洁的条目格式输出，每条一行，以 "- " 开头
-4. 如果没有值得记录的偏好，输出空字符串
-
-输出格式示例：
-- 用户喜欢第三人称叙事
-- 用户不喜欢过多的心理描写
-- 用户偏好简洁的对话风格
-"#;
-
 /// 从对话中抽取用户偏好（阶段二补全 D1）。
 ///
 /// 返回抽取到的偏好条目（markdown 列表格式），无值得记录的内容则返回空字符串。
+///
+/// #274 F-2：`data_root` 用于加载 `data_root/prompts/user_preference.md` 覆盖默认 prompt；
+/// 文件不存在时 fallback 到编译期默认值。
 pub async fn extract_user_preferences(
     client: &reqwest::Client,
     provider_config: Arc<ProviderConfig>,
     gen_params: GenerationParams,
+    data_root: &Path,
     user_message: &str,
     assistant_message: &str,
     config: &ExtractionConfig,
@@ -148,11 +194,18 @@ pub async fn extract_user_preferences(
     extract_params.temperature = Some(config.temperature);
     extract_params.max_tokens = Some(config.max_tokens);
 
+    // #274 F-2：加载 prompt 覆盖（data_root/prompts/user_preference.md）
+    let system_prompt = load_prompt_override(
+        data_root,
+        "user_preference.md",
+        USER_PREFERENCE_SYSTEM_PROMPT,
+    );
+
     let mut stream = Box::pin(crate::adapter::call_streaming_api(
         client.clone(),
         provider_config,
         extract_params,
-        USER_PREFERENCE_SYSTEM_PROMPT.to_string(),
+        system_prompt,
         messages,
     ));
 
@@ -173,6 +226,7 @@ pub async fn extract_user_preferences(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_extraction_config_default() {
@@ -181,5 +235,68 @@ mod tests {
         assert!(config.model.is_none());
         assert!((config.temperature - 0.1).abs() < f32::EPSILON);
         assert_eq!(config.max_tokens, 500);
+    }
+
+    // ── #274 F-2: load_prompt_override 测试 ──────────────────────────
+
+    #[test]
+    fn load_prompt_override_falls_back_when_file_missing() {
+        // 文件不存在 → 返回 default（零配置可用）
+        let tmp = tempdir().unwrap();
+        let result = load_prompt_override(tmp.path(), "extraction.md", "DEFAULT PROMPT");
+        assert_eq!(result, "DEFAULT PROMPT");
+    }
+
+    #[test]
+    fn load_prompt_override_reads_file_when_present() {
+        // 文件存在且非空 → 返回文件内容
+        let tmp = tempdir().unwrap();
+        let prompts_dir = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(
+            prompts_dir.join("extraction.md"),
+            "CUSTOM EXTRACTION PROMPT\n",
+        )
+        .unwrap();
+
+        let result = load_prompt_override(tmp.path(), "extraction.md", "DEFAULT PROMPT");
+        assert_eq!(result, "CUSTOM EXTRACTION PROMPT\n");
+    }
+
+    #[test]
+    fn load_prompt_override_falls_back_when_file_empty() {
+        // 文件存在但内容为空/纯空白 → 返回 default（避免 LLM 收到空 system prompt）
+        let tmp = tempdir().unwrap();
+        let prompts_dir = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(prompts_dir.join("extraction.md"), "   \n  \n").unwrap();
+
+        let result = load_prompt_override(tmp.path(), "extraction.md", "DEFAULT PROMPT");
+        assert_eq!(result, "DEFAULT PROMPT");
+    }
+
+    #[test]
+    fn load_prompt_override_reads_multiline_content() {
+        // 多行 prompt 文件（含 markdown 格式）应完整保留
+        let tmp = tempdir().unwrap();
+        let prompts_dir = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        let content = "你是一个抽取助手。\n\n规则：\n- 第一条\n- 第二条\n";
+        std::fs::write(prompts_dir.join("user_preference.md"), content).unwrap();
+
+        let result = load_prompt_override(tmp.path(), "user_preference.md", "DEFAULT");
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn load_prompt_override_resolves_correct_subpath() {
+        // 验证路径拼接：data_root/prompts/{name}
+        let tmp = tempdir().unwrap();
+        let prompts_dir = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(prompts_dir.join("custom.md"), "CUSTOM").unwrap();
+
+        let result = load_prompt_override(tmp.path(), "custom.md", "DEFAULT");
+        assert_eq!(result, "CUSTOM");
     }
 }
