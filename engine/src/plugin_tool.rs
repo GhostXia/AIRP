@@ -226,7 +226,7 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
 /// **SSRF 控制（Major2, 2026-07-26；E-P0-3 / #329 N3, 2026-07-30）**：
 /// - `https://` 拒绝字面量或 DNS 解析到的 loopback / private / link-local / 特殊用途地址；
 /// - DNS 解析失败或无记录时 **fail-closed**（不再为可用性放行）；
-/// - 本函数供注册路径使用；执行路径见 [`inspect_webhook_url`] + pin client。
+/// - 本函数供注册路径使用；执行路径在每次 webhook 调用前复用同一套检查并 pin DNS。
 pub fn validate_webhook_url(url: &str) -> Result<(), String> {
     inspect_webhook_url(url).map(|_| ())
 }
@@ -246,6 +246,13 @@ enum WebhookConnectPlan {
 
 /// 注册时与请求时共用的 URL 检查；成功时返回 connect 计划。
 fn inspect_webhook_url(url: &str) -> Result<WebhookConnectPlan, String> {
+    inspect_webhook_url_with(url, system_lookup_host)
+}
+
+fn inspect_webhook_url_with<F>(url: &str, lookup: F) -> Result<WebhookConnectPlan, String>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>>,
+{
     if url.is_empty() {
         return Err("webhook url 不能为空".to_string());
     }
@@ -276,7 +283,7 @@ fn inspect_webhook_url(url: &str) -> Result<WebhookConnectPlan, String> {
                 return Ok(WebhookConnectPlan::SharedClient);
             }
             // 域名：解析全部 A/AAAA；失败/空/内网一律拒绝；成功则 pin。
-            let addrs = resolve_public_host_addrs(host, port)?;
+            let addrs = resolve_public_host_addrs_with(host, port, lookup)?;
             Ok(WebhookConnectPlan::PinnedHttps {
                 host: host.to_string(),
                 addrs,
@@ -356,10 +363,6 @@ fn system_lookup_host(host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>>
 /// 解析 host 的全部 A/AAAA，要求非空且全部为公网地址；返回带目标 port 的 SocketAddr。
 ///
 /// **fail-closed**：解析错误、空记录、任一内网地址均返回 `Err`（#329 N3）。
-fn resolve_public_host_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
-    resolve_public_host_addrs_with(host, port, system_lookup_host)
-}
-
 fn resolve_public_host_addrs_with<F>(
     host: &str,
     port: u16,
@@ -1053,9 +1056,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_webhook_url_accepts_https() {
-        assert!(validate_webhook_url("https://example.com/hook").is_ok());
-        assert!(validate_webhook_url("https://api.example.com/v1/tool").is_ok());
+    fn validate_webhook_url_accepts_https_public_literal() {
+        // 字面量公网 IP 不依赖 DNS；域名路径由 inject lookup 测试覆盖。
+        assert!(validate_webhook_url("https://1.1.1.1/hook").is_ok());
+        assert!(validate_webhook_url("https://8.8.8.8/v1/tool").is_ok());
     }
 
     #[test]
@@ -1102,10 +1106,7 @@ mod tests {
     fn resolve_public_host_addrs_fail_closed_on_dns_error_empty_and_internal() {
         // 不依赖真实 DNS / ISP 劫持：注入 lookup，覆盖 fail-closed 三分支。
         let err = resolve_public_host_addrs_with("evil.example", 443, |_, _| {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "simulated nxdomain",
-            ))
+            Err(std::io::Error::other("simulated nxdomain"))
         })
         .expect_err("DNS io error must reject");
         assert!(err.contains("fail-closed"), "err={err}");
@@ -1135,13 +1136,20 @@ mod tests {
 
     #[test]
     fn inspect_webhook_url_pins_public_https_domain() {
-        // example.com 应解析到公网地址并进入 pin 计划（需系统 DNS）。
-        let plan = inspect_webhook_url("https://example.com/hook")
-            .expect("example.com must resolve on CI/dev DNS");
+        // 注入 lookup，避免 CI/本机 DNS 差异导致不稳定。
+        let plan = inspect_webhook_url_with("https://example.com/hook", |host, port| {
+            assert_eq!(host, "example.com");
+            assert_eq!(port, 443);
+            Ok(vec![
+                "93.184.216.34:443".parse().unwrap(),
+                "[2606:2800:220:1:248:1893:25c8:1946]:443".parse().unwrap(),
+            ])
+        })
+        .expect("injected public answers must pin");
         match plan {
             WebhookConnectPlan::PinnedHttps { host, addrs } => {
                 assert_eq!(host, "example.com");
-                assert!(!addrs.is_empty());
+                assert_eq!(addrs.len(), 2);
                 assert!(addrs.iter().all(|a| a.port() == 443));
                 assert!(addrs.iter().all(|a| !is_internal_ip(&a.ip())));
             }
@@ -1252,7 +1260,7 @@ mod tests {
     #[test]
     fn plugin_invocation_effective_timeout_clamps_to_30s() {
         let webhook = PluginInvocation::Webhook {
-            url: "https://example.com/hook".to_string(),
+            url: "https://1.1.1.1/hook".to_string(),
             headers: BTreeMap::new(),
             timeout_secs: Some(120),
         };
@@ -1449,7 +1457,7 @@ mod tests {
             side_effect: PluginSideEffect::Readonly,
             enabled: true,
             invocation: PluginInvocation::Webhook {
-                url: "https://example.com/hook".to_string(),
+                url: "https://1.1.1.1/hook".to_string(),
                 headers: {
                     let mut m = BTreeMap::new();
                     m.insert("Host".to_string(), "evil.com".to_string());

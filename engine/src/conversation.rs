@@ -1226,8 +1226,10 @@ mod tests {
         let slow_manifest = setup.create(request()).await.unwrap();
         let fast_manifest = setup.create(request()).await.unwrap();
         let slow_service = ConversationService::new(tmp.path());
+        // CI 高负载下 100ms 延迟不足以稳定证明「无跨 conversation 全局锁」：
+        // 慢路径 IO 延迟加长，避免 fast 因调度饥饿误判为被串行化。
         slow_service.inject_fault(ConversationIoFault::Delay(
-            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(750),
         ));
         let mut slow = tokio::spawn(async move {
             slow_service
@@ -1235,7 +1237,7 @@ mod tests {
                 .await
                 .unwrap()
         });
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let fast = setup.append_event(fast_manifest.conversation_id, append(Some("user"), Some(0)));
         tokio::pin!(fast);
