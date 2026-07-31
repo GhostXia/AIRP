@@ -504,8 +504,10 @@ impl ConversationService {
         #[cfg(test)]
         let fault = self.take_fault();
         #[cfg(test)]
-        if let Some(ConversationIoFault::Delay(duration)) = fault {
-            std::thread::sleep(duration);
+        if let Some(ConversationIoFault::Delay(duration, signal)) = fault.as_ref() {
+            // CR5：阻塞前通知测试线程，使其可确定性地启动 fast 任务。
+            signal.notify_one();
+            std::thread::sleep(*duration);
         }
         #[cfg(test)]
         if fault == Some(ConversationIoFault::ShortWrite) {
@@ -794,13 +796,31 @@ where
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum ConversationIoFault {
     ShortWrite,
     SyncData,
     CacheWrite,
-    Delay(std::time::Duration),
+    /// `Delay(duration, signal)`：阻塞 `duration` 后返回；阻塞前 `notify_one()`
+    /// 让测试可确定性地等待「慢任务已进入阻塞 I/O」而非依赖盲 sleep（CR5）。
+    Delay(std::time::Duration, std::sync::Arc<tokio::sync::Notify>),
 }
+
+#[cfg(test)]
+impl PartialEq for ConversationIoFault {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::ShortWrite, Self::ShortWrite)
+            | (Self::SyncData, Self::SyncData)
+            | (Self::CacheWrite, Self::CacheWrite) => true,
+            (Self::Delay(d1, _), Self::Delay(d2, _)) => d1 == d2,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Eq for ConversationIoFault {}
 
 fn validate_nonempty(field: &str, value: &str) -> Result<(), AirpError> {
     if value.trim().is_empty() {
@@ -1226,8 +1246,14 @@ mod tests {
         let slow_manifest = setup.create(request()).await.unwrap();
         let fast_manifest = setup.create(request()).await.unwrap();
         let slow_service = ConversationService::new(tmp.path());
+        // CR5（CodeRabbit PR #384）：用 Notify 替代盲 sleep，确定性地等待
+        // 「慢任务已进入阻塞 I/O（持有 conversation A 的锁并即将 sleep）」，
+        // 而非依赖 20ms 调度猜测。750ms 延迟远大于 fast 任务完成时间。
+        let slow_started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let fast_trigger = slow_started.clone();
         slow_service.inject_fault(ConversationIoFault::Delay(
-            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(750),
+            slow_started,
         ));
         let mut slow = tokio::spawn(async move {
             slow_service
@@ -1235,7 +1261,8 @@ mod tests {
                 .await
                 .unwrap()
         });
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // 等待慢任务的阻塞 I/O 确认已开始（已持有 conversation A 的锁）。
+        fast_trigger.notified().await;
 
         let fast = setup.append_event(fast_manifest.conversation_id, append(Some("user"), Some(0)));
         tokio::pin!(fast);
@@ -1384,6 +1411,7 @@ mod tests {
         let manifest = service.create(request()).await.unwrap();
         service.inject_fault(ConversationIoFault::Delay(
             std::time::Duration::from_millis(100),
+            std::sync::Arc::new(tokio::sync::Notify::new()),
         ));
 
         let append = service.append_event(manifest.conversation_id, append(Some("user"), Some(0)));

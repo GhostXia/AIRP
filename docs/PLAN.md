@@ -22,9 +22,9 @@ Phase 1–5.3 的大量功能已在 2026-07-25 至 2026-07-26 合入；此后 Co
 
 在继续 5.4+ 功能扩张前，必须先处理 [issue #381](https://github.com/GhostXia/AIRP/issues/381) 指出的一致性问题：
 
-1. **Chat vs Conversation 双轨**：产品 WebUI 仍只绑定 legacy `/v1/chat/*`；Conversation runtime 不得在无切流决策下与 Chat 对称堆功能（切流或冻结二选一）。
+1. **Chat vs Conversation 双轨**：**v0.0.3 已拍板选项 B**——产品 WebUI / 发布验收只绑定 legacy `/v1/chat/*`；Conversation runtime **冻结功能对称扩张**（仅安全/bugfix/文档诚实性）。切流（选项 A）另需战略决策与用户批准，见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §5.0。
 2. **Turn 级跨资源提交 / 恢复**：单资源原子写不等于跨资源事务（见 #286/#342）。
-3. **插件 DNS 与锁/async 模型**：安全残差与并发正确性优先于新工具/新页面。
+3. **插件 DNS 与锁/async 模型**：DNS fail-closed + 请求时 pin 为近端安全门（#329 N3）；锁/并发正确性优先于新工具/新页面。
 
 详细排序与去重挂接以 #381 与 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §5 为准。
 
