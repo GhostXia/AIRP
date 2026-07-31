@@ -13,13 +13,16 @@
 
 use crate::daemon::DaemonState;
 use crate::error::AirpError;
-use crate::plugin_tool::{save_plugin_tools, PluginInvocation, PluginSideEffect, PluginToolConfig};
+use crate::plugin_tool::{
+    save_plugin_tools, PluginInvocation, PluginSideEffect, PluginToolConfig, DNS_BUDGET_SECS,
+};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 // ── 视图模型（脱敏） ─────────────────────────────────────────────────────────
 
@@ -227,12 +230,18 @@ pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
     // 校验单条配置（在持久化前）。
     // N2（PR #384 审计）：validate 含同步 DNS 解析与文件 canonicalize，
     // 必须在 spawn_blocking 中执行以免阻塞 tokio 异步运行时。
+    // CR-new（CodeRabbit 2026-07-31 复审）：spawn_blocking 不受超时约束，
+    // 显式套 DNS_BUDGET_SECS timeout 防止挂起；超时归 Internal（环境问题）。
     let data_root_for_validate = state.data_root.clone();
     let config_for_validate = config.clone();
-    tokio::task::spawn_blocking(move || config_for_validate.validate(&data_root_for_validate))
-        .await
-        .map_err(|e| AirpError::Internal(format!("plugin_tools 校验任务失败: {e}")))?
-        .map_err(|e| AirpError::BadRequest(format!("插件工具配置不合法: {e}")))?;
+    tokio::time::timeout(
+        Duration::from_secs(DNS_BUDGET_SECS as u64),
+        tokio::task::spawn_blocking(move || config_for_validate.validate(&data_root_for_validate)),
+    )
+    .await
+    .map_err(|_| AirpError::Internal(format!("plugin_tools 校验超时 ({}s)", DNS_BUDGET_SECS)))?
+    .map_err(|e| AirpError::Internal(format!("plugin_tools 校验任务失败: {e}")))?
+    .map_err(|e| AirpError::BadRequest(format!("插件工具配置不合法: {e}")))?;
     // Minor2: 与内建工具命名空间冲突检查由 validate_tool_name 完成（前缀保护）。
 
     // Major1: 串行化 read-persist-commit。

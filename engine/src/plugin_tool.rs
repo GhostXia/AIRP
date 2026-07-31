@@ -38,6 +38,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
+/// DNS / URL 校验预算（秒）。`inspect_webhook_url` 与 `PluginToolConfig::validate`
+/// 含同步 DNS 解析与文件 canonicalize，`spawn_blocking` 不受 reqwest 超时约束，
+/// 故显式套此预算：超过即 fail-closed（归 `Internal`），防止挂起拖垮调用方。
+pub const DNS_BUDGET_SECS: u32 = 5;
+
 /// 插件工具调用方式。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -529,21 +534,32 @@ impl PluginTool {
         // CR3/CR4（CodeRabbit PR #384）：inspect_webhook_url 含同步 DNS 解析，
         // 必须在 spawn_blocking 中执行以免阻塞 tokio 异步运行时；请求时 DNS/策略
         // 失败属环境问题而非客户端请求格式错误，归类为 Internal（与超时/发送失败一致）。
+        // CR-new（CodeRabbit 2026-07-31 复审）：spawn_blocking 不受 reqwest 超时约束，
+        // 显式套 DNS_BUDGET_SECS timeout，防止 DNS 挂起拖垮调用方；超时归 Internal。
         let url_owned = url.to_string();
-        let plan = tokio::task::spawn_blocking(move || inspect_webhook_url(&url_owned))
-            .await
-            .map_err(|e| {
-                AirpError::Internal(format!(
-                    "插件工具 {} webhook DNS 校验任务失败: {}",
-                    self.config.name, e
-                ))
-            })?
-            .map_err(|e| {
-                AirpError::Internal(format!(
-                    "插件工具 {} webhook 目标未通过请求时 DNS 校验: {}",
-                    self.config.name, e
-                ))
-            })?;
+        let plan = tokio::time::timeout(
+            Duration::from_secs(DNS_BUDGET_SECS as u64),
+            tokio::task::spawn_blocking(move || inspect_webhook_url(&url_owned)),
+        )
+        .await
+        .map_err(|_| {
+            AirpError::Internal(format!(
+                "插件工具 {} webhook DNS 校验超时 ({}s)",
+                self.config.name, DNS_BUDGET_SECS
+            ))
+        })?
+        .map_err(|e| {
+            AirpError::Internal(format!(
+                "插件工具 {} webhook DNS 校验任务失败: {}",
+                self.config.name, e
+            ))
+        })?
+        .map_err(|e| {
+            AirpError::Internal(format!(
+                "插件工具 {} webhook 目标未通过请求时 DNS 校验: {}",
+                self.config.name, e
+            ))
+        })?;
         let http_client = client_for_webhook_plan(&self.http_client, &plan)?;
         let mut request = http_client.post(url);
         for (key, value) in headers {
