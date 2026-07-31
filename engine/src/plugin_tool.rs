@@ -171,7 +171,51 @@ impl PluginToolConfig {
     }
 }
 
-/// 工具名规则：`^[a-z0-9_]{1,64}$`，且不允许以数字开头。
+/// #329 N2：内建工具名精确清单（与 `default_registry` 实际注册的工具名一一同步）。
+///
+/// `validate_tool_name` 用此清单拒绝插件工具与内建工具**精确重名**，作为
+/// `ToolRegistry::register` 注册期重名兜底的早期反馈层。新增/删除/改名内建
+/// 工具时必须同步更新此清单；`agent::tools::tests::registry::builtin_tool_names_match_default_registry`
+/// 测试会强制此清单与 `default_registry` 实际注册的工具名保持完全一致，防止
+/// "忘记更新清单"导致插件工具覆盖内建工具名。
+///
+/// 清单按字典序排列，与 `ToolRegistry::list` 排序一致，便于人眼对照。注意此清单
+/// 只做**精确名匹配**；下方 `BUILTIN_PREFIXES` 是补充的"家族概念前缀"保留策略，
+/// 两者各司其职，不互相替代。
+pub(crate) const BUILTIN_TOOL_NAMES: &[&str] = &[
+    "advance_clock",
+    "advance_plot",
+    "append_message",
+    "apply_enhanced_analysis",
+    "apply_lorebook",
+    "delete_character",
+    "echo",
+    "enhance_analysis",
+    "export_context_bundle",
+    "get_character",
+    "get_character_state",
+    "get_clock",
+    "get_lorebook",
+    "get_plot_status",
+    "get_preset",
+    "get_recent_context",
+    "list_characters",
+    "list_sessions",
+    "list_world_events",
+    "merge_lorebooks",
+    "npc_action",
+    "rollback_messages",
+    "seal_volume",
+    "session_search",
+    "start_session",
+    "trigger_world_event",
+    "update_character_state",
+    "update_lorebook",
+    "update_preset",
+    "update_relationship",
+];
+
+/// 工具名规则：`^[a-z0-9_]{1,64}$`，且不允许以数字开头；且不与内建工具重名。
 pub fn validate_tool_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("PluginTool.name 不能为空".to_string());
@@ -201,7 +245,11 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
             name
         ));
     }
-    // 保留前缀：与内建工具命名空间冲突的拒绝。
+    // #329 N2：与内建工具精确重名拒绝（与 default_registry 同步）。
+    if BUILTIN_TOOL_NAMES.contains(&name) {
+        return Err(format!("PluginTool.name '{}' 与内建工具重名", name));
+    }
+    // 保留前缀：与内建工具命名空间冲突的拒绝（补充的家族概念前缀策略）。
     const BUILTIN_PREFIXES: &[&str] = &[
         "echo",
         "session_",
@@ -1088,6 +1136,34 @@ mod tests {
         assert!(validate_tool_name("npc_x").is_err());
         assert!(validate_tool_name("plot_x").is_err());
         assert!(validate_tool_name("search_x").is_err());
+    }
+
+    /// #329 N2：验证精确重名拒绝。这些内建工具名不以 `BUILTIN_PREFIXES` 中
+    /// 任何前缀开头（`advance_clock` 不以 `plot_`/`echo` 等开头），仅靠
+    /// `BUILTIN_TOOL_NAMES` 精确匹配捕获——这正是原前缀策略遗漏的盲区。
+    #[test]
+    fn validate_tool_name_rejects_exact_builtin_collision() {
+        // 非前缀匹配的内建工具名：必须被 BUILTIN_TOOL_NAMES 精确捕获。
+        assert!(validate_tool_name("advance_clock").is_err());
+        assert!(validate_tool_name("advance_plot").is_err());
+        assert!(validate_tool_name("append_message").is_err());
+        assert!(validate_tool_name("apply_lorebook").is_err());
+        assert!(validate_tool_name("delete_character").is_err());
+        assert!(validate_tool_name("enhance_analysis").is_err());
+        assert!(validate_tool_name("get_character").is_err());
+        assert!(validate_tool_name("get_clock").is_err());
+        assert!(validate_tool_name("list_sessions").is_err());
+        assert!(validate_tool_name("merge_lorebooks").is_err());
+        assert!(validate_tool_name("rollback_messages").is_err());
+        assert!(validate_tool_name("seal_volume").is_err());
+        assert!(validate_tool_name("start_session").is_err());
+        assert!(validate_tool_name("trigger_world_event").is_err());
+        assert!(validate_tool_name("update_preset").is_err());
+        assert!(validate_tool_name("update_relationship").is_err());
+        // 形似但非精确重名 → 允许（前缀策略不拦截这些动词前缀）
+        assert!(validate_tool_name("advance_clock_v2").is_ok());
+        assert!(validate_tool_name("get_my_data").is_ok());
+        assert!(validate_tool_name("list_my_items").is_ok());
     }
 
     #[test]
