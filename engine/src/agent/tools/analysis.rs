@@ -29,6 +29,12 @@ use std::sync::Arc;
 // A1 修复：enhance 只读返回 diff 预览，不写盘；apply 是 destructive → dry-run 默认。
 // A2 修复：world_book/ 开头的文件名拒绝（世界书只读，不参与 enhance）。
 //
+// #160 A1：enhance/apply 路径原用 `path.exists()` + `std::fs::read_to_string`，
+//   在 `Tool::call` 返回的 Tokio future 内阻塞 executor worker。改为
+//   `tokio::fs::try_exists` / `read_to_string`，与 apply 写路径一致。
+// #160 A2：apply 路径复用了只描述 enhance 的 "not eligible for enhance" 文案，
+//   对调用者描述不准确。提取共享常量，文案同时覆盖 enhance/apply。
+//
 // L3 修复（issue #92）：enhance 真正调 LLM 增强 analysis MD。
 // A3 修复：不调 `state.adapter`（DaemonState 无此字段，计划书 placeholder 已规避），
 // 改用 `state.http_client` + `state.config` + `call_streaming_api_auto`，
@@ -126,6 +132,11 @@ pub async fn enhance_md_via_llm_shared(
     Ok(enhanced.trim().to_string())
 }
 
+/// #160 A2：world_book 条目只读，enhance 与 apply 路径共享同一文案。
+/// 原实现两路径各自硬编码 "not eligible for enhance"，apply 路径描述不准确。
+const WORLD_BOOK_REJECT_MSG: &str =
+    "world_book entries are read-only and not eligible for enhance or apply (issue #87)";
+
 /// `enhance_analysis`：读 analysis MD，调 LLM 增强，返回 diff 预览（A1：不写盘）。
 /// readonly。A2：拒绝 world_book/ 前缀。
 /// L3：真正调 LLM（call_streaming_api_auto，与 chat_pipeline 同路径）。
@@ -162,21 +173,20 @@ impl Tool for EnhanceAnalysisTool {
 
             // A2 修复：世界书条目只读，不参与 enhance
             if filename.starts_with("world_book/") {
-                return Err(AirpError::BadRequest(
-                    "world_book entries are read-only and not eligible for enhance (issue #87)"
-                        .into(),
-                ));
+                return Err(AirpError::BadRequest(WORLD_BOOK_REJECT_MSG.into()));
             }
 
             let cid = required_character_id(&params)?;
             let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
-            if !path.exists() {
+            // #160 A1：原 `path.exists()` + `std::fs::read_to_string` 在 async
+            // future 内阻塞 executor worker；改 tokio::fs 与 apply 写路径一致。
+            if !tokio::fs::try_exists(&path).await? {
                 return Err(AirpError::NotFound(format!(
                     "analysis file {} not found for character {}",
                     filename, cid
                 )));
             }
-            let original_md = std::fs::read_to_string(&path)?;
+            let original_md = tokio::fs::read_to_string(&path).await?;
 
             // L3：调共享 helper 增强 MD（审计 CR5：抽公共逻辑防两路径漂移）。
             let enhanced_md = enhance_md_via_llm_shared(&state, &original_md, filename).await?;
@@ -234,15 +244,13 @@ impl Tool for ApplyEnhancedAnalysisTool {
 
             // A2 修复：世界书条目不可 apply
             if filename.starts_with("world_book/") {
-                return Err(AirpError::BadRequest(
-                    "world_book entries are read-only and not eligible for enhance (issue #87)"
-                        .into(),
-                ));
+                return Err(AirpError::BadRequest(WORLD_BOOK_REJECT_MSG.into()));
             }
 
             let cid = required_character_id(&params)?;
             let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
-            if !path.exists() {
+            // #160 A1：原 `path.exists()` 同步阻塞；改 tokio::fs::try_exists。
+            if !tokio::fs::try_exists(&path).await? {
                 return Err(AirpError::NotFound(format!(
                     "analysis file {} not found for character {}",
                     filename, cid
