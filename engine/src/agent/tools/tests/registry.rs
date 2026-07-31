@@ -288,3 +288,28 @@ fn default_registry_exposes_sorted_30_tool_snapshot_with_descriptions_and_side_e
         );
     }
 }
+
+/// #329 N2：`plugin_tool::BUILTIN_TOOL_NAMES` 必须与 `default_registry` 实际注册的
+/// 工具名保持完全一致（数量、名称、拼写、字典序）。
+///
+/// 新增/删除/改名内建工具时若忘记更新 `plugin_tool::BUILTIN_TOOL_NAMES`，此测试会
+/// 立刻失败，迫使开发者 conscious 同步——防止"忘记更新清单"导致
+/// `validate_tool_name` 漏拒插件工具与内建工具重名。
+#[test]
+fn builtin_tool_names_match_default_registry() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    let reg = default_registry(state);
+    let actual: Vec<&str> = reg.list().iter().map(|t| t.name).collect();
+
+    // BUILTIN_TOOL_NAMES 在源码中已按字典序声明；这里再 sort 一次防御性编程。
+    let mut expected: Vec<&str> = crate::plugin_tool::BUILTIN_TOOL_NAMES.to_vec();
+    expected.sort();
+
+    assert_eq!(
+        actual, expected,
+        "BUILTIN_TOOL_NAMES must exactly match default_registry tool names; \
+         if you added/removed/renamed a builtin tool, update BUILTIN_TOOL_NAMES \
+         in engine/src/plugin_tool.rs"
+    );
+}
