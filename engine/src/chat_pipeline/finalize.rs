@@ -51,6 +51,9 @@ pub(super) async fn run_finalize(
     //     在 state persist 失败时：消息已落盘用户可见，state 略滞后但下轮
     //     可重新抽取；消息丢失比 state 滞后更不可恢复。
     if let Some(ref cid) = ctx.character_id {
+        if let Some(lease) = ctx.session_operation_lease.as_mut() {
+            lease.begin_commit()?;
+        }
         let (stripped, live_state) = extract_state_content(&cleaned_acc);
         if !stripped.trim().is_empty() {
             if let Some(snapshot) = ctx.regen_snapshot.as_ref() {

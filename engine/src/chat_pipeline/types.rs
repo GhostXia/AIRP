@@ -10,9 +10,10 @@ use std::sync::Arc;
 
 use crate::adapter::{BackendEngine, ChatMessage, GenerationParams, ProviderConfig};
 use crate::config::VolumeConfig;
-use crate::domain::{RegenSnapshot, SessionOperationLease};
+use crate::domain::RegenSnapshot;
 use crate::fsm::StreamingFsm;
 use crate::orchestrator::trace::PromptAssemblyTrace;
+use crate::session_coordinator::SessionCommandLease;
 use crate::types::{CharacterId, SessionId, UserId};
 use crate::xml_unpacker::{StreamingXmlUnpacker, UnpackedChunk};
 
@@ -75,7 +76,7 @@ pub struct FinalizerCtx {
     pub(crate) regen_snapshot: Option<RegenSnapshot>,
     /// Logical session ownership carried by the SSE processing task. It is
     /// released after the chat/state commit and before slow volume side effects.
-    pub(crate) session_operation_lease: Option<SessionOperationLease>,
+    pub(crate) session_operation_lease: Option<SessionCommandLease>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

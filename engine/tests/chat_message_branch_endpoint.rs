@@ -38,6 +38,7 @@ async fn setup() -> (Arc<DaemonState>, tempfile::TempDir) {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        session_coordinators: Default::default(),
         provider_router: Default::default(),
         plugin_tools: Default::default(),
         provider_routing_update: Default::default(),

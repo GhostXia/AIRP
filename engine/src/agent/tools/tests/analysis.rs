@@ -34,6 +34,7 @@ async fn enhance_analysis_returns_preview_and_rejects_world_book() {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        session_coordinators: Default::default(),
         provider_router: Default::default(),
         provider_routing_update: Default::default(),
         plugin_tools: Default::default(),

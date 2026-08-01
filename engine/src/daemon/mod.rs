@@ -43,24 +43,24 @@ use handlers::{
     export_session_timeline_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
     get_character_avatar, get_character_card, get_character_lorebook,
     get_character_revision_endpoint, get_character_state, get_character_state_history,
-    get_character_state_schema, get_chat_history, get_conversation_capabilities_endpoint,
-    get_conversation_endpoint, get_conversation_events_endpoint,
-    get_conversation_migration_export_endpoint, get_conversation_turn_endpoint,
-    get_conversation_turn_observability_endpoint, get_drift, get_effective_persona_endpoint,
-    get_lorebook_graph_endpoint, get_persona_endpoint, get_persona_multi_endpoint, get_plot_arc,
-    get_preset_endpoint, get_resident_memory, get_routing_endpoint, get_scene_endpoint,
-    get_session_timeline_endpoint, get_settings, get_style_profile, get_template_endpoint,
-    get_user_model, get_world_events, import_character, import_preset_endpoint,
-    instantiate_template_endpoint, list_agent_tools, list_character_revisions_endpoint,
-    list_characters, list_conversation_policies_endpoint, list_conversations_endpoint,
-    list_images_endpoint, list_models, list_personas_endpoint, list_plugin_tools_endpoint,
-    list_presets_endpoint, list_providers_endpoint, list_scenes_endpoint, list_sessions_endpoint,
-    list_style_profiles, list_templates_endpoint, plan_conversation_migration_endpoint,
-    preview_chat_assembly, reextract_character_assets, regen_chat, resolve_provider_endpoint,
-    rollback_chat, rollback_conversation_migration_endpoint, rollback_drift, serve_image_endpoint,
-    serve_session_image_endpoint, style_learn, style_review, swipe_chat, switch_branch,
-    test_plugin_tool_endpoint, unbind_persona_endpoint, update_character_card,
-    update_character_lorebook, update_drift, update_persona_endpoint,
+    get_character_state_schema, get_chat_history, get_chat_session_state,
+    get_conversation_capabilities_endpoint, get_conversation_endpoint,
+    get_conversation_events_endpoint, get_conversation_migration_export_endpoint,
+    get_conversation_turn_endpoint, get_conversation_turn_observability_endpoint, get_drift,
+    get_effective_persona_endpoint, get_lorebook_graph_endpoint, get_persona_endpoint,
+    get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint, get_resident_memory,
+    get_routing_endpoint, get_scene_endpoint, get_session_timeline_endpoint, get_settings,
+    get_style_profile, get_template_endpoint, get_user_model, get_world_events, import_character,
+    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
+    list_character_revisions_endpoint, list_characters, list_conversation_policies_endpoint,
+    list_conversations_endpoint, list_images_endpoint, list_models, list_personas_endpoint,
+    list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
+    list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
+    plan_conversation_migration_endpoint, preview_chat_assembly, reextract_character_assets,
+    regen_chat, resolve_provider_endpoint, rollback_chat, rollback_conversation_migration_endpoint,
+    rollback_drift, serve_image_endpoint, serve_session_image_endpoint, style_learn, style_review,
+    swipe_chat, switch_branch, test_plugin_tool_endpoint, unbind_persona_endpoint,
+    update_character_card, update_character_lorebook, update_drift, update_persona_endpoint,
     update_persona_multi_endpoint, update_plot_arc, update_providers_endpoint,
     update_resident_memory, update_routing_endpoint, update_settings, update_user_model,
     upsert_plugin_tool_endpoint,
@@ -78,6 +78,8 @@ pub struct DaemonState {
     pub config: std::sync::RwLock<MutableConfig>,
     /// 串行 settings 候选构造、持久化与 live config 提交，不阻塞其他 config readers。
     pub settings_update: SettingsUpdateCoordinator,
+    /// Per-session command owner and observable lifecycle registry.
+    pub session_coordinators: crate::session_coordinator::SessionCoordinatorRegistry,
     /// Phase 5.1：多 provider 路由表。空时走 legacy 单 provider 路径。
     /// 由 `data/providers.json` + `data/provider_keys.json` 加载，
     /// `POST /v1/providers` / `PUT /v1/provider-routing` 在线热更新。
@@ -354,6 +356,7 @@ pub fn create_router_with_conversation_policy_registry(
         .route("/v1/agent/run", post(agent_run))
         .route("/v1/agent/tools", get(list_agent_tools))
         .route("/v1/chat/history", post(get_chat_history))
+        .route("/v1/chat/session-state", post(get_chat_session_state))
         .route("/v1/chat/rollback", post(rollback_chat))
         .route("/v1/chat/regen", post(regen_chat))
         .route("/v1/chat/continue", post(continue_chat))

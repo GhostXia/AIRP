@@ -243,3 +243,13 @@ pub struct HistoryQuery {
     /// #37：cursor；某条消息的 durable ID，返回该 ID 严格之前（更早）的消息。
     pub before: Option<String>,
 }
+
+/// `POST /v1/chat/session-state` request for the observable Coordinator state.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionStateQuery {
+    pub character_id: CharacterId,
+    pub session_id: Option<SessionId>,
+    /// Optional user scope, following the mutation endpoints' effective-root rule.
+    pub user_id: Option<String>,
+}

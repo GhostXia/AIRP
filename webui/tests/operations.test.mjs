@@ -7,6 +7,24 @@ const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta
 const consoleScript = await readFile(new URL('../assets/console-runtime.js', import.meta.url), 'utf8');
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
 const chatPage = await readFile(new URL('../screens/02-chat-space.html', import.meta.url), 'utf8');
+const chatStyle = await readFile(new URL('../assets/chat-space.css', import.meta.url), 'utf8');
+
+// ── #394 O1: observable Session Coordinator ───────────────────────────────
+
+test('chat space observes coordinator state and blocks conflicting mutations', () => {
+  assert.match(chatScript, /client\.request\('POST', '\/v1\/chat\/session-state'/);
+  assert.match(chatScript, /sessionMutationBlocked\(\)/);
+  assert.match(chatScript, /coordinatorPhase !== 'idle'/);
+  assert.match(chatScript, /error\.status === 409.*session_busy/);
+  assert.match(chatScript, /error\.status === 404[\s\S]*coordinatorStateSupported = false/);
+});
+
+test('coordinator status reuses the authoritative sample tag tokens', () => {
+  assert.match(chatPage, /id="session-operation-status"/);
+  assert.match(chatPage, /class="tag tag-warning mono session-operation-status"/);
+  assert.match(chatStyle, /\.session-operation-status \{ margin-right: var\(--space-2\); \}/);
+  assert.doesNotMatch(chatStyle, /session-operation-status[^}]*#[0-9a-f]{3,8}/i);
+});
 
 // ── B11: Delete character ──────────────────────────────────────────────────
 

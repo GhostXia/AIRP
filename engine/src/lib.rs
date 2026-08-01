@@ -50,6 +50,7 @@ pub mod provider_routing;
 pub mod quota;
 pub mod scene;
 pub(crate) mod secret_store;
+pub mod session_coordinator;
 pub mod style;
 pub mod timeline_export;
 pub mod types;

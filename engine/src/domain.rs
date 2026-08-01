@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::adapter::ChatMessage;
 use crate::chat_store::ChatLog;
@@ -25,117 +25,11 @@ type SessionLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
 type CharacterLockMap = Mutex<HashMap<String, Arc<RwLock<()>>>>;
 type StateLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
 type PersonaLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
-type SessionOperationRegistry = Mutex<HashMap<String, Weak<Mutex<SessionOperationState>>>>;
 
 static SESSION_LOCKS: OnceLock<SessionLockMap> = OnceLock::new();
 static CHARACTER_LOCKS: OnceLock<CharacterLockMap> = OnceLock::new();
 static STATE_LOCKS: OnceLock<StateLockMap> = OnceLock::new();
 static PERSONA_LOCKS: OnceLock<PersonaLockMap> = OnceLock::new();
-static SESSION_OPERATION_REGISTRY: OnceLock<SessionOperationRegistry> = OnceLock::new();
-
-#[derive(Debug)]
-struct SessionOperationState {
-    active_generation_id: Option<String>,
-}
-
-/// Logical, non-blocking ownership of one session mutation.
-///
-/// This is deliberately not a mutex guard held across LLM streaming. The active
-/// bit serializes admission while the lease is carried by the pipeline; the
-/// underlying mutex is held only for short state transitions.
-pub(crate) struct SessionOperationLease {
-    key: String,
-    state: Arc<Mutex<SessionOperationState>>,
-    generation_id: String,
-    released: bool,
-}
-
-impl SessionOperationLease {
-    pub(crate) fn generation_id(&self) -> &str {
-        &self.generation_id
-    }
-
-    pub(crate) fn matches_generation(&self, generation_id: &str) -> bool {
-        !self.released && self.generation_id == generation_id
-    }
-
-    pub(crate) fn release(&mut self) {
-        if self.released {
-            return;
-        }
-
-        let registry = SESSION_OPERATION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
-        let mut entries = registry
-            .lock()
-            .expect("session operation registry poisoned");
-        let mut state = self.state.lock().expect("session operation state poisoned");
-        if state.active_generation_id.as_deref() == Some(self.generation_id.as_str()) {
-            state.active_generation_id = None;
-        }
-        if entries
-            .get(&self.key)
-            .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(&self.state)))
-        {
-            entries.remove(&self.key);
-        }
-        self.released = true;
-    }
-}
-
-impl Drop for SessionOperationLease {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
-
-fn session_operation_key(
-    data_root: &Path,
-    character_id: &CharacterId,
-    session_id: Option<&SessionId>,
-) -> String {
-    let session = session_id
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "legacy".to_string());
-    format!("{}::{character_id}/{session}", data_root.to_string_lossy())
-}
-
-/// Reserve one session operation. A competing operation receives the public,
-/// stable `session_busy` conflict instead of observing a half-finished ChatLog.
-pub(crate) fn try_acquire_session_operation(
-    data_root: &Path,
-    character_id: &CharacterId,
-    session_id: Option<&SessionId>,
-) -> Result<SessionOperationLease, AirpError> {
-    let key = session_operation_key(data_root, character_id, session_id);
-    let registry = SESSION_OPERATION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut entries = registry
-        .lock()
-        .expect("session operation registry poisoned");
-    entries.retain(|_, entry| entry.strong_count() > 0);
-    let state = match entries.get(&key).and_then(Weak::upgrade) {
-        Some(state) => state,
-        None => {
-            let state = Arc::new(Mutex::new(SessionOperationState {
-                active_generation_id: None,
-            }));
-            entries.insert(key.clone(), Arc::downgrade(&state));
-            state
-        }
-    };
-    let generation_id = ulid::new_id();
-    let mut operation = state.lock().expect("session operation state poisoned");
-    if operation.active_generation_id.is_some() {
-        return Err(AirpError::Conflict("session_busy".to_string()));
-    }
-    operation.active_generation_id = Some(generation_id.clone());
-    drop(operation);
-    Ok(SessionOperationLease {
-        key,
-        state,
-        generation_id,
-        released: false,
-    })
-}
 
 /// Immutable target state captured before a regen proposal is generated.
 #[derive(Debug, Clone)]
@@ -4028,19 +3922,6 @@ mod tests {
             .commit_regen(&character, None, &snapshot, "new")
             .unwrap();
         assert_eq!(committed.message_candidates[1], vec!["old", "new"]);
-    }
-
-    #[test]
-    fn session_operation_lease_rejects_conflicts_and_releases_on_drop() {
-        let tmp = tempfile::tempdir().unwrap();
-        let character = CharacterId::new("lease-char").unwrap();
-        let lease = try_acquire_session_operation(tmp.path(), &character, None).unwrap();
-        assert!(matches!(
-            try_acquire_session_operation(tmp.path(), &character, None),
-            Err(AirpError::Conflict(message)) if message == "session_busy"
-        ));
-        drop(lease);
-        assert!(try_acquire_session_operation(tmp.path(), &character, None).is_ok());
     }
 
     // ── PR #270 audit M2/M3: domain-level branch behavior ─────────────────

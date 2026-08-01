@@ -77,6 +77,7 @@ mod tests {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            session_coordinators: Default::default(),
             provider_router: Default::default(),
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
@@ -1002,6 +1003,7 @@ mod tests_ms6 {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            session_coordinators: Default::default(),
             provider_router: Default::default(),
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
@@ -1233,6 +1235,7 @@ mod tests_issue27 {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            session_coordinators: Default::default(),
             provider_router: Default::default(),
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
@@ -1395,6 +1398,7 @@ mod tests_dx1 {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            session_coordinators: Default::default(),
             provider_router: Default::default(),
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
@@ -1954,6 +1958,7 @@ mod tests_a1b_pipeline_e2e {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            session_coordinators: Default::default(),
             provider_router: Default::default(),
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
@@ -2499,8 +2504,15 @@ mod tests_b1_finalize_empty_stripped {
                 },
             )
             .unwrap();
-        let lease =
-            crate::domain::try_acquire_session_operation(&data_root, &character, None).unwrap();
+        let registry = crate::session_coordinator::SessionCoordinatorRegistry::default();
+        let lease = registry
+            .try_submit(
+                &data_root,
+                &character,
+                None,
+                crate::session_coordinator::SessionCommand::Regen,
+            )
+            .unwrap();
         let snapshot = service
             .regen_snapshot(&character, None, lease.generation_id().to_string())
             .unwrap();
@@ -2528,8 +2540,15 @@ mod tests_b1_finalize_empty_stripped {
         service
             .append_with_candidates(&character, None, vec!["old reply".to_string()])
             .unwrap();
-        let lease =
-            crate::domain::try_acquire_session_operation(&data_root, &character, None).unwrap();
+        let registry = crate::session_coordinator::SessionCoordinatorRegistry::default();
+        let lease = registry
+            .try_submit(
+                &data_root,
+                &character,
+                None,
+                crate::session_coordinator::SessionCommand::Regen,
+            )
+            .unwrap();
         let snapshot = service
             .regen_snapshot(&character, None, lease.generation_id().to_string())
             .unwrap();

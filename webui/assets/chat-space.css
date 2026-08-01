@@ -22,6 +22,8 @@
 .runtime-error { border-color: var(--danger); background: var(--danger-tint); }
 .event-log-list { display: flex; flex-direction: column; }
 .chat-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
+.session-operation-status { margin-right: var(--space-2); }
+.message-action:disabled, .swipe-btn:disabled { opacity: 0.5; cursor: default; }
 .message-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; opacity: 0; transition: opacity .15s ease; }
 .bubble:hover .message-actions, .bubble:focus-within .message-actions { opacity: 1; }
 .message-action { border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; font: 10px/1.3 var(--font-mono); padding: 2px 4px; }

@@ -36,6 +36,7 @@ pub(super) fn make_state(data_root: PathBuf) -> Arc<DaemonState> {
         http_client: reqwest::Client::new(),
         fts: Default::default(),
         settings_update: Default::default(),
+        session_coordinators: Default::default(),
         provider_router: Default::default(),
         provider_routing_update: Default::default(),
         plugin_tools: Default::default(),
