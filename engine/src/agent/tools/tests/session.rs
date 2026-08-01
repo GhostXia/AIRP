@@ -384,6 +384,7 @@ async fn agent_session_writes_respect_an_active_chat_owner() {
         "interrupted-agent-generation".to_string(),
         true,
         false,
+        false,
     )
     .unwrap();
     let recovery_error = reg

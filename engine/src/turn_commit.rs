@@ -1,4 +1,5 @@
-//! Durable marker for the chat message + live-state commit boundary.
+//! Durable marker for the chat message + live-state + current-volume commit
+//! boundary.
 //!
 //! A marker is created before either resource is mutated and removed only
 //! after both stages complete.  A surviving or unreadable marker is a
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AirpError;
 use crate::types::{CharacterId, SessionId};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const MARKER_FILE: &str = "turn_commit.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +24,7 @@ pub(crate) enum TurnCommitPhase {
     Prepared,
     MessageCommitted,
     StateCommitted,
+    VolumeCommitted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +34,7 @@ pub(crate) struct TurnCommitMarker {
     pub(crate) phase: TurnCommitPhase,
     message_expected: bool,
     state_expected: bool,
+    volume_expected: bool,
 }
 
 pub(crate) struct TurnCommit {
@@ -48,6 +51,7 @@ impl TurnCommit {
         generation_id: String,
         message_expected: bool,
         state_expected: bool,
+        volume_expected: bool,
     ) -> Result<Self, AirpError> {
         let path = marker_path(data_root, character_id, session_id);
         let parent = path
@@ -60,6 +64,7 @@ impl TurnCommit {
             phase: TurnCommitPhase::Prepared,
             message_expected,
             state_expected,
+            volume_expected,
         };
         persist_new(&path, &marker)?;
         Ok(Self {
@@ -100,8 +105,30 @@ impl TurnCommit {
         Ok(())
     }
 
-    pub(crate) fn complete(mut self) -> Result<(), AirpError> {
+    pub(crate) fn mark_volume_committed(&mut self) -> Result<(), AirpError> {
         let expected_phase = if self.marker.state_expected {
+            TurnCommitPhase::StateCommitted
+        } else if self.marker.message_expected {
+            TurnCommitPhase::MessageCommitted
+        } else {
+            TurnCommitPhase::Prepared
+        };
+        if self.marker.phase != expected_phase {
+            return Err(AirpError::Internal(
+                "turn commit volume stage is out of order".to_string(),
+            ));
+        }
+        if self.marker.volume_expected {
+            self.marker.phase = TurnCommitPhase::VolumeCommitted;
+            persist(&self.path, &self.marker)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn complete(mut self) -> Result<(), AirpError> {
+        let expected_phase = if self.marker.volume_expected {
+            TurnCommitPhase::VolumeCommitted
+        } else if self.marker.state_expected {
             TurnCommitPhase::StateCommitted
         } else if self.marker.message_expected {
             TurnCommitPhase::MessageCommitted
@@ -160,6 +187,7 @@ pub(crate) fn pending_turn(
                 phase: marker.phase,
                 message_expected: marker.message_expected,
                 state_expected: marker.state_expected,
+                volume_expected: marker.volume_expected,
             })
         }
         Err(error) => {
@@ -176,6 +204,7 @@ fn unreadable_marker() -> TurnCommitMarker {
         phase: TurnCommitPhase::Prepared,
         message_expected: true,
         state_expected: true,
+        volume_expected: true,
     }
 }
 
@@ -245,6 +274,7 @@ mod tests {
             "generation-a".to_string(),
             true,
             true,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -292,6 +322,7 @@ mod tests {
                 phase: TurnCommitPhase::Prepared,
                 message_expected: true,
                 state_expected: true,
+                volume_expected: true,
             })
             .unwrap(),
         )
@@ -313,6 +344,7 @@ mod tests {
             "generation-first".to_string(),
             true,
             true,
+            false,
         )
         .unwrap();
 
@@ -324,6 +356,7 @@ mod tests {
                 "generation-second".to_string(),
                 true,
                 true,
+                false,
             ),
             Err(AirpError::Conflict(message)) if message == "session_recovery_required"
         ));
@@ -346,6 +379,7 @@ mod tests {
             "generation-state".to_string(),
             false,
             true,
+            false,
         )
         .unwrap();
         state_only.mark_message_committed().unwrap();
@@ -363,6 +397,7 @@ mod tests {
             "generation-message".to_string(),
             true,
             false,
+            false,
         )
         .unwrap();
         message_only.mark_message_committed().unwrap();
@@ -372,6 +407,35 @@ mod tests {
             TurnCommitPhase::MessageCommitted
         );
         message_only.complete().unwrap();
+    }
+
+    #[test]
+    fn marker_tracks_volume_before_completion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-volume").unwrap();
+        let mut commit = TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "generation-volume".to_string(),
+            true,
+            true,
+            true,
+        )
+        .unwrap();
+
+        commit.mark_message_committed().unwrap();
+        commit.mark_state_committed().unwrap();
+        assert_eq!(
+            pending_turn(tmp.path(), &character, None).unwrap().phase,
+            TurnCommitPhase::StateCommitted
+        );
+        commit.mark_volume_committed().unwrap();
+        assert_eq!(
+            pending_turn(tmp.path(), &character, None).unwrap().phase,
+            TurnCommitPhase::VolumeCommitted
+        );
+        commit.complete().unwrap();
     }
 
     #[test]
@@ -386,6 +450,7 @@ mod tests {
             Some(&first),
             "generation-named".to_string(),
             true,
+            false,
             false,
         )
         .unwrap();
@@ -409,6 +474,7 @@ mod tests {
             "generation-order".to_string(),
             true,
             true,
+            false,
         )
         .unwrap();
 

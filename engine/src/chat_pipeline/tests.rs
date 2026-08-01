@@ -2789,6 +2789,61 @@ mod tests_bug_d_finalize_order {
         );
     }
 
+    #[tokio::test]
+    async fn finalize_retains_state_marker_when_current_volume_write_fails() {
+        let (_tmp, data_root, character) =
+            setup_character_with_user_msg("finalize-bug-d-volume-fails");
+        let session_dir =
+            crate::data_dir::resolve_session_dir(&data_root, character.as_str(), None).unwrap();
+        let current = session_dir.join("current.md");
+        std::fs::remove_file(&current).unwrap();
+        std::fs::create_dir(&current).unwrap();
+
+        let mut ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
+        ctx.session_dir = Some(session_dir);
+        let output =
+            "Message and state persist before volume.\n<state>{\"hp\":1}</state>".to_string();
+        let error = run_finalize(ctx, output.clone(), output)
+            .await
+            .expect_err("current.md append failure must retain a recovery marker");
+        assert!(matches!(error, crate::error::AirpError::Io(_)));
+
+        let marker = crate::turn_commit::pending_turn(&data_root, &character, None)
+            .expect("failed volume write must retain a recovery marker");
+        assert_eq!(
+            marker.phase,
+            crate::turn_commit::TurnCommitPhase::StateCommitted
+        );
+        assert_eq!(
+            crate::session_coordinator::SessionCoordinatorRegistry::default()
+                .status(&data_root, &character, None)
+                .phase,
+            crate::session_coordinator::SessionPhase::Recovering
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_commits_message_state_and_current_volume_together() {
+        let (_tmp, data_root, character) =
+            setup_character_with_user_msg("finalize-bug-d-volume-success");
+        let session_dir =
+            crate::data_dir::resolve_session_dir(&data_root, character.as_str(), None).unwrap();
+        let mut ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
+        ctx.session_dir = Some(session_dir.clone());
+        let output =
+            "The party reaches the gate.\n<state>{\"location\":\"gate\"}</state>".to_string();
+
+        run_finalize(ctx, output.clone(), output).await.unwrap();
+
+        assert!(crate::volume_store::read_current(&session_dir)
+            .unwrap()
+            .contains("The party reaches the gate."));
+        assert!(
+            crate::turn_commit::pending_turn(&data_root, &character, None).is_none(),
+            "the marker is removed only after message, state, and current.md persist"
+        );
+    }
+
     /// Bug D 回归：assistant 消息只含 `<state>` 块（stripped 为空）时，
     /// 不应创建 assistant 消息，但 state 仍应持久化。
     /// 这验证 state persist 在 message append 分支跳过后仍能执行。

@@ -415,6 +415,7 @@ mod tests {
             "interrupted-generation".to_string(),
             true,
             true,
+            false,
         )
         .unwrap();
 
@@ -459,6 +460,7 @@ mod tests {
             lease.generation_id().to_string(),
             true,
             true,
+            false,
         )
         .unwrap();
 
