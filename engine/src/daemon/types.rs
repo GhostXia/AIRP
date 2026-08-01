@@ -253,3 +253,14 @@ pub struct SessionStateQuery {
     /// Optional user scope, following the mutation endpoints' effective-root rule.
     pub user_id: Option<String>,
 }
+
+/// `POST /v1/chat/cancel` request for one active generation.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelGenerationRequest {
+    pub character_id: CharacterId,
+    pub session_id: Option<SessionId>,
+    pub generation_id: String,
+    /// Optional user scope, following the generation endpoints' effective-root rule.
+    pub user_id: Option<String>,
+}

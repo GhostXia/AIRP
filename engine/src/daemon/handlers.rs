@@ -47,9 +47,9 @@ pub(super) use characters::{
     reextract_character_assets, update_character_card,
 };
 pub(super) use chat::{
-    chat_completion, continue_chat, delete_message, edit_message, get_chat_history,
-    get_chat_session_state, preview_chat_assembly, regen_chat, rollback_chat, swipe_chat,
-    switch_branch,
+    cancel_chat_generation, chat_completion, continue_chat, delete_message, edit_message,
+    get_chat_history, get_chat_session_state, preview_chat_assembly, regen_chat, rollback_chat,
+    swipe_chat, switch_branch,
 };
 pub(super) use conversations::{
     append_conversation_event_endpoint, cancel_conversation_turn_endpoint,

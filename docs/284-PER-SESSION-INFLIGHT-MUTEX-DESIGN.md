@@ -113,7 +113,15 @@ O 的价值是长期收敛，而不是为了“更先进”重写。只有在 N 
 - generation 期间的 `swipe`、`edit`、`delete`、`rollback` 同样返回 `409 session_busy`；
 - generation 完成后，基于同一 durable message id 的操作可重试；
 - 真正不存在或不属于 session 的 message id 保留原有 `BadRequest`，不得与 busy 混用；
-- `replace`/取消旧 generation 的产品语义不在本实现范围，后续需独立合同。
+- `replace` 旧 generation 不在本实现范围；显式取消只接受当前 `generation_id`。
+
+取消合同：
+
+- `POST /v1/chat/cancel` 必须同时提供 session scope 与 `generation_id`；
+- 只有 `Generating` 可协作取消；stale id 返回 `409 stale_generation`；
+- 已进入 `Committing` 返回 `409 generation_committing`，不得伪装成已取消；
+- HTTP/SSE 客户端断线本身不是权威取消命令，WebUI 应先请求 Engine 取消并继续读取最终 `commit_state`；
+- cancel、provider timeout 和普通 upstream failure 使用不同 SSE `error.code`，但都不得泄露 provider 私有错误正文。
 
 WebUI 应在 generation 期间禁用冲突操作，并在收到 `session_busy` 后保留可恢复提示。
 

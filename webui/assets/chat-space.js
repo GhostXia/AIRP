@@ -23,6 +23,7 @@
   let branchMeta = null; // { activePath: Set, activeLeaf, parents: [] }
   let historyCursor = null; // { hasMore, oldestId } — #122 窗口化分页
   let coordinatorPhase = 'idle';
+  let coordinatorGenerationId = null;
   let coordinatorStateSupported = true;
   let coordinatorStatePending = false;
 
@@ -71,6 +72,7 @@
 
   function setCoordinatorState(state) {
     coordinatorPhase = state && typeof state.phase === 'string' ? state.phase : 'idle';
+    coordinatorGenerationId = state && typeof state.generation_id === 'string' ? state.generation_id : null;
     const status = $('#session-operation-status');
     const labels = { generating: '会话：生成中', committing: '会话：提交中', recovering: '会话：恢复中' };
     status.textContent = labels[coordinatorPhase] || '';
@@ -78,6 +80,42 @@
     status.className = 'tag mono session-operation-status ' + (coordinatorPhase === 'recovering' ? 'tag-danger' : 'tag-warning');
     document.querySelectorAll('.message-action, .swipe-btn').forEach(button => { button.disabled = coordinatorPhase !== 'idle'; });
     if (!streamController) setComposer(Boolean(sessionId));
+  }
+
+  async function cancelActiveGeneration(controller) {
+    const requestedCharacter = characterId;
+    const requestedSession = sessionId;
+    let abortLocalStream = true;
+    try {
+      let generationId = coordinatorGenerationId;
+      if (!generationId) {
+        const state = await client.request('POST', '/v1/chat/session-state', {
+          character_id: requestedCharacter,
+          session_id: requestedSession,
+        });
+        generationId = state && state.generation_id;
+      }
+      if (generationId) {
+        await client.request('POST', '/v1/chat/cancel', {
+          character_id: requestedCharacter,
+          session_id: requestedSession,
+          generation_id: generationId,
+        });
+        // Keep reading until Engine reports the authoritative cancellation
+        // commit_state. Aborting here would discard that safety contract.
+        abortLocalStream = false;
+      }
+    } catch (error) {
+      const message = AIRPApi.errorMessage(error.data, error.message);
+      if (message.includes('generation_committing')) {
+        abortLocalStream = false;
+        $('#stream-status').textContent = '正在提交，无法取消';
+      } else if (!message.includes('stale_generation')) {
+        log('llm.stream.cancel.error', message);
+      }
+    } finally {
+      if (abortLocalStream) controller.abort();
+    }
   }
 
   async function refreshCoordinatorState() {
@@ -508,7 +546,9 @@
 
   async function send() {
     if (streamController) {
-      streamController.abort();
+      const controller = streamController;
+      $('#stream-status').textContent = '正在停止…';
+      void cancelActiveGeneration(controller);
       return;
     }
     if (coordinatorPhase !== 'idle') return;

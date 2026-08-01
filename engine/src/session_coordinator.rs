@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::AirpError;
 use crate::types::{CharacterId, SessionId};
@@ -72,6 +73,7 @@ impl SessionCoordinatorStatus {
 #[derive(Debug)]
 struct CoordinatorState {
     status: SessionCoordinatorStatus,
+    cancellation: Option<CancellationToken>,
 }
 
 type Registry = HashMap<String, Weak<Mutex<CoordinatorState>>>;
@@ -104,6 +106,7 @@ impl SessionCoordinatorRegistry {
             None => {
                 let state = Arc::new(Mutex::new(CoordinatorState {
                     status: SessionCoordinatorStatus::idle(),
+                    cancellation: None,
                 }));
                 entries.insert(key.clone(), Arc::downgrade(&state));
                 state
@@ -119,14 +122,53 @@ impl SessionCoordinatorRegistry {
             command: Some(command),
             generation_id: Some(generation_id.clone()),
         };
+        let cancellation = matches!(
+            command,
+            SessionCommand::Completion | SessionCommand::Regen | SessionCommand::Continue
+        )
+        .then(CancellationToken::new);
+        coordinator.cancellation = cancellation.clone();
         drop(coordinator);
         Ok(SessionCommandLease {
             registry: self.clone(),
             key,
             state,
             generation_id,
+            cancellation,
             released: false,
         })
+    }
+
+    pub(crate) fn cancel_generation(
+        &self,
+        data_root: &Path,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        generation_id: &str,
+    ) -> Result<SessionCoordinatorStatus, AirpError> {
+        let key = session_key(data_root, character_id, session_id);
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("session coordinator registry poisoned");
+        entries.retain(|_, entry| entry.strong_count() > 0);
+        let state = entries
+            .get(&key)
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| AirpError::Conflict("stale_generation".to_string()))?;
+        let coordinator = state.lock().expect("session coordinator state poisoned");
+        if coordinator.status.generation_id.as_deref() != Some(generation_id) {
+            return Err(AirpError::Conflict("stale_generation".to_string()));
+        }
+        if coordinator.status.phase == SessionPhase::Committing {
+            return Err(AirpError::Conflict("generation_committing".to_string()));
+        }
+        let cancellation = coordinator
+            .cancellation
+            .as_ref()
+            .ok_or_else(|| AirpError::Conflict("generation_not_cancellable".to_string()))?;
+        cancellation.cancel();
+        Ok(coordinator.status.clone())
     }
 
     pub(crate) fn status(
@@ -167,6 +209,7 @@ pub(crate) struct SessionCommandLease {
     key: String,
     state: Arc<Mutex<CoordinatorState>>,
     generation_id: String,
+    cancellation: Option<CancellationToken>,
     released: bool,
 }
 
@@ -179,6 +222,10 @@ impl SessionCommandLease {
         !self.released && self.generation_id == generation_id
     }
 
+    pub(crate) fn cancellation(&self) -> Option<CancellationToken> {
+        self.cancellation.clone()
+    }
+
     pub(crate) fn begin_commit(&mut self) -> Result<(), AirpError> {
         let mut coordinator = self
             .state
@@ -188,6 +235,13 @@ impl SessionCommandLease {
             || coordinator.status.generation_id.as_deref() != Some(self.generation_id.as_str())
         {
             return Err(AirpError::Conflict("generation_lease_lost".to_string()));
+        }
+        if coordinator
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(AirpError::Conflict("generation_cancelled".to_string()));
         }
         coordinator.status.phase = SessionPhase::Committing;
         Ok(())
@@ -208,6 +262,7 @@ impl SessionCommandLease {
             .expect("session coordinator state poisoned");
         if coordinator.status.generation_id.as_deref() == Some(self.generation_id.as_str()) {
             coordinator.status = SessionCoordinatorStatus::idle();
+            coordinator.cancellation = None;
         }
         if entries
             .get(&self.key)
@@ -282,5 +337,42 @@ mod tests {
         let _second = registry
             .try_submit(root, &character, Some(&second), SessionCommand::Completion)
             .unwrap();
+    }
+
+    #[test]
+    fn cancellation_is_generation_scoped_and_rejected_after_commit_starts() {
+        let registry = SessionCoordinatorRegistry::default();
+        let character = CharacterId::new("char-a").unwrap();
+        let root = Path::new("data");
+        let mut lease = registry
+            .try_submit(root, &character, None, SessionCommand::Regen)
+            .unwrap();
+        let cancellation = lease.cancellation().unwrap();
+
+        assert!(matches!(
+            registry.cancel_generation(root, &character, None, "older-generation"),
+            Err(AirpError::Conflict(message)) if message == "stale_generation"
+        ));
+        assert!(!cancellation.is_cancelled());
+
+        registry
+            .cancel_generation(root, &character, None, lease.generation_id())
+            .unwrap();
+        assert!(cancellation.is_cancelled());
+
+        assert!(matches!(
+            lease.begin_commit(),
+            Err(AirpError::Conflict(message)) if message == "generation_cancelled"
+        ));
+        drop(lease);
+
+        let mut committing = registry
+            .try_submit(root, &character, None, SessionCommand::Regen)
+            .unwrap();
+        committing.begin_commit().unwrap();
+        assert!(matches!(
+            registry.cancel_generation(root, &character, None, committing.generation_id()),
+            Err(AirpError::Conflict(message)) if message == "generation_committing"
+        ));
     }
 }

@@ -34,17 +34,17 @@ use decompose_handlers::{
 };
 use handlers::{
     add_scene_character_endpoint, agent_run, append_conversation_event_endpoint,
-    bind_persona_endpoint, cancel_conversation_turn_endpoint, chat_completion, chat_search,
-    continue_chat, create_conversation_endpoint, create_persona_endpoint,
-    create_scene_conversation_endpoint, create_scene_endpoint, create_session_endpoint,
-    delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
-    delete_plugin_tool_endpoint, delete_session_endpoint, diff_character_revisions_endpoint,
-    edit_message, execute_conversation_migration_endpoint, execute_conversation_turn_endpoint,
-    export_session_timeline_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
-    get_character_avatar, get_character_card, get_character_lorebook,
-    get_character_revision_endpoint, get_character_state, get_character_state_history,
-    get_character_state_schema, get_chat_history, get_chat_session_state,
-    get_conversation_capabilities_endpoint, get_conversation_endpoint,
+    bind_persona_endpoint, cancel_chat_generation, cancel_conversation_turn_endpoint,
+    chat_completion, chat_search, continue_chat, create_conversation_endpoint,
+    create_persona_endpoint, create_scene_conversation_endpoint, create_scene_endpoint,
+    create_session_endpoint, delete_character_endpoint, delete_message,
+    delete_persona_multi_endpoint, delete_plugin_tool_endpoint, delete_session_endpoint,
+    diff_character_revisions_endpoint, edit_message, execute_conversation_migration_endpoint,
+    execute_conversation_turn_endpoint, export_session_timeline_endpoint,
+    generate_dialogue_examples_endpoint, generate_image_endpoint, get_character_avatar,
+    get_character_card, get_character_lorebook, get_character_revision_endpoint,
+    get_character_state, get_character_state_history, get_character_state_schema, get_chat_history,
+    get_chat_session_state, get_conversation_capabilities_endpoint, get_conversation_endpoint,
     get_conversation_events_endpoint, get_conversation_migration_export_endpoint,
     get_conversation_turn_endpoint, get_conversation_turn_observability_endpoint, get_drift,
     get_effective_persona_endpoint, get_lorebook_graph_endpoint, get_persona_endpoint,
@@ -357,6 +357,7 @@ pub fn create_router_with_conversation_policy_registry(
         .route("/v1/agent/tools", get(list_agent_tools))
         .route("/v1/chat/history", post(get_chat_history))
         .route("/v1/chat/session-state", post(get_chat_session_state))
+        .route("/v1/chat/cancel", post(cancel_chat_generation))
         .route("/v1/chat/rollback", post(rollback_chat))
         .route("/v1/chat/regen", post(regen_chat))
         .route("/v1/chat/continue", post(continue_chat))

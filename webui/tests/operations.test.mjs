@@ -19,6 +19,13 @@ test('chat space observes coordinator state and blocks conflicting mutations', (
   assert.match(chatScript, /error\.status === 404[\s\S]*coordinatorStateSupported = false/);
 });
 
+test('chat stop preserves the Engine cancellation result and only aborts as fallback', () => {
+  assert.match(chatScript, /client\.request\('POST', '\/v1\/chat\/cancel'/);
+  assert.match(chatScript, /generation_id: generationId/);
+  assert.match(chatScript, /abortLocalStream = false;[\s\S]*finally \{\s*if \(abortLocalStream\) controller\.abort\(\);/);
+  assert.match(chatScript, /generation_committing[\s\S]*正在提交，无法取消/);
+});
+
 test('coordinator status reuses the authoritative sample tag tokens', () => {
   assert.match(chatPage, /id="session-operation-status"/);
   assert.match(chatPage, /class="tag tag-warning mono session-operation-status"/);

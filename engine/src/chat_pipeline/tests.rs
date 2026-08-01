@@ -2563,6 +2563,44 @@ mod tests_b1_finalize_empty_stripped {
         assert_eq!(log.messages[1].content, "new reply");
         assert_eq!(log.message_candidates[1], vec!["old reply", "new reply"]);
     }
+
+    #[tokio::test]
+    async fn cancelled_regen_cannot_cross_the_commit_boundary() {
+        let (_tmp, data_root, character) = setup_character_with_user_msg();
+        let service = ChatService::new(&data_root);
+        service
+            .append_with_candidates(&character, None, vec!["old reply".to_string()])
+            .unwrap();
+        let registry = crate::session_coordinator::SessionCoordinatorRegistry::default();
+        let lease = registry
+            .try_submit(
+                &data_root,
+                &character,
+                None,
+                crate::session_coordinator::SessionCommand::Regen,
+            )
+            .unwrap();
+        let snapshot = service
+            .regen_snapshot(&character, None, lease.generation_id().to_string())
+            .unwrap();
+        registry
+            .cancel_generation(&data_root, &character, None, lease.generation_id())
+            .unwrap();
+
+        let mut ctx = make_finalizer_ctx(data_root.clone(), Some(character.clone()));
+        ctx.regen_snapshot = Some(snapshot);
+        ctx.session_operation_lease = Some(lease);
+        let error = run_finalize(ctx, "new reply".to_string(), "new reply".to_string())
+            .await
+            .expect_err("a successful cancellation must win over commit");
+        assert!(matches!(
+            error,
+            crate::error::AirpError::Conflict(message) if message == "generation_cancelled"
+        ));
+        let log = service.history(&character, None).unwrap();
+        assert_eq!(log.messages[1].content, "old reply");
+        assert_eq!(log.message_candidates[1], vec!["old reply"]);
+    }
 }
 
 /// 审计 Bug D 修复测试：`run_finalize` 在 assistant 消息同时含正文与

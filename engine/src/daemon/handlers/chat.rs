@@ -14,8 +14,9 @@
 use crate::chat_pipeline;
 use crate::chat_store::ChatLog;
 use crate::daemon::types::{
-    ChatCompletionRequest, ContinueRequest, DeleteMessageRequest, EditMessageRequest, HistoryQuery,
-    RegenRequest, RollbackRequest, SessionStateQuery, SwipeRequest, SwitchBranchRequest,
+    CancelGenerationRequest, ChatCompletionRequest, ContinueRequest, DeleteMessageRequest,
+    EditMessageRequest, HistoryQuery, RegenRequest, RollbackRequest, SessionStateQuery,
+    SwipeRequest, SwitchBranchRequest,
 };
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
@@ -58,6 +59,22 @@ pub(in crate::daemon) async fn get_chat_session_state(
         &query.character_id,
         query.session_id.as_ref(),
     )))
+}
+
+/// POST /v1/chat/cancel — cooperatively cancel one exact active generation.
+pub(in crate::daemon) async fn cancel_chat_generation(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(req): Json<CancelGenerationRequest>,
+) -> Result<Json<SessionCoordinatorStatus>, AirpError> {
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let status = state.session_coordinators.cancel_generation(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        &req.generation_id,
+    )?;
+    Ok(Json(status))
 }
 
 /// POST /v1/chat/rollback — rollback to a specific message index
