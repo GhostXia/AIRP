@@ -31,6 +31,26 @@ struct TurnExecution<'a> {
     registration: &'a crate::conversation_turn::ActiveTurnRegistration,
 }
 
+struct ConversationSpeakerGenerationContext<'a> {
+    state: &'a Arc<DaemonState>,
+    request: &'a ConversationTurnRequest,
+    scene_id: &'a str,
+    cancellation: &'a tokio_util::sync::CancellationToken,
+    turn_deadline: tokio::time::Instant,
+    root: &'a std::path::Path,
+    conversation_id: SessionId,
+    turn_id: &'a str,
+}
+
+struct ConversationSpeakerCommitContext<'a> {
+    service: &'a ConversationService,
+    conversation_id: SessionId,
+    turn_id: &'a str,
+    user_event_id: &'a str,
+    context_budget: crate::conversation_context::ConversationContextBudget,
+    registration: &'a crate::conversation_turn::ActiveTurnRegistration,
+}
+
 /// Read-only compatibility analysis. This endpoint never creates or repairs
 /// legacy files and returns `needs_review` when attribution is not provable.
 pub(in crate::daemon) async fn plan_conversation_migration_endpoint(
@@ -596,21 +616,32 @@ async fn execute_new_turn(
         &committed,
     );
     let turn_deadline = tokio::time::Instant::now() + CONVERSATION_TURN_TIMEOUT;
+    let generation_context = ConversationSpeakerGenerationContext {
+        state,
+        request: &request,
+        scene_id: &plan.scene_id,
+        cancellation: &cancellation,
+        turn_deadline,
+        root,
+        conversation_id,
+        turn_id: &turn_id,
+    };
+    let commit_context = ConversationSpeakerCommitContext {
+        service: &service,
+        conversation_id,
+        turn_id: &turn_id,
+        user_event_id: &user_event_id,
+        context_budget,
+        registration,
+    };
 
     match plan.execution_mode {
         crate::conversation_policy::ConversationExecutionMode::Serial => {
             for speaker in plan.speakers {
                 let output = match generate_conversation_speaker(
-                    state,
-                    &request,
-                    &plan.scene_id,
+                    &generation_context,
                     history.clone(),
                     speaker,
-                    &cancellation,
-                    turn_deadline,
-                    root,
-                    conversation_id,
-                    &turn_id,
                 )
                 .await
                 {
@@ -632,16 +663,11 @@ async fn execute_new_turn(
                     }
                 };
                 if let Some(participant_id) = commit_speaker_output(
-                    &service,
-                    conversation_id,
-                    &turn_id,
-                    &user_event_id,
+                    &commit_context,
                     output,
                     &mut next_sequence,
                     &mut committed,
                     &mut history,
-                    context_budget,
-                    registration,
                 )
                 .await?
                 {
@@ -665,18 +691,7 @@ async fn execute_new_turn(
             let max_parallelism = policy.resource_limits.max_parallelism;
             let initial_history = history.clone();
             let generations = stream::iter(plan.speakers.into_iter().map(|speaker| {
-                generate_conversation_speaker(
-                    state,
-                    &request,
-                    &plan.scene_id,
-                    initial_history.clone(),
-                    speaker,
-                    &cancellation,
-                    turn_deadline,
-                    root,
-                    conversation_id,
-                    &turn_id,
-                )
+                generate_conversation_speaker(&generation_context, initial_history.clone(), speaker)
             }))
             .buffered(max_parallelism)
             .collect::<Vec<_>>()
@@ -744,16 +759,11 @@ async fn execute_new_turn(
                     }
                 };
                 if let Some(participant_id) = commit_speaker_output(
-                    &service,
-                    conversation_id,
-                    &turn_id,
-                    &user_event_id,
+                    &commit_context,
                     output,
                     &mut next_sequence,
                     &mut committed,
                     &mut history,
-                    context_budget,
-                    registration,
                 )
                 .await?
                 {
@@ -878,37 +888,29 @@ impl Default for TurnTerminalObservability {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn generate_conversation_speaker(
-    state: &Arc<DaemonState>,
-    request: &ConversationTurnRequest,
-    scene_id: &str,
+    context: &ConversationSpeakerGenerationContext<'_>,
     history: Vec<crate::adapter::ChatMessage>,
     speaker: crate::conversation_policy::ConversationSpeaker,
-    cancellation: &tokio_util::sync::CancellationToken,
-    turn_deadline: tokio::time::Instant,
-    root: &std::path::Path,
-    conversation_id: SessionId,
-    turn_id: &str,
 ) -> Result<GeneratedConversationSpeaker, ConversationSpeakerFailure> {
     let speaker_started = tokio::time::Instant::now();
     let participant_id = speaker.participant_id;
     let character_id = speaker.resource_id;
-    let mut payload = request.base.clone();
-    payload.user_id = request.user_id.as_ref().map(ToString::to_string);
-    payload.scene_id = Some(scene_id.to_string());
+    let mut payload = context.request.base.clone();
+    payload.user_id = context.request.user_id.as_ref().map(ToString::to_string);
+    payload.scene_id = Some(context.scene_id.to_string());
     payload.messages_history = None;
     let pipeline = match crate::chat_pipeline::prepare_scene_participant_pipeline(
         &payload,
-        state,
+        context.state,
         &character_id,
         history,
     ) {
         Ok(pipeline) => pipeline,
         Err(error) => {
             tracing::error!(
-                %conversation_id,
-                %turn_id,
+                %context.conversation_id,
+                %context.turn_id,
                 %participant_id,
                 %error,
                 "conversation turn preparation failed after user event commit"
@@ -924,10 +926,10 @@ async fn generate_conversation_speaker(
     };
     let result = tokio::select! {
         biased;
-        _ = cancellation.cancelled() => {
+        _ = context.cancellation.cancelled() => {
             tracing::info!(
-                %conversation_id,
-                %turn_id,
+                %context.conversation_id,
+                %context.turn_id,
                 %participant_id,
                 "conversation turn explicitly cancelled"
             );
@@ -940,14 +942,14 @@ async fn generate_conversation_speaker(
             });
         }
         timed = tokio::time::timeout_at(
-            turn_deadline,
+            context.turn_deadline,
             crate::chat_pipeline::run_generation_step(pipeline),
         ) => match timed {
             Ok(result) => result,
             Err(_) => {
                 tracing::error!(
-                    %conversation_id,
-                    %turn_id,
+                    %context.conversation_id,
+                    %context.turn_id,
                     %participant_id,
                     timeout_secs = CONVERSATION_TURN_TIMEOUT.as_secs(),
                     "conversation turn timed out after user event commit"
@@ -964,8 +966,8 @@ async fn generate_conversation_speaker(
     };
     let recorded_tokens =
         crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32;
-    crate::quota::record_tokens(root, recorded_tokens);
-    if cancellation.is_cancelled() {
+    crate::quota::record_tokens(context.root, recorded_tokens);
+    if context.cancellation.is_cancelled() {
         return Err(ConversationSpeakerFailure {
             participant_id,
             event_kind: crate::conversation_turn::TURN_CANCELLED,
@@ -976,8 +978,8 @@ async fn generate_conversation_speaker(
     }
     if let Some(error) = result.error {
         tracing::error!(
-            %conversation_id,
-            %turn_id,
+            %context.conversation_id,
+            %context.turn_id,
             %participant_id,
             %error,
             "conversation participant generation failed after user event commit"
@@ -994,8 +996,8 @@ async fn generate_conversation_speaker(
         crate::chat_pipeline::extract_conversation_state(&result.cleaned_acc);
     if content.trim().is_empty() {
         tracing::error!(
-            %conversation_id,
-            %turn_id,
+            %context.conversation_id,
+            %context.turn_id,
             %participant_id,
             "conversation participant returned an empty generation after user event commit"
         );
@@ -1012,8 +1014,8 @@ async fn generate_conversation_speaker(
     chunks.extend(unpacker.finish());
     let chunks = serde_json::to_value(chunks).map_err(|error| {
         tracing::error!(
-            %conversation_id,
-            %turn_id,
+            %context.conversation_id,
+            %context.turn_id,
             %participant_id,
             %error,
             "conversation response chunk serialization failed"
@@ -1041,28 +1043,23 @@ fn elapsed_millis(started: tokio::time::Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn commit_speaker_output(
-    service: &ConversationService,
-    conversation_id: SessionId,
-    turn_id: &str,
-    user_event_id: &str,
+    context: &ConversationSpeakerCommitContext<'_>,
     output: GeneratedConversationSpeaker,
     next_sequence: &mut u64,
     committed: &mut Vec<crate::conversation::ConversationEvent>,
     history: &mut Vec<crate::adapter::ChatMessage>,
-    context_budget: crate::conversation_context::ConversationContextBudget,
-    registration: &crate::conversation_turn::ActiveTurnRegistration,
 ) -> Result<Option<String>, AirpError> {
-    let assistant_event = service
+    let assistant_event = context
+        .service
         .append_event_locked_async(
-            conversation_id,
+            context.conversation_id,
             AppendConversationEventRequest {
                 user_id: None,
                 kind: "message.created".to_string(),
                 actor_id: Some(output.participant_id.clone()),
-                causation_id: Some(user_event_id.to_string()),
-                correlation_id: Some(turn_id.to_string()),
+                causation_id: Some(context.user_event_id.to_string()),
+                correlation_id: Some(context.turn_id.to_string()),
                 payload: serde_json::json!({
                     "role": "assistant",
                     "content": &output.content,
@@ -1088,18 +1085,18 @@ async fn commit_speaker_output(
             role: crate::adapter::MessageRole::Assistant,
             content: format!("[{}] {}", output.participant_id, output.content),
         },
-        context_budget,
+        context.context_budget,
     ) {
         tracing::error!(
-            %conversation_id,
-            %turn_id,
+            %context.conversation_id,
+            %context.turn_id,
             participant_id = %output.participant_id,
             %error,
             "conversation assistant message exceeds context budget"
         );
         return Ok(Some(output.participant_id));
     }
-    registration.publish(
+    context.registration.publish(
         crate::conversation_turn::ConversationTurnLifecycleState::Running,
         committed,
     );

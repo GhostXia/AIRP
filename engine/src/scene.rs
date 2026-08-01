@@ -1,7 +1,37 @@
 use crate::error::AirpError;
 use crate::types::{SceneId, SessionId};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SceneLockKey {
+    root: PathBuf,
+    scene_id: String,
+}
+
+type SceneLockRegistry = Mutex<HashMap<SceneLockKey, Weak<Mutex<()>>>>;
+
+static SCENE_WRITE_LOCKS: OnceLock<SceneLockRegistry> = OnceLock::new();
+
+fn scene_write_lock(root: &Path, scene_id: &SceneId) -> Arc<Mutex<()>> {
+    let key = SceneLockKey {
+        root: root.to_path_buf(),
+        scene_id: scene_id.as_str().to_string(),
+    };
+    let mut locks = SCENE_WRITE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("scene write lock registry poisoned");
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
 
 // ── MS-2: Scene data types ────────────────────────────────────────────────────
 
@@ -66,6 +96,12 @@ impl SceneConfig {
     }
 
     pub fn save(&self, root: &Path) -> Result<(), AirpError> {
+        let lock = scene_write_lock(root, &self.scene_id);
+        let _guard = lock.lock().expect("scene write lock poisoned");
+        self.save_unlocked(root)
+    }
+
+    fn save_unlocked(&self, root: &Path) -> Result<(), AirpError> {
         let scene_dir = crate::data_dir::scene_dir(root, &self.scene_id);
         std::fs::create_dir_all(&scene_dir)?;
         let path = scene_dir.join("scene.json");
@@ -75,10 +111,25 @@ impl SceneConfig {
     }
 }
 
+/// Serialize a scene load → mutate → save sequence under its per-path lock.
+///
+/// The lock key includes the data root and scene ID, so unrelated scenes can
+/// still update concurrently while all scene manifest writers for one path
+/// observe a single read-modify-write order.
+pub fn update_scene<T, F>(root: &Path, scene_id: &SceneId, update: F) -> Result<T, AirpError>
+where
+    F: FnOnce(&mut SceneConfig) -> Result<T, AirpError>,
+{
+    let lock = scene_write_lock(root, scene_id);
+    let _guard = lock.lock().expect("scene write lock poisoned");
+    let mut scene = SceneConfig::load(root, scene_id)?;
+    let result = update(&mut scene)?;
+    scene.save_unlocked(root)?;
+    Ok(result)
+}
+
 /// #343: 在 scene manifest 中记录当前活跃的群聊 Conversation。
 ///
-/// 该函数执行 load → set → save 三步。scene 配置更新不频繁，未引入额外锁；
-/// 若未来 scene 配置与 active_conversation 出现并发写冲突，可在此处加文件锁。
 /// 写入失败时 scene.json 不会半写（save 是整体覆盖），但已创建的 Conversation
 /// 仍存在——调用方应将 Conversation 创建视为权威，active_conversation_id 视为
 /// 指向标记，标记失败时不影响 Conversation 本身。
@@ -87,9 +138,10 @@ pub fn set_active_conversation(
     scene_id: &SceneId,
     conversation_id: SessionId,
 ) -> Result<(), AirpError> {
-    let mut scene = SceneConfig::load(root, scene_id)?;
-    scene.active_conversation_id = Some(conversation_id);
-    scene.save(root)
+    update_scene(root, scene_id, |scene| {
+        scene.active_conversation_id = Some(conversation_id);
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -347,5 +399,32 @@ mod tests {
             result.is_err(),
             "setting active conversation on missing scene should error"
         );
+    }
+
+    #[test]
+    fn test_376_update_scene_preserves_independent_mutations() {
+        let tmp = tempdir().unwrap();
+        let scene_id = SceneId::new("tavern").unwrap();
+        sample_scene().save(tmp.path()).unwrap();
+
+        update_scene(tmp.path(), &scene_id, |scene| {
+            scene.active_conversation_id = Some(SessionId::new());
+            Ok(())
+        })
+        .unwrap();
+        update_scene(tmp.path(), &scene_id, |scene| {
+            scene.characters.push(CharacterEntry {
+                character_id: "carol".to_string(),
+                role: CharacterRole::Npc,
+                intro: "The bard".to_string(),
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        let loaded = SceneConfig::load(tmp.path(), &scene_id).unwrap();
+        assert!(loaded.active_conversation_id.is_some());
+        assert_eq!(loaded.characters.len(), 3);
+        assert_eq!(loaded.characters[2].character_id, "carol");
     }
 }
