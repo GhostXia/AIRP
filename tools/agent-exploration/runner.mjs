@@ -18,6 +18,7 @@ import { writeReport } from './reporter.mjs';
 import { classifyPrDiff, DIFF_TASK_MAP } from './classifier.mjs';
 import { buildLaunchArgs } from './tls-args.mjs';
 import { lintScript } from './script-lint.mjs';
+import { validateScript } from './script-validation.mjs';
 import { sanitizeDomSnapshot } from './dom-privacy.mjs';
 
 const args = parseArgs(process.argv.slice(2));
@@ -274,6 +275,7 @@ async function runTask(browser, mod, name) {
   } catch (err) {
     result.result = 'Failed';
     result.actual = String(err && err.stack || err);
+    if (err && err.scriptPath) result.evidence.script = err.scriptPath;
     if (harness) {
       try { result.consoleErrors = await harness.getConsoleErrors(); } catch {}
       try { result.failedRequests = await harness.getFailedRequests(); } catch {}
@@ -309,6 +311,12 @@ async function generateAndRunScript(mod, ctx, taskDir) {
     const scriptContent = getBuiltinSmokeScript();
     const scriptPath = join(taskDir, 'agent-script.mjs');
     await writeFile(scriptPath, scriptContent);
+    const diagnostics = await validateScript(scriptContent);
+    if (diagnostics.length > 0) {
+      const error = new Error('built-in smoke script validation failed:\n' + diagnostics.join('\n'));
+      error.scriptPath = scriptPath;
+      throw error;
+    }
     const exitCode = await runTempScript(scriptPath, ctx);
     if (exitCode === 0) return scriptPath;
     throw new Error('fallback smoke script failed (exit code ' + exitCode + '); topology/harness is broken, not WebUI business logic');
@@ -320,6 +328,7 @@ async function generateAndRunScript(mod, ctx, taskDir) {
   const prompt = buildPrompt(mod, sanitized);
 
   let lastError = null;
+  let lastScriptPath = null;
   // ES module strict mode 要求显式声明；否则首次 lastScriptContent = scriptContent 抛 ReferenceError
   let lastScriptContent = '';
   for (let revision = 0; revision <= MAX_REVISIONS; revision++) {
@@ -335,20 +344,20 @@ async function generateAndRunScript(mod, ctx, taskDir) {
     const content = await chatCompletion(messages, { maxTokens: MAX_TOKENS, temperature: 0.2 });
     const scriptContent = extractCodeBlock(content);
     lastScriptContent = scriptContent;
+    const scriptPath = join(taskDir, 'agent-script-revision-' + revision + '.mjs');
+    await writeFile(scriptPath, scriptContent);
+    lastScriptPath = scriptPath;
 
-    // 预检：在执行前拦截 LLM 反复犯的反模式（即使 prompt 明确禁止，LLM 仍可能违反）。
+    // 预检：在执行前拦截 LLM 反复犯的语法、导出合同与反模式。
     // 检测到反模式时不执行脚本，直接进入下一轮 revision，把违规点作为 feedback 给 LLM。
     // 这避免浪费一次"执行失败 + 422 错误"的往返，并给 LLM 更精准的纠正信号。
-    const violations = lintScript(scriptContent);
-    if (violations.length > 0) {
-      lastError = 'Script lint failed (anti-patterns detected, script NOT executed):\n' +
-        violations.map(v => '  - ' + v).join('\n') +
+    const diagnostics = [...await validateScript(scriptContent), ...lintScript(scriptContent)];
+    if (diagnostics.length > 0) {
+      lastError = 'Script validation failed (script NOT executed):\n' +
+        diagnostics.map(v => '  - ' + v).join('\n') +
         '\n\nFix these and re-output the complete script.';
       continue;
     }
-
-    const scriptPath = join(taskDir, 'agent-script.mjs');
-    await writeFile(scriptPath, scriptContent);
 
     // 2. 执行临时脚本
     try {
@@ -359,7 +368,9 @@ async function generateAndRunScript(mod, ctx, taskDir) {
       lastError = String(err && err.stack || err);
     }
   }
-  throw new Error('agent script failed after ' + (MAX_REVISIONS + 1) + ' revisions; last error:\n' + lastError);
+  const error = new Error('agent script failed after ' + (MAX_REVISIONS + 1) + ' revisions; last error:\n' + lastError);
+  error.scriptPath = lastScriptPath;
+  throw error;
 }
 
 function buildPrompt(mod, domSnapshot) {
