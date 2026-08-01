@@ -271,6 +271,14 @@ AIRP_CHROME_SPKI="$chrome_spki" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-smoke.mjs"
 
+AIRP_SMOKE_ORIGIN="$origin" \
+AIRP_SMOKE_ADMIN_USER="$admin_user" \
+AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
+AIRP_SMOKE_RESULT_FILE="$result_file" \
+AIRP_CHROME_SPKI="$chrome_spki" \
+NODE_EXTRA_CA_CERTS="$trust_bundle" \
+node "$repo/ui/production-browser-advanced-pages-smoke.mjs"
+
 $compose restart engine gateway >/dev/null
 WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
 AIRP_SMOKE_ORIGIN="$origin" \

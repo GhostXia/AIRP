@@ -12,6 +12,7 @@ const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
 const productionBrowserSmoke = await readFile(new URL('../../ui/production-browser-smoke.mjs', import.meta.url), 'utf8');
+const productionAdvancedPagesSmoke = await readFile(new URL('../../ui/production-browser-advanced-pages-smoke.mjs', import.meta.url), 'utf8');
 const productionSmokeCi = await readFile(new URL('../../deploy/production/smoke-ci.sh', import.meta.url), 'utf8');
 const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
 const dialogueGenScript = await readFile(new URL('../assets/dialogue-gen.js', import.meta.url), 'utf8');
@@ -61,6 +62,14 @@ test('production onboarding smoke waits for each rendered wizard step', () => {
 test('both production restarts wait for the chat path before browser smoke', () => {
   const probes = productionSmokeCi.match(/WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready/g) || [];
   assert.equal(probes.length, 2);
+});
+
+test('production smoke covers every advanced WebUI page and a visible Engine failure', () => {
+  for (const file of ['34-relationship-graph.html', '35-plot-arc.html', '36-image-gen.html', '37-character-templates.html', '38-style-learn.html', '39-dialogue-gen.html', '40-worldbook-graph.html', '41-timeline-export.html', '42-card-diff.html', '43-provider-management.html', '44-plugin-tools.html']) {
+    assert.match(productionAdvancedPagesSmoke, new RegExp("file: '" + file + "'"));
+  }
+  assert.match(productionAdvancedPagesSmoke, /route\('\*\*\/health', route => route\.abort\('failed'\)\)/);
+  assert.match(productionAdvancedPagesSmoke, /无法连接 Engine/);
 });
 
 for (const [name, html] of [['role list', rolePage], ['chat space', chatPage]]) {
