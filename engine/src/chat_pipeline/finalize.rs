@@ -29,7 +29,7 @@ fn style_review_interval() -> u64 {
 // ── finalize ──────────────────────────────────────────────────────────────────
 
 pub(super) async fn run_finalize(
-    ctx: FinalizerCtx,
+    mut ctx: FinalizerCtx,
     raw_acc: String,
     cleaned_acc: String,
 ) -> Result<(), AirpError> {
@@ -53,7 +53,21 @@ pub(super) async fn run_finalize(
     if let Some(ref cid) = ctx.character_id {
         let (stripped, live_state) = extract_state_content(&cleaned_acc);
         if !stripped.trim().is_empty() {
-            if ctx.continue_mode {
+            if let Some(snapshot) = ctx.regen_snapshot.as_ref() {
+                if !ctx
+                    .session_operation_lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.matches_generation(&snapshot.generation_id))
+                {
+                    return Err(AirpError::Conflict("generation_lease_lost".to_string()));
+                }
+                ChatService::new(&ctx.data_root).commit_regen(
+                    cid,
+                    ctx.session_id.as_ref(),
+                    snapshot,
+                    &stripped,
+                )?;
+            } else if ctx.continue_mode {
                 // Continue: append generated text to the existing last assistant message.
                 ChatService::new(&ctx.data_root).append_to_last(
                     cid,
@@ -79,11 +93,9 @@ pub(super) async fn run_finalize(
                     },
                 )?;
             }
-        } else if !ctx.swipe_candidates.is_empty() {
-            // #249 审计 B1 修复：regen 时已预先 delete_last_n(1) 删除旧消息 + 候选。
-            // 若 stripped 为空（模型只输出 <state> 块或纯空白），不创建空 assistant 消息，
-            // 但必须把旧候选原样回灌，避免永久丢失用户资产。
-            // 触发条件现实性：模型输出纯 state 块或采样异常导致正文空，并非罕见。
+        } else if ctx.regen_snapshot.is_none() && !ctx.swipe_candidates.is_empty() {
+            // Legacy swipe finalization path: if a generated body is empty,
+            // restore the candidate list rather than losing it.
             ChatService::new(&ctx.data_root).append_with_candidates(
                 cid,
                 ctx.session_id.as_ref(),
@@ -96,6 +108,13 @@ pub(super) async fn run_finalize(
         if let Some(ref state) = live_state {
             persist_live_state(&ctx.data_root, cid.as_str(), state).await?;
         }
+    }
+
+    // The ChatLog and required live-state mutation are complete. Keep slow
+    // volume/maintenance work outside the session generation contract so a
+    // secondary LLM call cannot hold a session busy indefinitely.
+    if let Some(mut lease) = ctx.session_operation_lease.take() {
+        lease.release();
     }
 
     // (2) Volume side-effects

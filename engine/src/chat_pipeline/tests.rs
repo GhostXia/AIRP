@@ -2453,6 +2453,8 @@ mod tests_b1_finalize_empty_stripped {
             http_client: reqwest::Client::new(),
             continue_mode: false,
             swipe_candidates,
+            regen_snapshot: None,
+            session_operation_lease: None,
         }
     }
 
@@ -2659,6 +2661,8 @@ mod tests_bug_d_finalize_order {
             http_client: reqwest::Client::new(),
             continue_mode: false,
             swipe_candidates: Vec::new(),
+            regen_snapshot: None,
+            session_operation_lease: None,
         }
     }
 
@@ -2840,6 +2844,8 @@ mod tests_bug_e_seal_skips_maintenance {
             http_client: reqwest::Client::new(),
             continue_mode: false,
             swipe_candidates: Vec::new(),
+            regen_snapshot: None,
+            session_operation_lease: None,
         }
     }
 

@@ -321,6 +321,8 @@ pub(super) fn prepare_scene_pipeline(
             http_client: state.http_client.clone(),
             continue_mode: false,
             swipe_candidates: Vec::new(),
+            regen_snapshot: None,
+            session_operation_lease: None,
         },
         http_client: state.http_client.clone(),
     })

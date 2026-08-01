@@ -89,6 +89,13 @@ pub struct ChatLog {
     pub created_at: String,
     /// ISO 8601 last update timestamp
     pub updated_at: String,
+    /// Monotonic revision for compare-and-swap chat mutations.
+    ///
+    /// Legacy metadata has no revision and therefore loads as `0`. Every durable
+    /// mutation bumps this value before rewriting the metadata, so callers can
+    /// reject a proposal built from an older session snapshot.
+    #[serde(default)]
+    pub revision: u64,
     /// #85 O1：当前 ChatLog 所属的 scope session_id（由 `POST /v1/sessions/:character_id`
     /// 返回的 UUID）。`None` 表示 legacy per-character log。
     ///
@@ -108,6 +115,8 @@ struct ChatLogMeta {
     character_id: String,
     created_at: String,
     updated_at: String,
+    #[serde(default)]
+    revision: u64,
     /// 分支对话树：当前激活路径的叶节点 durable ID。
     /// 旧 meta 无此字段 → `None`（加载时回退为最后一条消息 ID）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,6 +172,7 @@ impl ChatLog {
             active_leaf: None,
             created_at: now.clone(),
             updated_at: now,
+            revision: 0,
             scope_session_id: None,
         }
     }
@@ -330,12 +340,13 @@ impl ChatLog {
                     active_leaf: m.active_leaf,
                     created_at: m.created_at,
                     updated_at: m.updated_at,
+                    revision: m.revision,
                     scope_session_id: Some(scope_session_id),
                 };
                 return Ok(log);
             }
 
-            let log = ChatLog::new_for_session(character_id, session_id);
+            let mut log = ChatLog::new_for_session(character_id, session_id);
             log.save(data_root)?;
             return Ok(log);
         }
@@ -368,6 +379,7 @@ impl ChatLog {
                 active_leaf: m.active_leaf,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
+                revision: m.revision,
                 scope_session_id: None,
             };
             return Ok(log);
@@ -383,7 +395,7 @@ impl ChatLog {
             } else {
                 Self::derive_meta(character_id, None, &pre_cf2_jsonl)
             };
-            let log = Self {
+            let mut log = Self {
                 session_id: m.session_id,
                 character_id: m.character_id,
                 messages: parsed.messages,
@@ -395,6 +407,7 @@ impl ChatLog {
                 active_leaf: m.active_leaf,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
+                revision: m.revision,
                 scope_session_id: None,
             };
             log.save(data_root)?;
@@ -468,7 +481,7 @@ impl ChatLog {
 
         // ── 4. 全新 ───────────────────────────────────────────────────────────
         crate::data_dir::character_dir(data_root, character_id)?;
-        let log = ChatLog::new(character_id);
+        let mut log = ChatLog::new(character_id);
         log.save(data_root)?;
         Ok(log)
     }
@@ -544,6 +557,7 @@ impl ChatLog {
                 active_leaf: metadata.active_leaf,
                 created_at: metadata.created_at,
                 updated_at: metadata.updated_at,
+                revision: metadata.revision,
                 scope_session_id: scope,
             }));
         }
@@ -572,6 +586,7 @@ impl ChatLog {
                 active_leaf: metadata.active_leaf,
                 created_at: metadata.created_at,
                 updated_at: metadata.updated_at,
+                revision: metadata.revision,
                 scope_session_id: None,
             }));
         }
@@ -678,6 +693,7 @@ impl ChatLog {
             character_id: character_id.to_string(),
             created_at: recovered_at.clone(),
             updated_at: recovered_at,
+            revision: 0,
             active_leaf: None,
         }
     }
@@ -694,7 +710,8 @@ impl ChatLog {
     ///
     /// **#37 注意**：`save` 永远写**全量** `messages`。上下文窗口由 `recent` 在读取时
     /// 裁剪，不能改变持久化历史。`save` 只被迁移、delete、rollback 等路径调用。
-    pub fn save(&self, data_root: &Path) -> Result<(), AirpError> {
+    pub fn save(&mut self, data_root: &Path) -> Result<(), AirpError> {
+        self.revision = self.revision.saturating_add(1);
         let scope = self.scope_session_id.as_deref();
         let jsonl = Self::scoped_jsonl_path(data_root, &self.character_id, scope);
         let meta = Self::scoped_meta_path(data_root, &self.character_id, scope);
@@ -738,6 +755,7 @@ impl ChatLog {
             character_id: self.character_id.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            revision: self.revision,
             active_leaf: self.active_leaf.clone(),
         };
         let meta_content = serde_json::to_string_pretty(&m)?;
@@ -823,11 +841,13 @@ impl ChatLog {
 
         // meta 刷新
         self.updated_at = Utc::now().to_rfc3339();
+        self.revision = self.revision.saturating_add(1);
         let m = ChatLogMeta {
             session_id: self.session_id.clone(),
             character_id: self.character_id.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            revision: self.revision,
             active_leaf: self.active_leaf.clone(),
         };
         let meta_path = Self::scoped_meta_path(data_root, &self.character_id, scope);
@@ -837,7 +857,7 @@ impl ChatLog {
         Ok(())
     }
 
-    /// Deletes the last N messages (for regen: delete last assistant message).
+    /// Deletes the last N messages from the active path.
     ///
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     /// #249：同步截断 `message_candidates` / `message_swipe_index`。
@@ -1469,6 +1489,7 @@ mod tests {
                 created_at: "2025-01-01T00:00:00Z".to_string(),
                 updated_at: "2025-01-02T00:00:00Z".to_string(),
                 active_leaf: None,
+                revision: 0,
             })
             .unwrap(),
         )
@@ -1512,6 +1533,7 @@ mod tests {
                 created_at: "2025-01-01T00:00:00Z".to_string(),
                 updated_at: "2025-01-02T00:00:00Z".to_string(),
                 active_leaf: None,
+                revision: 0,
             })
             .unwrap(),
         )
@@ -1754,6 +1776,7 @@ mod tests {
                 created_at: now.clone(),
                 updated_at: now,
                 active_leaf: None,
+                revision: 0,
             })
             .unwrap(),
         )
@@ -1806,6 +1829,7 @@ mod tests {
                 created_at: now.clone(),
                 updated_at: now,
                 active_leaf: None,
+                revision: 0,
             })
             .unwrap(),
         )

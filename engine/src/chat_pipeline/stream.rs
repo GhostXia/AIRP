@@ -106,6 +106,13 @@ pub fn build_sse_stream(
             }
         }
 
+        // A failed or cancelled regen must leave its previously durable
+        // assistant reply untouched. Dropping the finalizer also drops its
+        // logical session lease, so later mutations can proceed.
+        if (cancelled || failed) && finalizer.regen_snapshot.is_some() {
+            return;
+        }
+
         match run_finalize(finalizer, raw_acc, cleaned_acc).await {
             Ok(()) if !failed => {
                 let _ = chunk_tx.send(SseMessage::Done).await;

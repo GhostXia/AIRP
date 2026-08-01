@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 
 use crate::adapter::ChatMessage;
 use crate::chat_store::ChatLog;
@@ -25,11 +25,131 @@ type SessionLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
 type CharacterLockMap = Mutex<HashMap<String, Arc<RwLock<()>>>>;
 type StateLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
 type PersonaLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
+type SessionOperationRegistry = Mutex<HashMap<String, Weak<Mutex<SessionOperationState>>>>;
 
 static SESSION_LOCKS: OnceLock<SessionLockMap> = OnceLock::new();
 static CHARACTER_LOCKS: OnceLock<CharacterLockMap> = OnceLock::new();
 static STATE_LOCKS: OnceLock<StateLockMap> = OnceLock::new();
 static PERSONA_LOCKS: OnceLock<PersonaLockMap> = OnceLock::new();
+static SESSION_OPERATION_REGISTRY: OnceLock<SessionOperationRegistry> = OnceLock::new();
+
+#[derive(Debug)]
+struct SessionOperationState {
+    active_generation_id: Option<String>,
+}
+
+/// Logical, non-blocking ownership of one session mutation.
+///
+/// This is deliberately not a mutex guard held across LLM streaming. The active
+/// bit serializes admission while the lease is carried by the pipeline; the
+/// underlying mutex is held only for short state transitions.
+pub(crate) struct SessionOperationLease {
+    key: String,
+    state: Arc<Mutex<SessionOperationState>>,
+    generation_id: String,
+    released: bool,
+}
+
+impl SessionOperationLease {
+    pub(crate) fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+
+    pub(crate) fn matches_generation(&self, generation_id: &str) -> bool {
+        !self.released && self.generation_id == generation_id
+    }
+
+    pub(crate) fn release(&mut self) {
+        if self.released {
+            return;
+        }
+
+        let registry = SESSION_OPERATION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut entries = registry
+            .lock()
+            .expect("session operation registry poisoned");
+        let mut state = self.state.lock().expect("session operation state poisoned");
+        if state.active_generation_id.as_deref() == Some(self.generation_id.as_str()) {
+            state.active_generation_id = None;
+        }
+        if entries
+            .get(&self.key)
+            .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(&self.state)))
+        {
+            entries.remove(&self.key);
+        }
+        self.released = true;
+    }
+}
+
+impl Drop for SessionOperationLease {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+fn session_operation_key(
+    data_root: &Path,
+    character_id: &CharacterId,
+    session_id: Option<&SessionId>,
+) -> String {
+    let session = session_id
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "legacy".to_string());
+    format!("{}::{character_id}/{session}", data_root.to_string_lossy())
+}
+
+/// Reserve one session operation. A competing operation receives the public,
+/// stable `session_busy` conflict instead of observing a half-finished ChatLog.
+pub(crate) fn try_acquire_session_operation(
+    data_root: &Path,
+    character_id: &CharacterId,
+    session_id: Option<&SessionId>,
+) -> Result<SessionOperationLease, AirpError> {
+    let key = session_operation_key(data_root, character_id, session_id);
+    let registry = SESSION_OPERATION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = registry
+        .lock()
+        .expect("session operation registry poisoned");
+    entries.retain(|_, entry| entry.strong_count() > 0);
+    let state = match entries.get(&key).and_then(Weak::upgrade) {
+        Some(state) => state,
+        None => {
+            let state = Arc::new(Mutex::new(SessionOperationState {
+                active_generation_id: None,
+            }));
+            entries.insert(key.clone(), Arc::downgrade(&state));
+            state
+        }
+    };
+    let generation_id = ulid::new_id();
+    let mut operation = state.lock().expect("session operation state poisoned");
+    if operation.active_generation_id.is_some() {
+        return Err(AirpError::Conflict("session_busy".to_string()));
+    }
+    operation.active_generation_id = Some(generation_id.clone());
+    drop(operation);
+    Ok(SessionOperationLease {
+        key,
+        state,
+        generation_id,
+        released: false,
+    })
+}
+
+/// Immutable target state captured before a regen proposal is generated.
+#[derive(Debug, Clone)]
+pub(crate) struct RegenSnapshot {
+    pub(crate) generation_id: String,
+    pub(crate) target_message_id: String,
+    pub(crate) revision: u64,
+    pub(crate) content: String,
+    /// Exact persisted representation; an empty vector is distinct from a
+    /// one-item explicit candidate list for stale-snapshot comparison.
+    pub(crate) stored_candidates: Vec<String>,
+    pub(crate) candidates: Vec<String>,
+    pub(crate) swipe_index: usize,
+}
 
 pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
     let mut locks = CHARACTER_LOCKS
@@ -514,40 +634,120 @@ impl ChatService {
         })
     }
 
-    /// #249 Swipe：删除最后一条 assistant 消息并返回其候选列表。
-    ///
-    /// 返回值：`(ChatLog, Vec<String>)` —— 第二个元素是旧消息的全部候选
-    ///（含原始 content）。若旧消息无候选，则返回 `[old_content]`。
-    /// 调用方（regen handler）将此列表传入 pipeline，finalizer 会将新生成
-    /// 的文本追加为最后一个候选。
-    pub fn regen(
+    /// Capture the active assistant tail for deferred regen without modifying
+    /// durable history. The caller supplies the already-reserved generation id.
+    pub(crate) fn regen_snapshot(
         &self,
         character_id: &CharacterId,
         session_id: Option<&SessionId>,
-    ) -> Result<(ChatLog, Vec<String>), AirpError> {
+        generation_id: String,
+    ) -> Result<RegenSnapshot, AirpError> {
+        self.with_session(character_id, session_id, || {
+            let log = ChatLog::load_or_create_for_session(
+                &self.data_root,
+                character_id.as_str(),
+                session_id,
+            )?;
+            let target_index = log.active_path_indices().last().copied().ok_or_else(|| {
+                AirpError::BadRequest("cannot regen: chat history is empty".to_string())
+            })?;
+            let target = log.messages.get(target_index).ok_or_else(|| {
+                AirpError::Internal("active chat path references a missing message".to_string())
+            })?;
+            if target.role != crate::adapter::MessageRole::Assistant {
+                return Err(AirpError::BadRequest(
+                    "cannot regen: active message is not from assistant".to_string(),
+                ));
+            }
+            let stored_candidates = log
+                .message_candidates
+                .get(target_index)
+                .cloned()
+                .unwrap_or_default();
+            let candidates = if stored_candidates.is_empty() {
+                vec![target.content.clone()]
+            } else {
+                stored_candidates.clone()
+            };
+            Ok(RegenSnapshot {
+                generation_id,
+                target_message_id: log.message_ids.get(target_index).cloned().ok_or_else(|| {
+                    AirpError::Internal("active assistant message has no durable id".to_string())
+                })?,
+                revision: log.revision,
+                content: target.content.clone(),
+                stored_candidates,
+                candidates,
+                swipe_index: log
+                    .message_swipe_index
+                    .get(target_index)
+                    .copied()
+                    .unwrap_or(0),
+            })
+        })
+    }
+
+    /// Atomically replace one snapshotted assistant message with its old and new
+    /// candidates. A stale snapshot never overwrites newer session state.
+    pub(crate) fn commit_regen(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        snapshot: &RegenSnapshot,
+        generated: &str,
+    ) -> Result<ChatLog, AirpError> {
         self.with_session(character_id, session_id, || {
             let mut log = ChatLog::load_or_create_for_session(
                 &self.data_root,
                 character_id.as_str(),
                 session_id,
             )?;
-            let mut old_candidates = Vec::new();
-            if !log.messages.is_empty() {
-                let last_idx = log.messages.len() - 1;
-                // 捕获旧候选：有候选用候选，无候选用 content 本身。
-                let cands = log
-                    .message_candidates
-                    .get(last_idx)
-                    .cloned()
-                    .unwrap_or_default();
-                if cands.is_empty() {
-                    old_candidates.push(log.messages[last_idx].content.clone());
-                } else {
-                    old_candidates = cands;
-                }
-                log.delete_last_n(&self.data_root, 1)?;
+            if log.revision != snapshot.revision {
+                return Err(AirpError::Conflict(
+                    "session changed during generation".to_string(),
+                ));
             }
-            Ok((log, old_candidates))
+            let target_index = log
+                .message_ids
+                .iter()
+                .position(|id| crate::ulid::matches(id, &snapshot.target_message_id))
+                .ok_or_else(|| AirpError::Conflict("regen target no longer exists".to_string()))?;
+            if log.active_path_indices().last().copied() != Some(target_index)
+                || log.messages[target_index].role != crate::adapter::MessageRole::Assistant
+                || log.messages[target_index].content != snapshot.content
+                || log
+                    .message_candidates
+                    .get(target_index)
+                    .cloned()
+                    .unwrap_or_default()
+                    != snapshot.stored_candidates
+                || log
+                    .message_swipe_index
+                    .get(target_index)
+                    .copied()
+                    .unwrap_or(0)
+                    != snapshot.swipe_index
+            {
+                return Err(AirpError::Conflict("regen snapshot is stale".to_string()));
+            }
+
+            let mut candidates = snapshot.candidates.clone();
+            candidates.push(generated.to_string());
+            candidates.retain(|candidate| !candidate.trim().is_empty());
+            if candidates.is_empty() {
+                return Ok(log);
+            }
+            if candidates.len() > SWIPE_CANDIDATES_CAP {
+                let dropped = candidates.len() - SWIPE_CANDIDATES_CAP;
+                candidates.drain(0..dropped);
+            }
+            let swipe_index = candidates.len() - 1;
+            log.messages[target_index].content = candidates[swipe_index].clone();
+            log.message_candidates[target_index] = candidates;
+            log.message_swipe_index[target_index] = swipe_index;
+            log.updated_at = chrono::Utc::now().to_rfc3339();
+            log.save(&self.data_root)?;
+            Ok(log)
         })
     }
 
@@ -682,9 +882,14 @@ impl ChatService {
                 .ok_or_else(|| {
                     AirpError::BadRequest(format!("message_id {message_id} not in this session"))
                 })?;
-            let cands = log.message_candidates.get(idx).ok_or_else(|| {
-                AirpError::BadRequest(format!("message {message_id} has no candidates"))
-            })?;
+            let candidates_count = log
+                .message_candidates
+                .get(idx)
+                .ok_or_else(|| {
+                    AirpError::BadRequest(format!("message {message_id} has no candidates"))
+                })?
+                .len();
+            let cands = log.message_candidates.get(idx).expect("checked above");
             if cands.is_empty() {
                 return Err(AirpError::BadRequest(format!(
                     "message {message_id} has no candidates to switch"
@@ -708,7 +913,7 @@ impl ChatService {
                 index: new_index,
                 content: log.messages[idx].content.clone(),
                 role: log.messages[idx].role,
-                candidates_count: cands.len(),
+                candidates_count,
             })
         })
     }
@@ -3749,7 +3954,7 @@ mod tests {
     }
 
     #[test]
-    fn regen_returns_old_candidates_when_present() {
+    fn regen_snapshot_preserves_durable_message_until_commit() {
         let (_tmp, service, character) = make_swipe_service();
         let log = service
             .append_with_candidates(
@@ -3758,39 +3963,84 @@ mod tests {
                 vec!["old-a".to_string(), "old-b".to_string()],
             )
             .unwrap();
-        assert_eq!(log.messages.len(), 2);
-        let (_new_log, old_candidates) = service.regen(&character, None).unwrap();
-        assert_eq!(old_candidates, vec!["old-a", "old-b"]);
-    }
+        let snapshot = service
+            .regen_snapshot(&character, None, "generation-1".to_string())
+            .unwrap();
+        let unchanged = service.history(&character, None).unwrap();
+        assert_eq!(unchanged.message_ids[1], log.message_ids[1]);
+        assert_eq!(unchanged.messages[1].content, "old-b");
+        assert_eq!(snapshot.candidates, vec!["old-a", "old-b"]);
 
-    #[test]
-    fn regen_on_empty_log_returns_empty_candidates() {
-        let tmp = tempfile::tempdir().unwrap();
-        let service = ChatService::new(tmp.path());
-        let character = CharacterId::new("empty-regen").unwrap();
-        let (_log, old_candidates) = service.regen(&character, None).unwrap();
-        assert!(
-            old_candidates.is_empty(),
-            "empty log regen should return empty candidates"
+        let committed = service
+            .commit_regen(&character, None, &snapshot, "new-c")
+            .unwrap();
+        assert_eq!(committed.messages.len(), 2);
+        assert_eq!(committed.message_ids[1], log.message_ids[1]);
+        assert_eq!(
+            committed.message_candidates[1],
+            vec!["old-a", "old-b", "new-c"]
         );
+        assert_eq!(committed.messages[1].content, "new-c");
     }
 
     #[test]
-    fn regen_returns_content_as_single_candidate_for_legacy_message() {
+    fn regen_commit_rejects_stale_snapshot_without_overwriting_history() {
         let (_tmp, service, character) = make_swipe_service();
-        // 追加无候选的 assistant 消息（旧格式）
+        service
+            .append_with_candidates(&character, None, vec!["old".to_string()])
+            .unwrap();
+        let snapshot = service
+            .regen_snapshot(&character, None, "generation-1".to_string())
+            .unwrap();
         service
             .append(
                 &character,
                 None,
                 ChatMessage {
-                    role: MessageRole::Assistant,
-                    content: "legacy-reply".into(),
+                    role: MessageRole::User,
+                    content: "a concurrent edit".to_string(),
                 },
             )
             .unwrap();
-        let (_log, old_candidates) = service.regen(&character, None).unwrap();
-        assert_eq!(old_candidates, vec!["legacy-reply"]);
+
+        assert!(matches!(
+            service.commit_regen(&character, None, &snapshot, "new"),
+            Err(AirpError::Conflict(_))
+        ));
+        let history = service.history(&character, None).unwrap();
+        assert_eq!(
+            history.messages.last().unwrap().content,
+            "a concurrent edit"
+        );
+    }
+
+    #[test]
+    fn regen_commit_preserves_explicit_single_candidate_representation() {
+        let (_tmp, service, character) = make_swipe_service();
+        service
+            .append_with_candidates(&character, None, vec!["old".to_string()])
+            .unwrap();
+        let snapshot = service
+            .regen_snapshot(&character, None, "generation-1".to_string())
+            .unwrap();
+        assert_eq!(snapshot.stored_candidates, vec!["old"]);
+        let committed = service
+            .commit_regen(&character, None, &snapshot, "new")
+            .unwrap();
+        assert_eq!(committed.message_candidates[1], vec!["old", "new"]);
+    }
+
+    #[test]
+    fn session_operation_lease_rejects_conflicts_and_releases_on_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("lease-char").unwrap();
+        let lease = try_acquire_session_operation(tmp.path(), &character, None).unwrap();
+        assert!(matches!(
+            try_acquire_session_operation(tmp.path(), &character, None),
+            Err(AirpError::Conflict(message)) if message == "session_busy"
+        ));
+        drop(lease);
+        assert!(try_acquire_session_operation(tmp.path(), &character, None).is_ok());
     }
 
     // ── PR #270 audit M2/M3: domain-level branch behavior ─────────────────

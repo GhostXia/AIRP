@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::adapter::{ChatMessage, GenerationParams, ProviderConfig};
 use crate::daemon::{ChatCompletionRequest, DaemonState};
 use crate::data_dir;
+use crate::domain::RegenSnapshot;
 use crate::error::AirpError;
 use crate::fsm::StreamingFsm;
 use crate::orchestrator::{
@@ -42,7 +43,7 @@ pub fn prepare_pipeline(
     payload: &ChatCompletionRequest,
     state: &Arc<DaemonState>,
 ) -> Result<PreparedPipeline, AirpError> {
-    prepare_pipeline_with_mode(payload, state, PrepareMode::Chat)
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Chat, None)
 }
 
 /// Build the same provider-ready pipeline without advancing timeline state or writing history.
@@ -50,17 +51,17 @@ pub fn preview_pipeline(
     payload: &ChatCompletionRequest,
     state: &Arc<DaemonState>,
 ) -> Result<PreparedPipeline, AirpError> {
-    prepare_pipeline_with_mode(payload, state, PrepareMode::Preview)
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Preview, None)
 }
 
-/// Regen: caller has already deleted the last assistant message. Build a pipeline
-/// that generates a new response from existing history without appending/persisting
-/// a new user message.
-pub fn prepare_regen_pipeline(
+/// Regen: generate a replacement candidate from an immutable assistant snapshot
+/// without deleting the durable target before streaming.
+pub(crate) fn prepare_regen_pipeline(
     payload: &ChatCompletionRequest,
     state: &Arc<DaemonState>,
+    snapshot: RegenSnapshot,
 ) -> Result<PreparedPipeline, AirpError> {
-    prepare_pipeline_with_mode(payload, state, PrepareMode::Regen)
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Regen, Some(snapshot))
 }
 
 /// Continue: build a pipeline that generates a continuation of the last assistant
@@ -69,13 +70,14 @@ pub fn prepare_continue_pipeline(
     payload: &ChatCompletionRequest,
     state: &Arc<DaemonState>,
 ) -> Result<PreparedPipeline, AirpError> {
-    prepare_pipeline_with_mode(payload, state, PrepareMode::Continue)
+    prepare_pipeline_with_mode(payload, state, PrepareMode::Continue, None)
 }
 
 fn prepare_pipeline_with_mode(
     payload: &ChatCompletionRequest,
     state: &Arc<DaemonState>,
     mode: PrepareMode,
+    regen_snapshot: Option<RegenSnapshot>,
 ) -> Result<PreparedPipeline, AirpError> {
     // MS-6: scene branch — scene_id takes precedence over character_id
     if let Some(ref sid) = payload.scene_id {
@@ -392,6 +394,20 @@ fn prepare_pipeline_with_mode(
                 role: crate::adapter::MessageRole::User,
                 content: payload.message.clone(),
             });
+        } else if mode == PrepareMode::Regen {
+            let snapshot = regen_snapshot.as_ref().ok_or_else(|| {
+                AirpError::Internal("regen pipeline missing snapshot".to_string())
+            })?;
+            let target = list.pop().ok_or_else(|| {
+                AirpError::Conflict("regen target disappeared before prompt assembly".to_string())
+            })?;
+            if target.role != crate::adapter::MessageRole::Assistant
+                || target.content != snapshot.content
+            {
+                return Err(AirpError::Conflict(
+                    "regen target changed before prompt assembly".to_string(),
+                ));
+            }
         } else if mode == PrepareMode::Continue {
             // Pre-validate: last message must be assistant (fail before expensive LLM call).
             let last_msg = list.last().ok_or_else(|| {
@@ -473,7 +489,12 @@ fn prepare_pipeline_with_mode(
             volume_config: snapshot.volume_config.clone(),
             http_client: state.http_client.clone(),
             continue_mode: mode == PrepareMode::Continue,
-            swipe_candidates: payload.swipe_candidates.clone(),
+            // Kept in the HTTP schema for backward-compatible decoding, but
+            // deferred regen owns candidates through its trusted snapshot.
+            // Never allow a client-supplied list to alter a normal completion.
+            swipe_candidates: Vec::new(),
+            regen_snapshot,
+            session_operation_lease: None,
         },
         http_client: state.http_client.clone(),
     })
