@@ -333,6 +333,42 @@ async fn session_state_observes_active_command_without_creating_idle_owner() {
 }
 
 #[tokio::test]
+async fn session_state_reports_a_durable_recovery_marker_after_restart() {
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("recovering-route").unwrap();
+    let _commit = crate::turn_commit::TurnCommit::begin(
+        &state.data_root,
+        &character,
+        None,
+        "interrupted-route-generation".to_string(),
+        true,
+        true,
+    )
+    .unwrap();
+    let app = create_router(state);
+    let body = serde_json::json!({"character_id": "recovering-route"});
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/session-state")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let status: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+    assert_eq!(status["phase"], "recovering");
+    assert!(status.get("command").is_none());
+    assert_eq!(status["generation_id"], "interrupted-route-generation");
+}
+
+#[tokio::test]
 async fn cancel_generation_requires_the_current_generation_id() {
     let (state, _tmp) = make_state_no_key();
     let character = crate::types::CharacterId::new("alice").unwrap();

@@ -55,7 +55,26 @@ pub(super) async fn run_finalize(
             lease.begin_commit()?;
         }
         let (stripped, live_state) = extract_state_content(&cleaned_acc);
-        if !stripped.trim().is_empty() {
+        let message_expected = !stripped.trim().is_empty();
+        let state_expected = live_state.is_some();
+        let mut turn_commit = if message_expected || state_expected {
+            let generation_id = ctx
+                .session_operation_lease
+                .as_ref()
+                .map(|lease| lease.generation_id().to_string())
+                .unwrap_or_else(crate::ulid::new_id);
+            Some(crate::turn_commit::TurnCommit::begin(
+                &ctx.data_root,
+                cid,
+                ctx.session_id.as_ref(),
+                generation_id,
+                message_expected,
+                state_expected,
+            )?)
+        } else {
+            None
+        };
+        if message_expected {
             if let Some(snapshot) = ctx.regen_snapshot.as_ref() {
                 if !ctx
                     .session_operation_lease
@@ -88,11 +107,18 @@ pub(super) async fn run_finalize(
                 )?;
             }
         }
+        if let Some(commit) = turn_commit.as_mut() {
+            commit.mark_message_committed()?;
+        }
         // 先确认 assistant 消息成功落盘，再持久化 live state。
         // 若上面的消息追加失败（`?` 传播 Err），state 不会被写入，
         // 避免 live.json 领先于 chat_log 的不一致。
         if let Some(ref state) = live_state {
             persist_live_state(&ctx.data_root, cid.as_str(), state).await?;
+        }
+        if let Some(mut commit) = turn_commit {
+            commit.mark_state_committed()?;
+            commit.complete()?;
         }
     }
 

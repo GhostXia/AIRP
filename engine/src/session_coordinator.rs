@@ -96,11 +96,24 @@ impl SessionCoordinatorRegistry {
         command: SessionCommand,
     ) -> Result<SessionCommandLease, AirpError> {
         let key = session_key(data_root, character_id, session_id);
+        // Do not hold the global registry mutex across filesystem access: a
+        // slow data root for one session must not serialize unrelated sessions.
+        let recovery_pending =
+            crate::turn_commit::pending_turn(data_root, character_id, session_id).is_some();
         let mut entries = self
             .entries
             .lock()
             .expect("session coordinator registry poisoned");
         entries.retain(|_, entry| entry.strong_count() > 0);
+        if let Some(state) = entries.get(&key).and_then(Weak::upgrade) {
+            let coordinator = state.lock().expect("session coordinator state poisoned");
+            if coordinator.status.phase != SessionPhase::Idle {
+                return Err(AirpError::Conflict("session_busy".to_string()));
+            }
+        }
+        if recovery_pending {
+            return Err(AirpError::Conflict("session_recovery_required".to_string()));
+        }
         let state = match entries.get(&key).and_then(Weak::upgrade) {
             Some(state) => state,
             None => {
@@ -186,17 +199,24 @@ impl SessionCoordinatorRegistry {
             .lock()
             .expect("session coordinator registry poisoned");
         entries.retain(|_, entry| entry.strong_count() > 0);
-        entries
-            .get(&key)
-            .and_then(Weak::upgrade)
-            .map(|state| {
-                state
-                    .lock()
-                    .expect("session coordinator state poisoned")
-                    .status
-                    .clone()
-            })
-            .unwrap_or_else(SessionCoordinatorStatus::idle)
+        let active = entries.get(&key).and_then(Weak::upgrade).map(|state| {
+            state
+                .lock()
+                .expect("session coordinator state poisoned")
+                .status
+                .clone()
+        });
+        drop(entries);
+        active.unwrap_or_else(|| {
+            crate::turn_commit::pending_turn(data_root, character_id, session_id)
+                .map(|marker| SessionCoordinatorStatus {
+                    phase: SessionPhase::Recovering,
+                    command: None,
+                    generation_id: (!marker.generation_id.is_empty())
+                        .then_some(marker.generation_id),
+                })
+                .unwrap_or_else(SessionCoordinatorStatus::idle)
+        })
     }
 
     #[cfg(test)]
@@ -377,5 +397,83 @@ mod tests {
             registry.cancel_generation(root, &character, None, committing.generation_id()),
             Err(AirpError::Conflict(message)) if message == "generation_committing"
         ));
+    }
+
+    #[test]
+    fn durable_marker_reports_recovering_and_blocks_new_commands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = SessionCoordinatorRegistry::default();
+        let character = CharacterId::new("recovering-char").unwrap();
+        let mut commit = crate::turn_commit::TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "interrupted-generation".to_string(),
+            true,
+            true,
+        )
+        .unwrap();
+
+        let status = registry.status(tmp.path(), &character, None);
+        assert_eq!(status.phase, SessionPhase::Recovering);
+        assert_eq!(
+            status.generation_id.as_deref(),
+            Some("interrupted-generation")
+        );
+        assert!(matches!(
+            registry.try_submit(
+                tmp.path(),
+                &character,
+                None,
+                SessionCommand::Completion
+            ),
+            Err(AirpError::Conflict(message)) if message == "session_recovery_required"
+        ));
+
+        commit.mark_message_committed().unwrap();
+        commit.mark_state_committed().unwrap();
+        commit.complete().unwrap();
+        assert_eq!(
+            registry.status(tmp.path(), &character, None).phase,
+            SessionPhase::Idle
+        );
+    }
+
+    #[test]
+    fn active_commit_marker_remains_session_busy_until_owner_is_lost() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = SessionCoordinatorRegistry::default();
+        let character = CharacterId::new("active-marker-char").unwrap();
+        let mut lease = registry
+            .try_submit(tmp.path(), &character, None, SessionCommand::Completion)
+            .unwrap();
+        lease.begin_commit().unwrap();
+        let mut commit = crate::turn_commit::TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            lease.generation_id().to_string(),
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            registry.status(tmp.path(), &character, None).phase,
+            SessionPhase::Committing
+        );
+        assert!(matches!(
+            registry.try_submit(tmp.path(), &character, None, SessionCommand::Swipe),
+            Err(AirpError::Conflict(message)) if message == "session_busy"
+        ));
+
+        drop(lease);
+        assert_eq!(
+            registry.status(tmp.path(), &character, None).phase,
+            SessionPhase::Recovering
+        );
+        commit.mark_message_committed().unwrap();
+        commit.mark_state_committed().unwrap();
+        commit.complete().unwrap();
     }
 }
