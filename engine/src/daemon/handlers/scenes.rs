@@ -58,20 +58,29 @@ pub(in crate::daemon) async fn create_scene_endpoint(
     Json(scene): Json<crate::scene::SceneConfig>,
 ) -> Response {
     match scene.save(&state.data_root) {
-        Ok(()) => {
-            let path = data_dir::scene_json_path(&state.data_root, &scene.scene_id);
-            (
-                StatusCode::CREATED,
-                [(header::CONTENT_TYPE, "application/json")],
-                serde_json::json!({"scene_id": scene.scene_id, "path": path}).to_string(),
-            )
-                .into_response()
+        Ok(()) => (
+            StatusCode::CREATED,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({"scene_id": scene.scene_id}).to_string(),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(
+                scene_id = %scene.scene_id,
+                error = %error,
+                "scene manifest persistence failed"
+            );
+            error.into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
 /// POST /v1/scenes/:scene_id/characters — add a character to an existing scene.
+///
+/// Scene manifests intentionally allow forward references: `character_id` is
+/// validated as an ID, but the character asset need not exist yet. This keeps
+/// scene composition independent from character import order and is part of
+/// the endpoint contract.
 pub(in crate::daemon) async fn add_scene_character_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(scene_id): axum::extract::Path<String>,

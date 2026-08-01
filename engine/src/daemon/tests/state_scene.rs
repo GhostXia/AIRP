@@ -141,6 +141,11 @@ async fn test_ms3_create_and_get_scene() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
+    let create_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+    assert_eq!(create_json, serde_json::json!({"scene_id": "tavern"}));
 
     let app = create_router(state);
     let resp = app
@@ -177,8 +182,50 @@ async fn test_ms3_get_scene_404() {
 }
 
 #[tokio::test]
+async fn test_ms3_create_scene_save_error_uses_public_error_envelope() {
+    let (state, _tmp) = make_state_no_key();
+    std::fs::write(state.data_root.join("scenes"), "not a directory").unwrap();
+    let scene = crate::scene::SceneConfig {
+        scene_id: crate::types::SceneId::new("broken").unwrap(),
+        description: "Broken storage target".to_string(),
+        characters: vec![],
+        narrator_style: String::new(),
+        lorebook_merge: crate::scene::LorebookMerge::Union,
+        format_hint: String::new(),
+        active_conversation_id: None,
+    };
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/scenes")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&scene).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/json"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["code"], "io_error");
+    assert_eq!(error["error"]["message"], "internal error");
+    assert!(!body
+        .windows(b"not a directory".len())
+        .any(|window| window == b"not a directory"));
+}
+
+#[tokio::test]
 async fn test_ms3_add_character_to_scene() {
     let (state, _tmp) = make_state_no_key();
+    let data_root = state.data_root.clone();
     let scene = crate::scene::SceneConfig {
         scene_id: crate::types::SceneId::new("forest").unwrap(),
         description: "Forest".to_string(),
@@ -209,6 +256,10 @@ async fn test_ms3_add_character_to_scene() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
     assert_eq!(v["character_count"], 1);
+    assert!(
+        !data_root.join("characters").join("ranger").exists(),
+        "scene character references are intentionally allowed before character import"
+    );
 }
 
 // M_LS LS-7: schema endpoint
