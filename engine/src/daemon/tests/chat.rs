@@ -343,6 +343,7 @@ async fn session_state_reports_a_durable_recovery_marker_after_restart() {
         "interrupted-route-generation".to_string(),
         true,
         true,
+        false,
     )
     .unwrap();
     let app = create_router(state);

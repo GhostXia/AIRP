@@ -42,6 +42,8 @@ pub(super) async fn run_finalize(
     crate::quota::record_tokens_async(&ctx.data_root, out_tokens.min(u32::MAX as usize) as u32)
         .await;
 
+    let (volume_text, seal_signal) = volume_manager::parse_seal_signal(&raw_acc);
+
     // (1) Persist assistant message to ChatLog
     //     M_LS-1: strip <state>…</state> before persisting; side-persist state/live.json.
     //     审计 Bug D 修复：先追加 assistant 消息到 chat_log.jsonl，再持久化
@@ -57,7 +59,11 @@ pub(super) async fn run_finalize(
         let (stripped, live_state) = extract_state_content(&cleaned_acc);
         let message_expected = !stripped.trim().is_empty();
         let state_expected = live_state.is_some();
-        let mut turn_commit = if message_expected || state_expected {
+        let volume_expected = ctx
+            .session_dir
+            .as_ref()
+            .is_some_and(|_| !volume_text.trim().is_empty());
+        let mut turn_commit = if message_expected || state_expected || volume_expected {
             let generation_id = ctx
                 .session_operation_lease
                 .as_ref()
@@ -70,6 +76,7 @@ pub(super) async fn run_finalize(
                 generation_id,
                 message_expected,
                 state_expected,
+                volume_expected,
             )?)
         } else {
             None
@@ -116,8 +123,20 @@ pub(super) async fn run_finalize(
         if let Some(ref state) = live_state {
             persist_live_state(&ctx.data_root, cid.as_str(), state).await?;
         }
-        if let Some(mut commit) = turn_commit {
+        if let Some(commit) = turn_commit.as_mut() {
             commit.mark_state_committed()?;
+        }
+        if let Some(sd) = ctx.session_dir.as_ref().filter(|_| volume_expected) {
+            // `current.md` is synchronous durable turn state. Keep it inside
+            // the marker and coordinator lease; sealing and maintenance remain
+            // outside because they may make additional slow provider calls.
+            volume_store::append_to_current(sd, &volume_text)?;
+            crate::agent::director::acknowledge_directive(sd);
+        }
+        if let Some(commit) = turn_commit.as_mut() {
+            commit.mark_volume_committed()?;
+        }
+        if let Some(commit) = turn_commit {
             commit.complete()?;
         }
     }
@@ -131,23 +150,21 @@ pub(super) async fn run_finalize(
 
     // (2) Volume side-effects
     if let Some(sd) = ctx.session_dir {
-        let (cleaned, signal) = volume_manager::parse_seal_signal(&raw_acc);
-
-        if !cleaned.trim().is_empty() {
+        if ctx.character_id.is_none() && !volume_text.trim().is_empty() {
             // R3: 旧实现 `let _ = ...` 静默吞掉 `append_to_current` 的错误，
             // 包括磁盘满、权限拒绝、`commit_memory_revision` 因并发 commit
             // 同号 revision 被拒等。结果：刚生成的助手消息对客户端已可见，
             // 但 `current.md` 与 memory revision 都没记录，用户体感为"AI 忘了
             // 刚才说过什么"。因此改为硬失败，只有关键持久化全部成功后
             // 才向客户端发送 done；详细错误仅写内部日志。
-            volume_store::append_to_current(&sd, &cleaned)?;
+            volume_store::append_to_current(&sd, &volume_text)?;
             // Phase 2.1: 导演指令单轮交付——assistant 消息成功写入后
             // 清除 directive 文件，使非 observe 指令只生效一轮。
             // 如果生成失败（走不到这里），指令保持 pending，下轮重新注入。
             crate::agent::director::acknowledge_directive(&sd);
         }
 
-        let should_seal = signal.as_ref().map(|s| s.should_seal).unwrap_or(false)
+        let should_seal = seal_signal.as_ref().map(|s| s.should_seal).unwrap_or(false)
             || volume_manager::should_force_seal(&sd, ctx.volume_config.hard_threshold_tokens);
 
         // JoinSet 结构化管理：封卷 + 维护子任务，finalize 等待两者完成。
