@@ -60,6 +60,10 @@ pub fn build_sse_stream(
     } else {
         "partially_committed"
     };
+    let cancellation = finalizer
+        .session_operation_lease
+        .as_ref()
+        .and_then(|lease| lease.cancellation());
 
     // ── Processing task ───────────────────────────────────────────────────────
     tokio::spawn(async move {
@@ -71,7 +75,23 @@ pub fn build_sse_stream(
         let mut failed = false;
 
         tokio::pin!(raw_stream);
-        while let Some(item) = raw_stream.next().await {
+        loop {
+            let item = match cancellation.as_ref() {
+                Some(cancellation) => tokio::select! {
+                    _ = cancellation.cancelled() => {
+                        cancelled = true;
+                        None
+                    }
+                    item = raw_stream.next() => item,
+                },
+                None => raw_stream.next().await,
+            };
+            if cancelled {
+                break;
+            }
+            let Some(item) = item else {
+                break;
+            };
             match item {
                 Ok(token) => {
                     raw_acc.push_str(&token);
@@ -84,15 +104,20 @@ pub fn build_sse_stream(
                         break;
                     }
                 }
-                Err(_) => {
+                Err(error) => {
                     // The user message is already durable once streaming starts.
                     // Never expose the raw upstream body or invite a blind resend.
                     failed = true;
-                    tracing::error!("chat upstream stream failed");
+                    let code = crate::adapter::streaming_failure_code(&error);
+                    tracing::error!(failure_code = code, "chat upstream stream failed");
                     let _ = chunk_tx
                         .send(SseMessage::Error {
-                            code: "upstream".to_string(),
-                            message: "upstream request failed".to_string(),
+                            code: code.to_string(),
+                            message: if code == "timeout" {
+                                "upstream request timed out".to_string()
+                            } else {
+                                "upstream request failed".to_string()
+                            },
                             retryable: false,
                             commit_state: failure_commit_state,
                         })
@@ -117,20 +142,53 @@ pub fn build_sse_stream(
         // assistant reply untouched. Dropping the finalizer also drops its
         // logical session lease, so later mutations can proceed.
         if (cancelled || failed) && finalizer.regen_snapshot.is_some() {
+            if cancelled {
+                let _ = chunk_tx
+                    .send(SseMessage::Error {
+                        code: "cancelled".to_string(),
+                        message: "generation cancelled".to_string(),
+                        retryable: false,
+                        commit_state: "not_committed",
+                    })
+                    .await;
+            }
             return;
         }
 
         match run_finalize(finalizer, raw_acc, cleaned_acc).await {
+            Ok(()) if cancelled => {
+                let _ = chunk_tx
+                    .send(SseMessage::Error {
+                        code: "cancelled".to_string(),
+                        message: "generation cancelled".to_string(),
+                        retryable: false,
+                        commit_state: failure_commit_state,
+                    })
+                    .await;
+            }
             Ok(()) if !failed => {
                 let _ = chunk_tx.send(SseMessage::Done).await;
             }
             Ok(()) => {}
             Err(error) => {
                 tracing::error!(%error, "chat finalization failed");
+                let cancelled = matches!(
+                    &error,
+                    crate::error::AirpError::Conflict(message)
+                        if message == "generation_cancelled"
+                );
                 let _ = chunk_tx
                     .send(SseMessage::Error {
-                        code: error.code_str().to_string(),
-                        message: error.public_message(),
+                        code: if cancelled {
+                            "cancelled".to_string()
+                        } else {
+                            error.code_str().to_string()
+                        },
+                        message: if cancelled {
+                            "generation cancelled".to_string()
+                        } else {
+                            error.public_message()
+                        },
                         retryable: false,
                         commit_state: failure_commit_state,
                     })

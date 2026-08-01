@@ -333,6 +333,61 @@ async fn session_state_observes_active_command_without_creating_idle_owner() {
 }
 
 #[tokio::test]
+async fn cancel_generation_requires_the_current_generation_id() {
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let lease = state
+        .session_coordinators
+        .try_submit(
+            &state.data_root,
+            &character,
+            None,
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+    let cancellation = lease.cancellation().unwrap();
+    let generation_id = lease.generation_id().to_string();
+    let app = create_router(state);
+
+    let stale = serde_json::json!({
+        "character_id": "alice",
+        "generation_id": "older-generation"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/cancel")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&stale).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(!cancellation.is_cancelled());
+
+    let current = serde_json::json!({
+        "character_id": "alice",
+        "generation_id": generation_id
+    });
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/cancel")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&current).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(cancellation.is_cancelled());
+}
+
+#[tokio::test]
 async fn test_a6_chat_history_without_session_id_still_works() {
     // 回退兼容：不传 session_id 时仍然走 legacy 路径，不能因 A6 改动破坏旧客户端
     let (state, _tmp) = make_state_no_key();

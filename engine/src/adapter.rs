@@ -44,6 +44,16 @@ fn stream_idle_timeout() -> Duration {
         .unwrap_or(DEFAULT)
 }
 
+/// Stable classification for provider failures that are safe to expose in the
+/// SSE error contract. Detailed provider text remains internal.
+pub(crate) fn streaming_failure_code(error: &str) -> &'static str {
+    if error.starts_with("请求超时:") || error.starts_with("流式响应空闲超时:") {
+        "timeout"
+    } else {
+        "upstream"
+    }
+}
+
 async fn next_stream_item_with_idle_timeout<S>(
     stream: &mut S,
     idle_timeout: Duration,
@@ -582,5 +592,18 @@ mod tests {
         }
 
         assert_eq!(received, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn streaming_timeout_has_a_distinct_public_failure_code() {
+        assert_eq!(
+            streaming_failure_code("请求超时: 等待响应头超时"),
+            "timeout"
+        );
+        assert_eq!(
+            streaming_failure_code("流式响应空闲超时: 连续 60 秒未收到数据"),
+            "timeout"
+        );
+        assert_eq!(streaming_failure_code("发送请求失败"), "upstream");
     }
 }
