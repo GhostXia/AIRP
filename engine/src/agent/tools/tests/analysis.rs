@@ -98,7 +98,11 @@ async fn enhance_analysis_returns_preview_and_rejects_world_book() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, AirpError::BadRequest(_)));
+    // #160 A2：精确文案合同——enhance 路径文案同时覆盖 enhance/apply。
+    assert!(
+        matches!(err, AirpError::BadRequest(ref message) if message == "world_book entries are read-only and not eligible for enhance or apply (issue #87)"),
+        "enhance world_book rejection must use shared enhance/apply message, got: {err:?}"
+    );
 
     // 不存在文件 → NotFound
     let err = enhance
@@ -184,7 +188,11 @@ async fn apply_enhanced_analysis_dry_run_then_confirm() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, AirpError::BadRequest(_)));
+    // #160 A2：精确文案合同——apply 路径文案与 enhance 路径一致。
+    assert!(
+        matches!(err, AirpError::BadRequest(ref message) if message == "world_book entries are read-only and not eligible for enhance or apply (issue #87)"),
+        "apply world_book rejection must use shared enhance/apply message, got: {err:?}"
+    );
 }
 
 #[tokio::test]

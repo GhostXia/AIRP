@@ -63,13 +63,16 @@ impl Tool for GetCharacterStateTool {
             let character = required_character_id(&params)?;
             let path =
                 data_dir::char_state_dir(&state.data_root, character.as_str()).join("live.json");
-            if !path.exists() {
+            // #160 A1：原 `path.exists()` + `std::fs::read` 在 async future 内
+            // 阻塞 executor worker；改 tokio::fs 与 analysis 写路径一致。
+            if !tokio::fs::try_exists(&path).await? {
                 return Err(AirpError::NotFound(format!(
                     "state for {character} not found"
                 )));
             }
+            let bytes = tokio::fs::read(&path).await?;
             Ok(ToolResult {
-                output: serde_json::from_slice(&std::fs::read(path)?)?,
+                output: serde_json::from_slice(&bytes)?,
                 dry_run: false,
             })
         })
