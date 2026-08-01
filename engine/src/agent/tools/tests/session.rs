@@ -7,6 +7,7 @@
 use super::*;
 use crate::adapter::{ChatMessage, MessageRole};
 use crate::chat_store::{ChatLog, MAX_MESSAGES};
+use crate::domain::ChatService;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -300,5 +301,78 @@ async fn session_validation_preserves_existing_error_precedence() {
     assert!(matches!(
         rollback_err,
         AirpError::BadRequest(ref message) if message == "missing index"
+    ));
+}
+
+#[tokio::test]
+async fn agent_session_writes_respect_an_active_chat_owner() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    let reg = default_registry(state.clone());
+    let character = crate::types::CharacterId::new("coordinated").unwrap();
+
+    let _generation = state
+        .session_coordinators
+        .try_submit(
+            &state.data_root,
+            &character,
+            None,
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+
+    let append_error = reg
+        .get("append_message")
+        .unwrap()
+        .call(
+            serde_json::json!({
+                "character_id": "coordinated",
+                "role": "user",
+                "content": "must not bypass the active generation",
+            }),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        append_error,
+        AirpError::Conflict(ref message) if message == "session_busy"
+    ));
+
+    // Seed the log outside the active lease so the confirmed rollback reaches
+    // coordinator admission rather than failing its read-only preview first.
+    drop(_generation);
+    ChatService::new(&state.data_root)
+        .append(
+            &character,
+            None,
+            ChatMessage {
+                role: MessageRole::User,
+                content: "seed".to_string(),
+            },
+        )
+        .unwrap();
+    let _generation = state
+        .session_coordinators
+        .try_submit(
+            &state.data_root,
+            &character,
+            None,
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+    let rollback_error = reg
+        .get("rollback_messages")
+        .unwrap()
+        .call(
+            serde_json::json!({"character_id": "coordinated", "index": 0}),
+            true,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        rollback_error,
+        AirpError::Conflict(ref message) if message == "session_busy"
     ));
 }

@@ -26,6 +26,10 @@ pub(crate) enum SessionCommand {
     EditMessage,
     Swipe,
     SwitchBranch,
+    /// A durable mutation initiated by an Agent tool.  This is intentionally
+    /// separate from chat HTTP mutations so session-state observers can tell
+    /// why a session is busy without exposing individual tool parameters.
+    AgentToolMutation,
 }
 
 impl SessionCommand {
@@ -36,7 +40,8 @@ impl SessionCommand {
             | Self::DeleteMessage
             | Self::EditMessage
             | Self::Swipe
-            | Self::SwitchBranch => SessionPhase::Committing,
+            | Self::SwitchBranch
+            | Self::AgentToolMutation => SessionPhase::Committing,
         }
     }
 }
