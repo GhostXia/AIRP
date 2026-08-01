@@ -120,9 +120,9 @@ jobs:
           # 四处的 SPKI 处理逻辑都存在且互相一致。这一步独立于 runner 本身，
           # 即使 runner 因 LLM/网络失败，TLS 契约仍能验证修复未退化。
           node --test runner-tls.test.mjs
-          # 防回归：跑脚本预检（lintScript）单元测试，确保反模式拦截规则未退化。
-          # lint 是兜底 LLM 反复犯错的关键防线，规则变更必须有测试覆盖。
-          node --test script-lint.test.mjs
+          # 防回归：跑脚本预检测试。它会在执行前验证 ES module 语法、
+          # `export async function run(ctx)` 合同和已知反模式。
+          node --test script-lint.test.mjs script-validation.test.mjs
           # 再跑 runner 本身
           node runner.mjs \
             --origin $AIRP_SMOKE_ORIGIN \
