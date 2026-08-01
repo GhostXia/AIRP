@@ -48,7 +48,8 @@ pub(super) use characters::{
 };
 pub(super) use chat::{
     chat_completion, continue_chat, delete_message, edit_message, get_chat_history,
-    preview_chat_assembly, regen_chat, rollback_chat, swipe_chat, switch_branch,
+    get_chat_session_state, preview_chat_assembly, regen_chat, rollback_chat, swipe_chat,
+    switch_branch,
 };
 pub(super) use conversations::{
     append_conversation_event_endpoint, cancel_conversation_turn_endpoint,

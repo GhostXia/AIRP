@@ -15,11 +15,12 @@ use crate::chat_pipeline;
 use crate::chat_store::ChatLog;
 use crate::daemon::types::{
     ChatCompletionRequest, ContinueRequest, DeleteMessageRequest, EditMessageRequest, HistoryQuery,
-    RegenRequest, RollbackRequest, SwipeRequest, SwitchBranchRequest,
+    RegenRequest, RollbackRequest, SessionStateQuery, SwipeRequest, SwitchBranchRequest,
 };
 use crate::daemon::DaemonState;
-use crate::domain::{try_acquire_session_operation, ChatService};
+use crate::domain::ChatService;
 use crate::error::AirpError;
+use crate::session_coordinator::{SessionCommand, SessionCoordinatorStatus};
 use axum::{response::Sse, Json};
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -45,6 +46,20 @@ pub(in crate::daemon) async fn get_chat_history(
     Ok(Json(serde_json::to_value(log)?))
 }
 
+/// POST /v1/chat/session-state — observe the Coordinator without creating an idle entry.
+pub(in crate::daemon) async fn get_chat_session_state(
+    axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Json(query): Json<SessionStateQuery>,
+) -> Result<Json<SessionCoordinatorStatus>, AirpError> {
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, query.user_id.as_deref())?;
+    Ok(Json(state.session_coordinators.status(
+        &effective_root,
+        &query.character_id,
+        query.session_id.as_ref(),
+    )))
+}
+
 /// POST /v1/chat/rollback — rollback to a specific message index
 pub(in crate::daemon) async fn rollback_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
@@ -58,8 +73,12 @@ pub(in crate::daemon) async fn rollback_chat(
     // the daemon root. Keep this explicit to preserve the same lease-key rule
     // as the multi-user mutation handlers if the request grows later.
     let effective_root = state.data_root.clone();
-    let _operation =
-        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let _operation = state.session_coordinators.try_submit(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        SessionCommand::Rollback,
+    )?;
     let service = ChatService::new(&effective_root);
     let (log, _) = match (req.message_index, req.message_id.as_deref()) {
         (Some(idx), None) => service.rollback(&req.character_id, req.session_id.as_ref(), idx)?,
@@ -86,8 +105,12 @@ pub(in crate::daemon) async fn regen_chat(
 > {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
-    let operation =
-        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let operation = state.session_coordinators.try_submit(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        SessionCommand::Regen,
+    )?;
     // DX-3: quota check (same gate as chat_completion).
     let quota_config = {
         let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
@@ -145,8 +168,12 @@ pub(in crate::daemon) async fn continue_chat(
     // DX-3: quota check (same gate as chat_completion).
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
-    let operation =
-        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let operation = state.session_coordinators.try_submit(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        SessionCommand::Continue,
+    )?;
     let quota_config = {
         let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
         cfg.quota.clone()
@@ -191,8 +218,12 @@ pub(in crate::daemon) async fn delete_message(
 ) -> Result<Json<ChatLog>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
-    let _operation =
-        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let _operation = state.session_coordinators.try_submit(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        SessionCommand::DeleteMessage,
+    )?;
     let log = ChatService::new(&effective_root).delete_message(
         &req.character_id,
         req.session_id.as_ref(),
@@ -210,8 +241,12 @@ pub(in crate::daemon) async fn swipe_chat(
 ) -> Result<Json<crate::domain::SwipeResponse>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
-    let _operation =
-        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let _operation = state.session_coordinators.try_submit(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        SessionCommand::Swipe,
+    )?;
     let resp = ChatService::new(&effective_root).switch_swipe(
         &req.character_id,
         req.session_id.as_ref(),
@@ -240,8 +275,12 @@ pub(in crate::daemon) async fn edit_message(
 ) -> Result<Json<ChatLog>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
-    let _operation =
-        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let _operation = state.session_coordinators.try_submit(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        SessionCommand::EditMessage,
+    )?;
     let log = ChatService::new(&effective_root).edit_message(
         &req.character_id,
         req.session_id.as_ref(),
@@ -277,10 +316,11 @@ pub(in crate::daemon) async fn chat_completion(
         .character_id
         .as_ref()
         .map(|character_id| {
-            try_acquire_session_operation(
+            state.session_coordinators.try_submit(
                 &effective_root,
                 character_id,
                 payload.session_id.as_ref(),
+                SessionCommand::Completion,
             )
         })
         .transpose()?;
@@ -306,8 +346,12 @@ pub(in crate::daemon) async fn switch_branch(
 ) -> Result<Json<ChatLog>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
-    let _operation =
-        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let _operation = state.session_coordinators.try_submit(
+        &effective_root,
+        &req.character_id,
+        req.session_id.as_ref(),
+        SessionCommand::SwitchBranch,
+    )?;
     let log = ChatService::new(&effective_root).switch_branch(
         &req.character_id,
         req.session_id.as_ref(),

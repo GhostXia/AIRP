@@ -647,6 +647,7 @@ mod tests {
             http_client: reqwest::Client::new(),
             fts: Default::default(),
             settings_update: Default::default(),
+            session_coordinators: Default::default(),
             provider_router: Default::default(),
             provider_routing_update: tokio::sync::Mutex::new(()),
             plugin_tools: Default::default(),

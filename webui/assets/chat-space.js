@@ -22,6 +22,9 @@
   let streamController = null;
   let branchMeta = null; // { activePath: Set, activeLeaf, parents: [] }
   let historyCursor = null; // { hasMore, oldestId } — #122 窗口化分页
+  let coordinatorPhase = 'idle';
+  let coordinatorStateSupported = true;
+  let coordinatorStatePending = false;
 
   function log(type, detail) {
     const row = document.createElement('div');
@@ -42,7 +45,9 @@
   const client = AIRPApi.createClient({
     base,
     bearer,
-    onRequest: entry => log('http.' + entry.method.toLocaleLowerCase(), entry.path + ' · ' + (entry.status || 'network') + ' · ' + entry.ms + 'ms'),
+    onRequest: entry => {
+      if (entry.path !== '/v1/chat/session-state') log('http.' + entry.method.toLocaleLowerCase(), entry.path + ' · ' + (entry.status || 'network') + ' · ' + entry.ms + 'ms');
+    },
   });
   $('#connection-address').textContent = client.base === location.origin ? '同源 Engine' : client.base;
 
@@ -52,15 +57,62 @@
   }
 
   function setComposer(enabled) {
-    input.disabled = !enabled;
-    sendButton.disabled = !enabled;
-    $('#continue-message').disabled = !enabled || messageCount === 0;
-    $('#regen-message').disabled = !enabled || !lastHistory || !lastHistory.messages?.length || String(lastHistory.messages.at(-1)?.role).toLowerCase() === 'user';
+    const available = enabled && coordinatorPhase === 'idle';
+    input.disabled = !available;
+    sendButton.disabled = !available;
+    $('#continue-message').disabled = !available || messageCount === 0;
+    $('#regen-message').disabled = !available || !lastHistory || !lastHistory.messages?.length || String(lastHistory.messages.at(-1)?.role).toLowerCase() === 'user';
     input.placeholder = enabled ? '向 ' + (characterName || '角色') + ' 发送消息…' : '选择或新建会话后发送消息…';
+  }
+
+  function sessionMutationBlocked() {
+    return Boolean(streamController) || coordinatorPhase !== 'idle';
+  }
+
+  function setCoordinatorState(state) {
+    coordinatorPhase = state && typeof state.phase === 'string' ? state.phase : 'idle';
+    const status = $('#session-operation-status');
+    const labels = { generating: '会话：生成中', committing: '会话：提交中', recovering: '会话：恢复中' };
+    status.textContent = labels[coordinatorPhase] || '';
+    status.hidden = coordinatorPhase === 'idle';
+    status.className = 'tag mono session-operation-status ' + (coordinatorPhase === 'recovering' ? 'tag-danger' : 'tag-warning');
+    document.querySelectorAll('.message-action, .swipe-btn').forEach(button => { button.disabled = coordinatorPhase !== 'idle'; });
+    if (!streamController) setComposer(Boolean(sessionId));
+  }
+
+  async function refreshCoordinatorState() {
+    if (!characterId || !sessionId) { setCoordinatorState({ phase: 'idle' }); return; }
+    if (!coordinatorStateSupported || coordinatorStatePending) return;
+    const requestedCharacter = characterId;
+    const requestedSession = sessionId;
+    coordinatorStatePending = true;
+    try {
+      const state = await client.request('POST', '/v1/chat/session-state', {
+        character_id: requestedCharacter,
+        session_id: requestedSession,
+      });
+      if (characterId === requestedCharacter && sessionId === requestedSession) setCoordinatorState(state);
+    } catch (error) {
+      if (error && error.status === 404) {
+        coordinatorStateSupported = false;
+        setCoordinatorState({ phase: 'idle' });
+        return;
+      }
+      log('chat.session_state.error', AIRPApi.errorMessage(error.data, error.message));
+    } finally {
+      coordinatorStatePending = false;
+    }
+  }
+
+  function handleMutationError(type, error) {
+    const message = AIRPApi.errorMessage(error.data, error.message);
+    log(type, message);
+    if (error && error.status === 409 && message.includes('session_busy')) refreshCoordinatorState();
   }
 
   function setStreamState(active) {
     if (active) {
+      setCoordinatorState({ phase: 'generating' });
       sendButton.disabled = false;
       sendButton.classList.add('stop');
       sendButton.setAttribute('aria-label', '停止生成');
@@ -78,6 +130,7 @@
       sendButton.querySelector('.ico').textContent = '?';
       $('#stream-status').textContent = 'Enter 发送 · Shift+Enter 换行';
       setComposer(Boolean(sessionId));
+      refreshCoordinatorState();
       // Phase 3.5: 停止头像动画
       const avatar = $('#character-avatar');
       if (avatar) avatar.classList.remove('streaming');
@@ -153,14 +206,16 @@
       const prev = document.createElement('button'); prev.type = 'button'; prev.className = 'swipe-btn'; prev.textContent = '‹'; prev.setAttribute('aria-label', '上一个候选');
       const indicator = document.createElement('span'); indicator.className = 'swipe-indicator'; indicator.textContent = (swipeIndex + 1) + '/' + candidates.length;
       const next = document.createElement('button'); next.type = 'button'; next.className = 'swipe-btn'; next.textContent = '›'; next.setAttribute('aria-label', '下一个候选');
+      prev.disabled = coordinatorPhase !== 'idle';
+      next.disabled = coordinatorPhase !== 'idle';
       const doSwipe = async (newIndex) => {
-        if (streamController) return;
+        if (sessionMutationBlocked()) return;
         try {
           const resp = await client.request('POST', '/v1/chat/swipe', { character_id: characterId, session_id: sessionId, message_id: options.messageId, index: newIndex });
           content.textContent = resp.content || candidates[newIndex] || '';
           indicator.textContent = (resp.index + 1) + '/' + resp.candidates_count;
           log('chat.swipe', options.messageId + ' → ' + (resp.index + 1) + '/' + resp.candidates_count);
-        } catch (error) { log('chat.swipe.error', AIRPApi.errorMessage(error.data, error.message)); }
+        } catch (error) { handleMutationError('chat.swipe.error', error); }
       };
       prev.addEventListener('click', () => { const cur = parseInt(indicator.textContent) - 1; if (cur > 0) doSwipe(cur - 1); });
       next.addEventListener('click', () => { const cur = parseInt(indicator.textContent) - 1; if (cur < candidates.length - 1) doSwipe(cur + 1); });
@@ -173,6 +228,7 @@
       controls.className = 'message-actions';
       const addAction = (label, action) => {
         const control = document.createElement('button'); control.type = 'button'; control.className = 'message-action'; control.textContent = label; control.addEventListener('click', action); controls.appendChild(control);
+        control.disabled = coordinatorPhase !== 'idle';
       };
       addAction('回滚到这里', () => rollbackTo(options.messageId));
       addAction('删除', () => deleteMessage(options.messageId));
@@ -361,41 +417,41 @@
   }
 
   async function rollbackTo(messageId) {
-    if (!sessionId || streamController || !window.confirm('回滚会丢弃这条消息之后的全部内容。继续吗？')) return;
+    if (!sessionId || sessionMutationBlocked() || !window.confirm('回滚会丢弃这条消息之后的全部内容。继续吗？')) return;
     try {
       await client.request('POST', '/v1/chat/rollback', { character_id: characterId, session_id: sessionId, message_id: messageId });
       log('chat.rollback', messageId); await loadSessions(); await loadHistory();
-    } catch (error) { log('chat.rollback.error', AIRPApi.errorMessage(error.data, error.message)); }
+    } catch (error) { handleMutationError('chat.rollback.error', error); }
   }
 
   async function deleteMessage(messageId) {
-    if (!sessionId || streamController || !window.confirm('确定删除这条消息？')) return;
+    if (!sessionId || sessionMutationBlocked() || !window.confirm('确定删除这条消息？')) return;
     try {
       await client.request('POST', '/v1/chat/delete', { character_id: characterId, session_id: sessionId, message_id: messageId });
       log('chat.delete', messageId); await loadSessions(); await loadHistory();
-    } catch (error) { log('chat.delete.error', AIRPApi.errorMessage(error.data, error.message)); }
+    } catch (error) { handleMutationError('chat.delete.error', error); }
   }
 
   async function editMessage(messageId, current) {
-    if (!sessionId || streamController) return;
+    if (!sessionId || sessionMutationBlocked()) return;
     const content = window.prompt('编辑用户消息', current); if (content == null || !content.trim() || content === current) return;
     try {
       await client.request('PUT', '/v1/chat/message', { character_id: characterId, session_id: sessionId, message_id: messageId, content: content.trim() });
       log('chat.edit', messageId); await loadHistory();
-    } catch (error) { log('chat.edit.error', AIRPApi.errorMessage(error.data, error.message)); }
+    } catch (error) { handleMutationError('chat.edit.error', error); }
   }
 
   async function switchBranch(targetLeafId) {
-    if (!sessionId || streamController) return;
+    if (!sessionId || sessionMutationBlocked()) return;
     try {
       await client.request('POST', '/v1/chat/branch/switch', { character_id: characterId, session_id: sessionId, target_leaf_id: targetLeafId });
       log('chat.branch.switch', targetLeafId);
       await loadHistory();
-    } catch (error) { log('chat.branch.error', AIRPApi.errorMessage(error.data, error.message)); }
+    } catch (error) { handleMutationError('chat.branch.error', error); }
   }
 
   async function streamMutation(path, label) {
-    if (!sessionId || streamController) return;
+    if (!sessionId || sessionMutationBlocked()) return;
     const assistant = appendMessage('assistant', '', { streaming: true }); let text = '';
     streamController = new AbortController(); setStreamState(true);
     try {
@@ -406,7 +462,7 @@
       });
       await loadSessions(); await loadHistory();
     } catch (error) {
-      if (error.name !== 'AbortError') { assistant.content.textContent = text || AIRPApi.errorMessage(error.data, error.message); assistant.row.querySelector('.bubble').classList.add('runtime-error'); log(label + '.error', AIRPApi.errorMessage(error.data, error.message)); }
+      if (error.name !== 'AbortError') { assistant.content.textContent = text || AIRPApi.errorMessage(error.data, error.message); assistant.row.querySelector('.bubble').classList.add('runtime-error'); handleMutationError(label + '.error', error); }
     } finally { streamController = null; setStreamState(false); }
   }
 
@@ -428,6 +484,7 @@
     sessionStorage.setItem('airp_session_id', id);
     renderSessions();
     flow.classList.add('switching');
+    await refreshCoordinatorState();
     await loadHistory();
     flow.classList.remove('switching');
   }
@@ -454,6 +511,7 @@
       streamController.abort();
       return;
     }
+    if (coordinatorPhase !== 'idle') return;
     const message = input.value.trim();
     if (!message || !characterId || !sessionId) return;
     input.value = '';
@@ -548,8 +606,10 @@
       setConnection('ok', health && health.provider_configured ? 'Engine 已连接' : '已连接 · Provider 待配置');
       log('engine.ready', (version && version.version || version || 'ready').toString());
       await loadSessions();
+      await refreshCoordinatorState();
       await loadHistory();
       startHud(); // Phase 1.5: 启动状态 HUD 轮询
+      window.setInterval(refreshCoordinatorState, 2000);
     } catch (error) {
       setConnection('danger', '连接失败');
       emptyState('无法连接 Engine', AIRPApi.errorMessage(error.data, error.message) + '。确认 Engine 已启动后刷新页面。');

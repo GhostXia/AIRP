@@ -264,8 +264,15 @@ async fn test_a6_chat_regen_accepts_session_id() {
 async fn session_mutation_returns_409_while_generation_lease_is_active() {
     let (state, _tmp) = make_state_no_key();
     let character = crate::types::CharacterId::new("alice").unwrap();
-    let lease =
-        crate::domain::try_acquire_session_operation(&state.data_root, &character, None).unwrap();
+    let lease = state
+        .session_coordinators
+        .try_submit(
+            &state.data_root,
+            &character,
+            None,
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
     let app = create_router(state);
     let body = serde_json::json!({"character_id": "alice", "message_index": 0});
     let response = app
@@ -287,6 +294,42 @@ async fn session_mutation_returns_409_while_generation_lease_is_active() {
         .unwrap()
         .contains("session_busy"));
     drop(lease);
+}
+
+#[tokio::test]
+async fn session_state_observes_active_command_without_creating_idle_owner() {
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let lease = state
+        .session_coordinators
+        .try_submit(
+            &state.data_root,
+            &character,
+            None,
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+    let app = create_router(state);
+    let body = serde_json::json!({"character_id": "alice"});
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/session-state")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let status: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+    assert_eq!(status["phase"], "generating");
+    assert_eq!(status["command"], "completion");
+    assert_eq!(status["generation_id"], lease.generation_id());
 }
 
 #[tokio::test]
