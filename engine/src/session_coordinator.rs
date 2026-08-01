@@ -167,10 +167,9 @@ impl SessionCoordinatorRegistry {
         if coordinator.status.phase == SessionPhase::Committing {
             return Err(AirpError::Conflict("generation_committing".to_string()));
         }
-        let cancellation = coordinator
-            .cancellation
-            .as_ref()
-            .ok_or_else(|| AirpError::Conflict("generation_not_cancellable".to_string()))?;
+        let cancellation = coordinator.cancellation.as_ref().ok_or_else(|| {
+            AirpError::Internal("generating coordinator has no cancellation token".to_string())
+        })?;
         cancellation.cancel();
         Ok(coordinator.status.clone())
     }
@@ -371,10 +370,9 @@ mod tests {
         ));
         drop(lease);
 
-        let mut committing = registry
-            .try_submit(root, &character, None, SessionCommand::Regen)
+        let committing = registry
+            .try_submit(root, &character, None, SessionCommand::Swipe)
             .unwrap();
-        committing.begin_commit().unwrap();
         assert!(matches!(
             registry.cancel_generation(root, &character, None, committing.generation_id()),
             Err(AirpError::Conflict(message)) if message == "generation_committing"
