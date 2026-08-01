@@ -238,7 +238,10 @@ NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/deploy/production/api-smoke.mjs"
 
 $compose restart engine gateway >/dev/null
-wait_for_engine_ready
+# The onboarding browser smoke immediately exercises the same streaming chat
+# route as the restart-continuity smoke below. A health/models-only probe can
+# pass while the first post-restart SSE request is still unstable.
+WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
 character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
 session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file")
 expected_count=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).final_message_count" "$result_file")

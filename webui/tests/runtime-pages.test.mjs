@@ -11,6 +11,8 @@ const onboardingPage = await readFile(new URL('../screens/16-onboarding.html', i
 const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
+const productionBrowserSmoke = await readFile(new URL('../../ui/production-browser-smoke.mjs', import.meta.url), 'utf8');
+const productionSmokeCi = await readFile(new URL('../../deploy/production/smoke-ci.sh', import.meta.url), 'utf8');
 const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
 const dialogueGenScript = await readFile(new URL('../assets/dialogue-gen.js', import.meta.url), 'utf8');
 const dialogueFlowScript = await readFile(new URL('../assets/dialogue-flow.js', import.meta.url), 'utf8');
@@ -47,6 +49,18 @@ test('first-run onboarding blocks blind resend after an uncertain commit', () =>
   assert.match(onboardingScript, /message\.control\.disabled = true/);
   assert.match(onboardingScript, /打开对话历史确认/);
   assert.match(chatScript, /sessionStorage\.removeItem\('airp_onboarding_commit_uncertain'\)/);
+});
+
+test('production onboarding smoke waits for each rendered wizard step', () => {
+  assert.match(productionBrowserSmoke, /waitForOnboardingStep/);
+  for (const heading of ['检查 AIRP Engine', '配置 Provider', '验证模型连接', '导入或选择角色', '选择人设与预设', '完成首轮对话']) {
+    assert.match(productionBrowserSmoke, new RegExp("waitForOnboardingStep\\(page, '" + heading + "'"));
+  }
+});
+
+test('both production restarts wait for the chat path before browser smoke', () => {
+  const probes = productionSmokeCi.match(/WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready/g) || [];
+  assert.equal(probes.length, 2);
 });
 
 for (const [name, html] of [['role list', rolePage], ['chat space', chatPage]]) {
