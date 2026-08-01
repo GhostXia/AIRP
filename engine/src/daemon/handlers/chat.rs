@@ -54,12 +54,13 @@ pub(in crate::daemon) async fn rollback_chat(
     if let Err(msg) = req.validate_rollback_target() {
         return Err(AirpError::BadRequest(msg));
     }
-    let _operation = try_acquire_session_operation(
-        &state.data_root,
-        &req.character_id,
-        req.session_id.as_ref(),
-    )?;
-    let service = ChatService::new(&state.data_root);
+    // RollbackRequest intentionally has no user_id, so its effective root is
+    // the daemon root. Keep this explicit to preserve the same lease-key rule
+    // as the multi-user mutation handlers if the request grows later.
+    let effective_root = state.data_root.clone();
+    let _operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let service = ChatService::new(&effective_root);
     let (log, _) = match (req.message_index, req.message_id.as_deref()) {
         (Some(idx), None) => service.rollback(&req.character_id, req.session_id.as_ref(), idx)?,
         (None, Some(id)) => {

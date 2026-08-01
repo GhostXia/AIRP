@@ -70,9 +70,6 @@ pub struct FinalizerCtx {
     /// Continue mode: append generated text to the existing last assistant
     /// message instead of creating a new one.
     pub continue_mode: bool,
-    /// #249 Swipe：regen 时捕获的旧候选列表。非空时，finalizer 会将新生成
-    /// 的文本追加为最后一个候选，并将 swipe_index 指向新候选。
-    pub swipe_candidates: Vec<String>,
     /// Deferred regen replaces this existing assistant message instead of
     /// deleting it before streaming.
     pub(crate) regen_snapshot: Option<RegenSnapshot>,

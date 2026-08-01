@@ -74,15 +74,6 @@ pub(super) async fn run_finalize(
                     ctx.session_id.as_ref(),
                     &stripped,
                 )?;
-            } else if !ctx.swipe_candidates.is_empty() {
-                // #249 Swipe: regen 时捕获了旧候选，将新生成文本追加为最后一个候选。
-                let mut candidates = ctx.swipe_candidates.clone();
-                candidates.push(stripped);
-                ChatService::new(&ctx.data_root).append_with_candidates(
-                    cid,
-                    ctx.session_id.as_ref(),
-                    candidates,
-                )?;
             } else {
                 ChatService::new(&ctx.data_root).append(
                     cid,
@@ -93,14 +84,6 @@ pub(super) async fn run_finalize(
                     },
                 )?;
             }
-        } else if ctx.regen_snapshot.is_none() && !ctx.swipe_candidates.is_empty() {
-            // Legacy swipe finalization path: if a generated body is empty,
-            // restore the candidate list rather than losing it.
-            ChatService::new(&ctx.data_root).append_with_candidates(
-                cid,
-                ctx.session_id.as_ref(),
-                ctx.swipe_candidates.clone(),
-            )?;
         }
         // 先确认 assistant 消息成功落盘，再持久化 live state。
         // 若上面的消息追加失败（`?` 传播 Err），state 不会被写入，

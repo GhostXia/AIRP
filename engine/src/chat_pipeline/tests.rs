@@ -2406,14 +2406,7 @@ mod tests_effective_config_summary {
     }
 }
 
-/// #252 §2.B3：finalize 层端到端测试。
-///
-/// 验证 `run_finalize` 在 `stripped` 为空（模型只输出 `<state>` 块或纯空白）
-/// 且 `swipe_candidates` 非空时，会回灌旧候选而非丢失用户资产（§2.B1 回归）。
-/// 同时验证三条分支的完整契约：
-///   1. stripped 空 + candidates 非空 → 原样回灌旧候选
-///   2. stripped 非空 + candidates 非空 → 旧候选 + 新 stripped
-///   3. stripped 空 + candidates 空 → 不创建 assistant 消息
+/// Finalizer regression tests for empty output and deferred regeneration.
 ///
 /// `session_dir = None` 跳过卷副作用（封卷 / 维护 / 记忆抽取），让测试聚焦于
 /// ChatLog 持久化分支。`provider_config` / `gen_params` / `http_client` 仍需构造
@@ -2428,11 +2421,7 @@ mod tests_b1_finalize_empty_stripped {
     use tempfile::tempdir;
 
     /// 构造一份最小可用的 `FinalizerCtx`，`session_dir = None` 跳过卷副作用。
-    fn make_finalizer_ctx(
-        data_root: PathBuf,
-        character_id: Option<CharacterId>,
-        swipe_candidates: Vec<String>,
-    ) -> FinalizerCtx {
+    fn make_finalizer_ctx(data_root: PathBuf, character_id: Option<CharacterId>) -> FinalizerCtx {
         FinalizerCtx {
             character_id,
             session_id: None,
@@ -2452,7 +2441,6 @@ mod tests_b1_finalize_empty_stripped {
             volume_config: VolumeConfig::default(),
             http_client: reqwest::Client::new(),
             continue_mode: false,
-            swipe_candidates,
             regen_snapshot: None,
             session_operation_lease: None,
         }
@@ -2477,97 +2465,11 @@ mod tests_b1_finalize_empty_stripped {
         (tmp, data_root, character)
     }
 
-    /// §2.B1 回归核心：stripped 空 + swipe_candidates 非空 → 旧候选原样回灌。
-    ///
-    /// 场景：regen 时 `delete_last_n(1)` 已删除旧 assistant 消息 + 候选，
-    /// 旧候选被捕获到 `swipe_candidates`。模型再生失败（只输出 `<state>` 块，
-    /// stripped 后为空）。finalize 必须把旧候选写回，避免永久丢失。
-    #[tokio::test]
-    async fn finalize_empty_stripped_restores_old_candidates() {
-        let (_tmp, data_root, character) = setup_character_with_user_msg();
-        let ctx = make_finalizer_ctx(
-            data_root.clone(),
-            Some(character.clone()),
-            vec!["old-reply-a".to_string(), "old-reply-b".to_string()],
-        );
-        // raw_acc / cleaned_acc 只含 <state> 块；extract_state_content 后 stripped 为空。
-        let raw_acc = r#"<state>{"hp":100}</state>"#.to_string();
-        let cleaned_acc = raw_acc.clone();
-
-        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
-
-        // 验证：chat log 有 1 条 user + 1 条 assistant，assistant 候选 = 旧候选原样回灌。
-        let log = ChatService::new(&data_root)
-            .history(&character, None)
-            .unwrap();
-        assert_eq!(log.messages.len(), 2, "should have user + assistant");
-        assert_eq!(log.messages[1].role, MessageRole::Assistant);
-        assert_eq!(
-            log.message_candidates[1],
-            vec!["old-reply-a".to_string(), "old-reply-b".to_string()],
-            "old candidates must be restored verbatim, not lost"
-        );
-        assert_eq!(
-            log.message_swipe_index[1], 1,
-            "swipe_index should point to last restored candidate"
-        );
-        assert_eq!(
-            log.messages[1].content, "old-reply-b",
-            "content must match active candidate"
-        );
-    }
-
-    /// 正向路径：stripped 非空 + swipe_candidates 非空 → 旧候选 + 新 stripped。
-    ///
-    /// 场景：regen 模型成功生成新回复，旧候选 + 新回复组成新候选列表。
-    #[tokio::test]
-    async fn finalize_non_empty_stripped_appends_to_candidates() {
-        let (_tmp, data_root, character) = setup_character_with_user_msg();
-        let ctx = make_finalizer_ctx(
-            data_root.clone(),
-            Some(character.clone()),
-            vec!["old-reply-a".to_string(), "old-reply-b".to_string()],
-        );
-        let raw_acc = "new generated reply".to_string();
-        let cleaned_acc = raw_acc.clone();
-
-        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
-
-        let log = ChatService::new(&data_root)
-            .history(&character, None)
-            .unwrap();
-        assert_eq!(log.messages.len(), 2);
-        assert_eq!(
-            log.message_candidates[1],
-            vec![
-                "old-reply-a".to_string(),
-                "old-reply-b".to_string(),
-                "new generated reply".to_string()
-            ],
-            "new stripped should be appended as last candidate"
-        );
-        assert_eq!(
-            log.message_swipe_index[1], 2,
-            "swipe_index should point to newly generated candidate"
-        );
-        assert_eq!(
-            log.messages[1].content, "new generated reply",
-            "content must match newly generated candidate"
-        );
-    }
-
-    /// 防御性：stripped 空 + swipe_candidates 空 → 不创建 assistant 消息。
-    ///
-    /// 场景：普通 chat（非 regen），模型只输出 state 块，无旧候选可回灌。
-    /// finalize 不应创建空 assistant 消息。
+    /// A state-only normal completion does not create an empty assistant message.
     #[tokio::test]
     async fn finalize_empty_stripped_no_candidates_no_message() {
         let (_tmp, data_root, character) = setup_character_with_user_msg();
-        let ctx = make_finalizer_ctx(
-            data_root.clone(),
-            Some(character.clone()),
-            Vec::new(), // 无旧候选
-        );
+        let ctx = make_finalizer_ctx(data_root.clone(), Some(character.clone()));
         let raw_acc = r#"<state>{"hp":100}</state>"#.to_string();
         let cleaned_acc = raw_acc.clone();
 
@@ -2579,40 +2481,68 @@ mod tests_b1_finalize_empty_stripped {
         assert_eq!(
             log.messages.len(),
             1,
-            "no assistant message should be created when stripped is empty and no candidates"
+            "no assistant message should be created when stripped is empty"
         );
     }
 
-    /// 防御性：stripped 是纯空白（whitespace-only）+ swipe_candidates 非空
-    /// → 应等同 stripped 空，走旧候选回灌分支。
-    ///
-    /// 场景：模型输出只含空白字符（"\n  \t"），extract_state_content 后 stripped 非空
-    /// 但 trim 后为空。finalize.rs 用 `stripped.trim().is_empty()` 判断，应走回灌分支。
     #[tokio::test]
-    async fn finalize_whitespace_stripped_restores_old_candidates() {
+    async fn finalize_regen_rejects_a_snapshot_without_its_lease() {
         let (_tmp, data_root, character) = setup_character_with_user_msg();
-        let ctx = make_finalizer_ctx(
-            data_root.clone(),
-            Some(character.clone()),
-            vec!["old-reply".to_string()],
-        );
-        // cleaned_acc 是纯空白，extract_state_content 不剥离任何内容，
-        // 但 finalize.rs 的 `stripped.trim().is_empty()` 会判其为空。
-        let raw_acc = "   \n\t  ".to_string();
-        let cleaned_acc = raw_acc.clone();
-
-        run_finalize(ctx, raw_acc, cleaned_acc).await.unwrap();
-
-        let log = ChatService::new(&data_root)
-            .history(&character, None)
+        let service = ChatService::new(&data_root);
+        service
+            .append(
+                &character,
+                None,
+                ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: "old reply".into(),
+                },
+            )
             .unwrap();
-        assert_eq!(log.messages.len(), 2);
+        let lease =
+            crate::domain::try_acquire_session_operation(&data_root, &character, None).unwrap();
+        let snapshot = service
+            .regen_snapshot(&character, None, lease.generation_id().to_string())
+            .unwrap();
+        drop(lease);
+
+        let mut ctx = make_finalizer_ctx(data_root.clone(), Some(character.clone()));
+        ctx.regen_snapshot = Some(snapshot);
+        let error = run_finalize(ctx, "new reply".to_string(), "new reply".to_string())
+            .await
+            .expect_err("regen without its lease must fail closed");
+        assert!(matches!(
+            error,
+            crate::error::AirpError::Conflict(message) if message == "generation_lease_lost"
+        ));
         assert_eq!(
-            log.message_candidates[1],
-            vec!["old-reply".to_string()],
-            "whitespace-only stripped should restore old candidates, not create empty message"
+            service.history(&character, None).unwrap().messages[1].content,
+            "old reply"
         );
-        assert_eq!(log.messages[1].content, "old-reply");
+    }
+
+    #[tokio::test]
+    async fn finalize_regen_commits_when_its_lease_matches_snapshot() {
+        let (_tmp, data_root, character) = setup_character_with_user_msg();
+        let service = ChatService::new(&data_root);
+        service
+            .append_with_candidates(&character, None, vec!["old reply".to_string()])
+            .unwrap();
+        let lease =
+            crate::domain::try_acquire_session_operation(&data_root, &character, None).unwrap();
+        let snapshot = service
+            .regen_snapshot(&character, None, lease.generation_id().to_string())
+            .unwrap();
+
+        let mut ctx = make_finalizer_ctx(data_root.clone(), Some(character.clone()));
+        ctx.regen_snapshot = Some(snapshot);
+        ctx.session_operation_lease = Some(lease);
+        run_finalize(ctx, "new reply".to_string(), "new reply".to_string())
+            .await
+            .unwrap();
+        let log = service.history(&character, None).unwrap();
+        assert_eq!(log.messages[1].content, "new reply");
+        assert_eq!(log.message_candidates[1], vec!["old reply", "new reply"]);
     }
 }
 
@@ -2660,7 +2590,6 @@ mod tests_bug_d_finalize_order {
             volume_config: VolumeConfig::default(),
             http_client: reqwest::Client::new(),
             continue_mode: false,
-            swipe_candidates: Vec::new(),
             regen_snapshot: None,
             session_operation_lease: None,
         }
@@ -2753,8 +2682,8 @@ mod tests_bug_d_finalize_order {
         );
     }
 
-    /// Bug D 回归：assistant 消息只含 `<state>` 块（stripped 为空）且无
-    /// swipe_candidates 时，不应创建 assistant 消息，但 state 仍应持久化。
+    /// Bug D 回归：assistant 消息只含 `<state>` 块（stripped 为空）时，
+    /// 不应创建 assistant 消息，但 state 仍应持久化。
     /// 这验证 state persist 在 message append 分支跳过后仍能执行。
     #[tokio::test]
     async fn finalize_state_persisted_when_stripped_empty_no_candidates() {
@@ -2843,7 +2772,6 @@ mod tests_bug_e_seal_skips_maintenance {
             },
             http_client: reqwest::Client::new(),
             continue_mode: false,
-            swipe_candidates: Vec::new(),
             regen_snapshot: None,
             session_operation_lease: None,
         }

@@ -128,6 +128,14 @@ test('SSE error preserves commit_state so UI never suggests blind retry', async 
   );
 });
 
+test('SSE error preserves not_committed state for a safely retryable regen', async () => {
+  const body = 'event: error\ndata: {"type":"error","message":"上游失败","retryable":false,"commit_state":"not_committed"}\n\n';
+  await assert.rejects(
+    consumeSse(response(body), {}),
+    error => error instanceof AirpStreamError && error.commitState === 'not_committed' && error.retryable === false,
+  );
+});
+
 test('SSE ending without a done event is an uncertain non-retryable failure', async () => {
   const body = 'event: message\ndata: {"type":"body_chunk","text":"partial"}\n\n';
   await assert.rejects(

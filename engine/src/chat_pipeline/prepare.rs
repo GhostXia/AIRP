@@ -81,6 +81,11 @@ fn prepare_pipeline_with_mode(
 ) -> Result<PreparedPipeline, AirpError> {
     // MS-6: scene branch — scene_id takes precedence over character_id
     if let Some(ref sid) = payload.scene_id {
+        if regen_snapshot.is_some() {
+            return Err(AirpError::BadRequest(
+                "regen is not supported for scene requests".to_string(),
+            ));
+        }
         return prepare_scene_pipeline(payload, state, sid, mode);
     }
 
@@ -489,10 +494,6 @@ fn prepare_pipeline_with_mode(
             volume_config: snapshot.volume_config.clone(),
             http_client: state.http_client.clone(),
             continue_mode: mode == PrepareMode::Continue,
-            // Kept in the HTTP schema for backward-compatible decoding, but
-            // deferred regen owns candidates through its trusted snapshot.
-            // Never allow a client-supplied list to alter a normal completion.
-            swipe_candidates: Vec::new(),
             regen_snapshot,
             session_operation_lease: None,
         },
