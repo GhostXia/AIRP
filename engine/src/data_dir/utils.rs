@@ -48,14 +48,23 @@ where
     }
     if path.exists() {
         let _ = fs::remove_file(&backup);
-        fs::rename(path, &backup)?;
-    }
-    if let Err(error) = fs::rename(&temporary, path) {
-        if backup.exists() {
-            let _ = fs::rename(&backup, path);
+        // Keep the primary readable until the replacement is ready to commit.
+        // Renaming the primary to the backup first creates a crash window in
+        // which callers cannot find the authoritative path, even though its
+        // old bytes remain recoverable from the backup.
+        //
+        // Snapshot the old bytes without removing the primary. A hard link is
+        // cheap when the filesystem supports it; copying handles filesystems
+        // or policies that reject hard links. The following rename is then the
+        // only operation that changes the primary directory entry.
+        if fs::hard_link(path, &backup).is_err() {
+            fs::copy(path, &backup)?;
         }
-        return Err(error.into());
     }
+    #[cfg(test)]
+    observe_replace_midpoint(path, &backup);
+    // Replace the directory entry without first removing the primary.
+    fs::rename(&temporary, path)?;
     // D7: rename is atomic in-memory but the directory entry update is not
     // durable until the parent directory is fsync'd. Without this, a crash
     // after `rename` can leave the file appearing with stale or absent
@@ -112,8 +121,50 @@ pub(crate) fn move_path(src: &Path, dst: &Path) -> Result<(), AirpError> {
 }
 
 #[cfg(test)]
+fn observe_replace_midpoint(path: &Path, backup: &Path) {
+    MIDPOINT_HOOK.with(|cell| {
+        if let Some(hook) = cell.borrow().as_ref() {
+            hook(path, backup);
+        }
+    });
+}
+
+#[cfg(test)]
+type ReplaceMidpointHook = Box<dyn Fn(&Path, &Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static MIDPOINT_HOOK: std::cell::RefCell<Option<ReplaceMidpointHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sets a one-shot observer that runs after the backup is established but
+    /// before the atomic rename.  Used to assert the crash-safety invariant:
+    /// the original `path` MUST still exist and contain its original content
+    /// at this midpoint (the exact moment when crashes in the old
+    /// implementation would have silently destroyed user data).
+    ///
+    /// Uses `thread_local` storage so parallel test threads cannot clobber
+    /// each other's hooks.  Hook fires only for `replace_file` calls made on
+    /// the same thread.
+    fn set_midpoint_hook<F>(f: F)
+    where
+        F: Fn(&Path, &Path) + 'static,
+    {
+        MIDPOINT_HOOK.with(|cell| {
+            *cell.borrow_mut() = Some(Box::new(f));
+        });
+    }
+
+    fn clear_midpoint_hook() {
+        MIDPOINT_HOOK.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+    }
 
     #[test]
     fn replace_file_atomically_swaps_content() {
@@ -241,5 +292,99 @@ mod tests {
             !tmp.path().join("current.tmp.tmp").exists(),
             "current.tmp.tmp must not exist (bug from unwrap_or(\"tmp\") fallback)"
         );
+    }
+
+    /// #220 regression: after establishing the backup and before committing
+    /// the replacement, the primary remains readable with its old contents.
+    #[test]
+    fn replace_file_never_exposes_missing_primary_in_crash_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("chat_log.jsonl");
+        let original = b"user: hello\nassistant: hi there\nuser: tell me a story\n";
+        replace_file(&path, original).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        let original_for_hook = original.to_vec();
+        let path_for_hook = path.clone();
+        set_midpoint_hook(move |observed_path, backup| {
+            assert!(
+                observed_path.exists(),
+                "primary file vanished in the replacement window: {}",
+                observed_path.display()
+            );
+            let on_disk =
+                fs::read(observed_path).expect("primary file must be readable at midpoint");
+            assert_eq!(
+                on_disk, original_for_hook,
+                "primary content changed before the replacement committed"
+            );
+            let from_backup =
+                fs::read(backup).expect("backup snapshot must be readable at midpoint");
+            assert_eq!(
+                from_backup, original_for_hook,
+                "backup snapshot must hold original bytes at midpoint"
+            );
+            assert_eq!(
+                observed_path, &*path_for_hook,
+                "midpoint observer saw wrong path"
+            );
+        });
+
+        let new_content = b"user: next message\nassistant: ok\n";
+        let result = replace_file(&path, new_content);
+        clear_midpoint_hook();
+
+        assert!(result.is_ok(), "replace_file must succeed after midpoint");
+        assert_eq!(fs::read(&path).unwrap(), new_content);
+        let mut entries: Vec<String> = fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, vec!["chat_log.jsonl".to_string()]);
+    }
+
+    #[test]
+    fn replace_file_keeps_primary_when_commit_rename_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        replace_file(&path, b"old").unwrap();
+
+        let temporary = path.with_extension("json.tmp");
+        set_midpoint_hook(move |_, _| {
+            fs::remove_file(&temporary).unwrap();
+        });
+
+        let result = replace_file(&path, b"new");
+        clear_midpoint_hook();
+
+        assert!(result.is_err(), "missing temporary file must fail commit");
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        assert_eq!(fs::read(path.with_extension("json.bak")).unwrap(), b"old");
+    }
+
+    /// Companion regression: the midpoint invariant must hold for files with
+    /// no extension too (different code path in extension matching).
+    #[test]
+    fn replace_file_crash_window_safe_for_extensionless_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session_lock");
+        let original = b"held-by-generation-a";
+        replace_file(&path, original).unwrap();
+
+        let original_capture = original.to_vec();
+        set_midpoint_hook(move |observed_path, _backup| {
+            assert!(
+                observed_path.exists(),
+                "extensionless primary file vanished in crash window"
+            );
+            assert_eq!(fs::read(observed_path).unwrap(), original_capture);
+        });
+
+        replace_file(&path, b"held-by-generation-b").unwrap();
+        clear_midpoint_hook();
+
+        assert_eq!(fs::read(&path).unwrap(), b"held-by-generation-b");
     }
 }
