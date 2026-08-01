@@ -258,8 +258,11 @@ pub struct SessionStateQuery {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CancelGenerationRequest {
+    /// Character that owns the target session.
     pub character_id: CharacterId,
+    /// Optional named session; absence selects the legacy character session.
     pub session_id: Option<SessionId>,
+    /// Exact active generation returned by the Coordinator status endpoint.
     pub generation_id: String,
     /// Optional user scope, following the generation endpoints' effective-root rule.
     pub user_id: Option<String>,

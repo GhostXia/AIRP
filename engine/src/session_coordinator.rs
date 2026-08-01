@@ -139,6 +139,10 @@ impl SessionCoordinatorRegistry {
         })
     }
 
+    /// Requests cooperative cancellation for the exact active generation.
+    ///
+    /// The state mutex linearizes this request against `begin_commit`: either
+    /// cancellation wins, or the caller receives `generation_committing`.
     pub(crate) fn cancel_generation(
         &self,
         data_root: &Path,
@@ -222,6 +226,7 @@ impl SessionCommandLease {
         !self.released && self.generation_id == generation_id
     }
 
+    /// Returns the cooperative token for generation commands.
     pub(crate) fn cancellation(&self) -> Option<CancellationToken> {
         self.cancellation.clone()
     }
