@@ -84,18 +84,24 @@ pub(in crate::daemon) async fn add_scene_character_endpoint(
     if data_dir::validate_id_segment(&body.character_id).is_err() {
         return (StatusCode::BAD_REQUEST, "非法 character_id").into_response();
     }
-    let mut scene = match crate::scene::SceneConfig::load(&state.data_root, &scene_id) {
-        Ok(s) => s,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    scene.characters.push(crate::scene::CharacterEntry {
-        character_id: body.character_id,
-        role: body.role,
-        intro: body.intro,
-    });
-    match scene.save(&state.data_root) {
-        Ok(()) => Json(serde_json::json!({"scene_id": scene_id.as_str(), "character_count": scene.characters.len()})).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    match crate::scene::update_scene(&state.data_root, &scene_id, |scene| {
+        scene.characters.push(crate::scene::CharacterEntry {
+            character_id: body.character_id,
+            role: body.role,
+            intro: body.intro,
+        });
+        Ok(scene.characters.len())
+    }) {
+        Ok(character_count) => Json(serde_json::json!({
+            "scene_id": scene_id.as_str(),
+            "character_count": character_count
+        }))
+        .into_response(),
+        Err(crate::error::AirpError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(crate::error::AirpError::Json(_)) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
