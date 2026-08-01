@@ -6,7 +6,7 @@
 //! 端点：
 //! - `POST /v1/chat/history` — 读聊天历史（cursor 分页或 legacy 全量）
 //! - `POST /v1/chat/rollback` — 回滚到指定 message_index 或 message_id
-//! - `POST /v1/chat/regen` — 删除最后一条 assistant 消息并流式生成新响应 (SSE)
+//! - `POST /v1/chat/regen` — 对最后一条 assistant 生成新候选 (SSE)
 //! - `POST /v1/chat/continue` — 继续生成，追加到最后一条 assistant 消息 (SSE)
 //! - `POST /v1/chat/delete` — 删除单条消息
 //! - `POST /v1/chat/completions` — SSE 流式补全（quota 前置检查）
@@ -18,7 +18,7 @@ use crate::daemon::types::{
     RegenRequest, RollbackRequest, SwipeRequest, SwitchBranchRequest,
 };
 use crate::daemon::DaemonState;
-use crate::domain::ChatService;
+use crate::domain::{try_acquire_session_operation, ChatService};
 use crate::error::AirpError;
 use axum::{response::Sse, Json};
 use std::convert::Infallible;
@@ -54,7 +54,13 @@ pub(in crate::daemon) async fn rollback_chat(
     if let Err(msg) = req.validate_rollback_target() {
         return Err(AirpError::BadRequest(msg));
     }
-    let service = ChatService::new(&state.data_root);
+    // RollbackRequest intentionally has no user_id, so its effective root is
+    // the daemon root. Keep this explicit to preserve the same lease-key rule
+    // as the multi-user mutation handlers if the request grows later.
+    let effective_root = state.data_root.clone();
+    let _operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    let service = ChatService::new(&effective_root);
     let (log, _) = match (req.message_index, req.message_id.as_deref()) {
         (Some(idx), None) => service.rollback(&req.character_id, req.session_id.as_ref(), idx)?,
         (None, Some(id)) => {
@@ -70,7 +76,7 @@ pub(in crate::daemon) async fn rollback_chat(
     Ok(Json(log))
 }
 
-/// POST /v1/chat/regen — delete last assistant message and stream a new response (SSE)
+/// POST /v1/chat/regen — stream a new candidate for the active assistant message (SSE)
 pub(in crate::daemon) async fn regen_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RegenRequest>,
@@ -78,18 +84,23 @@ pub(in crate::daemon) async fn regen_chat(
     Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, Infallible>>>,
     AirpError,
 > {
-    // DX-3: quota check (same gate as chat_completion).
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
+    // DX-3: quota check (same gate as chat_completion).
     let quota_config = {
         let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
         cfg.quota.clone()
     };
     crate::quota::check_and_increment(&effective_root, &quota_config)?;
 
-    // 1. Delete the last assistant message and capture its candidates.
-    let (_log, old_candidates) =
-        ChatService::new(&effective_root).regen(&req.character_id, req.session_id.as_ref())?;
+    // 1. Capture the active assistant without mutating durable history.
+    let snapshot = ChatService::new(&effective_root).regen_snapshot(
+        &req.character_id,
+        req.session_id.as_ref(),
+        operation.generation_id().to_string(),
+    )?;
 
     // 2. Build a regen pipeline (no new user message, no timeline advancement).
     let payload = ChatCompletionRequest {
@@ -115,11 +126,11 @@ pub(in crate::daemon) async fn regen_chat(
         scene_id: None,
         user_id: req.user_id,
         persona_id: None,
-        // #249 Swipe：将旧候选传入 pipeline，finalizer 会追加新候选。
-        swipe_candidates: old_candidates,
+        swipe_candidates: Vec::new(),
         branch_from: None,
     };
-    let pipeline = chat_pipeline::prepare_regen_pipeline(&payload, &state)?;
+    let mut pipeline = chat_pipeline::prepare_regen_pipeline(&payload, &state, snapshot)?;
+    pipeline.finalizer.session_operation_lease = Some(operation);
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
 }
 
@@ -134,6 +145,8 @@ pub(in crate::daemon) async fn continue_chat(
     // DX-3: quota check (same gate as chat_completion).
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
     let quota_config = {
         let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
         cfg.quota.clone()
@@ -166,7 +179,8 @@ pub(in crate::daemon) async fn continue_chat(
         swipe_candidates: Vec::new(),
         branch_from: None,
     };
-    let pipeline = chat_pipeline::prepare_continue_pipeline(&payload, &state)?;
+    let mut pipeline = chat_pipeline::prepare_continue_pipeline(&payload, &state)?;
+    pipeline.finalizer.session_operation_lease = Some(operation);
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
 }
 
@@ -177,6 +191,8 @@ pub(in crate::daemon) async fn delete_message(
 ) -> Result<Json<ChatLog>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let _operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
     let log = ChatService::new(&effective_root).delete_message(
         &req.character_id,
         req.session_id.as_ref(),
@@ -194,6 +210,8 @@ pub(in crate::daemon) async fn swipe_chat(
 ) -> Result<Json<crate::domain::SwipeResponse>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let _operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
     let resp = ChatService::new(&effective_root).switch_swipe(
         &req.character_id,
         req.session_id.as_ref(),
@@ -222,6 +240,8 @@ pub(in crate::daemon) async fn edit_message(
 ) -> Result<Json<ChatLog>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let _operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
     let log = ChatService::new(&effective_root).edit_message(
         &req.character_id,
         req.session_id.as_ref(),
@@ -253,9 +273,20 @@ pub(in crate::daemon) async fn chat_completion(
             crate::data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;
         (quota, root)
     };
+    let operation = payload
+        .character_id
+        .as_ref()
+        .map(|character_id| {
+            try_acquire_session_operation(
+                &effective_root,
+                character_id,
+                payload.session_id.as_ref(),
+            )
+        })
+        .transpose()?;
     crate::quota::check_and_increment(&effective_root, &quota_config)?;
-
-    let pipeline = chat_pipeline::prepare_pipeline(&payload, &state)?;
+    let mut pipeline = chat_pipeline::prepare_pipeline(&payload, &state)?;
+    pipeline.finalizer.session_operation_lease = operation;
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
 }
 
@@ -275,6 +306,8 @@ pub(in crate::daemon) async fn switch_branch(
 ) -> Result<Json<ChatLog>, AirpError> {
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
+    let _operation =
+        try_acquire_session_operation(&effective_root, &req.character_id, req.session_id.as_ref())?;
     let log = ChatService::new(&effective_root).switch_branch(
         &req.character_id,
         req.session_id.as_ref(),

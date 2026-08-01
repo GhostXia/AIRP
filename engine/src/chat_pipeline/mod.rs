@@ -48,9 +48,8 @@ mod tests;
 
 pub use finalize::finalize_generation;
 pub use generation_step::run_generation_step;
-pub use prepare::{
-    prepare_continue_pipeline, prepare_pipeline, prepare_regen_pipeline, preview_pipeline,
-};
+pub(crate) use prepare::prepare_regen_pipeline;
+pub use prepare::{prepare_continue_pipeline, prepare_pipeline, preview_pipeline};
 pub use stdout_runner::run_pipeline_to_stdout;
 pub use stream::build_sse_stream;
 pub use types::{FinalizerCtx, GenerationStepResult, PrepareMode, PreparedPipeline};

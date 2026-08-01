@@ -63,8 +63,9 @@ pub struct ChatCompletionRequest {
     /// （`PersonaService::get` 内调 `validate_persona_id`）保留作为
     /// defense-in-depth。
     pub persona_id: Option<PersonaId>,
-    /// #249 Swipe：regen 时捕获的旧候选列表。内部使用，HTTP 请求不提供此字段
-    ///（serde(default) 给空 Vec）。非空时 finalizer 会将新生成文本追加为最后一个候选。
+    /// Historical wire field retained for backward-compatible decoding.
+    /// Deferred regen now captures candidates from durable history, so this
+    /// client-provided value is ignored.
     #[serde(default)]
     pub swipe_candidates: Vec<String>,
     /// 分支对话树：从指定消息 durable ID 分叉。

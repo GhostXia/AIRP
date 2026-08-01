@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::adapter::{BackendEngine, ChatMessage, GenerationParams, ProviderConfig};
 use crate::config::VolumeConfig;
+use crate::domain::{RegenSnapshot, SessionOperationLease};
 use crate::fsm::StreamingFsm;
 use crate::orchestrator::trace::PromptAssemblyTrace;
 use crate::types::{CharacterId, SessionId, UserId};
@@ -69,18 +70,21 @@ pub struct FinalizerCtx {
     /// Continue mode: append generated text to the existing last assistant
     /// message instead of creating a new one.
     pub continue_mode: bool,
-    /// #249 Swipe：regen 时捕获的旧候选列表。非空时，finalizer 会将新生成
-    /// 的文本追加为最后一个候选，并将 swipe_index 指向新候选。
-    pub swipe_candidates: Vec<String>,
+    /// Deferred regen replaces this existing assistant message instead of
+    /// deleting it before streaming.
+    pub(crate) regen_snapshot: Option<RegenSnapshot>,
+    /// Logical session ownership carried by the SSE processing task. It is
+    /// released after the chat/state commit and before slow volume side effects.
+    pub(crate) session_operation_lease: Option<SessionOperationLease>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrepareMode {
     Chat,
     Preview,
-    /// Regen: delete last assistant message (done by caller) then generate a
-    /// new response from existing history. Does NOT append/persist a new user
-    /// message and does NOT advance timeline/checkpoint.
+    /// Regen: snapshot the last assistant message, then generate a proposal
+    /// from history excluding it. The finalizer atomically replaces that
+    /// durable message only if the snapshot is still current.
     Regen,
     /// Continue: generate a continuation of the last assistant message without
     /// adding a new user message. Finalizer appends to the existing last

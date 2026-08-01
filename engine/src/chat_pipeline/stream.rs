@@ -53,6 +53,13 @@ pub fn build_sse_stream(
     );
 
     let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<SseMessage>(32);
+    // Failed regen skips finalization, so its durable assistant reply is
+    // unchanged and the client can safely distinguish it from a partial write.
+    let failure_commit_state = if finalizer.regen_snapshot.is_some() {
+        "not_committed"
+    } else {
+        "partially_committed"
+    };
 
     // ── Processing task ───────────────────────────────────────────────────────
     tokio::spawn(async move {
@@ -87,7 +94,7 @@ pub fn build_sse_stream(
                             code: "upstream".to_string(),
                             message: "upstream request failed".to_string(),
                             retryable: false,
-                            commit_state: "partially_committed",
+                            commit_state: failure_commit_state,
                         })
                         .await;
                     break;
@@ -106,6 +113,13 @@ pub fn build_sse_stream(
             }
         }
 
+        // A failed or cancelled regen must leave its previously durable
+        // assistant reply untouched. Dropping the finalizer also drops its
+        // logical session lease, so later mutations can proceed.
+        if (cancelled || failed) && finalizer.regen_snapshot.is_some() {
+            return;
+        }
+
         match run_finalize(finalizer, raw_acc, cleaned_acc).await {
             Ok(()) if !failed => {
                 let _ = chunk_tx.send(SseMessage::Done).await;
@@ -118,7 +132,7 @@ pub fn build_sse_stream(
                         code: error.code_str().to_string(),
                         message: error.public_message(),
                         retryable: false,
-                        commit_state: "partially_committed",
+                        commit_state: failure_commit_state,
                     })
                     .await;
             }

@@ -217,6 +217,19 @@ async fn test_a6_chat_rollback_accepts_session_id() {
 #[tokio::test]
 async fn test_a6_chat_regen_accepts_session_id() {
     let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let session_id =
+        crate::types::SessionId::parse("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    crate::domain::ChatService::new(&state.data_root)
+        .append(
+            &character,
+            Some(&session_id),
+            crate::adapter::ChatMessage {
+                role: crate::adapter::MessageRole::Assistant,
+                content: "existing assistant reply".into(),
+            },
+        )
+        .unwrap();
     let app = create_router(state);
     let body = serde_json::json!({
         "character_id": "alice",
@@ -245,6 +258,35 @@ async fn test_a6_chat_regen_accepts_session_id() {
         ct.contains("text/event-stream"),
         "regen must return SSE stream, got content-type: {ct}"
     );
+}
+
+#[tokio::test]
+async fn session_mutation_returns_409_while_generation_lease_is_active() {
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let lease =
+        crate::domain::try_acquire_session_operation(&state.data_root, &character, None).unwrap();
+    let app = create_router(state);
+    let body = serde_json::json!({"character_id": "alice", "message_index": 0});
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/rollback")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response_body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    assert!(std::str::from_utf8(&response_body)
+        .unwrap()
+        .contains("session_busy"));
+    drop(lease);
 }
 
 #[tokio::test]
