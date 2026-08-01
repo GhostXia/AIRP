@@ -375,4 +375,35 @@ async fn agent_session_writes_respect_an_active_chat_owner() {
         rollback_error,
         AirpError::Conflict(ref message) if message == "session_busy"
     ));
+
+    drop(_generation);
+    let mut pending = crate::turn_commit::TurnCommit::begin(
+        &state.data_root,
+        &character,
+        None,
+        "interrupted-agent-generation".to_string(),
+        true,
+        false,
+    )
+    .unwrap();
+    let recovery_error = reg
+        .get("append_message")
+        .unwrap()
+        .call(
+            serde_json::json!({
+                "character_id": "coordinated",
+                "role": "user",
+                "content": "must not bypass pending recovery",
+            }),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        recovery_error,
+        AirpError::Conflict(ref message) if message == "session_recovery_required"
+    ));
+    pending.mark_message_committed().unwrap();
+    pending.mark_state_committed().unwrap();
+    pending.complete().unwrap();
 }

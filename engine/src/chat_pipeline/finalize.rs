@@ -62,7 +62,7 @@ pub(super) async fn run_finalize(
                 .session_operation_lease
                 .as_ref()
                 .map(|lease| lease.generation_id().to_string())
-                .unwrap_or_else(crate::ulid::new_id);
+                .unwrap_or_default();
             Some(crate::turn_commit::TurnCommit::begin(
                 &ctx.data_root,
                 cid,

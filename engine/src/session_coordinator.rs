@@ -52,7 +52,6 @@ pub(crate) enum SessionPhase {
     Idle,
     Generating,
     Committing,
-    #[allow(dead_code)] // Reserved for Phase O3 journal recovery admission.
     Recovering,
 }
 

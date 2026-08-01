@@ -27,6 +27,7 @@ pub mod tools;
 use crate::chat_pipeline::{finalize_generation, prepare_pipeline, run_generation_step};
 use crate::daemon::{ChatCompletionRequest, DaemonState};
 use crate::error::AirpError;
+use crate::session_coordinator::SessionCommand;
 use airp_state_protocol::Capability;
 use axum::response::sse::Event;
 use futures_util::{stream, Stream};
@@ -312,9 +313,47 @@ async fn run_loop(
                 }
             }
             PlanAction::Generate => {
+                let operation = if let Some(character_id) = req.base.character_id.as_ref() {
+                    let effective_root = match crate::data_dir::resolve_effective_root(
+                        &state.data_root,
+                        req.base.user_id.as_deref(),
+                    ) {
+                        Ok(root) => root,
+                        Err(error) => {
+                            tracing::error!(%error, "agent generation root resolution failed");
+                            return emit_done(
+                                tx,
+                                StopReason::UpstreamError,
+                                steps_taken,
+                                tokens_estimated,
+                            )
+                            .await;
+                        }
+                    };
+                    match state.session_coordinators.try_submit(
+                        &effective_root,
+                        character_id,
+                        req.base.session_id.as_ref(),
+                        SessionCommand::Completion,
+                    ) {
+                        Ok(operation) => Some(operation),
+                        Err(error) => {
+                            tracing::warn!(%error, "agent generation session admission failed");
+                            return emit_done(
+                                tx,
+                                StopReason::UpstreamError,
+                                steps_taken,
+                                tokens_estimated,
+                            )
+                            .await;
+                        }
+                    }
+                } else {
+                    None
+                };
                 // 派生纯净 subagent：复用 prepare_pipeline 装配全新上下文。
                 // 戒律#6：base 请求里无任何协调器噪声（协调器状态不进 system prompt / messages）。
-                let pipeline = match prepare_pipeline(&req.base, state) {
+                let mut pipeline = match prepare_pipeline(&req.base, state) {
                     Ok(p) => p,
                     Err(e) => {
                         tracing::error!(err = %e, "prepare_pipeline failed in loop");
@@ -327,6 +366,7 @@ async fn run_loop(
                         .await;
                     }
                 };
+                pipeline.finalizer.session_operation_lease = operation;
                 // Generation stays pure while the planner is still deciding;
                 // only this converged generation is finalized below.
                 let result = run_generation_step(pipeline).await;

@@ -5,7 +5,8 @@
 //! conservative recovery signal: the Coordinator must reject new mutations
 //! until a later recovery slice inspects and resolves it.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,7 @@ pub(crate) struct TurnCommitMarker {
 pub(crate) struct TurnCommit {
     path: PathBuf,
     marker: TurnCommitMarker,
+    completed: bool,
 }
 
 impl TurnCommit {
@@ -59,8 +61,12 @@ impl TurnCommit {
             message_expected,
             state_expected,
         };
-        persist(&path, &marker)?;
-        Ok(Self { path, marker })
+        persist_new(&path, &marker)?;
+        Ok(Self {
+            path,
+            marker,
+            completed: false,
+        })
     }
 
     pub(crate) fn mark_message_committed(&mut self) -> Result<(), AirpError> {
@@ -69,22 +75,40 @@ impl TurnCommit {
                 "turn commit message stage is out of order".to_string(),
             ));
         }
-        self.marker.phase = TurnCommitPhase::MessageCommitted;
-        persist(&self.path, &self.marker)
+        if self.marker.message_expected {
+            self.marker.phase = TurnCommitPhase::MessageCommitted;
+            persist(&self.path, &self.marker)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn mark_state_committed(&mut self) -> Result<(), AirpError> {
-        if self.marker.phase != TurnCommitPhase::MessageCommitted {
+        let expected_phase = if self.marker.message_expected {
+            TurnCommitPhase::MessageCommitted
+        } else {
+            TurnCommitPhase::Prepared
+        };
+        if self.marker.phase != expected_phase {
             return Err(AirpError::Internal(
                 "turn commit state stage is out of order".to_string(),
             ));
         }
-        self.marker.phase = TurnCommitPhase::StateCommitted;
-        persist(&self.path, &self.marker)
+        if self.marker.state_expected {
+            self.marker.phase = TurnCommitPhase::StateCommitted;
+            persist(&self.path, &self.marker)?;
+        }
+        Ok(())
     }
 
-    pub(crate) fn complete(self) -> Result<(), AirpError> {
-        if self.marker.phase != TurnCommitPhase::StateCommitted {
+    pub(crate) fn complete(mut self) -> Result<(), AirpError> {
+        let expected_phase = if self.marker.state_expected {
+            TurnCommitPhase::StateCommitted
+        } else if self.marker.message_expected {
+            TurnCommitPhase::MessageCommitted
+        } else {
+            TurnCommitPhase::Prepared
+        };
+        if self.marker.phase != expected_phase {
             return Err(AirpError::Internal(
                 "turn commit cannot complete before all stages".to_string(),
             ));
@@ -93,7 +117,16 @@ impl TurnCommit {
         if let Some(parent) = self.path.parent() {
             crate::revision::atomic::sync_dir(parent)?;
         }
+        self.completed = true;
         Ok(())
+    }
+}
+
+impl Drop for TurnCommit {
+    fn drop(&mut self) {
+        if !self.completed {
+            record_recovery_signal(&self.path, &self.marker);
+        }
     }
 }
 
@@ -105,14 +138,15 @@ pub(crate) fn pending_turn(
     session_id: Option<&SessionId>,
 ) -> Option<TurnCommitMarker> {
     let path = marker_path(data_root, character_id, session_id);
-    if !path.exists() {
-        return None;
-    }
-    match fs::read(&path)
-        .map_err(|error| error.to_string())
-        .and_then(|bytes| {
-            serde_json::from_slice::<TurnCommitMarker>(&bytes).map_err(|error| error.to_string())
-        }) {
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::error!(path = %path.display(), %error, "unreadable turn commit marker requires recovery");
+            return Some(unreadable_marker());
+        }
+    };
+    match serde_json::from_slice::<TurnCommitMarker>(&bytes).map_err(|error| error.to_string()) {
         Ok(marker) if marker.schema_version == SCHEMA_VERSION => Some(marker),
         Ok(marker) => {
             tracing::error!(
@@ -130,14 +164,18 @@ pub(crate) fn pending_turn(
         }
         Err(error) => {
             tracing::error!(path = %path.display(), %error, "unreadable turn commit marker requires recovery");
-            Some(TurnCommitMarker {
-                schema_version: 0,
-                generation_id: String::new(),
-                phase: TurnCommitPhase::Prepared,
-                message_expected: true,
-                state_expected: true,
-            })
+            Some(unreadable_marker())
         }
+    }
+}
+
+fn unreadable_marker() -> TurnCommitMarker {
+    TurnCommitMarker {
+        schema_version: 0,
+        generation_id: String::new(),
+        phase: TurnCommitPhase::Prepared,
+        message_expected: true,
+        state_expected: true,
     }
 }
 
@@ -156,6 +194,40 @@ fn marker_path(
 
 fn persist(path: &Path, marker: &TurnCommitMarker) -> Result<(), AirpError> {
     crate::data_dir::replace_file(path, &serde_json::to_vec_pretty(marker)?)
+}
+
+fn persist_new(path: &Path, marker: &TurnCommitMarker) -> Result<(), AirpError> {
+    let bytes = serde_json::to_vec_pretty(marker)?;
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(AirpError::Conflict("session_recovery_required".to_string()));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let write_result = (|| -> Result<(), AirpError> {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        if let Some(parent) = path.parent() {
+            crate::revision::atomic::sync_dir(parent)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        record_recovery_signal(path, marker);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn record_recovery_signal(path: &Path, marker: &TurnCommitMarker) {
+    tracing::error!(
+        event = "turn_commit_recovery_required",
+        path = %path.display(),
+        generation_id = %marker.generation_id,
+        phase = ?marker.phase,
+        "turn commit marker retained for recovery"
+    );
 }
 
 #[cfg(test)]
@@ -204,6 +276,102 @@ mod tests {
         let marker = pending_turn(tmp.path(), &character, None).unwrap();
         assert!(marker.generation_id.is_empty());
         assert_eq!(marker.phase, TurnCommitPhase::Prepared);
+    }
+
+    #[test]
+    fn unsupported_schema_fails_closed_without_generation_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-future-schema").unwrap();
+        let path = marker_path(tmp.path(), &character, None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_vec(&TurnCommitMarker {
+                schema_version: SCHEMA_VERSION + 1,
+                generation_id: "future-generation".to_string(),
+                phase: TurnCommitPhase::Prepared,
+                message_expected: true,
+                state_expected: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let marker = pending_turn(tmp.path(), &character, None).unwrap();
+        assert!(marker.generation_id.is_empty());
+        assert_eq!(marker.schema_version, SCHEMA_VERSION + 1);
+    }
+
+    #[test]
+    fn begin_does_not_overwrite_a_pending_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-existing").unwrap();
+        let _pending = TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "generation-first".to_string(),
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            TurnCommit::begin(
+                tmp.path(),
+                &character,
+                None,
+                "generation-second".to_string(),
+                true,
+                true,
+            ),
+            Err(AirpError::Conflict(message)) if message == "session_recovery_required"
+        ));
+        assert_eq!(
+            pending_turn(tmp.path(), &character, None)
+                .unwrap()
+                .generation_id,
+            "generation-first"
+        );
+    }
+
+    #[test]
+    fn skipped_stages_do_not_report_false_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-skipped-stages").unwrap();
+        let mut state_only = TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "generation-state".to_string(),
+            false,
+            true,
+        )
+        .unwrap();
+        state_only.mark_message_committed().unwrap();
+        assert_eq!(
+            pending_turn(tmp.path(), &character, None).unwrap().phase,
+            TurnCommitPhase::Prepared
+        );
+        state_only.mark_state_committed().unwrap();
+        state_only.complete().unwrap();
+
+        let mut message_only = TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "generation-message".to_string(),
+            true,
+            false,
+        )
+        .unwrap();
+        message_only.mark_message_committed().unwrap();
+        message_only.mark_state_committed().unwrap();
+        assert_eq!(
+            pending_turn(tmp.path(), &character, None).unwrap().phase,
+            TurnCommitPhase::MessageCommitted
+        );
+        message_only.complete().unwrap();
     }
 
     #[test]

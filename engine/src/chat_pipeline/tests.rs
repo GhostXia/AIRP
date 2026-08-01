@@ -2767,6 +2767,8 @@ mod tests_bug_d_finalize_order {
             setup_character_with_user_msg("finalize-bug-d-state-fails");
         let ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
         let state_dir = data_root.join("characters/finalize-bug-d-state-fails/state");
+        // Deterministic sabotage: occupy the fixed temporary path used by
+        // StateService::write. Update this if its temp naming changes.
         std::fs::create_dir_all(state_dir.join("live.json.tmp")).unwrap();
 
         let output = "Message persists first.\n<state>{\"hp\":1}</state>".to_string();
