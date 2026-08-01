@@ -39,7 +39,8 @@ pub(super) async fn run_finalize(
     // raw_acc = full raw generation (pre-filter), the truest proxy for billed
     // output. Best-effort: record_tokens never blocks a completed response.
     let out_tokens = crate::volume_store::estimate_tokens(&raw_acc);
-    crate::quota::record_tokens(&ctx.data_root, out_tokens.min(u32::MAX as usize) as u32);
+    crate::quota::record_tokens_async(&ctx.data_root, out_tokens.min(u32::MAX as usize) as u32)
+        .await;
 
     // (1) Persist assistant message to ChatLog
     //     M_LS-1: strip <state>…</state> before persisting; side-persist state/live.json.

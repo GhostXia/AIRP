@@ -966,7 +966,7 @@ async fn generate_conversation_speaker(
     };
     let recorded_tokens =
         crate::volume_store::estimate_tokens(&result.raw_acc).min(u32::MAX as usize) as u32;
-    crate::quota::record_tokens(context.root, recorded_tokens);
+    crate::quota::record_tokens_async(context.root, recorded_tokens).await;
     if context.cancellation.is_cancelled() {
         return Err(ConversationSpeakerFailure {
             participant_id,

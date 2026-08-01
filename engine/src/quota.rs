@@ -199,6 +199,20 @@ pub fn record_tokens(effective_root: &Path, tokens: u32) {
     state.save(&path);
 }
 
+/// Record output tokens without performing quota file I/O on a Tokio worker.
+///
+/// Quota accounting is best-effort by design: a completed generation must not
+/// fail because the accounting task was cancelled or could not be scheduled.
+pub async fn record_tokens_async(effective_root: &Path, tokens: u32) {
+    if tokens == 0 {
+        return;
+    }
+    let root = effective_root.to_path_buf();
+    if let Err(error) = tokio::task::spawn_blocking(move || record_tokens(&root, tokens)).await {
+        tracing::warn!(%error, "quota: async token accounting task failed");
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -433,5 +447,15 @@ mod tests_dx3 {
             state.tokens_today, 500,
             "all 10 record_tokens(50) calls must be accounted for (no lost update)"
         );
+    }
+
+    #[tokio::test]
+    async fn test_record_tokens_async_preserves_accounting_semantics() {
+        let dir = tempdir().unwrap();
+
+        record_tokens_async(dir.path(), 125).await;
+
+        let state = QuotaState::load(&quota_file_path(dir.path()));
+        assert_eq!(state.tokens_today, 125);
     }
 }
