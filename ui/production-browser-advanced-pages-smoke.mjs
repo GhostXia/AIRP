@@ -81,14 +81,21 @@ try {
   await context.close();
 
   // A browser-visible failure state is part of the runtime contract: a broken
-  // Engine connection must not leave the relationship graph as an apparent
+  // Engine connection must not leave any advanced page as an apparent
   // successful empty result.
   const errorContext = await browser.newContext({ httpCredentials: { username, password }, ignoreHTTPSErrors: false });
   const errorPage = await errorContext.newPage();
+  const errorPageErrors = [];
+  errorPage.on('pageerror', error => errorPageErrors.push(error.message));
   await errorPage.route('**/health', route => route.abort('failed'));
-  await errorPage.goto(pageUrl('34-relationship-graph.html'), { waitUntil: 'domcontentloaded' });
-  await errorPage.waitForFunction(() => document.querySelector('#engine-status')?.classList.contains('danger'), null, { timeout: 15_000 });
-  await errorPage.waitForFunction(() => document.querySelector('#graph-info')?.textContent?.includes('无法连接 Engine'), null, { timeout: 15_000 });
+  for (const advancedPage of pages) {
+    await errorPage.goto(pageUrl(advancedPage.file), { waitUntil: 'domcontentloaded' });
+    await errorPage.waitForFunction(() => {
+      const classes = document.querySelector('#engine-status')?.classList;
+      return classes?.contains('danger') || classes?.contains('error');
+    }, null, { timeout: 15_000 });
+  }
+  assert.deepEqual(errorPageErrors, []);
   await errorContext.close();
   console.log('production advanced WebUI pages smoke passed');
 } finally {
