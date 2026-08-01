@@ -145,7 +145,7 @@
   function handleMutationError(type, error) {
     const message = AIRPApi.errorMessage(error.data, error.message);
     log(type, message);
-    if (error && error.status === 409 && message.includes('session_busy')) refreshCoordinatorState();
+    if (error && error.status === 409 && (message.includes('session_busy') || message.includes('session_recovery_required'))) refreshCoordinatorState();
   }
 
   function setStreamState(active) {

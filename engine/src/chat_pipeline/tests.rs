@@ -2708,6 +2708,10 @@ mod tests_bug_d_finalize_order {
             serde_json::from_slice(&std::fs::read(&live_path).unwrap()).unwrap();
         assert_eq!(live["hp"], 80);
         assert_eq!(live["mood"], "determined");
+        assert!(
+            crate::turn_commit::pending_turn(&data_root, &character, None).is_none(),
+            "successful message + state commit must remove its marker"
+        );
     }
 
     /// Bug D 失败路径：chat log 无法追加时，finalize 必须返回错误且不得写 live state。
@@ -2715,7 +2719,7 @@ mod tests_bug_d_finalize_order {
     async fn finalize_does_not_persist_state_when_message_append_fails() {
         let (_tmp, data_root, character) =
             setup_character_with_user_msg("finalize-bug-d-append-fails");
-        let ctx = make_finalizer_ctx_with_state(data_root.clone(), character);
+        let ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
 
         // 用同名目录替换 jsonl 文件，跨平台、确定性地让下一次 open-for-append 失败。
         let chat_log_path =
@@ -2736,6 +2740,52 @@ mod tests_bug_d_finalize_order {
         assert!(
             !live_path.exists(),
             "live state must not advance when the assistant message was not committed"
+        );
+        let marker = crate::turn_commit::pending_turn(&data_root, &character, None)
+            .expect("failed message commit must retain a recovery marker");
+        assert_eq!(marker.phase, crate::turn_commit::TurnCommitPhase::Prepared);
+        let registry = crate::session_coordinator::SessionCoordinatorRegistry::default();
+        assert_eq!(
+            registry.status(&data_root, &character, None).phase,
+            crate::session_coordinator::SessionPhase::Recovering
+        );
+        assert!(matches!(
+            registry.try_submit(
+                &data_root,
+                &character,
+                None,
+                crate::session_coordinator::SessionCommand::Completion
+            ),
+            Err(crate::error::AirpError::Conflict(message))
+                if message == "session_recovery_required"
+        ));
+    }
+
+    #[tokio::test]
+    async fn finalize_retains_message_committed_marker_when_state_write_fails() {
+        let (_tmp, data_root, character) =
+            setup_character_with_user_msg("finalize-bug-d-state-fails");
+        let ctx = make_finalizer_ctx_with_state(data_root.clone(), character.clone());
+        let state_dir = data_root.join("characters/finalize-bug-d-state-fails/state");
+        // Deterministic sabotage: occupy the fixed temporary path used by
+        // StateService::write. Update this if its temp naming changes.
+        std::fs::create_dir_all(state_dir.join("live.json.tmp")).unwrap();
+
+        let output = "Message persists first.\n<state>{\"hp\":1}</state>".to_string();
+        let error = run_finalize(ctx, output.clone(), output)
+            .await
+            .expect_err("state write failure must propagate");
+        assert!(matches!(error, crate::error::AirpError::Io(_)));
+
+        let log = ChatService::new(&data_root)
+            .history(&character, None)
+            .unwrap();
+        assert_eq!(log.messages.len(), 2, "assistant message committed first");
+        let marker = crate::turn_commit::pending_turn(&data_root, &character, None)
+            .expect("partial commit must retain a recovery marker");
+        assert_eq!(
+            marker.phase,
+            crate::turn_commit::TurnCommitPhase::MessageCommitted
         );
     }
 

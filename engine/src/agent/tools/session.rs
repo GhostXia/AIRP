@@ -21,6 +21,7 @@ use crate::adapter::{ChatMessage, MessageRole};
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
 use crate::error::AirpError;
+use crate::session_coordinator::SessionCommand;
 use crate::types::CharacterId;
 use serde_json::Value;
 use std::future::Future;
@@ -157,6 +158,15 @@ impl Tool for AppendMessageTool {
             };
             let cid = CharacterId::new(cid_str)?;
             let session_id = optional_session_id(&params)?;
+            // Agent tools must use the same owner as legacy chat mutations.
+            // Keep the lease local: this synchronous ChatService write is one
+            // bounded command, and its drop returns the session to Idle.
+            let _operation = state.session_coordinators.try_submit(
+                &state.data_root,
+                &cid,
+                session_id.as_ref(),
+                SessionCommand::AgentToolMutation,
+            )?;
             let service = ChatService::new(&state.data_root);
             if role == MessageRole::System {
                 tracing::info!(
@@ -289,6 +299,14 @@ impl Tool for RollbackMessagesTool {
                     dry_run: true,
                 });
             }
+            // A dry-run is read-only; the confirmed destructive write must
+            // arbitrate with active Chat generations and other mutations.
+            let _operation = state.session_coordinators.try_submit(
+                &state.data_root,
+                &cid,
+                session_id.as_ref(),
+                SessionCommand::AgentToolMutation,
+            )?;
             tracing::warn!(
                 character_id = %cid,
                 session_id = session_id.map(|sid| sid.to_string()).as_deref().unwrap_or("default"),

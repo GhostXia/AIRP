@@ -16,6 +16,7 @@ test('chat space observes coordinator state and blocks conflicting mutations', (
   assert.match(chatScript, /sessionMutationBlocked\(\)/);
   assert.match(chatScript, /coordinatorPhase !== 'idle'/);
   assert.match(chatScript, /error\.status === 409.*session_busy/);
+  assert.match(chatScript, /session_recovery_required.*refreshCoordinatorState/);
   assert.match(chatScript, /error\.status === 404[\s\S]*coordinatorStateSupported = false/);
 });
 
