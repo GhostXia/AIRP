@@ -124,7 +124,7 @@ impl SettingsUpdateCoordinator {
         *self
             .persistence_override
             .lock()
-            .expect("settings persistence override lock poisoned") = hook;
+            .unwrap_or_else(|p| p.into_inner()) = hook;
     }
 
     pub(crate) fn run_persistence_override(
@@ -135,7 +135,7 @@ impl SettingsUpdateCoordinator {
         let hook = self
             .persistence_override
             .lock()
-            .expect("settings persistence override lock poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .clone();
         hook.map(|hook| hook(path, bytes))
     }

@@ -236,7 +236,7 @@ impl Tool for TriggerWorldEventTool {
             // session_lock，同一调用任意时刻只持有一把锁。
             let (event, content_buf) = {
                 let state_boundary = state_lock(cid.as_str());
-                let _state_guard = state_boundary.lock().expect("state lock poisoned");
+                let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
 
                 let mut events = load_world_events(&state.data_root, cid.as_str())?;
                 let event_idx = events
@@ -274,7 +274,7 @@ impl Tool for TriggerWorldEventTool {
             // 防止并发追加在 current.md 中交错混合叙事内容。
             {
                 let session_boundary = session_lock(cid.as_str(), sid.as_ref());
-                let _session_guard = session_boundary.lock().expect("session lock poisoned");
+                let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
                 crate::volume_store::append_to_current(&session_dir, &content_buf)?;
             }
 
@@ -526,7 +526,7 @@ impl Tool for AdvanceClockTool {
             // read-modify-write 丢更新。
             let (clock, triggered, content_buf) = {
                 let state_boundary = state_lock(cid.as_str());
-                let _state_guard = state_boundary.lock().expect("state lock poisoned");
+                let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
                 advance_and_check_triggers(&state.data_root, cid.as_str(), advance_by)?
             };
             // state_lock 在此处释放，避免与 session_lock 形成锁序倒置死锁。
@@ -539,7 +539,7 @@ impl Tool for AdvanceClockTool {
             // 与此处的 append 在 current.md 中交错。
             if !content_buf.is_empty() {
                 let session_boundary = session_lock(cid.as_str(), sid.as_ref());
-                let _session_guard = session_boundary.lock().expect("session lock poisoned");
+                let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
                 crate::volume_store::append_to_current(&session_dir, &content_buf)?;
             }
 

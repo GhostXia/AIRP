@@ -49,7 +49,7 @@ pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
     let mut locks = CHARACTER_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .expect("character lock map poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     locks
         .entry(character_id.to_string())
         .or_insert_with(|| Arc::new(RwLock::new(())))
@@ -71,7 +71,7 @@ pub(crate) fn session_lock(character_id: &str, session_id: Option<&SessionId>) -
     let mut locks = SESSION_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .expect("session lock map poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     locks
         .entry(key)
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -83,7 +83,7 @@ fn remove_deleted_session_lock(character_id: &str, session_id: &SessionId) {
         return;
     };
     let key = format!("{character_id}/{session_id}");
-    let mut locks = lock_map.lock().expect("session lock map poisoned");
+    let mut locks = lock_map.lock().unwrap_or_else(|p| p.into_inner());
     // The tombstone is durable before this runs, so every waiter or future
     // caller will fail closed even if it holds/creates a different lock Arc.
     locks.remove(&key);
@@ -98,7 +98,7 @@ pub(crate) fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
     let mut locks = STATE_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .expect("state lock map poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     locks
         .entry(character_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -110,7 +110,7 @@ fn persona_lock(user_id: &str) -> Arc<Mutex<()>> {
     let mut locks = PERSONA_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .expect("persona lock map poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     locks
         .entry(user_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -195,9 +195,9 @@ impl ChatService {
         operation: impl FnOnce() -> Result<R, AirpError>,
     ) -> Result<R, AirpError> {
         let character = character_lock(character_id.as_str());
-        let _character_guard = character.read().expect("character lock poisoned");
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let session = session_lock(character_id.as_str(), session_id);
-        let _session_guard = session.lock().expect("session lock poisoned");
+        let _session_guard = session.lock().unwrap_or_else(|p| p.into_inner());
         // A never-seen named ID retains the legacy lazy-create behavior. Only
         // an explicitly deleted ID is rejected, using a tombstone so it cannot
         // be silently revived by load_or_create_for_session.
@@ -939,19 +939,19 @@ impl ChatService {
 
     pub fn list_sessions(&self, character_id: &CharacterId) -> Result<Vec<SessionId>, AirpError> {
         let character = character_lock(character_id.as_str());
-        let _guard = character.read().expect("character lock poisoned");
+        let _guard = character.read().unwrap_or_else(|p| p.into_inner());
         data_dir::list_sessions(&self.data_root, character_id.as_str())
     }
 
     pub fn create_session(&self, character_id: &CharacterId) -> Result<SessionId, AirpError> {
         let character = character_lock(character_id.as_str());
-        let _guard = character.read().expect("character lock poisoned");
+        let _guard = character.read().unwrap_or_else(|p| p.into_inner());
         data_dir::create_session(&self.data_root, character_id.as_str())
     }
 
     pub fn delete_character(&self, character_id: &CharacterId) -> Result<(), AirpError> {
         let character = character_lock(character_id.as_str());
-        let _guard = character.write().expect("character lock poisoned");
+        let _guard = character.write().unwrap_or_else(|p| p.into_inner());
         data_dir::delete_character(&self.data_root, character_id)
     }
 
@@ -965,9 +965,9 @@ impl ChatService {
         session_id: &SessionId,
     ) -> Result<(), AirpError> {
         let character = character_lock(character_id.as_str());
-        let _character_guard = character.read().expect("character lock poisoned");
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let session = session_lock(character_id.as_str(), Some(session_id));
-        let _session_guard = session.lock().expect("session lock poisoned");
+        let _session_guard = session.lock().unwrap_or_else(|p| p.into_inner());
         // A previous attempt may have written the fail-closed tombstone but
         // failed to remove the directory. Deletion must bypass `with_session`'s
         // tombstone rejection so a retry can finish that cleanup.
@@ -1008,9 +1008,9 @@ impl LorebookService {
         character_id: &CharacterId,
     ) -> Result<crate::orchestrator::Lorebook, AirpError> {
         let character = character_lock(character_id.as_str());
-        let _guard = character.read().expect("character lock poisoned");
+        let _guard = character.read().unwrap_or_else(|p| p.into_inner());
         let resource = state_lock(character_id.as_str());
-        let _resource_guard = resource.lock().expect("resource lock poisoned");
+        let _resource_guard = resource.lock().unwrap_or_else(|p| p.into_inner());
         let path = data_dir::char_world_lorebook_path(&self.data_root, character_id.as_str());
         if !path.exists() {
             return Err(AirpError::NotFound(format!(
@@ -1028,9 +1028,9 @@ impl LorebookService {
         lorebook: &crate::orchestrator::Lorebook,
     ) -> Result<(), AirpError> {
         let character = character_lock(character_id.as_str());
-        let _guard = character.read().expect("character lock poisoned");
+        let _guard = character.read().unwrap_or_else(|p| p.into_inner());
         let resource = state_lock(character_id.as_str());
-        let _resource_guard = resource.lock().expect("resource lock poisoned");
+        let _resource_guard = resource.lock().unwrap_or_else(|p| p.into_inner());
         let world_dir = data_dir::char_world_dir(&self.data_root, character_id.as_str())?;
         let path = data_dir::char_world_lorebook_path(&self.data_root, character_id.as_str());
         let lorebook_bytes = serde_json::to_vec_pretty(lorebook)?;
@@ -1134,9 +1134,9 @@ impl StateService {
     /// by a subsequent write.
     pub fn read(&self, character_id: &CharacterId) -> Result<serde_json::Value, AirpError> {
         let character = character_lock(character_id.as_str());
-        let _character_guard = character.read().expect("character lock poisoned");
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let state_boundary = state_lock(character_id.as_str());
-        let _state_guard = state_boundary.lock().expect("state lock poisoned");
+        let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         Self::load_live_value(character_id, &state_dir)
@@ -1163,9 +1163,9 @@ impl StateService {
         F: FnOnce(&mut serde_json::Value) -> Result<(), AirpError>,
     {
         let character = character_lock(character_id.as_str());
-        let _character_guard = character.read().expect("character lock poisoned");
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let state_boundary = state_lock(character_id.as_str());
-        let _state_guard = state_boundary.lock().expect("state lock poisoned");
+        let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         fs::create_dir_all(&state_dir)?;
@@ -1182,9 +1182,9 @@ impl StateService {
         state: &serde_json::Value,
     ) -> Result<StateSnapshot, AirpError> {
         let character = character_lock(character_id.as_str());
-        let _character_guard = character.read().expect("character lock poisoned");
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let state_boundary = state_lock(character_id.as_str());
-        let _state_guard = state_boundary.lock().expect("state lock poisoned");
+        let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         fs::create_dir_all(&state_dir)?;
@@ -1587,7 +1587,7 @@ impl PersonaService {
     /// 列出该用户的所有 Persona id（含 `default`）。无多份目录时返回 `["default"]`。
     pub fn list(&self, user_id: &UserId) -> Result<Vec<String>, AirpError> {
         let lock = persona_lock(user_id.as_str());
-        let _guard = lock.lock().expect("persona lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         self.reject_case_variant_default_file(user_id)?;
         let dir = data_dir::user_personas_dir(&self.data_root, user_id);
         let mut ids: Vec<String> = Vec::new();
@@ -1623,7 +1623,7 @@ impl PersonaService {
     ) -> Result<Persona, AirpError> {
         let persona_id = Self::canonical_persona_id(persona_id);
         let lock = persona_lock(user_id.as_str());
-        let _guard = lock.lock().expect("persona lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         if persona_id == "default" {
             self.reject_case_variant_default_file(user_id)?;
         }
@@ -1661,7 +1661,7 @@ impl PersonaService {
     ) -> Result<Persona, AirpError> {
         let persona_id = Self::canonical_persona_id(persona_id);
         let lock = persona_lock(user_id.as_str());
-        let _guard = lock.lock().expect("persona lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         if persona_id == "default" {
             self.reject_case_variant_default_file(user_id)?;
         }
@@ -1752,7 +1752,7 @@ impl PersonaService {
             ));
         }
         let lock = persona_lock(user_id.as_str());
-        let _guard = lock.lock().expect("persona lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         // Validate the untrusted ID before constructing either destructive path.
         let path = data_dir::user_persona_multi_path(&self.data_root, user_id, persona_id)?;
         let persona_asset_dir = path.with_extension("");
@@ -1951,7 +1951,7 @@ impl PersonaService {
     /// resolution observes one committed ownership snapshot.
     fn persona_snapshot(&self, user_id: &UserId) -> Result<Vec<(String, Persona)>, AirpError> {
         let lock = persona_lock(user_id.as_str());
-        let _guard = lock.lock().expect("persona lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         self.reject_case_variant_default_file(user_id)?;
 
         let dir = data_dir::user_personas_dir(&self.data_root, user_id);

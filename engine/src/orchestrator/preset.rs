@@ -514,9 +514,7 @@ impl PresetService {
         let raw_bytes = cleaned.as_bytes();
         let report_bytes = serde_json::to_vec_pretty(&report)?;
 
-        let _guard = PRESET_WRITE_LOCK
-            .lock()
-            .expect("preset write lock poisoned");
+        let _guard = PRESET_WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = self.data_root.join("presets").join(preset_id.as_str());
 
         // 统一 revision 合同：lazy migration + atomic commit。

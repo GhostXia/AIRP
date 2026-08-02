@@ -100,10 +100,7 @@ impl SessionCoordinatorRegistry {
         command: SessionCommand,
     ) -> Result<SessionCommandLease, AirpError> {
         let key = session_key(data_root, character_id, session_id);
-        let mut entries = self
-            .entries
-            .lock()
-            .expect("session coordinator registry poisoned");
+        let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.retain(|_, entry| entry.strong_count() > 0);
         let state = match entries.get(&key).and_then(Weak::upgrade) {
             Some(state) => state,
@@ -122,7 +119,7 @@ impl SessionCoordinatorRegistry {
         // protected.  Lease release uses this same entries -> state order;
         // keeping both guards through the idle check prevents a release from
         // removing the weak entry between upgrade and state admission.
-        let mut coordinator = state.lock().expect("session coordinator state poisoned");
+        let mut coordinator = state.lock().unwrap_or_else(|p| p.into_inner());
         if coordinator.status.phase != SessionPhase::Idle {
             return Err(AirpError::Conflict("session_busy".to_string()));
         }
@@ -170,16 +167,13 @@ impl SessionCoordinatorRegistry {
         generation_id: &str,
     ) -> Result<SessionCoordinatorStatus, AirpError> {
         let key = session_key(data_root, character_id, session_id);
-        let mut entries = self
-            .entries
-            .lock()
-            .expect("session coordinator registry poisoned");
+        let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.retain(|_, entry| entry.strong_count() > 0);
         let state = entries
             .get(&key)
             .and_then(Weak::upgrade)
             .ok_or_else(|| AirpError::Conflict("stale_generation".to_string()))?;
-        let coordinator = state.lock().expect("session coordinator state poisoned");
+        let coordinator = state.lock().unwrap_or_else(|p| p.into_inner());
         if coordinator.status.generation_id.as_deref() != Some(generation_id) {
             return Err(AirpError::Conflict("stale_generation".to_string()));
         }
@@ -200,15 +194,12 @@ impl SessionCoordinatorRegistry {
         session_id: Option<&SessionId>,
     ) -> SessionCoordinatorStatus {
         let key = session_key(data_root, character_id, session_id);
-        let mut entries = self
-            .entries
-            .lock()
-            .expect("session coordinator registry poisoned");
+        let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.retain(|_, entry| entry.strong_count() > 0);
         let active = entries.get(&key).and_then(Weak::upgrade).map(|state| {
             state
                 .lock()
-                .expect("session coordinator state poisoned")
+                .unwrap_or_else(|p| p.into_inner())
                 .status
                 .clone()
         });
@@ -265,10 +256,7 @@ impl SessionCommandLease {
     }
 
     pub(crate) fn begin_commit(&mut self) -> Result<(), AirpError> {
-        let mut coordinator = self
-            .state
-            .lock()
-            .expect("session coordinator state poisoned");
+        let mut coordinator = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if self.released
             || coordinator.status.generation_id.as_deref() != Some(self.generation_id.as_str())
         {
@@ -293,11 +281,8 @@ impl SessionCommandLease {
             .registry
             .entries
             .lock()
-            .expect("session coordinator registry poisoned");
-        let mut coordinator = self
-            .state
-            .lock()
-            .expect("session coordinator state poisoned");
+            .unwrap_or_else(|p| p.into_inner());
+        let mut coordinator = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if coordinator.status.generation_id.as_deref() == Some(self.generation_id.as_str()) {
             coordinator.status = SessionCoordinatorStatus::idle();
             coordinator.cancellation = None;

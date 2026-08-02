@@ -261,16 +261,26 @@ pub fn list_volume_numbers(session_dir: &Path) -> Vec<u32> {
 
 /// 返回下一个可用的卷编号（已有最大值 + 1，初始为 1）。
 ///
-/// R4: 用 `saturating_add` 防止 u32 溢出。若磁盘上出现 `vol_4294967295.md`
-/// （u32::MAX），返回值会停在 u32::MAX 而不是回绕到 0；后续 `write_volume`
-/// 会原地把 `vol_4294967295.md` 替换为最新内容，避免静默覆盖 `vol_000.md`。
-/// 这与 `revision::atomic::next_content_revision` 的 `checked_add` 纪律一致。
-pub fn next_volume_number(session_dir: &Path) -> u32 {
-    list_volume_numbers(session_dir)
+/// #220 L5 修复：旧实现用 `saturating_add`，u32::MAX 时静默停在 u32::MAX，
+/// 后续 `write_volume` 原地覆盖 `vol_4294967295.md`。doc 还声称与
+/// `revision::atomic::next_content_revision` 的 `checked_add` 纪律一致，
+/// 但 `saturating_add` ≠ `checked_add`——doc 与实现矛盾。
+///
+/// 现改为 `checked_add` + `Result`，与 `next_content_revision` 真正一致：
+/// u32::MAX + 1 返回 `Internal` 错误而非静默覆盖。实际 u32::MAX = 42 亿卷
+/// （按 1MB/卷 = 4PB），永远不会触发，但错误传播比静默覆盖更诚实。
+pub fn next_volume_number(session_dir: &Path) -> Result<u32, AirpError> {
+    let next = list_volume_numbers(session_dir)
         .last()
         .copied()
-        .map(|n| n.saturating_add(1))
-        .unwrap_or(1)
+        .map(|n| n.checked_add(1))
+        .unwrap_or(Some(1))
+        .ok_or_else(|| {
+            AirpError::Internal(
+                "volume number 已达 u32::MAX，无法继续递增（请清理 volumes/ 历史）".to_string(),
+            )
+        })?;
+    Ok(next)
 }
 
 /// 写入一卷的完整内容（含 [卷索引] 头部）。
@@ -458,21 +468,21 @@ mod tests {
         let session_dir = tmp.path().join("session1");
         ensure_session_dirs(&session_dir).unwrap();
 
-        assert_eq!(next_volume_number(&session_dir), 1);
+        assert_eq!(next_volume_number(&session_dir).unwrap(), 1);
         write_volume(&session_dir, 1, "vol1").unwrap();
-        assert_eq!(next_volume_number(&session_dir), 2);
+        assert_eq!(next_volume_number(&session_dir).unwrap(), 2);
         write_volume(&session_dir, 2, "vol2").unwrap();
-        assert_eq!(next_volume_number(&session_dir), 3);
+        assert_eq!(next_volume_number(&session_dir).unwrap(), 3);
 
         let nums = list_volume_numbers(&session_dir);
         assert_eq!(nums, vec![1, 2]);
     }
 
     #[test]
-    fn test_next_volume_number_saturates_at_u32_max() {
-        // R4: 旧实现用 `n + 1`，u32::MAX 时 debug 构建会 panic、release 构建
-        // 会回绕到 0，导致 `write_volume(session_dir, 0, ...)` 静默覆盖
-        // `vol_000.md`。saturating_add 保证停在 u32::MAX。
+    fn test_next_volume_number_returns_err_at_u32_max() {
+        // #220 L5：旧实现用 `saturating_add`，u32::MAX 时静默停在 u32::MAX，
+        // 后续 `write_volume` 原地覆盖 `vol_4294967295.md`。现改为 `checked_add`，
+        // u32::MAX + 1 返回 `Internal` 错误，与 `next_content_revision` 一致。
         let tmp = tempdir().unwrap();
         let session_dir = tmp.path().join("saturate");
         ensure_session_dirs(&session_dir).unwrap();
@@ -481,11 +491,20 @@ mod tests {
         let max_path = session_dir.join("volumes").join("vol_4294967295.md");
         std::fs::write(&max_path, "max").unwrap();
 
-        assert_eq!(
-            next_volume_number(&session_dir),
-            u32::MAX,
-            "saturating_add must not wrap to 0"
+        let result = next_volume_number(&session_dir);
+        assert!(
+            result.is_err(),
+            "u32::MAX + 1 must return Err, not silently saturate; got {result:?}"
         );
+        match result {
+            Err(crate::error::AirpError::Internal(msg)) => {
+                assert!(
+                    msg.contains("u32::MAX"),
+                    "error message should mention u32::MAX; got: {msg}"
+                );
+            }
+            other => panic!("expected AirpError::Internal, got {other:?}"),
+        }
     }
 
     #[test]
