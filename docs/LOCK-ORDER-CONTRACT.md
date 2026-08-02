@@ -195,14 +195,15 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate�
 
 `memory/fts.rs` 的 `Mutex<Connection>` poison 返回 `AirpError::Internal`，不 recover。理由：Connection poison 通常伴随 SQLite 内部状态损坏，继续用该连接可能写坏 FTS 索引；上层会重建连接。
 
-### P3：config RwLock poison 策略不一致（已知缺口）
+### P3：config RwLock poison 统一为 recover + warn（已交付）
 
-`DaemonState.config: RwLock<Settings>` 的 poison 处理不一致：
+`DaemonState.config: RwLock<MutableConfig>` 的 poison 处理曾不一致：
 
-- `daemon/mod.rs`、`daemon/handlers/agent.rs`：`unwrap_or_else(|e| e.into_inner())`（recover）
-- `agent/mod.rs`、`chat_pipeline/prepare.rs`、`chat_pipeline/prepare_scene.rs`、`agent/tools/analysis.rs`、`agent/tools/volume_context.rs`：`.map_err(|_| AirpError::Internal("config lock poisoned"))`（error）
+- `daemon/*`：`unwrap_or_else(|e| e.into_inner())`（recover，无日志）
+- `agent/*`、`chat_pipeline/*`、`daemon/handlers/{dialogue_gen,image_gen,settings,style}.rs`：`.map_err(|_| AirpError::Internal("config lock poisoned"))`（error）
+- `daemon/mod.rs::health_handler`：`.unwrap()`（panic）
 
-本合同不强制收敛，但记录为 follow-up：默认应向 P1（recover）对齐，除非有明确理由 error。见 §6.3。
+2026-08-02 PR 收敛为统一 `DaemonState::read_config()` / `write_config()` helper，poison 时 `tracing::warn!` + `into_inner()` 恢复（P4 模式）。13 处调用点已全部替换。
 
 ### P4：memory mutation lock recover + warn
 
@@ -218,13 +219,13 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate�
 
 `agent::tools::*` 在 std 锁内做 `fs` I/O 阻塞 tokio worker，由 #284 方案 O 收敛。本合同禁止新增此类路径，但不动既有 5 处（`advance_plot`、`npc_action`、`trigger_world_event`、`advance_clock`、`StateService::*`）。
 
-### 6.3 config RwLock poison 策略不一致
+### 6.3 config RwLock poison 策略不一致（已交付）
 
-见 §5 P3。建议 follow-up PR 统一为 recover + warn（P4 模式），除非审计发现有路径必须 error。
+见 §5 P3。2026-08-02 PR 已统一为 `DaemonState::read_config()` / `write_config()` helper（recover + warn，P4 模式），13 处调用点全部替换。
 
-### 6.4 FTS poison 策略与默认分叉
+### 6.4 FTS poison 策略与默认分叉（已加强注释）
 
-见 §5 P2。是有意为之，但应在 `memory/fts.rs` 注释里写明理由（当前已有部分注释，可加强）。
+见 §5 P2。是有意为之。2026-08-02 PR 在 `memory/fts.rs` 模块级文档补充了 error 策略的理由（SQLite Connection poison 伴随内部状态损坏，上层会重建连接）。
 
 ### 6.5 跨进程安全
 

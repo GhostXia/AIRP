@@ -74,10 +74,7 @@ pub async fn enhance_md_via_llm_shared(
     use futures_util::StreamExt;
 
     let (provider_config, gen_params, engine) = {
-        let cfg = state
-            .config
-            .read()
-            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+        let cfg = state.read_config();
         (
             std::sync::Arc::new(crate::adapter::ProviderConfig {
                 provider: cfg.provider.clone(),

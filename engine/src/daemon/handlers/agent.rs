@@ -28,7 +28,7 @@ pub(in crate::daemon) async fn agent_run(
 > {
     // DX-3: quota check（与 chat_completion 同路径）
     let (quota_config, effective_root) = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        let cfg = state.read_config();
         let quota = cfg.quota.clone();
         let root = crate::data_dir::resolve_effective_root(
             &state.data_root,

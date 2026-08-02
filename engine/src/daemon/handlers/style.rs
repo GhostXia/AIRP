@@ -104,11 +104,7 @@ async fn run_style_review_handler(
 
     let current_drift = crate::style::read_soul_drift(&state.data_root, cid.as_str())?;
 
-    let snapshot = state
-        .config
-        .read()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
-        .clone();
+    let snapshot = state.read_config().clone();
 
     let provider_config = Arc::new(crate::adapter::ProviderConfig {
         provider: snapshot.provider.clone(),
@@ -252,11 +248,7 @@ async fn run_style_learn_handler(
     }
 
     // 3. 构造 provider config + gen params
-    let snapshot = state
-        .config
-        .read()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
-        .clone();
+    let snapshot = state.read_config().clone();
     let provider_config = Arc::new(crate::adapter::ProviderConfig {
         provider: snapshot.provider.clone(),
         endpoint: snapshot.endpoint.clone(),

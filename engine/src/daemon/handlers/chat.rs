@@ -130,7 +130,7 @@ pub(in crate::daemon) async fn regen_chat(
     )?;
     // DX-3: quota check (same gate as chat_completion).
     let quota_config = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        let cfg = state.read_config();
         cfg.quota.clone()
     };
     crate::quota::check_and_increment(&effective_root, &quota_config)?;
@@ -192,7 +192,7 @@ pub(in crate::daemon) async fn continue_chat(
         SessionCommand::Continue,
     )?;
     let quota_config = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        let cfg = state.read_config();
         cfg.quota.clone()
     };
     crate::quota::check_and_increment(&effective_root, &quota_config)?;
@@ -323,7 +323,7 @@ pub(in crate::daemon) async fn chat_completion(
 > {
     // DX-3: quota check (before any expensive work; resolves same effective_root as pipeline)
     let (quota_config, effective_root) = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        let cfg = state.read_config();
         let quota = cfg.quota.clone();
         let root =
             crate::data_dir::resolve_effective_root(&state.data_root, payload.user_id.as_deref())?;

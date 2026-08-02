@@ -2,6 +2,13 @@
 //!
 //! 存储路径：`data/characters/{id}/search.db`（每角色一份 SQLite）
 //! 索引时机：搜索前从持久化 ChatLog 幂等同步（含历史回填与删除清理）
+//!
+//! # Poison 策略（LOCK-ORDER-CONTRACT §5 P2）
+//!
+//! 本模块的 `Mutex<Connection>` / `Mutex<ConnectionCache>` poison 时返回 `AirpError::Internal`，
+//! **不**采用默认的 silent recover（§5 P1）。理由：SQLite `Connection` poison 通常伴随
+//! 事务未提交 / 内部状态损坏，继续用该连接可能写坏 FTS 索引或触发未定义行为。上层
+//! `FtsStore` 会丢弃损坏连接并在下次 `connection()` 调用时重建，因此 error 是安全的。
 
 use crate::error::AirpError;
 use rusqlite::{params, Connection};

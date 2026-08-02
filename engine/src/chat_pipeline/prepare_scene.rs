@@ -149,13 +149,7 @@ pub(super) fn prepare_scene_pipeline(
         data_dir::scene_memory_dir(&effective_root, &scene_id).ok()
     };
 
-    let snapshot = {
-        let cfg = state
-            .config
-            .read()
-            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
-        cfg.clone()
-    };
+    let snapshot = state.read_config().clone();
 
     if let Some(ref sd) = session_dir_opt {
         let mut recent_context = String::new();

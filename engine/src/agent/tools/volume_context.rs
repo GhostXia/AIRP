@@ -83,10 +83,7 @@ impl Tool for SealVolumeTool {
                 });
             }
             let (provider, params) = {
-                let config = state
-                    .config
-                    .read()
-                    .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+                let config = state.read_config();
                 let volume = &config.volume_config;
                 (
                     Arc::new(crate::adapter::ProviderConfig {

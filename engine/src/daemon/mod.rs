@@ -97,6 +97,28 @@ pub struct DaemonState {
     pub plugin_tools_update: tokio::sync::Mutex<()>,
 }
 
+impl DaemonState {
+    /// 读取 live config，poison 时 recover + warn 而非 error/panic。
+    ///
+    /// LOCK-ORDER: config 是全局 utility 锁（§1.5 / R4 叶锁）。poison recover 策略见
+    /// docs/LOCK-ORDER-CONTRACT.md §5 P1/P3：daemon 单进程前台运行，poison 表示前一次
+    /// 临界区 panic，crash 整个 daemon 比继续服务更危险。
+    pub fn read_config(&self) -> std::sync::RwLockReadGuard<'_, MutableConfig> {
+        self.config.read().unwrap_or_else(|e| {
+            tracing::warn!("config read lock poisoned; recovering");
+            e.into_inner()
+        })
+    }
+
+    /// 写入 live config，poison 时 recover + warn 而非 error/panic。语义同 [`read_config`]。
+    pub fn write_config(&self) -> std::sync::RwLockWriteGuard<'_, MutableConfig> {
+        self.config.write().unwrap_or_else(|e| {
+            tracing::warn!("config write lock poisoned; recovering");
+            e.into_inner()
+        })
+    }
+}
+
 /// `/v1/settings` 的异步事务协调器。
 pub struct SettingsUpdateCoordinator {
     pub(crate) transaction: tokio::sync::Mutex<()>,
@@ -232,7 +254,7 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Response {
     let required_key = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        let cfg = state.read_config();
         cfg.access_api_key.clone()
     };
     if let Some(key) = required_key {
@@ -262,7 +284,7 @@ async fn production_cache_policy(
     next: Next,
 ) -> Response {
     let production = {
-        let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+        let cfg = state.read_config();
         cfg.deployment_mode == DeploymentMode::Production
     };
     let mut response = next.run(request).await;
@@ -741,7 +763,7 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
 
 fn cors_layer(state: &DaemonState) -> CorsLayer {
     let configured = std::env::var("AIRP_CORS_ORIGINS").ok();
-    let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
+    let cfg = state.read_config();
     let origins = allowed_cors_origins(
         cfg.deployment_mode,
         cfg.public_origin.as_deref(),
@@ -845,7 +867,7 @@ struct VersionInfo {
 async fn health_handler(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
 ) -> axum::Json<HealthInfo> {
-    let cfg = state.config.read().unwrap();
+    let cfg = state.read_config();
     let provider_configured =
         cfg.api_key.as_deref().is_some_and(|s| !s.is_empty()) && !cfg.endpoint.is_empty();
     drop(cfg);

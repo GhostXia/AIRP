@@ -433,10 +433,7 @@ async fn decide_action(
     }
 
     let (endpoint, api_key, model, engine) = {
-        let config = state
-            .config
-            .read()
-            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+        let config = state.read_config();
         (
             req.base
                 .endpoint
