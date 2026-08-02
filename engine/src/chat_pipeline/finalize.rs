@@ -26,6 +26,16 @@ fn style_review_interval() -> u64 {
         .unwrap_or(DEFAULT)
 }
 
+async fn run_memory_fs<T, F>(operation: &'static str, task: F) -> Result<T, AirpError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AirpError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|error| AirpError::Internal(format!("memory {operation} task failed: {error}")))?
+}
+
 // ── finalize ──────────────────────────────────────────────────────────────────
 
 pub(super) async fn run_finalize(
@@ -399,57 +409,50 @@ async fn run_memory_extraction(
         return Ok(());
     }
 
-    // 检查新抽取的条目是否已存在于 decay store 中：
-    // 已存在的条目调用 reinforce_entry 刷新 last_reinforced 和 importance，
-    // 避免重复追加相同内容到 resident.md
-    let new_lines: Vec<&str> = facts
+    let new_lines: Vec<String> = facts
         .lines()
         .filter(|l| l.trim().starts_with("- "))
+        .map(str::to_string)
         .collect();
-    let existing_store = crate::memory::decay::load_decay_store(session_dir);
-    let mut facts_to_append = Vec::new();
-    for line in &new_lines {
-        let hash = crate::memory::decay::line_hash(line);
-        if existing_store.contains_key(&hash) {
-            // 已存在：强化而非重复追加
-            crate::memory::decay::reinforce_entry(session_dir, line)?;
-        } else {
-            facts_to_append.push(*line);
-        }
-    }
-
-    if !facts_to_append.is_empty() {
-        let new_facts = facts_to_append.join("\n");
-        crate::memory::append_resident_memory(session_dir, &new_facts)?;
-    }
+    let commit_dir = session_dir.to_path_buf();
+    run_memory_fs("fact commit", move || {
+        let lines: Vec<&str> = new_lines.iter().map(String::as_str).collect();
+        crate::memory::commit_extracted_facts(&commit_dir, &lines)
+    })
+    .await?;
 
     // Phase 2.5: 遗忘曲线衰减 pass（压缩前先淡出低权重条目）
     let decay_config = crate::memory::DecayConfig::default();
-    let content_before_decay = crate::memory::read_resident_memory(session_dir)?;
-    if !content_before_decay.trim().is_empty() {
-        match crate::memory::apply_decay(session_dir, &content_before_decay, &decay_config) {
-            Ok(result) => {
-                if result.faded_count > 0 {
-                    tracing::info!(
-                        faded = result.faded_count,
-                        total = result.total_entries,
-                        "resident memory 遗忘曲线：淡出 {} 条低权重记忆",
-                        result.faded_count
-                    );
-                    crate::memory::write_resident_memory(session_dir, &result.retained)?;
-                }
+    let decay_dir = session_dir.to_path_buf();
+    match run_memory_fs("decay", move || {
+        crate::memory::apply_decay_to_resident(&decay_dir, &decay_config)
+    })
+    .await
+    {
+        Ok(result) => {
+            if result.faded_count > 0 {
+                tracing::info!(
+                    faded = result.faded_count,
+                    total = result.total_entries,
+                    "resident memory 遗忘曲线：淡出 {} 条低权重记忆",
+                    result.faded_count
+                );
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "decay pass 失败，跳过");
-            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "decay pass 失败，跳过");
         }
     }
 
     // 检查是否需要压缩
     let resident_config = crate::memory::ResidentMemoryConfig::default();
-    if crate::memory::is_over_capacity(session_dir, &resident_config) {
+    let read_dir = session_dir.to_path_buf();
+    let content = run_memory_fs("snapshot read", move || {
+        crate::memory::read_resident_memory(&read_dir)
+    })
+    .await?;
+    if content.chars().count() > resident_config.capacity_chars {
         tracing::info!("resident memory 超过容量上限，触发压缩");
-        let content = crate::memory::read_resident_memory(session_dir)?;
         let compressed = crate::memory::compress_resident_memory(
             client,
             provider_config.clone(),
@@ -458,7 +461,14 @@ async fn run_memory_extraction(
             resident_config.capacity_chars,
         )
         .await?;
-        crate::memory::write_resident_memory(session_dir, &compressed)?;
+        let write_dir = session_dir.to_path_buf();
+        if !run_memory_fs("compression commit", move || {
+            crate::memory::write_resident_memory_if_unchanged(&write_dir, &content, &compressed)
+        })
+        .await?
+        {
+            tracing::info!("resident memory changed during compression; skipping stale result");
+        }
     }
 
     Ok(())

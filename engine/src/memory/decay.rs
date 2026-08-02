@@ -22,26 +22,10 @@
 
 use crate::error::AirpError;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// per-session_dir 互斥锁，防止并发 apply_decay / reinforce_entry 丢更新。
-/// 不同 session_dir 独立加锁，互不阻塞。
-static DECAY_LOCKS: std::sync::LazyLock<Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// 获取指定 session_dir 的专属锁。
-fn decay_lock(session_dir: &Path) -> std::sync::Arc<Mutex<()>> {
-    let key = session_dir.to_string_lossy().to_string();
-    let mut locks = DECAY_LOCKS.lock().expect("decay locks map poisoned");
-    locks
-        .entry(key)
-        .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
-        .clone()
-}
 
 /// 默认衰减速率（约 14 天半衰期）。
 pub const DEFAULT_DECAY_RATE: f64 = 0.05;
@@ -168,9 +152,99 @@ pub fn apply_decay(
     content: &str,
     config: &DecayConfig,
 ) -> Result<DecayResult, AirpError> {
-    // 获取 per-session_dir 锁，防止并发 apply_decay 丢更新
-    let lock = decay_lock(session_dir);
-    let _guard = lock.lock().expect("decay lock poisoned");
+    super::with_memory_mutation(session_dir, || {
+        let (result, store) = compute_decay(session_dir, content, config);
+        append_faded_unlocked(session_dir, &result.faded)?;
+        save_decay_store(session_dir, &store)?;
+        Ok(result)
+    })
+}
+
+/// Apply decay to the current resident snapshot and commit the resulting
+/// resident/decay/faded files under one session mutation lock.
+pub(crate) fn apply_decay_to_resident(
+    session_dir: &Path,
+    config: &DecayConfig,
+) -> Result<DecayResult, AirpError> {
+    super::with_memory_mutation(session_dir, || {
+        let content = super::resident::read_resident_memory_unlocked(session_dir)?;
+        let (result, store) = compute_decay(session_dir, &content, config);
+        if result.faded_count > 0 {
+            // Archive first. A later resident write failure can duplicate an
+            // archive entry on retry, but cannot lose the user's memory.
+            append_faded_unlocked(session_dir, &result.faded)?;
+            super::resident::write_resident_memory_unlocked(session_dir, &result.retained)?;
+        }
+        // Metadata is committed last. If it fails, resident.md remains the
+        // authoritative source and the next pass reconstructs the store.
+        save_decay_store(session_dir, &store)?;
+        Ok(result)
+    })
+}
+
+/// Commit extracted bullet lines without allowing resident.md and decay.json
+/// to disagree about whether a fact exists. Resident content is authoritative:
+/// it is written first, and a later metadata failure is repaired on retry.
+pub(crate) fn commit_extracted_facts(
+    session_dir: &Path,
+    lines: &[&str],
+) -> Result<usize, AirpError> {
+    super::with_memory_mutation(session_dir, || {
+        let mut resident = super::resident::read_resident_memory_unlocked(session_dir)?;
+        let mut resident_lines: HashSet<String> = resident
+            .lines()
+            .filter(|line| line.trim().starts_with("- "))
+            .map(|line| line.trim().to_string())
+            .collect();
+        let mut batch_lines = HashSet::new();
+        let mut store = load_decay_store(session_dir);
+        let mut to_append = Vec::new();
+        let now = now_secs();
+
+        for line in lines.iter().map(|line| line.trim()) {
+            if !line.starts_with("- ") || !batch_lines.insert(line.to_string()) {
+                continue;
+            }
+
+            let already_resident = resident_lines.contains(line);
+            let hash = line_hash(line);
+            if let Some(meta) = store.get_mut(&hash) {
+                meta.last_reinforced = now;
+                meta.importance = (meta.importance + 0.05).min(1.0);
+            } else {
+                store.insert(
+                    hash,
+                    EntryMeta {
+                        created_at: now,
+                        last_reinforced: now,
+                        importance: DEFAULT_IMPORTANCE,
+                    },
+                );
+            }
+
+            if !already_resident {
+                resident_lines.insert(line.to_string());
+                to_append.push(line.to_string());
+            }
+        }
+
+        if !to_append.is_empty() {
+            if !resident.is_empty() && !resident.ends_with('\n') {
+                resident.push('\n');
+            }
+            resident.push_str(&to_append.join("\n"));
+            super::resident::write_resident_memory_unlocked(session_dir, &resident)?;
+        }
+        save_decay_store(session_dir, &store)?;
+        Ok(to_append.len())
+    })
+}
+
+fn compute_decay(
+    session_dir: &Path,
+    content: &str,
+    config: &DecayConfig,
+) -> (DecayResult, DecayStore) {
     let now = now_secs();
     let mut store = load_decay_store(session_dir);
     let mut retained_lines: Vec<String> = Vec::new();
@@ -223,50 +297,57 @@ pub fn apply_decay(
         .collect();
     store.retain(|k, _| current_hashes.contains(k));
 
-    save_decay_store(session_dir, &store)?;
-
-    // 追加淡出条目到 faded.md
-    if !faded_lines.is_empty() {
-        let faded_file = faded_path(session_dir);
-        let mut faded_content = fs::read_to_string(&faded_file).unwrap_or_default();
-        if !faded_content.is_empty() && !faded_content.ends_with('\n') {
-            faded_content.push('\n');
-        }
-        faded_content.push_str(&faded_lines.join("\n"));
-        faded_content.push('\n');
-        if let Some(parent) = faded_file.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        crate::data_dir::replace_file(&faded_file, faded_content.as_bytes())?;
-    }
-
     let faded_count = faded_lines
         .iter()
         .filter(|l| l.trim().starts_with("- "))
         .count();
 
-    Ok(DecayResult {
-        retained: retained_lines.join("\n"),
-        faded: faded_lines,
-        total_entries: total,
-        faded_count,
-    })
+    (
+        DecayResult {
+            retained: retained_lines.join("\n"),
+            faded: faded_lines,
+            total_entries: total,
+            faded_count,
+        },
+        store,
+    )
+}
+
+fn append_faded_unlocked(session_dir: &Path, faded_lines: &[String]) -> Result<(), AirpError> {
+    if faded_lines.is_empty() {
+        return Ok(());
+    }
+    let faded_file = faded_path(session_dir);
+    let mut faded_content = match fs::read_to_string(&faded_file) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    if !faded_content.is_empty() && !faded_content.ends_with('\n') {
+        faded_content.push('\n');
+    }
+    faded_content.push_str(&faded_lines.join("\n"));
+    faded_content.push('\n');
+    if let Some(parent) = faded_file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::data_dir::replace_file(&faded_file, faded_content.as_bytes())?;
+    Ok(())
 }
 
 /// 强化条目：当记忆被重新抽取或手动编辑时，更新 last_reinforced。
 pub fn reinforce_entry(session_dir: &Path, line: &str) -> Result<(), AirpError> {
-    // 获取 per-session_dir 锁，防止与 apply_decay 并发冲突
-    let lock = decay_lock(session_dir);
-    let _guard = lock.lock().expect("decay lock poisoned");
-    let mut store = load_decay_store(session_dir);
-    let hash = line_hash(line);
-    let now = now_secs();
-    if let Some(meta) = store.get_mut(&hash) {
-        meta.last_reinforced = now;
-        // 被强化的条目重要度略微提升
-        meta.importance = (meta.importance + 0.05).min(1.0);
-    }
-    save_decay_store(session_dir, &store)
+    super::with_memory_mutation(session_dir, || {
+        let mut store = load_decay_store(session_dir);
+        let hash = line_hash(line);
+        let now = now_secs();
+        if let Some(meta) = store.get_mut(&hash) {
+            meta.last_reinforced = now;
+            // 被强化的条目重要度略微提升
+            meta.importance = (meta.importance + 0.05).min(1.0);
+        }
+        save_decay_store(session_dir, &store)
+    })
 }
 
 /// 读取 faded.md 内容（供 API 查看/恢复）。
@@ -375,5 +456,117 @@ mod tests {
         let hash = line_hash("- 用户喜欢猫");
         let meta = store.get(&hash).unwrap();
         assert!(meta.importance > DEFAULT_IMPORTANCE);
+    }
+
+    #[test]
+    fn concurrent_fact_commits_keep_shared_and_unique_entries_once() {
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 8;
+        let tmp = tempdir().unwrap();
+        let dir = Arc::new(tmp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|index| {
+                let dir = Arc::clone(&dir);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let unique = format!("- unique-{index}");
+                    barrier.wait();
+                    commit_extracted_facts(&dir, &["- shared", unique.as_str()])
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let resident = super::super::resident::read_resident_memory(&dir).unwrap();
+        assert_eq!(
+            resident.lines().filter(|line| *line == "- shared").count(),
+            1
+        );
+        for index in 0..THREADS {
+            assert_eq!(
+                resident
+                    .lines()
+                    .filter(|line| *line == format!("- unique-{index}"))
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(load_decay_store(&dir).len(), THREADS + 1);
+    }
+
+    #[test]
+    fn metadata_write_failure_is_repaired_without_duplicate_resident_fact() {
+        let tmp = tempdir().unwrap();
+        let blocked_temporary = tmp.path().join("decay.json.tmp");
+        fs::create_dir(&blocked_temporary).unwrap();
+
+        let first = commit_extracted_facts(tmp.path(), &["- durable fact"]);
+        assert!(first.is_err());
+        let resident = super::super::resident::read_resident_memory(tmp.path()).unwrap();
+        assert_eq!(
+            resident
+                .lines()
+                .filter(|line| *line == "- durable fact")
+                .count(),
+            1
+        );
+
+        fs::remove_dir(&blocked_temporary).unwrap();
+        assert_eq!(
+            commit_extracted_facts(tmp.path(), &["- durable fact"]).unwrap(),
+            0
+        );
+        let resident = super::super::resident::read_resident_memory(tmp.path()).unwrap();
+        assert_eq!(
+            resident
+                .lines()
+                .filter(|line| *line == "- durable fact")
+                .count(),
+            1
+        );
+        assert!(load_decay_store(tmp.path()).contains_key(&line_hash("- durable fact")));
+    }
+
+    #[test]
+    fn decay_archive_failure_keeps_resident_memory() {
+        let tmp = tempdir().unwrap();
+        let line = "- old fact";
+        super::super::resident::write_resident_memory(tmp.path(), line).unwrap();
+
+        let old_time = now_secs() - 86400 * 60;
+        let mut store = HashMap::new();
+        store.insert(
+            line_hash(line),
+            EntryMeta {
+                created_at: old_time,
+                last_reinforced: old_time,
+                importance: 0.3,
+            },
+        );
+        fs::write(
+            tmp.path().join("decay.json"),
+            serde_json::to_vec(&store).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(tmp.path().join("faded.md")).unwrap();
+
+        let result = apply_decay_to_resident(
+            tmp.path(),
+            &DecayConfig {
+                decay_rate: 0.1,
+                fade_threshold: 0.2,
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            super::super::resident::read_resident_memory(tmp.path()).unwrap(),
+            line
+        );
     }
 }
