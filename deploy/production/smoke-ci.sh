@@ -180,6 +180,7 @@ EOF
 MOCK_PROVIDER_HOST=0.0.0.0 \
 MOCK_PROVIDER_TLS_CERT_FILE="$mock_cert" \
 MOCK_PROVIDER_TLS_KEY_FILE="$mock_key" \
+MOCK_PROVIDER_HOLD_MAX_MS=15000 \
 node "$repo/deploy/production/mock-provider.js" > "$mock_log" 2>&1 &
 mock_pid=$!
 

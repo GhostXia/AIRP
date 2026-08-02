@@ -7,6 +7,7 @@ import { sanitizeDomSnapshot } from '../../tools/agent-exploration/dom-privacy.m
 
 const rolePage = await readFile(new URL('../screens/01-role-list.html', import.meta.url), 'utf8');
 const chatPage = await readFile(new URL('../screens/02-chat-space.html', import.meta.url), 'utf8');
+const backupPage = await readFile(new URL('../screens/22-backup-restore.html', import.meta.url), 'utf8');
 const onboardingPage = await readFile(new URL('../screens/16-onboarding.html', import.meta.url), 'utf8');
 const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
@@ -15,6 +16,7 @@ const productionBrowserSmoke = await readFile(new URL('../../ui/production-brows
 const productionAdvancedPagesSmoke = await readFile(new URL('../../ui/production-browser-advanced-pages-smoke.mjs', import.meta.url), 'utf8');
 const productionSmokeCi = await readFile(new URL('../../deploy/production/smoke-ci.sh', import.meta.url), 'utf8');
 const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
+const consoleRuntime = await readFile(new URL('../assets/console-runtime.js', import.meta.url), 'utf8');
 const dialogueGenScript = await readFile(new URL('../assets/dialogue-gen.js', import.meta.url), 'utf8');
 const dialogueFlowScript = await readFile(new URL('../assets/dialogue-flow.js', import.meta.url), 'utf8');
 const agentHarnessScript = await readFile(new URL('../assets/agent-test-harness.js', import.meta.url), 'utf8');
@@ -247,6 +249,18 @@ test('console-runtime implements #304 new UI components', async () => {
   assert.match(rt, /combobox/, 'missing combobox class');
   // 05 presets must NOT contain model management
   assert.doesNotMatch(rt, /renderPresets[\s\S]*?Provider 模型/, 'presets page must not render model card');
+});
+
+test('backup page explicitly stays unavailable without calling a backup API', () => {
+  assert.match(backupPage, /data-screen="backup"/);
+  assert.ok(consoleRuntime.includes("backup: () => renderUnavailable('backup')"));
+  const start = consoleRuntime.indexOf('async function renderUnavailable');
+  const end = consoleRuntime.indexOf('async function boot', start);
+  assert.ok(start >= 0 && end > start, 'backup renderer must remain a bounded unavailable renderer');
+  const unavailableRenderer = consoleRuntime.slice(start, end);
+  assert.match(unavailableRenderer, /当前 Engine 没有备份\/恢复 HTTP API/);
+  assert.doesNotMatch(unavailableRenderer, /client\.request\(/);
+  assert.doesNotMatch(unavailableRenderer, /\/v1\/(?:backup|restore)/);
 });
 
 // N-K 修复：PR #314 Phase 1 WebUI 关键修复点契约测试

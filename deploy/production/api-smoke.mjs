@@ -14,6 +14,8 @@
 // 退出码：0 = 全绿；1 = 有断言失败（含详细 diff）。非零即验收未过。
 
 import { writeFileSync } from 'node:fs';
+import { consumeGenerationSse } from './sse-consumer.mjs';
+import { deleteSessionWithRetry } from './session-cleanup.mjs';
 
 const ENGINE = process.env.AIRP_ENGINE_URL || 'http://127.0.0.1:8000';
 const MOCK = process.env.AIRP_MOCK_URL || 'http://127.0.0.1:8889';
@@ -50,7 +52,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // engine daemon 用 tower_governor 限流 10 req/s burst 20（daemon/mod.rs::create_router）。
 // smoke 整链路 ~30+ 请求会打空 burst 桶；throttle 200ms（5 req/s）+ 关键节点前置 sleep 避误伤。
 let lastReqAt = 0;
-async function api(method, path, body, { bearer } = {}) {
+async function api(method, path, body, { bearer, signal } = {}) {
   const wait = 200 - (Date.now() - lastReqAt);
   if (wait > 0) await sleep(wait);
   lastReqAt = Date.now();
@@ -61,6 +63,7 @@ async function api(method, path, body, { bearer } = {}) {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   });
   let data = null;
   const text = await res.text();
@@ -70,70 +73,82 @@ async function api(method, path, body, { bearer } = {}) {
   return { status: res.status, ok: res.ok, data, text };
 }
 
-// 消费 engine 的 SSE chat 流，收集所有 chunk event，返回完整文本。
-// engine axum SSE 帧形（chat_pipeline.rs::chunks_result_to_events）：
-//   `event: message\ndata: {"type":"body_chunk","text":"..."}\n\n`
-//   `event: error\ndata: {"type":"body_chunk","text":"[Error/...]"}\n\n`
-// UnpackedChunk 序列化为 `{type, text}`（xml_unpacker.rs `#[serde(tag="type", content="text")]`）。
-async function streamChat(payload) {
-  const startedAt = Date.now();
-  const res = await fetch(ENGINE + '/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
-    },
-    body: JSON.stringify(payload),
-  });
-  ok(res.ok, 'chat SSE 200 OK');
-  if (!res.ok) return { chunks: [], text: '', error: await res.text() };
-  if (!res.body) return { chunks: [], text: '', error: 'chat SSE response has no body' };
-
-  const chunks = [];
-  let text = '';
-  let errorText = '';
-  let readBatches = 0;
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    readBatches++;
-    buf += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf('\n\n')) >= 0) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      let evt = null, dta = null;
-      for (const line of frame.split('\n')) {
-        if (line.startsWith('event:')) evt = line.slice(6).trim();
-        else if (line.startsWith('data:')) dta = line.slice(5).trim();
-      }
-      if (evt === 'message' && dta) {
-        try {
-          const obj = JSON.parse(dta);
-          // body_chunk = 正常正文；think_chunk = 心理独白（也算流式产出，验收计数含它）
-          if (obj && typeof obj.text === 'string' && (obj.type === 'body_chunk' || obj.type === 'think_chunk')) {
-            chunks.push(obj.text);
-            if (obj.type === 'body_chunk') text += obj.text;
-          }
-        } catch (e) {
-          ok(false, 'chunk JSON 解析失败: ' + e.message);
-        }
-      } else if (evt === 'error' && dta) {
-        try {
-          const obj = JSON.parse(dta);
-          if (obj && typeof obj.text === 'string') {
-            errorText += obj.text;
-          }
-        } catch (e) {
-          ok(false, 'error chunk JSON 解析失败: ' + e.message);
-        }
-      }
-    }
+// Cancellation evidence needs bounded control-plane requests.  Keep the
+// existing api() helper's throttle and response shape, but give polling a
+// per-request deadline so a broken gateway cannot turn the smoke into an
+// unbounded wait.
+async function apiTimed(method, path, body, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await api(method, path, body, { signal: controller.signal });
+  } catch (error) {
+    return {
+      status: 0,
+      ok: false,
+      data: null,
+      text: `request failed: ${error?.message || error}`,
+    };
+  } finally {
+    clearTimeout(timer);
   }
-  return { chunks, text, error: errorText || null, readBatches, elapsedMs: Date.now() - startedAt };
+}
+
+async function fetchTimed(url, options, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function deleteSessionEventually(characterId, sessionId, timeoutMs = 8000) {
+  return deleteSessionWithRetry({
+    timeoutMs,
+    deleteAttempt: (remainingMs) => apiTimed(
+      'DELETE',
+      '/v1/sessions/' + characterId + '/' + encodeURIComponent(sessionId),
+      undefined,
+      Math.min(3000, Math.max(1, remainingMs)),
+    ),
+    stateAttempt: (remainingMs) => apiTimed('POST', '/v1/chat/session-state', {
+      character_id: characterId,
+      session_id: sessionId,
+    }, Math.min(2000, Math.max(1, remainingMs))),
+    sleep,
+  });
+}
+
+// 消费 engine 的 SSE chat 流，收集所有 chunk event，返回完整文本。
+// strict consumer 同时验证 done/error terminal，避免首 chunk 后的 typed
+// error 或 early EOF 被误判为成功。
+async function streamChat(payload) {
+  try {
+    const res = await fetchTimed(ENGINE + '/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
+      },
+      body: JSON.stringify(payload),
+    }, 10000);
+    ok(res.ok, 'chat SSE 200 OK');
+    if (!res.ok) return { chunks: [], text: '', error: await res.text(), terminal: 'http_error', readBatches: 0, elapsedMs: 0 };
+    return consumeGenerationSse(res, { timeoutMs: 30000 });
+  } catch (error) {
+    const message = error?.message || String(error);
+    ok(false, `chat SSE 请求在响应头前失败: ${message}`);
+    return {
+      chunks: [],
+      text: '',
+      error: message,
+      terminal: 'transport_error',
+      readBatches: 0,
+      elapsedMs: 0,
+    };
+  }
 }
 
 async function waitFor(url, { name = '', timeoutMs = 10000 } = {}) {
@@ -410,6 +425,131 @@ let finalLastMessageId = null;
   ok(otherSessionId !== sessionId, '两个 session UUID 不同');
 }
 
+// 判据 4b（#394 O1）：Coordinator 的 generation-scoped cancellation 合同。
+// 使用独立临时 session，避免取消证据污染下面三轮正常对话的 history 断言。
+{
+  let cancellationSessionId = null;
+  let cancellationResponse = null;
+  try {
+    const create = await apiTimed('POST', '/v1/sessions/' + characterId, undefined, 8000);
+    ok(create.ok, 'cancellation smoke 创建隔离 session 成功');
+    cancellationSessionId = typeof create.data === 'string'
+      ? create.data
+      : create.data?.session_id || create.data?.id || null;
+    ok(typeof cancellationSessionId === 'string' && cancellationSessionId.length > 0,
+      'cancellation smoke session id 非空');
+
+    if (cancellationSessionId) {
+      cancellationResponse = await fetchTimed(ENGINE + '/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
+        },
+        body: JSON.stringify({
+          character_id: characterId,
+          session_id: cancellationSessionId,
+          user_profile: { name: 'Cancellation smoke', variables: {} },
+          preset_id: presetId,
+          // Dedicated mock-provider gate: headers flush immediately, but the
+          // first upstream token waits for cancellation (with a finite fail-safe).
+          model: 'airp-smoke-cancel-hold',
+          // mock-provider emits a multi-frame SSE; cancellation is requested
+          // while that controlled stream is still active.
+          message: 'coordinator cancellation smoke — keep this generation active',
+        }),
+      }, 10000);
+      ok(cancellationResponse.ok, 'cancellation smoke 长 SSE 200 OK');
+
+      const stateDeadline = Date.now() + 8000;
+      let state = null;
+      let lastState = null;
+      while (Date.now() < stateDeadline) {
+        const remaining = stateDeadline - Date.now();
+        const current = await apiTimed('POST', '/v1/chat/session-state', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+        }, Math.min(3000, Math.max(250, remaining)));
+        lastState = current;
+        if (
+          current.ok
+          && current.data?.phase === 'generating'
+          && typeof current.data?.generation_id === 'string'
+          && current.data.generation_id.length > 0
+        ) {
+          state = current.data;
+          break;
+        }
+        await sleep(Math.min(200, Math.max(25, remaining)));
+      }
+      ok(Boolean(state), `cancellation smoke 在 deadline 内观测 generating/nonempty generation_id${state ? '' : `; last=${JSON.stringify(lastState?.data || lastState?.text || lastState?.status)}`}`);
+
+      if (state) {
+        const generationId = state.generation_id;
+        const stale = await apiTimed('POST', '/v1/chat/cancel', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+          generation_id: 'stale-' + generationId,
+        }, 5000);
+        eq(stale.status, 409, 'stale generation cancel 返回 HTTP 409');
+
+        const afterStale = await apiTimed('POST', '/v1/chat/session-state', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+        }, 5000);
+        ok(
+          afterStale.ok
+          && afterStale.data?.phase === 'generating'
+          && afterStale.data?.generation_id === generationId,
+          'stale cancel 不影响当前 generating generation',
+        );
+
+        const current = await apiTimed('POST', '/v1/chat/cancel', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+          generation_id: generationId,
+        }, 5000);
+        eq(current.status, 200, 'current generation cancel 返回 HTTP 200');
+        eq(current.data?.generation_id, generationId, 'current cancel 返回同一 generation_id');
+      }
+
+      const streamed = await consumeGenerationSse(cancellationResponse, {
+        allowCancellation: true,
+        timeoutMs: 12000,
+      });
+      ok(!streamed.timedOut, `cancellation SSE 在 deadline 内结束${streamed.error ? ` (${streamed.error})` : ''}; frames=${streamed.frames}`);
+      ok(
+        streamed.terminal === 'cancelled'
+        && streamed.typedError?.code === 'cancelled'
+        && streamed.typedError?.commit_state === 'partially_committed'
+        && streamed.chunks.length === 0,
+        `cancellation SSE 返回 typed cancelled/partially_committed terminal 且 cancel-before-first-token; actual=${streamed.terminal}; chunks=${streamed.chunks.length}; observed=${JSON.stringify(streamed.errors)}`,
+      );
+
+      const history = await apiTimed('POST', '/v1/chat/history', {
+        character_id: characterId,
+        session_id: cancellationSessionId,
+      }, 5000);
+      const messages = history.data?.messages || [];
+      ok(history.ok, 'cancellation smoke history 查询成功');
+      ok(messages.length === 1 && messages[0]?.role === 'user',
+        'cancelled generation history 只保留 user turn');
+      ok(!messages.some((message) => message.role === 'assistant'),
+        'cancelled generation 未产生虚假 assistant commit');
+    }
+  } catch (error) {
+    ok(false, 'cancellation smoke 运行异常: ' + (error?.message || error));
+    if (cancellationResponse?.body) {
+      try { await cancellationResponse.body.cancel(); } catch {}
+    }
+  } finally {
+    if (cancellationSessionId) {
+      const removed = await deleteSessionEventually(characterId, cancellationSessionId);
+      ok(removed.ok, `cancellation smoke 清理隔离 session 成功（status=${removed.status}）`);
+    }
+  }
+}
+
 // 判据 6 + 7：连续三轮流式 RP，刷新后仍可从历史恢复
 const sentMessages = ['你好，初次见面。', '今晚的风有什么不一样？', '你愿意带我去你说的那条街走走吗？'];
 const replies = [];
@@ -424,6 +564,8 @@ for (let i = 0; i < sentMessages.length; i++) {
     preset_id: presetId,
     message: sentMessages[i],
   });
+  ok(out.terminal === 'done', `第 ${i + 1} 轮 SSE 明确收到 done terminal（actual=${out.terminal}）`);
+  ok(!out.typedError && !out.error, `第 ${i + 1} 轮 SSE 未收到 typed error/transport failure${out.error ? `: ${out.error}` : ''}`);
   ok(out.chunks.length >= 1, `第 ${i + 1} 轮流式产生 ≥1 chunk`);
   ok(out.readBatches >= 2 && out.elapsedMs >= 30, `第 ${i + 1} 轮 SSE 经多次读取增量到达`);
   ok(out.text.length > 0, `第 ${i + 1} 轮回复非空`);
@@ -486,20 +628,27 @@ for (let i = 0; i < sentMessages.length; i++) {
   eq((rb.data?.messages || []).length, 4, 'rollback 后剩 4 条消息');
 
   // regen 删除最后一条并流式生成新响应（SSE）
-  const rgRes = await fetch(ENGINE + '/v1/chat/regen', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
-    },
-    body: JSON.stringify({ character_id: characterId, session_id: sessionId }),
-  });
-  ok(rgRes.ok, 'regen 成功');
-  // 消费 SSE 流直到完成
-  if (rgRes.body) {
-    const reader = rgRes.body.getReader();
-    while (true) { const { done } = await reader.read(); if (done) break; }
+  let regen;
+  try {
+    const rgRes = await fetchTimed(ENGINE + '/v1/chat/regen', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
+      },
+      body: JSON.stringify({ character_id: characterId, session_id: sessionId }),
+    }, 10000);
+    ok(rgRes.ok, 'regen 成功');
+    regen = rgRes.ok
+      ? await consumeGenerationSse(rgRes, { timeoutMs: 30000 })
+      : { terminal: 'http_error', typedError: null, error: await rgRes.text(), frames: 0 };
+  } catch (error) {
+    const message = error?.message || String(error);
+    ok(false, `regen SSE 请求在响应头前失败: ${message}`);
+    regen = { terminal: 'transport_error', typedError: null, error: message, frames: 0 };
   }
+  ok(regen.terminal === 'done', `regen SSE 明确收到 done terminal（actual=${regen.terminal}）`);
+  ok(!regen.typedError && !regen.error, `regen SSE 未收到 typed error/transport failure${regen.error ? `: ${regen.error}` : ''}`);
   // 验证 history：regen 删除旧的 + 生成新的 = 仍 4 条（原 4 条 - 1 + 1 新）
   const afterRegen = await api('POST', '/v1/chat/history', { character_id: characterId, session_id: sessionId });
   eq((afterRegen.data?.messages || []).length, 4, 'regen 后仍 4 条消息（删旧+生新）');
