@@ -20,7 +20,7 @@
 | 当前事实 | [CURRENT-BASELINE.md](CURRENT-BASELINE.md) | 唯一人工维护的全仓能力基线 |
 | 开发治理 | [DEV-GUIDE.md](DEV-GUIDE.md) | 开发/审计入口、验证和工作流 |
 | 产品方向 | [PLAN.md](PLAN.md) | 稳定目标、阶段门和取舍；不复制 issue 队列 |
-| 数据合同 | [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)、[CONVERSATION-CONTRACT.md](CONVERSATION-CONTRACT.md) | session、history、Conversation；**目标与已交付必须分读** |
+| 数据合同 | [SESSION-DATA-DESIGN.md](SESSION-DATA-DESIGN.md)、[LONG-HISTORY-CONTRACT.md](LONG-HISTORY-CONTRACT.md)、[CONVERSATION-CONTRACT.md](CONVERSATION-CONTRACT.md)、[LOCK-ORDER-CONTRACT.md](LOCK-ORDER-CONTRACT.md) | session、history、Conversation、进程内锁序；**目标与已交付必须分读** |
 | RP 合同 | [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md)、[ASSET-SPEC.md](ASSET-SPEC.md) | Worldbook runtime 与资产规格策略（规格尚未正式发布） |
 | 接口/架构 | [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)、[AGENT-ORCHESTRATION.md](AGENT-ORCHESTRATION.md) | UI 协议决策与可配置编排**草案** |
 | 安全/发布 | [SECURITY.md](SECURITY.md)、[RISK-REGISTER.md](RISK-REGISTER.md)、[WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)、[WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md) | 威胁边界、风险、部署拓扑和发布门 |

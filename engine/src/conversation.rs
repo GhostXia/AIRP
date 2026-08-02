@@ -58,6 +58,9 @@ fn scoped_conversation_lock(
 }
 
 fn conversation_lock(data_root: &Path, conversation_id: SessionId) -> Arc<tokio::sync::Mutex<()>> {
+    // LOCK-ORDER: conversation 写入串行化。合法嵌套方向 conversation → io（§2.7 / R3），
+    // 反向禁止。可单独持有（append_event 是唯一同时持两把锁的入口）。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.2 / §2.7 / §3 R3 / §4 A2。
     scoped_conversation_lock(&CONVERSATION_LOCKS, data_root, conversation_id)
 }
 
@@ -65,6 +68,9 @@ pub(crate) fn conversation_io_lock(
     data_root: &Path,
     conversation_id: SessionId,
 ) -> Arc<tokio::sync::Mutex<()>> {
+    // LOCK-ORDER: conversation journal I/O 串行化。可单独持有（context_projection）。
+    // 持此锁时不得获取 conversation_lock（R3 反向禁止）。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.2 / §2.7 / §3 R3 / §4 A2。
     scoped_conversation_lock(&CONVERSATION_IO_LOCKS, data_root, conversation_id)
 }
 

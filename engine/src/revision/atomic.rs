@@ -98,6 +98,11 @@ pub(crate) fn commit_revision(
 ) -> Result<PathBuf, AirpError> {
     // 进程内串行化：防止并发 commit 的 TOCTOU 导致指针回退。
     // 跨进程安全由调用方负责（AIRP daemon 单进程，无跨进程 writer）。
+    //
+    // LOCK-ORDER: 全局叶锁（§1.5 / R4）。持此锁时不得获取任何 per-character /
+    // per-conversation / per-session 资源锁。调用方（如 StateService::mutate）已持
+    // character.read + state.lock 时获取此锁是合法外→内序列。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.5 / §3 R4。
     let _commit_guard = COMMIT_LOCK
         .lock()
         .map_err(|e| AirpError::Internal(format!("COMMIT_LOCK poisoned: {e}")))?;

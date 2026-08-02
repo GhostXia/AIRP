@@ -234,6 +234,10 @@ impl Tool for TriggerWorldEventTool {
             // 两者并发时永久阻塞。修复方式与 advance_and_check_triggers 一致：
             // 拆分为两段独立临界区，state_lock 在阶段一末尾释放，阶段二才获取
             // session_lock，同一调用任意时刻只持有一把锁。
+            //
+            // LOCK-ORDER: 两段临界区（§2.4 / R2）。阶段一持 state_lock，阶段二持 session_lock，
+            // 绝不嵌套。与 advance_plot 的 session→state 单向嵌套不形成环。
+            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.4 / §3 R2 / §4 A1 / §4 A3。
             let (event, content_buf) = {
                 let state_boundary = state_lock(cid.as_str());
                 let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
@@ -524,6 +528,10 @@ impl Tool for AdvanceClockTool {
             // update_relationship / advance_plot / trigger_world_event 共享
             // 同一把锁，杜绝 world_clock.json / world_events.json 的
             // read-modify-write 丢更新。
+            //
+            // LOCK-ORDER: 两段临界区（§2.5 / R2），与 trigger_world_event 同模式。
+            // 阶段一持 state_lock，阶段二持 session_lock，绝不嵌套。
+            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.5 / §3 R2 / §4 A1 / §4 A3。
             let (clock, triggered, content_buf) = {
                 let state_boundary = state_lock(cid.as_str());
                 let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());

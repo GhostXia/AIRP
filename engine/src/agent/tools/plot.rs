@@ -81,6 +81,11 @@ impl Tool for AdvancePlotTool {
             // 持有 session_lock 直到 append_to_current + memory revision commit
             // 完成，与 npc_action / trigger_world_event / seal_volume 共享
             // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
+            //
+            // LOCK-ORDER: session→state 唯一合法嵌套（§2.3 / R2）。下方 StateService::mutate
+            // 会内部获取 character.read → state.lock，与本 session_lock 形成 session→character→state。
+            // 反向（state→session）由 trigger_world_event / advance_clock 两段临界区避免。
+            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.3 / §3 R2 / §4 A1 / §4 A3。
             let session_boundary = session_lock(cid.as_str(), sid.as_ref());
             let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
 

@@ -46,6 +46,8 @@ pub(crate) struct RegenSnapshot {
 }
 
 pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
+    // LOCK-ORDER: per-character 外层门控（R1）。获取 state_lock/session_lock 前必须先持此锁。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.1 / §3 R1。
     let mut locks = CHARACTER_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -64,6 +66,9 @@ pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
 /// `volume_store::append_to_current`, preventing concurrent appends from
 /// interleaving narrative content in `current.md`.
 pub(crate) fn session_lock(character_id: &str, session_id: Option<&SessionId>) -> Arc<Mutex<()>> {
+    // LOCK-ORDER: per-session 叙事文件串行化。与 state_lock 唯一合法嵌套方向为
+    // session → state（仅 advance_plot 经 StateService::mutate），反向禁止（R2）。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.1 / §3 R2 / §2.3。
     let key = match session_id {
         Some(session_id) => format!("{character_id}/{session_id}"),
         None => character_id.to_string(),
@@ -95,6 +100,10 @@ fn remove_deleted_session_lock(character_id: &str, session_id: &SessionId) {
 /// (agent::tools::world_event) can participate in the same serialization
 /// contract without re-implementing the lock map.
 pub(crate) fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
+    // LOCK-ORDER: per-character 状态文件串行化。与 session_lock 唯一合法嵌套方向为
+    // session → state（仅 advance_plot），反向禁止（R2）。trigger_world_event /
+    // advance_clock 采用两段临界区，绝不嵌套。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.1 / §3 R2 / §2.4 / §2.5。
     let mut locks = STATE_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -194,6 +203,8 @@ impl ChatService {
         session_id: Option<&SessionId>,
         operation: impl FnOnce() -> Result<R, AirpError>,
     ) -> Result<R, AirpError> {
+        // LOCK-ORDER: character.read → session.lock（§2.1）。同步 std 锁，闭包内不 await。
+        // 合同：docs/LOCK-ORDER-CONTRACT.md §2.1 / §3 R1 / §4 A1。
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let session = session_lock(character_id.as_str(), session_id);
@@ -1162,6 +1173,9 @@ impl StateService {
     where
         F: FnOnce(&mut serde_json::Value) -> Result<(), AirpError>,
     {
+        // LOCK-ORDER: character.read → state.lock（§2.2）。
+        // 若调用方已持 session_lock（如 advance_plot），构成唯一合法 session→state 嵌套（§2.3 / R2）。
+        // 合同：docs/LOCK-ORDER-CONTRACT.md §2.2 / §2.3 / §3 R1 / §3 R2 / §4 A1。
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let state_boundary = state_lock(character_id.as_str());
