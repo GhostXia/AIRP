@@ -57,13 +57,18 @@ test('production onboarding smoke waits for each rendered wizard step', () => {
   for (const heading of ['检查 AIRP Engine', '配置 Provider', '验证模型连接', '导入或选择角色', '选择人设与预设', '完成首轮对话']) {
     assert.match(productionBrowserSmoke, new RegExp("waitForOnboardingStep\\(page, '" + heading + "'"));
   }
+  assert.match(productionBrowserSmoke, /getByLabel\('给角色的第一句话'\)\.waitFor\(\{ state: 'visible' \}\)/);
 });
 
 test('both production restarts wait for the chat path before browser smoke', () => {
-  const probes = productionSmokeCi.match(/WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready/g) || [];
-  assert.equal(probes.length, 1);
-  assert.match(productionSmokeCi, /WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 AIRP_SMOKE_READINESS_SESSION_ID="\$readiness_session_id" wait_for_engine_ready/);
-  assert.match(productionSmokeCi, /probe_session_id=\$\{AIRP_SMOKE_READINESS_SESSION_ID:-/);
+  const restartBlocks = productionSmokeCi.split('$compose restart engine gateway >/dev/null');
+  assert.equal(restartBlocks.length, 3, 'the production smoke must retain two restart branches');
+  for (const restartBlock of restartBlocks.slice(1)) {
+    const probes = restartBlock.match(/WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready/g) || [];
+    assert.equal(probes.length, 1, 'each restart branch must wait for one chat probe');
+  }
+  assert.match(productionSmokeCi, /could not create disposable session/);
+  assert.match(productionSmokeCi, /verify-readiness-sse\.mjs/);
 });
 
 test('production smoke covers every advanced WebUI page and a visible Engine failure', () => {
