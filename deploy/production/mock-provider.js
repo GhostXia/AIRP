@@ -22,6 +22,11 @@ const HOST = process.env.MOCK_PROVIDER_HOST || '127.0.0.1';
 const MODEL = process.env.MOCK_PROVIDER_MODEL || 'airp-mock-1';
 const TLS_CERT_FILE = process.env.MOCK_PROVIDER_TLS_CERT_FILE || '';
 const TLS_KEY_FILE = process.env.MOCK_PROVIDER_TLS_KEY_FILE || '';
+const CANCELLATION_HOLD_MODEL = 'airp-smoke-cancel-hold';
+const CANCELLATION_HOLD_MAX_MS = Number.isFinite(Number(process.env.MOCK_PROVIDER_HOLD_MAX_MS))
+  && Number(process.env.MOCK_PROVIDER_HOLD_MAX_MS) > 0
+  ? Number(process.env.MOCK_PROVIDER_HOLD_MAX_MS)
+  : 15000;
 if (Boolean(TLS_CERT_FILE) !== Boolean(TLS_KEY_FILE)) {
   throw new Error('MOCK_PROVIDER_TLS_CERT_FILE and MOCK_PROVIDER_TLS_KEY_FILE must be set together');
 }
@@ -72,23 +77,49 @@ function handleModels(res) {
   });
 }
 
-function handleChatCompletions(req, res) {
-  // 真实 SSE 响应。engine adapter 读字节流、按 `\n` 切行、解析 `data:` 前缀。
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+function readRequestBody(req) {
+  return new Promise(resolve => {
+    let body = '';
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    req.setEncoding('utf8');
+    req.on('data', chunk => {
+      if (settled) return;
+      body += chunk;
+      // This mock only needs the model field.  Keep a bounded body so a bad
+      // caller cannot make the test process retain unbounded input.
+      if (body.length > 1024 * 1024) finish('');
+    });
+    req.on('end', () => finish(body));
+    req.on('error', () => finish(''));
+    req.on('aborted', () => finish(''));
   });
+}
+
+function streamReply(res, model) {
+  // 真实 SSE 响应。engine adapter 读字节流、按 `\n` 切行、解析 `data:` 前缀。
+  if (!res.headersSent) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    });
+    res.flushHeaders();
+  }
 
   // 首 chunk 带 role 元数据（对齐 OpenAI 真实流：第一帧常是 delta.role=assistant）。
   res.write('data: ' + JSON.stringify({
     id: 'chatcmpl-airp-mock',
     object: 'chat.completion.chunk',
     created: Math.floor(Date.now() / 1000),
-    model: MODEL,
+    model,
     choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
   }) + '\n\n');
 
@@ -101,7 +132,7 @@ function handleChatCompletions(req, res) {
         id: 'chatcmpl-airp-mock',
         object: 'chat.completion.chunk',
         created: Math.floor(Date.now() / 1000),
-        model: MODEL,
+        model,
         choices: [{ index: 0, delta: { content: chunks[i] }, finish_reason: null }],
       }) + '\n\n');
       i++;
@@ -112,7 +143,7 @@ function handleChatCompletions(req, res) {
         id: 'chatcmpl-airp-mock',
         object: 'chat.completion.chunk',
         created: Math.floor(Date.now() / 1000),
-        model: MODEL,
+        model,
         choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
       }) + '\n\n');
       res.write('data: [DONE]\n\n');
@@ -123,6 +154,44 @@ function handleChatCompletions(req, res) {
   // 响应连接断开时清 timer。不能监听 req.close：POST 请求体读完就会触发，
   // 那会在 finish chunk / [DONE] 前误停流，导致 engine 无法 finalize assistant。
   res.on('close', () => clearInterval(timer));
+}
+
+async function handleChatCompletions(req, res) {
+  let model = MODEL;
+  try {
+    const body = JSON.parse(await readRequestBody(req));
+    if (typeof body?.model === 'string' && body.model) model = body.model;
+  } catch {
+    // Preserve the ordinary mock path for malformed/non-JSON requests.
+  }
+
+  if (model === CANCELLATION_HOLD_MODEL) {
+    // Production cancellation smoke needs a deterministic window in which
+    // Coordinator state can be observed and cancelled before any token is
+    // emitted.  Headers are flushed now; a finite fail-safe starts the normal
+    // stream if the client never closes the connection.
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    });
+    res.flushHeaders();
+    let holdTimer = setTimeout(() => {
+      holdTimer = null;
+      if (!res.destroyed && !res.writableEnded) streamReply(res, model);
+    }, CANCELLATION_HOLD_MAX_MS);
+    res.once('close', () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+    });
+    return;
+  }
+  streamReply(res, model);
 }
 
 const handler = (req, res) => {
