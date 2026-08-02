@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::adapter::ChatMessage;
 use crate::chat_store::ChatLog;
@@ -21,185 +20,11 @@ use crate::revision::manifest::{AssetKind, AssetSource};
 use crate::types::{CharacterId, SessionId, UserId};
 use crate::ulid;
 
-type SessionLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
-type CharacterLockMap = Mutex<HashMap<String, Arc<RwLock<()>>>>;
-type StateLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
-type PersonaLockMap = Mutex<HashMap<String, Arc<Mutex<()>>>>;
+pub(crate) mod lock_order;
+mod locks;
 
-static SESSION_LOCKS: OnceLock<SessionLockMap> = OnceLock::new();
-static CHARACTER_LOCKS: OnceLock<CharacterLockMap> = OnceLock::new();
-static STATE_LOCKS: OnceLock<StateLockMap> = OnceLock::new();
-static PERSONA_LOCKS: OnceLock<PersonaLockMap> = OnceLock::new();
-
-/// 运行时锁序追踪（LOCK-ORDER-CONTRACT §6.1）。
-///
-/// 在 debug build 下用 thread-local 栈记录当前线程持有的 `session_lock` /
-/// `state_lock`，检测 R2 禁止的 `state → session` 反向获取（Bug F 类死锁回归）。
-/// `session → state`（仅 `advance_plot` 经 `StateService::mutate`）是 R2 唯一合法
-/// 嵌套方向，不触发。
-///
-/// release build (`--release`) 下 `track_*` 返回零成本 no-op `Guard`，满足
-/// LOCK-ORDER-CONTRACT §7「release build 零开销」。
-///
-/// 约束：std `Mutex` guard 不得跨 `.await`（§4 A1），因此 thread-local 栈只在一
-/// 个同步作用域内有效；async fn 临界区是纯同步代码，guard 在作用域末尾 Drop。
-///
-/// 合同：docs/LOCK-ORDER-CONTRACT.md §6.1 / §3 R2 / §4 A1 / §7。
-#[cfg(debug_assertions)]
-pub(crate) mod lock_order {
-    use std::cell::RefCell;
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Kind {
-        Session,
-        State,
-    }
-
-    thread_local! {
-        static HELD: RefCell<Vec<Kind>> = const { RefCell::new(Vec::new()) };
-    }
-
-    /// RAII guard：构造时 push，Drop 时 pop。debug-only。
-    pub(crate) struct Guard(Option<Kind>);
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            if let Some(kind) = self.0.take() {
-                HELD.with(|held| {
-                    let mut held = held.borrow_mut();
-                    // LIFO 弹出栈顶匹配项；guard 顺序错乱时也安全移除一项。
-                    if let Some(pos) = held.iter().rposition(|k| *k == kind) {
-                        held.remove(pos);
-                    }
-                });
-            }
-        }
-    }
-
-    /// 记录已持有 `session_lock`。R2：持 `state_lock` 时获取 `session_lock`
-    /// 禁止（`state → session`），触发 `debug_assert!`。
-    pub(crate) fn track_session() -> Guard {
-        let violation = HELD.with(|held| held.borrow().contains(&Kind::State));
-        debug_assert!(
-            !violation,
-            "LOCK-ORDER R2 violation: acquiring session_lock while state_lock held \
-             (state→session forbidden; see docs/LOCK-ORDER-CONTRACT.md §3 R2)"
-        );
-        HELD.with(|held| held.borrow_mut().push(Kind::Session));
-        Guard(Some(Kind::Session))
-    }
-
-    /// 记录已持有 `state_lock`。R2：`session → state` 合法（`advance_plot`），
-    /// 无 violation；`state` 单独持有也合法。
-    pub(crate) fn track_state() -> Guard {
-        HELD.with(|held| held.borrow_mut().push(Kind::State));
-        Guard(Some(Kind::State))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn holds_session() -> bool {
-        HELD.with(|held| held.borrow().contains(&Kind::Session))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn holds_state() -> bool {
-        HELD.with(|held| held.borrow().contains(&Kind::State))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn reset() {
-        HELD.with(|held| held.borrow_mut().clear());
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn session_alone_ok() {
-            reset();
-            let _g = track_session();
-            assert!(holds_session());
-            assert!(!holds_state());
-        }
-
-        #[test]
-        fn state_alone_ok() {
-            reset();
-            let _g = track_state();
-            assert!(holds_state());
-            assert!(!holds_session());
-        }
-
-        /// R2：session → state 是唯一合法嵌套方向（advance_plot 经
-        /// StateService::mutate）。同时持有时不应触发。
-        #[test]
-        fn session_then_state_legal_no_panic() {
-            reset();
-            let _s = track_session();
-            let _t = track_state();
-            assert!(holds_session());
-            assert!(holds_state());
-        }
-
-        /// R2：state → session 禁止（Bug F 类锁序倒置死锁）。
-        /// `track_session` 在持 state_lock 时必须 `debug_assert!` panic。
-        #[test]
-        fn state_then_session_panics() {
-            reset();
-            let _t = track_state();
-            let result = std::panic::catch_unwind(track_session);
-            assert!(
-                result.is_err(),
-                "track_session must panic when state_lock held (state→session forbidden by R2)"
-            );
-            // panic 发生在 push 之前，栈仍含 State。
-            assert!(holds_state());
-            assert!(!holds_session());
-        }
-
-        #[test]
-        fn drop_releases_held() {
-            reset();
-            {
-                let _g = track_session();
-                assert!(holds_session());
-            }
-            assert!(!holds_session());
-            assert!(!holds_state());
-        }
-
-        /// 两段临界区模式（trigger_world_event / advance_clock）：
-        /// state_lock 释放后再获取 session_lock，合法，不应 panic。
-        #[test]
-        fn state_released_then_session_ok() {
-            reset();
-            {
-                let _t = track_state();
-                assert!(holds_state());
-            }
-            let _s = track_session();
-            assert!(holds_session());
-            assert!(!holds_state());
-        }
-    }
-}
-
-#[cfg(not(debug_assertions))]
-pub(crate) mod lock_order {
-    /// release build 零成本 no-op。`track_*` 不做任何检查，Guard 为 ZST。
-    pub(crate) struct Guard;
-
-    #[inline]
-    pub(crate) fn track_session() -> Guard {
-        Guard
-    }
-
-    #[inline]
-    pub(crate) fn track_state() -> Guard {
-        Guard
-    }
-}
+pub(crate) use locks::{character_lock, session_lock, state_lock};
+use locks::{persona_lock, remove_deleted_session_lock};
 
 /// Immutable target state captured before a regen proposal is generated.
 #[derive(Debug, Clone)]
@@ -213,87 +38,6 @@ pub(crate) struct RegenSnapshot {
     pub(crate) stored_candidates: Vec<String>,
     pub(crate) candidates: Vec<String>,
     pub(crate) swipe_index: usize,
-}
-
-pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
-    // LOCK-ORDER: per-character 外层门控（R1）。获取 state_lock/session_lock 前必须先持此锁。
-    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.1 / §3 R1。
-    let mut locks = CHARACTER_LOCKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    locks
-        .entry(character_id.to_string())
-        .or_insert_with(|| Arc::new(RwLock::new(())))
-        .clone()
-}
-
-/// Per-session state lock. Keyed on `character_id` (when `session_id` is
-/// `None`) or `character_id/session_id`, used to serialize all mutations to
-/// `session/current.md` and other per-session state files.
-/// `pub(crate)` so sibling modules (agent::tools::npc / plot / world_event)
-/// can participate in the same serialization contract when calling
-/// `volume_store::append_to_current`, preventing concurrent appends from
-/// interleaving narrative content in `current.md`.
-pub(crate) fn session_lock(character_id: &str, session_id: Option<&SessionId>) -> Arc<Mutex<()>> {
-    // LOCK-ORDER: per-session 叙事文件串行化。与 state_lock 唯一合法嵌套方向为
-    // session → state（仅 advance_plot 经 StateService::mutate），反向禁止（R2）。
-    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.1 / §3 R2 / §2.3。
-    let key = match session_id {
-        Some(session_id) => format!("{character_id}/{session_id}"),
-        None => character_id.to_string(),
-    };
-    let mut locks = SESSION_LOCKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    locks
-        .entry(key)
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
-}
-
-fn remove_deleted_session_lock(character_id: &str, session_id: &SessionId) {
-    let Some(lock_map) = SESSION_LOCKS.get() else {
-        return;
-    };
-    let key = format!("{character_id}/{session_id}");
-    let mut locks = lock_map.lock().unwrap_or_else(|p| p.into_inner());
-    // The tombstone is durable before this runs, so every waiter or future
-    // caller will fail closed even if it holds/creates a different lock Arc.
-    locks.remove(&key);
-}
-
-/// Per-character state lock. Keyed on `character_id`, used to serialize all
-/// mutations to `state/live.json` and other per-character state files
-/// (e.g. `world_events.json`). `pub(crate)` so sibling modules
-/// (agent::tools::world_event) can participate in the same serialization
-/// contract without re-implementing the lock map.
-pub(crate) fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
-    // LOCK-ORDER: per-character 状态文件串行化。与 session_lock 唯一合法嵌套方向为
-    // session → state（仅 advance_plot），反向禁止（R2）。trigger_world_event /
-    // advance_clock 采用两段临界区，绝不嵌套。
-    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.1 / §3 R2 / §2.4 / §2.5。
-    let mut locks = STATE_LOCKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    locks
-        .entry(character_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
-}
-
-/// Per-user persona lock（串行化 persona 写入与 revision bump）。
-fn persona_lock(user_id: &str) -> Arc<Mutex<()>> {
-    let mut locks = PERSONA_LOCKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    locks
-        .entry(user_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
 }
 
 #[derive(Clone, Debug)]
@@ -2357,6 +2101,7 @@ mod tests {
     use super::*;
     use crate::adapter::MessageRole;
     use crate::revision::atomic::read_current_revision;
+    use std::sync::Arc;
 
     #[test]
     fn lorebook_read_migrates_v3_selective_without_losing_explicit_false() {
