@@ -50,7 +50,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // engine daemon 用 tower_governor 限流 10 req/s burst 20（daemon/mod.rs::create_router）。
 // smoke 整链路 ~30+ 请求会打空 burst 桶；throttle 200ms（5 req/s）+ 关键节点前置 sleep 避误伤。
 let lastReqAt = 0;
-async function api(method, path, body, { bearer } = {}) {
+async function api(method, path, body, { bearer, signal } = {}) {
   const wait = 200 - (Date.now() - lastReqAt);
   if (wait > 0) await sleep(wait);
   lastReqAt = Date.now();
@@ -61,6 +61,7 @@ async function api(method, path, body, { bearer } = {}) {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   });
   let data = null;
   const text = await res.text();
@@ -68,6 +69,37 @@ async function api(method, path, body, { bearer } = {}) {
     try { data = JSON.parse(text); } catch { data = text; }
   }
   return { status: res.status, ok: res.ok, data, text };
+}
+
+// Cancellation evidence needs bounded control-plane requests.  Keep the
+// existing api() helper's throttle and response shape, but give polling a
+// per-request deadline so a broken gateway cannot turn the smoke into an
+// unbounded wait.
+async function apiTimed(method, path, body, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await api(method, path, body, { signal: controller.signal });
+  } catch (error) {
+    return {
+      status: 0,
+      ok: false,
+      data: null,
+      text: `request failed: ${error?.message || error}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchTimed(url, options, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // 消费 engine 的 SSE chat 流，收集所有 chunk event，返回完整文本。
@@ -134,6 +166,85 @@ async function streamChat(payload) {
     }
   }
   return { chunks, text, error: errorText || null, readBatches, elapsedMs: Date.now() - startedAt };
+}
+
+// Consume the cancellation stream with an explicit deadline.  The assertion
+// below intentionally checks the structured error envelope (code and
+// commit_state), rather than matching a human-readable message.  A normal
+// completion has already committed the user turn before streaming, so its
+// cancellation contract is `partially_committed`; `not_committed` is reserved
+// for the regen path, which is not used here because this session must retain
+// exactly one user turn in history.
+async function consumeCancellationStream(res, timeoutMs = 12000) {
+  if (!res.body) return { timedOut: false, cancellation: null, frames: 0, errors: [], error: 'no response body' };
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const deadline = Date.now() + timeoutMs;
+  let buffer = '';
+  let frames = 0;
+  let cancellation = null;
+  const errors = [];
+
+  function inspect(frame) {
+    let event = null;
+    let data = null;
+    for (const rawLine of frame.split('\n')) {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) data = line.slice(5).trim();
+    }
+    if (!event || !data) return;
+    let payload;
+    try {
+      payload = JSON.parse(data);
+    } catch (error) {
+      throw new Error(`cancellation SSE frame JSON parse failed: ${error.message}`);
+    }
+    frames++;
+    if (event === 'error') {
+      errors.push({ code: payload?.error?.code, commit_state: payload?.error?.commit_state });
+    }
+    if (
+      event === 'error'
+      && payload?.type === 'error'
+      && payload.error?.code === 'cancelled'
+      && payload.error?.commit_state === 'partially_committed'
+    ) {
+      cancellation = payload.error;
+    }
+  }
+
+  try {
+    while (Date.now() < deadline) {
+      const remaining = deadline - Date.now();
+      let timer;
+      const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true }), remaining);
+      });
+      const next = await Promise.race([
+        reader.read(),
+        timeout,
+      ]);
+      clearTimeout(timer);
+      if (next.timedOut) {
+        await reader.cancel();
+        return { timedOut: true, cancellation, frames, errors, error: 'SSE consumption deadline exceeded' };
+      }
+      if (next.done) break;
+      buffer += decoder.decode(next.value, { stream: true });
+      let index;
+      while ((index = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        inspect(frame);
+      }
+    }
+  } catch (error) {
+    try { await reader.cancel(); } catch {}
+    return { timedOut: false, cancellation, frames, errors, error: error.message || String(error) };
+  }
+  if (buffer.trim()) inspect(buffer);
+  return { timedOut: false, cancellation, frames, errors, error: null };
 }
 
 async function waitFor(url, { name = '', timeoutMs = 10000 } = {}) {
@@ -408,6 +519,129 @@ let finalLastMessageId = null;
   ok(create2.ok, 'create 第二个 session 成功（用于串扰断言）');
   const otherSessionId = create2.data;
   ok(otherSessionId !== sessionId, '两个 session UUID 不同');
+}
+
+// 判据 4b（#394 O1）：Coordinator 的 generation-scoped cancellation 合同。
+// 使用独立临时 session，避免取消证据污染下面三轮正常对话的 history 断言。
+{
+  let cancellationSessionId = null;
+  let cancellationResponse = null;
+  try {
+    const create = await apiTimed('POST', '/v1/sessions/' + characterId, undefined, 8000);
+    ok(create.ok, 'cancellation smoke 创建隔离 session 成功');
+    cancellationSessionId = typeof create.data === 'string'
+      ? create.data
+      : create.data?.session_id || create.data?.id || null;
+    ok(typeof cancellationSessionId === 'string' && cancellationSessionId.length > 0,
+      'cancellation smoke session id 非空');
+
+    if (cancellationSessionId) {
+      await sleep(300);
+      cancellationResponse = await fetchTimed(ENGINE + '/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(AUTH_HEADER ? { Authorization: AUTH_HEADER } : {}),
+        },
+        body: JSON.stringify({
+          character_id: characterId,
+          session_id: cancellationSessionId,
+          user_profile: { name: 'Cancellation smoke', variables: {} },
+          preset_id: presetId,
+          // mock-provider emits a multi-frame SSE; cancellation is requested
+          // while that controlled stream is still active.
+          message: 'coordinator cancellation smoke — keep this generation active',
+        }),
+      }, 10000);
+      ok(cancellationResponse.ok, 'cancellation smoke 长 SSE 200 OK');
+
+      const stateDeadline = Date.now() + 8000;
+      let state = null;
+      let lastState = null;
+      while (Date.now() < stateDeadline) {
+        const remaining = stateDeadline - Date.now();
+        const current = await apiTimed('POST', '/v1/chat/session-state', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+        }, Math.min(3000, Math.max(250, remaining)));
+        lastState = current;
+        if (
+          current.ok
+          && current.data?.phase === 'generating'
+          && typeof current.data?.generation_id === 'string'
+          && current.data.generation_id.length > 0
+        ) {
+          state = current.data;
+          break;
+        }
+        await sleep(Math.min(200, Math.max(25, remaining)));
+      }
+      ok(Boolean(state), `cancellation smoke 在 deadline 内观测 generating/nonempty generation_id${state ? '' : `; last=${JSON.stringify(lastState?.data || lastState?.text || lastState?.status)}`}`);
+
+      if (state) {
+        const generationId = state.generation_id;
+        const stale = await apiTimed('POST', '/v1/chat/cancel', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+          generation_id: 'stale-' + generationId,
+        }, 5000);
+        eq(stale.status, 409, 'stale generation cancel 返回 HTTP 409');
+
+        const afterStale = await apiTimed('POST', '/v1/chat/session-state', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+        }, 5000);
+        ok(
+          afterStale.ok
+          && afterStale.data?.phase === 'generating'
+          && afterStale.data?.generation_id === generationId,
+          'stale cancel 不影响当前 generating generation',
+        );
+
+        const current = await apiTimed('POST', '/v1/chat/cancel', {
+          character_id: characterId,
+          session_id: cancellationSessionId,
+          generation_id: generationId,
+        }, 5000);
+        eq(current.status, 200, 'current generation cancel 返回 HTTP 200');
+        eq(current.data?.generation_id, generationId, 'current cancel 返回同一 generation_id');
+      }
+
+      const streamed = await consumeCancellationStream(cancellationResponse, 12000);
+      ok(!streamed.timedOut, `cancellation SSE 在 deadline 内结束${streamed.error ? ` (${streamed.error})` : ''}; frames=${streamed.frames}`);
+      ok(
+        streamed.cancellation?.code === 'cancelled'
+        && streamed.cancellation?.commit_state === 'partially_committed',
+        `cancellation SSE 返回 typed cancelled/partially_committed envelope; observed=${JSON.stringify(streamed.errors)}`,
+      );
+
+      const history = await apiTimed('POST', '/v1/chat/history', {
+        character_id: characterId,
+        session_id: cancellationSessionId,
+      }, 5000);
+      const messages = history.data?.messages || [];
+      ok(history.ok, 'cancellation smoke history 查询成功');
+      ok(messages.length === 1 && messages[0]?.role === 'user',
+        'cancelled generation history 只保留 user turn');
+      ok(!messages.some((message) => message.role === 'assistant'),
+        'cancelled generation 未产生虚假 assistant commit');
+    }
+  } catch (error) {
+    ok(false, 'cancellation smoke 运行异常: ' + (error?.message || error));
+    if (cancellationResponse?.body) {
+      try { await cancellationResponse.body.cancel(); } catch {}
+    }
+  } finally {
+    if (cancellationSessionId) {
+      const removed = await apiTimed(
+        'DELETE',
+        '/v1/sessions/' + characterId + '/' + encodeURIComponent(cancellationSessionId),
+        undefined,
+        5000,
+      );
+      ok(removed.ok, 'cancellation smoke 清理隔离 session 成功');
+    }
+  }
 }
 
 // 判据 6 + 7：连续三轮流式 RP，刷新后仍可从历史恢复
