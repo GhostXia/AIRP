@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-07-30 at `main@4f3f792`. Document pass aligned open residuals with engine audit umbrella #381; runtime risks are not closed by documentation alone.
+> Last reviewed: 2026-08-02 at `main@830426e`. Document pass aligned open residuals with #413 dependency remediation; runtime risks are not closed by documentation alone.
 
 ## RR-001 · `card_path` local arbitrary file read
 

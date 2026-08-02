@@ -1,17 +1,17 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-07-30  
-> 代码基线：`main@4f3f792`（`test(281): add dry-run tests for update_relationship and advance_plot (#380)`）  
+> 基线日期：2026-08-02
+> 代码基线：`main@830426e`（合并 PR #413 `fix(deps): remediate npm audit findings`）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
 本文只记录当前代码树能够支持的结论。GitHub issues 是未完成工作的实时追踪面；PR、审计报告和历史测试数字只证明对应代码树，不自动证明当前 `HEAD`。
 
-本次校准（2026-07-30 docs-pass）做了三件事：
+本次校准（2026-08-02 v0.0.3 docs-pass）做了三件事：
 
-1. 将代码锚点从中间工作树 `449a685` / 旧 `200fed9` 对齐到当前 `main@4f3f792`；  
-2. 吸收 engine 独立审查 umbrella [#381](https://github.com/GhostXia/AIRP/issues/381) 的结构性事实（双轨会话、TurnCommit、锁/DNS、domain 边界），**不把已开 issue 写成已交付**；  
-3. 收缩活文档面：完成的 Persona HTTP 计划与桌面画布接力草案迁入 `docs/archive/`，阅读路径见 [README.md](README.md)。
+1. 将代码锚点从旧 `main@4f3f792` 对齐到当前 `main@830426e`；
+2. 吸收 #398–#413 的取消、TurnCommit/Recovering、终态 marker recovery、production smoke 与依赖治理事实，**不把后续 issue 写成已交付**；
+3. 保持活文档面收敛：已完成计划与桌面画布接力草案仍在 `docs/archive/`，阅读路径见 [README.md](README.md)。
 
 ## 1. 产品与仓库边界
 
@@ -39,7 +39,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | 能力域 | Engine / 数据 | HTTP / Agent | WebUI | 当前边界 |
 |---|---|---|---|---|
 | 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools（Persona **无**对称 Agent tool） | 管理、选择、导入与诊断入口 | 高级生命周期、完整导出/恢复未闭合（#342/#346） |
-| 会话与聊天（**产品主路径**） | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe、per-session Coordinator façade | OpenAI-compatible `/v1/chat/*` SSE、continue/regen/search、命名 session；generation-scoped `session-state`/`cancel` | 命名会话、流式聊天、Engine 协作停止、编辑/删除/分支/Swipe、导出 | 取消只接受当前 `generation_id`；stale/committing 分别 fail-closed，断线不等于取消。**产品 UI 只绑定本路径**；agent/tool 单 owner、跨资源 Turn 事务与完整崩溃恢复仍开放（#394/#286/#122） |
+| 会话与聊天（**产品主路径**） | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe、per-session Coordinator façade；TurnCommit 记录 message/state/volume 提交进度 | OpenAI-compatible `/v1/chat/*` SSE、continue/regen/search、命名 session；generation-scoped `session-state`/`cancel` | 命名会话、流式聊天、Engine 协作停止、编辑/删除/分支/Swipe、导出 | 取消只接受当前 `generation_id`；stale/committing 分别 fail-closed，断线不等于取消。终态 marker 可在已持久化最终阶段后恢复清理，Recovering/未知提交仍 fail-closed。**产品 UI 只绑定本路径**；agent/tool 单 owner、自动 replay/repair、跨资源事务与完整灾难恢复仍未交付（#394/#286/#342） |
 | Conversation runtime（**Engine 合同，未绑产品 UI**） | versioned manifest、append-only event journal、message/turn/observability projection、scene round-robin、受控 policy 注入、长历史 checkpoint/summary 预算、legacy copy-only migration | `/v1/conversations*`、capabilities、policies、migration plan/execute/export/rollback；旧 chat/session/scene API 形状不变 | **尚未绑定**；客户端若接入只能经 capability discovery，不能注入 history/代码/调度语义 | 与 legacy Chat **双轨并存**；切流或冻结须战略决策（#381 E-P0-2）。自动 summary policy、内容型停止条件、全仓 migration registry、跨进程策略沙箱仍开放 |
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | 大量 ST 字段仅为 advisory；完整 session 物化与记忆闭环未完成（#274） |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 约 30 个内置工具 + 可动态加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径有开放审计项（#284/#344/#381）；不是通用多 Agent 平台 |
@@ -47,7 +47,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | Provider / 扩展 | 多 Provider 路由、OpenAI-compatible/Anthropic/Ollama、本地脚本/HTTP webhook 插件 | providers/routing/plugin-tools API；Agent registry 动态合并 | 设置与插件管理入口 | 插件非沙箱；HTTPS webhook 注册+请求 fail-closed DNS 与域名 pin 已落地（RR-014 近端修复 / #381 E-P0-3 / #329 N3）；非通用代码沙箱 |
 | 部署 | production fail-closed 校验、原子配置更新、secret 脱敏 | loopback 默认；首方 gateway 同源代理 | Windows/Linux 便携包与 production preview | 非多租户；P1/P2/P3 发布门未闭合 |
 
-### 2.1 结构性事实（2026-07-30 审查确认）
+### 2.1 结构性事实（2026-08-02 审查确认）
 
 这些不是新功能承诺，而是避免误读代码树的硬事实：
 
@@ -56,6 +56,18 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 3. **Domain 写路径未完全闭合**：shared service 是目标边界；Agent tools 等路径仍可能直接 `replace_file` / `fs` 写（#381 E-P1-3 / #160）。  
 4. **锁模型分裂**：character/session/state/persona/conversation/decay/FTS/quota 等多套锁；async 路径上存在 std 锁 + 锁内磁盘 I/O；poison 策略不一致（#284/#220/#381）。  
 5. **桌面线暂停**：`ui/` 保留；画布接力等草案在 archive，不进入当前执行队列。
+
+### 2.2 v0.0.3 收敛切片的已交付边界
+
+以下记录的是当前 `main@830426e` 能由源码、测试或生产 harness 支持的边界，不把 release 计划写成能力：
+
+| 切片 | 已实现 / 已验证 | 明确未包含 |
+|---|---|---|
+| #398 | Coordinator 提供 generation-scoped `session-state` 与 cooperative `cancel`；仅当前 generation 可取消，stale/committing 请求返回冲突，WebUI 保留 Engine 权威 `commit_state`。 | 浏览器断线不等于 Engine 取消；不改变跨资源恢复能力。 |
+| #399/#403 | durable `TurnCommit` marker 覆盖 message、live state 与 current volume 阶段；中断后公开 `Recovering` 并拒绝新 mutation，marker schema/阶段状态 fail-closed。 | 不包含自动 replay/repair、volume sealing recovery、backup/restore。 |
+| #409 | 仅在所有 expected 阶段已 durable 时清理 terminal marker；恢复清理与 session owner/admission registry 锁序串行化；non-terminal、unreadable、unsupported 与 all-false marker 保留为 recovery-required。 | 不包含 payload-aware 自动 replay/journal 或完整灾难恢复。 |
+| #410/#411 | production mock smoke 覆盖 generation poll、stale/current cancel、严格 typed SSE terminal、取消后 history、临时 session cleanup；harness 对 cleanup、SSE、cancel poll、response body 与 deadline 使用绝对预算并 fail-closed，合法空响应体可结束；备份入口保持明确不可用，renderer 不发起 backup/restore API 调用。 | 这是 mock/CI 证据，不替代真实 provider、真实 browser 和维护者 Compose 验收；不改变 Engine/API 语义。 |
+| #413 | lock-only 更新 `brace-expansion` 2.1.1→2.1.4、`postcss` 8.5.16→8.5.25、`nanoid` 3.3.15→3.3.16；`npm audit --json` 与 `--omit=dev` 均为 0。当前 SBOM 生成报告 693 third-party、unknown license 0、blocked 0；inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。 | SBOM/notice 生成仍未成为 release pipeline 强制门禁；`ui` 依赖用于构建/测试，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime。 |
 
 ## 3. 必须保持的不变式
 
@@ -77,14 +89,18 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 - 不能把桌面 Tauri、production preview、Windows/Linux 便携包的测试结果互相外推。  
 - 不能把 Worldbook/Preset **advisory** 字段写成已执行语义；以 [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md) 为准。  
 - 不能把「已开 GitHub issue / 已写审计 umbrella」写成「风险已关闭」。
+- 不能把 #398–#411 的取消、marker、Recovering 或 harness 证据外推为自动 replay/repair、Agent/tool 单 owner、性能 SLO、backup/restore 或真实 provider/browser/Compose 验收。
+- #342 backup/restore/migration、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的 SBOM release gate、签名、browser matrix、soak 仍未交付；它们是后续正式 release gates，不是当前代码已具备的能力。
 
 ## 5. 当前优先级
 
 当前主线不是扩大功能面，而是把已合入能力收敛成可验证、可恢复的 **P1 有限试用**（**v0.0.3 后端门禁窗口**）：
 
+**v0.0.3 P1 门状态（2026-08-02）**：代码与 mock/CI 证据已覆盖 #398–#413 的上述收敛切片；对 P1 有限试用，唯一尚未完成的外部硬阻塞是 [#130](https://github.com/GhostXia/AIRP/issues/130) 的维护者验收：真实 provider + 真实 browser + production Compose。CI mock、system Chrome 或本地单元测试不能替代该验收。
+
 ### 5.0 v0.0.3 已拍板决策
 
-**E-P0-2 · Chat vs Conversation = 选项 B 冻结扩面（2026-07-30）**
+**E-P0-2 · Chat vs Conversation = 选项 B 冻结扩面（2026-07-30，当前仍有效）**
 
 - 产品主路径与 v0.0.3 验收 **只绑定** legacy `/v1/chat/*` + `ChatLog` / `ChatService`。
 - Conversation runtime（`/v1/conversations*` 及并行合同）在本窗口内 **冻结功能对称扩张**：仅允许安全修复、既有合同 bugfix、文档/测试诚实性维护；**不得**为 WebUI 切流或与 Chat 对等堆新能力。
@@ -96,9 +112,9 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
    - ~~Plugin DNS fail-closed + 请求时校验（E-P0-3，升权自 #329 N3）~~ → **已落地**（PR #384 / 见 SECURITY.md）；
    - Turn 级跨资源 commit/recovery（E-P0-1 → 执行面 #286，灾难恢复 #342）；  
    - 锁/async I/O/poison 与同 session 互斥（E-P0-4/5 → #284/#220/#160）。  
-2. 用真实 provider 与真实浏览器验证：onboarding → 首聊 → 继续对话 → 刷新恢复 → 服务重启恢复。  
+2. 用真实 provider 与真实浏览器验证：onboarding → 首聊 → 继续对话 → 刷新恢复 → 服务重启恢复（#130 是当前 P1 外部硬门）。
 3. 校准 WebUI 运行时契约、视觉一致性、空/错/慢状态与 browser smoke（#311/#345 等）。  
-4. 备份、恢复、migration 与回滚的最小闭环（#342）。  
+4. 备份、恢复、migration 与回滚的最小闭环（#342，正式 P2 release gate，当前未交付）。
 5. 上述证据稳定前，默认不从 #312 启动无用户证据的新子系统扩张；遵守 #242 范围收敛。
 
 ### 5.1 实时工作入口（动手前用 `gh issue view` 复核状态）
@@ -117,14 +133,18 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 6. 验证快照
 
-| 范围 | 命令 / 说明 | 结果（`main@4f3f792`，2026-07-30） |
+| 范围 | 命令 / 说明 | 结果（`main@830426e`，2026-08-02） |
 |---|---|---|
-| WebUI | `node --test webui/tests/*.test.mjs` | **67 passed** |
-| Rust workspace | `cargo test --workspace --locked` | **本 docs-pass 未完成干净复跑**（维护者环境曾出现 `target` file lock 争用）。**不得**用 Batch 7 / `449a685` 的 1199 passed 数字冒充本 HEAD。合并代码前仍须按 DEV-GUIDE 本地全绿。 |
-| 静态门禁 / production topology / 便携包 / 真实 provider·browser | 本 docs-pass 未跑 | 不得推断为通过 |
-| 历史参考（**仅证明对应树**） | Conversation Batch 7 工作树基于 `449a685` 曾报 engine+protocol+tauri 等合计 1199 passed / 5 ignored | 不可外推到 `4f3f792` |
+| WebUI | `node --test webui/tests/*.test.mjs` | **75 passed, 0 failed** |
+| production harness unit | `node --test deploy/production/*.test.mjs` | **22 passed, 0 failed** |
+| UI | `npm run typecheck`；`npm run test -- --run`（`ui/`） | typecheck 通过；Vitest **13 files / 98 passed** |
+| Rust engine + protocol | `cargo test --workspace --exclude airp-ui --locked` | **1,282 passed, 5 ignored, 0 failed** |
+| Rust full workspace | `cargo test --workspace --locked` | 本机验证边界：`airp-ui` build script 需要生成的 `ui/src-tauri/binaries/airp-core-x86_64-pc-windows-gnu.exe`；因此未完成 full-workspace 测试，不把 exclude 结果写成 full workspace。 |
+| npm dependency audit | `npm audit --json`；`npm audit --omit=dev --json`（`ui/`） | 两个命令均 exit 0，vulnerabilities total **0**；#413 后的 lock-only 版本见 §2.2。 |
+| dependency governance / SBOM | `discover-deps.mjs --fail-on-block`；`generate-sbom.mjs --fail-on-unknown` | 均 exit 0；**693 third-party / unknown 0 / blocked 0**。inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。 |
+| production topology / 真实 provider·browser | CI mock/system-Chrome 与本地检查 | 不能替代 #130 维护者真实 provider + 真实 browser + Compose 验收；当前不宣称通过。 |
 
-未在本次校准中运行的 production topology、Windows/Linux artifact、真实 provider/browser、网络故障、进程崩溃和真实 provider 长会话，不得由本表推断为通过。
+未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact、网络故障、进程崩溃和真实 provider 长会话，不得由本表推断为通过。
 
 ## 7. 文档职责（校准后）
 
@@ -150,6 +170,6 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | 归档 | `docs/archive/2026-07-persona-http-api-plan.md`（原 `docs/PERSONA-HTTP-API-PLAN.md`） | 实施计划已交付；接口事实以源码+基线为准 |
 | 归档 | `docs/archive/2026-07-29-desktop-ui-canvas-relay-plan.md`（原未跟踪活路径草案） | 桌面发布暂停；草案不占活文档位 |
 | 保留 | `docs/audits/2026-07-28-desktop-ui-relay-plan-audit.md` | 计划级审计原始记录 |
-| 刷新 | 本文、README、PLAN、DEV-GUIDE、SECURITY、RISK-REGISTER 及合同头信息 | 对齐 `4f3f792` 与 #381 |
+| 刷新 | 本文、DEV-GUIDE、WEBUI-PRODUCTION-PLAN 及直接相关事实入口 | 对齐 `830426e`、#398–#413 与 #130 未解除状态 |
 
 完整阅读路径与维护规则见 [README.md](README.md)。
