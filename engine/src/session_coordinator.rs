@@ -103,7 +103,8 @@ impl SessionCoordinatorRegistry {
         // Do not hold the global registry mutex across filesystem access: a
         // slow data root for one session must not serialize unrelated sessions.
         let recovery_pending =
-            crate::turn_commit::pending_turn(data_root, character_id, session_id).is_some();
+            crate::turn_commit::recover_completed_turn(data_root, character_id, session_id)
+                .is_some();
         let mut entries = self
             .entries
             .lock()
@@ -212,7 +213,7 @@ impl SessionCoordinatorRegistry {
         });
         drop(entries);
         active.unwrap_or_else(|| {
-            crate::turn_commit::pending_turn(data_root, character_id, session_id)
+            crate::turn_commit::recover_completed_turn(data_root, character_id, session_id)
                 .map(|marker| SessionCoordinatorStatus {
                     phase: SessionPhase::Recovering,
                     command: None,
@@ -442,6 +443,42 @@ mod tests {
             registry.status(tmp.path(), &character, None).phase,
             SessionPhase::Idle
         );
+    }
+
+    #[test]
+    fn terminal_marker_is_cleared_before_new_command_admission() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = SessionCoordinatorRegistry::default();
+        let character = CharacterId::new("terminal-recovery-char").unwrap();
+        let mut commit = crate::turn_commit::TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "terminal-generation".to_string(),
+            true,
+            true,
+            false,
+        )
+        .unwrap();
+        commit.mark_message_committed().unwrap();
+        commit.mark_state_committed().unwrap();
+        // Simulate a process exit after all resource stages but before marker
+        // cleanup.  The next observer/admission call may safely remove it.
+        std::mem::forget(commit);
+
+        assert_eq!(
+            registry.status(tmp.path(), &character, None).phase,
+            SessionPhase::Idle
+        );
+        let lease = registry
+            .try_submit(tmp.path(), &character, None, SessionCommand::Completion)
+            .expect("terminal marker recovery must unblock a new command");
+        assert_eq!(
+            registry.status(tmp.path(), &character, None).phase,
+            SessionPhase::Generating
+        );
+        drop(lease);
+        assert!(crate::turn_commit::pending_turn(tmp.path(), &character, None).is_none());
     }
 
     #[test]
