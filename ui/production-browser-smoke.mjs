@@ -56,7 +56,6 @@ try {
   await waitForOnboardingStep(page, '配置 LLM Provider');
   await page.getByRole('button', { name: '保存并下一步 →' }).click();
   await waitForOnboardingStep(page, '验证模型连接');
-  await page.waitForFunction(() => document.querySelector('#onboarding-card .btn-primary')?.disabled === false);
   await page.getByRole('button', { name: '下一步 →' }).click();
   await waitForOnboardingStep(page, '导入或选择角色');
   const characterChoice = page.getByRole('button', { name: characterId, exact: true });
