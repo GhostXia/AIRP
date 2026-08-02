@@ -116,6 +116,8 @@ impl SessionCoordinatorRegistry {
                 state
             }
         };
+        #[cfg(test)]
+        assert_registry_guard_is_held(&self.entries);
         // Acquire the per-session guard while the registry entry is still
         // protected.  Lease release uses this same entries -> state order;
         // keeping both guards through the idle check prevents a release from
@@ -229,6 +231,14 @@ impl SessionCoordinatorRegistry {
         entries.retain(|_, entry| entry.strong_count() > 0);
         entries.len()
     }
+}
+
+#[cfg(test)]
+fn assert_registry_guard_is_held(entries: &Mutex<Registry>) {
+    assert!(
+        matches!(entries.try_lock(), Err(std::sync::TryLockError::WouldBlock)),
+        "try_submit must hold the registry lock while acquiring session state"
+    );
 }
 
 pub(crate) struct SessionCommandLease {
@@ -523,6 +533,9 @@ mod tests {
         // admission becomes the owner (and the third submit is rejected).
         // The lock order must never allow both to succeed on distinct state
         // objects after the old lease removes its weak entry.
+        // The deterministic historical-gap check is the test-only
+        // `assert_registry_guard_is_held` above; this loop is runtime race
+        // coverage rather than a proof that the old implementation reproduces.
         for _ in 0..64 {
             let tmp = tempfile::tempdir().unwrap();
             let registry = SessionCoordinatorRegistry::default();
