@@ -86,11 +86,7 @@ pub(in crate::daemon) async fn generate_image_endpoint(
     }
 
     // 读取上游 LLM provider 配置（endpoint / api_key）。image_model 可覆盖默认 model。
-    let snapshot = state
-        .config
-        .read()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
-        .clone();
+    let snapshot = state.read_config().clone();
 
     let model = req
         .image_model

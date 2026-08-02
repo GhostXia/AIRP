@@ -17,10 +17,7 @@ use std::sync::Arc;
 pub(in crate::daemon) async fn get_settings(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
 ) -> Result<Json<SettingsView>, AirpError> {
-    let cfg = state
-        .config
-        .read()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+    let cfg = state.read_config();
     Ok(Json(SettingsView::from_config(&cfg, &state.data_root)))
 }
 
@@ -43,11 +40,7 @@ pub(in crate::daemon) async fn update_settings(
     // 2) 专用异步锁是 settings update 的单进程事务边界。它串行 candidate
     //    构造、持久化和 live commit，同时不在磁盘 I/O 期间阻塞其他 config readers。
     let _transaction = state.settings_update.transaction.lock().await;
-    let mut candidate = state
-        .config
-        .read()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
-        .clone();
+    let mut candidate = state.read_config().clone();
     if patch
         .access_api_key
         .as_deref()
@@ -131,10 +124,7 @@ pub(in crate::daemon) async fn update_settings(
     .await
     .map_err(|error| AirpError::Internal(format!("settings persistence task failed: {error}")))??;
 
-    let mut cfg = state
-        .config
-        .write()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
+    let mut cfg = state.write_config();
     *cfg = candidate;
     Ok(Json(SettingsView::from_config(&cfg, &state.data_root)))
 }

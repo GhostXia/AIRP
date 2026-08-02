@@ -266,13 +266,7 @@ fn prepare_pipeline_with_mode(
 
     // M4.4：一次性快照 daemon 当前热重载配置，后续读取本地变量；
     // 锁 RAII 出 scope 立即释放，避免长时间持锁。
-    let snapshot = {
-        let cfg = state
-            .config
-            .read()
-            .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?;
-        cfg.clone()
-    };
+    let snapshot = state.read_config().clone();
 
     if let Some(ref sd) = session_dir_opt {
         let mut recent_context = String::new();

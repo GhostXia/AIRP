@@ -90,11 +90,7 @@ async fn run_dialogue_gen_handler(
     // 注意：handler 只提供 model；temperature 与 max_tokens 由 run_dialogue_gen
     // 在校验 turns (1~10) 之后安全计算（避免 300 * payload.turns 在 turns=u32::MAX
     // 时溢出 panic，构成 DoS）。
-    let snapshot = state
-        .config
-        .read()
-        .map_err(|_| AirpError::Internal("config lock poisoned".to_string()))?
-        .clone();
+    let snapshot = state.read_config().clone();
 
     // CodeRabbit #9（critical）：mes_example_override 路径——前端 writeGenerated
     // 持有 dry_run=true 阶段拿到的预览内容（lastGenerated），通过本字段把该内容
