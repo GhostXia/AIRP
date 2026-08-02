@@ -7,7 +7,12 @@
 
 export async function consumeGenerationSse(
   response,
-  { allowCancellation = false, timeoutMs = 30000 } = {},
+  {
+    allowCancellation = false,
+    timeoutMs = 30000,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+  } = {},
 ) {
   const startedAt = Date.now();
   const empty = {
@@ -61,7 +66,13 @@ export async function consumeGenerationSse(
     }
     result.frames++;
 
-    if (event === 'error' || payload?.type === 'error') {
+    const eventIsError = event === 'error';
+    const payloadIsError = payload?.type === 'error';
+    if (eventIsError !== payloadIsError) {
+      finish('schema_mismatch', 'SSE error event/type fields disagree');
+      return;
+    }
+    if (eventIsError && payloadIsError) {
       const detail = payload?.error;
       if (payload?.type !== 'error' || !detail || typeof detail.code !== 'string' || typeof detail.commit_state !== 'string') {
         finish('malformed_error', 'SSE error frame lacks the typed error envelope');
@@ -104,10 +115,14 @@ export async function consumeGenerationSse(
       const remaining = deadline - Date.now();
       let timer;
       const timeout = new Promise(resolve => {
-        timer = setTimeout(() => resolve({ timedOut: true }), remaining);
+        timer = setTimer(() => resolve({ timedOut: true }), remaining);
       });
-      const next = await Promise.race([reader.read(), timeout]);
-      clearTimeout(timer);
+      let next;
+      try {
+        next = await Promise.race([reader.read(), timeout]);
+      } finally {
+        if (timer !== undefined) clearTimer(timer);
+      }
       if (next.timedOut) {
         result.timedOut = true;
         finish('timeout', 'SSE consumption deadline exceeded');

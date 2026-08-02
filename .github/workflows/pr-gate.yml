@@ -201,7 +201,7 @@ jobs:
         run: |
           for file in webui/assets/*.js; do node --check "$file"; done
           node --test webui/tests/*.test.mjs
-          node --test deploy/production/sse-consumer.test.mjs deploy/production/mock-provider.test.mjs
+          node --test deploy/production/sse-consumer.test.mjs deploy/production/mock-provider.test.mjs deploy/production/session-cleanup.test.mjs
           node --check deploy/production/api-smoke.mjs
           node --check deploy/production/mock-provider.js
           node deploy/production/verify-config.mjs

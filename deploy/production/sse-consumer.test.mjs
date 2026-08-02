@@ -55,6 +55,40 @@ test('strict consumer rejects an unexpected cancellation error and early EOF', a
   assert.match(early.error, /before a typed terminal/);
 });
 
+test('strict consumer rejects event/type error schema mismatches', async () => {
+  const eventOnly = await consumeGenerationSse(responseFrom(
+    'event: error\ndata: {"type":"done"}\n\n',
+  ));
+  assert.equal(eventOnly.terminal, 'schema_mismatch');
+
+  const payloadOnly = await consumeGenerationSse(responseFrom(
+    'event: message\ndata: {"type":"error","error":{"code":"cancelled","commit_state":"partially_committed"}}\n\n',
+  ), { allowCancellation: true });
+  assert.equal(payloadOnly.terminal, 'schema_mismatch');
+});
+
+test('strict consumer clears per-read timeout when transport rejects', async () => {
+  const response = new Response(new ReadableStream({
+    start(controller) {
+      controller.error(new Error('synthetic transport failure'));
+    },
+  }));
+  let activeTimers = 0;
+  const result = await consumeGenerationSse(response, {
+    timeoutMs: 5000,
+    setTimer(callback, delay) {
+      activeTimers++;
+      return { callback, delay };
+    },
+    clearTimer() {
+      activeTimers--;
+    },
+  });
+  assert.equal(result.terminal, 'transport_error');
+  assert.match(result.error, /synthetic transport failure/);
+  assert.equal(activeTimers, 0);
+});
+
 test('strict consumer rejects malformed JSON frames', async () => {
   const result = await consumeGenerationSse(responseFrom('event: message\ndata: {broken}\n\n'));
   assert.equal(result.terminal, 'malformed');

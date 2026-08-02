@@ -15,6 +15,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { consumeGenerationSse } from './sse-consumer.mjs';
+import { deleteSessionWithRetry } from './session-cleanup.mjs';
 
 const ENGINE = process.env.AIRP_ENGINE_URL || 'http://127.0.0.1:8000';
 const MOCK = process.env.AIRP_MOCK_URL || 'http://127.0.0.1:8889';
@@ -104,25 +105,20 @@ async function fetchTimed(url, options, timeoutMs = 10000) {
 }
 
 async function deleteSessionEventually(characterId, sessionId, timeoutMs = 8000) {
-  const deadline = Date.now() + timeoutMs;
-  let last = null;
-  while (Date.now() < deadline) {
-    last = await apiTimed(
+  return deleteSessionWithRetry({
+    timeoutMs,
+    deleteAttempt: (remainingMs) => apiTimed(
       'DELETE',
       '/v1/sessions/' + characterId + '/' + encodeURIComponent(sessionId),
       undefined,
-      Math.min(3000, Math.max(250, deadline - Date.now())),
-    );
-    if (last.ok || last.status !== 409) return last;
-    const state = await apiTimed('POST', '/v1/chat/session-state', {
+      Math.min(3000, Math.max(250, remainingMs)),
+    ),
+    stateAttempt: (remainingMs) => apiTimed('POST', '/v1/chat/session-state', {
       character_id: characterId,
       session_id: sessionId,
-    }, Math.min(2000, Math.max(250, deadline - Date.now())));
-    const phase = state.data?.phase || 'unknown';
-    if (state.ok && !['generating', 'committing'].includes(phase)) return last;
-    await sleep(Math.min(200, Math.max(25, deadline - Date.now())));
-  }
-  return last || { status: 0, ok: false, data: null, text: 'delete deadline exceeded' };
+    }, Math.min(2000, Math.max(250, remainingMs))),
+    sleep,
+  });
 }
 
 // 消费 engine 的 SSE chat 流，收集所有 chunk event，返回完整文本。
@@ -525,8 +521,9 @@ let finalLastMessageId = null;
       ok(
         streamed.terminal === 'cancelled'
         && streamed.typedError?.code === 'cancelled'
-        && streamed.typedError?.commit_state === 'partially_committed',
-        `cancellation SSE 返回 typed cancelled/partially_committed terminal; actual=${streamed.terminal}; observed=${JSON.stringify(streamed.errors)}`,
+        && streamed.typedError?.commit_state === 'partially_committed'
+        && streamed.chunks.length === 0,
+        `cancellation SSE 返回 typed cancelled/partially_committed terminal 且 cancel-before-first-token; actual=${streamed.terminal}; chunks=${streamed.chunks.length}; observed=${JSON.stringify(streamed.errors)}`,
       );
 
       const history = await apiTimed('POST', '/v1/chat/history', {
