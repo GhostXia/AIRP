@@ -16,13 +16,19 @@
 import { writeFileSync } from 'node:fs';
 import { consumeGenerationSse } from './sse-consumer.mjs';
 import { deleteSessionWithRetry } from './session-cleanup.mjs';
-import { clampTimeout, readResponseBodyBounded, remainingMs } from './bounded-http.mjs';
+import {
+  clampTimeout,
+  readResponseBodyBounded,
+  remainingMs,
+  responseSucceeded,
+} from './bounded-http.mjs';
 
 const ENGINE = process.env.AIRP_ENGINE_URL || 'http://127.0.0.1:8000';
 const MOCK = process.env.AIRP_MOCK_URL || 'http://127.0.0.1:8889';
 const AUTH_HEADER = process.env.AIRP_AUTH_HEADER || '';
 const KEEP_SESSION = process.env.AIRP_SMOKE_KEEP_SESSION === '1';
 const RESULT_FILE = process.env.AIRP_SMOKE_RESULT_FILE || '';
+const NO_CONTENT_STATUS = new Set([204, 205, 304]);
 
 // ── 断言工具 ─────────────────────────────────────────────────────────────
 const failures = [];
@@ -96,20 +102,47 @@ async function api(method, path, body, { bearer, signal, deadline } = {}) {
     clearTimeout(headerTimer);
   }
   let data = null;
-  const bodyResult = await readResponseBodyBounded(res, {
-    deadline: requestDeadline,
-    onTimeout: () => localController?.abort(),
-  });
+  // Fetch exposes a null body for the HTTP statuses whose contract forbids a
+  // payload. That is a complete empty response; an unexpected missing reader
+  // on any other status remains unsupported/incomplete fail-closed.
+  const bodyResult = NO_CONTENT_STATUS.has(res.status) && res.body === null
+    ? {
+      text: '',
+      bytes: 0,
+      complete: true,
+      timedOut: false,
+      tooLarge: false,
+      transportError: false,
+      unsupported: false,
+      error: null,
+      cleanupIncomplete: false,
+      cleanupError: null,
+      lockReleased: true,
+      lockReleaseError: null,
+    }
+    : await readResponseBodyBounded(res, {
+      deadline: requestDeadline,
+      onTimeout: () => localController?.abort(),
+    });
   const text = bodyResult.text;
   if (text) {
     try { data = JSON.parse(text); } catch { data = text; }
   }
   return {
     status: res.status,
-    ok: res.ok,
+    ok: responseSucceeded(res, bodyResult),
     data,
     text,
+    bodyComplete: bodyResult.complete,
+    bodyBytes: bodyResult.bytes,
+    bodyError: bodyResult.error,
     deadlineExceeded: bodyResult.timedOut,
+    bodyTooLarge: bodyResult.tooLarge,
+    bodyTransportError: bodyResult.transportError,
+    bodyUnsupported: bodyResult.unsupported,
+    bodyCleanupIncomplete: bodyResult.cleanupIncomplete,
+    bodyLockReleased: bodyResult.lockReleased,
+    bodyLockReleaseError: bodyResult.lockReleaseError,
   };
 }
 
@@ -150,10 +183,9 @@ async function boundedResponseError(response, deadline) {
   const body = await readResponseBodyBounded(response, {
     deadline,
   });
-  if (body.timedOut) {
-    return body.text
-      ? `${body.text} (response body deadline exceeded)`
-      : 'response body deadline exceeded';
+  if (!body.complete) {
+    const diagnostic = body.error || 'response body incomplete';
+    return body.text ? `${body.text} (${diagnostic})` : diagnostic;
   }
   return body.text;
 }
