@@ -22,6 +22,17 @@ test('strict consumer accepts CRLF/multiline data and done-before-EOF', async ()
   assert.equal(result.typedError, null);
 });
 
+test('strict consumer treats the typed terminal frame as authoritative', async () => {
+  const result = await consumeGenerationSse(responseFrom(
+    'event: message\ndata: {"type":"body_chunk","text":"before"}\n\n',
+    'event: message\ndata: {"type":"done"}\n\n',
+    'event: message\ndata: {"type":"body_chunk","text":"after"}\n\n',
+  ));
+  assert.equal(result.terminal, 'done');
+  assert.equal(result.text, 'before');
+  assert.deepEqual(result.chunks, ['before']);
+});
+
 test('strict consumer preserves typed errors instead of treating chunks as success', async () => {
   const result = await consumeGenerationSse(responseFrom(
     'event: message\ndata: {"type":"body_chunk","text":"partial"}\n\n',
@@ -87,6 +98,22 @@ test('strict consumer clears per-read timeout when transport rejects', async () 
   assert.equal(result.terminal, 'transport_error');
   assert.match(result.error, /synthetic transport failure/);
   assert.equal(activeTimers, 0);
+});
+
+test('strict consumer rejects an unknown event name', async () => {
+  const result = await consumeGenerationSse(responseFrom(
+    'event: progress\ndata: {"type":"done"}\n\n',
+  ));
+  assert.equal(result.terminal, 'invalid_event');
+  assert.match(result.error, /unexpected SSE event/);
+});
+
+test('strict consumer reports a bounded timeout for an idle stream', async () => {
+  const response = new Response(new ReadableStream({ start() {} }));
+  const result = await consumeGenerationSse(response, { timeoutMs: 20 });
+  assert.equal(result.terminal, 'timeout');
+  assert.equal(result.timedOut, true);
+  assert.match(result.error, /deadline exceeded/);
 });
 
 test('strict consumer rejects malformed JSON frames', async () => {

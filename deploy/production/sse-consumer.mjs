@@ -142,8 +142,10 @@ export async function consumeGenerationSse(
   } catch (error) {
     finish('transport_error', error?.message || String(error));
   } finally {
-    // Once a typed terminal frame is observed, no further bytes are needed;
-    // canceling the reader also makes the mock/provider connection finite.
+    // AIRP's typed terminal frame is authoritative: once `done`, or the
+    // allowed cancellation error, is observed, trailing transport bytes are
+    // intentionally ignored. Canceling the reader also makes the
+    // mock/provider connection finite instead of waiting for EOF.
     if (result.terminal) {
       try { await reader.cancel(); } catch {}
     }
