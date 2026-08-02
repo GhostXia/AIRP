@@ -541,3 +541,37 @@
 }
 .combobox.error-state { border-color: var(--danger); }
 .combobox-error { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--danger); }
+
+/* ============ 25. 导入诊断面板（E-P1-5 Worldbook/Preset 诚实性） ============ */
+/* 暴露 normalize_worldbook / normalize_preset 返回的 import_report，让 advisory
+   字段、invalid 与 needs_review 条目对用户可见，避免静默降级。 */
+.import-report {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border: 1px solid var(--border-default);
+  border-radius: var(--radius-input); background: var(--bg-subtle);
+}
+.import-report-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.import-report-title { font-size: 12px; font-weight: 650; color: var(--text-primary); }
+.import-report-tag { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.import-report-tag.ok { background: var(--bg-surface); color: var(--text-secondary); }
+.import-report-tag.warn { background: var(--warning-tint); color: var(--warning); }
+.import-report-overview {
+  font: 11px/1.5 var(--font-mono); color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.import-report-note {
+  margin: 0; font-size: 10px; line-height: 1.5; color: var(--warning);
+  background: var(--warning-tint); border-radius: var(--radius-input);
+  padding: 6px 10px;
+}
+.import-report-meta { font: 10px/1.4 var(--font-mono); color: var(--text-tertiary); }
+.import-report-error {
+  margin: 0; font-size: 11px; color: var(--danger);
+  background: var(--bg-surface); border-radius: var(--radius-input);
+  padding: 6px 10px;
+}
+.import-report-section-title { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-top: 2px; }
+.import-report-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.import-report-item { font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.import-report-item.invalid { color: var(--danger); }
+.import-report-item.review { color: var(--warning); }
