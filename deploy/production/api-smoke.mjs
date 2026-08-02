@@ -111,12 +111,12 @@ async function deleteSessionEventually(characterId, sessionId, timeoutMs = 8000)
       'DELETE',
       '/v1/sessions/' + characterId + '/' + encodeURIComponent(sessionId),
       undefined,
-      Math.min(3000, Math.max(250, remainingMs)),
+      Math.min(3000, Math.max(1, remainingMs)),
     ),
     stateAttempt: (remainingMs) => apiTimed('POST', '/v1/chat/session-state', {
       character_id: characterId,
       session_id: sessionId,
-    }, Math.min(2000, Math.max(250, remainingMs))),
+    }, Math.min(2000, Math.max(1, remainingMs))),
     sleep,
   });
 }
