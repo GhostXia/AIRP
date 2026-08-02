@@ -11,6 +11,9 @@ const onboardingPage = await readFile(new URL('../screens/16-onboarding.html', i
 const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
+const productionBrowserSmoke = await readFile(new URL('../../ui/production-browser-smoke.mjs', import.meta.url), 'utf8');
+const productionAdvancedPagesSmoke = await readFile(new URL('../../ui/production-browser-advanced-pages-smoke.mjs', import.meta.url), 'utf8');
+const productionSmokeCi = await readFile(new URL('../../deploy/production/smoke-ci.sh', import.meta.url), 'utf8');
 const chatScript = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
 const dialogueGenScript = await readFile(new URL('../assets/dialogue-gen.js', import.meta.url), 'utf8');
 const dialogueFlowScript = await readFile(new URL('../assets/dialogue-flow.js', import.meta.url), 'utf8');
@@ -47,6 +50,39 @@ test('first-run onboarding blocks blind resend after an uncertain commit', () =>
   assert.match(onboardingScript, /message\.control\.disabled = true/);
   assert.match(onboardingScript, /打开对话历史确认/);
   assert.match(chatScript, /sessionStorage\.removeItem\('airp_onboarding_commit_uncertain'\)/);
+});
+
+test('production onboarding smoke waits for each rendered wizard step', () => {
+  assert.match(productionBrowserSmoke, /waitForOnboardingStep/);
+  assert.match(productionBrowserSmoke, /#onboarding-card \.wizard-head h1/);
+  assert.match(productionBrowserSmoke, /textContent\?\.includes\(expected\)/);
+  assert.doesNotMatch(productionBrowserSmoke, /#onboarding-card \.btn-primary'\)\?\.disabled === false/);
+  for (const heading of ['检查 AIRP Engine', '配置 LLM Provider', '验证模型连接', '导入或选择角色', '选择人设与预设', '完成首轮对话']) {
+    assert.match(productionBrowserSmoke, new RegExp("waitForOnboardingStep\\(page, '" + heading + "'"));
+  }
+  assert.match(productionBrowserSmoke, /getByLabel\('给角色的第一句话'\)\.waitFor\(\{ state: 'visible' \}\)/);
+});
+
+test('both production restarts wait for the chat path before browser smoke', () => {
+  const restartBlocks = productionSmokeCi.split('$compose restart engine gateway >/dev/null');
+  assert.equal(restartBlocks.length, 3, 'the production smoke must retain two restart branches');
+  for (const restartBlock of restartBlocks.slice(1)) {
+    const probes = restartBlock.match(/WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready/g) || [];
+    assert.equal(probes.length, 1, 'each restart branch must wait for one chat probe');
+  }
+  assert.match(productionSmokeCi, /could not create disposable session/);
+  assert.match(productionSmokeCi, /verify-readiness-sse\.mjs/);
+});
+
+test('production smoke covers every advanced WebUI page and a visible Engine failure', () => {
+  for (const file of ['34-relationship-graph.html', '35-plot-arc.html', '36-image-gen.html', '37-character-templates.html', '38-style-learn.html', '39-dialogue-gen.html', '40-worldbook-graph.html', '41-timeline-export.html', '42-card-diff.html', '43-provider-management.html', '44-plugin-tools.html']) {
+    assert.match(productionAdvancedPagesSmoke, new RegExp("file: '" + file + "'"));
+  }
+  assert.match(productionAdvancedPagesSmoke, /route\('\*\*\/health', route => route\.abort\('failed'\)\)/);
+  assert.match(productionAdvancedPagesSmoke, /for \(const advancedPage of pages\)/);
+  assert.match(productionAdvancedPagesSmoke, /classes\?\.contains\('danger'\) \|\| classes\?\.contains\('error'\)/);
+  assert.match(productionAdvancedPagesSmoke, /window\.__airpCspViolations = \[\]/);
+  assert.match(productionAdvancedPagesSmoke, /must not violate its CSP/);
 });
 
 for (const [name, html] of [['role list', rolePage], ['chat space', chatPage]]) {

@@ -31,6 +31,13 @@ async function waitForHistory(context, payload, predicate, timeoutMs = 10_000) {
   throw new Error(`history did not reach the expected state within ${timeoutMs}ms; latest total=${latest?.total ?? 'unknown'}`);
 }
 
+async function waitForOnboardingStep(page, heading, timeoutMs = 15_000) {
+  const title = page.locator('#onboarding-card .wizard-head h1');
+  await title.waitFor({ state: 'visible', timeout: timeoutMs });
+  await page.waitForFunction(expected => document.querySelector('#onboarding-card .wizard-head h1')?.textContent?.includes(expected), heading, { timeout: timeoutMs });
+  assert.match(await title.textContent() || '', new RegExp(heading));
+}
+
 const browser = await chromium.launch({ headless: true, executablePath, args: [`--ignore-certificate-errors-spki-list=${chromeSpki}`] });
 try {
   const context = await browser.newContext({ httpCredentials: { username, password }, ignoreHTTPSErrors: false });
@@ -44,17 +51,21 @@ try {
   });
 
   await page.goto(origin + '/screens/16-onboarding.html', { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => document.querySelector('#onboarding-card')?.textContent?.includes('检查 AIRP Engine'));
+  await waitForOnboardingStep(page, '检查 AIRP Engine');
   assert.equal(await page.locator('#onboarding-steps .step').count(), 6);
   await page.getByRole('button', { name: '下一步 →' }).click();
+  await waitForOnboardingStep(page, '配置 LLM Provider');
   await page.getByRole('button', { name: '保存并下一步 →' }).click();
-  await page.getByRole('button', { name: '下一步 →' }).waitFor({ state: 'visible' });
-  await page.waitForFunction(() => document.querySelector('#onboarding-card .btn-primary')?.disabled === false);
+  await waitForOnboardingStep(page, '验证模型连接');
   await page.getByRole('button', { name: '下一步 →' }).click();
+  await waitForOnboardingStep(page, '导入或选择角色');
   const characterChoice = page.getByRole('button', { name: characterId, exact: true });
   if (await characterChoice.count()) await characterChoice.click();
   await page.getByRole('button', { name: '下一步 →' }).click();
+  await waitForOnboardingStep(page, '选择人设与预设');
   await page.getByRole('button', { name: '下一步 →' }).click();
+  await waitForOnboardingStep(page, '完成首轮对话');
+  await page.getByLabel('给角色的第一句话').waitFor({ state: 'visible' });
   await page.getByLabel('给角色的第一句话').fill('onboarding production smoke ' + Date.now());
   await page.getByRole('button', { name: '发送首轮消息' }).click();
   // 容器重启后 engine 冷启动，首次 /v1/chat/completions 流式回复可能比热路径慢。

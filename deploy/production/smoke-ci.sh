@@ -45,8 +45,9 @@ trap cleanup EXIT INT TERM
 #      is what the restart-continuity browser smoke actually exercises.
 #
 # Stage 3 only runs when `WAIT_FOR_ENGINE_READY_CHAT_PROBE` is set to a
-# non-empty value (the smoke callsite that has a valid character_id +
-# session_id). Stages 1–2 close the listener race from PR #243 run 29671033343;
+# non-empty value. Each attempt creates a fresh disposable session so retries
+# cannot append duplicate readiness turns to a user-visible conversation.
+# Stages 1–2 close the listener race from PR #243 run 29671033343;
 # stage 3 closes the mid-stream drop race from PR #246 run 29673388808, where
 # `/v1/models` returned 200 but the SSE stream still got reset mid-flight.
 #
@@ -80,11 +81,29 @@ wait_for_engine_ready() {
 
   if [ -n "${WAIT_FOR_ENGINE_READY_CHAT_PROBE:-}" ]; then
     probe_character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file" 2>/dev/null || true)
-    probe_session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file" 2>/dev/null || true)
-    if [ -n "$probe_character_id" ] && [ -n "$probe_session_id" ]; then
+    if [ -z "$probe_character_id" ]; then
+      echo "wait_for_engine_ready: chat probe requires character_id in $result_file" >&2
+      return 1
+    fi
+    probe_tmp=$(mktemp)
+    for attempt in $(seq 1 8); do
+      probe_session_response=$($curl_tls --silent --show-error --fail \
+        --user "$admin_user:$admin_password" \
+        --request POST "$origin/v1/sessions/$probe_character_id" 2>/dev/null || true)
+      probe_session_id=$(printf '%s' "$probe_session_response" | node -e '
+const raw = require("fs").readFileSync(0, "utf8");
+try {
+  const value = JSON.parse(raw);
+  const id = typeof value === "string" ? value : value?.session_id || value?.id;
+  if (id) process.stdout.write(String(id));
+} catch {}
+' )
+      if [ -z "$probe_session_id" ]; then
+        echo "wait_for_engine_ready: SSE probe attempt $attempt could not create disposable session" >&2
+        sleep 2
+        continue
+      fi
       probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
-      probe_tmp=$(mktemp)
-      for attempt in $(seq 1 8); do
         http_code=$($curl_tls --silent --show-error --no-buffer \
             --user "$admin_user:$admin_password" \
             --header 'Content-Type: application/json' \
@@ -93,7 +112,7 @@ wait_for_engine_ready() {
             --output "$probe_tmp" \
             --write-out '%{http_code}' \
             "$origin/v1/chat/completions" 2>&1) && rc=0 || rc=$?
-        if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && grep -q '"type":"done"' "$probe_tmp"; then
+        if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && node "$repo/deploy/production/verify-readiness-sse.mjs" "$probe_tmp"; then
           rm -f "$probe_tmp"
           # Grace period: SSE probe 成功不代表 Caddy upstream 连接池已稳定。
           # engine 刚 restart 时第一个真实 chat 流仍可能被 reset（PR #251 重试记录）。
@@ -108,11 +127,10 @@ wait_for_engine_ready() {
         rm -f "$probe_tmp"
         probe_tmp=$(mktemp)
         sleep 2
-      done
-      rm -f "$probe_tmp"
-      echo "wait_for_engine_ready: SSE round-trip probe failed after 8 attempts" >&2
-      return 1
-    fi
+    done
+    rm -f "$probe_tmp"
+    echo "wait_for_engine_ready: SSE round-trip probe failed after 8 attempts" >&2
+    return 1
   fi
 }
 
@@ -238,7 +256,10 @@ NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/deploy/production/api-smoke.mjs"
 
 $compose restart engine gateway >/dev/null
-wait_for_engine_ready
+# The onboarding browser smoke immediately exercises the same streaming chat
+# route as the restart-continuity smoke below. A health/models-only probe can
+# pass while the first post-restart SSE request is still unstable.
+WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
 character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
 session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file")
 expected_count=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).final_message_count" "$result_file")
@@ -267,6 +288,14 @@ AIRP_SMOKE_BROWSER_RESULT_FILE="$browser_result_file" \
 AIRP_CHROME_SPKI="$chrome_spki" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-smoke.mjs"
+
+AIRP_SMOKE_ORIGIN="$origin" \
+AIRP_SMOKE_ADMIN_USER="$admin_user" \
+AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
+AIRP_SMOKE_RESULT_FILE="$result_file" \
+AIRP_CHROME_SPKI="$chrome_spki" \
+NODE_EXTRA_CA_CERTS="$trust_bundle" \
+node "$repo/ui/production-browser-advanced-pages-smoke.mjs"
 
 $compose restart engine gateway >/dev/null
 WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
