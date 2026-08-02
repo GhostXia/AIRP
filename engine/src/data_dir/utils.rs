@@ -59,6 +59,7 @@ where
         // only operation that changes the primary directory entry.
         if fs::hard_link(path, &backup).is_err() {
             fs::copy(path, &backup)?;
+            fs::File::open(&backup)?.sync_all()?;
         }
     }
     #[cfg(test)]
