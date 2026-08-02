@@ -2,9 +2,12 @@
 //! boundary.
 //!
 //! A marker is created before either resource is mutated and removed only
-//! after both stages complete.  A surviving or unreadable marker is a
-//! conservative recovery signal: the Coordinator must reject new mutations
-//! until a later recovery slice inspects and resolves it.
+//! after all expected stages complete.  A surviving non-terminal or unreadable
+//! marker is a conservative recovery signal: the Coordinator must reject new
+//! mutations until a later recovery slice inspects and resolves it.  A marker
+//! whose terminal phase is already durable can be safely removed on restart;
+//! that is the narrow recovery case handled here.  Replaying a non-terminal
+//! turn still requires a payload journal and remains fail-closed.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -126,15 +129,7 @@ impl TurnCommit {
     }
 
     pub(crate) fn complete(mut self) -> Result<(), AirpError> {
-        let expected_phase = if self.marker.volume_expected {
-            TurnCommitPhase::VolumeCommitted
-        } else if self.marker.state_expected {
-            TurnCommitPhase::StateCommitted
-        } else if self.marker.message_expected {
-            TurnCommitPhase::MessageCommitted
-        } else {
-            TurnCommitPhase::Prepared
-        };
+        let expected_phase = self.marker.expected_phase();
         if self.marker.phase != expected_phase {
             return Err(AirpError::Internal(
                 "turn commit cannot complete before all stages".to_string(),
@@ -194,6 +189,79 @@ pub(crate) fn pending_turn(
             tracing::error!(path = %path.display(), %error, "unreadable turn commit marker requires recovery");
             Some(unreadable_marker())
         }
+    }
+}
+
+/// Removes a marker only when its terminal phase has already been persisted.
+///
+/// A process can crash after the final stage marker is durable but before
+/// `TurnCommit::complete` removes the marker.  In that case every expected
+/// resource write has already succeeded and deleting the marker is safe.  Any
+/// non-terminal, unreadable, or unsupported marker remains pending so callers
+/// continue to fail closed until a payload-aware replay path exists.
+pub(crate) fn recover_completed_turn(
+    data_root: &Path,
+    character_id: &CharacterId,
+    session_id: Option<&SessionId>,
+) -> Option<TurnCommitMarker> {
+    let marker = pending_turn(data_root, character_id, session_id)?;
+    if marker.schema_version != SCHEMA_VERSION || !marker.is_terminal() {
+        return Some(marker);
+    }
+
+    let path = marker_path(data_root, character_id, session_id);
+    match fs::remove_file(&path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent() {
+                if let Err(error) = crate::revision::atomic::sync_dir(parent) {
+                    // The marker is gone in this process, but the directory
+                    // durability result is unknown.  Keep the recovery signal
+                    // in logs; the resource stages themselves are complete.
+                    tracing::error!(
+                        path = %path.display(),
+                        %error,
+                        "terminal turn marker removed but directory sync failed"
+                    );
+                }
+            }
+            tracing::info!(
+                path = %path.display(),
+                generation_id = %marker.generation_id,
+                "recovered terminal turn commit marker"
+            );
+            None
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            tracing::error!(
+                path = %path.display(),
+                %error,
+                "terminal turn marker could not be removed; recovery remains required"
+            );
+            Some(marker)
+        }
+    }
+}
+
+impl TurnCommitMarker {
+    fn expected_phase(&self) -> TurnCommitPhase {
+        if self.volume_expected {
+            TurnCommitPhase::VolumeCommitted
+        } else if self.state_expected {
+            TurnCommitPhase::StateCommitted
+        } else if self.message_expected {
+            TurnCommitPhase::MessageCommitted
+        } else {
+            TurnCommitPhase::Prepared
+        }
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.has_expected_stage() && self.phase == self.expected_phase()
+    }
+
+    fn has_expected_stage(&self) -> bool {
+        self.message_expected || self.state_expected || self.volume_expected
     }
 }
 
@@ -296,6 +364,87 @@ mod tests {
     }
 
     #[test]
+    fn terminal_marker_is_recovered_after_final_stage_is_durable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-terminal-recovery").unwrap();
+        let mut commit = TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "generation-terminal".to_string(),
+            true,
+            true,
+            true,
+        )
+        .unwrap();
+        commit.mark_message_committed().unwrap();
+        commit.mark_state_committed().unwrap();
+        commit.mark_volume_committed().unwrap();
+
+        // Simulate a crash after the terminal marker update and before
+        // TurnCommit::complete could remove it.
+        std::mem::forget(commit);
+        assert_eq!(
+            pending_turn(tmp.path(), &character, None).unwrap().phase,
+            TurnCommitPhase::VolumeCommitted
+        );
+
+        assert!(recover_completed_turn(tmp.path(), &character, None).is_none());
+        assert!(pending_turn(tmp.path(), &character, None).is_none());
+    }
+
+    #[test]
+    fn non_terminal_marker_remains_pending_for_payload_aware_replay() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-nonterminal-recovery").unwrap();
+        let mut commit = TurnCommit::begin(
+            tmp.path(),
+            &character,
+            None,
+            "generation-nonterminal".to_string(),
+            true,
+            true,
+            true,
+        )
+        .unwrap();
+        commit.mark_message_committed().unwrap();
+
+        // A crash before the state write must not be treated as completed;
+        // the marker remains the authoritative fail-closed signal.
+        std::mem::forget(commit);
+        let marker = recover_completed_turn(tmp.path(), &character, None)
+            .expect("non-terminal marker must remain pending");
+        assert_eq!(marker.phase, TurnCommitPhase::MessageCommitted);
+        assert!(pending_turn(tmp.path(), &character, None).is_some());
+    }
+
+    #[test]
+    fn marker_without_expected_stages_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-no-expected-stages").unwrap();
+        let path = marker_path(tmp.path(), &character, None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_vec(&TurnCommitMarker {
+                schema_version: SCHEMA_VERSION,
+                generation_id: "malformed-generation".to_string(),
+                phase: TurnCommitPhase::Prepared,
+                message_expected: false,
+                state_expected: false,
+                volume_expected: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let marker = recover_completed_turn(tmp.path(), &character, None)
+            .expect("marker without expected stages must remain pending");
+        assert_eq!(marker.phase, TurnCommitPhase::Prepared);
+        assert!(path.exists());
+    }
+
+    #[test]
     fn unreadable_marker_fails_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let character = CharacterId::new("marker-corrupt").unwrap();
@@ -331,6 +480,13 @@ mod tests {
         let marker = pending_turn(tmp.path(), &character, None).unwrap();
         assert!(marker.generation_id.is_empty());
         assert_eq!(marker.schema_version, SCHEMA_VERSION + 1);
+        assert_eq!(
+            recover_completed_turn(tmp.path(), &character, None)
+                .unwrap()
+                .schema_version,
+            SCHEMA_VERSION + 1
+        );
+        assert!(marker_path(tmp.path(), &character, None).exists());
     }
 
     #[test]
