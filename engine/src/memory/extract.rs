@@ -6,6 +6,7 @@
 use crate::adapter::{ChatMessage, GenerationParams, MessageRole, ProviderConfig};
 use crate::error::AirpError;
 use futures_util::StreamExt;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -63,6 +64,8 @@ const USER_PREFERENCE_SYSTEM_PROMPT: &str = r#"你是一个用户偏好抽取助
 - 用户偏好简洁的对话风格
 "#;
 
+const MAX_PROMPT_OVERRIDE_BYTES: usize = 1024 * 1024;
+
 /// #274 F-2：从 `data_root/prompts/{prompt_name}` 加载 prompt 覆盖文件；
 /// 文件不存在或读取失败时 fallback 到 `default`。
 ///
@@ -76,7 +79,41 @@ const USER_PREFERENCE_SYSTEM_PROMPT: &str = r#"你是一个用户偏好抽取助
 /// best-effort 控制平面，不应因 prompt 文件损坏阻塞主流程。
 pub(crate) fn load_prompt_override(data_root: &Path, prompt_name: &str, default: &str) -> String {
     let path = data_root.join("prompts").join(prompt_name);
-    match std::fs::read_to_string(&path) {
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return default.to_string(),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to open prompt override file, falling back to default"
+            );
+            return default.to_string();
+        }
+    };
+
+    let mut bytes = Vec::new();
+    if let Err(e) = file
+        .take(MAX_PROMPT_OVERRIDE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+    {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "failed to read prompt override file, falling back to default"
+        );
+        return default.to_string();
+    }
+    if bytes.len() > MAX_PROMPT_OVERRIDE_BYTES {
+        tracing::warn!(
+            path = %path.display(),
+            limit = MAX_PROMPT_OVERRIDE_BYTES,
+            "prompt override file exceeds size limit, falling back to default"
+        );
+        return default.to_string();
+    }
+
+    match String::from_utf8(bytes) {
         Ok(content) if !content.trim().is_empty() => content,
         Ok(_) => {
             tracing::warn!(
@@ -85,7 +122,6 @@ pub(crate) fn load_prompt_override(data_root: &Path, prompt_name: &str, default:
             );
             default.to_string()
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => default.to_string(),
         Err(e) => {
             tracing::warn!(
                 path = %path.display(),
@@ -298,5 +334,35 @@ mod tests {
 
         let result = load_prompt_override(tmp.path(), "custom.md", "DEFAULT");
         assert_eq!(result, "CUSTOM");
+    }
+
+    #[test]
+    fn load_prompt_override_accepts_the_size_limit() {
+        let tmp = tempdir().unwrap();
+        let prompts_dir = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(
+            prompts_dir.join("extraction.md"),
+            vec![b'x'; MAX_PROMPT_OVERRIDE_BYTES],
+        )
+        .unwrap();
+
+        let result = load_prompt_override(tmp.path(), "extraction.md", "DEFAULT");
+        assert_eq!(result.len(), MAX_PROMPT_OVERRIDE_BYTES);
+    }
+
+    #[test]
+    fn load_prompt_override_rejects_content_over_the_size_limit() {
+        let tmp = tempdir().unwrap();
+        let prompts_dir = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(
+            prompts_dir.join("extraction.md"),
+            vec![b'x'; MAX_PROMPT_OVERRIDE_BYTES + 1],
+        )
+        .unwrap();
+
+        let result = load_prompt_override(tmp.path(), "extraction.md", "DEFAULT");
+        assert_eq!(result, "DEFAULT");
     }
 }

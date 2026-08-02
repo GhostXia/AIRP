@@ -40,6 +40,10 @@ fn resident_path(session_dir: &Path) -> std::path::PathBuf {
 
 /// 读取 resident memory 内容。文件不存在返回空字符串。
 pub fn read_resident_memory(session_dir: &Path) -> Result<String, AirpError> {
+    read_resident_memory_unlocked(session_dir)
+}
+
+pub(crate) fn read_resident_memory_unlocked(session_dir: &Path) -> Result<String, AirpError> {
     let path = resident_path(session_dir);
     match fs::read_to_string(&path) {
         Ok(content) => Ok(content),
@@ -51,6 +55,15 @@ pub fn read_resident_memory(session_dir: &Path) -> Result<String, AirpError> {
 /// 写入 resident memory（覆盖）。使用原子写（temp + rename + parent sync）
 /// 防止半写状态被并发 reader 观察到（审计 W1 修复）。
 pub fn write_resident_memory(session_dir: &Path, content: &str) -> Result<(), AirpError> {
+    super::with_memory_mutation(session_dir, || {
+        write_resident_memory_unlocked(session_dir, content)
+    })
+}
+
+pub(crate) fn write_resident_memory_unlocked(
+    session_dir: &Path,
+    content: &str,
+) -> Result<(), AirpError> {
     let path = resident_path(session_dir);
     // 确保目录存在
     if let Some(parent) = path.parent() {
@@ -62,12 +75,31 @@ pub fn write_resident_memory(session_dir: &Path, content: &str) -> Result<(), Ai
 
 /// 追加内容到 resident memory。
 pub fn append_resident_memory(session_dir: &Path, content: &str) -> Result<(), AirpError> {
-    let mut existing = read_resident_memory(session_dir)?;
-    if !existing.is_empty() && !existing.ends_with('\n') {
-        existing.push('\n');
-    }
-    existing.push_str(content);
-    write_resident_memory(session_dir, &existing)
+    super::with_memory_mutation(session_dir, || {
+        let mut existing = read_resident_memory_unlocked(session_dir)?;
+        if !existing.is_empty() && !existing.ends_with('\n') {
+            existing.push('\n');
+        }
+        existing.push_str(content);
+        write_resident_memory_unlocked(session_dir, &existing)
+    })
+}
+
+/// Replace resident memory only when it still matches the snapshot used to
+/// compute `replacement`. This prevents slow compression from overwriting a
+/// concurrent extraction or manual edit.
+pub(crate) fn write_resident_memory_if_unchanged(
+    session_dir: &Path,
+    expected: &str,
+    replacement: &str,
+) -> Result<bool, AirpError> {
+    super::with_memory_mutation(session_dir, || {
+        if read_resident_memory_unlocked(session_dir)? != expected {
+            return Ok(false);
+        }
+        write_resident_memory_unlocked(session_dir, replacement)?;
+        Ok(true)
+    })
 }
 
 /// 把 resident.md 注入到 System Prompt 的 `[Resident Memory]` 段。
@@ -124,6 +156,49 @@ mod tests {
         let content = read_resident_memory(tmp.path()).unwrap();
         assert!(content.contains("第一条"));
         assert!(content.contains("第二条"));
+    }
+
+    #[test]
+    fn compare_and_replace_rejects_a_stale_snapshot() {
+        let tmp = tempdir().unwrap();
+        write_resident_memory(tmp.path(), "baseline").unwrap();
+        write_resident_memory(tmp.path(), "manual edit").unwrap();
+
+        let wrote =
+            write_resident_memory_if_unchanged(tmp.path(), "baseline", "compressed").unwrap();
+
+        assert!(!wrote);
+        assert_eq!(read_resident_memory(tmp.path()).unwrap(), "manual edit");
+    }
+
+    #[test]
+    fn concurrent_appends_preserve_every_entry() {
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 12;
+        let tmp = tempdir().unwrap();
+        let dir = Arc::new(tmp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|index| {
+                let dir = Arc::clone(&dir);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    append_resident_memory(&dir, &format!("- entry-{index}"))
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let content = read_resident_memory(&dir).unwrap();
+        for index in 0..THREADS {
+            let expected = format!("- entry-{index}");
+            assert_eq!(content.lines().filter(|line| *line == expected).count(), 1);
+        }
     }
 
     #[test]
