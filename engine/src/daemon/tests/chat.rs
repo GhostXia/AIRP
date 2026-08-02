@@ -756,3 +756,208 @@ async fn pr75_chat_history_returns_message_timestamps() {
     assert_eq!(page["total"], 2);
     assert_eq!(page["has_more"], true);
 }
+
+// ── #286 TurnCommit HTTP-level recovery contract ────────────────────────
+//
+// Coordinator-level coverage lives in `session_coordinator::tests` and
+// `turn_commit::tests`.  These cases pin the HTTP wire contract that the
+// v0.0.3 release document promises: mutations surface 409
+// `session_recovery_required` while a non-terminal marker survives, reads
+// stay available, and a terminal marker is auto-cleared so the next
+// mutation succeeds.
+
+/// Assert the HTTP mutation endpoint returned 409 with the
+/// `session_recovery_required` conflict body.  Shared by the completion,
+/// regen, and continue recovery-contract cases.
+async fn assert_conflict_with_session_recovery_required(response: axum::response::Response) {
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(
+        text.contains("session_recovery_required"),
+        "expected session_recovery_required in body, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn chat_completion_returns_409_when_non_terminal_marker_exists() {
+    // Crash-before-commit: a marker still in `Prepared` must block new
+    // chat completions with 409 "session_recovery_required" until a
+    // payload-aware replay path resolves it.
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("recovery-block-completion").unwrap();
+    let _commit = crate::turn_commit::TurnCommit::begin(
+        &state.data_root,
+        &character,
+        None,
+        "interrupted-completion".to_string(),
+        true,
+        true,
+        false,
+    )
+    .unwrap();
+
+    let app = create_router(state);
+    let body = serde_json::json!({
+        "character_id": "recovery-block-completion",
+        "user_profile": { "name": "User", "variables": {} },
+        "message": "hi"
+    });
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_conflict_with_session_recovery_required(response).await;
+}
+
+#[tokio::test]
+async fn chat_history_read_path_is_not_blocked_by_recovery_marker() {
+    // The history endpoint is read-only: it must not call `try_submit` and
+    // therefore must remain available while a non-terminal marker blocks
+    // mutations.  This is the HTTP contract that lets operators inspect
+    // state during a recovery window.
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("recovery-read-path").unwrap();
+    let _commit = crate::turn_commit::TurnCommit::begin(
+        &state.data_root,
+        &character,
+        None,
+        "interrupted-read".to_string(),
+        true,
+        true,
+        false,
+    )
+    .unwrap();
+
+    let app = create_router(state);
+    let body = serde_json::json!({"character_id": "recovery-read-path"});
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/history")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn terminal_marker_auto_recovery_unblocks_next_mutation() {
+    // A terminal marker (all expected stages durable) means every resource
+    // write succeeded; the next admission call may safely remove it and
+    // proceed.  This simulates a crash after the final stage write but
+    // before `TurnCommit::complete` removes the marker, then verifies that
+    // a subsequent HTTP mutation succeeds and the marker is gone.
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("recovery-terminal").unwrap();
+    let data_root = state.data_root.clone();
+    let mut commit = crate::turn_commit::TurnCommit::begin(
+        &data_root,
+        &character,
+        None,
+        "terminal-generation".to_string(),
+        true,
+        true,
+        false,
+    )
+    .unwrap();
+    commit.mark_message_committed().unwrap();
+    commit.mark_state_committed().unwrap();
+    // Skip `complete()` and `Drop` so the terminal marker stays on disk,
+    // mirroring a process exit after the final stage write.
+    std::mem::forget(commit);
+    assert!(
+        crate::turn_commit::pending_turn(&data_root, &character, None).is_some(),
+        "terminal marker must be present before recovery"
+    );
+
+    let app = create_router(state);
+    let body = serde_json::json!({
+        "character_id": "recovery-terminal",
+        "message_index": 0
+    });
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/rollback")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    // `try_submit` must have auto-recovered the terminal marker before
+    // admitting the rollback.  A surviving marker would mean recovery
+    // silently no-op'd and the session is still wedged.
+    assert!(
+        crate::turn_commit::pending_turn(&data_root, &character, None).is_none(),
+        "terminal marker must be cleared after auto-recovery"
+    );
+}
+
+#[tokio::test]
+async fn regen_and_continue_reject_recovering_session() {
+    // Both `/v1/chat/regen` and `/v1/chat/continue` call `try_submit`
+    // before any pipeline work; a pending non-terminal marker must reject
+    // both with 409 "session_recovery_required".  The marker is not
+    // removed by a failed admission, so the second endpoint observes the
+    // same recovery signal.
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("recovery-regen-continue").unwrap();
+    let _commit = crate::turn_commit::TurnCommit::begin(
+        &state.data_root,
+        &character,
+        None,
+        "interrupted-regen-continue".to_string(),
+        true,
+        true,
+        false,
+    )
+    .unwrap();
+
+    let app = create_router(state);
+
+    let regen_body = serde_json::json!({"character_id": "recovery-regen-continue"});
+    let regen_resp = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/regen")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&regen_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_conflict_with_session_recovery_required(regen_resp).await;
+
+    let continue_body = serde_json::json!({"character_id": "recovery-regen-continue"});
+    let continue_resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/continue")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&continue_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_conflict_with_session_recovery_required(continue_resp).await;
+}
