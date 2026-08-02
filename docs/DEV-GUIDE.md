@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-07-30，`main@4f3f792`
+> 最后校准：2026-08-02，`main@830426e`
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -21,6 +21,15 @@ engine shared service → HTTP/SSE → WebUI → production/browser tests
 ```
 
 桌面 Tauri/Vue 代码保留，但开发、打包和性能计划暂停。恢复前先重新校准基线。
+
+截至 `main@830426e`，v0.0.3 的已交付收敛切片是：#398 的 generation-scoped
+`session-state`/`cancel`；#399/#403 的 durable `TurnCommit` marker 与
+`Recovering`/fail-closed mutation；#409 的 terminal marker recovery、Coordinator
+admission/owner 锁序和 all-false marker fail-closed；#410/#411 的 production mock
+取消、严格 SSE、cleanup、response-body 与 deadline 生命周期证据；#413 的 lock-only
+npm 安全修复与 SBOM 生成证据。它们不等于自动 replay/repair、Agent/tool 单 owner、
+backup/restore、性能 SLO 或真实 provider + browser + Compose 验收；后者仍由
+[#130](https://github.com/GhostXia/AIRP/issues/130) 作为当前 P1 外部硬门追踪。
 
 ## 2. 仓库地图
 
@@ -152,6 +161,13 @@ npm run test -- --run
 Pop-Location
 ```
 
+当前基线的可复现 backend/protocol 计数使用
+`cargo test --workspace --exclude airp-ui --locked`；完整 workspace 还需要生成的
+`ui/src-tauri/binaries/airp-core-x86_64-pc-windows-gnu.exe` sidecar，缺失时只能说明
+full-workspace 验证未完成，不能把 exclude 结果冒充 full workspace。`ui/` 的 npm
+依赖属于构建/测试图，production gateway 只复制静态 WebUI，不把 `ui/node_modules`
+当作 runtime；#413 后 `npm audit --json` 与 `npm audit --omit=dev --json` 均应为 0。
+
 Rustdoc 采用“合同正确性优先”策略：CI 要求公共文档能够生成，且不存在坏链接、
 无效 HTML 或其他 rustdoc 警告。只有能解释公共 API 合同、错误语义、副作用、
 并发或安全边界的注释才应补充；不按第三方工具的私有百分比给显而易见的字段和
@@ -241,7 +257,7 @@ Remove-Item Env:RUSTDOCFLAGS
 - `0.x` 依赖的次版本按主版本风险处理。即使只是补丁版本，只要涉及数据格式、网络/权限边界、密码学、构建/发布链或已知行为变化，也升级为 issue + 专项审计。
 - “发现有新版本”不是升级理由；升级 PR 要说明用户价值、风险、验证证据和不升级的后果。安全修复可提高优先级，但不得跳过兼容性验证。
 
-仓库已落地 `tools/dep-governance/`（PR #218）：`discover-deps.mjs` 扫描 Cargo workspace 与 npm package-lock.json v3 并按 BFS 划分 runtime/build/dev 作用域，`audit-routing.mjs` 提供纯函数审计路由（`classifyInventory` auto-pass/audit-required/block + `classifyUpgrade` 五类升级路由 + patch-sensitive 覆盖），`generate-sbom.mjs` 输出 SPDX-2.3 / CycloneDX 1.5 SBOM 与人类可读第三方声明；当前 SBOM 快照存于 `docs/sbom/`。该工具链是手动运行的离线工具（无上游版本比较、不自动开 PR），自动化版本检测与去重 issue 仍是 #192 后续切片；在自动化落地前，开发任务涉及依赖时仍需人工查询上游稳定版本和安全公告，不得把本节误述为 CI 强制门禁。
+仓库已落地 `tools/dep-governance/`（PR #218；#413 刷新 lock/SBOM 证据）：`discover-deps.mjs` 扫描 Cargo workspace 与 npm package-lock.json v3 并按 BFS 划分 runtime/build/dev 作用域，`audit-routing.mjs` 提供纯函数审计路由（`classifyInventory` auto-pass/audit-required/block + `classifyUpgrade` 五类升级路由 + patch-sensitive 覆盖），`generate-sbom.mjs` 输出 SPDX-2.3 / CycloneDX 1.5 SBOM 与人类可读第三方声明。当前快照生成命令报告 **693 third-party / unknown license 0 / blocked 0**；inventory 总记录 **697**（first-party 4、audit-required 17、auto-pass 680），不要把 audit-required 误写成 block。#413 的 `brace-expansion`、`postcss`、`nanoid` 是 lock-only transitive 更新，`ui` 依赖仍属于构建/测试图，production gateway 只复制静态 WebUI。该工具链仍是手动运行的离线工具（无上游版本比较、不自动开 PR），自动化版本检测与去重 issue 仍是 #192 后续切片；SBOM/notice 尚未成为 release pipeline 强制门禁。
 
 ## 8. 文档维护
 
@@ -255,8 +271,8 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. `main@4f3f792` 已包含 PR #314/#316/#317/#323/#328 的 Phase 1–5.3 功能，以及 PR #333/#334/#335/#338 的 finalize/world-event 并发修复；
-2. 优先处理 #320–#339 中仍开放且会影响数据正确性、失败行为或 WebUI 验收的审计遗留；不要只因 issue 编号较新就机械排序；
+1. `main@830426e` 已包含 PR #314/#316/#317/#323/#328 的 Phase 1–5.3 功能、PR #333/#334/#335/#338 的 finalize/world-event 并发修复，以及 #398–#413 的 v0.0.3 收敛切片；
+2. 优先完成 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose maintainer-run；不要用 CI mock/system Chrome 替代；
 3. 用真实 provider + 真实浏览器闭合 onboarding → 首聊 → 多轮 → 页面刷新 → 服务重启；分别记录传输失败、commit state、恢复动作和资产一致性；
 4. screen 34–44 已存在，需逐页校准 runtime contract、空/错/慢状态、视觉样板一致性和 browser smoke；
 5. P2 再推进 migration、自动备份/恢复、可恢复删除、完整资产生命周期和长会话资源上界；

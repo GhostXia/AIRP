@@ -2,7 +2,7 @@
 
 > 状态：发布门与验收计划；近期优先级总览以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准
 >
-> 基线日期：2026-07-30，`main@4f3f792`
+> 基线日期：2026-08-02，`main@830426e`
 >
 > 产品目标：在 Phase 1–5.3 功能扩张后，暂停用页面/功能数量替代发布证据；先把真实首聊、刷新/重启恢复、失败关闭、视觉一致性和用户资产安全收敛为可重复验收的 P1 有限试用版，再推进可升级、可恢复的正式 Web 产品。
 
@@ -102,14 +102,19 @@ Browser
 - `PromptAssemblyTrace` 已接入真实 chat pipeline，并交付无写副作用的脱敏 HTTP preview 与 WebUI 本轮配置/有序装配摘要；Phase 2 (#115) 6 类 asset revision（character/persona/preset/lorebook/state/memory）已全部接入统一 `content_revision` 合同（PR #201/#202/#203/#206/#215），新数据 `EffectiveIds` 6 个 `*_revision` 字段填充实际 u64，旧数据推送 `*_revision_unavailable` 诊断并在 WebUI chips 显示 `unavailable`，禁止用 mtime 伪造 revision；#114 统一有效配置摘要已交付（Persona 激活来源 + 参数来源 chips，engine 侧复用 `PersonaService::resolve_effective_persona` 与 HTTP effective 端点同源）；但 base lock / drift / rollback / 受控 dry-run / 完整 provenance 审计仍未交付。
 - 命名 session 已统一目录 UUID、history 响应与 metadata 身份；自包含 state/角色卡/worldbook 工作副本、统一 revision、恢复导出仍是分阶段合同。
 - PR #232 已收口 P1 代码候选的关键边界：chat finalization 失败关闭、结构化 SSE commit state、ambiguous/partial commit 不盲重发、Persona 删除路径与清理安全、客户端 secret/error 脱敏，以及带哈希/卷校验和 loopback 验证屏障的人工冷备份/回滚逃生路径。
+- #398 已交付 generation-scoped `session-state`/`cancel`：只允许取消当前 generation，stale/committing 请求 fail-closed；浏览器断线不等于 Engine 取消。
+- #399/#403 已将 durable `TurnCommit` marker 延伸到 message、live-state 和 current-volume 阶段，并在中断后公开 `Recovering`、阻止新的 session mutation；不包含自动 replay/repair、volume sealing recovery 或 backup/restore。
+- #409 已交付 terminal marker recovery、Coordinator owner/admission registry 锁序保护与 all-false marker fail-closed；non-terminal、unreadable、unsupported marker 仍保留为 recovery-required，不宣称自动 journal/replay。
+- #410/#411 已把这些合同写入 production mock smoke：generation poll、stale/current cancellation、严格 typed SSE terminal、取消后 history、临时 session cleanup，以及 cleanup/SSE/cancel poll/response body 的 bounded deadline 生命周期；备份入口保持明确不可用，renderer 不发起 backup/restore API 调用；它们是 mock/CI 证据，不替代真实 provider、真实 browser 和维护者 Compose 验收。
+- #413 已完成 lock-only npm 安全修复：full/omit-dev audit 均为 0；当前 SBOM 报告 693 third-party、unknown license 0、blocked 0，inventory 总记录 697（4 first-party、17 audit-required、680 auto-pass）。`ui` 依赖属于构建/测试图，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime；SBOM 仍未接入正式 release pipeline 强制门禁。
 
 ### 尚缺的上线能力
 
-- P0 首方部署 artifact 与真实 topology smoke 已落地，P1 代码候选已形成但黄金路径与可重复验收仍需继续开发；正式升级/自动回滚流程、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。SBOM/notices 已由 PR #218 `tools/dep-governance/` 提供离线生成（SPDX-2.3 / CycloneDX 1.5 / 人类可读声明，当前快照在 `docs/sbom/`），但尚未嵌入 release pipeline 作为强制度量。
+- P0 首方部署 artifact 与 mock/CI topology smoke 已落地，P1 代码候选已形成但真实黄金路径与可重复维护者验收仍需继续；正式升级/自动回滚流程、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。#413 已刷新 `docs/sbom/` 快照并清理当前 npm audit findings，但 SBOM/notices 尚未嵌入 release pipeline 作为强制度量。
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
 - Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#115 Phase 2 6 类 revision 合同与 trace 收口已落地，#114 统一有效配置摘要已交付（PR #217），#114 Persona/Preset 高级生命周期（base lock/drift/rollback/dry-run/provenance 审计）后移到 P2；#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
-- 单资源持久化边界已加固（PR #219/#227/#232：quota race、chat_store 原子性、replace_file fsync/扩展名、character_lock、lorebook 保留、volume 溢出，以及 chat finalization 关键写入失败关闭），但跨资源事务、`AIRP-TREE-SHA256-v1` 完整性校验、版本化 migration registry、自动备份恢复、soft-delete/回收站、完整 production observability contract 和运行手册仍缺；当前 Caddy access log/filter 只是 P0 局部实现，仍需在 P2 决定是否保留及其用途、字段、输出和保留策略；#220 deferred 项（character_lock poison 恢复、record_tokens spawn_blocking、resolve_param_sources 重构、temperature None 语义）后移到 P2。
+- 单资源持久化边界已加固（PR #219/#227/#232：quota race、chat_store 原子性、replace_file fsync/扩展名、character_lock、lorebook 保留、volume 溢出，以及 chat finalization 关键写入失败关闭）；#399/#403/#409 仅把 TurnCommit marker、Recovering 与终态 marker recovery 收敛到 fail-closed，跨资源事务、自动 replay/repair、`AIRP-TREE-SHA256-v1` 完整性校验、版本化 migration registry、自动备份恢复、soft-delete/回收站、完整 production observability contract 和运行手册仍缺。当前 Caddy access log/filter 只是 P0 局部实现，仍需在 P2 决定是否保留及其用途、字段、输出和保留策略；#220 deferred 项（character_lock poison 恢复、record_tokens spawn_blocking、resolve_param_sources 重构、temperature None 语义）后移到 P2。
 - engine-truth smoke 与 production system-Chrome smoke 已并行进入 CI；浏览器兼容矩阵、升级恢复与完整发布安全门禁仍不足。
 
 ## 4. 推进顺序
@@ -127,6 +132,8 @@ Browser
 ### Phase P1：有限试用版（当前唯一近期主线）
 
 P1 不是正式发布，也不以补齐全部资产生命周期为目标。它只验证 AIRP 是否能让少量目标用户安全、连续地完成真实 RP 首聊；“是否愿意再次使用”保留为诊断信息，不作为 P1 退出门槛。
+
+当前 P1 唯一外部硬阻塞是 [#130](https://github.com/GhostXia/AIRP/issues/130) 的维护者验收：真实 provider + 真实 browser + production Compose。CI mock、system Chrome 或局部单元测试不能替代该边界；#342 backup/restore/migration、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能/兼容基准，以及 P2/P3 正式 release gates 仍未交付。
 
 1. 已有地基保持不变：P0 production topology、Vite/Vitest 安全升级、onboarding wizard、Persona effective/绑定、Preset/Worldbook 基础管理、`PromptAssemblyTrace`、有效配置摘要和单资源持久化加固均已交付；
 2. 闭合唯一黄金路径：部署健康检查 → provider 配置 → 模型验证 → 角色导入 → Persona/Preset 选择 → 首轮流式对话 → 页面刷新/服务重启后继续当前会话；
@@ -162,7 +169,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 1. 浏览器兼容、响应式、键盘与基础可访问性收口；
 2. 真实 provider 脱敏 smoke、长会话与断网/重连 soak；
-3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #218 `tools/dep-governance/` 已提供 SPDX-2.3 / CycloneDX 1.5 离线生成器，需嵌入 release pipeline 并补发布签名）；
+3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #413 已刷新 SPDX-2.3 / CycloneDX 1.5 与 notices，当前 inventory 仍有 17 条 audit-required；需嵌入 release pipeline 并补发布签名）；
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
@@ -171,7 +178,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 ## 5. 非首发阻塞项
 
 - Persona/Preset 高级生命周期、完整 revision/provenance/collision 审计、自动 backup/restore、migration registry 与 soft-delete；它们进入 P2，不阻塞 P1 有限试用。
-- 新增 asset revision 类型/chip、dependency-governance 自动升级与 GitHub 写入自动化、SBOM release gate 和发布签名；它们不得抢占 P1 黄金路径。
+- 新增 asset revision 类型/chip、dependency-governance 自动升级与 GitHub 写入自动化、SBOM release gate 和发布签名；#413 的 audit 0 只证明当前 lock graph，不等于 release gate 已接入；它们不得抢占 P1 黄金路径。
 - #220 中不直接造成 secret 泄露、虚假成功或用户资产损坏的性能、锁 poison 一致性、代码组织与默认值展示改进。
 - #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review；它们在核心 WebUI 正式版之后继续推进。
 - MCP upstream、skills/plugin marketplace、可配置多 Agent 编排。
@@ -182,9 +189,9 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 ## 6. 下一批可执行工作
 
-> 2026-07-24 PR #305 合并后校准：开发优先于修补，用户反馈优先于审计遗留项。
+> 2026-08-02 PR #413 合并后校准：先闭合 #130 的真实 provider/browser/Compose P1 证据，再处理 P2/P3 release gates。
 
-1. **跑通首聊黄金路径（第一优先）**：用真实 provider + 真实浏览器贯通 onboarding → 首聊 → 刷新恢复 → 重启恢复。过程中实际触发的 bug 立即修；审计 #248 中未触发的理论风险不阻塞本步；
+1. **跑通首聊黄金路径（第一优先）**：用真实 provider + 真实浏览器贯通 onboarding → 首聊 → 刷新恢复 → 重启恢复，完成 #130 的 maintainer-run Compose 记录。过程中实际触发的 bug 立即修；审计 #248 中未触发的理论风险不阻塞本步；
 2. **交付真实用户试用**：Windows 便携包交给 1-3 个目标 RP 用户，收集体验痛点。用户反馈优先级高于审计遗留项和基础设施加固；
 3. **Agent RP 差异化能力**：黄金路径稳定后，优先推进多角色编排、世界事件触发、情感状态追踪等 Agent 驱动的 RP 增强，而非继续加固数据管理基础设施；
 4. **审计 #248 选择性修补**：secrets.json 权限（扩大分发前）、依赖扫描 CI（公开 release 前）、WebUI 类型安全（第二位长期维护者或脚本再次接近单体规模前）按触发条件处理，其余进 P2；
