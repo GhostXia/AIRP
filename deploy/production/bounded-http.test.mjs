@@ -141,7 +141,7 @@ test('a response without a reader fails closed without falling back to unbounded
   const result = await readResponseBodyBounded({
     status: 200,
     ok: true,
-    body: null,
+    body: {},
     text: async () => {
       textCalled = true;
       return 'must not be consumed';
@@ -152,6 +152,22 @@ test('a response without a reader fails closed without falling back to unbounded
   assert.equal(result.unsupported, true);
   assert.match(result.error, /reader unavailable/);
   assert.equal(textCalled, false);
+});
+
+test('a real 204 null-body response is a complete empty body', async () => {
+  const response = new Response(null, { status: 204 });
+  const result = await readResponseBodyBounded(response, {
+    deadline: 100,
+    now: () => 0,
+  });
+
+  assert.equal(response.body, null);
+  assert.equal(result.complete, true);
+  assert.equal(result.text, '');
+  assert.equal(result.bytes, 0);
+  assert.equal(result.unsupported, false);
+  assert.equal(result.lockReleased, true);
+  assert.equal(responseSucceeded(response, result), true);
 });
 
 test('a never-resolving cancel is bounded by cleanup grace and still releases the lock', async () => {

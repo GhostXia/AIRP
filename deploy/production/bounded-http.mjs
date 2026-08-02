@@ -122,6 +122,16 @@ export async function readResponseBodyBounded(
     return result;
   }
 
+  // Fetch uses a null body for legal no-content responses (including 204 and
+  // HEAD semantics). There is no stream lock to release and the empty body is
+  // complete by contract. An object with a non-null body that lacks a reader
+  // remains unsupported and fail-closed below.
+  if (response.body === null) {
+    result.complete = true;
+    result.lockReleased = true;
+    return result;
+  }
+
   let reader;
   try {
     reader = response.body?.getReader?.();

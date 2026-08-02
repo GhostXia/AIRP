@@ -28,7 +28,6 @@ const MOCK = process.env.AIRP_MOCK_URL || 'http://127.0.0.1:8889';
 const AUTH_HEADER = process.env.AIRP_AUTH_HEADER || '';
 const KEEP_SESSION = process.env.AIRP_SMOKE_KEEP_SESSION === '1';
 const RESULT_FILE = process.env.AIRP_SMOKE_RESULT_FILE || '';
-const NO_CONTENT_STATUS = new Set([204, 205, 304]);
 
 // ── 断言工具 ─────────────────────────────────────────────────────────────
 const failures = [];
@@ -102,28 +101,10 @@ async function api(method, path, body, { bearer, signal, deadline } = {}) {
     clearTimeout(headerTimer);
   }
   let data = null;
-  // Fetch exposes a null body for the HTTP statuses whose contract forbids a
-  // payload. That is a complete empty response; an unexpected missing reader
-  // on any other status remains unsupported/incomplete fail-closed.
-  const bodyResult = NO_CONTENT_STATUS.has(res.status) && res.body === null
-    ? {
-      text: '',
-      bytes: 0,
-      complete: true,
-      timedOut: false,
-      tooLarge: false,
-      transportError: false,
-      unsupported: false,
-      error: null,
-      cleanupIncomplete: false,
-      cleanupError: null,
-      lockReleased: true,
-      lockReleaseError: null,
-    }
-    : await readResponseBodyBounded(res, {
-      deadline: requestDeadline,
-      onTimeout: () => localController?.abort(),
-    });
+  const bodyResult = await readResponseBodyBounded(res, {
+    deadline: requestDeadline,
+    onTimeout: () => localController?.abort(),
+  });
   const text = bodyResult.text;
   if (text) {
     try { data = JSON.parse(text); } catch { data = text; }
