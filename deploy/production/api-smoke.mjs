@@ -16,6 +16,7 @@
 import { writeFileSync } from 'node:fs';
 import { consumeGenerationSse } from './sse-consumer.mjs';
 import { deleteSessionWithRetry } from './session-cleanup.mjs';
+import { clampTimeout, readResponseBodyBounded, remainingMs } from './bounded-http.mjs';
 
 const ENGINE = process.env.AIRP_ENGINE_URL || 'http://127.0.0.1:8000';
 const MOCK = process.env.AIRP_MOCK_URL || 'http://127.0.0.1:8889';
@@ -52,45 +53,86 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // engine daemon 用 tower_governor 限流 10 req/s burst 20（daemon/mod.rs::create_router）。
 // smoke 整链路 ~30+ 请求会打空 burst 桶；throttle 200ms（5 req/s）+ 关键节点前置 sleep 避误伤。
 let lastReqAt = 0;
-async function api(method, path, body, { bearer, signal } = {}) {
+function deadlineResult(text = 'request deadline exceeded') {
+  return {
+    status: 0,
+    ok: false,
+    data: null,
+    text,
+    deadlineExceeded: true,
+  };
+}
+
+async function api(method, path, body, { bearer, signal, deadline } = {}) {
+  const requestDeadline = Number.isFinite(deadline) ? deadline : Date.now() + 10000;
   const wait = 200 - (Date.now() - lastReqAt);
-  if (wait > 0) await sleep(wait);
+  const waitMs = clampTimeout(requestDeadline, wait);
+  if (waitMs > 0) await sleep(waitMs);
+  if (remainingMs(requestDeadline) <= 0) return deadlineResult();
   lastReqAt = Date.now();
   const headers = { 'Content-Type': 'application/json' };
   if (bearer) headers['Authorization'] = 'Bearer ' + bearer;
   else if (AUTH_HEADER) headers['Authorization'] = AUTH_HEADER;
-  const res = await fetch(ENGINE + path, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal,
-  });
-  let data = null;
-  const text = await res.text();
-  if (text) {
-    try { data = JSON.parse(text); } catch { data = text; }
-  }
-  return { status: res.status, ok: res.ok, data, text };
-}
-
-// Cancellation evidence needs bounded control-plane requests.  Keep the
-// existing api() helper's throttle and response shape, but give polling a
-// per-request deadline so a broken gateway cannot turn the smoke into an
-// unbounded wait.
-async function apiTimed(method, path, body, timeoutMs = 5000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const localController = signal ? null : new AbortController();
+  const requestSignal = signal || localController.signal;
+  const headerTimer = setTimeout(() => localController?.abort(), Math.max(1, remainingMs(requestDeadline)));
+  let res;
   try {
-    return await api(method, path, body, { signal: controller.signal });
+    res = await fetch(ENGINE + path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: requestSignal,
+    });
   } catch (error) {
     return {
       status: 0,
       ok: false,
       data: null,
       text: `request failed: ${error?.message || error}`,
+      deadlineExceeded: remainingMs(requestDeadline) <= 0,
     };
   } finally {
-    clearTimeout(timer);
+    clearTimeout(headerTimer);
+  }
+  let data = null;
+  const bodyResult = await readResponseBodyBounded(res, {
+    deadline: requestDeadline,
+    onTimeout: () => localController?.abort(),
+  });
+  const text = bodyResult.text;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = text; }
+  }
+  return {
+    status: res.status,
+    ok: res.ok,
+    data,
+    text,
+    deadlineExceeded: bodyResult.timedOut,
+  };
+}
+
+// Cancellation evidence needs bounded control-plane requests.  Keep the
+// existing api() helper's throttle and response shape, but give polling a
+// per-request deadline so a broken gateway cannot turn the smoke into an
+// unbounded wait.
+async function apiTimed(method, path, body, timeoutMs = 5000, { deadline } = {}) {
+  const budget = Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : 0;
+  const requestDeadline = Math.min(
+    Number.isFinite(deadline) ? deadline : Infinity,
+    Date.now() + budget,
+  );
+  try {
+    return await api(method, path, body, { deadline: requestDeadline });
+  } catch (error) {
+    return {
+      status: 0,
+      ok: false,
+      data: null,
+      text: `request failed: ${error?.message || error}`,
+      deadlineExceeded: remainingMs(requestDeadline) <= 0,
+    };
   }
 }
 
@@ -102,6 +144,18 @@ async function fetchTimed(url, options, timeoutMs = 10000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function boundedResponseError(response, deadline) {
+  const body = await readResponseBodyBounded(response, {
+    deadline,
+  });
+  if (body.timedOut) {
+    return body.text
+      ? `${body.text} (response body deadline exceeded)`
+      : 'response body deadline exceeded';
+  }
+  return body.text;
 }
 
 async function deleteSessionEventually(characterId, sessionId, timeoutMs = 8000) {
@@ -125,6 +179,7 @@ async function deleteSessionEventually(characterId, sessionId, timeoutMs = 8000)
 // strict consumer 同时验证 done/error terminal，避免首 chunk 后的 typed
 // error 或 early EOF 被误判为成功。
 async function streamChat(payload) {
+  const responseDeadline = Date.now() + 10000;
   try {
     const res = await fetchTimed(ENGINE + '/v1/chat/completions', {
       method: 'POST',
@@ -135,7 +190,16 @@ async function streamChat(payload) {
       body: JSON.stringify(payload),
     }, 10000);
     ok(res.ok, 'chat SSE 200 OK');
-    if (!res.ok) return { chunks: [], text: '', error: await res.text(), terminal: 'http_error', readBatches: 0, elapsedMs: 0 };
+    if (!res.ok) {
+      return {
+        chunks: [],
+        text: '',
+        error: await boundedResponseError(res, responseDeadline),
+        terminal: 'http_error',
+        readBatches: 0,
+        elapsedMs: 0,
+      };
+    }
     return consumeGenerationSse(res, { timeoutMs: 30000 });
   } catch (error) {
     const message = error?.message || String(error);
@@ -430,6 +494,7 @@ let finalLastMessageId = null;
 {
   let cancellationSessionId = null;
   let cancellationResponse = null;
+  let cancellationResponseError = '';
   try {
     const create = await apiTimed('POST', '/v1/sessions/' + characterId, undefined, 8000);
     ok(create.ok, 'cancellation smoke 创建隔离 session 成功');
@@ -440,6 +505,7 @@ let finalLastMessageId = null;
       'cancellation smoke session id 非空');
 
     if (cancellationSessionId) {
+      const cancellationResponseDeadline = Date.now() + 10000;
       cancellationResponse = await fetchTimed(ENGINE + '/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -460,16 +526,20 @@ let finalLastMessageId = null;
         }),
       }, 10000);
       ok(cancellationResponse.ok, 'cancellation smoke 长 SSE 200 OK');
+      if (!cancellationResponse.ok) {
+        cancellationResponseError = await boundedResponseError(cancellationResponse, cancellationResponseDeadline);
+      }
 
       const stateDeadline = Date.now() + 8000;
       let state = null;
       let lastState = null;
       while (Date.now() < stateDeadline) {
-        const remaining = stateDeadline - Date.now();
+        const remaining = remainingMs(stateDeadline);
+        if (remaining <= 0) break;
         const current = await apiTimed('POST', '/v1/chat/session-state', {
           character_id: characterId,
           session_id: cancellationSessionId,
-        }, Math.min(3000, Math.max(250, remaining)));
+        }, Math.min(3000, remaining), { deadline: stateDeadline });
         lastState = current;
         if (
           current.ok
@@ -480,9 +550,11 @@ let finalLastMessageId = null;
           state = current.data;
           break;
         }
-        await sleep(Math.min(200, Math.max(25, remaining)));
+        const afterProbe = remainingMs(stateDeadline);
+        if (afterProbe <= 0) break;
+        await sleep(Math.min(200, afterProbe));
       }
-      ok(Boolean(state), `cancellation smoke 在 deadline 内观测 generating/nonempty generation_id${state ? '' : `; last=${JSON.stringify(lastState?.data || lastState?.text || lastState?.status)}`}`);
+      ok(Boolean(state), `cancellation smoke 在 deadline 内观测 generating/nonempty generation_id${state ? '' : `; deadline=${stateDeadline}; last=${JSON.stringify({ status: lastState?.status, phase: lastState?.data?.phase, generation_id: lastState?.data?.generation_id, error: lastState?.data?.error || lastState?.text })}`}`);
 
       if (state) {
         const generationId = state.generation_id;
@@ -513,10 +585,18 @@ let finalLastMessageId = null;
         eq(current.data?.generation_id, generationId, 'current cancel 返回同一 generation_id');
       }
 
-      const streamed = await consumeGenerationSse(cancellationResponse, {
-        allowCancellation: true,
-        timeoutMs: 12000,
-      });
+      const streamed = cancellationResponse?.ok
+        ? await consumeGenerationSse(cancellationResponse, {
+          allowCancellation: true,
+          timeoutMs: 12000,
+        })
+        : {
+          terminal: 'http_error',
+          typedError: null,
+          error: cancellationResponseError || 'cancellation response unavailable',
+          chunks: [],
+          frames: 0,
+        };
       ok(!streamed.timedOut, `cancellation SSE 在 deadline 内结束${streamed.error ? ` (${streamed.error})` : ''}; frames=${streamed.frames}`);
       ok(
         streamed.terminal === 'cancelled'
@@ -629,6 +709,7 @@ for (let i = 0; i < sentMessages.length; i++) {
 
   // regen 删除最后一条并流式生成新响应（SSE）
   let regen;
+  const regenResponseDeadline = Date.now() + 10000;
   try {
     const rgRes = await fetchTimed(ENGINE + '/v1/chat/regen', {
       method: 'POST',
@@ -641,7 +722,7 @@ for (let i = 0; i < sentMessages.length; i++) {
     ok(rgRes.ok, 'regen 成功');
     regen = rgRes.ok
       ? await consumeGenerationSse(rgRes, { timeoutMs: 30000 })
-      : { terminal: 'http_error', typedError: null, error: await rgRes.text(), frames: 0 };
+      : { terminal: 'http_error', typedError: null, error: await boundedResponseError(rgRes, regenResponseDeadline), frames: 0 };
   } catch (error) {
     const message = error?.message || String(error);
     ok(false, `regen SSE 请求在响应头前失败: ${message}`);
