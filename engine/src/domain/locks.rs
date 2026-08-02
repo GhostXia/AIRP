@@ -89,6 +89,9 @@ pub(crate) fn state_lock(character_id: &str) -> Arc<Mutex<()>> {
 }
 
 /// Per-user persona lock（串行化 persona 写入与 revision bump）。
+///
+/// LOCK-ORDER: 独立锁族，按 `user_id` key，不与 character 锁族嵌套。
+/// 合同：docs/LOCK-ORDER-CONTRACT.md §1.4 / §3 R5。
 pub(super) fn persona_lock(user_id: &str) -> Arc<Mutex<()>> {
     let mut locks = PERSONA_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))

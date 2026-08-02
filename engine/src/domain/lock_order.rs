@@ -31,6 +31,7 @@ thread_local! {
 
 /// RAII guard：构造时 push，Drop 时 pop。debug-only。
 #[cfg(debug_assertions)]
+#[must_use = "Guard tracks a held lock until dropped; bind it to a named variable for the whole critical section"]
 pub(crate) struct Guard(Option<Kind>);
 
 #[cfg(debug_assertions)]
@@ -161,6 +162,7 @@ mod tests {
 // ── release build（零成本 no-op）─────────────────────────────────────────────
 /// release build 零成本 no-op。`track_*` 不做任何检查，Guard 为 ZST。
 #[cfg(not(debug_assertions))]
+#[must_use = "Guard tracks a held lock until dropped; bind it to a named variable for the whole critical section"]
 pub(crate) struct Guard;
 
 #[cfg(not(debug_assertions))]
