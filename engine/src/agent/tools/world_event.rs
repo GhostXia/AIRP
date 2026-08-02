@@ -32,7 +32,7 @@
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::{session_lock, state_lock};
+use crate::domain::{lock_order, session_lock, state_lock};
 use crate::error::AirpError;
 use crate::revision::atomic::{
     commit_revision, next_content_revision, read_current_revision, CommitOptions, StagedRevision,
@@ -241,6 +241,7 @@ impl Tool for TriggerWorldEventTool {
             let (event, content_buf) = {
                 let state_boundary = state_lock(cid.as_str());
                 let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                let _state_track = lock_order::track_state();
 
                 let mut events = load_world_events(&state.data_root, cid.as_str())?;
                 let event_idx = events
@@ -279,6 +280,7 @@ impl Tool for TriggerWorldEventTool {
             {
                 let session_boundary = session_lock(cid.as_str(), sid.as_ref());
                 let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                let _session_track = lock_order::track_session();
                 crate::volume_store::append_to_current(&session_dir, &content_buf)?;
             }
 
@@ -535,6 +537,7 @@ impl Tool for AdvanceClockTool {
             let (clock, triggered, content_buf) = {
                 let state_boundary = state_lock(cid.as_str());
                 let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                let _state_track = lock_order::track_state();
                 advance_and_check_triggers(&state.data_root, cid.as_str(), advance_by)?
             };
             // state_lock 在此处释放，避免与 session_lock 形成锁序倒置死锁。
@@ -548,6 +551,7 @@ impl Tool for AdvanceClockTool {
             if !content_buf.is_empty() {
                 let session_boundary = session_lock(cid.as_str(), sid.as_ref());
                 let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                let _session_track = lock_order::track_session();
                 crate::volume_store::append_to_current(&session_dir, &content_buf)?;
             }
 

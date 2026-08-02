@@ -211,9 +211,16 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate�
 
 ## 6. 已知缺口与 follow-up
 
-### 6.1 运行时锁序强制：未交付
+### 6.1 运行时锁序强制：已交付（部分路径）
 
-本合同是**文档合同**，由 code review 与审计按 R1–R6、A1–A3、P1–P4 校验。尚无 thread-local 锁序追踪或 `debug_assert!` 运行时检查。后续可考虑在 `domain.rs` 加 `ResourceLockGuard` RAII + thread-local depth counter，先覆盖 `advance_plot` / `trigger_world_event` / `advance_clock` 三个高风险路径。
+`domain.rs` 新增 `lock_order` 模块（`#[cfg(debug_assertions)]` thread-local 栈 + RAII `Guard`；`#[cfg(not(debug_assertions))]` 零成本 no-op），覆盖 R2 的 session↔state 嵌套方向检测：
+
+- `track_session()` 在持 `state_lock` 时获取 `session_lock` 触发 `debug_assert!`（state→session 禁止，Bug F 类死锁回归）。
+- `track_state()` 无检查（session→state 是 R2 唯一合法嵌套方向）。
+- 覆盖 13 个 acquire 点：`domain.rs`（`ChatService::with_session`/`delete_session`、`StateService::read`/`mutate`/`write`、`LorebookService::read`/`write`）+ `plot.rs`（`advance_plot`）+ `world_event.rs`（`trigger_world_event` 阶段一/二、`advance_clock` 阶段一/二）+ `npc.rs`（`npc_action`）。
+- 6 个单测覆盖：`session_alone_ok` / `state_alone_ok` / `session_then_state_legal_no_panic`（advance_plot 合法方向）/ `state_then_session_panics`（违反触发）/ `drop_releases_held` / `state_released_then_session_ok`（两段临界区模式）。
+- release build（`--release`）下 `track_*` 返回 ZST `Guard`，零开销（§7）。
+- 约束：仅检测 R2 session↔state 方向；R1（character 外层门控）、R3（conversation 双锁）、R6（coordinator 反向获取）尚未有运行时强制。guard 不跨 `.await`（§4 A1），thread-local 栈仅在同步作用域内有效。
 
 ### 6.2 std 锁内同步 I/O（结构性 debt）
 
@@ -249,6 +256,8 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate�
 - 必须新增测试覆盖每个 `debug_assert!` 触发点；
 - 必须在 release build (`--release`) 下零开销；
 - 必须在本合同 §6.1 更新状态为「已交付（部分路径）」或「已交付（全路径）」。
+
+§6.1 验收记录（2026-08-02）：6 个单测覆盖唯一 `debug_assert!` 触发点（`track_session` 持 state 时）+ 合法方向 + Drop 释放 + 两段临界区；`cargo check --release` 通过（no-op ZST `Guard`）；§6.1 状态已更新为「已交付（部分路径）」（仅 R2 session↔state，不含 R1/R3/R6）。本地 `cargo test --workspace` 1301 passed / 0 failed，WebUI 76 passed / 0 failed，神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。
 
 ## 8. 关联
 

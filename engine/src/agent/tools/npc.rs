@@ -19,7 +19,7 @@
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::{session_lock, StateService};
+use crate::domain::{lock_order, session_lock, StateService};
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -71,6 +71,7 @@ impl Tool for NpcActionTool {
             // 合同：docs/LOCK-ORDER-CONTRACT.md §2.6 / §3 R2 / §4 A1 / §4 A3。
             let session_boundary = session_lock(cid.as_str(), sid.as_ref());
             let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
+            let _session_track = lock_order::track_session();
 
             let mut entry = format!("\n[NPC行动: {}] {}\n", npc_name, action);
             if !result.is_empty() {

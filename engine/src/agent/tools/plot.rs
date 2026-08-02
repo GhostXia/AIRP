@@ -22,7 +22,7 @@
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::{session_lock, StateService};
+use crate::domain::{lock_order, session_lock, StateService};
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -88,6 +88,7 @@ impl Tool for AdvancePlotTool {
             // 合同：docs/LOCK-ORDER-CONTRACT.md §2.3 / §3 R2 / §4 A1 / §4 A3。
             let session_boundary = session_lock(cid.as_str(), sid.as_ref());
             let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
+            let _session_track = lock_order::track_session();
 
             let entry = format!("\n[剧情推进: {}] {}\n", plot_type, development);
 
