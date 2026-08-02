@@ -34,6 +34,7 @@ async function waitForHistory(context, payload, predicate, timeoutMs = 10_000) {
 async function waitForOnboardingStep(page, heading, timeoutMs = 15_000) {
   const title = page.locator('#onboarding-card .wizard-head h1');
   await title.waitFor({ state: 'visible', timeout: timeoutMs });
+  await page.waitForFunction(expected => document.querySelector('#onboarding-card .wizard-head h1')?.textContent?.includes(expected), heading, { timeout: timeoutMs });
   assert.match(await title.textContent() || '', new RegExp(heading));
 }
 

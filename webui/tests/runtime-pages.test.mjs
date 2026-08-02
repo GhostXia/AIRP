@@ -55,6 +55,7 @@ test('first-run onboarding blocks blind resend after an uncertain commit', () =>
 test('production onboarding smoke waits for each rendered wizard step', () => {
   assert.match(productionBrowserSmoke, /waitForOnboardingStep/);
   assert.match(productionBrowserSmoke, /#onboarding-card \.wizard-head h1/);
+  assert.match(productionBrowserSmoke, /textContent\?\.includes\(expected\)/);
   assert.doesNotMatch(productionBrowserSmoke, /#onboarding-card \.btn-primary'\)\?\.disabled === false/);
   for (const heading of ['检查 AIRP Engine', '配置 LLM Provider', '验证模型连接', '导入或选择角色', '选择人设与预设', '完成首轮对话']) {
     assert.match(productionBrowserSmoke, new RegExp("waitForOnboardingStep\\(page, '" + heading + "'"));
