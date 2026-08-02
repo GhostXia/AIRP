@@ -1,15 +1,15 @@
 AIRP dependency inventory
 =========================
-Generated: 2026-07-19T01:11:11.558Z
+Generated: 2026-08-02T08:10:29.791Z
 Repo root: .
-Total records: 691
+Total records: 697
 
 Summary by audit class:
   audit-required: 17
-  auto-pass: 674
+  auto-pass: 680
 
 Summary by ecosystem:
-  cargo: 567
+  cargo: 573
   npm: 124
 
 Records requiring attention (block / audit-required)
@@ -69,6 +69,7 @@ Records requiring attention (block / audit-required)
 All records (sorted by ecosystem, name, version)
 ------------------------------------------------
 cargo/adler2@2.0.1  [auto-pass]  license=0BSD OR MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/ahash@0.8.12  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/aho-corasick@1.1.4  [auto-pass]  license=Unlicense OR MIT  scope=runtime  tier=third-party
 cargo/airp-core@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=first-party
 cargo/airp-state-protocol@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=first-party
@@ -174,6 +175,8 @@ cargo/encoding_rs@0.8.35  [auto-pass]  license=(Apache-2.0 OR MIT) AND BSD-3-Cla
 cargo/equivalent@1.0.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/erased-serde@0.4.10  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/errno@0.3.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/fallible-iterator@0.3.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/fallible-streaming-iterator@0.1.9  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/fastrand@2.4.1  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/fdeflate@0.3.7  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/field-offset@0.3.6  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
@@ -224,6 +227,7 @@ cargo/h2@0.4.15  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/hashbrown@0.12.3  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/hashbrown@0.14.5  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/hashbrown@0.17.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
+cargo/hashlink@0.9.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/heck@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/heck@0.5.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
 cargo/hermit-abi@0.5.2  [auto-pass]  license=MIT OR Apache-2.0  scope=dev  tier=third-party
@@ -277,6 +281,7 @@ cargo/libc@0.2.186  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=
 cargo/libdbus-sys@0.2.7  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/libloading@0.7.4  [auto-pass]  license=ISC  scope=runtime  tier=third-party
 cargo/libredox@0.1.17  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+cargo/libsqlite3-sys@0.30.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/linux-raw-sys@0.12.1  [auto-pass]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/litemap@0.8.2  [auto-pass]  license=Unicode-3.0  scope=runtime  tier=third-party
 cargo/lock_api@0.4.14  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=third-party
@@ -390,6 +395,7 @@ cargo/rfd@0.16.0  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/ring@0.17.14  [auto-pass]  license=Apache-2.0 AND ISC  scope=runtime  tier=third-party
 cargo/rmcp@1.8.0  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
 cargo/rmcp-macros@1.8.0  [auto-pass]  license=Apache-2.0  scope=runtime  tier=third-party
+cargo/rusqlite@0.32.1  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 cargo/rustc-hash@2.1.2  [auto-pass]  license=Apache-2.0 OR MIT  scope=runtime  tier=third-party
 cargo/rustc_version@0.4.1  [auto-pass]  license=MIT OR Apache-2.0  scope=build  tier=third-party
 cargo/rustix@1.1.4  [auto-pass]  license=Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  scope=runtime  tier=third-party
@@ -706,7 +712,7 @@ npm/airp-ui@0.1.0  [auto-pass]  license=MIT OR Apache-2.0  scope=runtime  tier=f
 npm/alien-signals@1.0.13  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/assertion-error@2.0.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/balanced-match@1.0.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
-npm/brace-expansion@2.1.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
+npm/brace-expansion@2.1.4  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/chai@6.2.2  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/convert-source-map@2.0.0  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/csstype@3.2.3  [auto-pass]  license=MIT  scope=runtime  tier=third-party
@@ -734,14 +740,14 @@ npm/lightningcss-win32-x64-msvc@1.32.0  [audit-required]  license=MPL-2.0  scope
 npm/magic-string@0.30.21  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 npm/minimatch@9.0.9  [auto-pass]  license=ISC  scope=dev  tier=third-party
 npm/muggle-string@0.4.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
-npm/nanoid@3.3.15  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/nanoid@3.3.16  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 npm/obug@2.1.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/path-browserify@1.0.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/pathe@2.0.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/picocolors@1.1.1  [auto-pass]  license=ISC  scope=runtime  tier=third-party
 npm/picomatch@4.0.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/playwright-core@1.61.1  [auto-pass]  license=Apache-2.0  scope=dev  tier=third-party
-npm/postcss@8.5.16  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/postcss@8.5.25  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 npm/rolldown@1.1.5  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/siginfo@2.0.0  [auto-pass]  license=ISC  scope=dev  tier=third-party
 npm/source-map-js@1.2.1  [auto-pass]  license=BSD-3-Clause  scope=runtime  tier=third-party
