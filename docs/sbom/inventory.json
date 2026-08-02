@@ -1,6 +1,6 @@
 {
   "meta": {
-    "cargo_lock_packages": 567,
+    "cargo_lock_packages": 573,
     "cargo_metadata_version": null,
     "cargo_workspace_members": [
       "path+file:///<repo>/engine#airp-core@0.1.0",
@@ -8,30 +8,30 @@
       "path+file:///<repo>/ui/src-tauri#airp-ui@0.1.0"
     ],
     "config_version": "https://airp.local/dep-governance/audit-routing.config.json",
-    "generated_at": "2026-07-19T01:11:11.558Z",
+    "generated_at": "2026-08-02T08:10:29.791Z",
     "generator": "tools/dep-governance/discover-deps.mjs",
     "npm_lockfile_version": 3,
     "repo_root": ".",
     "summary": {
       "by_audit_class": {
         "audit-required": 17,
-        "auto-pass": 674
+        "auto-pass": 680
       },
       "by_ecosystem": {
-        "cargo": 567,
+        "cargo": 573,
         "npm": 124
       },
       "by_scope": {
         "build": 28,
         "dev": 113,
-        "runtime": 550
+        "runtime": 556
       },
       "by_tier": {
         "first-party": 4,
-        "third-party": 687
+        "third-party": 693
       }
     },
-    "total_records": 691
+    "total_records": 697
   },
   "records": [
     {
@@ -51,6 +51,24 @@
       "source": "crates.io",
       "tier": "third-party",
       "version": "2.0.1"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "OR (auto-pass | auto-pass); recipient may choose auto-pass branch",
+      "description": "A non-cryptographic hash function using AES-NI for high performance",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75",
+      "license": "MIT OR Apache-2.0",
+      "license_normalized": "MIT OR Apache-2.0",
+      "manifest_path": "<cargo-registry>/ahash-0.8.12/Cargo.toml",
+      "name": "ahash",
+      "repository": "https://github.com/tkaitchuck/ahash",
+      "resolved": "https://crates.io/api/v1/crates/ahash/0.8.12/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "0.8.12"
     },
     {
       "audit_class": "auto-pass",
@@ -1945,6 +1963,42 @@
     {
       "audit_class": "auto-pass",
       "audit_reason": "OR (auto-pass | auto-pass); recipient may choose auto-pass branch",
+      "description": "Fallible iterator traits",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649",
+      "license": "MIT/Apache-2.0",
+      "license_normalized": "MIT OR Apache-2.0",
+      "manifest_path": "<cargo-registry>/fallible-iterator-0.3.0/Cargo.toml",
+      "name": "fallible-iterator",
+      "repository": "https://github.com/sfackler/rust-fallible-iterator",
+      "resolved": "https://crates.io/api/v1/crates/fallible-iterator/0.3.0/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "0.3.0"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "OR (auto-pass | auto-pass); recipient may choose auto-pass branch",
+      "description": "Fallible streaming iteration",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a",
+      "license": "MIT/Apache-2.0",
+      "license_normalized": "MIT OR Apache-2.0",
+      "manifest_path": "<cargo-registry>/fallible-streaming-iterator-0.1.9/Cargo.toml",
+      "name": "fallible-streaming-iterator",
+      "repository": "https://github.com/sfackler/fallible-streaming-iterator",
+      "resolved": "https://crates.io/api/v1/crates/fallible-streaming-iterator/0.1.9/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "0.1.9"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "OR (auto-pass | auto-pass); recipient may choose auto-pass branch",
       "description": "A simple and fast random number generator",
       "ecosystem": "cargo",
       "homepage": null,
@@ -2841,6 +2895,24 @@
       "source": "crates.io",
       "tier": "third-party",
       "version": "0.17.1"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "OR (auto-pass | auto-pass); recipient may choose auto-pass branch",
+      "description": "HashMap-like containers that hold their key-value pairs in a user controllable order",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:6ba4ff7128dee98c7dc9794b6a411377e1404dba1c97deb8d1a55297bd25d8af",
+      "license": "MIT OR Apache-2.0",
+      "license_normalized": "MIT OR Apache-2.0",
+      "manifest_path": "<cargo-registry>/hashlink-0.9.1/Cargo.toml",
+      "name": "hashlink",
+      "repository": "https://github.com/kyren/hashlink",
+      "resolved": "https://crates.io/api/v1/crates/hashlink/0.9.1/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "0.9.1"
     },
     {
       "audit_class": "auto-pass",
@@ -3795,6 +3867,24 @@
       "source": "crates.io",
       "tier": "third-party",
       "version": "0.1.17"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "permissive license (MIT)",
+      "description": "Native bindings to the libsqlite3 library",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149",
+      "license": "MIT",
+      "license_normalized": "MIT",
+      "manifest_path": "<cargo-registry>/libsqlite3-sys-0.30.1/Cargo.toml",
+      "name": "libsqlite3-sys",
+      "repository": "https://github.com/rusqlite/rusqlite",
+      "resolved": "https://crates.io/api/v1/crates/libsqlite3-sys/0.30.1/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "0.30.1"
     },
     {
       "audit_class": "auto-pass",
@@ -5829,6 +5919,24 @@
       "source": "crates.io",
       "tier": "third-party",
       "version": "1.8.0"
+    },
+    {
+      "audit_class": "auto-pass",
+      "audit_reason": "permissive license (MIT)",
+      "description": "Ergonomic wrapper for SQLite",
+      "ecosystem": "cargo",
+      "homepage": null,
+      "integrity": "sha256:7753b721174eb8ff87a9a0e799e2d7bc3749323e773db92e0984debb00019d6e",
+      "license": "MIT",
+      "license_normalized": "MIT",
+      "manifest_path": "<cargo-registry>/rusqlite-0.32.1/Cargo.toml",
+      "name": "rusqlite",
+      "repository": "https://github.com/rusqlite/rusqlite",
+      "resolved": "https://crates.io/api/v1/crates/rusqlite/0.32.1/download",
+      "scope": "runtime",
+      "source": "crates.io",
+      "tier": "third-party",
+      "version": "0.32.1"
     },
     {
       "audit_class": "auto-pass",
@@ -11524,17 +11632,17 @@
       "description": null,
       "ecosystem": "npm",
       "homepage": null,
-      "integrity": "sha512-WR1cURNjuvBLMZBMbqM0UoE+WAfdUcEV1ccD8PVBVOI+Z3ND4+SZbN8RsfT2bMuG1qwz5RFvPukSZm5fF2D5eA==",
+      "integrity": "sha512-hGfVzPxthbf3+2yjg/RBs60cB0FhqBS/zvdV/4wn4/BmN0bNMMHPc4V/BbFieqf1TKAGGAHnY4eSjajCl0f2Xg==",
       "license": "MIT",
       "license_normalized": "MIT",
       "manifest_path": "ui/package.json",
       "name": "brace-expansion",
       "repository": null,
-      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.1.tgz",
+      "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.4.tgz",
       "scope": "dev",
       "source": "npm",
       "tier": "third-party",
-      "version": "2.1.1"
+      "version": "2.1.4"
     },
     {
       "audit_class": "auto-pass",
@@ -12028,17 +12136,17 @@
       "description": null,
       "ecosystem": "npm",
       "homepage": null,
-      "integrity": "sha512-y7Wygv/7mEOvxTuEQDB8StXdMRBWf1kR/tlhAzBRUFkB2jfcLOAxO/SHmOO2zgz1pVgK29/kyupn059/bCHdjA==",
+      "integrity": "sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==",
       "license": "MIT",
       "license_normalized": "MIT",
       "manifest_path": "ui/package.json",
       "name": "nanoid",
       "repository": null,
-      "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.15.tgz",
+      "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.16.tgz",
       "scope": "runtime",
       "source": "npm",
       "tier": "third-party",
-      "version": "3.3.15"
+      "version": "3.3.16"
     },
     {
       "audit_class": "auto-pass",
@@ -12154,17 +12262,17 @@
       "description": null,
       "ecosystem": "npm",
       "homepage": null,
-      "integrity": "sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg==",
+      "integrity": "sha512-DTPx3RWSSnWyzLxQnlH0rJP+EW5ekl16ZU4/psbIhA0e53kJfdgaN5vKM+xP7yJtXVu+nfdVFmlgFDEKAe4Pyw==",
       "license": "MIT",
       "license_normalized": "MIT",
       "manifest_path": "ui/package.json",
       "name": "postcss",
       "repository": null,
-      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.16.tgz",
+      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.25.tgz",
       "scope": "runtime",
       "source": "npm",
       "tier": "third-party",
-      "version": "8.5.16"
+      "version": "8.5.25"
     },
     {
       "audit_class": "auto-pass",
