@@ -53,7 +53,7 @@ try {
   await waitForOnboardingStep(page, '检查 AIRP Engine');
   assert.equal(await page.locator('#onboarding-steps .step').count(), 6);
   await page.getByRole('button', { name: '下一步 →' }).click();
-  await waitForOnboardingStep(page, '配置 Provider');
+  await waitForOnboardingStep(page, '配置 LLM Provider');
   await page.getByRole('button', { name: '保存并下一步 →' }).click();
   await waitForOnboardingStep(page, '验证模型连接');
   await page.waitForFunction(() => document.querySelector('#onboarding-card .btn-primary')?.disabled === false);
