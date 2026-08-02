@@ -116,15 +116,19 @@ impl SessionCoordinatorRegistry {
                 state
             }
         };
+        // Acquire the per-session guard while the registry entry is still
+        // protected.  Lease release uses this same entries -> state order;
+        // keeping both guards through the idle check prevents a release from
+        // removing the weak entry between upgrade and state admission.
+        let mut coordinator = state.lock().expect("session coordinator state poisoned");
+        if coordinator.status.phase != SessionPhase::Idle {
+            return Err(AirpError::Conflict("session_busy".to_string()));
+        }
         drop(entries);
         // Do not hold the global registry mutex across filesystem access: a
         // slow data root for one session must not serialize unrelated sessions.
         // Keep this per-session state guard while inspecting/removing a
         // terminal marker so an active owner cannot race its final `complete`.
-        let mut coordinator = state.lock().expect("session coordinator state poisoned");
-        if coordinator.status.phase != SessionPhase::Idle {
-            return Err(AirpError::Conflict("session_busy".to_string()));
-        }
         if crate::turn_commit::recover_completed_turn(data_root, character_id, session_id).is_some()
         {
             return Err(AirpError::Conflict("session_recovery_required".to_string()));
@@ -509,6 +513,75 @@ mod tests {
         commit.complete().unwrap();
         drop(lease);
         assert!(crate::turn_commit::pending_turn(tmp.path(), &character, None).is_none());
+    }
+
+    #[test]
+    fn release_and_new_admission_keep_a_single_registered_owner() {
+        // Start release and admission together repeatedly.  Depending on
+        // which side acquires the registry first, either the admission is
+        // rejected as busy (and the third submit becomes the owner) or the
+        // admission becomes the owner (and the third submit is rejected).
+        // The lock order must never allow both to succeed on distinct state
+        // objects after the old lease removes its weak entry.
+        for _ in 0..64 {
+            let tmp = tempfile::tempdir().unwrap();
+            let registry = SessionCoordinatorRegistry::default();
+            let character = CharacterId::new("release-admission-race").unwrap();
+            let mut old_lease = registry
+                .try_submit(tmp.path(), &character, None, SessionCommand::Completion)
+                .unwrap();
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+
+            let release_barrier = barrier.clone();
+            let release_thread = std::thread::spawn(move || {
+                release_barrier.wait();
+                std::thread::yield_now();
+                old_lease.release();
+            });
+
+            let admission_registry = registry.clone();
+            let admission_root = tmp.path().to_path_buf();
+            let admission_character = character.clone();
+            let admission_barrier = barrier.clone();
+            let admission_thread = std::thread::spawn(move || {
+                admission_barrier.wait();
+                std::thread::yield_now();
+                admission_registry.try_submit(
+                    &admission_root,
+                    &admission_character,
+                    None,
+                    SessionCommand::Swipe,
+                )
+            });
+
+            barrier.wait();
+            let admission = admission_thread.join().unwrap();
+            release_thread.join().unwrap();
+
+            match admission {
+                Ok(admission_lease) => {
+                    assert!(matches!(
+                        registry.try_submit(
+                            tmp.path(),
+                            &character,
+                            None,
+                            SessionCommand::AgentToolMutation,
+                        ),
+                        Err(AirpError::Conflict(message)) if message == "session_busy"
+                    ));
+                    drop(admission_lease);
+                }
+                Err(AirpError::Conflict(message)) if message == "session_busy" => {
+                    let third_lease = registry
+                        .try_submit(tmp.path(), &character, None, SessionCommand::Swipe)
+                        .expect("the third submit owns the session after the old lease releases");
+                    drop(third_lease);
+                }
+                Err(error) => panic!("unexpected admission result: {error:?}"),
+            }
+
+            assert_eq!(registry.active_entry_count(), 0);
+        }
     }
 
     #[test]

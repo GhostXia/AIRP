@@ -257,7 +257,11 @@ impl TurnCommitMarker {
     }
 
     fn is_terminal(&self) -> bool {
-        self.phase == self.expected_phase()
+        self.has_expected_stage() && self.phase == self.expected_phase()
+    }
+
+    fn has_expected_stage(&self) -> bool {
+        self.message_expected || self.state_expected || self.volume_expected
     }
 }
 
@@ -412,6 +416,32 @@ mod tests {
             .expect("non-terminal marker must remain pending");
         assert_eq!(marker.phase, TurnCommitPhase::MessageCommitted);
         assert!(pending_turn(tmp.path(), &character, None).is_some());
+    }
+
+    #[test]
+    fn marker_without_expected_stages_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-no-expected-stages").unwrap();
+        let path = marker_path(tmp.path(), &character, None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_vec(&TurnCommitMarker {
+                schema_version: SCHEMA_VERSION,
+                generation_id: "malformed-generation".to_string(),
+                phase: TurnCommitPhase::Prepared,
+                message_expected: false,
+                state_expected: false,
+                volume_expected: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let marker = recover_completed_turn(tmp.path(), &character, None)
+            .expect("marker without expected stages must remain pending");
+        assert_eq!(marker.phase, TurnCommitPhase::Prepared);
+        assert!(path.exists());
     }
 
     #[test]
