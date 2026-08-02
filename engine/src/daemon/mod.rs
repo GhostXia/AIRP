@@ -110,7 +110,7 @@ impl DaemonState {
         })
     }
 
-    /// 写入 live config，poison 时 recover + warn 而非 error/panic。语义同 [`read_config`]。
+    /// 写入 live config，poison 时 recover + warn 而非 error/panic。语义同 [`DaemonState::read_config`]。
     pub fn write_config(&self) -> std::sync::RwLockWriteGuard<'_, MutableConfig> {
         self.config.write().unwrap_or_else(|e| {
             tracing::warn!("config write lock poisoned; recovering");
