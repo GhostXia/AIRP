@@ -79,6 +79,8 @@ test('production smoke covers every advanced WebUI page and a visible Engine fai
   assert.match(productionAdvancedPagesSmoke, /route\('\*\*\/health', route => route\.abort\('failed'\)\)/);
   assert.match(productionAdvancedPagesSmoke, /for \(const advancedPage of pages\)/);
   assert.match(productionAdvancedPagesSmoke, /classes\?\.contains\('danger'\) \|\| classes\?\.contains\('error'\)/);
+  assert.match(productionAdvancedPagesSmoke, /window\.__airpCspViolations = \[\]/);
+  assert.match(productionAdvancedPagesSmoke, /must not violate its CSP/);
 });
 
 for (const [name, html] of [['role list', rolePage], ['chat space', chatPage]]) {

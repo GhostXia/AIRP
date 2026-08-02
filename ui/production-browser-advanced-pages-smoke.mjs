@@ -63,6 +63,7 @@ try {
   });
 
   for (const advancedPage of pages) {
+    await page.evaluate(() => { window.__airpCspViolations = []; });
     const response = await page.goto(pageUrl(advancedPage.file), { waitUntil: 'domcontentloaded' });
     await assertSecurityHeaders(response);
     await page.locator('#page-title').filter({ hasText: advancedPage.title }).waitFor({ state: 'visible', timeout: 15_000 });
@@ -74,9 +75,9 @@ try {
       await page.locator(advancedPage.refresh).click();
       await page.waitForFunction(() => document.querySelector('#engine-status')?.classList.contains('ok'), null, { timeout: 5_000 });
     }
+    assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), [], `${advancedPage.file} must not violate its CSP`);
   }
 
-  assert.deepEqual(await page.evaluate(() => window.__airpCspViolations), []);
   assert.deepEqual(pageErrors, []);
   await context.close();
 
