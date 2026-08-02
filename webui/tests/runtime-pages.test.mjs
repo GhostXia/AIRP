@@ -61,7 +61,9 @@ test('production onboarding smoke waits for each rendered wizard step', () => {
 
 test('both production restarts wait for the chat path before browser smoke', () => {
   const probes = productionSmokeCi.match(/WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready/g) || [];
-  assert.equal(probes.length, 2);
+  assert.equal(probes.length, 1);
+  assert.match(productionSmokeCi, /WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 AIRP_SMOKE_READINESS_SESSION_ID="\$readiness_session_id" wait_for_engine_ready/);
+  assert.match(productionSmokeCi, /probe_session_id=\$\{AIRP_SMOKE_READINESS_SESSION_ID:-/);
 });
 
 test('production smoke covers every advanced WebUI page and a visible Engine failure', () => {

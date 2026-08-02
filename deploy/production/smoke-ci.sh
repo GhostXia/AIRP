@@ -46,7 +46,9 @@ trap cleanup EXIT INT TERM
 #
 # Stage 3 only runs when `WAIT_FOR_ENGINE_READY_CHAT_PROBE` is set to a
 # non-empty value (the smoke callsite that has a valid character_id +
-# session_id). Stages 1–2 close the listener race from PR #243 run 29671033343;
+# session_id). `AIRP_SMOKE_READINESS_SESSION_ID` may override the session from
+# `result_file` when the probe must not mutate the continuity baseline. Stages
+# 1–2 close the listener race from PR #243 run 29671033343;
 # stage 3 closes the mid-stream drop race from PR #246 run 29673388808, where
 # `/v1/models` returned 200 but the SSE stream still got reset mid-flight.
 #
@@ -80,7 +82,7 @@ wait_for_engine_ready() {
 
   if [ -n "${WAIT_FOR_ENGINE_READY_CHAT_PROBE:-}" ]; then
     probe_character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file" 2>/dev/null || true)
-    probe_session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file" 2>/dev/null || true)
+    probe_session_id=${AIRP_SMOKE_READINESS_SESSION_ID:-$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file" 2>/dev/null || true)}
     if [ -n "$probe_character_id" ] && [ -n "$probe_session_id" ]; then
       probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
       probe_tmp=$(mktemp)
@@ -237,12 +239,27 @@ AIRP_SMOKE_RESULT_FILE="$result_file" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/deploy/production/api-smoke.mjs"
 
+# The first restart must prove the SSE path is ready before onboarding starts,
+# without changing the history that the next assertion uses as its durability
+# baseline. Create a disposable session before the restart and route only that
+# readiness probe through it.
+character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
+readiness_session_response=$($curl_tls --silent --show-error --fail \
+  --user "$admin_user:$admin_password" \
+  --request POST "$origin/v1/sessions/$character_id")
+readiness_session_id=$(printf '%s' "$readiness_session_response" | node -e '
+const raw = require("fs").readFileSync(0, "utf8");
+const value = JSON.parse(raw);
+const id = typeof value === "string" ? value : value?.session_id || value?.id;
+if (!id) process.exit(1);
+process.stdout.write(String(id));
+')
+
 $compose restart engine gateway >/dev/null
 # The onboarding browser smoke immediately exercises the same streaming chat
 # route as the restart-continuity smoke below. A health/models-only probe can
 # pass while the first post-restart SSE request is still unstable.
-WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
-character_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).character_id" "$result_file")
+WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 AIRP_SMOKE_READINESS_SESSION_ID="$readiness_session_id" wait_for_engine_ready || { dump_failure_logs; exit 1; }
 session_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).session_id" "$result_file")
 expected_count=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).final_message_count" "$result_file")
 expected_last_id=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).final_last_message_id" "$result_file")
