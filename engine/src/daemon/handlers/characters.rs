@@ -595,7 +595,7 @@ pub(in crate::daemon) async fn update_character_card(
     // 工作副本被 last-writer 覆盖、最终与最新 revision snapshot 不一致。
     // 与 LorebookService::write / StateService::write 的锁纪律对齐。
     let character = crate::domain::character_lock(cid.as_str());
-    let _guard = character.write().expect("character lock poisoned");
+    let _guard = character.write().unwrap_or_else(|p| p.into_inner());
 
     // 校验角色已存在（character_dir 会创建子目录，所以用 list_characters 校验）
     let exists = data_dir::list_characters(&state.data_root)?

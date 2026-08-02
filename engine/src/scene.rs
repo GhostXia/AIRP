@@ -23,7 +23,7 @@ fn scene_write_lock(root: &Path, scene_id: &SceneId) -> Arc<Mutex<()>> {
     let mut locks = SCENE_WRITE_LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .expect("scene write lock registry poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     locks.retain(|_, weak| weak.strong_count() > 0);
     if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
         return lock;
@@ -97,7 +97,7 @@ impl SceneConfig {
 
     pub fn save(&self, root: &Path) -> Result<(), AirpError> {
         let lock = scene_write_lock(root, &self.scene_id);
-        let _guard = lock.lock().expect("scene write lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         self.save_unlocked(root)
     }
 
@@ -121,7 +121,7 @@ where
     F: FnOnce(&mut SceneConfig) -> Result<T, AirpError>,
 {
     let lock = scene_write_lock(root, scene_id);
-    let _guard = lock.lock().expect("scene write lock poisoned");
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     let mut scene = SceneConfig::load(root, scene_id)?;
     let result = update(&mut scene)?;
     scene.save_unlocked(root)?;

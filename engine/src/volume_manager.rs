@@ -234,7 +234,7 @@ pub async fn run_seal_flow(
     let baseline = current.clone();
     let index = volume_store::read_index(session_dir)?;
     let index_baseline = index.clone();
-    let next_n = volume_store::next_volume_number(session_dir);
+    let next_n = volume_store::next_volume_number(session_dir)?;
 
     let system_prompt = build_seal_system_prompt();
     let user_input = format!(
@@ -297,7 +297,7 @@ pub async fn run_seal_flow(
     let new_index = index_parser::apply_diff(&index, &diff);
     if let Some(cid) = character_id {
         let lock = crate::domain::session_lock(cid, session_id);
-        let _guard = lock.lock().expect("session lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         // 双 baseline 校验：current.md 防止并发 append 被销毁，index.md 防止
         // 并发 run_maintenance 的跨卷实体晋升被覆盖。
         let recheck_current = volume_store::read_current(session_dir)?;

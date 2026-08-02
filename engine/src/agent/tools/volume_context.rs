@@ -54,7 +54,7 @@ impl Tool for SealVolumeTool {
                 session_id.as_ref(),
             )?;
             let current = crate::volume_store::read_current(&session_dir)?;
-            let next_volume = crate::volume_store::next_volume_number(&session_dir);
+            let next_volume = crate::volume_store::next_volume_number(&session_dir)?;
             let preview = serde_json::json!({
                 "character_id": character.as_str(),
                 "session_id": session_id.as_ref().map(ToString::to_string),

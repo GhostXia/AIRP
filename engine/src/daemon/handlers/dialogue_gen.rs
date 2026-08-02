@@ -150,7 +150,7 @@ async fn run_dialogue_gen_handler(
 
     // ── Phase B: 取 character_lock 写锁，原子 read-modify-write 卡片 ──
     let character = crate::domain::character_lock(cid.as_str());
-    let _guard = character.write().expect("character lock poisoned");
+    let _guard = character.write().unwrap_or_else(|p| p.into_inner());
 
     // 重读 card：检测 Phase A 期间是否发生并发写入。
     let card_text_now = crate::data_dir::read_character_card_text(&state.data_root, &cid)?;

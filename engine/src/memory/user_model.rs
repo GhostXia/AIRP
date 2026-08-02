@@ -23,7 +23,7 @@ static USER_MODEL_LOCKS: Lazy<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
 /// 获取用户模型的串行化锁。key 为用户主目录路径字符串。
 fn user_model_lock(home: &Path) -> Arc<Mutex<()>> {
     let key = home.to_string_lossy().into_owned();
-    let mut locks = USER_MODEL_LOCKS.lock().expect("user model locks poisoned");
+    let mut locks = USER_MODEL_LOCKS.lock().unwrap_or_else(|p| p.into_inner());
     locks.retain(|_, weak| weak.strong_count() > 0);
     if let Some(weak) = locks.get(&key) {
         if let Some(strong) = weak.upgrade() {
@@ -92,7 +92,7 @@ fn user_model_path_in_home(home: &Path) -> PathBuf {
 /// 同模式）。
 pub fn append_user_model_in_home(home: &Path, content: &str) -> Result<(), AirpError> {
     let lock = user_model_lock(home);
-    let _guard = lock.lock().expect("user model lock poisoned");
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
 
     let path = user_model_path_in_home(home);
     let existing = match fs::read_to_string(&path) {

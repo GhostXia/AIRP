@@ -97,7 +97,7 @@ pub(in crate::daemon) async fn import_preset_endpoint(
     let _guard = PRESET_IMPORT_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("preset import lock poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     let dir = state.data_root.join("presets").join(preset_id.as_str());
     let final_path = dir.join("preset.json");
     let raw_path = dir.join("raw.json");

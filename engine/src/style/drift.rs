@@ -27,7 +27,7 @@ static DRIFT_LOCKS: Lazy<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
 
 /// 获取角色的串行化锁。
 fn drift_lock(character_id: &str) -> Arc<Mutex<()>> {
-    let mut locks = DRIFT_LOCKS.lock().expect("drift locks poisoned");
+    let mut locks = DRIFT_LOCKS.lock().unwrap_or_else(|p| p.into_inner());
     // 清理已无强引用的 stale 条目，保证注册表有界。
     locks.retain(|_, weak| weak.strong_count() > 0);
     if let Some(weak) = locks.get(character_id) {
@@ -136,7 +136,7 @@ pub fn write_soul_drift(
     content: &str,
 ) -> Result<u64, AirpError> {
     let lock = drift_lock(character_id);
-    let _guard = lock.lock().expect("drift lock poisoned");
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     ensure_legacy_revision_unlocked(data_root, character_id)?;
     let config = SoulDriftConfig::default();
     let content = enforce_capacity(content, config.capacity_chars);
@@ -246,7 +246,7 @@ pub fn append_soul_drift(
     content: &str,
 ) -> Result<u64, AirpError> {
     let lock = drift_lock(character_id);
-    let _guard = lock.lock().expect("drift lock poisoned");
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     ensure_legacy_revision_unlocked(data_root, character_id)?;
     let (mut existing, parent_revision) =
         read_soul_drift_with_revision_unlocked(data_root, character_id)?;
@@ -276,7 +276,7 @@ pub async fn append_soul_drift_with_compression(
     let config = SoulDriftConfig::default();
     let (base, base_revision) = {
         let lock = drift_lock(character_id);
-        let _guard = lock.lock().expect("drift lock poisoned");
+        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         ensure_legacy_revision_unlocked(data_root, character_id)?;
         read_soul_drift_with_revision_unlocked(data_root, character_id)?
     };
@@ -303,7 +303,7 @@ pub async fn append_soul_drift_with_compression(
     let bounded = enforce_capacity(selected, config.capacity_chars);
 
     let lock = drift_lock(character_id);
-    let _guard = lock.lock().expect("drift lock poisoned");
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     ensure_legacy_revision_unlocked(data_root, character_id)?;
     let (current, current_revision) =
         read_soul_drift_with_revision_unlocked(data_root, character_id)?;
@@ -344,7 +344,7 @@ pub fn rollback_soul_drift(
         ));
     }
     let lock = drift_lock(character_id);
-    let _guard = lock.lock().expect("drift lock poisoned");
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     ensure_legacy_revision_unlocked(data_root, character_id)?;
     let asset_dir = drift_asset_dir(data_root, character_id);
     let content =
@@ -417,7 +417,7 @@ pub async fn compress_soul_drift_if_needed(
     }
     // CAS 验证：持有锁后重新读取，确保内容未被并发修改。
     let lock = drift_lock(character_id);
-    let _guard = lock.lock().expect("drift lock poisoned");
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     ensure_legacy_revision_unlocked(data_root, character_id)?;
     let (current, parent_revision) =
         read_soul_drift_with_revision_unlocked(data_root, character_id)?;

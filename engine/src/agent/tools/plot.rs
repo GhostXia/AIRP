@@ -82,7 +82,7 @@ impl Tool for AdvancePlotTool {
             // 完成，与 npc_action / trigger_world_event / seal_volume 共享
             // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
             let session_boundary = session_lock(cid.as_str(), sid.as_ref());
-            let _session_guard = session_boundary.lock().expect("session lock poisoned");
+            let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
 
             let entry = format!("\n[剧情推进: {}] {}\n", plot_type, development);
 
