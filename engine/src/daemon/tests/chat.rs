@@ -766,6 +766,21 @@ async fn pr75_chat_history_returns_message_timestamps() {
 // stay available, and a terminal marker is auto-cleared so the next
 // mutation succeeds.
 
+/// Assert the HTTP mutation endpoint returned 409 with the
+/// `session_recovery_required` conflict body.  Shared by the completion,
+/// regen, and continue recovery-contract cases.
+async fn assert_conflict_with_session_recovery_required(response: axum::response::Response) {
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(
+        text.contains("session_recovery_required"),
+        "expected session_recovery_required in body, got: {text}"
+    );
+}
+
 #[tokio::test]
 async fn chat_completion_returns_409_when_non_terminal_marker_exists() {
     // Crash-before-commit: a marker still in `Prepared` must block new
@@ -801,17 +816,7 @@ async fn chat_completion_returns_409_when_non_terminal_marker_exists() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    assert!(
-        std::str::from_utf8(&body)
-            .unwrap()
-            .contains("session_recovery_required"),
-        "expected session_recovery_required in body, got: {}",
-        std::str::from_utf8(&body).unwrap()
-    );
+    assert_conflict_with_session_recovery_required(response).await;
 }
 
 #[tokio::test]
@@ -940,17 +945,7 @@ async fn regen_and_continue_reject_recovering_session() {
         )
         .await
         .unwrap();
-    assert_eq!(regen_resp.status(), StatusCode::CONFLICT);
-    let regen_body_bytes = axum::body::to_bytes(regen_resp.into_body(), 4096)
-        .await
-        .unwrap();
-    assert!(
-        std::str::from_utf8(&regen_body_bytes)
-            .unwrap()
-            .contains("session_recovery_required"),
-        "regen must report session_recovery_required, got: {}",
-        std::str::from_utf8(&regen_body_bytes).unwrap()
-    );
+    assert_conflict_with_session_recovery_required(regen_resp).await;
 
     let continue_body = serde_json::json!({"character_id": "recovery-regen-continue"});
     let continue_resp = app
@@ -964,15 +959,5 @@ async fn regen_and_continue_reject_recovering_session() {
         )
         .await
         .unwrap();
-    assert_eq!(continue_resp.status(), StatusCode::CONFLICT);
-    let continue_body_bytes = axum::body::to_bytes(continue_resp.into_body(), 4096)
-        .await
-        .unwrap();
-    assert!(
-        std::str::from_utf8(&continue_body_bytes)
-            .unwrap()
-            .contains("session_recovery_required"),
-        "continue must report session_recovery_required, got: {}",
-        std::str::from_utf8(&continue_body_bytes).unwrap()
-    );
+    assert_conflict_with_session_recovery_required(continue_resp).await;
 }
