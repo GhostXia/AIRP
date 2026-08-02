@@ -17,6 +17,9 @@
     userId: sessionStorage.getItem('airp_user_id') || 'default',
     characters: [],
     sessions: [],
+    // E-P1-5：保存最近一次 worldbook/preset 导入诊断，供重新渲染时复显。
+    lastLorebookReport: null,
+    lastPresetReport: null,
   };
 
   const pages = [
@@ -91,6 +94,70 @@
   function json(value) { return JSON.stringify(value, null, 2); }
   function parseJson(text, label) {
     try { return JSON.parse(text); } catch (error) { throw new Error((label || 'JSON') + ' 格式错误：' + error.message); }
+  }
+  // E-P1-5：渲染 worldbook/preset 导入诊断面板，暴露 advisory 字段与 needs_review/invalid 条目。
+  // 后端 normalize_worldbook / normalize_preset 已在 PUT/POST 响应中返回 import_report；
+  // 此 helper 把 report 翻译成可见 DOM，避免 advisory 字段被静默降级。
+  function renderImportReport(report, kind) {
+    if (!report || typeof report !== 'object') return null;
+    const panel = node('div', 'import-report');
+    const head = node('div', 'import-report-head');
+    const titleText = kind === 'preset' ? 'Preset 导入诊断' : '世界书导入诊断';
+    head.appendChild(node('span', 'import-report-title', titleText));
+    const hasIssues = report.source_error || (Array.isArray(report.invalid) && report.invalid.length) || (Array.isArray(report.needs_review) && report.needs_review.length);
+    head.appendChild(node('span', hasIssues ? 'import-report-tag warn' : 'import-report-tag ok', hasIssues ? '需关注' : '正常'));
+    panel.appendChild(head);
+    // 概览计数行
+    const overview = node('div', 'import-report-overview');
+    const stats = [
+      '输入 ' + (report.total_input ?? 0),
+      '转换 ' + (report.converted ?? 0),
+      '别名归一 ' + (report.aliases_normalized ?? 0),
+      'advisory 保留 ' + (report.advisory_preserved ?? 0),
+      '无效 ' + (Array.isArray(report.invalid) ? report.invalid.length : 0),
+      '需复核 ' + (Array.isArray(report.needs_review) ? report.needs_review.length : 0),
+    ];
+    overview.textContent = stats.join(' · ');
+    panel.appendChild(overview);
+    // advisory 提示：明确标注运行时不消费
+    if ((report.advisory_preserved ?? 0) > 0) {
+      panel.appendChild(node('p', 'import-report-note', 'advisory 字段（如 position/probability/injection_position）已保留在 extensions/raw sidecar，但运行时不消费——仅 canonical 字段参与触发与装配。'));
+    }
+    // preset 专有元数据
+    if (kind === 'preset' && (report.format_version || report.source_hash || report.converter_version)) {
+      const meta = node('div', 'import-report-meta');
+      const parts = [];
+      if (report.format_version) parts.push('格式 ' + report.format_version);
+      if (report.source_hash) parts.push('源 hash ' + report.source_hash);
+      if (report.converter_version) parts.push('转换器 ' + report.converter_version);
+      meta.textContent = parts.join(' · ');
+      panel.appendChild(meta);
+    }
+    // source_error
+    if (report.source_error) {
+      panel.appendChild(node('p', 'import-report-error', '源错误：' + report.source_error));
+    }
+    // invalid 详情
+    if (Array.isArray(report.invalid) && report.invalid.length) {
+      panel.appendChild(node('div', 'import-report-section-title', '无效条目（已跳过）'));
+      const ul = node('ul', 'import-report-list');
+      for (const item of report.invalid) {
+        const label = item.comment || item.name || item.identifier || ('#' + (item.index ?? '?'));
+        ul.appendChild(node('li', 'import-report-item invalid', '[' + (item.index ?? '?') + '] ' + label + ' — ' + (item.reason || '')));
+      }
+      panel.appendChild(ul);
+    }
+    // needs_review 详情
+    if (Array.isArray(report.needs_review) && report.needs_review.length) {
+      panel.appendChild(node('div', 'import-report-section-title', '需人工复核（已写入但不触发）'));
+      const ul = node('ul', 'import-report-list');
+      for (const item of report.needs_review) {
+        const label = item.comment || item.name || item.identifier || ('#' + (item.index ?? '?'));
+        ul.appendChild(node('li', 'import-report-item review', '[' + (item.index ?? '?') + '] ' + label + ' — ' + (item.reason || '')));
+      }
+      panel.appendChild(ul);
+    }
+    return panel;
   }
   function message(error) { return AIRPApi.errorMessage(error && error.data, error && error.message || String(error)); }
   function setStatus(text, error) {
@@ -294,18 +361,27 @@
   async function renderWorldbook() {
     const view = $('#view'); view.replaceChildren(); const box = card('角色世界书', true); const form = node('div', 'runtime-form'); box.appendChild(form); view.appendChild(box);
     form.appendChild(characterSelector(renderWorldbook).wrap);
+    // E-P1-5：复显最近一次世界书导入诊断（advisory/invalid/needs_review）
+    if (state.lastLorebookReport) {
+      const reportPanel = renderImportReport(state.lastLorebookReport, 'worldbook');
+      if (reportPanel) form.appendChild(reportPanel);
+    }
     if (!state.characterId) { form.appendChild(node('p', 'runtime-muted', '没有可读取的角色。')); return; }
     let book = {};
     try { book = await client.request('GET', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook'); }
     catch (error) { if (error.status !== 404) throw error; setStatus('该角色尚无世界书；保存后创建'); }
     // 条目级操作列
     const entries = book.entries || [];
-    const saveBook = async (newEntries) => {
-      const updated = Object.assign({}, book, { entries: newEntries });
-      await task('保存世界书', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook', updated));
-      setStatus('世界书已保存（' + newEntries.length + ' 条）');
+    // E-P1-5：saveBookRaw 捕获 PUT 响应中的 import_report，存入 state 供重新渲染复显。
+    const saveBookRaw = async (body, countFallback) => {
+      const resp = await task('保存世界书', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook', body));
+      state.lastLorebookReport = (resp && resp.import_report) ? resp.import_report : null;
+      const count = resp && resp.entries_count != null ? resp.entries_count : countFallback;
+      const diagSuffix = resp && resp.import_report ? ' · 诊断已显示' : '';
+      setStatus('世界书已保存（' + count + ' 条' + diagSuffix + '）');
       renderWorldbook();
     };
+    const saveBook = (newEntries) => saveBookRaw(Object.assign({}, book, { entries: newEntries }), newEntries.length);
     if (entries.length) {
       const list = node('div', 'runtime-list');
       entries.forEach((entry, idx) => {
@@ -365,7 +441,7 @@
     const jaBody = node('div', 'ja-body'); jaBody.style.display = 'none';
     jaBody.append(node('div', 'ja-warn', '⚠ 保存会整体替换世界书全部条目——按条编辑中的未保存修改将被覆盖。'));
     const editor = input('规范化世界书 JSON', json(book), { multiline: true, code: true });
-    jaBody.append(editor.wrap, node('div', 'ja-actions', button('保存 JSON（整体替换）', () => task('保存世界书', () => client.request('PUT', '/v1/characters/' + encodeURIComponent(state.characterId) + '/lorebook', parseJson(editor.control.value, '世界书'))), 'btn-secondary')));
+    jaBody.append(editor.wrap, node('div', 'ja-actions', button('保存 JSON（整体替换）', () => saveBookRaw(parseJson(editor.control.value, '世界书'), (parseJson(editor.control.value, '世界书').entries || []).length), 'btn-secondary')));
     ja.append(jaBar, jaBody);
     form.appendChild(ja);
   }
@@ -374,6 +450,11 @@
     const view = $('#view'); view.replaceChildren();
     const presets = await client.request('GET', '/v1/presets');
     const box = card('预设', false); const form = node('div', 'runtime-form'); box.appendChild(form); view.appendChild(box);
+    // E-P1-5：复显最近一次 preset 导入诊断（advisory/invalid/needs_review）
+    if (state.lastPresetReport) {
+      const reportPanel = renderImportReport(state.lastPresetReport, 'preset');
+      if (reportPanel) form.appendChild(reportPanel);
+    }
     const pick = selector('已导入预设', presets, presets[0] || '', async value => { editor.control.value = json(await task('读取预设', () => client.request('GET', '/v1/presets/' + encodeURIComponent(value)))); }); form.appendChild(pick.wrap);
     const editor = input('Prompt 列表', presets.length ? json(await client.request('GET', '/v1/presets/' + encodeURIComponent(presets[0]))) : '[]', { multiline: true, code: true }); form.appendChild(editor.wrap);
     const importer = card('导入新预设', true); const importForm = node('div', 'runtime-form'); importer.appendChild(importForm); view.appendChild(importer);
@@ -381,7 +462,12 @@
     importForm.appendChild(button('校验并导入', async () => {
       parseJson(raw.control.value, '预设');
       const result = await task('导入预设', () => client.request('POST', '/v1/presets/import', { preset_id: id.control.value.trim(), preset_json: raw.control.value }));
-      editor.control.value = json(result);
+      // E-P1-5：捕获 import_report 并重新渲染以显示诊断面板。
+      // 修复旧 bug：原代码把整个 import 响应灌进 editor，但响应是 {preset_id, prompts_count, import_report}，
+      // 不是 canonical preset；正确行为是重新渲染让 selector 显示新导入的 preset。
+      state.lastPresetReport = (result && result.import_report) ? result.import_report : null;
+      setStatus('预设已导入：' + (result && result.preset_id ? result.preset_id : '') + '（' + (result && result.prompts_count != null ? result.prompts_count : 0) + ' prompts）');
+      renderPresets();
     }, 'btn-primary'));
   }
 

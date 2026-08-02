@@ -251,6 +251,31 @@ test('console-runtime implements #304 new UI components', async () => {
   assert.doesNotMatch(rt, /renderPresets[\s\S]*?Provider 模型/, 'presets page must not render model card');
 });
 
+// E-P1-5：Worldbook/Preset 诚实性——WebUI 必须消费 import_report，暴露 advisory/invalid/needs_review
+test('console-runtime consumes import_report for worldbook/preset honesty (E-P1-5)', async () => {
+  const rt = await readFile(new URL('../assets/console-runtime.js', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../assets/components.css', import.meta.url), 'utf8');
+  // state 持有最近一次诊断
+  assert.match(rt, /lastLorebookReport/, 'state must track last lorebook report');
+  assert.match(rt, /lastPresetReport/, 'state must track last preset report');
+  // renderImportReport helper 存在，且处理 advisory/invalid/needs_review
+  assert.match(rt, /function renderImportReport/, 'missing renderImportReport helper');
+  assert.match(rt, /advisory_preserved/, 'renderImportReport must surface advisory_preserved count');
+  assert.match(rt, /import-report-item invalid/, 'renderImportReport must render invalid items');
+  assert.match(rt, /import-report-item review/, 'renderImportReport must render needs_review items');
+  // advisory 运行时不消费的提示文案
+  assert.match(rt, /运行时不消费/, 'must warn advisory fields are not consumed at runtime');
+  // saveBookRaw 捕获 PUT lorebook 响应的 import_report
+  assert.match(rt, /saveBookRaw[\s\S]*?import_report/, 'saveBookRaw must capture import_report from PUT response');
+  // renderPresets 捕获 POST import 响应的 import_report
+  assert.match(rt, /renderPresets[\s\S]*?import_report/, 'renderPresets must capture import_report from POST response');
+  // 旧 bug 已修：不再把整个 import 响应灌进 editor
+  assert.doesNotMatch(rt, /editor\.control\.value = json\(result\)/, 'must not dump entire import response into editor');
+  // CSS 诊断面板样式
+  assert.match(css, /\.import-report\b/, 'components.css must style .import-report panel');
+  assert.match(css, /\.import-report-tag\.warn/, 'components.css must style warn tag');
+});
+
 test('backup page explicitly stays unavailable without calling a backup API', () => {
   assert.match(backupPage, /data-screen="backup"/);
   assert.ok(consoleRuntime.includes("backup: () => renderUnavailable('backup')"));
