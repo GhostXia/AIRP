@@ -39,7 +39,6 @@ mod tests {
     use crate::error::AirpError;
     use crate::revision::atomic::read_current_revision;
     use crate::types::{CharacterId, SessionId, UserId};
-    use crate::ulid;
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
