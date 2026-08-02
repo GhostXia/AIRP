@@ -32,7 +32,9 @@ async function waitForHistory(context, payload, predicate, timeoutMs = 10_000) {
 }
 
 async function waitForOnboardingStep(page, heading, timeoutMs = 15_000) {
-  await page.getByRole('heading', { name: heading, exact: true }).waitFor({ state: 'visible', timeout: timeoutMs });
+  const title = page.locator('#onboarding-card .wizard-head h1');
+  await title.waitFor({ state: 'visible', timeout: timeoutMs });
+  assert.match(await title.textContent() || '', new RegExp(heading));
 }
 
 const browser = await chromium.launch({ headless: true, executablePath, args: [`--ignore-certificate-errors-spki-list=${chromeSpki}`] });
