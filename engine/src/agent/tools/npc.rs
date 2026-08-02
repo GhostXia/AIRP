@@ -66,6 +66,9 @@ impl Tool for NpcActionTool {
             // 持有 session_lock 直到 append_to_current + memory revision commit
             // 完成，与 advance_plot / trigger_world_event / seal_volume 共享
             // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
+            //
+            // LOCK-ORDER: 单锁（§2.6），不与 state_lock 嵌套。
+            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.6 / §3 R2 / §4 A1 / §4 A3。
             let session_boundary = session_lock(cid.as_str(), sid.as_ref());
             let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
 

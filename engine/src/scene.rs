@@ -16,6 +16,8 @@ type SceneLockRegistry = Mutex<HashMap<SceneLockKey, Weak<Mutex<()>>>>;
 static SCENE_WRITE_LOCKS: OnceLock<SceneLockRegistry> = OnceLock::new();
 
 fn scene_write_lock(root: &Path, scene_id: &SceneId) -> Arc<Mutex<()>> {
+    // LOCK-ORDER: scene advisory 锁（§1.3 / R5）。独立，不与资源锁嵌套。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §1.3 / §3 R5。
     let key = SceneLockKey {
         root: root.to_path_buf(),
         scene_id: scene_id.as_str().to_string(),
