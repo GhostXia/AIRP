@@ -69,6 +69,12 @@ impl StateService {
     /// `character_lock` read guard + `state_lock` mutex guard held for the
     /// entire read-modify-write critical section, so concurrent tool calls
     /// (e.g. `update_relationship` + `advance_plot`) cannot lose updates.
+    ///
+    /// Callers that already hold `character_lock.read()` externally (e.g.
+    /// `advance_plot` after #437 fix path 4) must use [`Self::mutate_locked`]
+    /// to avoid a re-entrant `RwLock::read` on `character_lock` — std
+    /// `RwLock` recursive read breaks exclusivity semantics on Windows
+    /// SRWLOCK and may deadlock on some pthread implementations.
     pub fn mutate<F>(
         &self,
         character_id: &CharacterId,
@@ -82,6 +88,32 @@ impl StateService {
         // 合同：docs/LOCK-ORDER-CONTRACT.md §2.2 / §2.3 / §3 R1 / §3 R2 / §4 A1。
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        self.mutate_locked(character_id, mutate)
+    }
+
+    /// Same as [`Self::mutate`] but **does not** acquire `character_lock.read()`.
+    ///
+    /// Caller must already hold `character_lock.read()` (or `.write()`) for
+    /// `character_id` before calling this method — typically as the outermost
+    /// R1 gate before acquiring `session_lock`. This variant exists to break
+    /// the `StateService::mutate` re-entrant `RwLock::read` cycle that
+    /// prevented `advance_plot` from acquiring `character_lock.read()`
+    /// externally (PR #436 §2.3 R1 exception; closed by #437 fix path 4).
+    ///
+    /// Only acquires `state_lock` internally. R2 still applies: if the caller
+    /// holds `session_lock`, the nesting direction is `session → state`
+    /// (legal, only `advance_plot`).
+    ///
+    /// LOCK-ORDER: caller-held character.read → [caller-held session?] → state.lock。
+    /// 合同：docs/LOCK-ORDER-CONTRACT.md §2.2 / §2.3 / §3 R1 / §3 R2 / §4 A1。
+    pub fn mutate_locked<F>(
+        &self,
+        character_id: &CharacterId,
+        mutate: F,
+    ) -> Result<StateSnapshot, AirpError>
+    where
+        F: FnOnce(&mut serde_json::Value) -> Result<(), AirpError>,
+    {
         let state_boundary = state_lock(character_id.as_str());
         let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
         let _state_track = lock_order::track_state();
