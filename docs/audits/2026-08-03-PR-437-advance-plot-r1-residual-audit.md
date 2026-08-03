@@ -207,19 +207,23 @@ fix path 4 实现正确闭合了 R1 残留 TOCTOU 风险，合同更新自洽，
 
 ## 5. 非阻塞意见（写入 PR 后续 issue）
 
-| 编号 | 类型 | 描述 | 建议时机 |
+PR #439 合并（commit 57e4b7e）后，按 AGENTS.md「审计遗留项处理」规则，以下 3 条非阻塞意见已写入 GitHub issue：
+
+| 编号 | 类型 | 描述 | 跟踪 issue |
 |---|---|---|---|
-| W-01 | Pre-existing race | #422 lock-map cleanup race：`delete_character` 在 write guard 释放前移除 `CHARACTER_LOCKS` / `STATE_LOCKS` 中的 entry，允许新 caller（如 `advance_plot`）创建不同的 lock 实例并并发执行。这在 Windows 上导致 `fs::remove_dir_all` 失败（`DirectoryNotEmpty`），在 Linux 上可能导致 TOCTOU（`advance_plot` 在 `delete_character` 删除目录后仍写入 `live.json`，因为使用了不同 lock 实例）。修复方案：将 `remove_deleted_*_lock` 调用移到 `_guard` drop 之后（例如显式 `drop(_guard)` 后再清理 lock map）。 | 后续 issue（独立 PR） |
-| W-02 | R1 运行时强制 | §6.1 仍仅覆盖 R2 session↔state。R1（character 外层门控）的运行时 `debug_assert!` 未交付（与 PR #436 W-03 同一缺口）。建议在 `lock_order` 模块新增 `track_character_read()` / `track_character_write()`，在持 character_lock 时 set thread-local flag，acquire session/state_lock 时检查。 | 后续 issue（独立 PR，与 PR #436 W-03 合并） |
-| W-03 | 测试覆盖强度 | CodeRabbit PR #439 comment 3：当前并发回归测试证明「no-deadlock + no-TOCTOU」，但不直接证明 `character_lock.read()` 阻塞了 `delete_character` 的 `character_lock.write()`。建议新增确定性测试：显式持有 write guard、断言 `advance_plot` 无法推进、释放后再断言推进。 | 后续 issue（与 W-02 合并） |
+| W-01 | Pre-existing race | #422 lock-map cleanup race：`delete_character` 在 write guard 释放前移除 `CHARACTER_LOCKS` / `STATE_LOCKS` 中的 entry，允许新 caller（如 `advance_plot`）创建不同的 lock 实例并并发执行。这在 Windows 上导致 `fs::remove_dir_all` 失败（`DirectoryNotEmpty`），在 Linux 上可能导致 TOCTOU（`advance_plot` 在 `delete_character` 删除目录后仍写入 `live.json`，因为使用了不同 lock 实例）。修复方案：将 `remove_deleted_*_lock` 调用移到 `_guard` drop 之后（例如显式 `drop(_guard)` 后再清理 lock map）。 | [#440](https://github.com/GhostXia/AIRP/issues/440) |
+| W-02 | R1 运行时强制 | §6.1 仍仅覆盖 R2 session↔state。R1（character 外层门控）的运行时 `debug_assert!` 未交付（与 PR #436 W-03 同一缺口）。建议在 `lock_order` 模块新增 `track_character_read()` / `track_character_write()`，在持 character_lock 时 set thread-local flag，acquire session/state_lock 时检查。 | [#438](https://github.com/GhostXia/AIRP/issues/438)（合并到 PR #436 W-03/W-04，已通过 [comment 5163651867](https://github.com/GhostXia/AIRP/issues/438#issuecomment-5163651867) 补充 PR #439 后的更新：advance_plot R1 例外已闭合，无需 `track_character_read_skip()` 过渡） |
+| W-03 | 测试覆盖强度 | CodeRabbit PR #439 comment 3：当前并发回归测试证明「no-deadlock + no-TOCTOU」，但不直接证明 `character_lock.read()` 阻塞了 `delete_character` 的 `character_lock.write()`。建议新增确定性测试：显式持有 write guard、断言 `advance_plot` 无法推进、释放后再断言推进。 | [#438](https://github.com/GhostXia/AIRP/issues/438)（合并到 W-02，确定性测试设计见同一 comment） |
+
+**依赖关系**：建议 #440 先修（lock-map cleanup race），#438 测试在 #440 修复基础上简化 PR #439 回归测试的 error matcher（不再需要接受 `Io(NotFound)`）。
 
 ## 6. 审计结论
 
 **通过（无阻塞）**。
 
-PR #439（closes issue #437）通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合了 PR #436 残留的 `advance_plot` R1 TOCTOU 风险。实现正确，合同更新自洽，W-01 措辞修正准确，回归测试覆盖 no-deadlock + no-TOCTOU 不变式（确定性串行化证明见 W-03 follow-up）。R1 例外路径数从 1 降为 0。
+PR #439（closes issue #437）通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合了 PR #436 残留的 `advance_plot` R1 TOCTOU 风险。实现正确，合同更新自洽，W-01 措辞修正准确，回归测试覆盖 no-deadlock + no-TOCTOU 不变式（确定性串行化证明见 W-03 follow-up，已合并到 #438）。R1 例外路径数从 1 降为 0。
 
-非阻塞意见 W-01（#422 lock-map cleanup race）、W-02（R1 运行时强制）和 W-03（确定性串行化测试）按 AGENTS.md「审计遗留项处理」规则，PR 合并后由执行审计的 agent 写入 GitHub issue。
+非阻塞意见 W-01（#422 lock-map cleanup race → #440）、W-02（R1 运行时强制 → #438）和 W-03（确定性串行化测试 → #438）按 AGENTS.md「审计遗留项处理」规则，PR 合并后已写入 GitHub issue。
 
 ## 7. Re-audit：CI 失败后测试修正（2026-08-03）
 
