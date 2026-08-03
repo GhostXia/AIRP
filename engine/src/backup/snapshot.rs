@@ -2,7 +2,7 @@
 //!
 //! ## 创建流程
 //!
-//! 1. acquire `BACKUP_LOCK`（进程内 `tokio::sync::Mutex`）串行化 backup vs backup / restore
+//! 1. acquire `BACKUP_LOCK`（进程内 `std::sync::Mutex`）串行化 backup vs backup / restore
 //! 2. 生成 `backup_id`（uuid v4 simple，32 hex）
 //! 3. 创建 staging 目录 `data_root/backups/.staging-{backup_id}/files/`
 //! 4. walk `data_root`（排除 `backups/` 自身 + secret 文件），逐文件复制到 staging `files/`
@@ -19,6 +19,16 @@
 //! 调用方应在维护窗口或无活跃 session 时执行 backup。`PreDelete` / `PreRestoreRollback`
 //! 场景由调用方持有的 character_lock / backup_lock 自然串行化相关资源。
 //! follow-up issue 将实现跨资源强一致性备份。
+//!
+//! ## Scoped restore（v1）
+//!
+//! v1 支持 `BackupScope::Full` / `Character` / `Session` 三种 scope 的 restore：
+//! - **Full**：替换 `data_root` 下所有顶层条目（除 `backups/`），见 `swap_full_data_root`
+//! - **Character / Session**：仅替换 `subtree_prefix` 子树（如 `characters/alice/`），
+//!   其他 data_root 内容不受影响，见 `swap_scoped_subtree`
+//!
+//! 这是 #342 pre-delete 备份可恢复能力的核心保证：删除 character/session 时创建的
+//! scoped backup 能 restore 回原资源而不影响其他 character/session。
 
 use crate::error::AirpError;
 use crate::revision::manifest::{file_sha256_hex, ApprovedFile};
@@ -38,9 +48,17 @@ use super::manifest::{
 /// 串行化 backup vs backup / backup vs restore，防止 staging 冲突与 tree hash 不一致。
 /// 跨进程安全由调用方负责（AIRP daemon 单进程前台运行，AGENTS.md）。
 ///
+/// 类型为 `std::sync::Mutex`（非 `tokio::sync::Mutex`）：backup/restore 是同步阻塞
+/// 文件 IO，调用方（HTTP handler / agent tool）应通过 `tokio::task::spawn_blocking`
+/// 把整个调用搬到 blocking pool，避免占用 tokio worker 线程。
+///
 /// LOCK-ORDER: 全局叶锁（与 `revision::atomic::COMMIT_LOCK` 同层级）。持此锁时不得
 /// 获取任何 per-character / per-session / per-state 资源锁。调用方在 character_lock
 /// 内调用 backup 时合法（外→内序列）。
+///
+/// poison 恢复：guarded value 是 `()`，poison 仅表示持锁线程 panic，无实际状态损坏。
+/// 用 `unwrap_or_else(|p| p.into_inner())` 恢复，与 `character_lock` / `session_lock`
+/// / `state_lock` 既有模式一致。
 pub(crate) static BACKUP_LOCK: Mutex<()> = Mutex::new(());
 
 /// backup 创建选项。
@@ -66,9 +84,7 @@ pub(crate) struct CreatedBackup {
 ///
 /// 全流程串行化在 `BACKUP_LOCK` 内。返回 manifest 与最终 backup 目录路径。
 pub(crate) fn create_backup(opts: &CreateBackupOptions) -> Result<CreatedBackup, AirpError> {
-    let _guard = BACKUP_LOCK
-        .lock()
-        .map_err(|e| AirpError::Internal(format!("BACKUP_LOCK poisoned: {e}")))?;
+    let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     create_backup_locked(opts)
 }
 
@@ -389,9 +405,7 @@ pub(crate) fn verify_backup(
     data_root: &Path,
     backup_id: &str,
 ) -> Result<(usize, String), AirpError> {
-    let _guard = BACKUP_LOCK
-        .lock()
-        .map_err(|e| AirpError::Internal(format!("BACKUP_LOCK poisoned: {e}")))?;
+    let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
     let manifest = read_backup_manifest(data_root, backup_id)?;
     let backup_dir = data_root.join("backups").join(backup_id);
@@ -403,9 +417,7 @@ pub(crate) fn verify_backup(
 ///
 /// 不可恢复。删除前会校验 manifest 合法性（防止误删非 backup 目录）。
 pub(crate) fn delete_backup(data_root: &Path, backup_id: &str) -> Result<(), AirpError> {
-    let _guard = BACKUP_LOCK
-        .lock()
-        .map_err(|e| AirpError::Internal(format!("BACKUP_LOCK poisoned: {e}")))?;
+    let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
     // 先校验 manifest 合法性，防止误删
     let manifest = read_backup_manifest(data_root, backup_id)?;
@@ -431,11 +443,21 @@ pub(crate) fn delete_backup(data_root: &Path, backup_id: &str) -> Result<(), Air
 /// 3. 创建回滚 backup（`source: PreRestoreRollback`，`scope: Full`）——保护当前 data_root
 /// 4. staging：`data_root/.restore-staging-{backup_id}/`，从 backup `files/` 逐文件复制
 ///    （路径经 `validate_approved_path` + `safe_resolve_for_write` 双重校验）
-/// 5. 移除 `data_root` 下除 `backups/` 与 staging 外的所有顶层条目
-/// 6. 原子 rename staging 内顶层条目 → `data_root/`
-/// 7. post-restore 校验：重新枚举 `data_root`（排除 `backups/`），与 manifest `files` 对比
+/// 5. 根据 `manifest.scope` 选择替换策略：
+///    - **Full scope**：移除 `data_root` 下除 `backups/` 与 staging 外的所有顶层条目，
+///      再 rename staging 内顶层条目 → `data_root/`
+///    - **Character / Session scope**：仅替换 `subtree_prefix` 子树
+///      （如 `characters/alice/`），其他 data_root 内容不受影响
+/// 6. post-restore 校验：重新枚举恢复范围，与 manifest `files` 对比
 ///    （允许 secret 文件缺失，因为 restore 不写 secret）
-/// 8. 失败任一步：保留 staging + 回滚备份，返回 `Internal`，**不**清理现场供人工恢复
+/// 7. 失败任一步：保留 staging + 回滚备份，返回 `Internal`，**不**清理现场供人工恢复
+///
+/// ## Scoped restore 不变量（v1）
+///
+/// - 仅替换 `manifest.scope.subtree_prefix()` 子树；其他 character / session /
+///   顶层文件保持原样
+/// - 替换前移除现有子树（若存在），再 rename staging 子树到目标位置
+/// - 子树路径组件经 `validate_approved_path` 校验，拒绝 `..` / 绝对路径 / 反斜杠
 ///
 /// ## 返回
 ///
@@ -444,9 +466,7 @@ pub(crate) fn restore_backup(
     data_root: &Path,
     backup_id: &str,
 ) -> Result<(String, String), AirpError> {
-    let _guard = BACKUP_LOCK
-        .lock()
-        .map_err(|e| AirpError::Internal(format!("BACKUP_LOCK poisoned: {e}")))?;
+    let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
     // 1. 校验目标 backup 完整性
     let manifest = read_backup_manifest(data_root, backup_id)?;
@@ -509,7 +529,32 @@ pub(crate) fn restore_backup(
     }
     sync_dir(&staging_dir)?;
 
-    // 5. 移除 data_root 下除 backups/ 与 staging 外的所有顶层条目
+    // 5. 根据 scope 选择替换策略
+    let subtree_prefix = manifest.scope.subtree_prefix();
+    if subtree_prefix.is_empty() {
+        // Full scope：替换 data_root 下所有顶层条目（除 backups/ 与 staging）
+        swap_full_data_root(data_root, &staging_dir, &rollback_id)?;
+    } else {
+        // scoped：仅替换 subtree_prefix 子树
+        swap_scoped_subtree(data_root, &staging_dir, &subtree_prefix, &rollback_id)?;
+    }
+    sync_dir(data_root)?;
+
+    // 6. post-restore 校验：重新枚举恢复范围，与 manifest.files 对比
+    let expected_files: std::collections::HashSet<String> =
+        manifest.files.iter().map(|f| f.path.clone()).collect();
+    post_restore_verify(data_root, &manifest, &expected_files)?;
+
+    Ok((backup_id.to_string(), rollback_id))
+}
+
+/// Full scope restore：移除 data_root 下除 `backups/` 与 staging 外的所有顶层条目，
+/// 再 rename staging 内顶层条目 → `data_root/`。
+fn swap_full_data_root(
+    data_root: &Path,
+    staging_dir: &Path,
+    rollback_id: &str,
+) -> Result<(), AirpError> {
     let staging_name = staging_dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -534,8 +579,8 @@ pub(crate) fn restore_backup(
     }
     sync_dir(data_root)?;
 
-    // 6. 原子 rename staging 内顶层条目 → data_root/
-    let staging_entries = collect_top_level_entries(&staging_dir);
+    // rename staging 内顶层条目 → data_root/
+    let staging_entries = collect_top_level_entries(staging_dir);
     for entry in &staging_entries {
         let name = entry
             .file_name()
@@ -551,15 +596,122 @@ pub(crate) fn restore_backup(
         })?;
     }
     // 清理空 staging 目录
-    let _ = fs::remove_dir(&staging_dir);
-    sync_dir(data_root)?;
+    let _ = fs::remove_dir(staging_dir);
+    Ok(())
+}
 
-    // 7. post-restore 校验：重新枚举 data_root（排除 backups/），与 manifest.files 对比
-    let expected_files: std::collections::HashSet<String> =
-        manifest.files.iter().map(|f| f.path.clone()).collect();
-    post_restore_verify(data_root, &manifest, &expected_files)?;
+/// Scoped restore：仅替换 `data_root/{subtree_prefix}/` 子树，
+/// 其他 data_root 内容不受影响。
+///
+/// 流程：
+/// 1. 校验 `subtree_prefix` 路径组件合法（拒绝 `..` / 绝对路径 / 反斜杠 / 空字节）
+/// 2. 计算目标 `data_root/{subtree_prefix}/` 与源 `staging/{subtree_prefix}/`
+/// 3. 若目标存在，rename 到 trash 目录再 remove_dir_all（避免 rename 覆盖失败）
+/// 4. 确保 `data_root/{subtree_prefix}` 的父目录存在
+/// 5. rename `staging/{subtree_prefix}/` → `data_root/{subtree_prefix}/`
+/// 6. 清理 staging 下空的祖先目录
+fn swap_scoped_subtree(
+    data_root: &Path,
+    staging_dir: &Path,
+    subtree_prefix: &str,
+    rollback_id: &str,
+) -> Result<(), AirpError> {
+    // 路径安全：subtree_prefix 必须是合法相对路径
+    crate::revision::tree_hash::validate_approved_path(subtree_prefix).map_err(|e| {
+        AirpError::Internal(format!(
+            "scoped restore: subtree_prefix {:?} 非法: {e}",
+            subtree_prefix
+        ))
+    })?;
 
-    Ok((backup_id.to_string(), rollback_id))
+    let dest_subtree =
+        crate::data_dir::safe_resolve_for_write(data_root, subtree_prefix).map_err(|e| {
+            AirpError::Internal(format!(
+                "scoped restore: 目标子树 {:?} 解析失败: {e}",
+                subtree_prefix
+            ))
+        })?;
+    let src_subtree = crate::data_dir::safe_resolve_for_write(staging_dir, subtree_prefix)
+        .map_err(|e| {
+            AirpError::Internal(format!(
+                "scoped restore: 源子树 {:?} 解析失败: {e}",
+                subtree_prefix
+            ))
+        })?;
+    if !src_subtree.exists() {
+        return Err(AirpError::Internal(format!(
+            "scoped restore: staging 中不存在子树 {}（backup 可能是空的，或 manifest 损坏）",
+            subtree_prefix
+        )));
+    }
+
+    // 若目标子树存在，先移到 trash 再删（避免 rename 覆盖现有目录失败）
+    if dest_subtree.exists() {
+        let trash_dir =
+            data_root.join(format!(".restore-trash-{subtree_prefix}").replace('/', "-"));
+        if trash_dir.exists() {
+            fs::remove_dir_all(&trash_dir).map_err(|e| {
+                AirpError::Internal(format!(
+                    "scoped restore: 清理残留 trash {} 失败: {e}",
+                    trash_dir.display()
+                ))
+            })?;
+        }
+        fs::rename(&dest_subtree, &trash_dir).map_err(|e| {
+            AirpError::Internal(format!(
+                "scoped restore: rename 现有子树 {} -> trash 失败: {e}",
+                dest_subtree.display()
+            ))
+        })?;
+        fs::remove_dir_all(&trash_dir).map_err(|e| {
+            AirpError::Internal(format!(
+                "scoped restore: 删除 trash {} 失败: {e}（回滚 backup 仍可用: {rollback_id}）",
+                trash_dir.display(),
+            ))
+        })?;
+    }
+
+    // 确保目标父目录存在
+    if let Some(parent) = dest_subtree.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // rename staging 子树 → data_root 子树
+    fs::rename(&src_subtree, &dest_subtree).map_err(|e| {
+        AirpError::Internal(format!(
+            "scoped restore: rename staging {} -> data_root {} 失败: {e}（回滚 backup 仍可用: {rollback_id}）",
+            src_subtree.display(),
+            dest_subtree.display()
+        ))
+    })?;
+
+    // 清理 staging 下空的祖先目录（如 staging/characters/ 已空则删）
+    cleanup_empty_staging_ancestors(staging_dir, subtree_prefix);
+
+    // 清理空 staging 根
+    let _ = fs::remove_dir(staging_dir);
+    Ok(())
+}
+
+/// 从 staging 根开始向下清理 `subtree_prefix` 路径中已空的祖先目录。
+/// 例如 `subtree_prefix = "characters/alice"`，清理 `staging/characters/`（若空）。
+fn cleanup_empty_staging_ancestors(staging_dir: &Path, subtree_prefix: &str) {
+    let components: Vec<&str> = subtree_prefix.split('/').collect();
+    if components.is_empty() {
+        return;
+    }
+    // 从最深的祖先往上尝试删除空目录
+    for depth in (1..components.len()).rev() {
+        let ancestor_rel = components[..depth].join("/");
+        let ancestor = staging_dir.join(&ancestor_rel);
+        if ancestor.is_dir()
+            && fs::read_dir(&ancestor)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false)
+        {
+            let _ = fs::remove_dir(&ancestor);
+        }
+    }
 }
 
 /// 收集目录下所有顶层条目（不递归）。
@@ -1249,5 +1401,53 @@ mod tests {
         assert_eq!(listed.len(), 2);
         // 源 backup 仍存在
         assert!(listed.iter().any(|m| m.backup_id == created.backup_id));
+    }
+
+    /// scoped (Character / Session) restore 仅替换目标子树，保留 data_root 下其他
+    /// 不相关数据。这是 #342 pre-delete 备份可恢复能力的核心保证：删除 alice 后
+    /// 创建的 PreDelete Character-scoped backup 必须能 restore 回 alice，且不影响 bob。
+    ///
+    /// 参见 `restore_backup` 的 `swap_scoped_subtree` 分支与 §"Scoped restore 不变量"。
+    #[test]
+    fn restore_scoped_backup_preserves_unrelated_data() {
+        let dir = tempdir().unwrap();
+        // data_root 下有两个 character，各自有数据
+        let alice_dir = dir.path().join("characters").join("alice");
+        let bob_dir = dir.path().join("characters").join("bob");
+        fs::create_dir_all(&alice_dir).unwrap();
+        fs::create_dir_all(&bob_dir).unwrap();
+        fs::write(alice_dir.join("card.json"), r#"{"name":"alice"}"#).unwrap();
+        fs::write(bob_dir.join("card.json"), r#"{"name":"bob"}"#).unwrap();
+
+        // 创建 alice 的 scoped backup
+        let opts = make_opts(
+            dir.path(),
+            BackupSource::Manual,
+            BackupScope::Character {
+                character_id: "alice".to_string(),
+            },
+        );
+        let created = create_backup(&opts).unwrap();
+
+        // 模拟删除 alice（直接 remove_dir_all，跳过 PreDelete backup 创建）
+        fs::remove_dir_all(&alice_dir).unwrap();
+        assert!(!alice_dir.exists(), "alice 应已被删除");
+
+        // restore alice 的 scoped backup —— 应成功
+        let (restored_from, _rollback_id) = restore_backup(dir.path(), &created.backup_id).unwrap();
+        assert_eq!(restored_from, created.backup_id);
+
+        // 关键不变量：bob 的数据未被改动
+        assert!(
+            bob_dir.join("card.json").exists(),
+            "scoped restore 不应改动 data_root 下其他 character，bob 的数据必须完好"
+        );
+        let bob_card = fs::read_to_string(bob_dir.join("card.json")).unwrap();
+        assert_eq!(bob_card, r#"{"name":"bob"}"#);
+
+        // alice 的数据应被恢复
+        assert!(alice_dir.join("card.json").exists());
+        let alice_card = fs::read_to_string(alice_dir.join("card.json")).unwrap();
+        assert_eq!(alice_card, r#"{"name":"alice"}"#);
     }
 }

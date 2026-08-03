@@ -11,13 +11,17 @@
 //! - `files`：批准文件集合（相对 data_root 路径 + per-file SHA-256 + 字节数）
 //! - `tree_sha256`：覆盖 `files` 子树的 `AIRP-TREE-SHA256-v1`
 //!
-//! 加载时强制不变量：
+//! 加载时（`from_json_bytes`）强制不变量：
 //! 1. `schema == 1`
 //! 2. `backup_id` 非空且为合法路径段
-//! 3. `files` 路径经 `validate_approved_path` 校验
-//! 4. `tree_sha256` 重新计算匹配
+//! 3. `data_schema_version` 不超过本引擎支持的最大值
+//! 4. `secrets_excluded == true`（v1 强制）
+//! 5. `files` 路径经 `validate_approved_path` 校验
 //!
-//! 任一失败拒绝该 backup，禁止部分加载或降级。
+//! 注：`tree_sha256` 与 per-file SHA-256 的**重新计算匹配**不在加载阶段做，
+//! 而是在 `verify_against_disk` 中针对磁盘 `files/` 子树完整重算并比对。
+//! `list_backups` 等只读场景只做加载阶段校验，不重算 hash（性能考虑）。
+//! 任一加载/校验失败拒绝该 backup，禁止部分加载或降级。
 
 use crate::error::AirpError;
 use crate::revision::manifest::ApprovedFile;

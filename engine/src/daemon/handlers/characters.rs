@@ -566,15 +566,26 @@ pub(in crate::daemon) async fn get_character_card(
 ///
 /// #342 E-P2-1：默认创建 `PreDelete` scoped backup，让删除可恢复。
 /// `?force=true` 跳过 pre-delete backup（advanced / testing）。
+///
+/// `delete_character` 内部执行同步文件 IO（pre-delete backup walk + `remove_dir_all`），
+/// 整段搬到 `spawn_blocking` 避免阻塞 tokio worker 线程。参考
+/// `restore_backup_endpoint` 与 `engine/src/agent/tools/analysis.rs` 的同模式。
 pub(in crate::daemon) async fn delete_character_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
     axum::extract::Query(params): axum::extract::Query<DeleteForceParams>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let backup_id = ChatService::new(&state.data_root).delete_character(&cid, params.force)?;
+    let data_root = state.data_root.clone();
+    let force = params.force;
+    let cid_str = cid.as_str().to_string();
+    let backup_id = tokio::task::spawn_blocking(move || {
+        ChatService::new(&data_root).delete_character(&cid, force)
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("delete_character join failed: {e}")))??;
     Ok(Json(serde_json::json!({
-        "deleted": cid.as_str(),
+        "deleted": cid_str,
         "status": "ok",
         "pre_delete_backup_id": backup_id,
     })))

@@ -41,6 +41,10 @@ pub(in crate::daemon) async fn create_session_endpoint(
 ///
 /// #342 E-P2-1：默认创建 `PreDelete` scoped backup，让删除可恢复。
 /// `?force=true` 跳过 pre-delete backup（advanced / testing）。
+///
+/// `delete_session` 内部执行同步文件 IO（pre-delete backup + `remove_dir_all`），
+/// 整段搬到 `spawn_blocking` 避免阻塞 tokio worker 线程。参考
+/// `delete_character_endpoint` 与 `restore_backup_endpoint` 的同模式。
 pub(in crate::daemon) async fn delete_session_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((character_id, session_id)): axum::extract::Path<(String, String)>,
@@ -48,10 +52,18 @@ pub(in crate::daemon) async fn delete_session_endpoint(
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
     let sid = SessionId::parse(&session_id)?;
-    let backup_id = ChatService::new(&state.data_root).delete_session(&cid, &sid, params.force)?;
+    let data_root = state.data_root.clone();
+    let force = params.force;
+    let cid_str = cid.as_str().to_string();
+    let sid_str = sid.to_string();
+    let backup_id = tokio::task::spawn_blocking(move || {
+        ChatService::new(&data_root).delete_session(&cid, &sid, force)
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("delete_session join failed: {e}")))??;
     Ok(Json(serde_json::json!({
-        "deleted": sid.to_string(),
-        "character_id": cid.as_str(),
+        "deleted": sid_str,
+        "character_id": cid_str,
         "status": "ok",
         "pre_delete_backup_id": backup_id,
     })))
