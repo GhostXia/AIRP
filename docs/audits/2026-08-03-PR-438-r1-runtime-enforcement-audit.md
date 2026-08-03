@@ -1,4 +1,4 @@
-# PR 独立审计：R1 运行时强制 + 回归测试（closes issue #438 W-03/W-04）
+# PR 独立审计：R1 运行时强制 + 回归测试 + lock-map cleanup race 修复（closes issue #438 W-03/W-04 + closes issue #440）
 
 > 审计日期：2026-08-03
 > 审计对象：本 PR `fix(engine): add R1 runtime enforcement + regression tests (closes #438 W-03/W-04)`
@@ -6,21 +6,22 @@
 > 审计基线：`main@d27c2c3`（合并 PR #439 后）
 > 审计依据：AGENTS.md「审计 Agent 守则」三原则——独立审计、可提己见、可质疑历史并查证
 > 关联合同：`docs/LOCK-ORDER-CONTRACT.md`
-> 关联 issue：[#438](https://github.com/GhostXia/AIRP/issues/438)（W-03 R1 运行时强制 + W-04 R1 回归测试）
+> 关联 issue：[#438](https://github.com/GhostXia/AIRP/issues/438)（W-03 R1 运行时强制 + W-04 R1 回归测试）、[#440](https://github.com/GhostXia/AIRP/issues/440)（lock-map cleanup race，PR #439 审计 W-01 follow-up）
 >
-> 命名说明：文件名沿用 `PR-438` 前缀（与 issue #438 对齐，本 PR 审计启动时 PR 号未分配）。
+> 命名说明：文件名沿用 `PR-438` 前缀（与 issue #438 对齐，本 PR 审计启动时 PR 号未分配）。本 PR 实际同时 closes #438 + #440（#440 修复与 #438 R1 强制共享 `engine/src/domain/{chat.rs, persona.rs}` 修改面，issue #440「建议时机」明确建议合并同一 PR）。
 
 ## 1. 审计范围
 
-本审计独立复核本 PR（closes issue #438 W-03/W-04）的五项内容：
+本审计独立复核本 PR 的六项内容：
 
-1. **R1 运行时强制**（W-03）：`lock_order` 模块新增 `track_character_read()` / `track_character_write()`；`track_session()` / `track_state()` 增补 R1 `debug_assert!`
+1. **R1 运行时强制**（W-03，closes #438）：`lock_order` 模块新增 `track_character_read()` / `track_character_write()`；`track_session()` / `track_state()` 增补 R1 `debug_assert!`
 2. **R1 路径覆盖**：所有 `character_lock` / `session_lock` / `state_lock` acquire 点补齐 `track_character_read()` 调用
 3. **LorebookService::write 遗漏修复**：R1 强制上线即捕获的漏调 `track_character_read()` 遗漏
-4. **R1 回归测试**（W-04）：3 条新增并发测试（`trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 并发）+ 共享辅助 `run_r1_tool_vs_delete_character`
+4. **R1 回归测试**（W-04，closes #438）：3 条新增并发测试（`trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 并发）+ 共享辅助 `run_r1_tool_vs_delete_character`
 5. **合同更新**：`LOCK-ORDER-CONTRACT.md` §6.1 / §6.7 / §7
+6. **lock-map cleanup race 修复**（closes #440）：`delete_character` / `delete_session` / `delete_persona` 的 `remove_deleted_*_lock` 调用移到 write guard 显式 drop 之后
 
-审计方法：读源码 + 读合同 + 与 `main@d27c2c3` 对照 + 独立判断 R1 运行时强制实现是否正确覆盖所有路径。**不**把开发 agent 的结论或 PR #436/#439 审计报告的 W-03 建议作为不可质疑的前提。
+审计方法：读源码 + 读合同 + 与 `main@d27c2c3` 对照 + 独立判断 R1 运行时强制实现是否正确覆盖所有路径、#440 race 修复是否正确闭合。**不**把开发 agent 的结论或 PR #436/#439 审计报告的 W-01/W-03 建议作为不可质疑的前提。
 
 ## 2. 独立发现
 
@@ -182,6 +183,131 @@ issue #438 W-04 要求 4 条回归测试，包括 `run_seal_flow`。本 PR 仅�
 
 新增「R1 运行时强制 + 回归测试验收记录」段落，记录测试数字与 §6.1 状态升级。✅
 
+### 2.6 lock-map cleanup race 修复（closes #440）✅
+
+**race 背景**（独立复核 issue #440 描述 + `main@d27c2c3` 源码）：
+
+`main@d27c2c3` 的 `delete_character`（`chat.rs:871-886`）、`delete_session`（`chat.rs:901-916`）、`delete_persona`（`persona.rs:330-350`）在 **write guard 释放之前** 调用 `remove_deleted_*_lock` 移除 lock-map 条目。此时：
+
+1. `_guard` 仍持有旧 `Arc<RwLock<()>>` 的 write lock。
+2. 但 `CHARACTER_LOCKS` / `STATE_LOCKS` / `PERSONA_LOCKS` 中该 key 的 entry 已被移除。
+3. 新 caller（如 `advance_plot`、`npc_action`）调 `character_lock(cid)` → map 查不到 → **创建新 `Arc<RwLock<()>>`** → acquire `read()` 立即成功（新 Arc 无 contention）。
+4. 新 caller 进入临界区，访问已被 `data_dir::delete_character` 删除的目录。
+
+**影响**（独立复核）：
+- Windows：`fs::remove_dir_all` 在 `delete_character` 持 write guard 期间被并发文件创建打败 → `DirectoryNotEmpty`。已在 PR #439 回归测试 CI 中观察到。
+- Linux / 通用：TOCTOU——`advance_plot` 在 `delete_character` 删除目录后用新 Arc 进入临界区，`StateService::mutate_locked` 内 `fs::create_dir_all(&state_dir)` 重新创建 dir → 写 `live.json`，导致 character 目录在 `delete_character` 成功后被「复活」部分文件（半删状态）。
+
+**关键区分**（独立判断）：这**不是** R1 TOCTOU 失效——R1（`character_lock.read()` 外层门控）在 PR #439 后已正确闭合。问题是 lock-map cleanup 过早移除 entry，使新 caller 用新 Arc 绕过了 R1 锁（用新 Arc 而非旧 Arc，不与 write guard 互斥）。即 R1 锁本身存在，但它锁的是「已被删除的旧 Arc」，新 caller 用新 Arc 不与之互斥。
+
+#### 2.6.1 `delete_character` 修复（`engine/src/domain/chat.rs:871-895`）✅
+
+```rust
+pub fn delete_character(&self, character_id: &CharacterId) -> Result<(), AirpError> {
+    let character = character_lock(character_id.as_str());
+    let _guard = character.write().unwrap_or_else(|p| p.into_inner());
+    let _character_track = lock_order::track_character_write();
+    let result = data_dir::delete_character(&self.data_root, character_id);
+    // #440: 必须在 write guard 释放之后再清理 lock-map 条目。...
+    drop(_character_track);
+    drop(_guard);
+    if result.is_ok() {
+        remove_deleted_character_lock(character_id.as_str());
+        remove_deleted_state_lock(character_id.as_str());
+    }
+    result
+}
+```
+
+**独立复核要点**：
+
+1. **drop 顺序** ✅：`drop(_character_track)` 先于 `drop(_guard)`——`track_character_write` 是 thread-local 栈标记，先 pop 不影响 write guard；然后 `drop(_guard)` 释放 write lock；最后 `remove_deleted_*_lock` 清理 map entry。顺序正确。
+2. **cleanup 在 guard drop 之后** ✅：`if result.is_ok() { remove_deleted_*_lock(...) }` 在 `drop(_guard)` 之后执行。修复后时序：write guard 释放 → （新 caller 调 `character_lock(cid)` → map 仍有旧 entry → 拿到旧 Arc → acquire `read()` 必须等待 write guard 释放，已释放 → 进入临界区 → 看到 dir 已删除 → `NotFound`，fail-closed 正确）→ cleanup 移除 entry → 未来 caller 用新 Arc 走正常 create 流程。
+3. **`result` 返回值不受影响** ✅：`result` 在 `data_dir::delete_character` 调用后已确定，drop 和 cleanup 都不改变 `result`。
+4. **`track_character_write` 与 R1 强制配合** ✅：`delete_character` 持 `character.write()`，`track_character_write` 标记 thread-local 栈。若 `delete_character` 内部调用任何 acquire `session_lock` / `state_lock` 的路径（当前没有），R1 强制不会误报（`character_held()` 同时检查 `CharacterRead` 和 `CharacterWrite`）。
+
+#### 2.6.2 `delete_session` 修复（`engine/src/domain/chat.rs:901-926`）✅
+
+```rust
+pub fn delete_session(...) -> Result<(), AirpError> {
+    let character = character_lock(character_id.as_str());
+    let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+    let _character_track = lock_order::track_character_read();
+    let session = session_lock(character_id.as_str(), Some(session_id));
+    let _session_guard = session.lock().unwrap_or_else(|p| p.into_inner());
+    let _session_track = lock_order::track_session();
+    let result = data_dir::delete_session(&self.data_root, character_id.as_str(), session_id);
+    // #440: 同 delete_character，在 guard 释放后再清理 lock-map 条目，...
+    drop(_session_track);
+    drop(_session_guard);
+    drop(_character_track);
+    drop(_character_guard);
+    if result.is_ok() {
+        remove_deleted_session_lock(character_id.as_str(), session_id);
+    }
+    result
+}
+```
+
+**独立复核要点**：
+
+1. **drop 顺序** ✅：LIFO——`session_track` → `session_guard` → `character_track` → `character_guard`。与 acquire 顺序（character → session）相反，符合 RAII 栈语义。
+2. **`remove_deleted_session_lock` 在所有 guard drop 之后** ✅：cleanup 只清理 `SESSION_LOCKS` 中该 `{cid}/{sid}` 条目，不清理 `CHARACTER_LOCKS`（character 仍存在）。新 caller 调 `session_lock(cid, Some(sid))` → map 已无该 entry → 创建新 Arc → 但此时 `character_lock.read()` 仍由旧 Arc 持有（`_character_guard` 已 drop，但旧 Arc 仍在 map 中）→ 新 caller 拿到旧 `character_lock` Arc → 串行化正确。
+
+   **等等**——`delete_session` 只清理 `SESSION_LOCKS`，不清理 `CHARACTER_LOCKS`。新 caller 调 `session_lock(cid, Some(sid))` 时，`SESSION_LOCKS` 已无该 entry，会创建新 session Arc。但新 caller 仍需先 acquire `character_lock.read()`（旧 Arc），与 `delete_session` 的 `character_lock.read()` 互斥（读读不互斥，但 `delete_session` 持 `character.read()` 期间 `delete_character` 无法获取 `character.write()`）。这是正确的——session 删除不需要 character write 门控，只需 character read + session lock。✅
+3. **`track_session` 在 `session_guard` drop 前** ✅：`track_session` 是 thread-local 标记，先 pop 不影响 `session_guard`。
+
+#### 2.6.3 `delete_persona` 修复（`engine/src/domain/persona.rs:330-350`）✅
+
+```rust
+// ... fs::remove_dir_all / fs::remove_file ...
+// #440: 在 guard 释放后再清理 lock-map 条目，与 delete_character 同模式。...
+drop(_guard);
+// #422: 工作副本 + revision 目录 durable 删除后清理 persona lock-map stale 条目。...
+remove_deleted_persona_lock(user_id.as_str());
+Ok(())
+```
+
+**独立复核要点**：
+
+1. **`drop(_guard)` 在 `remove_deleted_persona_lock` 之前** ✅：与 `delete_character` 同模式。
+2. **persona_lock 独立锁族（R5）** ✅：`PERSONA_LOCKS` 按 `user_id` key，不与 character 锁族嵌套。race 模式与 `delete_character` 同构：cleanup 过早移除 entry → 新 caller 用新 Arc 绕过 write guard。修复同模式。
+3. **`delete_persona` 无 `track_character_*` 调用** ✅：persona_lock 不属于 R1 character 外层门控范围（R5 独立锁族），无需 `track_character_read`。persona_lock 自身无运行时强制（§6.1 仅覆盖 R1 character + R2 session↔state），但 race 修复不依赖运行时强制，靠 drop 顺序保证。
+
+#### 2.6.4 race 闭合性独立验证 ✅
+
+**修复前 race 时序**（`main@d27c2c3`）：
+1. T1 `delete_character` acquire `character.write()`（旧 Arc A）。
+2. T1 `data_dir::delete_character` 删除目录。
+3. T1 `remove_deleted_character_lock` 移除 map entry（旧 Arc A 仍被 `_guard` 持有，但 map 已无 entry）。
+4. T2 `advance_plot` 调 `character_lock(cid)` → map 无 entry → 创建新 Arc B → acquire `read()` 立即成功（Arc B 无 contention）。
+5. T2 进入临界区，`StateService::mutate_locked` 内 `fs::create_dir_all` 重新创建 dir → 写 `live.json`。**race**：dir 被「复活」。
+6. T1 `drop(_guard)` 释放 Arc A write。
+7. 终态：dir 存在且含 `live.json`，但 `delete_character` 已返回 `Ok(())`。**数据不一致**。
+
+**修复后时序**（本 PR）：
+1. T1 `delete_character` acquire `character.write()`（旧 Arc A）。
+2. T1 `data_dir::delete_character` 删除目录。
+3. T1 `drop(_guard)` 释放 Arc A write。
+4. T1 `remove_deleted_character_lock` 移除 map entry。
+
+   **在步骤 3 与 4 之间**，T2 `advance_plot` 调 `character_lock(cid)` → map 仍有旧 entry → 拿到 **旧 Arc A** → acquire `read()` 必须等待 Arc A write 释放（已释放）→ 进入临界区 → 看到 dir 已删除 → `NotFound` / `Io(NotFound)`，fail-closed 正确。
+
+   **在步骤 4 之后**，T2 `advance_plot` 调 `character_lock(cid)` → map 无 entry → 创建新 Arc B → acquire `read()` → 进入临界区 → `fs::create_dir_all` 重新创建 dir → 写 `live.json`。这是 **合法的串行化结果**：`delete_character` 已完全完成（guard 释放 + cleanup 完成），`advance_plot` 在 `delete_character` 之后重新创建 character。这不是 race，是正常的「先删后建」顺序。R1 只保证串行化不保证顺序（§2.4.2 / PR #439 §7.1 已论证）。
+
+**结论**：修复后 race 闭合。新 caller 在 cleanup 前拿到旧 Arc，与 write guard 互斥；cleanup 后拿到新 Arc，`delete_character` 已完全完成。✅
+
+#### 2.6.5 测试覆盖 ⚠️（部分覆盖，非阻塞）
+
+**已有覆盖**：
+- PR #439 的 `advance_plot_and_delete_character_serialized_by_character_lock`（本 PR 保留）+ 本 PR 新增 3 条 R1 回归测试（`trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 并发）——这些测试在修复前的 `main@d27c2c3` 上会因 #440 race 而偶发失败（CI 在顺序 B 下观察到 `Io(NotFound)` 和 `DirectoryNotEmpty`），修复后这些失败模式被消除。
+- R1 运行时强制（`debug_assert!`）覆盖所有 character/session/state acquire 点，间接验证 `delete_character` 持 `character.write()` 时 `track_character_write()` 正确调用。
+
+**未覆盖**：
+- issue #440「验证」建议的 **Arc 指针相等性测试**（`arc_ptr_eq` 模式）：在 cleanup 前后验证 caller 拿到的是同一 Arc 还是新 Arc。本 PR 未实现。理由：(1) race 闭合由 drop 顺序静态保证，不依赖运行时检测；(2) R1 回归测试已间接覆盖 race（修复前会偶发失败，修复后稳定通过）；(3) `arc_ptr_eq` 测试需要暴露 `CHARACTER_LOCKS` 内部 Arc 引用，增加测试 API 表面。建议作为非阻塞 follow-up。
+
+**建议**：Arc 指针相等性测试作为非阻塞 follow-up，由独立 issue 追踪。当前 R1 回归测试 + 静态 drop 顺序已提供等价保护。
+
 ## 3. 测试验证
 
 | 检查 | 命令 | 结果 | 独立复核 |
@@ -199,7 +325,7 @@ issue #438 W-04 要求 4 条回归测试，包括 `run_seal_flow`。本 PR 仅�
 
 **无阻塞意见**。
 
-R1 运行时强制实现正确，覆盖所有 14 个 acquire 点；R1 强制上线即捕获 `LorebookService::write` 遗漏（证明强制有效）；3 条新回归测试 + 1 条既有测试覆盖 4 条 agent tool 路径；合同更新自洽。所有测试通过，神圣不变式保持。
+R1 运行时强制实现正确，覆盖所有 14 个 acquire 点；R1 强制上线即捕获 `LorebookService::write` 遗漏（证明强制有效）；3 条新回归测试 + 1 条既有测试覆盖 4 条 agent tool 路径；合同更新自洽。#440 lock-map cleanup race 修复正确闭合 `delete_character` / `delete_session` / `delete_persona` 三处 race，drop 顺序静态保证新 caller 在 cleanup 前拿到旧 Arc 与 write guard 互斥。所有测试通过，神圣不变式保持。
 
 ## 5. 非阻塞意见（写入 PR 后续 issue）
 
@@ -207,14 +333,19 @@ R1 运行时强制实现正确，覆盖所有 14 个 acquire 点；R1 强制上�
 |---|---|---|---|
 | W-01 | 测试覆盖 | `run_seal_flow` R1 并发回归测试未实现（issue #438 W-04 第 4 条）。R1 运行时强制已覆盖该路径，测试复杂度高（mock LLM + timing 协调），建议独立 issue 追踪。 | 新 issue |
 | W-02 | 测试强度 | 当前 R1 回归测试证明「no-deadlock + no-TOCTOU」，但不直接证明 `character_lock.read()` 阻塞了 `delete_character` 的 `character_lock.write()`（与 PR #439 W-03 同）。确定性串行化证明仍为 follow-up。 | 合并到 #438（W-03 同源） |
+| W-03 | 测试覆盖 | #440 Arc 指针相等性测试（`arc_ptr_eq` 模式）未实现。race 闭合由 drop 顺序静态保证，R1 回归测试间接覆盖。建议独立 issue 追踪。 | 新 issue |
 
 ## 6. 审计结论
 
 **通过（无阻塞）**。
 
-本 PR（closes issue #438 W-03/W-04）交付了 R1 运行时强制（`track_character_read` / `track_character_write` + `track_session` / `track_state` R1 `debug_assert!`），覆盖所有 14 个锁 acquire 点。R1 强制上线即捕获 `LorebookService::write` 漏调 `track_character_read()` 的遗漏（PR #436 残留），证明强制有效。3 条新 R1 回归测试 + PR #439 既有测试覆盖 4 条 agent tool 路径的 no-deadlock + no-TOCTOU 不变式。合同 §6.1 状态升级为「已交付（R1 + R2，全路径）」。
+本 PR（closes issue #438 W-03/W-04 + closes issue #440）交付两项修复：
 
-非阻塞意见 W-01（`run_seal_flow` 回归测试）和 W-02（确定性串行化证明）按 AGENTS.md「审计遗留项处理」规则，PR 合并后写入 GitHub issue。
+1. **R1 运行时强制**（closes #438 W-03/W-04）：`track_character_read` / `track_character_write` + `track_session` / `track_state` R1 `debug_assert!`，覆盖所有 14 个锁 acquire 点。R1 强制上线即捕获 `LorebookService::write` 漏调 `track_character_read()` 的遗漏（PR #436 残留），证明强制有效。3 条新 R1 回归测试 + PR #439 既有测试覆盖 4 条 agent tool 路径的 no-deadlock + no-TOCTOU 不变式。合同 §6.1 状态升级为「已交付（R1 + R2，全路径）」。
+
+2. **lock-map cleanup race 修复**（closes #440）：`delete_character` / `delete_session` / `delete_persona` 的 `remove_deleted_*_lock` 调用移到 write guard 显式 drop 之后。修复正确闭合 race——新 caller 在 cleanup 前拿到旧 Arc（与 write guard 互斥，看到 dir 已删除 → fail-closed），cleanup 后拿到新 Arc（`delete_character` 已完全完成，合法串行化）。race 闭合由 drop 顺序静态保证，R1 回归测试间接覆盖（修复前 CI 偶发 `Io(NotFound)` / `DirectoryNotEmpty`，修复后稳定通过）。
+
+非阻塞意见 W-01（`run_seal_flow` 回归测试）、W-02（确定性串行化证明）和 W-03（#440 Arc 指针相等性测试）按 AGENTS.md「审计遗留项处理」规则，PR 合并后写入 GitHub issue。
 
 ---
 
