@@ -16,7 +16,7 @@
 use super::params::required_character_id;
 use super::*;
 use crate::daemon::DaemonState;
-use crate::data_dir;
+use crate::domain::AnalysisService;
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -39,6 +39,19 @@ use std::sync::Arc;
 // A3 修复：不调 `state.adapter`（DaemonState 无此字段，计划书 placeholder 已规避），
 // 改用 `state.http_client` + `state.config` + `call_streaming_api_auto`，
 // 与 chat_pipeline 同路径。LLM 输出原样作为 enhanced_md 返回，apply 端点二次确认写盘。
+//
+// E-P1-3 P0（PR #431）：读/写盘收口至 `AnalysisService`。
+// - enhance 读盘：`spawn_blocking` + `AnalysisService::load_file`（替换 `tokio::fs::try_exists`
+//   + `read_to_string`）。Service 内部同步 `std::fs`，`spawn_blocking` 包装避免占用
+//   tokio worker 线程（审计 PR #431 Point 4，`search.rs:44` 既定惯例）。
+// - apply 写盘：`spawn_blocking` + `AnalysisService::save_file`（替换 `tokio::fs::write`）。
+//   原子写（`replace_file` tmp+rename+fsync）+ `character_lock` 串行化，消除半写可见。
+// - world_book/ 拒绝 + 路径安全校验已移入 Service，调用方不再重复实现。
+// - apply 路径的 `try_exists` 前置存在性校验删除：原校验是防御性 guard，正常流程
+//   `apply` 必跟在 `enhance` 之后（文件已被读出），race 场景由 `character_lock`
+//   串行化覆盖；删除后 `apply` 可在文件不存在时创建新文件，行为变化已在 PR 描述记录。
+// - 已知 gap（审计 Point 1）：character_lock 不检测语义冲突，last-write-wins
+//   静默丢失风险由未来 revision 合同/CAS 解决。
 
 /// enhance 专用 system prompt：指示 LLM 增强 analysis MD，保留结构、补全占位符。
 /// #155 PR 3：item 自身声明为 `pub`（analysis 是 tools 的私有子模块，`pub` 项
@@ -129,14 +142,11 @@ pub async fn enhance_md_via_llm_shared(
     Ok(enhanced.trim().to_string())
 }
 
-/// #160 A2：world_book 条目只读，enhance 与 apply 路径共享同一文案。
-/// 原实现两路径各自硬编码 "not eligible for enhance"，apply 路径描述不准确。
-const WORLD_BOOK_REJECT_MSG: &str =
-    "world_book entries are read-only and not eligible for enhance or apply (issue #87)";
-
 /// `enhance_analysis`：读 analysis MD，调 LLM 增强，返回 diff 预览（A1：不写盘）。
-/// readonly。A2：拒绝 world_book/ 前缀。
+/// readonly。A2：拒绝 world_book/ 前缀（已移入 Service）。
 /// L3：真正调 LLM（call_streaming_api_auto，与 chat_pipeline 同路径）。
+/// E-P1-3 P0：读盘收口至 `AnalysisService::load_file`（spawn_blocking 包装，
+///   审计 PR #431 Point 4：避免相对原 `tokio::fs::read_to_string` 的 blocking 池卸载回归）。
 /// params: `{ "character_id": string, "filename": string }`
 /// → `{ "filename": string, "original_md": string, "enhanced_md": string, "has_changes": bool }`
 struct EnhanceAnalysisTool {
@@ -168,22 +178,23 @@ impl Tool for EnhanceAnalysisTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing filename".into()))?;
 
-            // A2 修复：世界书条目只读，不参与 enhance
-            if filename.starts_with("world_book/") {
-                return Err(AirpError::BadRequest(WORLD_BOOK_REJECT_MSG.into()));
-            }
-
             let cid = required_character_id(&params)?;
-            let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
-            // #160 A1：原 `path.exists()` + `std::fs::read_to_string` 在 async
-            // future 内阻塞 executor worker；改 tokio::fs 与 apply 写路径一致。
-            if !tokio::fs::try_exists(&path).await? {
-                return Err(AirpError::NotFound(format!(
-                    "analysis file {} not found for character {}",
-                    filename, cid
-                )));
-            }
-            let original_md = tokio::fs::read_to_string(&path).await?;
+
+            // E-P1-3 P0：读盘收口至 AnalysisService（spawn_blocking 包装）。
+            // - world_book/ 拒绝已移入 Service，调用方不再重复实现。
+            // - 文件不存在时 Service 返回 `NotFound`（与原 `tokio::fs::try_exists` 行为一致）。
+            // - 路径安全校验由 `char_analysis_file_path` 内置，Service 调用它即继承全部校验。
+            // - spawn_blocking：Service 内部同步 `std::fs`，相对原 `tokio::fs::read_to_string`
+            //   （内部已卸载到 blocking 池）必须显式包装，避免占用 tokio worker 线程（审计 Point 4）。
+            let svc = AnalysisService::new(state.data_root.clone());
+            let cid_str = cid.as_str().to_string();
+            let filename_str = filename.to_string();
+            let original_md =
+                tokio::task::spawn_blocking(move || svc.load_file(&cid_str, &filename_str))
+                    .await
+                    .map_err(|e| {
+                        AirpError::Internal(format!("analysis load task failed: {e}"))
+                    })??;
 
             // L3：调共享 helper 增强 MD（审计 CR5：抽公共逻辑防两路径漂移）。
             let enhanced_md = enhance_md_via_llm_shared(&state, &original_md, filename).await?;
@@ -203,7 +214,9 @@ impl Tool for EnhanceAnalysisTool {
 
 /// `apply_enhanced_analysis`：写入用户确认的 enhanced_md 到 analysis MD 文件。
 /// **destructive** → 默认 dry-run，未 confirm 只回预览。
-/// A2：拒绝 world_book/ 前缀。
+/// A2：拒绝 world_book/ 前缀（已移入 Service）。
+/// E-P1-3 P0：写盘收口至 `AnalysisService::save_file`（原子 `replace_file` +
+///   `character_lock` 串行化；spawn_blocking 包装，审计 PR #431 Point 4）。
 /// params: `{ "character_id": string, "filename": string, "enhanced_md": string }`
 /// → `{ "character_id": string, "filename": string, "status": "applied" }`
 struct ApplyEnhancedAnalysisTool {
@@ -239,20 +252,7 @@ impl Tool for ApplyEnhancedAnalysisTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing enhanced_md".into()))?;
 
-            // A2 修复：世界书条目不可 apply
-            if filename.starts_with("world_book/") {
-                return Err(AirpError::BadRequest(WORLD_BOOK_REJECT_MSG.into()));
-            }
-
             let cid = required_character_id(&params)?;
-            let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), filename)?;
-            // #160 A1：原 `path.exists()` 同步阻塞；改 tokio::fs::try_exists。
-            if !tokio::fs::try_exists(&path).await? {
-                return Err(AirpError::NotFound(format!(
-                    "analysis file {} not found for character {}",
-                    filename, cid
-                )));
-            }
 
             if !confirm {
                 return Ok(ToolResult {
@@ -267,7 +267,25 @@ impl Tool for ApplyEnhancedAnalysisTool {
                 });
             }
 
-            tokio::fs::write(&path, enhanced_md).await?;
+            // E-P1-3 P0：写盘收口至 AnalysisService（spawn_blocking 包装）。
+            // - world_book/ 拒绝已移入 Service。
+            // - 路径安全校验由 `char_analysis_file_path` 内置。
+            // - 原子写：`replace_file`（tmp + rename + fsync），消除原 `tokio::fs::write` 的半写可见。
+            // - 串行化：`character_lock(character_id).read()`，与 `LorebookService` 读路径一致。
+            // - spawn_blocking：Service 内部同步 `std::fs`，相对原 `tokio::fs::write`
+            //   （内部已卸载到 blocking 池）必须显式包装，避免占用 tokio worker 线程（审计 Point 4）。
+            // - 已知 gap（审计 Point 1）：character_lock 不检测语义冲突，last-write-wins
+            //   静默丢失风险由未来 revision 合同/CAS 解决。
+            let svc = AnalysisService::new(state.data_root.clone());
+            let cid_str = cid.as_str().to_string();
+            let filename_str = filename.to_string();
+            let enhanced_md_owned = enhanced_md.to_string();
+            tokio::task::spawn_blocking(move || {
+                svc.save_file(&cid_str, &filename_str, &enhanced_md_owned)
+            })
+            .await
+            .map_err(|e| AirpError::Internal(format!("analysis save task failed: {e}")))??;
+
             tracing::warn!(
                 character_id = %cid,
                 filename,

@@ -13,6 +13,7 @@
 
 use crate::data_dir;
 use crate::decompose::{CharacterDecomposer, DecomposeResult, PresetDecomposer};
+use crate::domain::AnalysisService;
 use crate::error::AirpError;
 use crate::orchestrator::card::{TavernCardV2, TavernPreset};
 use crate::orchestrator::lorebook::Lorebook;
@@ -239,19 +240,23 @@ pub(super) async fn list_character_analysis(
 }
 
 /// `GET /v1/characters/:character_id/analysis/*filename` — 读单个 analysis MD 文件
+///
+/// E-P1-3 P0：读盘收口至 `AnalysisService::load_file`（`spawn_blocking` 包装）。
+/// - 文件不存在时 Service 返回 `NotFound`（与原 `path.exists()` 行为一致）。
+/// - `world_book/` 拒绝 + 路径安全校验已移入 Service。
+/// - `spawn_blocking`：Service 内部同步 `std::fs`，原代码直接在 async handler
+///   调 `std::fs::read_to_string` 阻塞 tokio worker 线程，本 PR 顺手修复（审计 Point 4）。
 pub(super) async fn get_character_analysis_file(
     State(state): State<Arc<DaemonState>>,
     Path((character_id, filename)): Path<(String, String)>,
 ) -> Result<Json<AnalysisFileContent>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), &filename)?;
-    if !path.exists() {
-        return Err(AirpError::NotFound(format!(
-            "analysis file {} not found for character {}",
-            filename, cid
-        )));
-    }
-    let content = std::fs::read_to_string(&path)?;
+    let svc = AnalysisService::new(state.data_root.clone());
+    let cid_str = cid.as_str().to_string();
+    let filename_str = filename.clone();
+    let content = tokio::task::spawn_blocking(move || svc.load_file(&cid_str, &filename_str))
+        .await
+        .map_err(|e| AirpError::Internal(format!("analysis load task failed: {e}")))??;
     Ok(Json(AnalysisFileContent { filename, content }))
 }
 
@@ -262,32 +267,39 @@ pub(super) async fn get_character_analysis_file(
 /// - `action: "enhance"` — A1：只读返回 diff 预览，不写盘。ToolSideEffect = Readonly。
 /// - `action: "apply"`   — A1：写入用户确认的 enhanced_md 到文件。
 ///
-/// A2 修复：拒绝 world_book/ 开头的文件名（世界书只读，不参与 enhance）。
+/// E-P1-3 P0：读/写盘收口至 `AnalysisService`（`spawn_blocking` 包装）。
+/// - `world_book/` 拒绝 + 路径安全校验已移入 Service，调用方不再重复实现。
+/// - `enhance` 分支：`spawn_blocking` + `load_file`（替换原 `std::fs::read_to_string`，
+///   顺手修复原 async handler 直接同步 IO 阻塞 worker 线程的问题）。Service 返回
+///   `NotFound` 如文件缺失（与原 `path.exists()` 行为一致）。
+/// - `apply` 分支：`spawn_blocking` + `save_file`（替换 `tokio::fs::write`）。
+///   原子写 + `character_lock` 串行化。原前置 `path.exists()` 校验删除（与
+///   `agent/tools/analysis.rs` slice 3 同决策：apply 正常流程跟在 enhance 之后，
+///   race 由 `character_lock` 串行化覆盖；删除后 apply 可创建新文件）。
+/// - 错误优先级变化：原代码先做 `world_book/` + 路径校验 + 存在性校验，再 match action；
+///   现先 match action 再调 Service。仅影响 "无效 action + 异常 filename" 组合，
+///   两种都返回 `BadRequest`，无测试覆盖，此处文档化供审计追溯。
 pub(super) async fn enhance_or_apply_character_analysis(
     State(state): State<Arc<DaemonState>>,
     Path((character_id, filename)): Path<(String, String)>,
     Json(body): Json<EnhanceApplyRequest>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-
-    // A2 修复：世界书条目不参与 enhance/apply
-    if filename.starts_with("world_book/") {
-        return Err(AirpError::BadRequest(
-            "world_book entries are read-only and not eligible for enhance (issue #87)".into(),
-        ));
-    }
-
-    let path = data_dir::char_analysis_file_path(&state.data_root, cid.as_str(), &filename)?;
-    if !path.exists() {
-        return Err(AirpError::NotFound(format!(
-            "analysis file {} not found for character {}",
-            filename, cid
-        )));
-    }
+    let svc = AnalysisService::new(state.data_root.clone());
+    let cid_str = cid.as_str().to_string();
 
     match body.action.as_str() {
         "enhance" => {
-            let original_md = std::fs::read_to_string(&path)?;
+            // spawn_blocking + load_file：读盘 + 存在性校验合一
+            let filename_str = filename.clone();
+            let svc_clone = svc.clone();
+            let cid_for_load = cid_str.clone();
+            let original_md = tokio::task::spawn_blocking(move || {
+                svc_clone.load_file(&cid_for_load, &filename_str)
+            })
+            .await
+            .map_err(|e| AirpError::Internal(format!("analysis load task failed: {e}")))??;
+
             // L3 修复（issue #92）：HTTP 端点也真正调 LLM 增强 MD。
             // 与 EnhanceAnalysisTool 同路径：state.config + http_client + call_streaming_api_auto。
             let enhanced_md = enhance_md_via_llm(&state, &original_md, &filename).await?;
@@ -303,7 +315,12 @@ pub(super) async fn enhance_or_apply_character_analysis(
             let enhanced_md = body.enhanced_md.ok_or_else(|| {
                 AirpError::BadRequest("action=apply requires enhanced_md field".into())
             })?;
-            tokio::fs::write(&path, &enhanced_md).await?;
+            let filename_str = filename.clone();
+            tokio::task::spawn_blocking(move || {
+                svc.save_file(&cid_str, &filename_str, &enhanced_md)
+            })
+            .await
+            .map_err(|e| AirpError::Internal(format!("analysis save task failed: {e}")))??;
             Ok(Json(serde_json::json!({
                 "character_id": cid.as_str(),
                 "filename": filename,

@@ -43,6 +43,13 @@ pub(crate) enum AssetKind {
     /// 注意：`rename_all = "lowercase"` 不插入下划线，需单独 `rename` 为 `"world_events"`。
     #[serde(rename = "world_events")]
     WorldEvents,
+    /// E-P1-3 P0 (PR #431): 预留 analysis MD 文件枚举变体。
+    ///
+    /// 当前仅占位，revision 合同尚未接入 analysis 资产（A1 决策：本 PR 只做
+    /// `AnalysisService` 提取 + 原子写，不实现完整 revision 合同）。
+    /// 预留变体避免未来接入 revision 时再改 schema 枚举。序列化为 `"analysis"`，
+    /// 由 `rename_all = "lowercase"` 自动派生，无需单独 `rename`。
+    Analysis,
 }
 
 impl AssetKind {
@@ -56,6 +63,7 @@ impl AssetKind {
             AssetKind::Persona => "persona",
             AssetKind::SoulDrift => "soul_drift",
             AssetKind::WorldEvents => "world_events",
+            AssetKind::Analysis => "analysis",
         }
     }
 }
@@ -525,6 +533,21 @@ mod tests {
         // roundtrip
         let back: RevisionManifest = serde_json::from_value(value).unwrap();
         assert_eq!(back.asset_kind, AssetKind::WorldEvents);
+    }
+
+    // E-P1-3 P0 (PR #431): Analysis 枚举变体预留 + 序列化 roundtrip。
+    // 当前仅占位，无 revision 合同接入；序列化稳定后未来接入时不应再变。
+    #[test]
+    fn asset_kind_analysis_serializes_lowercase() {
+        let mut manifest = sample_manifest();
+        manifest.asset_kind = AssetKind::Analysis;
+        let value = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(value["asset_kind"], "analysis");
+        // roundtrip
+        let back: RevisionManifest = serde_json::from_value(value).unwrap();
+        assert_eq!(back.asset_kind, AssetKind::Analysis);
+        // as_str 对齐
+        assert_eq!(AssetKind::Analysis.as_str(), "analysis");
     }
 
     #[test]

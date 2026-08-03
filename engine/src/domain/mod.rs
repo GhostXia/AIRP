@@ -4,6 +4,7 @@
 //! rollback semantics.  `ChatService` is the single boundary for chat/session
 //! mutations and character deletion.
 
+mod analysis;
 mod chat;
 pub(crate) mod lock_order;
 mod locks;
@@ -13,6 +14,7 @@ mod plot;
 mod state;
 mod world_event;
 
+pub use analysis::AnalysisService;
 pub(crate) use chat::RegenSnapshot;
 pub use chat::{ChatService, HistoryWindow, SwipeResponse, SWIPE_CANDIDATES_CAP};
 pub(crate) use locks::{character_lock, session_lock, state_lock};
@@ -43,6 +45,15 @@ pub use world_event::{WorldClock, WorldEvent, WorldEventService};
 // 通过 `pub use plot::{PlotArc, PlotPhase, PlotService};` 重新导出，保持公共 API 不变。
 // daemon/handlers/plot.rs 不再直接 replace_file/fs::write，写路径收口至 Service。
 // 边界：PlotService 只管 plot_arc.json；live.json 的 plot_history 仍由 StateService::mutate 管。
+
+// ── AnalysisService 已提取至 `domain/analysis.rs`（E-P1-3 P0）────────────────
+// 通过 `pub use analysis::AnalysisService;` 重新导出，保持公共 API 不变。
+// agent/tools/analysis.rs + daemon/decompose_handlers.rs 不再直接 tokio::fs::write，
+// 写路径收口至 Service（原子 replace_file + character_lock 串行化）。
+// 边界（审计 PR #431 Point 4）：Service 内部同步 std::fs，调用方在 async context
+// 必须用 `tokio::task::spawn_blocking` 包装，避免相对原 tokio::fs::write 的性能回归。
+// 已知 gap（审计 PR #431 Point 1）：character_lock 不检测语义冲突，last-write-wins
+// 静默丢失风险由未来 revision 合同/CAS 解决。
 
 #[cfg(test)]
 mod tests {
