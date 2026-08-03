@@ -281,11 +281,11 @@ PR #445 交付了 #342 的最小闭环，但 `CURRENT-BASELINE.md` 未更新。B
 
 ## 3. 审计结论
 
-**FAIL（1 条阻塞意见）**。
+**PASS（B-01 阻塞意见已修复并经独立复核 + CodeRabbit 复审确认）**。
 
 PR #445 的实现质量整体良好：manifest schema、atomic snapshot、scoped restore、pre-delete 集成、path sandbox、secret 排除、BACKUP_LOCK 语义均经独立复核确认正确。40 + 15 + 4 + 22 + 1 = 82 条测试通过，神圣不变式保持，clippy clean。
 
-**但 `docs/BACKUP-RESTORE.md` 与实现存在严重矛盾**（B-01）：文档在 5 处声称 scoped restore 不支持并指导用户手动拷贝文件，而实现已完整交付 scoped restore 且有测试覆盖。这违反文档诚实性不变式，并引导用户走不安全路径（绕过完整性校验、无回滚备份、无 post-restore 校验）。必须修复后才能合并。
+**B-01 修复闭环**：原阻塞意见「`docs/BACKUP-RESTORE.md` 与实现存在严重矛盾——文档声称 scoped restore 不支持」已在 commit `1a5e640` 修复：§4.3 改为描述 scoped restore 直接恢复、删除手动拷贝步骤；§5 v1 限制表删除「仅支持 Full scope restore」行；§6.5 删除「scoped restore → 拒绝（v1）」；§7 HTTP API 改为「恢复（Full / Character / Session scope）」。CodeRabbit 在 `issuecomment-5168459267` 复审确认：「`docs/BACKUP-RESTORE.md` 现在正确说明 Full、Character 和 Session scope 的 restore 行为...与 `swap_scoped_subtree` 分支及 `restore_scoped_backup_preserves_unrelated_data` 测试一致」。
 
 非阻塞意见 W-01 ~ W-06 按 AGENTS.md「审计遗留项处理」规则，PR 合并后由执行审计的 agent 写入 GitHub issue。
 
