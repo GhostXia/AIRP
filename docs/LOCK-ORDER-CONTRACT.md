@@ -315,7 +315,7 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 
 R1 收敛验收记录（PR #436，2026-08-03）：§2.4 `trigger_world_event` / §2.5 `advance_clock` / §2.6 `npc_action` / §2.7 `run_seal_flow` 四个路径已补齐外层 `character_lock.read()`；§2.3 `advance_plot` 因 `StateService::mutate` re-entrancy 风险未闭合，残留风险与修复路径记录于 §6.7。本次为静态锁序收敛，**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
 
-R1 残留闭合验收记录（PR #437，2026-08-03）：§2.3 `advance_plot` 通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合 R1。外层 `character_lock.read()` 已补齐，re-entrancy 风险消除，§6.7 残留 TOCTOU 风险已闭合。R1 例外路径数：0。本次为静态锁序收敛 + `StateService` API 拆分（新增 `mutate_locked` 方法），**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`；R1 运行时强制见 §6.1 W-03 follow-up）。同时修正 W-01 措辞（§6.7 re-entrancy 论证从「deadlock 风险」改为「deadlock 风险（部分 pthread 实现）+ 排他性语义破坏（Windows SRWLOCK）」）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
+R1 残留闭合验收记录（PR #439，closes issue #437，2026-08-03）：§2.3 `advance_plot` 通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合 R1。外层 `character_lock.read()` 已补齐，re-entrancy 风险消除，§6.7 残留 TOCTOU 风险已闭合。R1 例外路径数：0。本次为静态锁序收敛 + `StateService` API 拆分（新增 `mutate_locked` 方法），**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`；R1 运行时强制见 §6.1 W-03 follow-up）。同时修正 W-01 措辞（§6.7 re-entrancy 论证从「deadlock 风险」改为「deadlock 风险（部分 pthread 实现）+ 排他性语义破坏（Windows SRWLOCK）」）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
 
 ## 8. 关联
 

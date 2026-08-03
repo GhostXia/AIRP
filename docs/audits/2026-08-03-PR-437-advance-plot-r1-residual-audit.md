@@ -1,16 +1,18 @@
-# PR #437 独立审计：advance_plot R1 残留 TOCTOU 闭合（fix path 4）
+# PR #439 独立审计：advance_plot R1 残留 TOCTOU 闭合（fix path 4，closes issue #437）
 
 > 审计日期：2026-08-03
-> 审计对象：PR #437 `fix(engine): close advance_plot R1 residual TOCTOU (fix path 4: split StateService::mutate)`
+> 审计对象：PR #439 `fix(engine): close advance_plot R1 residual TOCTOU (fix path 4: split StateService::mutate)`（closes issue #437）
 > 审计分支：`fix-advance-plot-r1-residual`
 > 审计基线：`main@48afdf1`（合并 PR #436 后）
 > 审计依据：AGENTS.md「审计 Agent 守则」三原则——独立审计、可提己见、可质疑历史并查证
 > 关联合同：`docs/LOCK-ORDER-CONTRACT.md`
 > 关联 issue：[#437](https://github.com/GhostXia/AIRP/issues/437)（PR #436 W-01/W-02 follow-up）
+>
+> 命名说明：文件名沿用 `PR-437` 前缀（与 issue #437 对齐，本 PR 审计启动时 PR 号未分配）；审计内容中「PR #439」指本 pull request，「issue #437」指被闭合的 follow-up issue。
 
 ## 1. 审计范围
 
-本审计独立复核 PR #437 的四项内容：
+本审计独立复核 PR #439（closes issue #437）的四项内容：
 
 1. **代码修复**：`StateService::mutate` 拆分为 `mutate_locked`（不 acquire `character_lock`）+ `mutate`（兼容包装）；`advance_plot` 改用 `mutate_locked` + 外层 `character_lock.read()`
 2. **合同更新**：`LOCK-ORDER-CONTRACT.md` §2.2 / §2.3 / R1 / R2 / §6.7 / §7
@@ -77,7 +79,7 @@ where
 
 **独立复核要点**：
 
-1. **向后兼容** ✅：`mutate` 行为与 PR #437 之前完全一致（acquire `character_lock.read()` → 进入 `state_lock` 临界区）。其他调用方（`update_relationship` / `update_character_state` / 等）无需改动。
+1. **向后兼容** ✅：`mutate` 行为与 PR #439 之前完全一致（acquire `character_lock.read()` → 进入 `state_lock` 临界区）。其他调用方（`update_relationship` / `update_character_state` / 等）无需改动。
 2. **内部委托 `mutate_locked`** ✅：避免代码重复，`mutate` 仅负责外层 `character_lock.read()` 门控。
 3. **lock_order tracking** ✅：`mutate_locked` 内部已调用 `track_state()`，`mutate` 不重复调用。
 
@@ -159,7 +161,7 @@ let snapshot = StateService::new(&state.data_root).mutate_locked(&cid, |live| {
 
 #### 2.3.6 §7 验收记录 ✅
 
-- 新增「R1 残留闭合验收记录（PR #437，2026-08-03）」段落 ✅
+- 新增「R1 残留闭合验收记录（PR #439，closes issue #437，2026-08-03）」段落 ✅
 - 明确标注「不改变 §6.1 运行时强制状态（R1 仍无运行时强制）」 ✅
 - 记录 W-01 措辞修正 ✅
 
@@ -174,17 +176,18 @@ let snapshot = StateService::new(&state.data_root).mutate_locked(&cid, |live| {
 - **独立 OS thread + current-thread runtime** ✅：避免占用 parent tokio runtime worker pool。
 - **唯一 character_id** ✅：避免与其他 `#[tokio::test]` 争用 process-global 锁。
 
-#### 2.4.2 测试断言 ✅
+#### 2.4.2 测试断言 ⚠️（CodeRabbit 指出：不证明串行化本身）
 
 - **不 deadlock** ✅：30s 超时检测。
-- **advance_plot 不返回 Internal error** ✅：worker A 将非 NotFound error 升级为测试失败。这验证 R1 TOCTOU 防护——若 `delete_character` 在 `advance_plot` 临界区期间删除 `live.json`，`advance_plot` 读到半删状态会返回 Internal（而非 NotFound），测试失败。
-- **不断言 character dir 终态** ✅（CI 失败后修正）：R1 只保证串行化（不保证顺序）。若 `delete_character` 先完成而 `advance_plot` 后完成，`advance_plot` 会重新创建 dir 写 `live.json` —— 这是合法的串行化结果，非 TOCTOU 失效。原版测试在 `delete_succeeded == true` 时断言 `!character_dir.exists()`，这在「delete 先 / advance_plot 后」顺序下会误判失败。详见 §6 re-audit。
+- **advance_plot 不返回 Internal error** ✅：worker A 将非 NotFound / Io(NotFound) error 升级为测试失败。这验证 R1 TOCTOU 防护——若 `delete_character` 在 `advance_plot` 临界区期间删除 `live.json`，`advance_plot` 读到半删状态会返回 Internal（而非 NotFound），测试失败。
+- **不断言 character dir 终态** ✅（CI 失败后修正）：R1 只保证串行化（不保证顺序）。若 `delete_character` 先完成而 `advance_plot` 后完成，`advance_plot` 会重新创建 dir 写 `live.json` —— 这是合法的串行化结果，非 TOCTOU 失效。原版测试在 `delete_succeeded == true` 时断言 `!character_dir.exists()`，这在「delete 先 / advance_plot 后」顺序下会误判失败。详见 §7 re-audit。
+- **不证明锁串行化本身** ⚠️（CodeRabbit PR #439 comment 3）：当前并发 + 超时 + 无 Internal error 的断言组合证明「no-deadlock + no-TOCTOU」，但**不直接证明** `character_lock.read()` 阻塞了 `delete_character` 的 `character_lock.write()`。确定性证明需要在测试中显式持有 write guard、断言 `advance_plot` 无法推进、释放后再断言推进。记录为 follow-up（W-03），非阻塞——R1 串行化由源码 `character_lock.read()` acquire 在 `session_lock` 之前保证，合同 §2.3 + 静态 review 已覆盖。
 
 #### 2.4.3 Windows `DirectoryNotEmpty` quirk 处理 ✅
 
-测试注释准确记录了 Windows 上 `fs::remove_dir_all` 可能因 #422 lock-map cleanup race（entry 在 write guard 释放前被移除）而失败的情况。这不是 #437 引入的回归，测试正确地将 `delete_character` 失败视为合法结果。
+测试注释准确记录了 Windows 上 `fs::remove_dir_all` 可能因 #422 lock-map cleanup race（entry 在 write guard 释放前被移除）而失败的情况。这不是 PR #439 引入的回归，测试正确地将 `delete_character` 失败视为合法结果。
 
-**审计建议**：#422 lock-map cleanup race（`delete_character` 在 write guard 释放前移除 lock map entry，允许新 caller 创建不同 lock 实例）是一个 pre-existing TOCTOU 风险，与 #437 闭合的 R1 风险独立。建议后续 issue 追踪。**非阻塞**——不在 #437 范围内。
+**审计建议**：#422 lock-map cleanup race（`delete_character` 在 write guard 释放前移除 lock map entry，允许新 caller 创建不同 lock 实例）是一个 pre-existing TOCTOU 风险，与 issue #437 闭合的 R1 风险独立。建议后续 issue 追踪。**非阻塞**——不在 PR #439 范围内。
 
 ## 3. 测试验证
 
@@ -192,7 +195,7 @@ let snapshot = StateService::new(&state.data_root).mutate_locked(&cid, |live| {
 |---|---|---|---|
 | 格式 | `cargo fmt --check` | clean | ✅ |
 | Clippy | `cargo clippy --workspace --exclude airp-ui --locked --all-targets -- -D warnings` | clean | ✅ |
-| Rust 测试 | `cargo test --workspace --exclude airp-ui --locked` | 1250 passed / 0 failed / 5 ignored | ✅（基线 1249 → 1250，增量来自 #437 新增 1 个回归测试） |
+| Rust 测试 | `cargo test --workspace --exclude airp-ui --locked` | 1250 passed / 0 failed / 5 ignored | ✅（基线 1249 → 1250，增量来自 PR #439 新增 1 个回归测试） |
 | 神圣不变式 | `cargo test -p airp-core --lib subagent_context_has_no_orchestrator_noise` | ok | ✅ |
 | WebUI | `node --test webui/tests/*.test.mjs` | 76 passed / 0 failed | ✅ |
 
@@ -208,20 +211,21 @@ fix path 4 实现正确闭合了 R1 残留 TOCTOU 风险，合同更新自洽，
 |---|---|---|---|
 | W-01 | Pre-existing race | #422 lock-map cleanup race：`delete_character` 在 write guard 释放前移除 `CHARACTER_LOCKS` / `STATE_LOCKS` 中的 entry，允许新 caller（如 `advance_plot`）创建不同的 lock 实例并并发执行。这在 Windows 上导致 `fs::remove_dir_all` 失败（`DirectoryNotEmpty`），在 Linux 上可能导致 TOCTOU（`advance_plot` 在 `delete_character` 删除目录后仍写入 `live.json`，因为使用了不同 lock 实例）。修复方案：将 `remove_deleted_*_lock` 调用移到 `_guard` drop 之后（例如显式 `drop(_guard)` 后再清理 lock map）。 | 后续 issue（独立 PR） |
 | W-02 | R1 运行时强制 | §6.1 仍仅覆盖 R2 session↔state。R1（character 外层门控）的运行时 `debug_assert!` 未交付（与 PR #436 W-03 同一缺口）。建议在 `lock_order` 模块新增 `track_character_read()` / `track_character_write()`，在持 character_lock 时 set thread-local flag，acquire session/state_lock 时检查。 | 后续 issue（独立 PR，与 PR #436 W-03 合并） |
+| W-03 | 测试覆盖强度 | CodeRabbit PR #439 comment 3：当前并发回归测试证明「no-deadlock + no-TOCTOU」，但不直接证明 `character_lock.read()` 阻塞了 `delete_character` 的 `character_lock.write()`。建议新增确定性测试：显式持有 write guard、断言 `advance_plot` 无法推进、释放后再断言推进。 | 后续 issue（与 W-02 合并） |
 
 ## 6. 审计结论
 
 **通过（无阻塞）**。
 
-PR #437 通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合了 PR #436 残留的 `advance_plot` R1 TOCTOU 风险。实现正确，合同更新自洽，W-01 措辞修正准确，回归测试覆盖 R1 串行化语义。R1 例外路径数从 1 降为 0。
+PR #439（closes issue #437）通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合了 PR #436 残留的 `advance_plot` R1 TOCTOU 风险。实现正确，合同更新自洽，W-01 措辞修正准确，回归测试覆盖 no-deadlock + no-TOCTOU 不变式（确定性串行化证明见 W-03 follow-up）。R1 例外路径数从 1 降为 0。
 
-非阻塞意见 W-01（#422 lock-map cleanup race）和 W-02（R1 运行时强制）按 AGENTS.md「审计遗留项处理」规则，PR 合并后由执行审计的 agent 写入 GitHub issue。
+非阻塞意见 W-01（#422 lock-map cleanup race）、W-02（R1 运行时强制）和 W-03（确定性串行化测试）按 AGENTS.md「审计遗留项处理」规则，PR 合并后由执行审计的 agent 写入 GitHub issue。
 
 ## 7. Re-audit：CI 失败后测试修正（2026-08-03）
 
 PR #439（即 #437 实现）首次 CI 运行 `Rust test` job 失败：
 
-```
+```text
 test agent::tools::tests::agent_rp_phase3::advance_plot_and_delete_character_serialized_by_character_lock ... FAILED
 thread '...advance_plot_and_delete_character_serialized_by_character_lock' panicked at engine\src\agent\tools\tests\agent_rp_phase3.rs:1516:9:
 character dir must be deleted after delete_character succeeded
@@ -258,7 +262,7 @@ CI 在顺序 B 下运行，触发了误判失败。这是**测试逻辑 bug**，
 
 PR #439 第二次 CI 运行 `Rust test` job 再次失败（同一测试）：
 
-```
+```text
 worker error: advance_plot failed with non-NotFound error (R1 TOCTOU protection may have failed): Io(Os { code: 3, kind: NotFound, message: "The system cannot find the path specified." })
 ```
 
@@ -287,7 +291,7 @@ worker A 的 error matcher 扩展为同时接受：
 
 - 修正后 `cargo test --workspace --all-features` 全量通过（1307 passed / 0 failed / 5 ignored）。
 - 生产代码（`state.rs` / `plot.rs` / `LOCK-ORDER-CONTRACT.md`）**仍未改动**。
-- #422 race 的根本修复（将 `remove_deleted_*_lock` 移到 guard drop 之后）不在 #437 范围，仍由 W-01 follow-up issue 追踪。
+- #422 race 的根本修复（将 `remove_deleted_*_lock` 移到 guard drop 之后）不在 PR #439 范围，仍由 W-01 follow-up issue 追踪。
 
 ### 8.4 Second re-audit 结论
 
