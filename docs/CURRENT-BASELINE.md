@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-08-02
-> 代码基线：`main@830426e`（合并 PR #413 `fix(deps): remediate npm audit findings`）
+> 基线日期：2026-08-03
+> 代码基线：`main@e931bf7`（合并 PR #445 `feat(engine): backup/restore closed loop (E-P2-1, closes #342)`）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -12,6 +12,8 @@
 1. 将代码锚点从旧 `main@4f3f792` 对齐到当前 `main@830426e`；
 2. 吸收 #398–#413 的取消、TurnCommit/Recovering、终态 marker recovery、production smoke 与依赖治理事实，**不把后续 issue 写成已交付**；
 3. 保持活文档面收敛：已完成计划与桌面画布接力草案仍在 `docs/archive/`，阅读路径见 [README.md](README.md)。
+
+增量校准（2026-08-03，W-06 闭合）：代码锚点从 `main@830426e` 推进到 `main@e931bf7`，吸收 PR #436/#439/#441（R1 锁序收敛 + 运行时强制 + 回归测试，closes #437/#438/#440）与 PR #445（#342 backup/restore 最小闭环）的交付事实。#342 标记为已交付（v1 限制见 §2.2）；R1 锁序合同补全见 [LOCK-ORDER-CONTRACT.md](LOCK-ORDER-CONTRACT.md) §1.5/§2.9/R4。本次为 docs-only 增量校准，§6 验证快照的 full-workspace 数字未在本 docs-pass 重跑，仅追加 #342 与 R1 回归测试的 PR 级证据。
 
 ## 1. 产品与仓库边界
 
@@ -38,8 +40,8 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 | 能力域 | Engine / 数据 | HTTP / Agent | WebUI | 当前边界 |
 |---|---|---|---|---|
-| 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools（Persona **无**对称 Agent tool） | 管理、选择、导入与诊断入口 | 高级生命周期、完整导出/恢复未闭合（#342/#346） |
-| 会话与聊天（**产品主路径**） | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe、per-session Coordinator façade；TurnCommit 记录 message/state/volume 提交进度 | OpenAI-compatible `/v1/chat/*` SSE、continue/regen/search、命名 session；generation-scoped `session-state`/`cancel` | 命名会话、流式聊天、Engine 协作停止、编辑/删除/分支/Swipe、导出 | 取消只接受当前 `generation_id`；stale/committing 分别 fail-closed，断线不等于取消。终态 marker 可在已持久化最终阶段后恢复清理，Recovering/未知提交仍 fail-closed。**产品 UI 只绑定本路径**；agent/tool 单 owner、自动 replay/repair、跨资源事务与完整灾难恢复仍未交付（#394/#286/#342） |
+| 角色、Persona、Preset、场景 | CRUD、导入、绑定、revision、装配 | 主要 CRUD/导入/预览 route；相关 Agent tools（Persona **无**对称 Agent tool） | 管理、选择、导入与诊断入口 | backup/restore 最小闭环已交付（#342，PR #445，v1 限制见 §2.2 切片表）；完整导出/migration 未闭合（#346） |
+| 会话与聊天（**产品主路径**） | durable JSONL、稳定 message ID、cursor、rollback、branch/swipe、per-session Coordinator façade；TurnCommit 记录 message/state/volume 提交进度 | OpenAI-compatible `/v1/chat/*` SSE、continue/regen/search、命名 session；generation-scoped `session-state`/`cancel` | 命名会话、流式聊天、Engine 协作停止、编辑/删除/分支/Swipe、导出 | 取消只接受当前 `generation_id`；stale/committing 分别 fail-closed，断线不等于取消。终态 marker 可在已持久化最终阶段后恢复清理，Recovering/未知提交仍 fail-closed。**产品 UI 只绑定本路径**；agent/tool 单 owner、自动 replay/repair、跨资源事务仍未交付（#394/#286）；backup/restore 最小闭环已交付（#342，PR #445），但跨资源一致性 backup 与完整灾难恢复未交付 |
 | Conversation runtime（**Engine 合同，未绑产品 UI**） | versioned manifest、append-only event journal、message/turn/observability projection、scene round-robin、受控 policy 注入、长历史 checkpoint/summary 预算、legacy copy-only migration | `/v1/conversations*`、capabilities、policies、migration plan/execute/export/rollback；旧 chat/session/scene API 形状不变 | **尚未绑定**；客户端若接入只能经 capability discovery，不能注入 history/代码/调度语义 | 与 legacy Chat **双轨并存**；切流或冻结须战略决策（#381 E-P0-2）。自动 summary policy、内容型停止条件、全仓 migration registry、跨进程策略沙箱仍开放 |
 | Worldbook / state / memory | v4 runtime、state history/schema、resident memory、revision | CRUD、图谱、事件、状态与记忆相关接口/工具 | 编辑、图谱、状态 HUD、记忆面板 | 大量 ST 字段仅为 advisory；完整 session 物化与记忆闭环未完成（#274） |
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 约 30 个内置工具 + 可动态加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径有开放审计项（#284/#344/#381）；不是通用多 Agent 平台 |
@@ -68,6 +70,8 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | #409 | 仅在所有 expected 阶段已 durable 时清理 terminal marker；恢复清理与 session owner/admission registry 锁序串行化；non-terminal、unreadable、unsupported 与 all-false marker 保留为 recovery-required。 | 不包含 payload-aware 自动 replay/journal 或完整灾难恢复。 |
 | #410/#411 | production mock smoke 覆盖 generation poll、stale/current cancel、严格 typed SSE terminal、取消后 history、临时 session cleanup；harness 对 cleanup、SSE、cancel poll、response body 与 deadline 使用绝对预算并 fail-closed，合法空响应体可结束；备份入口保持明确不可用，renderer 不发起 backup/restore API 调用。 | 这是 mock/CI 证据，不替代真实 provider、真实 browser 和维护者 Compose 验收；不改变 Engine/API 语义。 |
 | #413 | lock-only 更新 `brace-expansion` 2.1.1→2.1.4、`postcss` 8.5.16→8.5.25、`nanoid` 3.3.15→3.3.16；`npm audit --json` 与 `--omit=dev` 均为 0。当前 SBOM 生成报告 693 third-party、unknown license 0、blocked 0；inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。 | SBOM/notice 生成仍未成为 release pipeline 强制门禁；`ui` 依赖用于构建/测试，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime。 |
+| #436/#439/#441（R1 锁序收敛 + 运行时强制） | `advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` / `run_seal_flow` 五个 agent-tool 路径补齐外层 `character_lock.read()`（R1）；`StateService::mutate` 拆为 `mutate_locked` + `mutate` 消除 re-entrancy；`lock_order` 模块提供 R1+R2 运行时 `debug_assert!` 强制（thread-local 栈 + RAII Guard，release 零开销）；4 条并发回归测试（各路径与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + TOCTOU）；lock-map cleanup race 修复（`remove_deleted_*_lock` 移到 write guard drop 之后）。 | R1/R2 仅在 `debug_assertions` 下强制，release build 无运行时强制；`advance_plot` 仍持 std 锁做同步 I/O（A3 debt）；W-01~W-04 follow-up 见 #442/#443/#444。 |
+| #342（PR #445，backup/restore 最小闭环） | 手动 backup（Full / Character / Session scope）+ manifest schema v1（per-file SHA-256 + tree SHA-256）+ `verify_against_disk` 完整性校验 + restore（Full + scoped `swap_scoped_subtree`）+ `PreRestoreRollback` 回滚备份 + post-restore 校验 + `PreDelete` 自动备份（`delete_character` / `delete_session`，`force=true` 可跳过）+ secret 排除（`secrets.json` / `settings.json`）+ `BACKUP_LOCK` 串行化 + WebUI backup 管理界面。82 条 backup 测试通过（PR #445）。 | v1 限制：无自动定时备份；restore swap 阶段不持 `character_lock`（W-02，#447，v1 缓解为维护窗口执行）；Windows `sync_dir` no-op（W-03，#448）；跨资源一致性 backup 未交付；完整 migration / 导出未交付（#346）。审计遗留 W-01~W-06 见 #446/#447/#448/#449/#450/#451。 |
 
 ## 3. 必须保持的不变式
 
@@ -90,7 +94,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 - 不能把 Worldbook/Preset **advisory** 字段写成已执行语义；以 [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md) 为准。  
 - 不能把「已开 GitHub issue / 已写审计 umbrella」写成「风险已关闭」。
 - 不能把 #398–#411 的取消、marker、Recovering 或 harness 证据外推为自动 replay/repair、Agent/tool 单 owner、性能 SLO、backup/restore 或真实 provider/browser/Compose 验收。
-- #342 backup/restore/migration、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的 SBOM release gate、签名、browser matrix、soak 仍未交付；它们是后续正式 release gates，不是当前代码已具备的能力。
+- #346 完整导出/migration、跨资源一致性 backup、自动定时备份/恢复、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的 SBOM release gate、签名、browser matrix、soak 仍未交付；它们是后续正式 release gates，不是当前代码已具备的能力。#342 backup/restore **最小闭环已交付**（PR #445，v1 限制见 §2.2），但不得外推为完整灾难恢复或自动定时备份。
 
 ## 5. 当前优先级
 
@@ -114,7 +118,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
    - 锁/async I/O/poison 与同 session 互斥（E-P0-4/5 → #284/#220/#160）。  
 2. 用真实 provider 与真实浏览器验证：onboarding → 首聊 → 继续对话 → 刷新恢复 → 服务重启恢复（#130 是当前 P1 外部硬门）。
 3. 校准 WebUI 运行时契约、视觉一致性、空/错/慢状态与 browser smoke（#311/#345 等）。  
-4. 备份、恢复、migration 与回滚的最小闭环（#342，正式 P2 release gate，当前未交付）。
+4. ~~备份、恢复、migration 与回滚的最小闭环（#342，正式 P2 release gate，当前未交付）~~ → **#342 最小闭环已交付（PR #445）**：手动 backup/restore（Full/Character/Session scope）+ pre-delete backup + scoped restore + 完整性校验 + WebUI。剩余：完整 migration/导出（#346）、自动定时备份、跨资源一致性 backup、restore swap 持 character_lock（W-02/#447）。
 5. 上述证据稳定前，默认不从 #312 启动无用户证据的新子系统扩张；遵守 #242 范围收敛。
 
 ### 5.1 实时工作入口（动手前用 `gh issue view` 复核状态）
@@ -133,18 +137,20 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 6. 验证快照
 
-| 范围 | 命令 / 说明 | 结果（`main@830426e`，2026-08-02） |
+| 范围 | 命令 / 说明 | 结果 |
 |---|---|---|
-| WebUI | `node --test webui/tests/*.test.mjs` | **75 passed, 0 failed** |
-| production harness unit | `node --test deploy/production/*.test.mjs` | **22 passed, 0 failed** |
-| UI | `npm run typecheck`；`npm run test -- --run`（`ui/`） | typecheck 通过；Vitest **13 files / 98 passed** |
-| Rust engine + protocol | `cargo test --workspace --exclude airp-ui --locked` | **1,282 passed, 5 ignored, 0 failed** |
+| WebUI | `node --test webui/tests/*.test.mjs` | **75 passed, 0 failed**（`main@830426e`，2026-08-02；PR #445 WebUI backup 测试含其中） |
+| production harness unit | `node --test deploy/production/*.test.mjs` | **22 passed, 0 failed**（`main@830426e`，2026-08-02） |
+| UI | `npm run typecheck`；`npm run test -- --run`（`ui/`） | typecheck 通过；Vitest **13 files / 98 passed**（`main@830426e`，2026-08-02） |
+| Rust engine + protocol | `cargo test --workspace --exclude airp-ui --locked` | **1,282 passed, 5 ignored, 0 failed**（`main@830426e`，2026-08-02）。增量：PR #436/#439/#441/#445 新增 R1 回归 + backup 测试，`main@e931bf7` 数字 ≥ 此处；本 docs-pass 未重跑 full-workspace，不把旧数字写成 e931bf7 数字。 |
 | Rust full workspace | `cargo test --workspace --locked` | 本机验证边界：`airp-ui` build script 需要生成的 `ui/src-tauri/binaries/airp-core-x86_64-pc-windows-gnu.exe`；因此未完成 full-workspace 测试，不把 exclude 结果写成 full workspace。 |
+| #342 backup/restore（PR #445） | `cargo test -p airp-core --lib backup::` 等 | **82 passed, 0 failed**（PR #445，`main@e931bf7`）：manifest schema、atomic snapshot、scoped restore、pre-delete backup、secret 排除、path sandbox、BACKUP_LOCK 语义。神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。 |
+| R1 锁序运行时强制（PR #441） | `cargo test -p airp-core --lib` | 4 条并发回归测试（`advance_plot`/`trigger_world_event`/`advance_clock`/`npc_action` 各与 `delete_character` 经 `Barrier` 并发）+ 9 条 R1 单测通过（PR #441）。 |
 | npm dependency audit | `npm audit --json`；`npm audit --omit=dev --json`（`ui/`） | 两个命令均 exit 0，vulnerabilities total **0**；#413 后的 lock-only 版本见 §2.2。 |
 | dependency governance / SBOM | `discover-deps.mjs --fail-on-block`；`generate-sbom.mjs --fail-on-unknown` | 均 exit 0；**693 third-party / unknown 0 / blocked 0**。inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。 |
 | production topology / 真实 provider·browser | CI mock/system-Chrome 与本地检查 | 不能替代 #130 维护者真实 provider + 真实 browser + Compose 验收；当前不宣称通过。 |
 
-未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact、网络故障、进程崩溃和真实 provider 长会话，不得由本表推断为通过。
+未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact、网络故障、进程崩溃和真实 provider 长会话，不得由本表推断为通过。本 docs-pass（2026-08-03）未重跑 full-workspace 测试；#342 与 R1 行为 PR 级证据，其余行仍为 `main@830426e` 证据。
 
 ## 7. 文档职责（校准后）
 

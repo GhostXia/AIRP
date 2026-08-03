@@ -58,6 +58,7 @@
 | `INDEX_LOCK` | `image_gen.rs` | `tokio::sync::Mutex<()>` | image gen 索引 |
 | `ENV_LOCK` | `config.rs`、`daemon/handlers/characters.rs` | `Mutex<()>` / `tokio::sync::Mutex<()>` | 进程 env reload 串行化 |
 | `DaemonState.provider_routing_update` / `plugin_tools_update` / `settings_update.transaction` | `daemon/mod.rs` | `tokio::sync::Mutex<()>` | per-DaemonState 配置热更新串行化 |
+| `BACKUP_LOCK` | `backup/snapshot.rs` | `Mutex<()>`（std） | 串行化 backup vs backup / backup vs restore（#342 E-P2-1，PR #445 引入） |
 
 ## 2. 已核验的嵌套路径
 
@@ -152,6 +153,25 @@ conversation_lock.lock().await  →  conversation_io_lock.lock().await  →  spa
 - tokio::sync::Mutex；`conversation_io_lock` 在 `spawn_blocking` 外持有，确保 journal I/O 串行。
 - `append_event_locked_async` 是唯一同时持两把锁的入口；`context_projection` 只持 `conversation_io_lock`。
 
+### 2.9 `delete_character` / `delete_session` → `create_backup`（`domain/chat.rs`，#342 E-P2-1，PR #445）
+
+`delete_character` 持 `character.write()` 后调用 `create_backup`（后者 acquire `BACKUP_LOCK`）：
+
+```text
+character_lock.write()  →  [create_backup 内] BACKUP_LOCK.lock()
+```
+
+`delete_session` 持 `character.read() + session_lock` 后调用 `create_backup`：
+
+```text
+character_lock.read()  →  session_lock.lock()  →  [create_backup 内] BACKUP_LOCK.lock()
+```
+
+- `BACKUP_LOCK` 是叶锁（R4），不与 `character_lock` / `session_lock` 反向嵌套。
+- `BACKUP_LOCK` 为 `std::sync::Mutex`，调用方（`delete_character_endpoint` / `delete_session_endpoint` / `delete_character` agent tool / `restore_backup_endpoint`）通过 `tokio::task::spawn_blocking` 包装 sync I/O，避免阻塞 tokio worker（A1）。
+- `restore_backup` 内部调 `create_backup_locked`（非 `create_backup`）以避免 `std::sync::Mutex` 不可重入死锁：`restore_backup` 已持 `BACKUP_LOCK`，再调 `create_backup` 会重入同一 `Mutex` 死锁；split 后 `create_backup_locked` 假设锁已持有，不再 acquire。
+- **残留风险（W-02，#447）**：`restore_backup` 的 swap 阶段（`swap_full_data_root` / `swap_scoped_subtree`）仅持 `BACKUP_LOCK`，不持任何 `character_lock`，可与并发 `append_to_current` / `StateService::mutate` 竞态。v1 缓解：用户在维护窗口执行 restore（无活跃 session）。
+
 ## 3. 锁序规则
 
 ### R1：`character_lock` 是 per-character 外层门控
@@ -182,7 +202,7 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 
 ### R4：全局 utility 锁是叶锁
 
-`COMMIT_LOCK`、`QUOTA_LOCK`、`PRESET_WRITE_LOCK`、`PRESET_IMPORT_LOCK`、`INDEX_LOCK`、`ENV_LOCK`、`DaemonState.*_update` 持有期间**不得**获取任何 per-character / per-conversation / per-session 资源锁。它们必须是临界区的最内层。
+`COMMIT_LOCK`、`QUOTA_LOCK`、`PRESET_WRITE_LOCK`、`PRESET_IMPORT_LOCK`、`INDEX_LOCK`、`ENV_LOCK`、`DaemonState.*_update`、`BACKUP_LOCK` 持有期间**不得**获取任何 per-character / per-conversation / per-session 资源锁。它们必须是临界区的最内层。
 
 例外审计：`StateService::mutate` 在持 `character_lock.read + state_lock` 期间调用 `commit_revision`，后者获取 `COMMIT_LOCK`——这是 `character.read → state → COMMIT_LOCK` 的合法外→内序列，`COMMIT_LOCK` 仍为最内层叶锁，不违反 R4。
 
@@ -359,6 +379,8 @@ R1 残留闭合验收记录（PR #439，closes issue #437，2026-08-03）：§2.
 R1 运行时强制 + 回归测试验收记录（closes #438 W-04，2026-08-03）：§6.1 运行时强制从「仅 R2」扩展到「R1 + R2 全路径」。新增 `track_character_read()` / `track_character_write()` 标记 character 外层门控；`track_session()` / `track_state()` 增补 R1 `debug_assert!`（无 character 时 panic）。修复 `LorebookService::write` 漏调 `track_character_read()` 的遗漏（R1 强制上线即捕获）。新增 4 条并发回归测试（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + Internal error 检测 TOCTOU）+ 9 条 R1 单测（合法路径 + 违反 panic + Drop 语义）。本地 `cargo test -p airp-core --lib --locked` 1262 passed / 0 failed / 5 ignored；`cargo test -p airp-core --tests --locked` 全绿；WebUI 98 passed / 0 failed；神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。§6.1 状态更新为「已交付（R1 + R2，全路径）」。
 
 lock-map cleanup race 修复验收记录（closes #440，2026-08-03）：§6.8 新增。`delete_character` / `delete_session` / `delete_persona` 的 `remove_deleted_*_lock` 调用移到 write guard 显式 `drop` 之后。修复闭合 PR #434 引入的 cleanup race（#422 修复的副作用）：修复前新 caller 在 cleanup 后拿到新 Arc 绕过 write guard（Windows `DirectoryNotEmpty` / Linux TOCTOU dir 复活）；修复后新 caller 在 cleanup 前拿到旧 Arc 与 write guard 互斥（fail-closed `NotFound`），cleanup 后 `delete_*` 已完全完成（合法串行化）。race 闭合由 drop 顺序静态保证，R1 回归测试间接覆盖。本次为 cleanup 时机修复，**不**改变 §6.1 运行时强制状态。`cargo test -p airp-core --lib --locked` 1262 passed / 0 failed / 5 ignored（同 #438 验收，未新增测试）。
+
+BACKUP_LOCK 锁序合同补全验收记录（closes #446 W-01，2026-08-03，docs-only）：§1.5 全局 utility 锁清单新增 `BACKUP_LOCK`；R4 叶锁规则列举 `BACKUP_LOCK`；§2.9 新增 `delete_character` / `delete_session` → `create_backup` 嵌套路径（`character_lock.write/read → session_lock → BACKUP_LOCK`，外→内合法序列）。本次为 docs-only 合同补全，**不**引入代码改动，**不**改变 §6.1 运行时强制状态。残留风险 W-02（`restore_backup` swap 阶段不持 character_lock，#447）记录于 §2.9，v1 缓解为维护窗口执行 restore。
 
 ## 8. 关联
 
