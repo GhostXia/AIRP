@@ -22,8 +22,9 @@
 //! - **AIRP 独立实现**：所有渲染逻辑自行编写，不复用第三方模板引擎
 
 use crate::adapter::MessageRole;
-use crate::agent::tools::{load_world_clock, load_world_events, WorldClock, WorldEvent};
+use crate::agent::tools::{WorldClock, WorldEvent};
 use crate::chat_store::ChatLog;
+use crate::domain::WorldEventService;
 use crate::error::AirpError;
 use crate::types::{CharacterId, SessionId};
 use serde::{Deserialize, Serialize};
@@ -152,8 +153,9 @@ pub fn build_timeline(
         Some(log) => log,
         None => {
             // JSONL 不存在 → 返回空 TimelineExport（仅含 world events / clock 元数据）
-            let world_events = load_world_events(data_root, cid.as_str())?;
-            let world_clock = load_world_clock(data_root, cid.as_str())?;
+            let svc = WorldEventService::new(data_root);
+            let world_events = svc.load_events(cid.as_str())?;
+            let world_clock = svc.load_clock(cid.as_str())?;
             let clock_snapshot = WorldClockSnapshot::from(&world_clock);
             let pending_events: Vec<WorldEvent> = world_events
                 .iter()
@@ -184,8 +186,9 @@ pub fn build_timeline(
     };
 
     // 2. 加载 world_events 与 world_clock（角色级，不依赖 session）
-    let world_events = load_world_events(data_root, cid.as_str())?;
-    let world_clock = load_world_clock(data_root, cid.as_str())?;
+    let svc = WorldEventService::new(data_root);
+    let world_events = svc.load_events(cid.as_str())?;
+    let world_clock = svc.load_clock(cid.as_str())?;
     let clock_snapshot = WorldClockSnapshot::from(&world_clock);
 
     // 3. 构建条目并排序
