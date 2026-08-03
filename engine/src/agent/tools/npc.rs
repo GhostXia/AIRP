@@ -19,7 +19,7 @@
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::{lock_order, session_lock, StateService};
+use crate::domain::{character_lock, lock_order, session_lock, StateService};
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -63,12 +63,20 @@ impl Tool for NpcActionTool {
             let session_dir =
                 crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
 
+            // 持有 character_lock.read() 作为 per-character 外层门控（R1），
+            // 防止 delete_character 在 append 期间删除 session 目录（TOCTOU）。
+            // RwLock read 共享，不阻塞其他 reader；仅阻塞 delete_character 的
+            // character.write()，这正是期望的互斥语义。
+            //
             // 持有 session_lock 直到 append_to_current + memory revision commit
             // 完成，与 advance_plot / trigger_world_event / seal_volume 共享
             // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
             //
-            // LOCK-ORDER: 单锁（§2.6），不与 state_lock 嵌套。
-            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.6 / §3 R2 / §4 A1 / §4 A3。
+            // LOCK-ORDER: character.read → session（§2.6 / R1，与 with_session 同模式）。
+            // 单锁族内不与 state_lock 嵌套。
+            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.6 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
+            let character = character_lock(cid.as_str());
+            let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
             let session_boundary = session_lock(cid.as_str(), sid.as_ref());
             let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
             let _session_track = lock_order::track_session();
