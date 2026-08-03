@@ -22,7 +22,7 @@ use crate::revision::atomic::{commit_revision, CommitOptions, StagedRevision};
 use crate::revision::manifest::{AssetKind, AssetSource};
 use crate::types::{CharacterId, SessionId, UserId};
 
-use super::locks::persona_lock;
+use super::locks::{persona_lock, remove_deleted_persona_lock};
 
 /// 持久化的 Persona（每用户一份，#114 MVP；#115 扩多份与绑定）。
 ///
@@ -341,6 +341,9 @@ impl PersonaService {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        // #422: 工作副本 + revision 目录 durable 删除后清理 persona lock-map
+        // stale 条目。新 caller 调 `persona_lock` 会创建新 Arc 走正常 create 流程。
+        remove_deleted_persona_lock(user_id.as_str());
         Ok(())
     }
 
