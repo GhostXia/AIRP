@@ -10,6 +10,7 @@ mod locks;
 mod lorebook;
 mod persona;
 mod state;
+mod world_event;
 
 pub(crate) use chat::RegenSnapshot;
 pub use chat::{ChatService, HistoryWindow, SwipeResponse, SWIPE_CANDIDATES_CAP};
@@ -20,6 +21,7 @@ pub use persona::{
     PersonaRevisionConflict, PersonaService,
 };
 pub use state::{StateService, StateSnapshot};
+pub use world_event::{WorldClock, WorldEvent, WorldEventService};
 
 // ── ChatService 已提取至 `domain/chat.rs`（E-P1-1 slice 5）────────────────────
 // 通过 `pub use chat::{...};` 重新导出，保持公共 API 不变。
@@ -30,6 +32,10 @@ pub use state::{StateService, StateSnapshot};
 
 // ── PersonaService 已提取至 `domain/persona.rs`（E-P1-1 slice 4）──────────────
 // 通过 `pub use persona::{...};` 重新导出，保持公共 API 不变。
+
+// ── WorldEventService 已提取至 `domain/world_event.rs`（E-P1-3 slice 1）────────
+// 通过 `pub use world_event::{...};` 重新导出，保持公共 API 不变。
+// agent/tools/world_event.rs 不再直接 replace_file/fs::write，写路径收口至 Service。
 
 #[cfg(test)]
 mod tests {
