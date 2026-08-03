@@ -254,6 +254,45 @@ CI 在顺序 B 下运行，触发了误判失败。这是**测试逻辑 bug**，
 
 **通过（无阻塞）**。测试修正正确，根因分析准确，R1 覆盖未削弱。建议合并。
 
+## 8. Second re-audit：第二次 CI 失败后测试修正（2026-08-03）
+
+PR #439 第二次 CI 运行 `Rust test` job 再次失败（同一测试）：
+
+```
+worker error: advance_plot failed with non-NotFound error (R1 TOCTOU protection may have failed): Io(Os { code: 3, kind: NotFound, message: "The system cannot find the path specified." })
+```
+
+### 8.1 根因分析
+
+§7 修正移除了 dir-existence 断言，但 worker A 的 error matcher 仍只接受 `AirpError::NotFound`，未覆盖 `AirpError::Io(io::Error { kind: NotFound })`。
+
+当 `delete_character` 先完成（dir 已删）而 `advance_plot` 后运行时：
+
+1. `advance_plot` 调 `resolve_session_dir`（line 78-79，**在 character_lock.read() 之前**）→ 返回路径（此时 dir 可能已不存在，但 `resolve_session_dir` 不检查存在性，只构造路径）。
+2. `advance_plot` acquire `character_lock.read()`（**新 Arc 实例**——#422 lock-map cleanup race：`delete_character` 在 write guard 释放前已移除 lock-map entry）。
+3. `advance_plot` 调 `append_to_current(&session_dir, &entry)`（line 108）→ `session_dir/current.md` 路径不存在 → 返回 `AirpError::Io(std::io::Error { kind: NotFound, code: 3 })`。
+
+这是 **#422 lock-map cleanup race** 的另一种表现（与 §2.4.3 W-01 同源）：`delete_character` 在 write guard 释放前移除 lock-map entry，允许 `advance_plot` 用新 lock 实例运行，此时 session_dir 已被 `remove_dir_all` 删除。**非 R1 TOCTOU 失效**——`advance_plot` 未读到半删状态，只是路径不存在。
+
+### 8.2 修正内容
+
+worker A 的 error matcher 扩展为同时接受：
+
+- `AirpError::NotFound(_)`：StateService 层显式 NotFound（原已接受）。
+- `AirpError::Io(io_err) if io_err.kind() == ErrorKind::NotFound`：`append_to_current` / `mutate_locked` 内 `fs` 操作因路径不存在失败（新增）。
+
+两种都是「character 已被 delete_character 删除」的合法串行化结果。真正的 R1 失效（读到半删 live.json → `AirpError::Internal`）仍会触发测试失败。
+
+### 8.3 独立复核
+
+- 修正后 `cargo test --workspace --all-features` 全量通过（1307 passed / 0 failed / 5 ignored）。
+- 生产代码（`state.rs` / `plot.rs` / `LOCK-ORDER-CONTRACT.md`）**仍未改动**。
+- #422 race 的根本修复（将 `remove_deleted_*_lock` 移到 guard drop 之后）不在 #437 范围，仍由 W-01 follow-up issue 追踪。
+
+### 8.4 Second re-audit 结论
+
+**通过（无阻塞）**。测试正确覆盖了 #422 race 的两种 NotFound 表现形式，R1 TOCTOU 不变式仍被严格验证。建议合并。
+
 ---
 
 审计 agent：（独立审计 mode，遵循 AGENTS.md 三原则）

@@ -1454,12 +1454,24 @@ async fn advance_plot_and_delete_character_serialized_by_character_lock() {
                         .await
                     });
                     // advance_plot 可能成功（持锁先于 delete_character 完成），
-                    // 也可能失败（delete_character 先完成，live.json 已删 → NotFound）。
-                    // 两者都是合法的 R1 串行化结果；读到半删状态会返回 Internal，
+                    // 也可能失败（delete_character 先完成，dir 已删）。
+                    // 合法失败模式：
+                    // - `AirpError::NotFound`：StateService 层显式 NotFound
+                    // - `AirpError::Io(io::Error { kind: NotFound })`：`append_to_current`
+                    //   写 session_dir/current.md 时路径不存在（#422 lock-map cleanup
+                    //   race：delete_character 在 write guard 释放前移除 lock-map entry，
+                    //   advance_plot 用新 lock 实例运行时 session_dir 已被 remove_dir_all
+                    //   删除）。这是 pre-existing #422 race，非 #437 R1 fix 范围。
+                    // 两者都是合法的串行化结果；读到半删状态会返回 Internal，
                     // 那是 R1 防护失效的标志，会让下面的 err 检查失败。
                     if let Err(e) = result {
                         match e {
                             crate::error::AirpError::NotFound(_) => Ok(()),
+                            crate::error::AirpError::Io(io_err)
+                                if io_err.kind() == std::io::ErrorKind::NotFound =>
+                            {
+                                Ok(())
+                            }
                             other => Err(format!(
                                 "advance_plot failed with non-NotFound error (R1 TOCTOU protection may have failed): {other:?}"
                             )),
