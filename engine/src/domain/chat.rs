@@ -13,7 +13,10 @@ use crate::types::{CharacterId, SessionId};
 use crate::ulid;
 
 use super::lock_order;
-use super::locks::{character_lock, remove_deleted_session_lock, session_lock};
+use super::locks::{
+    character_lock, remove_deleted_character_lock, remove_deleted_session_lock,
+    remove_deleted_state_lock, session_lock,
+};
 
 /// Immutable target state captured before a regen proposal is generated.
 #[derive(Debug, Clone)]
@@ -867,7 +870,19 @@ impl ChatService {
     pub fn delete_character(&self, character_id: &CharacterId) -> Result<(), AirpError> {
         let character = character_lock(character_id.as_str());
         let _guard = character.write().unwrap_or_else(|p| p.into_inner());
-        data_dir::delete_character(&self.data_root, character_id)
+        let result = data_dir::delete_character(&self.data_root, character_id);
+        if result.is_ok() {
+            // #422: character 目录 durable 删除后清理 lock-map stale 条目。
+            // 正在等待旧 Arc 的 waiter 拿到锁后操作已删除资源会 fail closed
+            //（NotFound）；新 caller 调 `character_lock`/`state_lock` 会创建新
+            // Arc 走正常 create 流程。与 `delete_session` 清理 session lock 同模式。
+            // 已知 gap：SESSION_LOCKS 中该 character 下所有 `{cid}/*` 条目也会
+            // stale，但批量前缀清理需遍历整表且 `delete_session` 已有 per-session
+            // 清理路径；character 级批量 session lock 清理留作后续。
+            remove_deleted_character_lock(character_id.as_str());
+            remove_deleted_state_lock(character_id.as_str());
+        }
+        result
     }
 
     /// #35：删除一个命名会话目录。走 character read lock + session lock，与 append/
