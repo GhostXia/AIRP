@@ -238,16 +238,22 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 
 ## 6. 已知缺口与 follow-up
 
-### 6.1 运行时锁序强制：已交付（部分路径）
+### 6.1 运行时锁序强制：已交付（R1 + R2，全路径）
 
-`domain.rs` 新增 `lock_order` 模块（`#[cfg(debug_assertions)]` thread-local 栈 + RAII `Guard`；`#[cfg(not(debug_assertions))]` 零成本 no-op），覆盖 R2 的 session↔state 嵌套方向检测：
+`domain.rs` 新增 `lock_order` 模块（`#[cfg(debug_assertions)]` thread-local 栈 + RAII `Guard`；`#[cfg(not(debug_assertions))]` 零成本 no-op），覆盖 R1（character 外层门控）与 R2（session↔state 嵌套方向）的运行时检测：
 
-- `track_session()` 在持 `state_lock` 时获取 `session_lock` 触发 `debug_assert!`（state→session 禁止，Bug F 类死锁回归）。
-- `track_state()` 无检查（session→state 是 R2 唯一合法嵌套方向）。
-- 覆盖 13 个 acquire 点：`domain.rs`（`ChatService::with_session`/`delete_session`、`StateService::read`/`mutate`/`write`、`LorebookService::read`/`write`）+ `plot.rs`（`advance_plot`）+ `world_event.rs`（`trigger_world_event` 阶段一/二、`advance_clock` 阶段一/二）+ `npc.rs`（`npc_action`）。
-- 6 个单测覆盖：`session_alone_ok` / `state_alone_ok` / `session_then_state_legal_no_panic`（advance_plot 合法方向）/ `state_then_session_panics`（违反触发）/ `drop_releases_held` / `state_released_then_session_ok`（两段临界区模式）。
+- **R1 强制**（#438 W-04，2026-08-03 交付）：
+  - `track_character_read()` / `track_character_write()` 记录 `character_lock` 持有状态，无 violation 检查（character 是最外层门控，无前置要求）。
+  - `track_session()` / `track_state()` 在调用时检查 HELD 栈是否含 `CharacterRead` 或 `CharacterWrite`；不含则 `debug_assert!` panic（R1 违反：session/state 必须由 character 外层门控）。
+  - 覆盖所有 4 条 agent tool 路径（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action`）+ `volume_manager::run_seal_flow` + `StateService::read`/`mutate`/`write` + `LorebookService::read`/`write` + `ChatService::with_session`/`delete_session`/`delete_character`。
+- **R2 强制**（既有）：
+  - `track_session()` 在持 `state_lock` 时获取 `session_lock` 触发 `debug_assert!`（state→session 禁止，Bug F 类死锁回归）。
+  - `track_state()` 无 R2 检查（session→state 是 R2 唯一合法嵌套方向）。
+- **R1 回归测试**（#438 W-04，2026-08-03 交付）：
+  - 4 条并发测试：`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 同时放行，30s 超时检测死锁。关键不变式：tool 不应返回 `Internal` error（那表示读到半删 live.json / world_events.json / world_clock.json，R1 TOCTOU 防护失效）。
+  - 15 条 `lock_order` 单测覆盖 R1/R2 合法路径、违反路径、Drop 语义、两段临界区模式。
 - release build（`--release`）下 `track_*` 返回 ZST `Guard`，零开销（§7）。
-- 约束：仅检测 R2 session↔state 方向；R1（character 外层门控）、R3（conversation 双锁）、R6（coordinator 反向获取）尚未有运行时强制。guard 不跨 `.await`（§4 A1），thread-local 栈仅在同步作用域内有效。
+- **未覆盖**：R3（conversation 双锁）、R6（coordinator 反向获取）尚未有运行时强制。guard 不跨 `.await`（§4 A1），thread-local 栈仅在同步作用域内有效。
 
 ### 6.2 std 锁内同步 I/O（结构性 debt）
 
@@ -296,6 +302,39 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 
 **闭合状态**：#437 通过 fix path 4 闭合本风险。`StateService::mutate` 拆为 `mutate_locked`（不 acquire `character_lock.read()`，要求调用方已持有）+ `mutate`（兼容包装，内部 acquire 后调 `mutate_locked`）。`advance_plot` 改用 `mutate_locked`，外层先 acquire `character_lock.read()` 再 acquire `session_lock`，最后调 `mutate_locked` 进入 `state_lock` 临界区。re-entrancy 风险消除，R1 TOCTOU 防护恢复，character 顶层目录（含 `live.json`）的并发删除被 `character_lock.read()` 外层门控阻断。本节保留作为历史记录，不再代表当前风险。
 
+**R1 运行时强制 + 回归测试（#438 W-04，2026-08-03 交付）**：在 #437 静态闭合基础上，#438 补齐运行时强制（§6.1）与 4 条并发回归测试（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + Internal error 检测 TOCTOU）。任意 PR 若回退 R1 fix（如移除 `character_lock.read()` 外层 acquire），`debug_assert!` 会在 CI debug build 立即 panic，回归测试也会失败。
+
+### 6.8 lock-map cleanup race（**已闭合，#440**）
+
+**历史背景**：PR #434 为修复 #422（stale lock-map 条目无界增长）引入 `remove_deleted_*_lock` cleanup 代码。但 cleanup 调用时机错误——在 `delete_character` / `delete_session` / `delete_persona` 的 write guard 释放**之前**调用，导致 race：
+
+1. `delete_character` 持 `character.write()`（旧 Arc A）期间，`data_dir::delete_character` 删除目录。
+2. `remove_deleted_character_lock` 移除 map entry（旧 Arc A 仍被 `_guard` 持有，但 map 已无 entry）。
+3. 新 caller（如 `advance_plot`）调 `character_lock(cid)` → map 无 entry → 创建新 Arc B → acquire `read()` 立即成功（Arc B 无 contention）。
+4. 新 caller 进入临界区，`StateService::mutate_locked` 内 `fs::create_dir_all` 重新创建 dir → 写 `live.json`。**race**：dir 被「复活」，`delete_character` 已返回 `Ok(())` 但 dir 存在。
+
+**影响**：
+- Windows：`fs::remove_dir_all` 在 `delete_character` 持 write guard 期间被并发文件创建打败 → `DirectoryNotEmpty`（PR #439 CI 中观察到）。
+- Linux / 通用：TOCTOU——`advance_plot` 用新 Arc 绕过 write guard，复活已删 dir 的部分文件（半删状态）。
+
+**关键区分**：这**不是** R1 TOCTOU 失效——R1（`character_lock.read()` 外层门控）在 #437 后已闭合。问题是 lock-map cleanup 过早移除 entry，使新 caller 用新 Arc 绕过 R1 锁（用新 Arc 而非旧 Arc，不与 write guard 互斥）。
+
+**修复**（#440，2026-08-03 交付）：将 `remove_deleted_*_lock` 调用移到 write guard 显式 `drop` **之后**：
+
+```rust
+// delete_character / delete_session / delete_persona 同模式
+let _guard = character.write().unwrap_or_else(|p| p.into_inner());
+let result = data_dir::delete_character(&self.data_root, character_id);
+drop(_guard);  // 显式释放 write guard
+if result.is_ok() {
+    remove_deleted_character_lock(character_id.as_str());  // cleanup 在 guard drop 之后
+}
+```
+
+**闭合状态**：修复后新 caller 在 cleanup 前拿到旧 Arc（与 write guard 互斥，看到 dir 已删除 → `NotFound` fail-closed），cleanup 后拿到新 Arc（`delete_character` 已完全完成，合法串行化）。race 闭合由 drop 顺序静态保证，R1 回归测试间接覆盖（修复前 CI 偶发 `Io(NotFound)` / `DirectoryNotEmpty`，修复后稳定通过）。
+
+**未覆盖**：Arc 指针相等性测试（`arc_ptr_eq` 模式）未实现（W-03 非阻塞 follow-up）。race 闭合由 drop 顺序静态保证，不依赖运行时检测。
+
 ## 7. 验收
 
 本合同不引入代码改动时（docs-only PR）：
@@ -317,11 +356,16 @@ R1 收敛验收记录（PR #436，2026-08-03）：§2.4 `trigger_world_event` / 
 
 R1 残留闭合验收记录（PR #439，closes issue #437，2026-08-03）：§2.3 `advance_plot` 通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合 R1。外层 `character_lock.read()` 已补齐，re-entrancy 风险消除，§6.7 残留 TOCTOU 风险已闭合。R1 例外路径数：0。本次为静态锁序收敛 + `StateService` API 拆分（新增 `mutate_locked` 方法），**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`；R1 运行时强制见 §6.1 W-03 follow-up）。同时修正 W-01 措辞（§6.7 re-entrancy 论证从「deadlock 风险」改为「deadlock 风险（部分 pthread 实现）+ 排他性语义破坏（Windows SRWLOCK）」）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
 
+R1 运行时强制 + 回归测试验收记录（closes #438 W-04，2026-08-03）：§6.1 运行时强制从「仅 R2」扩展到「R1 + R2 全路径」。新增 `track_character_read()` / `track_character_write()` 标记 character 外层门控；`track_session()` / `track_state()` 增补 R1 `debug_assert!`（无 character 时 panic）。修复 `LorebookService::write` 漏调 `track_character_read()` 的遗漏（R1 强制上线即捕获）。新增 4 条并发回归测试（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + Internal error 检测 TOCTOU）+ 9 条 R1 单测（合法路径 + 违反 panic + Drop 语义）。本地 `cargo test -p airp-core --lib --locked` 1262 passed / 0 failed / 5 ignored；`cargo test -p airp-core --tests --locked` 全绿；WebUI 98 passed / 0 failed；神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。§6.1 状态更新为「已交付（R1 + R2，全路径）」。
+
+lock-map cleanup race 修复验收记录（closes #440，2026-08-03）：§6.8 新增。`delete_character` / `delete_session` / `delete_persona` 的 `remove_deleted_*_lock` 调用移到 write guard 显式 `drop` 之后。修复闭合 PR #434 引入的 cleanup race（#422 修复的副作用）：修复前新 caller 在 cleanup 后拿到新 Arc 绕过 write guard（Windows `DirectoryNotEmpty` / Linux TOCTOU dir 复活）；修复后新 caller 在 cleanup 前拿到旧 Arc 与 write guard 互斥（fail-closed `NotFound`），cleanup 后 `delete_*` 已完全完成（合法串行化）。race 闭合由 drop 顺序静态保证，R1 回归测试间接覆盖。本次为 cleanup 时机修复，**不**改变 §6.1 运行时强制状态。`cargo test -p airp-core --lib --locked` 1262 passed / 0 failed / 5 ignored（同 #438 验收，未新增测试）。
+
 ## 8. 关联
 
 - [#284](https://github.com/GhostXia/AIRP/issues/284)：per-session in-flight mutex 设计；方案 N/O 在途。
 - [#220](https://github.com/GhostXia/AIRP/issues/220)：持久化/lock 遗留；PR #416 已收敛 mutex poison recovery。
 - [#381](https://github.com/GhostXia/AIRP/issues/381) E-P1-2：本合同对应 issue。
+- [#440](https://github.com/GhostXia/AIRP/issues/440)：lock-map cleanup race（已闭合，§6.8）。
 - `284-PER-SESSION-INFLIGHT-MUTEX-DESIGN.md` §6：本合同的子集，限定 coordinator 路径。
 - `docs/audits/2026-07-26-PR-335-bug-f-deadlock-audit.md`：Bug F 锁序倒置死锁审计。
 - `docs/audits/2026-07-26-PR-338-bug-b-advance-clock-session-lock-audit.md`：Bug B `advance_clock` session 锁审计。

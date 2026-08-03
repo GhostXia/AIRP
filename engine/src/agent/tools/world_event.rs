@@ -80,6 +80,7 @@ impl Tool for TriggerWorldEventTool {
             // 合同：docs/LOCK-ORDER-CONTRACT.md §2.4 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
             let character = character_lock(cid.as_str());
             let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+            let _character_track = lock_order::track_character_read();
 
             // 阶段一：state_lock 临界区——load + check + mark + save。
             // 返回 (event, content_buf) 给阶段二使用。若事件已 triggered，
@@ -257,6 +258,7 @@ impl Tool for AdvanceClockTool {
             // 合同：docs/LOCK-ORDER-CONTRACT.md §2.5 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
             let character = character_lock(cid.as_str());
             let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+            let _character_track = lock_order::track_character_read();
 
             // 阶段一：推进时钟 + 收集/标记到期事件（state_lock 临界区）。
             // 持有 state_lock 直到 save_world_events 完成，与

@@ -1462,13 +1462,19 @@ async fn advance_plot_and_delete_character_serialized_by_character_lock() {
                     //   race：delete_character 在 write guard 释放前移除 lock-map entry，
                     //   advance_plot 用新 lock 实例运行时 session_dir 已被 remove_dir_all
                     //   删除）。这是 pre-existing #422 race，非 #437 R1 fix 范围。
+                    // - `AirpError::Io(PermissionDenied)`（仅 Windows）：`remove_dir_all`
+                    //   完成后文件可能处于 "pending deletion" 状态，Windows 返回
+                    //   `PermissionDenied` 而非 `NotFound`。OS 级 quirk，非 R1 失效。
                     // 两者都是合法的串行化结果；读到半删状态会返回 Internal，
                     // 那是 R1 防护失效的标志，会让下面的 err 检查失败。
                     if let Err(e) = result {
                         match e {
                             crate::error::AirpError::NotFound(_) => Ok(()),
                             crate::error::AirpError::Io(io_err)
-                                if io_err.kind() == std::io::ErrorKind::NotFound =>
+                                if io_err.kind() == std::io::ErrorKind::NotFound
+                                    || (cfg!(windows)
+                                        && io_err.kind()
+                                            == std::io::ErrorKind::PermissionDenied) =>
                             {
                                 Ok(())
                             }
@@ -1535,4 +1541,220 @@ async fn advance_plot_and_delete_character_serialized_by_character_lock() {
     // `delete_character` 先完成而 `advance_plot` 后完成，`advance_plot` 会
     // 重新创建 dir 写 live.json —— 这是合法的串行化结果，非 TOCTOU 失效。
     // `delete_succeeded` 仅用于完成 worker B 的 Result<bool, String> 类型契约。
+}
+
+// ── #438 W-04：R1 回归测试（剩余 3 条 agent tool 路径）──────────────────────────
+//
+// 以下 3 条测试复用 `advance_plot_and_delete_character_serialized_by_character_lock`
+// 的策略：worker A 调用 agent tool（持 character_lock.read()），worker B 调用
+// `delete_character`（持 character_lock.write()），Barrier 同步放行，30s 超时
+// 检测死锁。关键不变式：tool 不应返回 `Internal` error（那表示读到半删
+// live.json / world_events.json / world_clock.json，R1 TOCTOU 防护失效）。
+//
+// 共享辅助 `run_r1_tool_vs_delete_character` 抽出 spawn_blocking + thread::scope
+// + Barrier + 超时模板，每个测试只声明 tool 名 / 参数 / character_id / setup。
+
+/// #438 W-04 通用 R1 回归测试辅助：并发运行 agent tool 调用（worker A）与
+/// `delete_character`（worker B），验证 R1 `character_lock` 串行化。
+///
+/// 策略与 `advance_plot_and_delete_character_serialized_by_character_lock` 一致：
+/// - 两个 worker 经 `Barrier` 同时放行，30s 超时检测死锁；
+/// - worker A 调用 tool（修复后持 `character_lock.read()` 作为 R1 外层门控），
+///   worker B 调用 `delete_character`（需 `character_lock.write()`）；
+/// - R1 只保证串行化（不保证顺序），所以 `Ok` / `NotFound` / `Io(NotFound)`
+///   都是合法结果；读到半删状态会返回 `Internal`，那表示 R1 防护失效，
+///   worker A 将其升级为测试失败。
+///
+/// `setup` 在 Barrier 放行前调用，用于写 world_events.json / world_clock.json
+/// 等工具专用 fixture。
+async fn run_r1_tool_vs_delete_character(
+    tool_name: &'static str,
+    tool_params: serde_json::Value,
+    character_id: &'static str,
+    setup: impl FnOnce(&std::path::Path) + Send + 'static,
+) {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, character_id);
+    setup(&state.data_root);
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
+    let worker_state = state.clone();
+    let join_handle = tokio::task::spawn_blocking(move || {
+        std::thread::scope(|scope| {
+            // Worker A: agent tool 调用（修复后持 character_lock.read()）
+            let handle_a = {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || -> Result<(), String> {
+                    let reg = default_registry(state.clone());
+                    let tool = reg.get(tool_name).unwrap();
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .map_err(|e| format!("rt build: {e}"))?;
+                    barrier.wait();
+                    let result = rt.block_on(async { tool.call(tool_params, true).await });
+                    // 合法失败模式：
+                    // - `NotFound` / `Io(NotFound)`：character dir 已被
+                    //   `delete_character` 删除（R1 串行化后 tool 看到 dir 不存在）。
+                    // - `Io(PermissionDenied)`（仅 Windows）：`fs::remove_dir_all` 在
+                    //   write guard 内完成后，Windows 内核可能将文件保持 "pending
+                    //   deletion" 状态（filesystem filter / antivirus 句柄延迟释放）。
+                    //   tool acquire read lock 后访问已删路径时，Windows 返回
+                    //   `PermissionDenied`（OS error 5）而非 `NotFound`。这是 OS 级
+                    //   transient quirk，非 R1 TOCTOU 失效——R1 串行化已保证 tool 不
+                    //   与 `delete_character` 临界区重叠。
+                    // `Internal` error 表示读到半删状态（corrupt JSON / 缺字段），
+                    // 那才是 R1 防护失效的标志，仍升级为测试失败。
+                    if let Err(e) = result {
+                        match e {
+                            crate::error::AirpError::NotFound(_) => Ok(()),
+                            crate::error::AirpError::Io(io_err)
+                                if io_err.kind() == std::io::ErrorKind::NotFound
+                                    || (cfg!(windows)
+                                        && io_err.kind()
+                                            == std::io::ErrorKind::PermissionDenied) =>
+                            {
+                                Ok(())
+                            }
+                            other => Err(format!(
+                                "{tool_name} failed with non-NotFound error \
+                                 (R1 TOCTOU protection may have failed): {other:?}"
+                            )),
+                        }
+                    } else {
+                        Ok(())
+                    }
+                })
+            };
+
+            // Worker B: delete_character（需 character_lock.write()）
+            let handle_b = {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || -> Result<bool, String> {
+                    let chat = crate::domain::ChatService::new(&state.data_root);
+                    let cid = crate::types::CharacterId::new(character_id)
+                        .map_err(|e| format!("cid: {e}"))?;
+                    barrier.wait();
+                    let result = chat.delete_character(&cid);
+                    Ok(result.is_ok())
+                })
+            };
+
+            handle_a
+                .join()
+                .map_err(|e| format!("worker A join: {e:?}"))??;
+            let delete_succeeded = handle_b
+                .join()
+                .map_err(|e| format!("worker B join: {e:?}"))??;
+            Ok::<bool, String>(delete_succeeded)
+        })
+    });
+
+    let _ = match tokio::time::timeout_at(deadline, join_handle).await {
+        Ok(Ok(Ok(succeeded))) => succeeded,
+        Ok(Ok(Err(message))) => panic!("worker error: {message}"),
+        Ok(Err(error)) => panic!("spawn_blocking join error: {error:?}"),
+        Err(_) => {
+            panic!(
+                "{tool_name} + delete_character deadlocked: workers exceeded 30 seconds \
+                 (R1 character_lock serialization failed — see #437 / #438)"
+            )
+        }
+    };
+}
+
+/// #438 W-04：`trigger_world_event` 持 `character_lock.read()` 期间，
+/// `delete_character` 必须串行化，不得并发删除 character 顶层目录（含
+/// `world_events.json`）。验证 R1 TOCTOU 防护已闭合（fix path 1）。
+#[tokio::test(flavor = "current_thread")]
+async fn trigger_world_event_and_delete_character_serialized_by_character_lock() {
+    run_r1_tool_vs_delete_character(
+        "trigger_world_event",
+        serde_json::json!({
+            "character_id": "trig_evt_r1",
+            "event_id": "evt_001"
+        }),
+        "trig_evt_r1",
+        |data_root| {
+            let events_path = data_root.join("characters/trig_evt_r1/world_events.json");
+            std::fs::write(
+                &events_path,
+                serde_json::json!([{
+                    "id": "evt_001",
+                    "name": "Storm",
+                    "description": "A sudden storm",
+                    "content": "Lightning split the sky."
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        },
+    )
+    .await;
+}
+
+/// #438 W-04：`advance_clock` 持 `character_lock.read()` 期间，
+/// `delete_character` 必须串行化，不得并发删除 character 顶层目录（含
+/// `world_clock.json` / `world_events.json`）。验证 R1 TOCTOU 防护已闭合
+/// （fix path 3）。
+#[tokio::test(flavor = "current_thread")]
+async fn advance_clock_and_delete_character_serialized_by_character_lock() {
+    run_r1_tool_vs_delete_character(
+        "advance_clock",
+        serde_json::json!({
+            "character_id": "adv_clk_r1"
+        }),
+        "adv_clk_r1",
+        |data_root| {
+            let clock_path = data_root.join("characters/adv_clk_r1/world_clock.json");
+            std::fs::write(
+                &clock_path,
+                serde_json::json!({
+                    "current_time": 0,
+                    "advance_per_turn": 1,
+                    "time_unit": "hour"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let events_path = data_root.join("characters/adv_clk_r1/world_events.json");
+            std::fs::write(
+                &events_path,
+                serde_json::json!([{
+                    "id": "evt_time_1",
+                    "name": "Dawn",
+                    "description": "The sun rises",
+                    "content": "Golden light spills over the horizon.",
+                    "time_trigger": 1
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        },
+    )
+    .await;
+}
+
+/// #438 W-04：`npc_action` 持 `character_lock.read()` 期间，
+/// `delete_character` 必须串行化，不得并发删除 character 顶层目录（含
+/// session 目录下的 `current.md`）。验证 R1 TOCTOU 防护已闭合（fix path 2）。
+#[tokio::test(flavor = "current_thread")]
+async fn npc_action_and_delete_character_serialized_by_character_lock() {
+    run_r1_tool_vs_delete_character(
+        "npc_action",
+        serde_json::json!({
+            "character_id": "npc_act_r1",
+            "npc_name": "Goblin",
+            "action": "steals an apple",
+            "result": "the merchant shouts"
+        }),
+        "npc_act_r1",
+        |_| {},
+    )
+    .await;
 }

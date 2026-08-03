@@ -49,6 +49,7 @@ impl StateService {
     pub fn read(&self, character_id: &CharacterId) -> Result<serde_json::Value, AirpError> {
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
         let state_boundary = state_lock(character_id.as_str());
         let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
         let _state_track = lock_order::track_state();
@@ -88,6 +89,7 @@ impl StateService {
         // 合同：docs/LOCK-ORDER-CONTRACT.md §2.2 / §2.3 / §3 R1 / §3 R2 / §4 A1。
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
         self.mutate_locked(character_id, mutate)
     }
 
@@ -134,6 +136,7 @@ impl StateService {
     ) -> Result<StateSnapshot, AirpError> {
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
         let state_boundary = state_lock(character_id.as_str());
         let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
         let _state_track = lock_order::track_state();
