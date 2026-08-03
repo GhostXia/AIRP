@@ -22,7 +22,7 @@
 use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
-use crate::domain::{lock_order, session_lock, StateService};
+use crate::domain::{character_lock, lock_order, session_lock, StateService};
 use crate::error::AirpError;
 use serde_json::Value;
 use std::future::Future;
@@ -78,14 +78,27 @@ impl Tool for AdvancePlotTool {
             let session_dir =
                 crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
 
+            // #437 fix path 4：外层先持有 character_lock.read() 作为 per-character
+            // 外层门控（R1），防止 delete_character 在 advance_plot 临界区期间删除
+            // character 目录（TOCTOU）。PR #436 因 StateService::mutate 内部也
+            // acquire character_lock.read() 构成 re-entrant read（std RwLock 递归
+            // read 在 Windows SRWLOCK 破坏排他性语义、在部分 pthread 实现可能
+            // deadlock），未能闭合本路径。#437 拆 StateService::mutate 为
+            // mutate_locked（不 acquire character_lock）+ mutate（兼容包装），
+            // advance_plot 改用 mutate_locked，外层 character_lock.read() 由
+            // 调用方持有，消除 re-entrancy。
+            //
             // 持有 session_lock 直到 append_to_current + memory revision commit
             // 完成，与 npc_action / trigger_world_event / seal_volume 共享
             // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
             //
-            // LOCK-ORDER: session→state 唯一合法嵌套（§2.3 / R2）。下方 StateService::mutate
-            // 会内部获取 character.read → state.lock，与本 session_lock 形成 session→character→state。
-            // 反向（state→session）由 trigger_world_event / advance_clock 两段临界区避免。
-            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.3 / §3 R2 / §4 A1 / §4 A3。
+            // LOCK-ORDER: character.read → session → state（§2.3 / R1 / R2）。
+            // session→state 唯一合法嵌套方向（R2），反向由 trigger_world_event /
+            // advance_clock 两段临界区避免。StateService::mutate_locked 只 acquire
+            // state_lock，不 acquire character_lock，无 re-entrancy。
+            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.3 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
+            let character = character_lock(cid.as_str());
+            let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
             let session_boundary = session_lock(cid.as_str(), sid.as_ref());
             let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
             let _session_track = lock_order::track_session();
@@ -94,10 +107,12 @@ impl Tool for AdvancePlotTool {
 
             crate::volume_store::append_to_current(&session_dir, &entry)?;
 
-            // 通过 StateService::mutate 串行化 plot_history 写入：
+            // 通过 StateService::mutate_locked 串行化 plot_history 写入：
             // 1) 与 update_relationship / update_character_state 共享 state_lock(character_id)；
             // 2) parse 失败返回 AirpError::Internal，而非静默吞错；
             // 3) 复用 #115 Phase 2e revision 合同。
+            // 4) #437：使用 mutate_locked 而非 mutate，因为本调用方已在外层持有
+            //    character_lock.read()，mutate 会构成 re-entrant read（见上方注释）。
             //
             // 防御性类型检查（Gemini #1 跟进）：旧版若 `live` 非 Object 会 panic
             // （`live["plot_history"]` indexing 在非 Object 上 panic）；若
@@ -105,7 +120,7 @@ impl Tool for AdvancePlotTool {
             // 时 push 被静默跳过，导致更新丢失却仍返回 Ok。改为显式
             // `as_object_mut` + `entry` + `as_array_mut` + `ok_or_else(Internal)`，
             // 任何类型错乱都上抛错误而非 panic 或静默丢更新。
-            let snapshot = StateService::new(&state.data_root).mutate(&cid, |live| {
+            let snapshot = StateService::new(&state.data_root).mutate_locked(&cid, |live| {
                 let live_obj = live.as_object_mut().ok_or_else(|| {
                     AirpError::Internal("live state is not a JSON object".to_string())
                 })?;

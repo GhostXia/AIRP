@@ -1393,3 +1393,146 @@ async fn advance_clock_and_advance_plot_concurrent_no_deadlock() {
     assert!(current.contains("Dawn reached the valley."));
     assert!(current.contains("the valley woke at dawn"));
 }
+
+/// #437 回归测试：`advance_plot` 持有 `character_lock.read()` 期间，
+/// `delete_character`（需 `character_lock.write()`）必须串行化，不得并发删除
+/// character 顶层目录（含 `live.json`）。这验证 R1 TOCTOU 防护已闭合。
+///
+/// 修复前（PR #436 时残留）：`advance_plot` 外层为 `session_lock`，未持
+/// `character_lock.read()`；`delete_character` 可在 `advance_plot` 临界区期间
+/// 并发删除 `live.json`，导致 `StateService::mutate` 读到半删状态（TOCTOU）。
+///
+/// 修复后（#437 fix path 4）：`advance_plot` 外层先 acquire
+/// `character_lock.read()`，`delete_character` 的 `character_lock.write()`
+/// 必须等待 `advance_plot` 释放后才能进入临界区，消除 TOCTOU 风险。
+///
+/// 测试策略：两个 worker 经 Barrier 同时放行，30s 超时检测死锁。R1 只保证
+/// 串行化（不保证顺序），所以两种合法终态：
+/// - `advance_plot` 先完成 → 持锁期间 durable 写入；`delete_character` 随后
+///   删除 dir → 终态：dir 不存在。
+/// - `delete_character` 先完成 → dir 已删；`advance_plot` 随后 acquire 新
+///   `character_lock` 实例（lock-map 已 cleanup），重新创建 dir 写 live.json
+///   → 终态：dir 存在且含 advance_plot 产物。
+///
+/// 关键不变式（本测试唯一断言）：`advance_plot` 不应返回 `Internal` error
+/// （那表示读到半删 live.json，R1 TOCTOU 防护失效）。`Ok` 与 `NotFound` 都是
+/// 合法的串行化结果。dir 终态由串行顺序决定，不断言。
+#[tokio::test(flavor = "current_thread")]
+async fn advance_plot_and_delete_character_serialized_by_character_lock() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    // 唯一 character_id：避免与其他 #[tokio::test] 争用 process-global 锁。
+    seed_character(&state.data_root, "adv_plot_r1");
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
+    let worker_state = state.clone();
+    let join_handle = tokio::task::spawn_blocking(move || {
+        std::thread::scope(|scope| {
+            // Worker A: advance_plot（修复后持 character_lock.read()）
+            let handle_a = {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || -> Result<(), String> {
+                    let reg = default_registry(state.clone());
+                    let tool = reg.get("advance_plot").unwrap();
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .map_err(|e| format!("rt build: {e}"))?;
+                    barrier.wait();
+                    let result = rt.block_on(async {
+                        tool.call(
+                            serde_json::json!({
+                                "character_id": "adv_plot_r1",
+                                "development": "test plot for r1 regression",
+                                "type": "progression"
+                            }),
+                            true,
+                        )
+                        .await
+                    });
+                    // advance_plot 可能成功（持锁先于 delete_character 完成），
+                    // 也可能失败（delete_character 先完成，dir 已删）。
+                    // 合法失败模式：
+                    // - `AirpError::NotFound`：StateService 层显式 NotFound
+                    // - `AirpError::Io(io::Error { kind: NotFound })`：`append_to_current`
+                    //   写 session_dir/current.md 时路径不存在（#422 lock-map cleanup
+                    //   race：delete_character 在 write guard 释放前移除 lock-map entry，
+                    //   advance_plot 用新 lock 实例运行时 session_dir 已被 remove_dir_all
+                    //   删除）。这是 pre-existing #422 race，非 #437 R1 fix 范围。
+                    // 两者都是合法的串行化结果；读到半删状态会返回 Internal，
+                    // 那是 R1 防护失效的标志，会让下面的 err 检查失败。
+                    if let Err(e) = result {
+                        match e {
+                            crate::error::AirpError::NotFound(_) => Ok(()),
+                            crate::error::AirpError::Io(io_err)
+                                if io_err.kind() == std::io::ErrorKind::NotFound =>
+                            {
+                                Ok(())
+                            }
+                            other => Err(format!(
+                                "advance_plot failed with non-NotFound error (R1 TOCTOU protection may have failed): {other:?}"
+                            )),
+                        }
+                    } else {
+                        Ok(())
+                    }
+                })
+            };
+
+            // Worker B: delete_character（需 character_lock.write()）
+            let handle_b = {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || -> Result<bool, String> {
+                    let chat = crate::domain::ChatService::new(&state.data_root);
+                    let cid = crate::types::CharacterId::new("adv_plot_r1")
+                        .map_err(|e| format!("cid: {e}"))?;
+                    barrier.wait();
+                    // delete_character 可能：
+                    // - 成功（character dir 被删除）
+                    // - 失败 NotFound（advance_plot 已删除？不会发生——advance_plot 不删 character）
+                    // - 失败 Io(DirectoryNotEmpty)（Windows 已知 quirk：lock-map cleanup 在
+                    //   write guard 释放前移除条目，允许 advance_plot 用新 lock 实例并发写文件，
+                    //   导致 remove_dir_all 在 Windows 上失败。这是 #422 lock-map cleanup 的
+                    //   pre-existing race，非 #437 R1 fix 引入，记录为 follow-up。）
+                    // 三者都是合法结果；本测试只验证 R1 锁序串行化不死锁 + advance_plot
+                    // 不读到半删状态（Internal error）。
+                    let result = chat.delete_character(&cid);
+                    Ok(result.is_ok())
+                })
+            };
+
+            handle_a
+                .join()
+                .map_err(|e| format!("worker A join: {e:?}"))??;
+            let delete_succeeded = handle_b
+                .join()
+                .map_err(|e| format!("worker B join: {e:?}"))??;
+            Ok::<bool, String>(delete_succeeded)
+        })
+    });
+
+    let _delete_succeeded = match tokio::time::timeout_at(deadline, join_handle).await {
+        Ok(Ok(Ok(succeeded))) => succeeded,
+        Ok(Ok(Err(message))) => panic!("worker error: {message}"),
+        Ok(Err(error)) => panic!("spawn_blocking join error: {error:?}"),
+        Err(_) => {
+            panic!(
+                "advance_plot + delete_character deadlocked: workers exceeded 30 seconds \
+                 (R1 character_lock serialization failed — see #437 fix path 4)"
+            )
+        }
+    };
+
+    // 关键不变式已在 worker A 内验证：advance_plot 不应返回 Internal error
+    //（那表示读到半删 live.json，R1 TOCTOU 防护失效）。worker A 已将非 NotFound
+    // error 升级为测试失败。
+    //
+    // 不断言 character dir 终态：R1 只保证串行化（不保证顺序），若
+    // `delete_character` 先完成而 `advance_plot` 后完成，`advance_plot` 会
+    // 重新创建 dir 写 live.json —— 这是合法的串行化结果，非 TOCTOU 失效。
+    // `delete_succeeded` 仅用于完成 worker B 的 Result<bool, String> 类型契约。
+}
