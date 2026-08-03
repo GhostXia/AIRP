@@ -81,7 +81,7 @@ character_lock.read()  →  state_lock.lock()
 - 同步 std 锁；闭包内为纯同步 I/O，不跨 `.await`。
 - `mutate` 在持锁期间执行 `load → closure → schema 校验 → replace_file → history.jsonl append → revision commit`。
 
-### 2.3 `agent::tools::plot::advance_plot`（`plot.rs`）—— 唯一合法 session→state 嵌套
+### 2.3 `agent::tools::plot::advance_plot`（`plot.rs`）—— 唯一合法 session→state 嵌套，R1 已记录例外
 
 ```text
 session_lock.lock()  →  [StateService::mutate 内]  character_lock.read()  →  state_lock.lock()
@@ -90,40 +90,58 @@ session_lock.lock()  →  [StateService::mutate 内]  character_lock.read()  →
 - 同步 std 锁；async fn 体内不 `.await`（同步 I/O 阻塞 tokio worker——已知 debt，见 §6.2）。
 - **这是 session_lock 与 state_lock 同时持有的唯一已核验路径**，方向固定为 session → state。
 - 由 Bug F 修复（PR #335）后，无反向路径与之成环。
+- **R1 例外（已记录）**：本路径外层为 `session_lock`，而非 `character_lock.read()`。理由：`advance_plot` 持 `session_lock` 后调用 `StateService::mutate`，后者内部已 acquire `character_lock.read()`；若 advance_plot 在外部再 acquire `character_lock.read()`，将构成同一 thread 对 std `RwLock` 的递归 read——这在某些平台（含 Windows SRWLOCK）会 deadlock。当前债务：本路径相对 `delete_character` 的 TOCTOU 防护依赖 `session_lock` 串行化（`delete_character` 不持 `session_lock`），而非 `character_lock.read()` 外层门控；`delete_character` 内部持 `character.write()` 但不持 `session_lock`，因此 advance_plot 持 `session_lock` 期间 `delete_character` 不会清空 session 目录，但仍可能并发删除 character 顶层目录（未闭合风险，记录于 §6.7）。修复路径需先解决 `StateService::mutate` 的 character_lock re-entrancy（如改为 upgradable read 或显式区分外层/内层 acquire），不在本合同本轮收敛范围。
 
-### 2.4 `agent::tools::world_event::trigger_world_event`（`world_event.rs`，Bug F 修复后）
+### 2.4 `agent::tools::world_event::trigger_world_event`（`world_event.rs`，Bug F 修复后 + R1 收敛）
 
-两段独立临界区，**绝不嵌套**：
+外层 `character_lock.read()` 跨两段临界区持有；两段临界区**绝不嵌套**：
 
 ```text
-阶段一: state_lock.lock()           → 释放
-阶段二: session_lock.lock()         → 释放
+character_lock.read()  →  阶段一: state_lock.lock()           → 释放
+                      →  阶段二: session_lock.lock()         → 释放
 ```
 
-- 同一调用任意时刻只持一把锁。
+- 同一调用任意时刻只持一把内层锁（state 或 session），`character_lock.read()` 共享读不阻塞其他 reader。
 - Bug F（PR #335）就是消除旧版 state→session 与 `advance_plot` session→state 的锁序倒置死锁。
+- R1 收敛（本 PR）：新增外层 `character_lock.read()`，防止 `delete_character` 在事件标记 / append 期间删除 character 目录（TOCTOU）。早期 return（事件已 triggered）时 guard 由 Drop 自动释放。
 
-### 2.5 `agent::tools::world_event::advance_clock`（`world_event.rs`，Bug B 修复后）
+### 2.5 `agent::tools::world_event::advance_clock`（`world_event.rs`，Bug B 修复后 + R1 收敛）
 
 与 §2.4 同模式：
 
 ```text
-阶段一: state_lock.lock()           → 释放
-阶段二: session_lock.lock()         → 释放（仅当 content_buf 非空）
+character_lock.read()  →  阶段一: state_lock.lock()           → 释放
+                      →  阶段二: session_lock.lock()         → 释放（仅当 content_buf 非空）
 ```
 
 - `advance_and_check_triggers` 在阶段一内完成 clock 推进 + 事件标记 + `save_world_events`。
 - Bug B（PR #338）修复了旧版阶段二无 `session_lock` 导致的 `current.md` 并发交错。
+- R1 收敛（本 PR）：新增外层 `character_lock.read()`，与 `trigger_world_event` 同模式，防止 `delete_character` 在时钟推进 / 事件 append 期间删除 character 目录。
 
-### 2.6 `agent::tools::npc::npc_action`（`npc.rs`）
+### 2.6 `agent::tools::npc::npc_action`（`npc.rs`，R1 收敛）
 
 ```text
-session_lock.lock()
+character_lock.read()  →  session_lock.lock()
 ```
 
-- 单锁，不与 state_lock 嵌套。
+- 单内层锁，不与 state_lock 嵌套。
+- R1 收敛（本 PR）：新增外层 `character_lock.read()`，与 `with_session` 同模式，防止 `delete_character` 在 append 期间删除 session 目录（TOCTOU）。
 
-### 2.7 `conversation::append_event`（`conversation.rs`）
+### 2.7 `volume_manager::run_seal_flow`（`volume_manager.rs`，#283 方案 J + R1 收敛）
+
+LLM streaming（秒级）不持锁；写盘段持 `character.read + session_lock` + baseline 校验：
+
+```text
+[LLM streaming 不持锁]
+character_lock.read()  →  session_lock.lock()  →  baseline 校验  →  write_volume / write_index / clear_current
+```
+
+- 仅 per-character 路径（`character_id = Some`）持锁；scene 模式（`character_id = None`）保持既有行为不持锁。
+- guard 不跨 `.await`（write_volume / write_index / clear_current 全为 sync），因此 std `Mutex` / `RwLock` 合法。
+- 双 baseline 校验（current.md + index.md）防止并发 `npc_action` / `advance_plot` 的 append 或 `run_maintenance` 的跨卷实体晋升被静默覆盖；校验失败返回 `Conflict`，调用方可重试。
+- R1 收敛（本 PR）：新增外层 `character_lock.read()`，防止 `delete_character` 在 seal 写盘期间删除 character 目录（TOCTOU）。
+
+### 2.8 `conversation::append_event`（`conversation.rs`）
 
 ```text
 conversation_lock.lock().await  →  conversation_io_lock.lock().await  →  spawn_blocking(I/O)
@@ -136,7 +154,13 @@ conversation_lock.lock().await  →  conversation_io_lock.lock().await  →  spa
 
 ### R1：`character_lock` 是 per-character 外层门控
 
-获取 `state_lock`、`session_lock`（针对同一 `character_id`）前，必须先持有 `character_lock.read()`（或 `.write()`）。例外：`agent::tools::*` 通过 `StateService::mutate` 间接获取时，由 `StateService` 内部保证。
+获取 `state_lock`、`session_lock`（针对同一 `character_id`）前，必须先持有 `character_lock.read()`（或 `.write()`）。例外：`StateService::read` / `mutate` / `write` 内部已 acquire `character_lock.read()` 再 acquire `state_lock`，调用方若已持 `character_lock.read()` 再调 `StateService::*` 会构成递归 read（部分平台 deadlock 风险），因此 `agent::tools::*` 通过 `StateService::mutate` 间接获取 state_lock 时不再外部 acquire `character_lock.read()`。
+
+**已记录的 R1 例外路径**（仅 1 处）：
+
+- §2.3 `advance_plot`：外层为 `session_lock`（非 `character_lock.read()`），因 `StateService::mutate` 内部 acquire `character_lock.read()` 会构成递归 read。TOCTOU 防护降级为依赖 `session_lock` 串行化 + `delete_character` 不持 `session_lock` 的事实；未闭合风险见 §6.7。
+
+**R1 收敛进度（本 PR）**：§2.4 `trigger_world_event`、§2.5 `advance_clock`、§2.6 `npc_action`、§2.7 `run_seal_flow` 已全部补齐外层 `character_lock.read()`，仅余 §2.3 `advance_plot` 因 re-entrancy 风险未闭合。
 
 ### R2：`session_lock` 与 `state_lock` 的唯一合法嵌套方向
 
@@ -242,6 +266,21 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate�
 
 `agent::tools::*` 部分路径绕过 shared service 直接 `replace_file` / `fs` 写（#381 E-P1-3 / #160）。这些路径若同时持 `session_lock` / `state_lock`，仍受本合同约束；若不持锁，则不在本合同覆盖范围，由 #381 E-P1-3 单独收敛。
 
+### 6.7 `advance_plot` R1 例外残留 TOCTOU 风险（本 PR 记录）
+
+§2.3 `advance_plot` 因 `StateService::mutate` 内部 acquire `character_lock.read()` 的 re-entrancy 风险（std `RwLock` 递归 read 在部分平台 deadlock），未在本 PR 补齐外层 `character_lock.read()`。当前 TOCTOU 防护降级为：
+
+- `advance_plot` 持 `session_lock` 期间，`delete_character` 不会清空 session 目录（`delete_character` 不持 `session_lock`，但会持 `character.write()`）。
+- 但 `delete_character` 仍可能并发删除 character 顶层目录（含 `live.json` / `world_clock.json`），与 `advance_plot` 调用 `StateService::mutate` 读 `live.json` 形成竞态。
+
+**修复路径**：需先解决 `StateService::mutate` 的 character_lock re-entrancy，可选方案：
+
+1. 将 `StateService::*` 的 `character_lock.read()` 上提到调用方（advance_plot 外层 acquire），`StateService::*` 内部不再 acquire——破坏现有 `StateService` 自封装语义，需重审所有调用点。
+2. 改用 `RwLock::read()` + 显式递归计数（如 `lock_api::RwLock` 的 re-entrant 变体）——引入新依赖。
+3. 将 `advance_plot` 改为两段临界区模式（先释放 `session_lock`，再调 `StateService::mutate`），消除 session→state 嵌套——但改变 `advance_plot` 的事务语义（state 变更不再原子于 session append）。
+
+本 PR 不闭合此风险，记录为 follow-up issue。
+
 ## 7. 验收
 
 本合同不引入代码改动时（docs-only PR）：
@@ -258,6 +297,8 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate�
 - 必须在本合同 §6.1 更新状态为「已交付（部分路径）」或「已交付（全路径）」。
 
 §6.1 验收记录（2026-08-02）：6 个单测覆盖唯一 `debug_assert!` 触发点（`track_session` 持 state 时）+ 合法方向 + Drop 释放 + 两段临界区；`cargo check --release` 通过（no-op ZST `Guard`）；§6.1 状态已更新为「已交付（部分路径）」（仅 R2 session↔state，不含 R1/R3/R6）。本地 `cargo test --workspace` 1301 passed / 0 failed，WebUI 76 passed / 0 failed，神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。
+
+R1 收敛验收记录（本 PR，2026-08-03）：§2.4 `trigger_world_event` / §2.5 `advance_clock` / §2.6 `npc_action` / §2.7 `run_seal_flow` 四个路径已补齐外层 `character_lock.read()`；§2.3 `advance_plot` 因 `StateService::mutate` re-entrancy 风险未闭合，残留风险与修复路径记录于 §6.7。本次为静态锁序收敛，**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
 
 ## 8. 关联
 

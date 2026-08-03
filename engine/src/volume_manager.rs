@@ -289,13 +289,23 @@ pub async fn run_seal_flow(
         next_n, title, header_block, content_block
     );
 
-    // #283 方案 J：写盘段持 session_lock + baseline 校验。
+    // #283 方案 J：写盘段持 character.read + session_lock + baseline 校验。
     // guard 不跨 await（write_volume / write_index / clear_current 全为 sync），
-    // 因此 std::sync::Mutex 合法。校验失败返回 Conflict，调用方可重试；
+    // 因此 std::sync::Mutex / RwLock 合法。校验失败返回 Conflict，调用方可重试；
     // current.md + index.md 保留不变，下一轮硬阈值会重新触发封卷，不损坏数据。
+    //
+    // character_lock.read() 作为 per-character 外层门控（R1），防止
+    // delete_character 在 seal 写盘期间删除 character 目录（TOCTOU）。RwLock read
+    // 共享，不阻塞其他 reader；仅阻塞 delete_character 的 character.write()。
+    // 与 npc_action / trigger_world_event / advance_clock 同模式。
+    //
+    // LOCK-ORDER: character.read → session（§2.7 / R1）。
+    // 合同：docs/LOCK-ORDER-CONTRACT.md §2.7 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
     let diff = index_parser::parse_index_diff(&diff_block);
     let new_index = index_parser::apply_diff(&index, &diff);
     if let Some(cid) = character_id {
+        let character = crate::domain::character_lock(cid);
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let lock = crate::domain::session_lock(cid, session_id);
         let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         // 双 baseline 校验：current.md 防止并发 append 被销毁，index.md 防止
