@@ -84,14 +84,18 @@ POST /v1/backups/:id/restore   → 返回 { restored_from, rollback_backup_id, v
 `delete_character` / `delete_session` 默认会创建 `source: PreDelete` 的 scoped backup（character 或 session 子树）。流程：
 
 1. 在备份列表中找到对应 `PreDelete` backup（按 `source` 字段筛选）
-2. **不能直接 restore**：v1 仅支持 `Full` scope restore，scoped restore 会被 fail-closed 拒绝（防止当前 restore 流程删除 data_root 下未备份的不相关数据）
-3. 手动从 backup 目录的 `files/` 子树拷贝所需文件回 data_root：
-   ```
-   data_root/backups/{backup_id}/files/characters/{id}/  →  data_root/characters/{id}/
-   ```
-4. 重启 daemon
+2. 点击"校验"确认完整性（`POST /v1/backups/:id/verify`）
+3. 点击"恢复"——scoped restore 会**仅替换目标子树**（如 `characters/alice/`），其他 character / session / 顶层文件不受影响
+4. 恢复流程与标准恢复一致：自动创建 `PreRestoreRollback` Full scope backup、post-restore 校验、secret 不恢复
+5. 重启 daemon（让 character_lock map / session_lock map 重新加载）
 
-follow-up issue 将实现真正的 scoped restore（仅替换目标子树）。
+API 等价流程：
+```
+POST /v1/backups/:id/verify
+POST /v1/backups/:id/restore   → 返回 { restored_from, rollback_backup_id, verified }
+```
+
+scoped restore 不变量：仅替换 `manifest.scope.subtree_prefix()` 子树；其他 character / session / 顶层文件保持原样。替换前移除现有子树（若存在），再 rename staging 子树到目标位置。
 
 ### 4.4 命令行兜底（backup 不可读时）
 
@@ -101,14 +105,15 @@ follow-up issue 将实现真正的 scoped restore（仅替换目标子树）。
 
 | 限制 | 影响 | 缓解 | follow-up |
 |---|---|---|---|
-| 不串行化所有写路径 | backup 期间并发写可能产生混合快照 | 在维护窗口或无活跃 session 时执行 backup；`PreDelete` / `PreRestoreRollback` 由调用方锁串行化 | 跨资源一致性强备份 |
-| 仅支持 `Full` scope restore | `Character` / `Session` scope backup 不能直接 restore | 见 4.3，手动从 `files/` 拷贝 | scoped restore |
+| backup 创建不串行化所有写路径 | backup 期间并发写可能产生混合快照 | 在维护窗口或无活跃 session 时执行 backup；`PreDelete` 由调用方 character_lock 串行化创建阶段 | 跨资源一致性强备份 |
+| restore swap 阶段不持 character_lock | restore 期间并发写同一资源可能竞态 | restore 前确保无活跃 session（或暂停 daemon） | restore swap 阶段 acquire character_lock |
 | 不加密 secret | provider/access key 不进备份 | 恢复后手动重配 | secret 加密备份 |
 | 不自动定时 | 用户必须手动触发或调 API | follow-up 做 cron | 自动定时备份 |
 | 不增量 / 不压缩 | 大 data_root 备份慢、占空间 | v1 接受 | 增量 / 压缩 |
 | 无保留策略 | backup 累积需手动清理 | WebUI 删除按钮 | 自动清理策略 |
 | `delete_persona` / `delete_plugin_tool` 无 pre-delete backup | persona / plugin 误删不可恢复 | v1 只覆盖用户最痛的 character/session；persona/plugin 可重建 | 后续补齐 |
 | 进程内 backup lock | 跨进程不安全 | AIRP daemon 单进程前台运行（AGENTS.md） | 跨进程锁（如有需要） |
+| Windows `sync_dir` 为 no-op | Windows crash safety 弱于 Unix（目录元数据不 fsync） | Unix 上 `sync_data` 有效；Windows 与既有 `revision::atomic::sync_dir` 一致 | Windows 目录 fsync（如 API 可用） |
 
 ## 6. 一致性约束（写入合同）
 
@@ -127,7 +132,7 @@ follow-up issue 将实现真正的 scoped restore（仅替换目标子树）。
 
 4. **原子性**：create / restore 都用 staging → `sync_dir` → 原子 rename 模式；任一步失败不留下半成品状态
 
-5. **fail-closed**：pre-delete backup 失败 → delete 操作拒绝执行（不删数据）；restore 校验失败 → 拒绝 restore（不动 data_root）；scoped restore → 拒绝（v1）
+5. **fail-closed**：pre-delete backup 失败 → delete 操作拒绝执行（不删数据）；restore 校验失败 → 拒绝 restore（不动 data_root）；restore swap 失败 → 保留 staging + rollback backup 供人工恢复（不清理现场）
 
 6. **`BACKUP_LOCK`**（`std::sync::Mutex`，进程内）串行化 backup vs backup / backup vs restore；调用方在 `character_lock` 内调用 backup 合法（外→内序列，LOCK-ORDER 合同）
 
@@ -143,7 +148,7 @@ follow-up issue 将实现真正的 scoped restore（仅替换目标子树）。
 | `GET` | `/v1/backups` | 列出所有 backup | 返回数组，按 `created_at` 降序 |
 | `GET` | `/v1/backups/:id` | 取 manifest | 完整 `BackupManifest` |
 | `POST` | `/v1/backups/:id/verify` | 校验完整性 | `{verified, checked_files, tree_sha256}` |
-| `POST` | `/v1/backups/:id/restore` | 恢复（v1 仅 Full） | `{restored_from, rollback_backup_id, verified}` |
+| `POST` | `/v1/backups/:id/restore` | 恢复（Full / Character / Session scope） | `{restored_from, rollback_backup_id, verified}` |
 | `DELETE` | `/v1/backups/:id` | 删除 backup | 不可恢复 |
 
 `DELETE /v1/characters/:id` 与 `DELETE /v1/sessions/:id` 接受 `?force=true` 跳过 pre-delete backup（advanced / testing）。
