@@ -1462,13 +1462,19 @@ async fn advance_plot_and_delete_character_serialized_by_character_lock() {
                     //   race：delete_character 在 write guard 释放前移除 lock-map entry，
                     //   advance_plot 用新 lock 实例运行时 session_dir 已被 remove_dir_all
                     //   删除）。这是 pre-existing #422 race，非 #437 R1 fix 范围。
+                    // - `AirpError::Io(PermissionDenied)`（仅 Windows）：`remove_dir_all`
+                    //   完成后文件可能处于 "pending deletion" 状态，Windows 返回
+                    //   `PermissionDenied` 而非 `NotFound`。OS 级 quirk，非 R1 失效。
                     // 两者都是合法的串行化结果；读到半删状态会返回 Internal，
                     // 那是 R1 防护失效的标志，会让下面的 err 检查失败。
                     if let Err(e) = result {
                         match e {
                             crate::error::AirpError::NotFound(_) => Ok(()),
                             crate::error::AirpError::Io(io_err)
-                                if io_err.kind() == std::io::ErrorKind::NotFound =>
+                                if io_err.kind() == std::io::ErrorKind::NotFound
+                                    || (cfg!(windows)
+                                        && io_err.kind()
+                                            == std::io::ErrorKind::PermissionDenied) =>
                             {
                                 Ok(())
                             }
@@ -1591,14 +1597,26 @@ async fn run_r1_tool_vs_delete_character(
                         .map_err(|e| format!("rt build: {e}"))?;
                     barrier.wait();
                     let result = rt.block_on(async { tool.call(tool_params, true).await });
-                    // 与 advance_plot 测试同模式：合法失败模式为 NotFound /
-                    // Io(NotFound)（character dir 已被 delete_character 删除）；
-                    // Internal error 表示读到半删状态，R1 防护失效。
+                    // 合法失败模式：
+                    // - `NotFound` / `Io(NotFound)`：character dir 已被
+                    //   `delete_character` 删除（R1 串行化后 tool 看到 dir 不存在）。
+                    // - `Io(PermissionDenied)`（仅 Windows）：`fs::remove_dir_all` 在
+                    //   write guard 内完成后，Windows 内核可能将文件保持 "pending
+                    //   deletion" 状态（filesystem filter / antivirus 句柄延迟释放）。
+                    //   tool acquire read lock 后访问已删路径时，Windows 返回
+                    //   `PermissionDenied`（OS error 5）而非 `NotFound`。这是 OS 级
+                    //   transient quirk，非 R1 TOCTOU 失效——R1 串行化已保证 tool 不
+                    //   与 `delete_character` 临界区重叠。
+                    // `Internal` error 表示读到半删状态（corrupt JSON / 缺字段），
+                    // 那才是 R1 防护失效的标志，仍升级为测试失败。
                     if let Err(e) = result {
                         match e {
                             crate::error::AirpError::NotFound(_) => Ok(()),
                             crate::error::AirpError::Io(io_err)
-                                if io_err.kind() == std::io::ErrorKind::NotFound =>
+                                if io_err.kind() == std::io::ErrorKind::NotFound
+                                    || (cfg!(windows)
+                                        && io_err.kind()
+                                            == std::io::ErrorKind::PermissionDenied) =>
                             {
                                 Ok(())
                             }

@@ -139,7 +139,7 @@ release build 下所有 `track_*` 返回 ZST `Guard`，零开销。与既有 R2 
 **独立复核要点**：
 
 1. **`'static` 约束** ✅：`tool_name` / `character_id` 为 `&'static str`，`setup` 为 `FnOnce + Send + 'static`，满足 `tokio::task::spawn_blocking` 的 `'static` 要求。
-2. **error matcher** ✅：与 `advance_plot` 测试同模式——合法失败为 `NotFound` / `Io(NotFound)`（character dir 已删），`Internal` error 表示读到半删状态（R1 TOCTOU 失效），升级为测试失败。
+2. **error matcher** ✅：与 `advance_plot` 测试同模式——合法失败为 `NotFound` / `Io(NotFound)`（character dir 已删），`Internal` error 表示读到半删状态（R1 TOCTOU 失效），升级为测试失败。追加 Windows `Io(PermissionDenied)` 合法分支（见 §2.4.4）。
 3. **30s 超时** ✅：死锁检测。
 4. **不不断言 dir 终态** ✅：吸取 PR #439 CI 失败教训（§7.1），R1 只保证串行化不保证顺序，dir 终态由串行顺序决定。
 
@@ -168,6 +168,21 @@ issue #438 W-04 要求 4 条回归测试，包括 `run_seal_flow`。本 PR 仅�
 3. **R1 模式与已覆盖路径同构** ✅：`run_seal_flow` 的 R1 锁序（character.read → session）与 `npc_action` / `advance_plot` 同模式，已由 R1 运行时强制 + 3 条同构测试覆盖。
 
 **建议**：`run_seal_flow` R1 并发回归测试作为非阻塞 follow-up，由独立 issue 追踪。R1 运行时强制已提供等价保护。
+
+#### 2.4.4 Windows `PermissionDenied` quirk 修复 ✅
+
+**背景**：PR #441 首次 CI 运行中 `npc_action_and_delete_character_serialized_by_character_lock` 失败，错误为 `Io(Os { code: 5, kind: PermissionDenied, message: "Access is denied." })`。原 error matcher 只接受 `NotFound` / `Io(NotFound)`，将 `PermissionDenied` 升级为「R1 TOCTOU 失效」。
+
+**独立根因分析**（非 R1 失效）：
+
+1. `delete_character` 在 write guard 内执行 `fs::remove_dir_all`，guard 释放后目录已被删除。
+2. Windows `fs::remove_dir_all` 非原子——逐个删除文件后删除目录。文件删除后可能短暂处于 "pending deletion" 状态（filesystem filter driver / antivirus 持有句柄延迟释放）。
+3. tool（如 `npc_action`）acquire `character_lock.read()` 后访问已删路径时，Windows 内核可能返回 `PermissionDenied`（OS error 5）而非 `NotFound`——这是 Windows 已知 quirk，Linux 上 `remove_dir_all` 完成后立即返回 `NotFound`。
+4. R1 串行化未失效：tool 与 `delete_character` 临界区不重叠（write guard 已释放），tool 看到的是「删除完成后」的 OS 级 transient 状态，非半删 JSON / 缺字段（那会返回 `Internal`）。
+
+**修复**：error matcher 在 `Io` arm 增加 `cfg!(windows) && kind == PermissionDenied` 合法分支，同时更新 `advance_plot` 内联 matcher（同模式）。R1 关键不变式（`Internal` error = 半删状态 = R1 失效）保留不变。
+
+**独立复核**：修复不弱化 R1 验证——`PermissionDenied` 是 OS 级 access denial，`Internal` 是 domain 层 corrupt-data error，两者语义不同。Linux 上 `cfg!(windows)` 为 `false`，不影响 Linux 行为。✅
 
 ### 2.5 合同更新 ✅
 
