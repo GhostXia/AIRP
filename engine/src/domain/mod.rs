@@ -9,6 +9,7 @@ pub(crate) mod lock_order;
 mod locks;
 mod lorebook;
 mod persona;
+mod plot;
 mod state;
 mod world_event;
 
@@ -20,6 +21,7 @@ pub use persona::{
     EffectivePersonaResolution, EffectivePersonaSource, Persona, PersonaBinding,
     PersonaRevisionConflict, PersonaService,
 };
+pub use plot::{PlotArc, PlotPhase, PlotService};
 pub use state::{StateService, StateSnapshot};
 pub use world_event::{WorldClock, WorldEvent, WorldEventService};
 
@@ -36,6 +38,11 @@ pub use world_event::{WorldClock, WorldEvent, WorldEventService};
 // ── WorldEventService 已提取至 `domain/world_event.rs`（E-P1-3 slice 1）────────
 // 通过 `pub use world_event::{...};` 重新导出，保持公共 API 不变。
 // agent/tools/world_event.rs 不再直接 replace_file/fs::write，写路径收口至 Service。
+
+// ── PlotService 已提取至 `domain/plot.rs`（E-P1-3 slice 2）────────────────────
+// 通过 `pub use plot::{PlotArc, PlotPhase, PlotService};` 重新导出，保持公共 API 不变。
+// daemon/handlers/plot.rs 不再直接 replace_file/fs::write，写路径收口至 Service。
+// 边界：PlotService 只管 plot_arc.json；live.json 的 plot_history 仍由 StateService::mutate 管。
 
 #[cfg(test)]
 mod tests {
