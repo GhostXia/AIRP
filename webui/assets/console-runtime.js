@@ -820,6 +820,184 @@
     if (state.characterId) loadDrift();
   }
 
+  // #342 E-P2-1：备份恢复闭环 WebUI 入口。替换原 renderUnavailable('backup')。
+  // 调用契约：GET /v1/backups（列表）、POST /v1/backups（创建）、
+  // POST /v1/backups/:id/verify（校验）、POST /v1/backups/:id/restore（恢复）、
+  // DELETE /v1/backups/:id（删除）。secret 文件（secrets.json / settings.json）
+  // 由 Engine denylist 排除，restore 后需手动重配 provider key。
+  async function renderBackup() {
+    const BACKUP_SOURCE_LABELS = { manual: '手动', pre_delete: '删除前', pre_restore_rollback: '恢复前回滚' };
+    const BACKUP_SCOPE_KIND_LABELS = { full: '全量', character: '角色', session: '会话' };
+
+    function formatBytes(n) {
+      if (n == null) return '—';
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+      if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+      return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    function formatTimestamp(iso) {
+      if (!iso) return '—';
+      // Engine 返回 RFC3339 UTC；本地展示按浏览器时区
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleString();
+    }
+
+    function describeScope(scope) {
+      if (!scope || typeof scope !== 'object') return '—';
+      const kind = scope.kind;
+      const kindLabel = BACKUP_SCOPE_KIND_LABELS[kind] || kind;
+      if (kind === 'full') return kindLabel;
+      if (kind === 'character') return kindLabel + '：' + (scope.character_id || '?');
+      if (kind === 'session') return kindLabel + '：' + (scope.character_id || '?') + '/' + (scope.session_id || '?');
+      return kindLabel;
+    }
+
+    function describeVerified(verified) {
+      if (verified === true) return '已校验';
+      if (verified === false) return '校验失败';
+      return '未校验';
+    }
+
+    const view = $('#view'); view.replaceChildren();
+    const createCard = card('创建备份', true);
+    view.appendChild(createCard);
+    createCard.appendChild(node('div', 'runtime-warning',
+      '备份会排除 secrets.json 与 settings.json（含 provider key 与 access key）。' +
+      '备份期间建议暂停写入（维护窗口），避免并发写产生混合快照。'));
+    const form = node('div', 'runtime-form'); createCard.appendChild(form);
+    const scopeKind = input('备份范围', 'full', {
+      select: [
+        { value: 'full', label: '全量' },
+        { value: 'character', label: '单角色' },
+        { value: 'session', label: '单会话' },
+      ],
+    });
+    form.append(scopeKind.wrap);
+    // scope-dependent ID inputs
+    const charOptions = state.characters.map(v => ({ value: v, label: v }));
+    const charIdInput = input('角色 ID', state.characterId || '', { select: charOptions.length ? charOptions : [{ value: '', label: '无可用角色' }] });
+    const sessOptions = state.sessions.map(v => ({ value: v, label: v }));
+    const sessIdInput = input('会话 ID', state.sessionId || '', { select: sessOptions.length ? sessOptions : [{ value: '', label: '无可用会话' }] });
+    form.append(charIdInput.wrap, sessIdInput.wrap);
+    const refreshScopeInputs = () => {
+      const kind = scopeKind.control.value;
+      charIdInput.wrap.style.display = kind === 'character' || kind === 'session' ? '' : 'none';
+      sessIdInput.wrap.style.display = kind === 'session' ? '' : 'none';
+    };
+    scopeKind.control.addEventListener('change', refreshScopeInputs);
+    refreshScopeInputs();
+    const createBtn = button('创建备份', async () => {
+      const kind = scopeKind.control.value;
+      let scopeBody;
+      if (kind === 'full') {
+        scopeBody = { kind: 'full' };
+      } else if (kind === 'character') {
+        const cid = charIdInput.control.value.trim();
+        if (!cid) { setStatus('请填写角色 ID', true); return; }
+        scopeBody = { kind: 'character', character_id: cid };
+      } else {
+        const cid = charIdInput.control.value.trim();
+        const sid = sessIdInput.control.value.trim();
+        if (!cid || !sid) { setStatus('请填写角色 ID 与会话 ID', true); return; }
+        scopeBody = { kind: 'session', character_id: cid, session_id: sid };
+      }
+      if (!window.confirm('即将创建备份。secrets.json 与 settings.json 会被排除。备份期间请暂停写入。继续？')) return;
+      try {
+        await task('创建备份', () => client.request('POST', '/v1/backups', { source: 'manual', scope: scopeBody }));
+        setStatus('备份已创建');
+        loadList();
+      } catch (error) { /* task 已 setStatus */ }
+    }, 'btn-primary');
+    form.append(createBtn);
+
+    const listBox = card('已有备份', true);
+    view.appendChild(listBox);
+    const listInfo = node('p', 'runtime-muted', '');
+    listBox.appendChild(listInfo);
+    const listContainer = node('div', 'runtime-list'); listBox.appendChild(listContainer);
+    const refreshBtn = button('刷新列表', () => loadList());
+    listBox.appendChild(refreshBtn);
+
+    async function loadList() {
+      listContainer.replaceChildren();
+      listInfo.textContent = '加载中…';
+      let items;
+      try {
+        items = await task('加载备份列表', () => client.request('GET', '/v1/backups'));
+      } catch (error) {
+        listInfo.textContent = '加载失败：' + message(error);
+        return;
+      }
+      if (!Array.isArray(items) || !items.length) {
+        listInfo.textContent = '暂无备份';
+        return;
+      }
+      listInfo.textContent = '共 ' + items.length + ' 个备份（按创建时间降序）';
+      items.forEach(item => listContainer.appendChild(renderBackupRow(item, loadList)));
+    }
+
+    function renderBackupRow(item, reload) {
+      const row = node('div', 'runtime-card runtime-backup-row');
+      const head = node('div', 'runtime-row-title');
+      const shortId = (item.backup_id || '').slice(0, 8);
+      head.appendChild(node('span', '', shortId));
+      const sourceLabel = BACKUP_SOURCE_LABELS[item.source] || item.source;
+      head.appendChild(node('span', 'import-report-tag ' + (item.source === 'manual' ? 'ok' : 'warn'), sourceLabel));
+      head.appendChild(node('span', 'runtime-muted', describeVerified(item.verified)));
+      row.appendChild(head);
+      const meta = node('dl', 'runtime-kv');
+      const appendMeta = (label, value) => {
+        meta.appendChild(node('dt', '', label));
+        meta.appendChild(node('dd', '', value));
+      };
+      appendMeta('创建时间', formatTimestamp(item.created_at));
+      appendMeta('范围', describeScope(item.scope));
+      appendMeta('文件数', String(item.files_count ?? '—'));
+      appendMeta('总字节', formatBytes(item.total_bytes));
+      row.appendChild(meta);
+      const actionBox = actions();
+      row.appendChild(actionBox);
+      actionBox.appendChild(button('校验', async () => {
+        try {
+          const resp = await task('校验备份', () => client.request('POST', '/v1/backups/' + encodeURIComponent(item.backup_id) + '/verify'));
+          setStatus('校验通过：' + resp.checked_files + ' 文件，tree=' + (resp.tree_sha256 || '').slice(0, 12) + '…');
+          reload();
+        } catch (error) { /* task 已 setStatus */ }
+      }));
+      actionBox.appendChild(button('恢复', async () => {
+        const ok = window.confirm(
+          '确定从备份 ' + shortId + ' 恢复？\n\n' +
+          '此操作会：\n' +
+          '1. 自动创建一个回滚备份（保护当前 data_root 状态）\n' +
+          '2. 用备份内容覆盖 data_root 下所有非 backup 文件\n' +
+          '3. secrets.json / settings.json 不会被恢复，需手动重新配置 provider key 与 access key\n' +
+          '4. 建议恢复后重启 daemon，避免运行中状态与新数据不一致\n\n' +
+          '继续？'
+        );
+        if (!ok) return;
+        try {
+          const resp = await task('恢复备份', () => client.request('POST', '/v1/backups/' + encodeURIComponent(item.backup_id) + '/restore'));
+          setStatus('已恢复（回滚备份 id=' + (resp.rollback_backup_id || '').slice(0, 8) + '…），建议重启 daemon');
+          reload();
+        } catch (error) { /* task 已 setStatus */ }
+      }));
+      actionBox.appendChild(button('删除', async () => {
+        if (!window.confirm('确定删除备份 ' + shortId + '？此操作不可恢复。')) return;
+        try {
+          await task('删除备份', () => client.request('DELETE', '/v1/backups/' + encodeURIComponent(item.backup_id)));
+          setStatus('备份已删除');
+          reload();
+        } catch (error) { /* task 已 setStatus */ }
+      }, 'btn-danger'));
+      return row;
+    }
+
+    loadList();
+  }
+
   async function renderUnavailable(kind) {
     const view = $('#view'); view.replaceChildren(); const box = card(kind === 'backup' ? '备份与恢复' : '插件管理', true); box.append(node('div', 'runtime-warning', kind === 'backup' ? '当前 Engine 没有备份/恢复 HTTP API。为避免制造“已备份”的假象，本页不提供不可验证的操作。请先通过文件系统或部署层备份 AIRP 数据目录。' : '当前 Engine 没有插件发现、安装或权限管理 API。本页只声明能力缺口，不伪造插件状态。'), node('p', 'runtime-muted', '后端提供正式契约后，可在此接入并加入 smoke 验收。')); view.appendChild(box);
   }
@@ -837,7 +1015,7 @@
       // 旧代码会落入 renderDiagnostics fallback 而非跳到正确的专用页面。
       // 这里加 redirect renderer，把这类请求转发到对应的 HTML 页面。
       const redirectRenderer = href => () => { location.href = pathWithState(href); };
-      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: () => renderUnavailable('backup'), plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; }, stylelearn: redirectRenderer('38-style-learn.html'), dialoguegen: redirectRenderer('39-dialogue-gen.html'), wbgraph: redirectRenderer('40-worldbook-graph.html'), timeline: redirectRenderer('41-timeline-export.html'), carddiff: redirectRenderer('42-card-diff.html') };
+      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: renderBackup, plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; }, stylelearn: redirectRenderer('38-style-learn.html'), dialoguegen: redirectRenderer('39-dialogue-gen.html'), wbgraph: redirectRenderer('40-worldbook-graph.html'), timeline: redirectRenderer('41-timeline-export.html'), carddiff: redirectRenderer('42-card-diff.html') };
       await (renderers[screen] || renderDiagnostics)();
     } catch (error) {
       $('#engine-status').className = 'status-pill danger'; $('#engine-status').lastChild.textContent = '连接或加载失败'; setStatus(message(error), true);

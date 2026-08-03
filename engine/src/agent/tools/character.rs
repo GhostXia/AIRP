@@ -133,10 +133,14 @@ impl Tool for DeleteCharacterTool {
             // 破坏性删除：拿角色级写锁，独占排斥该角色下所有会话的 append/rollback
             // （它们持 read 锁）。旧实现用 per-session Mutex 的 key=character，与命名
             // 会话写的 key=character/{sid} 不互斥，故可交错半删（issue #22）。
-            ChatService::new(&state.data_root).delete_character(&cid)?;
-            tracing::warn!(character_id = %cid, "delete_character executed");
+            // #342 E-P2-1：默认创建 PreDelete scoped backup，让删除可恢复。
+            let backup_id = ChatService::new(&state.data_root).delete_character(&cid, false)?;
+            tracing::warn!(character_id = %cid, ?backup_id, "delete_character executed");
             Ok(ToolResult {
-                output: serde_json::json!({ "deleted": cid.to_string() }),
+                output: serde_json::json!({
+                    "deleted": cid.to_string(),
+                    "pre_delete_backup_id": backup_id,
+                }),
                 dry_run: false,
             })
         })

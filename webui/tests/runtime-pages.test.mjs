@@ -276,16 +276,40 @@ test('console-runtime consumes import_report for worldbook/preset honesty (E-P1-
   assert.match(css, /\.import-report-tag\.warn/, 'components.css must style warn tag');
 });
 
-test('backup page explicitly stays unavailable without calling a backup API', () => {
+// #342 E-P2-1：backup 页面接入新契约。原 "stays unavailable" 测试已废弃，
+// 改为断言 renderBackup 调用 /v1/backups 系列端点，并向用户明示 secret 排除与
+// restore 风险（secrets 需重配、建议重启 daemon、回滚备份）。
+test('backup page calls backup API and renders list with secret/restore warnings', () => {
   assert.match(backupPage, /data-screen="backup"/);
-  assert.ok(consoleRuntime.includes("backup: () => renderUnavailable('backup')"));
-  const start = consoleRuntime.indexOf('async function renderUnavailable');
-  const end = consoleRuntime.indexOf('async function boot', start);
-  assert.ok(start >= 0 && end > start, 'backup renderer must remain a bounded unavailable renderer');
-  const unavailableRenderer = consoleRuntime.slice(start, end);
-  assert.match(unavailableRenderer, /当前 Engine 没有备份\/恢复 HTTP API/);
-  assert.doesNotMatch(unavailableRenderer, /client\.request\(/);
-  assert.doesNotMatch(unavailableRenderer, /\/v1\/(?:backup|restore)/);
+  // renderer 已从 renderUnavailable('backup') 切换为 renderBackup
+  assert.ok(consoleRuntime.includes('backup: renderBackup'),
+    'renderers map must bind backup to renderBackup');
+  assert.doesNotMatch(consoleRuntime, /backup:\s*\(\)\s*=>\s*renderUnavailable\('backup'\)/,
+    'must not keep the old unavailable renderer for backup');
+  // renderBackup 函数定义存在
+  assert.match(consoleRuntime, /async function renderBackup\b/,
+    'missing renderBackup function');
+  const start = consoleRuntime.indexOf('async function renderBackup');
+  const end = consoleRuntime.indexOf('async function renderUnavailable', start);
+  assert.ok(start >= 0 && end > start, 'renderBackup must be a bounded renderer');
+  const backupRenderer = consoleRuntime.slice(start, end);
+  // 调用 backup API 契约：list / create / verify / restore / delete
+  assert.match(backupRenderer, /GET.*\/v1\/backups/, 'must list backups via GET /v1/backups');
+  assert.match(backupRenderer, /POST.*\/v1\/backups'/, 'must create backup via POST /v1/backups');
+  assert.match(backupRenderer, /POST.*\/v1\/backups\/.*\/verify/, 'must verify via POST /v1/backups/:id/verify');
+  assert.match(backupRenderer, /POST.*\/v1\/backups\/.*\/restore/, 'must restore via POST /v1/backups/:id/restore');
+  assert.match(backupRenderer, /DELETE.*\/v1\/backups\//, 'must delete via DELETE /v1/backups/:id');
+  // secret 排除警告（创建对话框）
+  assert.match(backupRenderer, /secrets\.json.*settings\.json/, 'create dialog must warn about secret exclusion');
+  // restore 确认对话框明示风险：回滚备份、secrets 需重配、建议重启 daemon
+  assert.match(backupRenderer, /回滚备份/, 'restore dialog must mention rollback backup');
+  assert.match(backupRenderer, /secrets\.json.*settings\.json.*不会被恢复/, 'restore dialog must warn secrets not restored');
+  assert.match(backupRenderer, /重启 daemon/, 'restore dialog must suggest daemon restart');
+  // 删除确认对话框明示不可恢复
+  assert.match(backupRenderer, /不可恢复/, 'delete dialog must warn irreversible');
+  // source / scope 标签映射（manual / pre_delete / pre_restore_rollback）
+  assert.match(backupRenderer, /pre_delete/, 'must label pre_delete source');
+  assert.match(backupRenderer, /pre_restore_rollback/, 'must label pre_restore_rollback source');
 });
 
 // N-K 修复：PR #314 Phase 1 WebUI 关键修复点契约测试

@@ -1506,7 +1506,7 @@ async fn advance_plot_and_delete_character_serialized_by_character_lock() {
                     //   pre-existing race，非 #437 R1 fix 引入，记录为 follow-up。）
                     // 三者都是合法结果；本测试只验证 R1 锁序串行化不死锁 + advance_plot
                     // 不读到半删状态（Internal error）。
-                    let result = chat.delete_character(&cid);
+                    let result = chat.delete_character(&cid, true);
                     Ok(result.is_ok())
                 })
             };
@@ -1640,7 +1640,7 @@ async fn run_r1_tool_vs_delete_character(
                     let cid = crate::types::CharacterId::new(character_id)
                         .map_err(|e| format!("cid: {e}"))?;
                     barrier.wait();
-                    let result = chat.delete_character(&cid);
+                    let result = chat.delete_character(&cid, true);
                     Ok(result.is_ok())
                 })
             };

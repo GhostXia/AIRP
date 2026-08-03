@@ -36,17 +36,23 @@ pub(in crate::daemon) async fn create_session_endpoint(
 }
 
 /// DELETE /v1/sessions/:character_id/:session_id — 删除一个命名会话目录。
-/// #35：destructive，调用方负责确认。返回 `{deleted, status}`。会话不存在 → 404。
+/// #35：destructive，调用方负责确认。返回 `{deleted, character_id, status, pre_delete_backup_id?}`。
+/// 会话不存在 → 404。
+///
+/// #342 E-P2-1：默认创建 `PreDelete` scoped backup，让删除可恢复。
+/// `?force=true` 跳过 pre-delete backup（advanced / testing）。
 pub(in crate::daemon) async fn delete_session_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((character_id, session_id)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(params): axum::extract::Query<crate::daemon::handlers::DeleteForceParams>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
     let sid = SessionId::parse(&session_id)?;
-    ChatService::new(&state.data_root).delete_session(&cid, &sid)?;
+    let backup_id = ChatService::new(&state.data_root).delete_session(&cid, &sid, params.force)?;
     Ok(Json(serde_json::json!({
         "deleted": sid.to_string(),
         "character_id": cid.as_str(),
-        "status": "ok"
+        "status": "ok",
+        "pre_delete_backup_id": backup_id,
     })))
 }

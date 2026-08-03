@@ -614,7 +614,9 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, session_id.to_string());
 
-        service.delete_session(&character, &session_id).unwrap();
+        service
+            .delete_session(&character, &session_id, true)
+            .unwrap();
         assert!(store
             .search_history(tmp.path(), &character, "topaz", 10)
             .unwrap()

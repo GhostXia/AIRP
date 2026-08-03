@@ -21,6 +21,9 @@
 
 pub mod adapter;
 pub mod agent;
+// #342 E-P2-1：backup / restore / 可恢复删除闭环。
+// pub(crate)：实现细节，不对外保证 API 稳定。
+pub(crate) mod backup;
 pub mod card_diff;
 pub mod character_templates;
 pub mod chat_pipeline;
