@@ -684,7 +684,7 @@ mod tests {
             "session dir must exist before delete"
         );
 
-        service.delete_session(&character, &sid).unwrap();
+        service.delete_session(&character, &sid, true).unwrap();
         assert!(
             !sessions_dir.exists(),
             "session dir must be gone after delete"
@@ -702,7 +702,9 @@ mod tests {
         let service = ChatService::new(tmp.path());
         let character = CharacterId::new("alice").unwrap();
         let unknown = SessionId::new();
-        let err = service.delete_session(&character, &unknown).unwrap_err();
+        let err = service
+            .delete_session(&character, &unknown, true)
+            .unwrap_err();
         assert!(
             matches!(err, AirpError::NotFound(_)),
             "unknown session delete must be NotFound, got {err:?}"
@@ -722,7 +724,7 @@ mod tests {
         std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
         std::fs::write(&marker, []).unwrap();
 
-        service.delete_session(&character, &sid).unwrap();
+        service.delete_session(&character, &sid, true).unwrap();
 
         assert!(marker.is_file());
         assert!(!tmp
@@ -808,7 +810,7 @@ mod tests {
         );
 
         // delete named A → default 不受影响
-        service.delete_session(&character, &sid_a).unwrap();
+        service.delete_session(&character, &sid_a, true).unwrap();
         let default_log_after = service.history(&character, None).unwrap();
         assert_eq!(
             default_log_after.messages.len(),
@@ -853,7 +855,7 @@ mod tests {
         let delete_barrier = barrier.clone();
         let delete_worker = std::thread::spawn(move || {
             delete_barrier.wait();
-            delete_service.delete_session(&delete_character, &sid)
+            delete_service.delete_session(&delete_character, &sid, true)
         });
         for worker in workers {
             let result = worker.join().unwrap();
@@ -891,12 +893,152 @@ mod tests {
         let character = CharacterId::new("missing-character").unwrap();
         let sid = SessionId::new();
 
-        let err = service.delete_session(&character, &sid).unwrap_err();
+        let err = service.delete_session(&character, &sid, true).unwrap_err();
         assert!(matches!(err, AirpError::NotFound(_)));
         assert!(
             !tmp.path().join("characters/missing-character").exists(),
             "a failed delete must not create an empty character"
         );
+    }
+
+    // ── #342 E-P2-1：pre-delete backup ───────────────────────────────────────
+
+    /// `delete_character(force=false)` 应创建 `PreDelete` + `Character` scoped backup。
+    #[test]
+    fn delete_character_creates_pre_delete_backup_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("alice").unwrap();
+        // 创建角色目录 + card.json
+        let char_dir = tmp.path().join("characters").join("alice");
+        std::fs::create_dir_all(&char_dir).unwrap();
+        std::fs::write(char_dir.join("card.json"), r#"{"name":"alice"}"#).unwrap();
+
+        let backup_id = service.delete_character(&character, false).unwrap();
+        assert!(backup_id.is_some(), "force=false 应创建 pre-delete backup");
+
+        // 角色目录已被删
+        assert!(!char_dir.exists());
+
+        // backup 存在 + manifest 正确
+        let manifest =
+            crate::backup::read_backup_manifest(tmp.path(), backup_id.as_ref().unwrap()).unwrap();
+        assert_eq!(manifest.source, crate::backup::BackupSource::PreDelete);
+        assert_eq!(
+            manifest.scope,
+            crate::backup::BackupScope::Character {
+                character_id: "alice".to_string()
+            }
+        );
+        // backup files 应包含 card.json
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"characters/alice/card.json"));
+    }
+
+    /// `delete_character(force=true)` 跳过 pre-delete backup。
+    #[test]
+    fn delete_character_force_skips_pre_delete_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("alice").unwrap();
+        let char_dir = tmp.path().join("characters").join("alice");
+        std::fs::create_dir_all(&char_dir).unwrap();
+        std::fs::write(char_dir.join("card.json"), "{}").unwrap();
+
+        let backup_id = service.delete_character(&character, true).unwrap();
+        assert!(backup_id.is_none(), "force=true 应跳过 pre-delete backup");
+        assert!(!char_dir.exists());
+
+        // 不应存在任何 backup
+        let listed = crate::backup::list_backups(tmp.path()).unwrap();
+        assert!(listed.is_empty(), "force=true 不应留下 backup");
+    }
+
+    /// `delete_character(force=false)` 创建的 pre-delete backup 可被 restore 恢复。
+    #[test]
+    fn delete_character_pre_delete_backup_can_be_restored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("alice").unwrap();
+        let char_dir = tmp.path().join("characters").join("alice");
+        std::fs::create_dir_all(&char_dir).unwrap();
+        std::fs::write(char_dir.join("card.json"), r#"{"name":"alice"}"#).unwrap();
+
+        let backup_id = service
+            .delete_character(&character, false)
+            .unwrap()
+            .unwrap();
+
+        // restore 这个 pre-delete backup
+        let (restored_from, _rollback_id) =
+            crate::backup::restore_backup(tmp.path(), &backup_id).unwrap();
+        assert_eq!(restored_from, backup_id);
+
+        // 角色目录应被恢复
+        assert!(char_dir.exists());
+        let restored_card = std::fs::read_to_string(char_dir.join("card.json")).unwrap();
+        assert_eq!(restored_card, r#"{"name":"alice"}"#);
+    }
+
+    /// `delete_session(force=false)` 应创建 `PreDelete` + `Session` scoped backup。
+    #[test]
+    fn delete_session_creates_pre_delete_backup_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("alice").unwrap();
+        let sid = service.create_session(&character).unwrap();
+
+        // 写一条消息让 session 目录非空
+        service
+            .append(
+                &character,
+                Some(&sid),
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "hello".into(),
+                },
+            )
+            .unwrap();
+
+        let backup_id = service.delete_session(&character, &sid, false).unwrap();
+        assert!(backup_id.is_some(), "force=false 应创建 pre-delete backup");
+
+        // session 目录已被删
+        let session_dir = tmp
+            .path()
+            .join("characters/alice/sessions")
+            .join(sid.to_string());
+        assert!(!session_dir.exists());
+
+        // backup 存在 + manifest 正确
+        let manifest =
+            crate::backup::read_backup_manifest(tmp.path(), backup_id.as_ref().unwrap()).unwrap();
+        assert_eq!(manifest.source, crate::backup::BackupSource::PreDelete);
+        match manifest.scope {
+            crate::backup::BackupScope::Session {
+                character_id,
+                session_id,
+            } => {
+                assert_eq!(character_id, "alice");
+                assert_eq!(session_id, sid.to_string());
+            }
+            other => panic!("expected Session scope, got {other:?}"),
+        }
+    }
+
+    /// `delete_session(force=true)` 跳过 pre-delete backup。
+    #[test]
+    fn delete_session_force_skips_pre_delete_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("alice").unwrap();
+        let sid = service.create_session(&character).unwrap();
+
+        let backup_id = service.delete_session(&character, &sid, true).unwrap();
+        assert!(backup_id.is_none(), "force=true 应跳过 pre-delete backup");
+
+        let listed = crate::backup::list_backups(tmp.path()).unwrap();
+        assert!(listed.is_empty(), "force=true 不应留下 backup");
     }
 
     // ── #37 durable message-id contract：cursor / rollback-by-ID 不变式 ──────

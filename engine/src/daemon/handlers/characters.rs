@@ -562,17 +562,40 @@ pub(in crate::daemon) async fn get_character_card(
 }
 
 /// DELETE /v1/characters/:character_id — 删除整个角色目录（card + state + sessions + ...）。
-/// destructive：调用方负责确认。返回 {deleted: id}。
+/// destructive：调用方负责确认。返回 `{deleted, status, pre_delete_backup_id?}`。
+///
+/// #342 E-P2-1：默认创建 `PreDelete` scoped backup，让删除可恢复。
+/// `?force=true` 跳过 pre-delete backup（advanced / testing）。
+///
+/// `delete_character` 内部执行同步文件 IO（pre-delete backup walk + `remove_dir_all`），
+/// 整段搬到 `spawn_blocking` 避免阻塞 tokio worker 线程。参考
+/// `restore_backup_endpoint` 与 `engine/src/agent/tools/analysis.rs` 的同模式。
 pub(in crate::daemon) async fn delete_character_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<DeleteForceParams>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    ChatService::new(&state.data_root).delete_character(&cid)?;
+    let data_root = state.data_root.clone();
+    let force = params.force;
+    let cid_str = cid.as_str().to_string();
+    let backup_id = tokio::task::spawn_blocking(move || {
+        ChatService::new(&data_root).delete_character(&cid, force)
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("delete_character join failed: {e}")))??;
     Ok(Json(serde_json::json!({
-        "deleted": cid.as_str(),
-        "status": "ok"
+        "deleted": cid_str,
+        "status": "ok",
+        "pre_delete_backup_id": backup_id,
     })))
+}
+
+/// `?force=true` query 参数解析。
+#[derive(Debug, serde::Deserialize)]
+pub(in crate::daemon) struct DeleteForceParams {
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// PUT /v1/characters/:character_id — 更新角色卡 JSON（整体替换）。
@@ -1466,5 +1489,84 @@ mod tests {
         );
         // 不留脏文件（审计 CR4：与其他拒绝测试一致防御）
         assert!(!data_root.path().join("characters/none").exists());
+    }
+
+    // ── #342 E-P2-1：DELETE /v1/characters/:id pre-delete backup 集成 ───────
+
+    /// `DELETE /v1/characters/:id`（无 `?force=true`）应创建 pre-delete backup，
+    /// 响应含 `pre_delete_backup_id` 字段。
+    #[tokio::test]
+    async fn delete_character_creates_pre_delete_backup_via_http() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+        let (state, _tmp) = make_state_for_http_test();
+        let char_dir = state.data_root.join("characters").join("alice");
+        std::fs::create_dir_all(&char_dir).unwrap();
+        std::fs::write(char_dir.join("card.json"), r#"{"name":"alice"}"#).unwrap();
+        let app = crate::daemon::create_router(state.clone());
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/characters/alice")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["deleted"], "alice");
+        assert!(
+            v["pre_delete_backup_id"].is_string(),
+            "应返回 pre_delete_backup_id: {v}"
+        );
+        assert!(!char_dir.exists(), "character 目录应被删除");
+
+        // backup 应存在于 list 中
+        let backup_id = v["pre_delete_backup_id"].as_str().unwrap();
+        let manifest = crate::backup::read_backup_manifest(&state.data_root, backup_id).unwrap();
+        assert_eq!(manifest.source, crate::backup::BackupSource::PreDelete);
+    }
+
+    /// `DELETE /v1/characters/:id?force=true` 跳过 pre-delete backup。
+    #[tokio::test]
+    async fn delete_character_force_skips_backup_via_http() {
+        use axum::body::Body;
+        use tower::util::ServiceExt;
+        let (state, _tmp) = make_state_for_http_test();
+        let char_dir = state.data_root.join("characters").join("alice");
+        std::fs::create_dir_all(&char_dir).unwrap();
+        std::fs::write(char_dir.join("card.json"), "{}").unwrap();
+        let app = crate::daemon::create_router(state.clone());
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/characters/alice?force=true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            v["pre_delete_backup_id"].is_null(),
+            "force=true 应返回 null pre_delete_backup_id: {v}"
+        );
+        assert!(!char_dir.exists());
+
+        // 不应存在任何 backup
+        let listed = crate::backup::list_backups(&state.data_root).unwrap();
+        assert!(listed.is_empty(), "force=true 不应留下 backup");
     }
 }

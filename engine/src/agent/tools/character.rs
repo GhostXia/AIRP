@@ -133,10 +133,23 @@ impl Tool for DeleteCharacterTool {
             // 破坏性删除：拿角色级写锁，独占排斥该角色下所有会话的 append/rollback
             // （它们持 read 锁）。旧实现用 per-session Mutex 的 key=character，与命名
             // 会话写的 key=character/{sid} 不互斥，故可交错半删（issue #22）。
-            ChatService::new(&state.data_root).delete_character(&cid)?;
-            tracing::warn!(character_id = %cid, "delete_character executed");
+            // #342 E-P2-1：默认创建 PreDelete scoped backup，让删除可恢复。
+            // 整段搬到 spawn_blocking：内部是同步文件 IO（pre-delete backup walk +
+            // remove_dir_all），避免阻塞 tokio worker 线程。参考
+            // delete_character_endpoint / restore_backup_endpoint 同模式。
+            let data_root = state.data_root.clone();
+            let cid_for_log = cid.as_str().to_string();
+            let backup_id = tokio::task::spawn_blocking(move || {
+                ChatService::new(&data_root).delete_character(&cid, false)
+            })
+            .await
+            .map_err(|e| AirpError::Internal(format!("delete_character join failed: {e}")))??;
+            tracing::warn!(character_id = %cid_for_log, ?backup_id, "delete_character executed");
             Ok(ToolResult {
-                output: serde_json::json!({ "deleted": cid.to_string() }),
+                output: serde_json::json!({
+                    "deleted": cid_for_log,
+                    "pre_delete_backup_id": backup_id,
+                }),
                 dry_run: false,
             })
         })

@@ -868,10 +868,43 @@ impl ChatService {
         data_dir::create_session(&self.data_root, character_id.as_str())
     }
 
-    pub fn delete_character(&self, character_id: &CharacterId) -> Result<(), AirpError> {
+    /// #342 E-P2-1：删除角色目录。
+    ///
+    /// 默认在 `fs::remove_dir_all` 前创建 `BackupSource::PreDelete` +
+    /// `BackupScope::Character { id }` scoped backup，让删除可恢复。
+    /// `force = true` 时跳过 pre-delete backup（advanced / testing）。
+    ///
+    /// pre-delete backup 失败 → `Err`，**不**删除数据（fail-closed）。
+    /// backup 内**不**含 secrets.json / settings.json（denylist 排除）。
+    pub fn delete_character(
+        &self,
+        character_id: &CharacterId,
+        force: bool,
+    ) -> Result<Option<String>, AirpError> {
         let character = character_lock(character_id.as_str());
         let _guard = character.write().unwrap_or_else(|p| p.into_inner());
         let _character_track = lock_order::track_character_write();
+
+        // pre-delete backup（默认开启）
+        let backup_id = if !force {
+            let opts = crate::backup::CreateBackupOptions {
+                data_root: self.data_root.clone(),
+                source: crate::backup::BackupSource::PreDelete,
+                scope: crate::backup::BackupScope::Character {
+                    character_id: character_id.as_str().to_string(),
+                },
+            };
+            let created = crate::backup::create_backup(&opts).map_err(|e| {
+                AirpError::Internal(format!(
+                    "pre-delete backup 失败，已拒绝删除 character {}（fail-closed）: {e}",
+                    character_id.as_str()
+                ))
+            })?;
+            Some(created.backup_id)
+        } else {
+            None
+        };
+
         let result = data_dir::delete_character(&self.data_root, character_id);
         // #440: 必须在 write guard 释放之后再清理 lock-map 条目。否则新 caller
         // 调 `character_lock` 会拿到新 Arc（条目已移除），不与本次 write guard
@@ -891,24 +924,53 @@ impl ChatService {
             remove_deleted_character_lock(character_id.as_str());
             remove_deleted_state_lock(character_id.as_str());
         }
-        result
+        result?;
+        Ok(backup_id)
     }
 
     /// #35：删除一个命名会话目录。走 character read lock + session lock，与 append/
     /// rollback/regen 同边界串行化，避免并发写期间删到半态。
     ///
+    /// #342 E-P2-1：默认创建 `BackupSource::PreDelete` +
+    /// `BackupScope::Session { .. }` scoped backup，让删除可恢复。
+    /// `force = true` 时跳过 pre-delete backup。
+    ///
     /// 会话不存在 → `NotFound`。destructive：调用方负责确认。
+    /// pre-delete backup 失败 → `Err`，**不**删除数据（fail-closed）。
     pub fn delete_session(
         &self,
         character_id: &CharacterId,
         session_id: &SessionId,
-    ) -> Result<(), AirpError> {
+        force: bool,
+    ) -> Result<Option<String>, AirpError> {
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let _character_track = lock_order::track_character_read();
         let session = session_lock(character_id.as_str(), Some(session_id));
         let _session_guard = session.lock().unwrap_or_else(|p| p.into_inner());
         let _session_track = lock_order::track_session();
+
+        // pre-delete backup（默认开启）
+        let backup_id = if !force {
+            let opts = crate::backup::CreateBackupOptions {
+                data_root: self.data_root.clone(),
+                source: crate::backup::BackupSource::PreDelete,
+                scope: crate::backup::BackupScope::Session {
+                    character_id: character_id.as_str().to_string(),
+                    session_id: session_id.to_string(),
+                },
+            };
+            let created = crate::backup::create_backup(&opts).map_err(|e| {
+                AirpError::Internal(format!(
+                    "pre-delete backup 失败，已拒绝删除 session {}（fail-closed）: {e}",
+                    session_id
+                ))
+            })?;
+            Some(created.backup_id)
+        } else {
+            None
+        };
+
         // A previous attempt may have written the fail-closed tombstone but
         // failed to remove the directory. Deletion must bypass `with_session`'s
         // tombstone rejection so a retry can finish that cleanup.
@@ -922,6 +984,7 @@ impl ChatService {
         if result.is_ok() {
             remove_deleted_session_lock(character_id.as_str(), session_id);
         }
-        result
+        result?;
+        Ok(backup_id)
     }
 }
