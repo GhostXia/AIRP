@@ -35,6 +35,7 @@ impl LorebookService {
     ) -> Result<crate::orchestrator::Lorebook, AirpError> {
         let character = character_lock(character_id.as_str());
         let _guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
         let resource = state_lock(character_id.as_str());
         let _resource_guard = resource.lock().unwrap_or_else(|p| p.into_inner());
         let _state_track = lock_order::track_state();
@@ -56,6 +57,7 @@ impl LorebookService {
     ) -> Result<(), AirpError> {
         let character = character_lock(character_id.as_str());
         let _guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
         let resource = state_lock(character_id.as_str());
         let _resource_guard = resource.lock().unwrap_or_else(|p| p.into_inner());
         let _state_track = lock_order::track_state();

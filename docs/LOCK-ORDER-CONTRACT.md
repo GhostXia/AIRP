@@ -238,16 +238,22 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 
 ## 6. 已知缺口与 follow-up
 
-### 6.1 运行时锁序强制：已交付（部分路径）
+### 6.1 运行时锁序强制：已交付（R1 + R2，全路径）
 
-`domain.rs` 新增 `lock_order` 模块（`#[cfg(debug_assertions)]` thread-local 栈 + RAII `Guard`；`#[cfg(not(debug_assertions))]` 零成本 no-op），覆盖 R2 的 session↔state 嵌套方向检测：
+`domain.rs` 新增 `lock_order` 模块（`#[cfg(debug_assertions)]` thread-local 栈 + RAII `Guard`；`#[cfg(not(debug_assertions))]` 零成本 no-op），覆盖 R1（character 外层门控）与 R2（session↔state 嵌套方向）的运行时检测：
 
-- `track_session()` 在持 `state_lock` 时获取 `session_lock` 触发 `debug_assert!`（state→session 禁止，Bug F 类死锁回归）。
-- `track_state()` 无检查（session→state 是 R2 唯一合法嵌套方向）。
-- 覆盖 13 个 acquire 点：`domain.rs`（`ChatService::with_session`/`delete_session`、`StateService::read`/`mutate`/`write`、`LorebookService::read`/`write`）+ `plot.rs`（`advance_plot`）+ `world_event.rs`（`trigger_world_event` 阶段一/二、`advance_clock` 阶段一/二）+ `npc.rs`（`npc_action`）。
-- 6 个单测覆盖：`session_alone_ok` / `state_alone_ok` / `session_then_state_legal_no_panic`（advance_plot 合法方向）/ `state_then_session_panics`（违反触发）/ `drop_releases_held` / `state_released_then_session_ok`（两段临界区模式）。
+- **R1 强制**（#438 W-04，2026-08-03 交付）：
+  - `track_character_read()` / `track_character_write()` 记录 `character_lock` 持有状态，无 violation 检查（character 是最外层门控，无前置要求）。
+  - `track_session()` / `track_state()` 在调用时检查 HELD 栈是否含 `CharacterRead` 或 `CharacterWrite`；不含则 `debug_assert!` panic（R1 违反：session/state 必须由 character 外层门控）。
+  - 覆盖所有 4 条 agent tool 路径（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action`）+ `volume_manager::run_seal_flow` + `StateService::read`/`mutate`/`write` + `LorebookService::read`/`write` + `ChatService::with_session`/`delete_session`/`delete_character`。
+- **R2 强制**（既有）：
+  - `track_session()` 在持 `state_lock` 时获取 `session_lock` 触发 `debug_assert!`（state→session 禁止，Bug F 类死锁回归）。
+  - `track_state()` 无 R2 检查（session→state 是 R2 唯一合法嵌套方向）。
+- **R1 回归测试**（#438 W-04，2026-08-03 交付）：
+  - 4 条并发测试：`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 同时放行，30s 超时检测死锁。关键不变式：tool 不应返回 `Internal` error（那表示读到半删 live.json / world_events.json / world_clock.json，R1 TOCTOU 防护失效）。
+  - 15 条 `lock_order` 单测覆盖 R1/R2 合法路径、违反路径、Drop 语义、两段临界区模式。
 - release build（`--release`）下 `track_*` 返回 ZST `Guard`，零开销（§7）。
-- 约束：仅检测 R2 session↔state 方向；R1（character 外层门控）、R3（conversation 双锁）、R6（coordinator 反向获取）尚未有运行时强制。guard 不跨 `.await`（§4 A1），thread-local 栈仅在同步作用域内有效。
+- **未覆盖**：R3（conversation 双锁）、R6（coordinator 反向获取）尚未有运行时强制。guard 不跨 `.await`（§4 A1），thread-local 栈仅在同步作用域内有效。
 
 ### 6.2 std 锁内同步 I/O（结构性 debt）
 
@@ -296,6 +302,8 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 
 **闭合状态**：#437 通过 fix path 4 闭合本风险。`StateService::mutate` 拆为 `mutate_locked`（不 acquire `character_lock.read()`，要求调用方已持有）+ `mutate`（兼容包装，内部 acquire 后调 `mutate_locked`）。`advance_plot` 改用 `mutate_locked`，外层先 acquire `character_lock.read()` 再 acquire `session_lock`，最后调 `mutate_locked` 进入 `state_lock` 临界区。re-entrancy 风险消除，R1 TOCTOU 防护恢复，character 顶层目录（含 `live.json`）的并发删除被 `character_lock.read()` 外层门控阻断。本节保留作为历史记录，不再代表当前风险。
 
+**R1 运行时强制 + 回归测试（#438 W-04，2026-08-03 交付）**：在 #437 静态闭合基础上，#438 补齐运行时强制（§6.1）与 4 条并发回归测试（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + Internal error 检测 TOCTOU）。任意 PR 若回退 R1 fix（如移除 `character_lock.read()` 外层 acquire），`debug_assert!` 会在 CI debug build 立即 panic，回归测试也会失败。
+
 ## 7. 验收
 
 本合同不引入代码改动时（docs-only PR）：
@@ -316,6 +324,8 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 R1 收敛验收记录（PR #436，2026-08-03）：§2.4 `trigger_world_event` / §2.5 `advance_clock` / §2.6 `npc_action` / §2.7 `run_seal_flow` 四个路径已补齐外层 `character_lock.read()`；§2.3 `advance_plot` 因 `StateService::mutate` re-entrancy 风险未闭合，残留风险与修复路径记录于 §6.7。本次为静态锁序收敛，**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
 
 R1 残留闭合验收记录（PR #439，closes issue #437，2026-08-03）：§2.3 `advance_plot` 通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合 R1。外层 `character_lock.read()` 已补齐，re-entrancy 风险消除，§6.7 残留 TOCTOU 风险已闭合。R1 例外路径数：0。本次为静态锁序收敛 + `StateService` API 拆分（新增 `mutate_locked` 方法），**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`；R1 运行时强制见 §6.1 W-03 follow-up）。同时修正 W-01 措辞（§6.7 re-entrancy 论证从「deadlock 风险」改为「deadlock 风险（部分 pthread 实现）+ 排他性语义破坏（Windows SRWLOCK）」）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
+
+R1 运行时强制 + 回归测试验收记录（closes #438 W-04，2026-08-03）：§6.1 运行时强制从「仅 R2」扩展到「R1 + R2 全路径」。新增 `track_character_read()` / `track_character_write()` 标记 character 外层门控；`track_session()` / `track_state()` 增补 R1 `debug_assert!`（无 character 时 panic）。修复 `LorebookService::write` 漏调 `track_character_read()` 的遗漏（R1 强制上线即捕获）。新增 4 条并发回归测试（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + Internal error 检测 TOCTOU）+ 9 条 R1 单测（合法路径 + 违反 panic + Drop 语义）。本地 `cargo test -p airp-core --lib --locked` 1262 passed / 0 failed / 5 ignored；`cargo test -p airp-core --tests --locked` 全绿；WebUI 98 passed / 0 failed；神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。§6.1 状态更新为「已交付（R1 + R2，全路径）」。
 
 ## 8. 关联
 

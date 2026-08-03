@@ -341,6 +341,9 @@ impl PersonaService {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        // #440: 在 guard 释放后再清理 lock-map 条目，与 delete_character 同模式。
+        // 避免新 caller 用新 Arc 绕过 persona_lock 串行化（R5 独立锁族，同 race 模式）。
+        drop(_guard);
         // #422: 工作副本 + revision 目录 durable 删除后清理 persona lock-map
         // stale 条目。新 caller 调 `persona_lock` 会创建新 Arc 走正常 create 流程。
         remove_deleted_persona_lock(user_id.as_str());

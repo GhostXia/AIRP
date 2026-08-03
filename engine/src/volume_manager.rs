@@ -306,8 +306,10 @@ pub async fn run_seal_flow(
     if let Some(cid) = character_id {
         let character = crate::domain::character_lock(cid);
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = crate::domain::lock_order::track_character_read();
         let lock = crate::domain::session_lock(cid, session_id);
         let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
+        let _session_track = crate::domain::lock_order::track_session();
         // 双 baseline 校验：current.md 防止并发 append 被销毁，index.md 防止
         // 并发 run_maintenance 的跨卷实体晋升被覆盖。
         let recheck_current = volume_store::read_current(session_dir)?;

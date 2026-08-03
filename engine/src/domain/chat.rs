@@ -113,6 +113,7 @@ impl ChatService {
         // 合同：docs/LOCK-ORDER-CONTRACT.md §2.1 / §3 R1 / §4 A1。
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
         let session = session_lock(character_id.as_str(), session_id);
         let _session_guard = session.lock().unwrap_or_else(|p| p.into_inner());
         let _session_track = lock_order::track_session();
@@ -870,7 +871,15 @@ impl ChatService {
     pub fn delete_character(&self, character_id: &CharacterId) -> Result<(), AirpError> {
         let character = character_lock(character_id.as_str());
         let _guard = character.write().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_write();
         let result = data_dir::delete_character(&self.data_root, character_id);
+        // #440: 必须在 write guard 释放之后再清理 lock-map 条目。否则新 caller
+        // 调 `character_lock` 会拿到新 Arc（条目已移除），不与本次 write guard
+        // 互斥，绕过 R1 串行化——Windows 上观察到 `DirectoryNotEmpty`，Linux
+        // 上理论 TOCTOU（advance_plot 用新 Arc 复活已删 dir 的部分文件）。
+        // 显式 drop 确保 cleanup 与临界区不重叠。
+        drop(_character_track);
+        drop(_guard);
         if result.is_ok() {
             // #422: character 目录 durable 删除后清理 lock-map stale 条目。
             // 正在等待旧 Arc 的 waiter 拿到锁后操作已删除资源会 fail closed
@@ -896,6 +905,7 @@ impl ChatService {
     ) -> Result<(), AirpError> {
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
         let session = session_lock(character_id.as_str(), Some(session_id));
         let _session_guard = session.lock().unwrap_or_else(|p| p.into_inner());
         let _session_track = lock_order::track_session();
@@ -903,6 +913,12 @@ impl ChatService {
         // failed to remove the directory. Deletion must bypass `with_session`'s
         // tombstone rejection so a retry can finish that cleanup.
         let result = data_dir::delete_session(&self.data_root, character_id.as_str(), session_id);
+        // #440: 同 delete_character，在 guard 释放后再清理 lock-map 条目，
+        // 避免新 caller 用新 Arc 绕过 R1 串行化。
+        drop(_session_track);
+        drop(_session_guard);
+        drop(_character_track);
+        drop(_character_guard);
         if result.is_ok() {
             remove_deleted_session_lock(character_id.as_str(), session_id);
         }
