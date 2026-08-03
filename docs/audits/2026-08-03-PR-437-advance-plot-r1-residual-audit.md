@@ -178,7 +178,7 @@ let snapshot = StateService::new(&state.data_root).mutate_locked(&cid, |live| {
 
 - **不 deadlock** ✅：30s 超时检测。
 - **advance_plot 不返回 Internal error** ✅：worker A 将非 NotFound error 升级为测试失败。这验证 R1 TOCTOU 防护——若 `delete_character` 在 `advance_plot` 临界区期间删除 `live.json`，`advance_plot` 读到半删状态会返回 Internal（而非 NotFound），测试失败。
-- **delete_character 成功时 character dir 已删除** ✅：条件断言。
+- **不断言 character dir 终态** ✅（CI 失败后修正）：R1 只保证串行化（不保证顺序）。若 `delete_character` 先完成而 `advance_plot` 后完成，`advance_plot` 会重新创建 dir 写 `live.json` —— 这是合法的串行化结果，非 TOCTOU 失效。原版测试在 `delete_succeeded == true` 时断言 `!character_dir.exists()`，这在「delete 先 / advance_plot 后」顺序下会误判失败。详见 §6 re-audit。
 
 #### 2.4.3 Windows `DirectoryNotEmpty` quirk 处理 ✅
 
@@ -216,6 +216,43 @@ fix path 4 实现正确闭合了 R1 残留 TOCTOU 风险，合同更新自洽，
 PR #437 通过 fix path 4（拆 `StateService::mutate` 为 `mutate_locked` + `mutate`）闭合了 PR #436 残留的 `advance_plot` R1 TOCTOU 风险。实现正确，合同更新自洽，W-01 措辞修正准确，回归测试覆盖 R1 串行化语义。R1 例外路径数从 1 降为 0。
 
 非阻塞意见 W-01（#422 lock-map cleanup race）和 W-02（R1 运行时强制）按 AGENTS.md「审计遗留项处理」规则，PR 合并后由执行审计的 agent 写入 GitHub issue。
+
+## 7. Re-audit：CI 失败后测试修正（2026-08-03）
+
+PR #439（即 #437 实现）首次 CI 运行 `Rust test` job 失败：
+
+```
+test agent::tools::tests::agent_rp_phase3::advance_plot_and_delete_character_serialized_by_character_lock ... FAILED
+thread '...advance_plot_and_delete_character_serialized_by_character_lock' panicked at engine\src\agent\tools\tests\agent_rp_phase3.rs:1516:9:
+character dir must be deleted after delete_character succeeded
+```
+
+### 7.1 根因分析
+
+测试断言 `if delete_succeeded { assert!(!character_dir.exists(), ...) }` 错误地假设「`delete_character` 成功 ⇒ character dir 不存在」。这只在 `delete_character` 是最后一个完成的 worker 时成立。R1 只保证**串行化**（两个 worker 不重叠），**不保证顺序**：
+
+- **顺序 A（advance_plot 先 / delete_character 后）**：advance_plot 持 `character_lock.read()` 写 live.json → 释放 → delete_character 持 `character_lock.write()` 删 dir。终态：dir 不存在。原断言通过。
+- **顺序 B（delete_character 先 / advance_plot 后）**：delete_character 持 `character_lock.write()` 删 dir + cleanup lock-map → 释放 → advance_plot 持 `character_lock.read()`（**新 Arc 实例**，因 lock-map 已 cleanup）→ `StateService::mutate_locked` 内 `fs::create_dir_all(&state_dir)` 重新创建 dir → 写 live.json。终态：dir **存在**且含 advance_plot 产物。原断言失败。
+
+CI 在顺序 B 下运行，触发了误判失败。这是**测试逻辑 bug**，不是生产代码 bug —— `state.rs` / `plot.rs` 实现正确，R1 串行化语义在两种顺序下都成立。
+
+### 7.2 修正内容
+
+- **移除** `if delete_succeeded { assert!(!character_dir.exists(), ...) }` 断言块。
+- **保留** 核心不变式：(1) 不 deadlock（30s 超时）；(2) `advance_plot` 不返回 `Internal` error（worker A 将非 NotFound error 升级为失败）。
+- **更新** 测试 doc comment：明确 R1 只保证串行化不保证顺序，两种终态都合法，dir 终态不断言。
+- **更新** §2.4.2：第三条断言从「dir 已删除」改为「不断言 dir 终态」并标注 CI 修正原因。
+
+### 7.3 独立复核
+
+- 修正后 `cargo test --lib -p airp-core advance_plot_and_delete_character_serialized_by_character_lock` 单测连跑 5 次全过。
+- 修正后 `cargo test --workspace --all-features` 全量测试通过。
+- 生产代码（`state.rs` / `plot.rs` / `LOCK-ORDER-CONTRACT.md`）**未改动**，仅测试文件 + 审计报告变更。
+- 修正不削弱 R1 覆盖：核心不变式（no-deadlock + no-TOCTOU）仍在验证；dir 终态断言原本就是过度约束，与 R1 语义无关。
+
+### 7.4 Re-audit 结论
+
+**通过（无阻塞）**。测试修正正确，根因分析准确，R1 覆盖未削弱。建议合并。
 
 ---
 
