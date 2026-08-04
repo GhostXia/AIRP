@@ -36,7 +36,7 @@ test('strict consumer treats the typed terminal frame as authoritative', async (
 test('strict consumer preserves typed errors instead of treating chunks as success', async () => {
   const result = await consumeGenerationSse(responseFrom(
     'event: message\ndata: {"type":"body_chunk","text":"partial"}\n\n',
-    'event: error\ndata: {"type":"error","error":{"code":"upstream","message":"failed","commit_state":"partially_committed"}}\n\n',
+    'event: error\ndata: {"type":"error","text":"failed","error":{"code":"upstream","message":"failed","retryable":false,"commit_state":"partially_committed"}}\n\n',
   ));
   assert.equal(result.terminal, 'error');
   assert.equal(result.text, 'partial');
@@ -46,7 +46,7 @@ test('strict consumer preserves typed errors instead of treating chunks as succe
 
 test('strict consumer accepts only the typed cancellation terminal when enabled', async () => {
   const result = await consumeGenerationSse(responseFrom(
-    'event: error\ndata: {"type":"error","error":{"code":"cancelled","message":"generation cancelled","commit_state":"partially_committed"}}\n\n',
+    'event: error\ndata: {"type":"error","text":"generation cancelled","error":{"code":"cancelled","message":"generation cancelled","retryable":false,"commit_state":"partially_committed"}}\n\n',
   ), { allowCancellation: true });
   assert.equal(result.terminal, 'cancelled');
   assert.equal(result.typedError.code, 'cancelled');
@@ -55,7 +55,7 @@ test('strict consumer accepts only the typed cancellation terminal when enabled'
 
 test('strict consumer rejects an unexpected cancellation error and early EOF', async () => {
   const unexpected = await consumeGenerationSse(responseFrom(
-    'event: error\ndata: {"type":"error","error":{"code":"timeout","message":"timed out","commit_state":"partially_committed"}}\n\n',
+    'event: error\ndata: {"type":"error","text":"timed out","error":{"code":"timeout","message":"timed out","retryable":false,"commit_state":"partially_committed"}}\n\n',
   ), { allowCancellation: true });
   assert.equal(unexpected.terminal, 'invalid_error');
 
