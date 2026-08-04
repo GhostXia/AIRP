@@ -787,19 +787,39 @@ fn webui_router_with_mode(
 }
 
 async fn local_webui_security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
+    // C-P1：widget 沙箱 iframe 以 sandbox="allow-scripts"（无 allow-same-origin）
+    // 运行于 opaque origin，其内 import() widget module 属 CORS 请求。
+    // /assets/widgets/ 是 loopback 静态公开资产（不含任何秘密），附
+    // Access-Control-Allow-Origin:* 使沙箱可加载；其余路径一律不加。
+    let is_widget_asset = request.uri().path().starts_with("/assets/widgets/");
+    // 沙箱引导页自身要被宿主 iframe 嵌入：X-Frame-Options DENY 会拒绝它。
+    // 不削弱安全：该页 CSP 仍带 frame-ancestors 'none'（第三方不得嵌它），
+    // 且宿主以 event.source === iframe.contentWindow 门控消息来源。
+    let is_sandbox_frame = request.uri().path() == "/assets/widgets/sandbox-frame.html";
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-        ),
+        HeaderValue::from_static(if is_sandbox_frame {
+            // 引导页须被同源宿主页嵌入：frame-ancestors 放宽为 'self'。
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+        } else {
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        }),
     );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if !is_sandbox_frame {
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
+    if is_widget_asset {
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        );
+    }
     headers.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),

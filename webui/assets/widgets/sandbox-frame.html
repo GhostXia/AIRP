@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- C-P1：第三方 widget 沙箱引导页。
+     由 sandbox-bridge.js 以 <iframe sandbox="allow-scripts" src="sandbox-frame.html?src=..."> 载入。
+     CSP 纪律：零内联 script/style，全部外链 'self' 资源（父页 CSP 对 srcdoc
+     内联内容不放行，实证 2026-08-05）。本页运行于 opaque origin，读不到宿主
+     DOM/存储/cookie；与宿主仅经 postMessage 通信（见 sandbox-frame.js）。 -->
+<link rel="stylesheet" href="sandbox-frame.css">
+</head>
+<body>
+<script src="sandbox-frame.js"></script>
+</body>
+</html>
