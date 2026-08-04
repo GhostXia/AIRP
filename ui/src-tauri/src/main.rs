@@ -202,7 +202,7 @@ fn load_sidecar_settings(data_root: &Path) -> (u16, Option<String>) {
 /// 1. `AIRP_WEBUI_DIR` 环境变量（显式覆盖）；
 /// 2. 打包资源目录 `<resource_dir>/webui`（或 bundle-webui.ps1 暂存的
 ///    `<resource_dir>/webui-bundle`，见 tauri.conf.json bundle.resources；
-///    dev 模式下 tauri-build 会把 resources 拷到 target/<profile>/，
+///    dev 模式下 tauri-build 会把 resources 拷到 `target/<profile>/`，
 ///    resource_dir 即指向那里，内容与仓库 webui/ 等价）；
 /// 3. 从可执行文件向上回溯（开发检出：target/debug|release 上 2~3 级即仓库根）。
 ///
@@ -262,7 +262,7 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
     let plan = lifecycle::decide_startup(
         lock.as_ref(),
         std::process::id(),
-        &lifecycle::is_pid_alive,
+        &lifecycle::is_process_running,
         port_occupied,
         external_hosts_webui,
     );
@@ -276,15 +276,20 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
 
     match plan {
         lifecycle::StartupPlan::AnotherShellRunning { shell_pid } => {
-            show_engine_error(
-                &app,
-                &format!(
-                    "AIRP UI is already running (shell PID {shell_pid}). \
-                     This second instance will now exit. \
-                     已有 AIRP UI 实例在运行（壳进程 {shell_pid}），本窗口即将退出。"
-                ),
+            // exit 必须挪进对话框关闭回调：非阻塞 show + 立即退出会让
+            // 窗口一闪而过，用户看不到任何解释（双开是最需要解释的路径）。
+            // 文案附锁文件位置，给 PID 复用等异常场景留自助出路。
+            let message = format!(
+                "AIRP UI is already running (shell PID {shell_pid}). \
+                 This second instance will now exit. \
+                 If no AIRP UI window is actually open, delete the stale \
+                 instance lock (engine-instance.lock) under the app data \
+                 directory and retry.\n\
+                 已有 AIRP UI 实例在运行（壳进程 {shell_pid}），本窗口即将退出。\
+                 若实际没有 AIRP UI 窗口，请删除数据目录下的残留锁文件 \
+                 engine-instance.lock 后重试。"
             );
-            app.exit(0);
+            show_engine_error_then_exit(&app, &message);
         }
         lifecycle::StartupPlan::KillOwnedEngineThenSpawn { engine_pid } => {
             tracing::info!(engine_pid, "killing leftover owned engine before respawn");
@@ -303,8 +308,10 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
-            lifecycle::remove_lock(&lock_path);
             if freed {
+                // 仅在端口确认释放后才删锁：kill 失败（归属信息已丢则下次
+                // 无法再走分支 a 自愈）时保留锁，保持自愈链路完整。
+                lifecycle::remove_lock(&lock_path);
                 spawn_sidecar(&app, &context, &lock_path).await;
             } else {
                 show_port_conflict_error(&app, context.port);
@@ -634,6 +641,20 @@ fn show_engine_error(app: &tauri::AppHandle, message: &str) {
         .title("AIRP engine error")
         .kind(tauri_plugin_dialog::MessageDialogKind::Error)
         .show(|_| {});
+}
+
+/// 展示错误对话框并在用户关闭后才退出进程（防双开路径专用）。
+/// 对话框属于本进程，先 exit 再 show 会直接销毁窗口；exit 必须放在
+/// 关闭回调里，用户才能读到解释。
+fn show_engine_error_then_exit(app: &tauri::AppHandle, message: &str) {
+    let app = app.clone();
+    app.dialog()
+        .message(message.to_string())
+        .title("AIRP UI")
+        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+        .show(move |_| {
+            app.exit(0);
+        });
 }
 
 #[cfg(test)]
