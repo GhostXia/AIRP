@@ -211,7 +211,8 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     // #155 PR 3：analysis enhance/apply family 2 工具。
     analysis::register(&mut reg, state.clone());
     // 阶段三：Agent RP 差异化。
-    // 3.1 世界事件触发器 family 2 工具。
+    // 3.1 世界事件触发器 family 4 工具（trigger_world_event / list_world_events /
+    // advance_clock / get_clock）。
     world_event::register(&mut reg, state.clone());
     // 3.3 多角色编排增强 family 2 工具。
     npc::register(&mut reg, state.clone());
