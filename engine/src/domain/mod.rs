@@ -1225,6 +1225,7 @@ mod tests {
             message_index: Some(2),
             message_id: Some("m0abc".to_string()),
             session_id: None,
+            user_id: None,
         };
         assert!(both.validate_rollback_target().is_err());
 
@@ -1233,6 +1234,7 @@ mod tests {
             message_index: None,
             message_id: None,
             session_id: None,
+            user_id: None,
         };
         assert!(neither.validate_rollback_target().is_err());
 
@@ -1241,6 +1243,7 @@ mod tests {
             message_index: None,
             message_id: Some("m0abc".to_string()),
             session_id: None,
+            user_id: None,
         };
         assert!(ok_id.validate_rollback_target().is_ok());
 
@@ -1249,6 +1252,7 @@ mod tests {
             message_index: Some(2),
             message_id: None,
             session_id: None,
+            user_id: None,
         };
         assert!(ok_idx.validate_rollback_target().is_ok());
     }
