@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "description": "AIRP Engine SSE 生成流事件合同的机器可读规格（权威发射端：engine/src/chat_pipeline/stream.rs）。锁定事件名、message data 的 type 判别符集合与终态形状；字段类型为 JSON 类型标记（string / boolean / string[] / object）。",
+  "compatibility": "additive-only",
+  "extensionRules": [
+    "message data 的 type 判别符集合只允许追加新值，不得复用、改名或移除已锁定的判别符。",
+    "消费端必须容忍未知的 message data type：未知 type 不得导致解析失败，应按普通增量帧透传或忽略。",
+    "已锁定的帧只允许追加新字段，不得删除或改变既有字段类型；消费端必须忽略未知字段。",
+    "event 名称集合 eventNames 为封闭集合；event: error 的 data.type 必须为 error，反之亦然。",
+    "{type:done} 帧与 typed error 帧是终态帧；发射端在终态帧之后不得再发射任何帧。"
+  ],
+  "eventNames": ["message", "error"],
+  "events": {
+    "message": {
+      "description": "非错误帧。data 为 JSON 对象，判别符字段为 type。",
+      "dataDiscriminator": "type",
+      "dataTypes": {
+        "body_chunk": {
+          "description": "标签外的正文流式文本片段。",
+          "fields": {
+            "text": "string"
+          }
+        },
+        "think_chunk": {
+          "description": "<think> 标签内文本片段（心理独白）。",
+          "fields": {
+            "text": "string"
+          }
+        },
+        "action_options": {
+          "description": "<action> 标签解析出的剧情选项。serde adjacent-tagged 形状：text 为内容对象，options 按出现顺序。",
+          "fields": {
+            "text": {
+              "fields": {
+                "options": "string[]"
+              }
+            }
+          }
+        },
+        "done": {
+          "description": "成功生成终态帧；仅在关键持久化成功后发射。",
+          "fields": {}
+        }
+      }
+    },
+    "error": {
+      "description": "终态错误帧。event 与 data.type 均为 error；顶层 text 为人类可读摘要，结构化细节在 error 对象内。",
+      "fields": {
+        "text": "string",
+        "error": {
+          "fields": {
+            "code": "string",
+            "message": "string",
+            "retryable": "boolean",
+            "commit_state": "string"
+          }
+        }
+      },
+      "knownCommitStates": {
+        "note": "信息性列表，非封闭集合；消费端不得依据它做穷举分支。",
+        "values": ["not_committed", "partially_committed"]
+      }
+    }
+  }
+}

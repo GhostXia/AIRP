@@ -18,9 +18,14 @@
     constructor(message, detail) {
       super(message);
       this.name = 'AirpStreamError';
-      this.code = detail && detail.code;
-      this.retryable = Boolean(detail && detail.retryable);
-      this.commitState = detail && detail.commit_state;
+      // 合同形状（protocol/sse-events.json）：结构化细节在嵌套 error envelope；
+      // 兼容旧的扁平负载（字段直接在顶层）。
+      const envelope = detail && typeof detail === 'object' && detail.error && typeof detail.error === 'object'
+        ? detail.error
+        : detail;
+      this.code = envelope && envelope.code;
+      this.retryable = Boolean(envelope && envelope.retryable);
+      this.commitState = envelope && envelope.commit_state;
     }
   }
 
@@ -46,7 +51,7 @@
   function errorMessage(data, fallback) {
     if (typeof data === 'string' && data.trim()) return data.trim();
     if (data && typeof data === 'object') {
-      for (const key of ['message', 'detail', 'error', 'hint']) {
+      for (const key of ['message', 'text', 'detail', 'error', 'hint']) {
         if (typeof data[key] === 'string' && data[key].trim()) return data[key].trim();
       }
     }
