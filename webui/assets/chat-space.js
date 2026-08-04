@@ -654,6 +654,24 @@
     }
   }
 
+  // C-P1 widget slots：把真实连接状态推给 chat.panel-right 槽内的
+  // status-pill widget（引导由 assets/widgets/boot.js 完成，这里只推 state）。
+  // boot.js 是 module 脚本（defer），晚于本经典脚本执行；轮询等它把
+  // 就绪 Promise 挂到 window.__airpWidgetBoot，超时静默跳过。
+  function pushChatWidgetState(label, on) {
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (window.__airpWidgetBoot) {
+        window.clearInterval(timer);
+        window.__airpWidgetBoot.then(api => {
+          if (api) api.pushSlotState('chat.panel-right', { label, on });
+        }).catch(() => {});
+      } else if (Date.now() - started > 5000) {
+        window.clearInterval(timer);
+      }
+    }, 100);
+  }
+
   async function boot() {
     setConnection('', '正在连接');
     setComposer(false);
@@ -683,6 +701,7 @@
       $('#character-model').textContent = (provider.model || (settings && settings.model) || '未设置模型') + (!settings || settings.temperature == null ? '' : ' · T' + settings.temperature);
       $('#chat-crumb').textContent = '对话空间 / ' + characterName;
       setConnection('ok', health && health.provider_configured ? 'Engine 已连接' : '已连接 · Provider 待配置');
+      pushChatWidgetState(health && health.provider_configured ? 'Engine · Provider 就绪' : 'Engine 就绪 · Provider 待配置', true);
       log('engine.ready', (version && version.version || version || 'ready').toString());
       await loadSessions();
       await refreshCoordinatorState();
@@ -691,6 +710,7 @@
       window.setInterval(refreshCoordinatorState, 2000);
     } catch (error) {
       setConnection('danger', '连接失败');
+      pushChatWidgetState('Engine 连接失败', false);
       emptyState('无法连接 Engine', AIRPApi.errorMessage(error.data, error.message) + '。确认 Engine 已启动后刷新页面。');
       log('engine.error', AIRPApi.errorMessage(error.data, error.message));
     }

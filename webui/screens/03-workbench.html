@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="../assets/base.css">
 <link rel="stylesheet" href="../assets/components.css">
 <link rel="stylesheet" href="../assets/console.css">
+<link rel="stylesheet" href="../assets/widgets/widgets.css">
 </head>
 <body data-screen="workbench">
 <div class="canvas">
@@ -17,7 +18,7 @@
   </header>
   <div class="screen-body console-body">
     <nav class="console-nav" id="console-nav" aria-label="控制台主导航"></nav>
-    <main class="console-main"><div class="page-heading"><div><h1 id="heading-title"></h1><p>所有可操作状态均来自当前 Engine。</p></div></div><div class="runtime-grid" id="view"></div></main>
+    <main class="console-main"><div class="page-heading"><div><h1 id="heading-title"></h1><p>所有可操作状态均来自当前 Engine。</p></div></div><div class="runtime-grid" id="view"></div><div data-slot="workbench.grid" aria-label="工作台 widget 区"></div></main>
     <aside class="console-context">
       <div class="context-block"><h2 class="context-title">当前作用域</h2><dl class="runtime-kv"><dt>Engine</dt><dd id="engine-address">—</dd><dt>角色</dt><dd id="scope-character">—</dd><dt>会话</dt><dd id="scope-session">—</dd><dt>用户</dt><dd id="scope-user">—</dd></dl></div>
       <div class="context-block"><h2 class="context-title">相关入口</h2><div id="related-links"></div></div>
@@ -27,5 +28,12 @@
 <script src="../assets/api-client.js"></script>
 <script src="../assets/workbench-reextract.js"></script>
 <script src="../assets/console-runtime.js"></script>
+<script src="../assets/widgets/registry.js"></script>
+<script src="../assets/widgets/manifests.js"></script>
+<script src="../assets/widgets/consent.js"></script>
+<script src="../assets/widgets/sandbox-bridge.js"></script>
+<script src="../assets/widgets/widget-host.js"></script>
+<script src="../assets/widgets/slots.js"></script>
+<script type="module" src="../assets/widgets/boot.js"></script>
 </body>
 </html>

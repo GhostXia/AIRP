@@ -10,7 +10,24 @@
     base: sessionStorage.getItem('airp_engine_url') || location.origin,
     bearer: sessionStorage.getItem('airp_bearer') || '',
   };
-  const client = AIRPApi.createClient({ base: connection.base, bearer: connection.bearer });
+  // C-P1：8h bearer 生命周期的失败可见化。桌面壳注入的 desktop session token
+  // 过期后，API 会返回 401；这里把首次 401 变成用户可见的状态栏提示。
+  // 续期机制留 C-P2（见 C-P1 报告「留 C-P2 的项」）。
+  let authExpired = false;
+  function markAuthExpired() {
+    if (authExpired) return;
+    authExpired = true;
+    const target = $('#runtime-status');
+    if (target) {
+      target.textContent = '鉴权失效（401）：会话 token 已过期或无效，请重启应用或重新保存连接';
+      target.classList.add('error');
+    }
+  }
+  const client = AIRPApi.createClient({
+    base: connection.base,
+    bearer: connection.bearer,
+    onRequest: info => { if (info && info.status === 401) markAuthExpired(); },
+  });
   const state = {
     characterId: params.get('character') || sessionStorage.getItem('airp_character_id') || '',
     sessionId: params.get('session') || sessionStorage.getItem('airp_session_id') || '',
@@ -1030,6 +1047,20 @@
     const view = $('#view'); view.replaceChildren(); const box = card(kind === 'backup' ? '备份与恢复' : '插件管理', true); box.append(node('div', 'runtime-warning', kind === 'backup' ? '当前 Engine 没有备份/恢复 HTTP API。为避免制造“已备份”的假象，本页不提供不可验证的操作。请先通过文件系统或部署层备份 AIRP 数据目录。' : '当前 Engine 没有插件发现、安装或权限管理 API。本页只声明能力缺口，不伪造插件状态。'), node('p', 'runtime-muted', '后端提供正式契约后，可在此接入并加入 smoke 验收。')); view.appendChild(box);
   }
 
+  // C-P1：等待 widget 引导模块（assets/widgets/boot.js）把就绪 Promise 挂到
+  // window.__airpWidgetBoot；超时（模块未加载/被裁剪）返回 null 静默跳过。
+  function waitForWidgetBoot(timeoutMs) {
+    if (timeoutMs === undefined) timeoutMs = 5000;
+    return new Promise(resolve => {
+      if (window.__airpWidgetBoot) return resolve(window.__airpWidgetBoot);
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (window.__airpWidgetBoot) { clearInterval(timer); resolve(window.__airpWidgetBoot); }
+        else if (Date.now() - started > timeoutMs) { clearInterval(timer); resolve(null); }
+      }, 50);
+    });
+  }
+
   async function boot() {
     renderChrome();
     $('#heading-title').textContent = titles[screen] || (screen === 'onboarding' ? '首次连接' : screen === 'backup' ? '备份与恢复' : screen === 'plugins' ? '插件管理' : screen === 'notes' ? '备注与连接' : 'AIRP 控制台');
@@ -1045,6 +1076,21 @@
       const redirectRenderer = href => () => { location.href = pathWithState(href); };
       const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: renderBackup, plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; }, stylelearn: redirectRenderer('38-style-learn.html'), dialoguegen: redirectRenderer('39-dialogue-gen.html'), wbgraph: redirectRenderer('40-worldbook-graph.html'), timeline: redirectRenderer('41-timeline-export.html'), carddiff: redirectRenderer('42-card-diff.html') };
       await (renderers[screen] || renderDiagnostics)();
+      // C-P1 widget slots：屏渲染完成后挂载 [data-slot]。boot.js 是 module
+      // 脚本（defer），晚于本经典脚本执行；它把挂载完成 Promise 赋给
+      // window.__airpWidgetBoot，这里等它就绪后再拿 API 接线。
+      const widgetBoot = await waitForWidgetBoot();
+      if (widgetBoot) {
+        try {
+          const widgets = await widgetBoot;
+          if (widgets) {
+            widgets.setAuthFailureHandler(markAuthExpired);
+            window.__airpSlotHandles = await widgets.bootWidgetSlots();
+          }
+        } catch (widgetError) {
+          console.warn('[widgets] slot 挂载失败：', widgetError);
+        }
+      }
     } catch (error) {
       $('#engine-status').className = 'status-pill danger'; $('#engine-status').lastChild.textContent = '连接或加载失败'; setStatus(message(error), true);
       const view = $('#view'); if (!view.children.length) { const box = card('无法加载页面', true); box.appendChild(node('p', 'runtime-warning', message(error))); view.append(box, connectionCard()); }
