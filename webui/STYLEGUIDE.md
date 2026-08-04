@@ -3,6 +3,8 @@
 本目录是 AIRP 控制台前端的**派生 WebUI 实现**，视觉以 `airp-engine-console/`
 权威样板为准。样板与 Ardot 设计稿「AIRP Engine Console」（32 屏，编号至 33，
 缺 32）逐屏对应；本派生实现须逐像素对齐样板，冲突时以样板为准并回写 issue。
+WebUI 已扩充到 44 屏；依据样板扩充新页面的完整流程与硬清单见本文 §9，
+无样板对应屏的登记处见 `airp-engine-console/README.md`「未纳入样板屏登记」。
 
 ---
 
@@ -160,3 +162,61 @@ airp-engine-console/
   每屏的 `design` 字段（screens.js）记录画板节点 ID。
 - 令牌来源：画布变量集「AIRP Tokens / Light」（2026-07-22 fetch_variables）。
 - 归档：`exports/AIRP Engine Console.pdf`（32 屏）、`exports/13_1.png`（流转图）。
+
+## 9. 扩充新页面清单
+
+本节是「依据 UI 样板扩充新页面」的硬清单。任何新增屏（含既有屏的推倒重写）
+必须逐项走完，缺一环不视为完成。
+
+### 9.1 规范链条
+
+```text
+airp-engine-console/ 权威样板（STYLEGUIDE.md §2 令牌 / §3 布局 / §4 组件 /
+  §5 屏模板 / §7 派生规则）
+→ webui/assets/tokens.css（令牌单一事实源）
+→ 屏文件模板（本文件 §5，复制最接近的现有屏改造）
+→ 运行时接入（骨架契约 + console 运行时，见 9.2）
+→ 测试注册（CSP 静态断言 + smoke pages 数组，见 9.2 第 3/6 条）
+→ 截图基线（golden 截图，见 9.2 第 6 条）
+```
+
+样板目录 `airp-engine-console/` 只覆盖 1–33 屏（缺 32）。webui 的
+32-style-review 与 34–44 共 12 屏没有对应设计稿，属于「未纳入样板」屏，
+登记处见 `airp-engine-console/README.md`。
+
+### 9.2 硬清单
+
+1. **令牌**：界面只允许引用 `var(--*)` 令牌，禁止硬编码色值；新令牌必须先进
+   `webui/assets/tokens.css` 并注明来源（样板令牌以 Ardot 画布变量集
+   「AIRP Tokens / Light」为准，派生扩展令牌注明来源为「派生扩展」）。
+   图表辅助色等非语义色的例外见样板 STYLEGUIDE §2。
+2. **骨架契约**：每屏 HTML 必须满足——`<html lang="zh-CN">` + `.canvas` 根容器 +
+   顶栏 `.topbar`（含 `#page-title` 面包屑与 `#engine-status` 状态胶囊，
+   后者带 `role="status"`）+ `<body data-screen="...">`。自定义布局必须保留
+   `#runtime-status` 区域（smoke 断言其存在且唯一）；确因布局无法容纳而豁免的，
+   必须在 `ui/production-browser-advanced-pages-smoke.mjs` 对应屏条目处写注释
+   记录豁免理由。
+3. **CSP 兼容**：禁止内联 `style=` 属性、`<style>` 块、无 `src` 的内联 `<script>`
+   与 `on*` 事件处理器——`webui/tests/runtime-pages.test.mjs` 会自动遍历
+   `screens/` 全部 HTML 做静态断言。注意该测试同时断言屏总数，**新增屏必须同步
+   更新该处的屏数断言**，否则测试失败。
+4. **状态齐备**：空态（`.empty-state`）/ 加载 / 错误 / 断流四态必须实现，
+   这是样板 STYLEGUIDE §7 的硬规则——状态变体与主界面同等重要，不是可选抛光项。
+5. **安全与诚实**：
+   - 危险操作必须二次确认，统一经 console 运行时的 confirm 封装（注入点在
+     `webui/assets/console-runtime.js` 约 L263，`AIRPWorkbench` 依赖注入的
+     `confirm` 回调；收敛方向是用样板 `.modal-mask` / `.modal` 二次确认替换
+     `window.confirm`）。**不得新增裸 `window.confirm` 调用**；存量裸调属历史
+     债务，改造时一并收敛。
+   - 密钥不回显（样板 §7 数据安全语义，不可视觉降级）。
+   - 无后端契约的能力显示为不可用（禁用态 + 「规划中 · 契约未交付」标注），
+     不得做假交互。
+6. **测试注册与截图基线**：新屏必须在
+   `ui/production-browser-advanced-pages-smoke.mjs` 的 `pages` 数组注册
+   （含 `file` / `title` / `ready` 锚点），smoke 会自动断言 `#page-title`、
+   `#engine-status.ok`、`#runtime-status`。同时须提供 golden 截图纳入截图基线；
+   截图采集与对拍机制由后续任务建设，落地前在截图基线目录登记占位条目即可。
+7. **样板归属**：有样板对应屏的，视觉与文案以
+   `airp-engine-console/STYLEGUIDE.md` 为准，冲突时以样板为准并回写 issue；
+   无样板对应屏的，必须在 `airp-engine-console/README.md`「未纳入样板屏登记」
+   小节登记，**不得宣称通过样板一致性审查**（「页面已实现」≠「已通过审查」）。
