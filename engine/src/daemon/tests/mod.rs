@@ -24,6 +24,7 @@ mod local_webui;
 mod memory;
 mod persona;
 mod security;
+mod session_recovery;
 mod sessions;
 mod state_scene;
 mod style;

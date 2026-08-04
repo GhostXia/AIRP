@@ -78,8 +78,47 @@
     status.textContent = labels[coordinatorPhase] || '';
     status.hidden = coordinatorPhase === 'idle';
     status.className = 'tag mono session-operation-status ' + (coordinatorPhase === 'recovering' ? 'tag-danger' : 'tag-warning');
+    renderSessionRecoverAction();
     document.querySelectorAll('.message-action, .swipe-btn').forEach(button => { button.disabled = coordinatorPhase !== 'idle'; });
     if (!streamController) setComposer(Boolean(sessionId));
+  }
+
+  // BUG-2 缓解切片：会话被 TurnCommit marker fail-closed 锁死时，给用户提供
+  // 一键恢复入口（归档 marker，不删除数据；replay 尚未交付）。
+  function renderSessionRecoverAction() {
+    const status = $('#session-operation-status');
+    const existing = $('#session-recover');
+    if (coordinatorPhase !== 'recovering') {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'session-recover';
+    button.className = 'btn btn-secondary session-recover-btn';
+    button.textContent = '尝试恢复会话';
+    button.addEventListener('click', recoverSession);
+    status.insertAdjacentElement('afterend', button);
+  }
+
+  async function recoverSession() {
+    if (!characterId || !sessionId || streamController) return;
+    if (!window.confirm('该会话因上次写入中断被保护性锁定。\n恢复会隔离未完成的提交标记（不会删除任何消息数据），然后允许继续对话。继续吗？')) return;
+    const button = $('#session-recover');
+    if (button) { button.disabled = true; button.textContent = '正在恢复…'; }
+    try {
+      const resp = await client.request('POST', '/v1/chat/session-recover', { character_id: characterId, session_id: sessionId });
+      log('session.recover', '标记已隔离：' + (resp && resp.quarantined_marker || 'ok'));
+      $('#stream-status').textContent = '会话已恢复，可继续对话';
+      await refreshCoordinatorState();
+      await loadHistory();
+    } catch (error) {
+      const msg = AIRPApi.errorMessage(error.data, error.message);
+      log('session.recover.error', msg);
+      $('#stream-status').textContent = '恢复失败：' + msg;
+      if (button) { button.disabled = false; button.textContent = '尝试恢复会话'; }
+    }
   }
 
   async function cancelActiveGeneration(controller) {

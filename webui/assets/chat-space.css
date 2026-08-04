@@ -23,6 +23,7 @@
 .event-log-list { display: flex; flex-direction: column; }
 .chat-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
 .session-operation-status { margin-right: var(--space-2); }
+.session-recover-btn { margin-right: var(--space-2); padding: 2px 8px; font-size: 11px; }
 .message-action:disabled, .swipe-btn:disabled { opacity: 0.5; cursor: default; }
 .message-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; opacity: 0; transition: opacity .15s ease; }
 .bubble:hover .message-actions, .bubble:focus-within .message-actions { opacity: 1; }

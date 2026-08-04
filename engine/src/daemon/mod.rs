@@ -57,9 +57,9 @@ use handlers::{
     list_conversations_endpoint, list_images_endpoint, list_models, list_personas_endpoint,
     list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
-    plan_conversation_migration_endpoint, preview_chat_assembly, reextract_character_assets,
-    regen_chat, resolve_provider_endpoint, restore_backup_endpoint, rollback_chat,
-    rollback_conversation_migration_endpoint, rollback_drift, serve_image_endpoint,
+    plan_conversation_migration_endpoint, preview_chat_assembly, recover_chat_session,
+    reextract_character_assets, regen_chat, resolve_provider_endpoint, restore_backup_endpoint,
+    rollback_chat, rollback_conversation_migration_endpoint, rollback_drift, serve_image_endpoint,
     serve_session_image_endpoint, style_learn, style_review, swipe_chat, switch_branch,
     test_plugin_tool_endpoint, unbind_persona_endpoint, update_character_card,
     update_character_lorebook, update_drift, update_persona_endpoint,
@@ -381,6 +381,9 @@ pub fn create_router_with_conversation_policy_registry(
         .route("/v1/agent/tools", get(list_agent_tools))
         .route("/v1/chat/history", post(get_chat_history))
         .route("/v1/chat/session-state", post(get_chat_session_state))
+        // BUG-2 mitigation slice: user-directed recovery bypass for sessions
+        // fail-closed by a pending TurnCommit marker (quarantine, no replay).
+        .route("/v1/chat/session-recover", post(recover_chat_session))
         .route("/v1/chat/cancel", post(cancel_chat_generation))
         .route("/v1/chat/rollback", post(rollback_chat))
         .route("/v1/chat/regen", post(regen_chat))

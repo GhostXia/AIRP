@@ -729,6 +729,34 @@
       try { result[name] = { ok: true, data: await client.request('GET', path) }; } catch (error) { result[name] = { ok: false, error: message(error), status: error.status || 0 }; }
     }
     box.appendChild(output(json(result), true));
+
+    // BUG-2 缓解切片：被 TurnCommit marker fail-closed 锁死的会话，在这里提供
+    // 状态展示 + 恢复入口（归档 marker、不删数据；replay 尚未交付）。
+    const recoverBox = card('会话恢复（写入中断锁死）', true);
+    view.appendChild(recoverBox);
+    const recoverForm = node('div', 'runtime-form'); recoverBox.appendChild(recoverForm);
+    const phaseLine = node('p', 'runtime-muted', '正在检查当前会话状态…');
+    recoverForm.appendChild(phaseLine);
+    const readSessionState = async () => {
+      if (!state.characterId) { phaseLine.textContent = '请先在角色列表选择角色。'; return null; }
+      try {
+        const st = await client.request('POST', '/v1/chat/session-state', { character_id: state.characterId, session_id: state.sessionId || null });
+        const phase = st && st.phase || 'unknown';
+        phaseLine.textContent = '当前会话状态：' + phase + (st && st.generation_id ? '（generation ' + st.generation_id + '）' : '') + (phase === 'recovering' ? ' —— 会话被未完成的写入标记锁定，可尝试恢复。' : '');
+        return st;
+      } catch (error) { phaseLine.textContent = '状态查询失败：' + message(error); return null; }
+    };
+    await readSessionState();
+    const recoverBtn = button('尝试恢复会话', async () => {
+      if (!state.characterId) { setStatus('请先选择角色', true); return; }
+      if (!window.confirm('恢复会隔离未完成的提交标记（不会删除任何消息数据），然后允许继续对话。继续吗？')) return;
+      try {
+        const resp = await task('会话恢复', () => client.request('POST', '/v1/chat/session-recover', { character_id: state.characterId, session_id: state.sessionId || null }));
+        phaseLine.textContent = '已恢复；标记已归档到：' + (resp && resp.quarantined_marker || 'quarantine 目录');
+        await readSessionState();
+      } catch (error) { /* task 已写入状态栏；保留诊断行供重试 */ }
+    }, 'btn-primary');
+    recoverForm.append(recoverBtn, button('刷新状态', readSessionState), node('p', 'runtime-muted', '仅当会话处于 recovering 状态时可用；原始标记移入 quarantine 目录而非删除，供后续 replay 或人工检查。'));
   }
 
   async function renderNotes() {
