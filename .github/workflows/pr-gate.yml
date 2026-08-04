@@ -87,6 +87,8 @@ jobs:
           cargo build -p airp-core --bin airp-core --locked
           New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
           Copy-Item target/debug/airp-core.exe ui/src-tauri/binaries/airp-core-x86_64-pc-windows-msvc.exe
+          # C-P0：tauri-build 的 resources glob 要求 webui-bundle 暂存目录存在。
+          pwsh -ExecutionPolicy Bypass -File ui/bundle-webui.ps1
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -127,6 +129,8 @@ jobs:
           cargo build -p airp-core --bin airp-core --locked
           New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
           Copy-Item target/debug/airp-core.exe ui/src-tauri/binaries/airp-core-x86_64-pc-windows-msvc.exe
+          # C-P0：tauri-build 的 resources glob 要求 webui-bundle 暂存目录存在。
+          pwsh -ExecutionPolicy Bypass -File ui/bundle-webui.ps1
 
       - name: Workspace tests
         run: cargo test --workspace --locked
@@ -163,6 +167,8 @@ jobs:
           cargo build -p airp-core --bin airp-core --locked
           New-Item -ItemType Directory -Force ui/src-tauri/binaries | Out-Null
           Copy-Item target/debug/airp-core.exe ui/src-tauri/binaries/airp-core-x86_64-pc-windows-msvc.exe
+          # C-P0：tauri-build 的 resources glob 要求 webui-bundle 暂存目录存在。
+          pwsh -ExecutionPolicy Bypass -File ui/bundle-webui.ps1
 
       - name: Rustdoc
         env:
