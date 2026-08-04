@@ -17,7 +17,8 @@
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bundle:webui": "powershell -ExecutionPolicy Bypass -File ./bundle-webui.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
