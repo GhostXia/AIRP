@@ -226,6 +226,13 @@ jobs:
         working-directory: ui
         run: npm ci
 
+      # Task #12：截图验证套件需要中文字体才能渲染 webui 中文文案，
+      # 否则 CJK 字形回退为方框，golden 基线对比无意义。
+      - name: Install CJK fonts for screenshots
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
       - name: Create synthetic deployment inputs
         working-directory: deploy/production
         run: |
@@ -269,3 +276,14 @@ jobs:
 
       - name: Production HTTPS topology smoke
         run: bash deploy/production/smoke-ci.sh
+
+      # Task #12：上传截图验证产物（44 屏 + 关键流帧 + manifest.json）。
+      # 失败时也上传，便于排查令牌/CSP 门禁失败的现场。
+      - name: Upload WebUI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-screenshots-${{ github.event.pull_request.number || github.run_id }}
+          path: deploy/production/smoke-screenshots/
+          retention-days: 30
+          if-no-files-found: warn

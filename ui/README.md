@@ -72,6 +72,7 @@ The root `.github/workflows/manual-build.yml` workflow can be run manually on a 
 
 ## Open Items
 
+- Desktop screenshot acceptance: `ui/smoke-desktop-screenshots.ps1` is a stub that only checks Tauri artifact presence; wiring the WebView2 harness screenshots against `webui/baseline-screenshots/` is a follow-up task (Task #12 stub).
 - AIRP-Dev packaged GUI end-to-end verification; source-level engine integration is already present.
 - Package/runtime smoke: build the desktop artifact, launch it, select/import a character, send one message, and receive a streamed reply with real settings.
 - Agent UI Test Harness: connect the current `window.__AIRP_AGENT_TEST__` surface to Codex browser plugin / Playwright GUI smoke and store screenshots/logs as artifacts.

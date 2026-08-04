@@ -49,6 +49,34 @@ git checkout 3caafa1 -- airp-engine-console/
 - **画板 → 屏映射**：每屏的 `design` 字段在 `assets/screens.js` 中记录画板节点 ID
 - **归档**：`exports/AIRP Engine Console.pdf`（33 屏）、`exports/13_1.png`（流转图）
 
+## 未纳入样板屏登记
+
+以下屏没有对应的 Ardot 画板设计稿，不在本权威样板覆盖范围内（样板只覆盖
+1–33 屏，缺 32）。这些屏必须复用样板的 token、布局语言和交互规则，但在补齐
+设计稿并过审查前，一律登记为「未纳入样板」：
+
+| 屏 | WebUI 文件 | 登记状态 |
+|---|---|---|
+| 32 风格审查 | `webui/screens/32-style-review.html` | 未纳入样板 |
+| 34 角色关系图谱 | `webui/screens/34-relationship-graph.html` | 未纳入样板 |
+| 35 剧情弧编辑器 | `webui/screens/35-plot-arc.html` | 未纳入样板 |
+| 36 场景插图生成 | `webui/screens/36-image-gen.html` | 未纳入样板 |
+| 37 角色卡模板库 | `webui/screens/37-character-templates.html` | 未纳入样板 |
+| 38 风格迁移 | `webui/screens/38-style-learn.html` | 未纳入样板 |
+| 39 对话示例生成器 | `webui/screens/39-dialogue-gen.html` | 未纳入样板 |
+| 40 世界书知识图谱 | `webui/screens/40-worldbook-graph.html` | 未纳入样板 |
+| 41 剧情时间线导出 | `webui/screens/41-timeline-export.html` | 未纳入样板 |
+| 42 角色卡版本对比 | `webui/screens/42-card-diff.html` | 未纳入样板 |
+| 43 多 Provider 路由 | `webui/screens/43-provider-management.html` | 未纳入样板 |
+| 44 插件工具 | `webui/screens/44-plugin-tools.html` | 未纳入样板 |
+
+登记规则：
+
+1. 新增无设计稿的屏**必须**在上表登记（屏号、标题、文件、状态），否则不视为交付完成。
+2. 登记屏不得宣称通过样板一致性审查；「页面已实现」≠「已通过审查」。
+3. 后续补齐 Ardot 画板并纳入样板后，将状态更新为已纳入并记入上方「溯源与回退」表。
+4. 扩充新页面的完整硬清单见 `webui/STYLEGUIDE.md` §9「扩充新页面清单」。
+
 ## 快速开始
 
 直接在浏览器中打开 `index.html` 即可浏览全部 33 屏样板。
