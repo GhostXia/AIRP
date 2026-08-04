@@ -961,3 +961,222 @@ async fn regen_and_continue_reject_recovering_session() {
         .unwrap();
     assert_conflict_with_session_recovery_required(continue_resp).await;
 }
+
+// ── DX-1: history / rollback 多用户 effective root 对齐回归 ───────────
+//
+// P0 修复前：`get_chat_history` 恒用 daemon root，`rollback_chat` 无 user_id，
+// 而 regen/continue/delete/swipe/edit/branch 均按 user_id 解析
+// `users/{user_id}/` 根 → 多用户隔离下读/写不同根、lease key 不一致。
+
+/// 辅助：向指定数据根的 legacy per-character log 追加一条 user 消息。
+fn append_user_message(root: &std::path::Path, character: &str, content: &str) {
+    let cid = crate::types::CharacterId::new(character).unwrap();
+    crate::domain::ChatService::new(root)
+        .append(
+            &cid,
+            None,
+            crate::adapter::ChatMessage {
+                role: crate::adapter::MessageRole::User,
+                content: content.into(),
+            },
+        )
+        .unwrap();
+}
+
+async fn post_chat_history(app: &Router, body: &serde_json::Value) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/history")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn history_reads_user_scoped_root_and_stays_isolated_from_daemon_root() {
+    // users/alice/ 根下写入的消息：带同一 user_id 的 history 能读到；
+    // 不带 user_id（daemon root）读不到。legacy 全量与 cursor 分支都要覆盖。
+    let (state, tmp) = make_state_no_key();
+    let alice_root = crate::data_dir::resolve_effective_root(tmp.path(), Some("alice")).unwrap();
+    append_user_message(&alice_root, "hero", "scoped message");
+
+    let app = create_router(state);
+
+    // (1) 带 user_id → legacy 全量分支读到 1 条
+    let resp = post_chat_history(
+        &app,
+        &serde_json::json!({"character_id": "hero", "user_id": "alice"}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        v["messages"].as_array().unwrap().len(),
+        1,
+        "带 user_id 的 history 必须读 users/alice/ 根下的消息"
+    );
+
+    // (2) 带 user_id + limit → cursor 分支同样命中 user 根
+    let resp = post_chat_history(
+        &app,
+        &serde_json::json!({"character_id": "hero", "user_id": "alice", "limit": 10}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(page["total"], 1, "cursor 分支也必须解析到 user 根");
+
+    // (3) 不带 user_id → daemon root，读不到 alice 的消息
+    let resp = post_chat_history(&app, &serde_json::json!({"character_id": "hero"})).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        v["messages"].as_array().unwrap().len(),
+        0,
+        "不带 user_id 时不得泄露 users/ 根下的消息"
+    );
+}
+
+#[tokio::test]
+async fn rollback_with_user_id_acts_on_user_scoped_root() {
+    // rollback 带 user_id → 作用于 users/alice/ 根；daemon root 不受影响。
+    let (state, tmp) = make_state_no_key();
+    let alice_root = crate::data_dir::resolve_effective_root(tmp.path(), Some("alice")).unwrap();
+    append_user_message(&alice_root, "hero", "first");
+    append_user_message(&alice_root, "hero", "second");
+    append_user_message(&alice_root, "hero", "third");
+
+    let app = create_router(state);
+    let body = serde_json::json!({
+        "character_id": "hero",
+        "message_index": 1,
+        "user_id": "alice"
+    });
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/rollback")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let log: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        log["messages"].as_array().unwrap().len(),
+        2,
+        "rollback 必须截断 users/alice/ 根下的 log（保留目标索引及之前）"
+    );
+
+    // 落盘验证：user 根只剩 2 条（原 3 条）；daemon 根从未被写入。
+    let user_jsonl = alice_root.join("characters/hero/history/chat_log.jsonl");
+    assert!(user_jsonl.exists());
+    assert_eq!(
+        std::fs::read_to_string(&user_jsonl)
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+    assert!(
+        !tmp.path()
+            .join("characters/hero/history/chat_log.jsonl")
+            .exists(),
+        "带 user_id 的 rollback 不得写入 daemon 根"
+    );
+}
+
+#[tokio::test]
+async fn rollback_without_user_id_keeps_daemon_root_behavior() {
+    // 向后兼容：旧请求不带 user_id 时维持 daemon root 旧行为。
+    let (state, tmp) = make_state_no_key();
+    append_user_message(tmp.path(), "hero", "first");
+    append_user_message(tmp.path(), "hero", "second");
+
+    let app = create_router(state);
+    let body = serde_json::json!({"character_id": "hero", "message_index": 1});
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/rollback")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let log: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        log["messages"].as_array().unwrap().len(),
+        2,
+        "不带 user_id 的 rollback 必须作用于 daemon 根（保留目标索引及之前）"
+    );
+}
+
+#[tokio::test]
+async fn rollback_shares_lease_key_with_user_scoped_generation() {
+    // lease key 一致性：user 根上存在活跃 generation lease 时，带同一 user_id
+    // 的 rollback 必须 409 —— 与 mutation 写入解析到同一个 Coordinator key。
+    let (state, tmp) = make_state_no_key();
+    let alice_root = crate::data_dir::resolve_effective_root(tmp.path(), Some("alice")).unwrap();
+    append_user_message(&alice_root, "hero", "first");
+    let character = crate::types::CharacterId::new("hero").unwrap();
+    let lease = state
+        .session_coordinators
+        .try_submit(
+            &alice_root,
+            &character,
+            None,
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+
+    let app = create_router(state);
+    let body = serde_json::json!({
+        "character_id": "hero",
+        "message_index": 1,
+        "user_id": "alice"
+    });
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/chat/rollback")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "同 user 根的活跃 lease 必须拦住 rollback（lease key 对齐）"
+    );
+    drop(lease);
+}

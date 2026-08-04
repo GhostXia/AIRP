@@ -31,9 +31,13 @@ pub(in crate::daemon) async fn get_chat_history(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(query): Json<HistoryQuery>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
+    // DX-1：与同族 mutation handler 对齐，按 user_id 解析 effective root，
+    // 避免多用户隔离下 history 读取与 mutation 写入落在不同数据根。
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, query.user_id.as_deref())?;
     // #37 cursor 分页：传 limit/before 走窗口；不传 → 全量（向后兼容旧客户端）。
     if query.limit.is_some() || query.before.is_some() {
-        let window = ChatService::new(&state.data_root).history_window(
+        let window = ChatService::new(&effective_root).history_window(
             &query.character_id,
             query.session_id.as_ref(),
             query.limit,
@@ -42,7 +46,7 @@ pub(in crate::daemon) async fn get_chat_history(
         return Ok(Json(serde_json::to_value(window)?));
     }
     // legacy 全量返回必须保留 ChatLog 的既有响应形状。
-    let log = ChatService::new(&state.data_root)
+    let log = ChatService::new(&effective_root)
         .history(&query.character_id, query.session_id.as_ref())?;
     Ok(Json(serde_json::to_value(log)?))
 }
@@ -86,10 +90,13 @@ pub(in crate::daemon) async fn rollback_chat(
     if let Err(msg) = req.validate_rollback_target() {
         return Err(AirpError::BadRequest(msg));
     }
-    // RollbackRequest intentionally has no user_id, so its effective root is
-    // the daemon root. Keep this explicit to preserve the same lease-key rule
-    // as the multi-user mutation handlers if the request grows later.
-    let effective_root = state.data_root.clone();
+    // DX-1：与同族 mutation handler（regen/continue/delete/swipe/edit/branch 等）对齐：
+    // effective root = resolve_effective_root(daemon_root, user_id)。Coordinator
+    // lease key 以 effective root 为前缀，因此 history 读取与 rollback 写入必须
+    // 解析到同一个根，否则多用户隔离下 lease key 不一致。user_id 省略/空串时
+    // resolve_effective_root 原样返回 daemon root，旧请求行为不变。
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, req.user_id.as_deref())?;
     let _operation = state.session_coordinators.try_submit(
         &effective_root,
         &req.character_id,
