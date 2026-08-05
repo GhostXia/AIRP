@@ -33,6 +33,10 @@ use sha2::{Digest, Sha256};
 
 pub mod api;
 
+/// C-P4 第二批（#484）：host_api / capability 合同兼容回归装置（仅测试构型）。
+#[cfg(test)]
+mod compat;
+
 /// 单个包文件数上限（防 zip-bomb 式清单膨胀；widget 包本就只有几个文件）。
 pub const MAX_PACKAGE_FILES: usize = 32;
 /// 单个文件大小上限（1MB；widget 是文本资产，图片另走 CDN 不属本阶段）。

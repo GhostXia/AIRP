@@ -8,6 +8,10 @@
 //! - intent 执行面：拒绝默认 403 + envelope 形状校验；
 //! - token 续期：rotation（撤旧发新）、无效 401、无 key 403、access key 不得续期。
 
+// token_test_lock（#485 E6）有意跨 await 持有：串行化全局 token store，
+// 测试用 oneshot 请求无跨线程挂起风险，此处豁免 await_holding_lock。
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 use crate::daemon::desktop_session::{
     clear_desktop_session_tokens_for_test, mint_desktop_session_token, token_test_lock,
@@ -80,7 +84,10 @@ fn ext_router(state: Arc<DaemonState>) -> Router {
             get(crate::extensions::api::list_all_grants),
         )
         // C-P4 第二批（#484）：统一授权查询面。
-        .route("/v1/grants", get(crate::extensions::api::list_unified_grants))
+        .route(
+            "/v1/grants",
+            get(crate::extensions::api::list_unified_grants),
+        )
         .route(
             "/v1/widget-intents",
             post(crate::extensions::api::widget_intent),

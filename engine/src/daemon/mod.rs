@@ -783,7 +783,10 @@ pub fn create_router_with_conversation_policy_registry(
         )
         // C-P4 第二批（#484）：统一授权查询面（kind 判别字段，本阶段仅
         // widget 扩展 grant；additive，不动 /v1/extensions/grants）。
-        .route("/v1/grants", get(crate::extensions::api::list_unified_grants))
+        .route(
+            "/v1/grants",
+            get(crate::extensions::api::list_unified_grants),
+        )
         .route(
             "/v1/widget-intents",
             post(crate::extensions::api::widget_intent),

@@ -353,7 +353,7 @@ pub async fn get_catalog(State(state): State<Arc<DaemonState>>) -> Response {
         object.insert("host_api_major".to_string(), Value::from(HOST_API_MAJOR));
         object.insert(
             "capabilities".to_string(),
-            Value::from(KNOWN_CAPABILITIES.iter().copied().collect::<Vec<_>>()),
+            Value::from(KNOWN_CAPABILITIES.to_vec()),
         );
     }
     let store = store(&state);
