@@ -18,14 +18,13 @@
       "ui": true
     },
     {
-      "method": "GET",
-      "path": "/v1/backups",
+      "method": "POST",
+      "path": "/v1/backups/:backup_id/restore",
       "ui": true
     },
     {
       "method": "POST",
-      "path": "/v1/backups",
-      "bodyLimit": "64KB",
+      "path": "/v1/backups/:backup_id/verify",
       "ui": true
     },
     {
@@ -40,23 +39,14 @@
       "reason": "WebUI 备份面板仅用列表/创建/校验/恢复/删除（console-runtime.js 备份调用契约注释），单项详情留给 API 客户端"
     },
     {
-      "method": "POST",
-      "path": "/v1/backups/:backup_id/restore",
-      "ui": true
-    },
-    {
-      "method": "POST",
-      "path": "/v1/backups/:backup_id/verify",
-      "ui": true
-    },
-    {
       "method": "GET",
-      "path": "/v1/character-templates",
+      "path": "/v1/backups",
       "ui": true
     },
     {
-      "method": "GET",
-      "path": "/v1/character-templates/:template_id",
+      "method": "POST",
+      "path": "/v1/backups",
+      "bodyLimit": "64KB",
       "ui": true
     },
     {
@@ -67,28 +57,12 @@
     },
     {
       "method": "GET",
-      "path": "/v1/characters",
-      "ui": true
-    },
-    {
-      "method": "DELETE",
-      "path": "/v1/characters/:character_id",
+      "path": "/v1/character-templates/:template_id",
       "ui": true
     },
     {
       "method": "GET",
-      "path": "/v1/characters/:character_id",
-      "ui": true
-    },
-    {
-      "method": "PUT",
-      "path": "/v1/characters/:character_id",
-      "bodyLimit": "2MB",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/characters/:character_id/analysis",
+      "path": "/v1/character-templates",
       "ui": true
     },
     {
@@ -100,6 +74,11 @@
       "method": "POST",
       "path": "/v1/characters/:character_id/analysis/*filename",
       "bodyLimit": "1MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/analysis",
       "ui": true
     },
     {
@@ -121,6 +100,11 @@
       "ui": true
     },
     {
+      "method": "POST",
+      "path": "/v1/characters/:character_id/drift/rollback",
+      "ui": true
+    },
+    {
       "method": "GET",
       "path": "/v1/characters/:character_id/drift",
       "ui": true
@@ -128,16 +112,6 @@
     {
       "method": "PUT",
       "path": "/v1/characters/:character_id/drift",
-      "ui": true
-    },
-    {
-      "method": "POST",
-      "path": "/v1/characters/:character_id/drift/rollback",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/characters/:character_id/images",
       "ui": true
     },
     {
@@ -148,6 +122,16 @@
     },
     {
       "method": "GET",
+      "path": "/v1/characters/:character_id/images",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/lorebook/graph",
+      "ui": true
+    },
+    {
+      "method": "GET",
       "path": "/v1/characters/:character_id/lorebook",
       "ui": true
     },
@@ -155,11 +139,6 @@
       "method": "PUT",
       "path": "/v1/characters/:character_id/lorebook",
       "bodyLimit": "2MB",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/characters/:character_id/lorebook/graph",
       "ui": true
     },
     {
@@ -181,11 +160,6 @@
     },
     {
       "method": "GET",
-      "path": "/v1/characters/:character_id/revisions",
-      "ui": true
-    },
-    {
-      "method": "GET",
       "path": "/v1/characters/:character_id/revisions/:revision_id",
       "ui": true
     },
@@ -196,14 +170,14 @@
     },
     {
       "method": "GET",
-      "path": "/v1/characters/:character_id/sessions/:session_id/images/:filename",
-      "ui": true,
-      "note": "经 <img src> 直接加载（image-gen.js），不经 client.request"
+      "path": "/v1/characters/:character_id/revisions",
+      "ui": true
     },
     {
       "method": "GET",
-      "path": "/v1/characters/:character_id/state",
-      "ui": true
+      "path": "/v1/characters/:character_id/sessions/:session_id/images/:filename",
+      "ui": true,
+      "note": "经 <img src> 直接加载（image-gen.js），不经 client.request"
     },
     {
       "method": "GET",
@@ -217,13 +191,39 @@
     },
     {
       "method": "GET",
+      "path": "/v1/characters/:character_id/state",
+      "ui": true
+    },
+    {
+      "method": "GET",
       "path": "/v1/characters/:character_id/world-events",
+      "ui": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/characters/:character_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/characters/:character_id",
+      "bodyLimit": "2MB",
       "ui": true
     },
     {
       "method": "POST",
       "path": "/v1/characters/import",
       "bodyLimit": "10MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters",
       "ui": true
     },
     {
@@ -304,13 +304,6 @@
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
-      "method": "POST",
-      "path": "/v1/conversation-migrations",
-      "bodyLimit": "2MB",
-      "ui": false,
-      "reason": "Conversation 迁移工具链专用，WebUI 不消费"
-    },
-    {
       "method": "GET",
       "path": "/v1/conversation-migrations/:migration_id/export",
       "ui": false,
@@ -330,6 +323,13 @@
       "reason": "Conversation 迁移工具链专用，WebUI 不消费"
     },
     {
+      "method": "POST",
+      "path": "/v1/conversation-migrations",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 迁移工具链专用，WebUI 不消费"
+    },
+    {
       "method": "GET",
       "path": "/v1/conversation-policies",
       "ui": false,
@@ -337,25 +337,6 @@
     },
     {
       "method": "GET",
-      "path": "/v1/conversations",
-      "ui": false,
-      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/conversations",
-      "bodyLimit": "2MB",
-      "ui": false,
-      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/conversations/:conversation_id",
-      "ui": false,
-      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
-    },
-    {
-      "method": "GET",
       "path": "/v1/conversations/:conversation_id/events",
       "ui": false,
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
@@ -364,19 +345,6 @@
       "method": "POST",
       "path": "/v1/conversations/:conversation_id/events",
       "bodyLimit": "2MB",
-      "ui": false,
-      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/conversations/:conversation_id/turns",
-      "bodyLimit": "2MB",
-      "ui": false,
-      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/conversations/:conversation_id/turns/:turn_id",
       "ui": false,
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
@@ -391,6 +359,44 @@
       "path": "/v1/conversations/:conversation_id/turns/:turn_id/observability",
       "ui": false,
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations/:conversation_id/turns/:turn_id",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/turns",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations/:conversation_id",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/desktop-session",
+      "ui": false,
+      "reason": "C-P0 桌面壳（Tauri）专属：壳持进程级 access key 经此端点换短时效 UI token（bearer 注入通道），WebUI JS 不直接调用——token 由壳以 URL fragment 传入首屏写 sessionStorage"
     },
     {
       "method": "POST",
@@ -431,14 +437,9 @@
       "ui": true
     },
     {
-      "method": "GET",
-      "path": "/v1/plugin-tools",
-      "ui": true
-    },
-    {
       "method": "POST",
-      "path": "/v1/plugin-tools",
-      "bodyLimit": "2MB",
+      "path": "/v1/plugin-tools/:name/test",
+      "bodyLimit": "1MB",
       "ui": true
     },
     {
@@ -447,19 +448,14 @@
       "ui": true
     },
     {
+      "method": "GET",
+      "path": "/v1/plugin-tools",
+      "ui": true
+    },
+    {
       "method": "POST",
-      "path": "/v1/plugin-tools/:name/test",
-      "bodyLimit": "1MB",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/presets",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/presets/:preset_id",
+      "path": "/v1/plugin-tools",
+      "bodyLimit": "2MB",
       "ui": true
     },
     {
@@ -470,9 +466,19 @@
       "reason": "WebUI 仅暴露角色卡拆解入口（/v1/characters/:character_id/decompose），预设拆解留给 API 客户端"
     },
     {
+      "method": "GET",
+      "path": "/v1/presets/:preset_id",
+      "ui": true
+    },
+    {
       "method": "POST",
       "path": "/v1/presets/import",
       "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/presets",
       "ui": true
     },
     {
@@ -489,6 +495,11 @@
     },
     {
       "method": "GET",
+      "path": "/v1/providers/resolve",
+      "ui": true
+    },
+    {
+      "method": "GET",
       "path": "/v1/providers",
       "ui": true
     },
@@ -496,26 +507,6 @@
       "method": "POST",
       "path": "/v1/providers",
       "bodyLimit": "2MB",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/providers/resolve",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/scenes",
-      "ui": true
-    },
-    {
-      "method": "POST",
-      "path": "/v1/scenes",
-      "ui": true
-    },
-    {
-      "method": "GET",
-      "path": "/v1/scenes/:scene_id",
       "ui": true
     },
     {
@@ -532,12 +523,27 @@
     },
     {
       "method": "GET",
-      "path": "/v1/sessions/:character_id",
+      "path": "/v1/scenes/:scene_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/scenes",
       "ui": true
     },
     {
       "method": "POST",
-      "path": "/v1/sessions/:character_id",
+      "path": "/v1/scenes",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/:character_id/:session_id/timeline/export",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/:character_id/:session_id/timeline",
       "ui": true
     },
     {
@@ -547,12 +553,12 @@
     },
     {
       "method": "GET",
-      "path": "/v1/sessions/:character_id/:session_id/timeline",
+      "path": "/v1/sessions/:character_id",
       "ui": true
     },
     {
-      "method": "GET",
-      "path": "/v1/sessions/:character_id/:session_id/timeline/export",
+      "method": "POST",
+      "path": "/v1/sessions/:character_id",
       "ui": true
     },
     {
@@ -573,12 +579,12 @@
     },
     {
       "method": "GET",
-      "path": "/v1/style/profiles",
+      "path": "/v1/style/profiles/:profile_id",
       "ui": true
     },
     {
       "method": "GET",
-      "path": "/v1/style/profiles/:profile_id",
+      "path": "/v1/style/profiles",
       "ui": true
     },
     {
@@ -588,30 +594,30 @@
     },
     {
       "method": "GET",
-      "path": "/v1/users/:user_id/persona",
-      "ui": false,
-      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
-    },
-    {
-      "method": "PUT",
-      "path": "/v1/users/:user_id/persona",
-      "ui": false,
-      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
-    },
-    {
-      "method": "GET",
       "path": "/v1/users/:user_id/persona/effective",
       "ui": false,
       "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
     },
     {
       "method": "GET",
-      "path": "/v1/users/:user_id/personas",
+      "path": "/v1/users/:user_id/persona",
+      "ui": false,
+      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/users/:user_id/persona",
+      "ui": false,
+      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/users/:user_id/personas/:persona_id/bindings",
       "ui": true
     },
     {
       "method": "POST",
-      "path": "/v1/users/:user_id/personas",
+      "path": "/v1/users/:user_id/personas/:persona_id/bindings",
       "ui": true
     },
     {
@@ -630,13 +636,13 @@
       "ui": true
     },
     {
-      "method": "DELETE",
-      "path": "/v1/users/:user_id/personas/:persona_id/bindings",
+      "method": "GET",
+      "path": "/v1/users/:user_id/personas",
       "ui": true
     },
     {
       "method": "POST",
-      "path": "/v1/users/:user_id/personas/:persona_id/bindings",
+      "path": "/v1/users/:user_id/personas",
       "ui": true
     }
   ]

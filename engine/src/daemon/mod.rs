@@ -1,6 +1,7 @@
 //! Daemon state, config, auth middleware, and axum router factory.
 
 pub(crate) mod decompose_handlers;
+pub(crate) mod desktop_session;
 pub(crate) mod handlers;
 pub mod types;
 
@@ -269,6 +270,13 @@ pub async fn auth_middleware(
             let ok = provided
                 .map(|k| constant_time_eq(k.as_bytes(), key.as_bytes()))
                 .unwrap_or(false);
+            // C-P0：桌面壳 bearer 注入通道——access key 不匹配时再尝试短时效
+            // desktop session token（POST /v1/desktop-session 签发，仅内存存储）。
+            // 两个分支均失败才拒绝；token 校验是哈希表查找，无时序通道顾虑。
+            let ok = ok
+                || provided
+                    .map(desktop_session::validate_desktop_session_token)
+                    .unwrap_or(false);
             if !ok {
                 return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
             }
@@ -376,6 +384,11 @@ pub fn create_router_with_conversation_policy_registry(
 
     let v1_routes = Router::new()
         .route("/v1/chat/completions", post(chat_completion))
+        // C-P0：桌面壳进程互信换短时效 UI token（bearer 注入通道）。
+        .route(
+            "/v1/desktop-session",
+            post(desktop_session::desktop_session_endpoint),
+        )
         .route("/v1/chat/preview", post(preview_chat_assembly))
         .route("/v1/agent/run", post(agent_run))
         .route("/v1/agent/tools", get(list_agent_tools))
@@ -736,16 +749,36 @@ pub fn create_router_with_conversation_policy_registry(
 /// This remains opt-in so API-only and Tauri callers retain their existing
 /// router, while the local WebUI package gets a single same-origin process.
 pub fn create_local_webui_router(state: Arc<DaemonState>, webui_dir: PathBuf) -> Router {
+    webui_router_with_mode(state, webui_dir, "local")
+}
+
+/// C-P0: 桌面壳（Tauri）同源承载 webui 的 router。
+///
+/// 与 [`create_local_webui_router`] 结构完全一致（同样的硬 CSP / 安全头 /
+/// no-store），仅 runtime-config 的 mode 为 `desktop`，供 webui 识别宿主。
+/// 桌面场景下 daemon 带进程级 access key（由壳注入），webui 侧鉴权走
+/// `POST /v1/desktop-session` 签发的短时效 token（见 `desktop_session` 模块）。
+pub fn create_desktop_webui_router(state: Arc<DaemonState>, webui_dir: PathBuf) -> Router {
+    webui_router_with_mode(state, webui_dir, "desktop")
+}
+
+fn webui_router_with_mode(
+    state: Arc<DaemonState>,
+    webui_dir: PathBuf,
+    mode: &'static str,
+) -> Router {
+    let runtime_config =
+        format!("window.AIRP_WEBUI_CONFIG = Object.freeze({{ mode: '{mode}' }});\n");
     create_router(state)
         .route(
             "/runtime-config.js",
-            get(|| async {
+            get(move || async move {
                 (
                     [(
                         header::CONTENT_TYPE,
                         "application/javascript; charset=utf-8",
                     )],
-                    "window.AIRP_WEBUI_CONFIG = Object.freeze({ mode: 'local' });\n",
+                    runtime_config,
                 )
             }),
         )
