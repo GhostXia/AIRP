@@ -134,7 +134,13 @@
     const opts = options || {};
     const fetchImpl = opts.fetchImpl || globalThis.fetch;
     const base = trimBase(opts.base || (globalThis.location && globalThis.location.origin));
-    const bearer = String(opts.bearer || '');
+    // C-P2：bearer 支持函数形态（每次请求时解析）——token 续期（rotation）后
+    // 新值即刻生效，无需重建 client；字符串形态行为不变（additive）。
+    const bearerProvider = typeof opts.bearer === 'function' ? opts.bearer : function () { return opts.bearer; };
+    function currentBearer() { return String(bearerProvider() || ''); }
+    // C-P2：401 续期钩子。返回 truthy → 已续期，允许单次重试；falsy → 不重试
+    // （钩子自行处理可见化，如登录提示）。仅 401 触发；重试至多一次。
+    const onUnauthorized = typeof opts.onUnauthorized === 'function' ? opts.onUnauthorized : null;
     const onRequest = typeof opts.onRequest === 'function' ? opts.onRequest : function () {};
     const requestTimeoutMs = normalizeTimeout(opts.requestTimeoutMs, 30_000);
     const streamTimeoutMs = normalizeTimeout(opts.streamTimeoutMs, 300_000);
@@ -146,6 +152,7 @@
     // 同源判断用 location.origin；跨源 base 必须在 opts.trustedOrigins 白名单中才发送 bearer。
     const trustedOrigins = Array.isArray(opts.trustedOrigins) ? opts.trustedOrigins.map(function (o) { return trimBase(o); }) : [];
     function shouldSendBearer(targetBase) {
+      const bearer = currentBearer();
       if (!bearer || !targetBase) return false;
       try {
         const target = new URL(targetBase);
@@ -157,7 +164,7 @@
 
     function headers(extra, targetBase) {
       const value = Object.assign({ Accept: 'application/json' }, extra || {});
-      if (shouldSendBearer(targetBase)) value.Authorization = 'Bearer ' + bearer;
+      if (shouldSendBearer(targetBase)) value.Authorization = 'Bearer ' + currentBearer();
       return value;
     }
 
@@ -174,6 +181,14 @@
         let response;
         try {
           response = await fetchImpl(base + path, init);
+          // C-P2：401 续期单次重试（rotation 后 bearerProvider 已返回新值）。
+          if (response.status === 401 && onUnauthorized && !(requestOptions && requestOptions._retried)) {
+            const renewed = await onUnauthorized({ method, path });
+            if (renewed) {
+              timed.cleanup();
+              return request(method, path, body, Object.assign({}, requestOptions, { _retried: true }));
+            }
+          }
         } catch (error) {
           onRequest({ method, path, status: 0, ms: Date.now() - started });
           throw error;
@@ -204,6 +219,14 @@
             body: JSON.stringify(body),
             signal: timed.signal,
           });
+          // C-P2：流启动前的 401 同样可续期重试（尚未消费任何流字节）。
+          if (response.status === 401 && onUnauthorized && !callbacks._retried) {
+            const renewed = await onUnauthorized({ method: 'POST', path });
+            if (renewed) {
+              timed.cleanup();
+              return stream(path, body, Object.assign({}, callbacks, { _retried: true }));
+            }
+          }
         } catch (error) {
           onRequest({ method: 'POST', path, status: 0, ms: Date.now() - started });
           throw error;

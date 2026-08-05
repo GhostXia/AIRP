@@ -93,6 +93,7 @@ async fn setup_with_quota(
         plugin_tools: Default::default(),
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
+        extensions: std::sync::OnceLock::new(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -132,6 +133,7 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
         plugin_tools: Default::default(),
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
+        extensions: std::sync::OnceLock::new(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -166,6 +168,7 @@ async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::T
         plugin_tools: Default::default(),
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
+        extensions: std::sync::OnceLock::new(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,

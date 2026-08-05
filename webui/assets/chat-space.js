@@ -12,7 +12,9 @@
   const requestedEngine = params.get('engine');
   if (requestedEngine && /^https?:\/\//i.test(requestedEngine)) sessionStorage.setItem('airp_engine_url', requestedEngine.replace(/\/+$/, ''));
   const base = sessionStorage.getItem('airp_engine_url') || location.origin;
-  const bearer = sessionStorage.getItem('airp_bearer') || '';
+  // C-P2：函数形态 bearer——每次请求时解析当前 sessionStorage 值，
+  // token 续期（rotation）后新值即刻生效，无需重建 client。
+  const bearer = () => sessionStorage.getItem('airp_bearer') || '';
   let characterId = params.get('character') || sessionStorage.getItem('airp_character_id') || '';
   let characterName = '';
   let sessionId = params.get('session') || sessionStorage.getItem('airp_session_id') || '';
@@ -49,6 +51,9 @@
     onRequest: entry => {
       if (entry.path !== '/v1/chat/session-state') log('http.' + entry.method.toLocaleLowerCase(), entry.path + ' · ' + (entry.status || 'network') + ' · ' + entry.ms + 'ms');
     },
+    // C-P2：401 续期单次重试（含流启动前）。无 key 模式 renew 403 →
+    // 钩子返回 false → 回退既有 401 错误展示行为。
+    onUnauthorized: () => AIRPDesktopSession.renewDesktopSession({ base }),
   });
   $('#connection-address').textContent = client.base === location.origin ? '同源 Engine' : client.base;
 

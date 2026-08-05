@@ -82,6 +82,7 @@ mod tests {
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
+            extensions: std::sync::OnceLock::new(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1008,6 +1009,7 @@ mod tests_ms6 {
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
+            extensions: std::sync::OnceLock::new(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1240,6 +1242,7 @@ mod tests_issue27 {
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
+            extensions: std::sync::OnceLock::new(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1403,6 +1406,7 @@ mod tests_dx1 {
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
+            extensions: std::sync::OnceLock::new(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1963,6 +1967,7 @@ mod tests_a1b_pipeline_e2e {
             provider_routing_update: Default::default(),
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
+            extensions: std::sync::OnceLock::new(),
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),

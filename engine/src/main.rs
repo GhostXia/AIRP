@@ -255,6 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 provider_routing_update: tokio::sync::Mutex::new(()),
                 plugin_tools: std::sync::RwLock::new(plugin_tools),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
+                extensions: std::sync::OnceLock::new(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
@@ -377,6 +378,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 provider_routing_update: tokio::sync::Mutex::new(()),
                 plugin_tools: Default::default(),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
+                extensions: std::sync::OnceLock::new(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,

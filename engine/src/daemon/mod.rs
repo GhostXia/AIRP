@@ -18,7 +18,7 @@ use axum::{
     http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -98,6 +98,10 @@ pub struct DaemonState {
     /// Phase 5.3 (Major1, 2026-07-26)：plugin tools 写操作（upsert / delete）
     /// 协调器，串行化 read-persist-commit，避免并发写造成盘-内存不一致。
     pub plugin_tools_update: tokio::sync::Mutex<()>,
+    /// C-P2：扩展注册面（registry / catalog / digest-pinned 包）。
+    /// 惰性初始化（首次访问 extensions 端点时从 data_root 加载），
+    /// 避免全部 18 个构造点承担加载成本与测试 tmp 目录差异。
+    pub extensions: std::sync::OnceLock<Arc<crate::extensions::ExtensionStore>>,
 }
 
 impl DaemonState {
@@ -119,6 +123,12 @@ impl DaemonState {
             tracing::warn!("config write lock poisoned; recovering");
             e.into_inner()
         })
+    }
+
+    /// C-P2：扩展存储惰性访问器（首次调用时从 `data_root` 加载）。
+    pub fn extensions(&self) -> &Arc<crate::extensions::ExtensionStore> {
+        self.extensions
+            .get_or_init(|| crate::extensions::ExtensionStore::load(self.data_root.clone()))
     }
 }
 
@@ -388,6 +398,11 @@ pub fn create_router_with_conversation_policy_registry(
         .route(
             "/v1/desktop-session",
             post(desktop_session::desktop_session_endpoint),
+        )
+        // C-P2：token 续期（rotation：撤旧发新，避免 8h 边界会话锁死）。
+        .route(
+            "/v1/desktop-session/renew",
+            post(desktop_session::desktop_session_renew_endpoint),
         )
         .route("/v1/chat/preview", post(preview_chat_assembly))
         .route("/v1/agent/run", post(agent_run))
@@ -722,6 +737,40 @@ pub fn create_router_with_conversation_policy_registry(
             "/v1/backups/:backup_id/restore",
             post(restore_backup_endpoint),
         )
+        // ── C-P2: 扩展注册面 / catalog / intent 执行面（最小合同） ──────────
+        .route(
+            "/v1/extensions/install",
+            // W1：包上限 MAX_PACKAGE_BYTES=4MB，经 base64 膨胀 33% ≈ 5.33MB
+            // + JSON 封套开销；路由 body 上限取 6MB，否则合法包会先撞 413
+            // 而非业务层校验（与 store 内 4MB 包级上限分工：传输层宽、
+            // 业务层严）。
+            post(crate::extensions::api::install_extension)
+                .layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/extensions",
+            get(crate::extensions::api::list_extensions),
+        )
+        .route(
+            "/v1/extensions/catalog",
+            get(crate::extensions::api::get_catalog),
+        )
+        .route(
+            "/v1/extensions/:extension_id/enable",
+            post(crate::extensions::api::enable_extension),
+        )
+        .route(
+            "/v1/extensions/:extension_id/disable",
+            post(crate::extensions::api::disable_extension),
+        )
+        .route(
+            "/v1/extensions/:extension_id",
+            delete(crate::extensions::api::delete_extension),
+        )
+        .route(
+            "/v1/widget-intents",
+            post(crate::extensions::api::widget_intent),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -734,6 +783,15 @@ pub fn create_router_with_conversation_policy_registry(
     Router::new()
         .route("/version", get(version_handler))
         .route("/health", get(health_handler))
+        // C-P2：digest-pinned 扩展静态包服务。故意挂在鉴权层外：
+        // 内容寻址不可变 + 仅 loopback 拓扑 + nosniff；opaque-origin 沙箱
+        // iframe 的 module import 属 CORS 请求，ACAO:* 由
+        // local_webui_security_headers 对 /extensions/ 前缀精确附。
+        // 未注册 digest 一律 404（不投放未经安装面登记的内容）。
+        .route(
+            "/extensions/:digest/*file",
+            get(crate::extensions::api::serve_extension_asset),
+        )
         .merge(v1_routes)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -792,6 +850,10 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
     // /assets/widgets/ 是 loopback 静态公开资产（不含任何秘密），附
     // Access-Control-Allow-Origin:* 使沙箱可加载；其余路径一律不加。
     let is_widget_asset = request.uri().path().starts_with("/assets/widgets/");
+    // C-P2：digest-pinned 扩展静态包。与 widget 资产同理（opaque-origin
+    // 沙箱的 CORS module import 需要 ACAO:*），且内容寻址不可变，可附
+    // immutable 缓存。仅精确前缀匹配；其余路径一律不加。
+    let is_extension_asset = request.uri().path().starts_with("/extensions/");
     // 沙箱引导页自身要被宿主 iframe 嵌入：X-Frame-Options DENY 会拒绝它。
     // 不削弱安全：该页 CSP 仍带 frame-ancestors 'none'（第三方不得嵌它），
     // 且宿主以 event.source === iframe.contentWindow 门控消息来源。
@@ -814,7 +876,7 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
     if !is_sandbox_frame {
         headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     }
-    if is_widget_asset {
+    if is_widget_asset || is_extension_asset {
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             HeaderValue::from_static("*"),
@@ -832,6 +894,10 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
         header::CACHE_CONTROL,
         HeaderValue::from_static(if is_event_stream {
             "no-cache"
+        } else if is_extension_asset {
+            // 内容寻址不可变：安全长缓存（serve handler 已设同值，
+            // 此中间件会覆盖响应头，故必须在此重申）。
+            "public, max-age=31536000, immutable"
         } else {
             "no-store"
         }),

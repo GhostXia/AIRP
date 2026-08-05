@@ -94,7 +94,12 @@
         container.className = 'widget-slot-instance';
         node.appendChild(container);
                 // 透传 doc：宿主创建 slot 容器用的 document（node 单测无全局 document）。
-                const handle = host.mountWidget(container, entry.instance, entry.state, { onIntent, doc: d });
+                // C-P2：onIntent 附加第三参 instance（{id,type}）——intent envelope
+                // 的 widget_type/instance_id 由宿主从 slot 计划补齐，widget 不得伪造。
+                const wrappedIntent = typeof onIntent === 'function'
+                  ? (name, params) => onIntent(name, params, entry.instance)
+                  : onIntent;
+                const handle = host.mountWidget(container, entry.instance, entry.state, { onIntent: wrappedIntent, doc: d });
         handle.slotId = id;
         handles.push(handle);
       }

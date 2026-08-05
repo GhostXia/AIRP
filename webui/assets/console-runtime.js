@@ -8,11 +8,14 @@
   if (requestedEngine && /^https?:\/\//i.test(requestedEngine)) sessionStorage.setItem('airp_engine_url', requestedEngine.replace(/\/+$/, ''));
   const connection = {
     base: sessionStorage.getItem('airp_engine_url') || location.origin,
-    bearer: sessionStorage.getItem('airp_bearer') || '',
+    // C-P2：函数形态 bearer——每次请求时解析当前 sessionStorage 值，
+    // token 续期（rotation）后新值即刻生效，无需重建 client。
+    bearer: () => sessionStorage.getItem('airp_bearer') || '',
   };
   // C-P1：8h bearer 生命周期的失败可见化。桌面壳注入的 desktop session token
   // 过期后，API 会返回 401；这里把首次 401 变成用户可见的状态栏提示。
-  // 续期机制留 C-P2（见 C-P1 报告「留 C-P2 的项」）。
+  // C-P2：401 先尝试 desktop-session 续期（rotation）；无 key 模式 renew
+  // 端点 403 fail-closed → 钩子返回 false → 行为回退到本可见化提示。
   let authExpired = false;
   function markAuthExpired() {
     if (authExpired) return;
@@ -23,10 +26,24 @@
       target.classList.add('error');
     }
   }
+  function resetAuthExpired() {
+    if (!authExpired) return;
+    authExpired = false;
+    const target = $('#runtime-status');
+    if (target) {
+      target.textContent = '';
+      target.classList.remove('error');
+    }
+  }
   const client = AIRPApi.createClient({
     base: connection.base,
     bearer: connection.bearer,
     onRequest: info => { if (info && info.status === 401) markAuthExpired(); },
+    onUnauthorized: async () => {
+      const renewed = await AIRPDesktopSession.renewDesktopSession({ base: connection.base });
+      if (renewed) resetAuthExpired();
+      return renewed;
+    },
   });
   const state = {
     characterId: params.get('character') || sessionStorage.getItem('airp_character_id') || '',
