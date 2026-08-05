@@ -1,4 +1,5 @@
-//! C-P2 扩展注册面的 HTTP 面（全部 additive，bearer 鉴权由 v1 路由层承担）。
+//! C-P2/C-P3 扩展注册面 + capability 权威授权的 HTTP 面（全部 additive，
+//! bearer 鉴权由 v1 路由层承担）。
 //!
 //! 端点：
 //! - `POST   /v1/extensions/install`              —— 安装/替换扩展包（digest-pinned）
@@ -7,18 +8,24 @@
 //! - `POST   /v1/extensions/:extension_id/disable`—— 停用（出 catalog，包保留）
 //! - `DELETE /v1/extensions/:extension_id`        —— 卸载（记录 + 孤儿包目录清理）
 //! - `GET    /v1/extensions/catalog`              —— 机器可读下发：manifests + slot 计划
-//! - `POST   /v1/widget-intents`                  —— intent 执行面最小合同（拒绝默认）
+//! - `POST   /v1/extensions/:extension_id/grants` —— C-P3：签发/撤销 capability grant
+//! - `GET    /v1/extensions/:extension_id/grants` —— C-P3：查询单扩展 grant 状态
+//! - `GET    /v1/extensions/grants`               —— C-P3：列出全部 grant（consent 初始化用）
+//! - `POST   /v1/widget-intents`                  —— intent 执行面（C-P3 逐调用强制）
 //!
 //! 静态包服务：`GET /extensions/:digest/*file` 挂在**鉴权层外**（内容寻址
 //! 不可变 + 仅 loopback 拓扑 + nosniff；opaque-origin 沙箱 iframe 的 module
 //! import 属 CORS 请求，需要 ACAO:*，由 local_webui_security_headers 统一附）。
 //! 服务时按记录中的文件摘要复检内容（防篡改），摘要不符即 500 拒绝投放。
 //!
-//! intent 执行面（本阶段最小合同）：
+//! intent 执行面（C-P3 逐调用强制）：
 //! - 合同形状见 `protocol/widget-intents.json`（机器可读唯一事实源）；
-//! - 拒绝默认：C-P2 无任何已注册执行器，一切 intent 返回 403 `intent_denied`；
-//! - envelope 携带 `capability` 字段（可空）——C-P3 逐调用强制的预留面，
-//!   本阶段只校验形状与留痕（tracing），不消费其值。
+//! - envelope `capability` 字段缺省 → 视为无需授权的 intent，放行 200；
+//! - envelope `capability` 存在 → engine 逐调用强制：
+//!   1. 按 `widget_type` 找已启用扩展记录（未安装/停用 → 403 `intent_denied`）；
+//!   2. 校验 `capability ∈ record.granted_capabilities`（未授权 → 403 `intent_denied`）；
+//!   3. 授权通过 → 200 echo（C-P3 无执行器，授权通过即视为 intent 被接受并留痕）。
+//! - 授权决策（grant/revoke/intent allow/deny）全部 tracing::info! 留痕（审计日志）。
 
 use std::sync::Arc;
 
@@ -205,6 +212,84 @@ pub async fn delete_extension(
     }
 }
 
+/// C-P3 grant 请求体。
+#[derive(Debug, Deserialize)]
+pub struct GrantRequest {
+    /// `"grant"` 签发 / `"revoke"` 撤销。
+    pub action: String,
+    /// 缺省：grant = manifest 全集 / revoke = 全部撤销。
+    /// 指定：grant = 子集授权（须 ∈ manifest） / revoke = 子集撤销。
+    #[serde(default)]
+    pub capabilities: Option<Vec<String>>,
+}
+
+/// grant 视图：仅暴露授权相关字段（不含 manifest/files 等安装细节）。
+/// consent.js 用此形状初始化 grant 缓存（type → granted_capabilities）。
+fn grant_view(record: &super::ExtensionRecord) -> Value {
+    json!({
+        "id": record.id,
+        "type": record.widget_type,
+        "granted_capabilities": record.granted_capabilities,
+        "granted_at": record.granted_at,
+    })
+}
+
+/// `POST /v1/extensions/:extension_id/grants`：C-P3 签发/撤销 capability grant。
+///
+/// 权威语义见 [`super::ExtensionStore::grant`] / [`super::ExtensionStore::revoke_grant`]。
+pub async fn grant_extension(
+    State(state): State<Arc<DaemonState>>,
+    Path(id): Path<String>,
+    Json(request): Json<GrantRequest>,
+) -> Response {
+    let store = store(&state);
+    let result = match request.action.as_str() {
+        "grant" => store.grant(&id, request.capabilities),
+        "revoke" => store.revoke_grant(&id, request.capabilities),
+        _ => {
+            return error_body("invalid_action", "action must be 'grant' or 'revoke'");
+        }
+    };
+    match result {
+        Ok(Some(record)) => (StatusCode::OK, Json(grant_view(&record))).into_response(),
+        Ok(None) => not_found("extension not found"),
+        Err(error) => {
+            let status = if error.code == "storage_error" {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (
+                status,
+                Json(json!({ "error": { "code": error.code, "message": error.message } })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /v1/extensions/:extension_id/grants`：查询单扩展 grant 状态。
+pub async fn get_extension_grants(
+    State(state): State<Arc<DaemonState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let store = store(&state);
+    match store.get(&id) {
+        Some(record) => (StatusCode::OK, Json(grant_view(&record))).into_response(),
+        None => not_found("extension not found"),
+    }
+}
+
+/// `GET /v1/extensions/grants`：列出全部 grant（webui consent.js 初始化用）。
+///
+/// 返回所有已安装扩展的 grant 状态（含未 grant 的，granted_capabilities 为空）。
+/// consent.js 据此建立 type → grant 映射，与本地 catalog 交叉判定 canMount。
+pub async fn list_all_grants(State(state): State<Arc<DaemonState>>) -> Json<Value> {
+    let store = store(&state);
+    let grants: Vec<Value> = store.list().iter().map(grant_view).collect();
+    Json(json!({ "grants": grants }))
+}
+
 /// `GET /v1/extensions/catalog`：机器可读下发（manifests + slot 计划）。
 ///
 /// 组装规则：内置默认计划打底；已启用扩展的 manifest 按 type upsert
@@ -260,8 +345,8 @@ pub async fn get_catalog(State(state): State<Arc<DaemonState>>) -> Response {
 
 /// intent envelope（合同权威：protocol/widget-intents.json）。
 ///
-/// C-P3 预留：`capability` 已是合同一等字段；逐调用强制在 C-P3 落 engine 侧
-/// 授权检查（manifest ∩ 用户同意 ∩ engine policy），本阶段拒绝默认。
+/// C-P3：`capability` 是逐调用强制的输入字段；engine 按 widget_type 查找
+/// 已启用扩展记录，校验 `capability ∈ record.granted_capabilities`。
 #[derive(Debug, Deserialize)]
 pub struct WidgetIntentEnvelope {
     pub name: String,
@@ -270,16 +355,25 @@ pub struct WidgetIntentEnvelope {
     pub widget_type: String,
     pub instance_id: String,
     /// 该 intent 所需的 capability（如 `read:state`）；无需求时可省。
+    /// 缺省 → 无需授权校验，放行 200（合同 required: false）。
     #[serde(default)]
     pub capability: Option<String>,
 }
 
-/// `POST /v1/widget-intents`：intent 执行面最小合同——**拒绝默认**。
+/// `POST /v1/widget-intents`：intent 执行面——C-P3 逐调用强制。
 ///
-/// C-P2 无任何已注册执行器：envelope 校验通过后一律 403 `intent_denied`。
-/// 这保证 C-P3 接入执行器前没有任何「假交互」路径，且合同形状已锁定。
+/// 授权决策流（逐调用，无缓存）：
+/// 1. envelope 形状校验（name/widget_type/instance_id）；
+/// 2. `capability` 缺省 → 放行 200（无需授权的 intent）；
+/// 3. `capability` 存在 → 按 `widget_type` 找已启用扩展记录：
+///    - 未安装/停用 → 403 `intent_denied`；
+///    - `capability ∉ granted_capabilities` → 403 `intent_denied`（越权/未授权）；
+///    - 授权通过 → 200 echo（C-P3 无执行器，授权通过即视为 intent 被接受并留痕）。
+///
+/// 审计日志：每次决策（allow/deny）均 tracing::info! 留痕（intent/widget_type/
+/// instance_id/capability/extension_id），供运维与未来授权审计面消费。
 pub async fn widget_intent(
-    State(_state): State<Arc<DaemonState>>,
+    State(state): State<Arc<DaemonState>>,
     Json(envelope): Json<WidgetIntentEnvelope>,
 ) -> Response {
     if envelope.name.is_empty() || envelope.name.len() > 128 {
@@ -288,21 +382,91 @@ pub async fn widget_intent(
     if envelope.widget_type.is_empty() || envelope.instance_id.is_empty() {
         return error_body("intent_invalid", "widget_type and instance_id are required");
     }
-    // 留痕：拒绝也要可观察（C-P3 审计日志的前身）。
+
+    // C-P3 逐调用强制：无 capability 字段 → 放行（合同 required: false）。
+    let Some(capability) = envelope.capability.as_deref() else {
+        tracing::info!(
+            intent = %envelope.name,
+            widget_type = %envelope.widget_type,
+            instance_id = %envelope.instance_id,
+            "widget intent allowed (no capability required)"
+        );
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "name": envelope.name,
+                "widget_type": envelope.widget_type,
+                "instance_id": envelope.instance_id,
+            })),
+        )
+            .into_response();
+    };
+
+    // 有 capability → engine 权威逐调用强制。
+    let store = store(&state);
+    let Some(record) = store.find_enabled_by_type(&envelope.widget_type) else {
+        tracing::info!(
+            intent = %envelope.name,
+            widget_type = %envelope.widget_type,
+            instance_id = %envelope.instance_id,
+            capability = %capability,
+            "widget intent denied: extension not installed or not enabled"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": {
+                    "code": "intent_denied",
+                    "message": "extension not installed or not enabled for this widget_type",
+                }
+            })),
+        )
+            .into_response();
+    };
+
+    if !record.granted_capabilities.iter().any(|c| c == capability) {
+        tracing::info!(
+            intent = %envelope.name,
+            widget_type = %envelope.widget_type,
+            instance_id = %envelope.instance_id,
+            capability = %capability,
+            extension_id = %record.id,
+            "widget intent denied: capability not granted"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": {
+                    "code": "intent_denied",
+                    "message": format!(
+                        "capability {capability} not granted to {}",
+                        envelope.widget_type
+                    ),
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    // 授权通过：C-P3 无执行器，授权通过即视为 intent 被接受并留痕。
+    // C-P4 接入真实执行器时，此分支改为派发到 executor 并返回执行结果。
     tracing::info!(
         intent = %envelope.name,
         widget_type = %envelope.widget_type,
         instance_id = %envelope.instance_id,
-        capability = envelope.capability.as_deref().unwrap_or("-"),
-        "widget intent denied (C-P2 default-deny; executors arrive in C-P3)"
+        capability = %capability,
+        extension_id = %record.id,
+        "widget intent allowed (capability granted; C-P3 has no executor)"
     );
     (
-        StatusCode::FORBIDDEN,
+        StatusCode::OK,
         Json(json!({
-            "error": {
-                "code": "intent_denied",
-                "message": "no executor is registered for widget intents (C-P2 default-deny); per-call capability enforcement arrives in C-P3",
-            }
+            "ok": true,
+            "name": envelope.name,
+            "widget_type": envelope.widget_type,
+            "instance_id": envelope.instance_id,
+            "capability": capability,
         })),
     )
         .into_response()

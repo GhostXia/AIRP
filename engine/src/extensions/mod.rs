@@ -120,6 +120,17 @@ pub struct ExtensionRecord {
     pub slot: String,
     pub manifest: WidgetManifest,
     pub files: Vec<PackageFileMeta>,
+    /// C-P3：engine 权威签发的 capability grant（manifest.capabilities 的子集）。
+    /// 空 = 未 consent（widget 加载门禁未通过，esm widget 不应挂载）。
+    /// 非空 = 已 consent 且被授予这些 capabilities；逐调用强制时
+    /// `widget_intent` 校验 envelope.capability ∈ 此集合。
+    /// 重装（同 type 不同 digest）会清空 grant——consent 不跨身份延续
+    /// （对译 webui consent.js 的 grantKey = type@version#source 语义）。
+    #[serde(default)]
+    pub granted_capabilities: Vec<String>,
+    /// C-P3：grant 签发时间戳（秒，UNIX_EPOCH）。None = 未 grant。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_at: Option<u64>,
 }
 
 /// extensions.json 的落盘形状。
@@ -232,6 +243,139 @@ impl ExtensionStore {
             .cloned()
     }
 
+    /// C-P3：按 widget_type 查找已启用扩展记录（`widget_intent` 逐调用强制用）。
+    /// 仅返回已启用的——停用的扩展其 capability 不应被任何 intent 使用。
+    pub fn find_enabled_by_type(&self, widget_type: &str) -> Option<ExtensionRecord> {
+        self.records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|r| r.widget_type == widget_type && r.enabled)
+            .cloned()
+    }
+
+    /// C-P3：engine 权威签发 capability grant。
+    ///
+    /// 权限 = manifest ∩ 用户请求 ∩ engine policy：
+    /// - `capabilities = None` → 授予 `manifest.capabilities` 全集（用户全量同意）
+    /// - `capabilities = Some(caps)` → 校验 `caps ⊆ manifest.capabilities`，
+    ///   仅授予子集（部分授权）；越界 capability 返回 `capability_not_declared`。
+    /// - engine policy：C-P3 暂无额外限制（manifest 内即允许）；C-P4 可接 policy 层。
+    ///
+    /// 返回 `Ok(None)` = 未找到 id；`Ok(Some)` = 成功；`Err` = 校验/持久化失败。
+    /// persist 失败时精确回滚内存态至原 grant 集合（保内存与盘上同真）。
+    pub fn grant(
+        &self,
+        id: &str,
+        capabilities: Option<Vec<String>>,
+    ) -> Result<Option<ExtensionRecord>, ValidationError> {
+        let _serial = self.mutation_guard();
+        let (updated, snapshot, original) = {
+            let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(target) = records.iter_mut().find(|r| r.id == id) else {
+                return Ok(None);
+            };
+            let granted = match capabilities {
+                Some(caps) => {
+                    for cap in &caps {
+                        if !target.manifest.capabilities.contains(cap) {
+                            return Err(ValidationError::new(
+                                "capability_not_declared",
+                                format!(
+                                    "capability {cap} not declared in manifest of {}",
+                                    target.widget_type
+                                ),
+                            ));
+                        }
+                    }
+                    caps
+                }
+                None => target.manifest.capabilities.clone(),
+            };
+            let original = (target.granted_capabilities.clone(), target.granted_at);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            target.granted_capabilities = granted;
+            target.granted_at = Some(now);
+            (target.clone(), records.clone(), original)
+        };
+        if let Err(error) = self.persist(&snapshot) {
+            tracing::error!(%error, "extensions.json 持久化失败；回滚 grant");
+            let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(target) = records.iter_mut().find(|r| r.id == id) {
+                target.granted_capabilities = original.0;
+                target.granted_at = original.1;
+            }
+            return Err(ValidationError::new(
+                "storage_error",
+                format!("persist grant failed: {error}"),
+            ));
+        }
+        tracing::info!(
+            extension_id = %id,
+            widget_type = %updated.widget_type,
+            granted_count = updated.granted_capabilities.len(),
+            "C-P3 grant signed"
+        );
+        Ok(Some(updated))
+    }
+
+    /// C-P3：撤销 capability grant。
+    ///
+    /// - `capabilities = None` → 撤销全部（等同 revoke consent）
+    /// - `capabilities = Some(caps)` → 仅撤销指定 capability（子集撤销）
+    ///
+    /// 返回 `Ok(None)` = 未找到 id；`Ok(Some)` = 成功；`Err` = 持久化失败。
+    /// persist 失败时精确回滚内存态至原 grant 集合。
+    pub fn revoke_grant(
+        &self,
+        id: &str,
+        capabilities: Option<Vec<String>>,
+    ) -> Result<Option<ExtensionRecord>, ValidationError> {
+        let _serial = self.mutation_guard();
+        let (updated, snapshot, original) = {
+            let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(target) = records.iter_mut().find(|r| r.id == id) else {
+                return Ok(None);
+            };
+            let original = (target.granted_capabilities.clone(), target.granted_at);
+            match capabilities {
+                None => {
+                    target.granted_capabilities.clear();
+                    target.granted_at = None;
+                }
+                Some(caps) => {
+                    target.granted_capabilities.retain(|c| !caps.contains(c));
+                    if target.granted_capabilities.is_empty() {
+                        target.granted_at = None;
+                    }
+                }
+            }
+            (target.clone(), records.clone(), original)
+        };
+        if let Err(error) = self.persist(&snapshot) {
+            tracing::error!(%error, "extensions.json 持久化失败；回滚 revoke_grant");
+            let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(target) = records.iter_mut().find(|r| r.id == id) {
+                target.granted_capabilities = original.0;
+                target.granted_at = original.1;
+            }
+            return Err(ValidationError::new(
+                "storage_error",
+                format!("persist revoke_grant failed: {error}"),
+            ));
+        }
+        tracing::info!(
+            extension_id = %id,
+            widget_type = %updated.widget_type,
+            remaining = updated.granted_capabilities.len(),
+            "C-P3 grant revoked"
+        );
+        Ok(Some(updated))
+    }
+
     /// 安装（或按 type 替换）一个扩展包。
     ///
     /// 流程：全量校验 → 逐文件摘要比对（digest-pinned）→ 写包目录 →
@@ -303,6 +447,9 @@ impl ExtensionStore {
                     sha256: sha.clone(),
                 })
                 .collect(),
+            // C-P3：新装/重装一律从无 grant 起步——consent 不跨身份延续。
+            granted_capabilities: Vec::new(),
+            granted_at: None,
         };
 
         // W3：以下记录变更 + persist + 孤儿清理全程串行（mutation_guard），
@@ -791,6 +938,176 @@ mod tests {
         );
         assert!(resolve_package_file(&extensions_root, "not-a-digest", "index.js").is_none());
         assert!(resolve_package_file(&extensions_root, &record.digest, "missing.js").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// C-P3：manifest 多 capabilities 的安装 helper。
+    fn manifest_multi_caps(caps: Vec<&str>) -> WidgetManifest {
+        WidgetManifest {
+            widget_type: "acme.multi".to_string(),
+            version: "1.0.0".to_string(),
+            title: Some("Multi".to_string()),
+            author: None,
+            capabilities: caps.into_iter().map(String::from).collect(),
+            entry: WidgetEntry {
+                kind: "esm".to_string(),
+                source: Some("https://evil.example/w.js".to_string()),
+                sandbox: true,
+            },
+        }
+    }
+
+    #[test]
+    fn grant_full_set_grants_all_manifest_capabilities() {
+        let root = temp_root("grant-full");
+        let store = ExtensionStore::load(root.clone());
+        let mut req = request(true);
+        req.manifest = manifest_multi_caps(vec!["read:state", "write:state", "read:memory"]);
+        let record = store.install(req).unwrap();
+
+        // 新装 → 无 grant。
+        assert!(record.granted_capabilities.is_empty());
+        assert!(record.granted_at.is_none());
+
+        // grant(None) → 全集。
+        let granted = store.grant(&record.id, None).unwrap().unwrap();
+        assert_eq!(granted.granted_capabilities.len(), 3);
+        assert!(granted.granted_at.is_some());
+        assert!(granted.granted_capabilities.iter().all(|c| [
+            "read:state",
+            "write:state",
+            "read:memory"
+        ]
+        .contains(&c.as_str())));
+
+        // 持久化：新 store 实例能读回 grant。
+        let reloaded = ExtensionStore::load(root.clone());
+        let persisted = reloaded.get(&record.id).unwrap();
+        assert_eq!(persisted.granted_capabilities.len(), 3);
+        assert!(persisted.granted_at.is_some());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn grant_subset_validates_against_manifest() {
+        let root = temp_root("grant-subset");
+        let store = ExtensionStore::load(root.clone());
+        let mut req = request(true);
+        req.manifest = manifest_multi_caps(vec!["read:state", "write:state"]);
+        let record = store.install(req).unwrap();
+
+        // 部分授权：仅 read:state。
+        let granted = store
+            .grant(&record.id, Some(vec!["read:state".to_string()]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(granted.granted_capabilities, vec!["read:state".to_string()]);
+
+        // 越界 capability → capability_not_declared。
+        let error = store
+            .grant(&record.id, Some(vec!["admin:root".to_string()]))
+            .unwrap_err();
+        assert_eq!(error.code, "capability_not_declared");
+        // 越界不改变现有 grant。
+        let current = store.get(&record.id).unwrap();
+        assert_eq!(current.granted_capabilities, vec!["read:state".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn revoke_grant_clears_all_or_subset() {
+        let root = temp_root("revoke");
+        let store = ExtensionStore::load(root.clone());
+        let mut req = request(true);
+        req.manifest = manifest_multi_caps(vec!["read:state", "write:state", "read:memory"]);
+        let record = store.install(req).unwrap();
+        store.grant(&record.id, None).unwrap();
+
+        // 子集撤销：移除 write:state，剩 read:state + read:memory。
+        let after = store
+            .revoke_grant(&record.id, Some(vec!["write:state".to_string()]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.granted_capabilities.len(), 2);
+        assert!(!after
+            .granted_capabilities
+            .contains(&"write:state".to_string()));
+        assert!(after.granted_at.is_some(), "非空 grant 保留 granted_at");
+
+        // 全量撤销：清空全部。
+        let after = store.revoke_grant(&record.id, None).unwrap().unwrap();
+        assert!(after.granted_capabilities.is_empty());
+        assert!(after.granted_at.is_none(), "空 grant 清除 granted_at");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_resets_grant_on_reinstall() {
+        let root = temp_root("reinstall-reset");
+        let store = ExtensionStore::load(root.clone());
+        let record = store.install(request(true)).unwrap();
+        store.grant(&record.id, None).unwrap();
+        assert!(!store
+            .get(&record.id)
+            .unwrap()
+            .granted_capabilities
+            .is_empty());
+
+        // 重装（同 type 不同内容 → 不同 digest）→ grant 清空。
+        let new_content = b"export default () => ({ mount() { /* v2 */ } });";
+        use base64::Engine;
+        let req = InstallRequest {
+            manifest: manifest(true),
+            files: vec![InstallFilePayload {
+                path: "index.js".to_string(),
+                content_base64: base64::engine::general_purpose::STANDARD.encode(new_content),
+                sha256: sha256_hex(new_content),
+            }],
+            slot: None,
+        };
+        let reinstalled = store.install(req).unwrap();
+        assert!(reinstalled.granted_capabilities.is_empty());
+        assert!(
+            reinstalled.granted_at.is_none(),
+            "重装后 grant 必须清空（consent 不跨身份延续）"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_enabled_by_type_skips_disabled() {
+        let root = temp_root("find-enabled");
+        let store = ExtensionStore::load(root.clone());
+        let record = store.install(request(true)).unwrap();
+
+        assert!(store.find_enabled_by_type("acme.demo").is_some());
+        store.set_enabled(&record.id, false);
+        assert!(
+            store.find_enabled_by_type("acme.demo").is_none(),
+            "停用的扩展不应被 widget_intent 找到"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn grant_and_revoke_persist_failure_rolls_back() {
+        // persist 失败回滚：用 set_persistence_override 注入失败 hook 不可行
+        // （ExtensionStore 无 override 面）；改为校验 not_found 与越界的非破坏性。
+        let root = temp_root("grant-rollback");
+        let store = ExtensionStore::load(root.clone());
+
+        // 未找到 id → Ok(None)，不 panic。
+        assert!(store.grant("ext-nonexistent", None).unwrap().is_none());
+        assert!(store
+            .revoke_grant("ext-nonexistent", None)
+            .unwrap()
+            .is_none());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

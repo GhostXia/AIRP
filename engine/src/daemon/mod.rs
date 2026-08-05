@@ -767,6 +767,20 @@ pub fn create_router_with_conversation_policy_registry(
             "/v1/extensions/:extension_id",
             delete(crate::extensions::api::delete_extension),
         )
+        // ── C-P3: capability 权威授权面（grant / revoke / 查询） ──────────
+        // grant_extension 处理 POST（签发/撤销）；get_extension_grants 处理
+        // GET（查询单扩展 grant 状态）。action=grant|revoke 在 body 中区分。
+        .route(
+            "/v1/extensions/:extension_id/grants",
+            post(crate::extensions::api::grant_extension)
+                .get(crate::extensions::api::get_extension_grants),
+        )
+        // list_all_grants：列出全部扩展 grant（webui consent.js 初始化用）。
+        // 字面量段 `grants` 优先于参数段 `:extension_id`，无路由冲突。
+        .route(
+            "/v1/extensions/grants",
+            get(crate::extensions::api::list_all_grants),
+        )
         .route(
             "/v1/widget-intents",
             post(crate::extensions::api::widget_intent),
