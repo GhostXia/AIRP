@@ -1116,3 +1116,86 @@ async fn cp3_reinstall_same_type_clears_grant() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// C-P4-1：catalog 未知扩展点 fail-closed（defense in depth）。
+//
+// 安装面已校验 slot ∈ DEFAULT_SLOT_IDS（invalid_slot），但若 extensions.json
+// 被直接篡改或未来安装面逻辑漂移，catalog 组装面必须再次 fail-closed：
+// 未知 slot 的扩展不进入下发计划，并 log warn（不静默丢弃）。
+#[tokio::test]
+async fn cp4_catalog_skips_extension_with_unknown_slot() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state.clone());
+
+    // 正常安装一个合法扩展（slot=chat.sidebar）。
+    let _ = install_helper(&router, "acme.known", &["read:state"]).await;
+
+    // 直接写一个 extensions.json，含一条 slot 为未知值的 enabled 记录
+    // （绕过安装面的 slot 校验，模拟篡改/漂移场景）。
+    let data_root = state.data_root.clone();
+    let tampered = serde_json::json!({
+        "extensions": [{
+            "id": "tampered-1",
+            "type": "acme.unknown_slot",
+            "digest": "0".repeat(64),
+            "installed_at": 0u64,
+            "enabled": true,
+            "slot": "not.a.real.slot",
+            "manifest": {
+                "type": "acme.unknown_slot",
+                "version": "1.0.0",
+                "capabilities": ["read:state"],
+                "entry": {
+                    "kind": "esm",
+                    "source": "/extensions/0000000000000000000000000000000000000000000000000000000000000000/index.js",
+                    "sandbox": true
+                }
+            },
+            "files": [],
+            "granted_capabilities": []
+        }]
+    });
+    std::fs::write(
+        data_root.join("extensions.json"),
+        serde_json::to_vec_pretty(&tampered).unwrap(),
+    )
+    .unwrap();
+
+    // 重新加载 state 让篡改生效。
+    let state2 = crate::daemon::tests::make_state_with_data_root(data_root.clone());
+    let router2 = ext_router(state2);
+
+    let resp = router2
+        .oneshot(
+            Request::get("/v1/extensions/catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let catalog = body_json(resp).await;
+
+    // 篡改记录的 widget_type 不应出现在 catalog manifests 中。
+    let types: Vec<&str> = catalog["manifests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["type"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        !types.contains(&"acme.unknown_slot"),
+        "未知 slot 的扩展必须 fail-closed，不进入 catalog 下发计划"
+    );
+
+    // 篡改记录不应出现在任何 slot 的 widgets 列表中。
+    for slot in catalog["slots"].as_array().unwrap() {
+        for widget in slot["widgets"].as_array().unwrap() {
+            assert_ne!(
+                widget["instance"]["type"].as_str().unwrap_or(""),
+                "acme.unknown_slot",
+                "未知 slot 的扩展不应被编入任何 slot"
+            );
+        }
+    }
+}

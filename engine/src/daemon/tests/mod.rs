@@ -115,3 +115,33 @@ pub(super) fn make_state_no_key() -> (Arc<DaemonState>, tempfile::TempDir) {
     });
     (state, tmp)
 }
+
+/// C-P4-1：从已有 data_root 构造 state（extensions OnceLock 未初始化，
+/// 首次访问 extensions 端点时从磁盘加载）。用于 catalog fail-closed 测试
+/// 模拟 extensions.json 被篡改后重新加载的场景。
+pub(super) fn make_state_with_data_root(data_root: std::path::PathBuf) -> Arc<DaemonState> {
+    Arc::new(DaemonState {
+        data_root,
+        http_client: reqwest::Client::new(),
+        fts: Default::default(),
+        settings_update: Default::default(),
+        session_coordinators: Default::default(),
+        provider_router: Default::default(),
+        provider_routing_update: Default::default(),
+        plugin_tools: Default::default(),
+        plugin_tools_update: Default::default(),
+        extensions: std::sync::OnceLock::new(),
+        config: std::sync::RwLock::new(MutableConfig {
+            provider: crate::adapter::Provider::OpenAI,
+            endpoint: "http://localhost".to_string(),
+            api_key: None,
+            model: "gpt-4o".to_string(),
+            volume_config: crate::config::VolumeConfig::default(),
+            access_api_key: None,
+            engine: crate::adapter::BackendEngine::default(),
+            quota: crate::quota::QuotaConfig::default(),
+            deployment_mode: Default::default(),
+            public_origin: None,
+        }),
+    })
+}
