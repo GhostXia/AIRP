@@ -15,6 +15,7 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 ## 必须保留
 
 - **Blueprint**：UI 渲染来自引擎的声明式 Blueprint。Agent 不得在运行时写 Vue、JavaScript 或任意前端代码。
+  - ⚠️ **superseded（2026-08-05）**：「UI 渲染来自引擎的声明式 Blueprint」的表述已被文末「修订记录 → 2026-08-05：Blueprint 定位校准（C-P4 扩展合同收口）」章节取代：Blueprint 在 AIRP 中的定位是声明式 slot 组合 / 仪表盘合同层（当前由 catalog 的 slot 计划承担），不是运行时 Vue 渲染器；运行时渲染由 webui 原生 JS 承担。后半句不变式（Agent 不得在运行时写前端代码）仍然有效。
 - **Widget 系统**：保留 Widget Registry、WidgetHost、首方 widget、manifest 元数据和受控第三方 widget 加载。
 - **状态 patch**：保留 RFC6902 风格 patch，用于细粒度 UI 状态更新。
 - **Envelope 类型**：在有助于当前 Tauri 和未来 web 客户端共用时，保留传输无关消息形状。
@@ -54,7 +55,7 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 
 | 资产 | 决策 |
 |---|---|
-| Blueprint schema/concept | 保留并改造为 AIRP 内部渲染合同 |
+| Blueprint schema/concept | 保留并改造为 AIRP 内部渲染合同 ⚠️ superseded（2026-08-05）：「内部渲染合同」的定位已被文末「修订记录 → 2026-08-05：Blueprint 定位校准」取代——Blueprint 是声明式 slot 组合 / 仪表盘合同层，非运行时渲染技术；保留结论本身不变 |
 | Widget Registry / WidgetHost | 保留；首方 RP widget 优先 |
 | RFC6902 store | 保留；`test` 已做 patch 前预校验，失败不半应用 |
 | Tauri + Vue shell | 保留；当前桌面客户端 |
