@@ -1,0 +1,54 @@
+{
+  "$schema_note": "widget intent 执行面合同的机器可读唯一事实源（权威执行端：engine/src/extensions/api.rs 的 widget_intent handler；消费端：webui/assets/widgets/boot.js 的 onIntent）。",
+  "version": 1,
+  "description": "widget 通过 WidgetContext.emit() 发出的 intent 经宿主 webui 以 POST /v1/widget-intents 送达 engine。C-P2 为最小合同：engine 无任何已注册执行器，一切 intent 拒绝默认（403 intent_denied），但合同形状已锁定——C-P3 接入 capability 权威授权与逐调用强制时只追加行为，不改形状。",
+  "compatibility": "additive-only",
+  "extensionRules": [
+    "envelope 既有字段不得删除、改名或改类型；消费端必须忽略未知字段。",
+    "新字段只允许追加且可空（缺省有良默认）；C-P3 的授权结果字段将按此规则追加。",
+    "error.code 集合为封闭锁定集：intent_invalid / intent_denied；追加新 code 必须同步本文件。",
+    "intent name 为自由命名空间（建议 ns.action 形态），engine 不得以名字白名单拒绝——拒绝语义只来自授权层。"
+  ],
+  "endpoint": {
+    "method": "POST",
+    "path": "/v1/widget-intents",
+    "auth": "bearer（access key 或 desktop session token，由 v1 路由层统一强制）"
+  },
+  "requestEnvelope": {
+    "description": "WidgetContext.emit(name, params) 的传输形状；widget_type / instance_id / capability 由宿主 webui 从 slot 计划的实例元数据补齐，widget 代码不得自行伪造。",
+    "fields": {
+      "name": { "type": "string", "required": true, "bounds": "1..=128 chars", "description": "intent 名（如 third-party.ping）。" },
+      "params": { "type": "object", "required": false, "default": {}, "description": "intent 参数；透传给执行器，C-P2 不消费。" },
+      "widget_type": { "type": "string", "required": true, "description": "发射方 widget 的 manifest type（catalog manifests 的 type）。" },
+      "instance_id": { "type": "string", "required": true, "description": "发射方实例 id（slot 计划 widgets[].instance.id）。" },
+      "capability": { "type": "string", "required": false, "format": "scope:action", "description": "该 intent 所需 capability。C-P3 预留一等字段：逐调用强制将校验 manifest.capabilities ∩ 用户同意 ∩ engine policy；C-P2 只校验形状与留痕，不消费其值。" }
+    }
+  },
+  "responses": {
+    "403": {
+      "description": "拒绝默认——C-P2 无执行器，一切合法 envelope 都返回此响应。C-P3 起亦为授权失败的标准响应。",
+      "body": {
+        "error": {
+          "code": "intent_denied",
+          "message": "string"
+        }
+      }
+    },
+    "400": {
+      "description": "envelope 形状校验失败（name 越界 / widget_type / instance_id 缺失）。",
+      "body": {
+        "error": {
+          "code": "intent_invalid",
+          "message": "string"
+        }
+      }
+    }
+  },
+  "consumerContract": {
+    "description": "webui 消费端行为约定。",
+    "rules": [
+      "宿主收到 403/400 不得崩溃或静默吞掉：应向 widget 回传错误并留 console 痕迹。",
+      "网络失败按瞬态处理，widget 可重试；403 为授权终态，重试无意义。"
+    ]
+  }
+}

@@ -48,6 +48,7 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 6. UI 架构变更必须包含打包运行时 smoke 和性能检查。
 7. Widget/Blueprint 变更必须保持可观察、可迁移、可回退：schema 变动有版本，状态 patch 可审计，错误能落到明确边界。
 8. SSE 生成流事件合同以 [`protocol/sse-events.json`](../protocol/sse-events.json) 为机器可读唯一事实源（additive-only；发射端形状由 engine 测试锁定，消费端一致性由 webui/deploy 合同测试守护）。
+9. widget intent 执行面合同以 [`protocol/widget-intents.json`](../protocol/widget-intents.json) 为机器可读唯一事实源（additive-only；C-P2 拒绝默认，capability 字段为 C-P3 逐调用强制预留）。扩展目录（manifests + slot 计划）由 engine `GET /v1/extensions/catalog` 权威下发，webui 静态 slots.json 仅作降级。
 
 ## 当前采纳表
 
