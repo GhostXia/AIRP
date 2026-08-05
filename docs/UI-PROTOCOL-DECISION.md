@@ -72,3 +72,34 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 
 UI 应该成为强大、可扩展的 AIRP 客户端，而不是一个刚好能跑 RP 的通用协议 demo。
 
+## 修订记录
+
+### 2026-08-05：Blueprint 定位校准（C-P4 扩展合同收口）
+
+**背景**：原决策第 17 行将 Blueprint 描述为"UI 渲染来自引擎的声明式 Blueprint"，未界定其与 widget 系统、slot 计划的边界。C-P1～C-P3 落地后，实际架构清晰：
+
+- **slot 计划**（`GET /v1/extensions/catalog` 权威下发，降级 `webui/assets/widgets/slots.json`）= 声明式 slot 组合 / 仪表盘合同层：哪些 widget 实例挂在哪些 slot 上。
+- **widget manifest**（catalog 下发的 manifests 列表）= widget 元数据合同层：type / version / capabilities / entry.source / sandbox。
+- **Blueprint**（原 State-Protocol 资产中的 Vue 声明式渲染层）= **未来声明式组合层**，当前未在 webui 主线落地。
+
+**校准结论**：
+
+1. Blueprint 在 AIRP 中的定位是 **声明式 slot 组合 / 仪表盘合同层**，不是运行时 Vue 渲染器。当前由 catalog 的 slot 计划承担该职责；未来若引入声明式仪表盘编辑器，其输出即为 slot 计划 JSON。
+2. 核心不变式完整满足：
+   - Agent 不得在运行时写 Vue / JavaScript / 任意前端代码（原不变式）；
+   - widget 不得持 RP 数据真相源，引擎拥有真相（原不变式）；
+   - 第三方 widget 接触敏感数据或触发特权动作前，必须有 engine 侧 capability 强制（C-P3 已落地）；
+   - 运行时验证是功能的一部分（原不变式）。
+3. "声明式 Blueprint"在 AIRP 语境中 = catalog 下发的 slot 计划 + widget manifest 合同。它不是 agent 生成的 Vue 组件树，而是 engine 权威下发的、可审计、可回退的 JSON 合同。
+4. 原 State-Protocol 的 Vue BlueprintRenderer 壳留在 `.worktrees/strategic-reaudit`（PR #458 研究归档），不进入主线。AIRP webui 用原生 JS + slots.js + widget-host.js 承担渲染职责。
+
+**与原决策的差异**：
+
+| 原决策表述 | 校准后定位 | 理由 |
+|---|---|---|
+| "UI 渲染来自引擎的声明式 Blueprint" | slot 计划 + widget manifest 是声明式合同层；运行时渲染由 webui 原生 JS 承担 | C-P1～C-P3 实际架构 |
+| Blueprint 是 Vue 渲染器 | Blueprint 是合同层概念，非具体渲染技术 | 解耦合同与渲染实现 |
+| Agent 生成 Blueprint | Agent 不得生成前端代码；catalog 由 engine 权威下发 | 原不变式保留，语义更明确 |
+
+**不变项**：原决策"必须保留"清单全部保留（Blueprint 概念、Widget 系统、状态 patch、Envelope 类型、运行时 guard、性能纪律、consent/sandbox）。本次校准仅明确 Blueprint 的实现定位，不削弱任何不变式。
+
