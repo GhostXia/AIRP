@@ -69,6 +69,16 @@ fn ext_router(state: Arc<DaemonState>) -> Router {
             "/v1/extensions/:extension_id",
             delete(crate::extensions::api::delete_extension),
         )
+        // C-P3：capability 权威授权面（grant / revoke / 查询）。
+        .route(
+            "/v1/extensions/:extension_id/grants",
+            post(crate::extensions::api::grant_extension)
+                .get(crate::extensions::api::get_extension_grants),
+        )
+        .route(
+            "/v1/extensions/grants",
+            get(crate::extensions::api::list_all_grants),
+        )
         .route(
             "/v1/widget-intents",
             post(crate::extensions::api::widget_intent),
@@ -547,4 +557,562 @@ async fn renew_rotates_token_and_rejects_stale_or_keyless() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// C-P3：capability 权威授权 + intent 逐调用强制
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 多 capability 安装体（用于 grant 子集 / 越界测试）。
+fn install_body_multi_cap(
+    widget_type: &str,
+    slot: Option<&str>,
+    capabilities: &[&str],
+) -> serde_json::Value {
+    let content = b"export default () => ({ mount() {} });";
+    use base64::Engine;
+    serde_json::json!({
+        "manifest": {
+            "type": widget_type,
+            "version": "1.0.0",
+            "capabilities": capabilities,
+            "entry": {
+                "kind": "esm",
+                "source": "https://evil.example/w.js",
+                "sandbox": true,
+            }
+        },
+        "files": [{
+            "path": "index.js",
+            "content_base64": base64::engine::general_purpose::STANDARD.encode(content),
+            "sha256": sha256_of(content),
+        }],
+        "slot": slot,
+    })
+}
+
+/// 安装一个扩展并返回其 id（默认 slot=chat.sidebar，capabilities=["read:state"]）。
+async fn install_helper(router: &Router, widget_type: &str, capabilities: &[&str]) -> String {
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/extensions/install",
+            &install_body_multi_cap(widget_type, Some("chat.sidebar"), capabilities),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "install must succeed for helper"
+    );
+    body_json(resp).await["id"].as_str().unwrap().to_string()
+}
+
+fn grant_request(action: &str, capabilities: Option<Vec<&str>>) -> serde_json::Value {
+    let mut req = serde_json::json!({ "action": action });
+    if let Some(caps) = capabilities {
+        req["capabilities"] = serde_json::json!(caps);
+    }
+    req
+}
+
+fn intent_envelope(
+    name: &str,
+    widget_type: &str,
+    instance_id: &str,
+    capability: Option<&str>,
+) -> serde_json::Value {
+    let mut env = serde_json::json!({
+        "name": name,
+        "widget_type": widget_type,
+        "instance_id": instance_id,
+    });
+    if let Some(cap) = capability {
+        env["capability"] = serde_json::json!(cap);
+    }
+    env
+}
+
+#[tokio::test]
+async fn cp3_grant_full_set_when_capabilities_omitted() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id = install_helper(&router, "acme.grant-full", &["read:state", "write:state"]).await;
+
+    // grant 不带 capabilities → 签发 manifest 全集。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["id"], id);
+    assert_eq!(body["type"], "acme.grant-full");
+    let mut granted: Vec<String> = body["granted_capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    granted.sort();
+    assert_eq!(
+        granted,
+        vec!["read:state".to_string(), "write:state".to_string()]
+    );
+    assert!(
+        body["granted_at"].as_u64().is_some(),
+        "granted_at 必须是 UNIX 秒"
+    );
+}
+
+#[tokio::test]
+async fn cp3_grant_subset_only_grants_declared_capabilities() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id = install_helper(&router, "acme.grant-sub", &["read:state", "write:state"]).await;
+
+    // 子集授权：只 grant read:state。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("grant", Some(vec!["read:state"])),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let granted: Vec<String> = body["granted_capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(granted, vec!["read:state".to_string()]);
+
+    // 越界 capability → 400 capability_not_declared。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("grant", Some(vec!["admin:system"])),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(resp).await["error"]["code"],
+        "capability_not_declared"
+    );
+}
+
+#[tokio::test]
+async fn cp3_grant_revoke_clears_all_or_subset() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id = install_helper(&router, "acme.revoke", &["read:state", "write:state"]).await;
+
+    // 先 grant 全集。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 子集撤销：revoke read:state → 剩 write:state。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("revoke", Some(vec!["read:state"])),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let granted: Vec<String> = body["granted_capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(granted, vec!["write:state".to_string()]);
+
+    // 全集撤销（capabilities 缺省）→ granted_capabilities 空。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("revoke", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(
+        body["granted_capabilities"].as_array().unwrap().is_empty(),
+        "全集撤销后 granted_capabilities 必须为空"
+    );
+}
+
+#[tokio::test]
+async fn cp3_grant_invalid_action_and_unknown_extension() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+
+    // 未知 extension_id → 404。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/extensions/no-such-id/grants",
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // 非法 action → 400 invalid_action。
+    let id = install_helper(&router, "acme.bad-action", &["read:state"]).await;
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &serde_json::json!({ "action": "rotate" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"]["code"], "invalid_action");
+}
+
+#[tokio::test]
+async fn cp3_get_extension_grants_and_list_all_grants() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id_a = install_helper(&router, "acme.list-a", &["read:state"]).await;
+    let _id_b = install_helper(&router, "acme.list-b", &["read:state"]).await;
+
+    // 仅 grant A；B 保持未授权。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id_a}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // GET 单扩展 grant。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/extensions/{id_a}/grants"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["id"], id_a);
+    assert_eq!(body["granted_capabilities"].as_array().unwrap().len(), 1);
+
+    // GET 未知 extension → 404。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get("/v1/extensions/no-such/grants")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // GET 全部 grants → 含 A（已 grant）与 B（未 grant，空数组）。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get("/v1/extensions/grants")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let grants = body["grants"].as_array().unwrap();
+    assert_eq!(grants.len(), 2);
+    let by_type: std::collections::HashMap<&str, &serde_json::Value> = grants
+        .iter()
+        .map(|g| (g["type"].as_str().unwrap(), g))
+        .collect();
+    assert_eq!(
+        by_type["acme.list-a"]["granted_capabilities"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        by_type["acme.list-b"]["granted_capabilities"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "未 grant 的扩展 granted_capabilities 必须为空"
+    );
+}
+
+#[tokio::test]
+async fn cp3_intent_without_capability_passes_through() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+
+    // 无 capability 字段 → 放行 200（无需授权的 intent）。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/widget-intents",
+            &intent_envelope("ui.ping", "acme.uninstalled", "inst-1", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["name"], "ui.ping");
+    // 未授权 intent 不应返回 capability 字段。
+    assert!(body.get("capability").is_none() || body["capability"].is_null());
+}
+
+#[tokio::test]
+async fn cp3_intent_with_capability_denied_when_extension_missing() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+
+    // 扩展未安装 → 403 intent_denied（不是 404，合同统一 deny 语义）。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/widget-intents",
+            &intent_envelope(
+                "data.read",
+                "acme.never-installed",
+                "inst-1",
+                Some("read:state"),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(resp).await["error"]["code"], "intent_denied");
+}
+
+#[tokio::test]
+async fn cp3_intent_with_capability_denied_when_not_granted() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let _id = install_helper(&router, "acme.not-granted", &["read:state"]).await;
+
+    // 已安装但未 grant → 403 intent_denied。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/widget-intents",
+            &intent_envelope(
+                "data.read",
+                "acme.not-granted",
+                "inst-1",
+                Some("read:state"),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "intent_denied");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not granted"),
+        "deny 消息必须明示 capability 未授权"
+    );
+}
+
+#[tokio::test]
+async fn cp3_intent_allowed_when_capability_granted() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id = install_helper(&router, "acme.allowed", &["read:state", "write:state"]).await;
+
+    // grant 全集。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // intent with read:state → 200。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/widget-intents",
+            &intent_envelope("data.read", "acme.allowed", "inst-1", Some("read:state")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["capability"], "read:state");
+
+    // 子集授权后再调用未授权 capability → 403。
+    // 先 revoke read:state → 仅剩 write:state。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("revoke", Some(vec!["read:state"])),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // read:state 已撤销 → 403。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/widget-intents",
+            &intent_envelope("data.read", "acme.allowed", "inst-1", Some("read:state")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // write:state 仍授权 → 200。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/widget-intents",
+            &intent_envelope("data.write", "acme.allowed", "inst-1", Some("write:state")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn cp3_intent_denied_when_extension_disabled() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id = install_helper(&router, "acme.disabled", &["read:state"]).await;
+
+    // grant 全集。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // disable → 出 catalog；intent 即使 grant 仍在也拒绝（find_enabled_by_type 排除停用）。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/v1/extensions/{id}/disable"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/widget-intents",
+            &intent_envelope("data.read", "acme.disabled", "inst-1", Some("read:state")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(resp).await["error"]["code"], "intent_denied");
+}
+
+#[tokio::test]
+async fn cp3_reinstall_same_type_clears_grant() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let _id_v1 = install_helper(&router, "acme.reinstall", &["read:state"]).await;
+
+    // grant 全集。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{_id_v1}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 重装同 type（替换语义）→ 新记录 granted_capabilities 必须为空。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/extensions/install",
+            &install_body_multi_cap("acme.reinstall", Some("chat.sidebar"), &["read:state"]),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let new_id = body_json(resp).await["id"].as_str().unwrap().to_string();
+    assert_ne!(new_id, _id_v1, "重装必须生成新 id（旧记录被替换）");
+
+    // GET 新记录 grant → 空。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/extensions/{new_id}/grants"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(
+        body["granted_capabilities"].as_array().unwrap().is_empty(),
+        "重装必须清空 grant（新代码新身份）"
+    );
+
+    // 旧 id 已被替换 → GET 404。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/extensions/{_id_v1}/grants"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

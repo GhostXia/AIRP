@@ -3,8 +3,8 @@
   "description": "engine /v1 端点契约 golden 清单。由 webui/tests/extract-v1-endpoints.mjs 从 engine/src/daemon/mod.rs 抽取后人工补充 ui 标注。更新方式见 DEV-GUIDE「端点契约守卫」。",
   "generatedFrom": {
     "file": "engine/src/daemon/mod.rs",
-    "ref": "main@1b14a7c",
-    "date": "2026-08-04"
+    "ref": "desktop/c-p3-capability-auth@bd22c52",
+    "date": "2026-08-05"
   },
   "endpoints": [
     {
@@ -407,14 +407,14 @@
       "method": "POST",
       "path": "/v1/extensions/install",
       "bodyLimit": "6MB",
-      "ui": false,
-      "reason": "C-P2 扩展注册面管理端点（digest-pinned 安装包投放）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+      "ui": true,
+      "note": "C-P3 扩展管理 UI（24-plugins.html renderPlugins）——digest-pinned 安装包投放"
     },
     {
       "method": "GET",
       "path": "/v1/extensions",
-      "ui": false,
-      "reason": "C-P2 扩展注册面管理端点（枚举已安装扩展包：digest/状态/slot）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——枚举已安装扩展包（digest/状态/slot/grant）"
     },
     {
       "method": "GET",
@@ -424,20 +424,38 @@
     {
       "method": "POST",
       "path": "/v1/extensions/:extension_id/enable",
-      "ui": false,
-      "reason": "C-P2 扩展注册面管理端点（启用已安装扩展包）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——启用已安装扩展包"
     },
     {
       "method": "POST",
       "path": "/v1/extensions/:extension_id/disable",
-      "ui": false,
-      "reason": "C-P2 扩展注册面管理端点（停用已安装扩展包）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——停用已安装扩展包"
     },
     {
       "method": "DELETE",
       "path": "/v1/extensions/:extension_id",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——卸载扩展包并清理孤儿资产"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/:extension_id/grants",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——capability 权威签发/撤销（action=grant|revoke，capabilities 可选子集）"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions/:extension_id/grants",
       "ui": false,
-      "reason": "C-P2 扩展注册面管理端点（卸载扩展包并清理孤儿资产）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+      "reason": "C-P3 grant 查询由 GET /v1/extensions/grants 批量拉取（consent.js 初始化），单扩展查询留给 API 客户端"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions/grants",
+      "ui": true,
+      "note": "C-P3 consent.js boot 时批量拉取权威 grant 状态（type → granted_capabilities）"
     },
     {
       "method": "POST",
