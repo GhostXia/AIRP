@@ -133,6 +133,19 @@ fn not_found(message: &str) -> Response {
         .into_response()
 }
 
+/// #485 E1：变更类操作失败的统一映射——NotFound → 404；Storage → 500
+/// storage_error（此前 Option::None 双义被一律映射 404，掩盖持久化失败）。
+fn mutation_error_response(error: super::MutationError) -> Response {
+    match error {
+        super::MutationError::NotFound => not_found("extension not found"),
+        super::MutationError::Storage(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": { "code": "storage_error", "message": message } })),
+        )
+            .into_response(),
+    }
+}
+
 fn store(state: &DaemonState) -> Arc<ExtensionStore> {
     state.extensions().clone()
 }
@@ -179,8 +192,8 @@ pub async fn list_extensions(State(state): State<Arc<DaemonState>>) -> Json<Valu
 async fn set_enabled(state: Arc<DaemonState>, id: String, enabled: bool) -> Response {
     let store = store(&state);
     match store.set_enabled(&id, enabled) {
-        Some(record) => (StatusCode::OK, Json(json!(record))).into_response(),
-        None => not_found("extension not found"),
+        Ok(record) => (StatusCode::OK, Json(json!(record))).into_response(),
+        Err(error) => mutation_error_response(error),
     }
 }
 
@@ -207,8 +220,8 @@ pub async fn delete_extension(
 ) -> Response {
     let store = store(&state);
     match store.remove(&id) {
-        Some(_) => StatusCode::NO_CONTENT.into_response(),
-        None => not_found("extension not found"),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => mutation_error_response(error),
     }
 }
 
@@ -489,6 +502,9 @@ pub async fn widget_intent(
 /// 安全模型：内容寻址不可变 + 仅 loopback 拓扑 + nosniff；服务时按记录中
 /// 的文件摘要复检（防篡改）。未注册的 digest 一律 404——即使目录存在
 /// （不投放任何未经安装面登记的内容）。
+///
+/// #485 E2：磁盘读 + 全量 SHA-256 复检（≤1MB）移入 `spawn_blocking`，
+/// 不占用 tokio worker 线程；digest 复检语义不变。
 pub async fn serve_extension_asset(
     State(state): State<Arc<DaemonState>>,
     Path((digest, file)): Path<(String, String)>,
@@ -500,23 +516,54 @@ pub async fn serve_extension_asset(
     let Some(expected) = record.files.iter().find(|f| f.path == file) else {
         return not_found("file not in package manifest");
     };
+    let expected_sha = expected.sha256.clone();
     let extensions_root = state.data_root.join("extensions");
-    let Some(path) = super::resolve_package_file(&extensions_root, &digest, &file) else {
-        return not_found("extension asset missing");
-    };
-    let Ok(bytes) = std::fs::read(&path) else {
-        return not_found("extension asset missing");
-    };
-    // 加载时校验：内容与安装时登记的摘要不符即拒绝投放（tamper-evident）。
-    if sha256_hex(&bytes) != expected.sha256 {
-        tracing::error!(digest = %digest, file = %file, "extension asset digest mismatch; refusing to serve");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": { "code": "digest_mismatch", "message": "extension asset failed integrity check" } })),
-        )
-            .into_response();
+    // 留副本供响应段（content-type / 日志）使用；digest/file 被阻塞闭包 move。
+    let digest_log = digest.clone();
+    let file_log = file.clone();
+    /// 阻塞段结果：保留原 404/500 语义划分（#485 E2 仅移出线程，不改行为）。
+    enum AssetLoad {
+        Bytes(Vec<u8>),
+        Missing,
+        Mismatch,
     }
-    let content_type = match file.rsplit_once('.') {
+    // 阻塞 I/O + 摘要复检移出 async worker（内容不可变，读与复检幂等）。
+    let loaded = tokio::task::spawn_blocking(move || {
+        let Some(path) = super::resolve_package_file(&extensions_root, &digest, &file) else {
+            return AssetLoad::Missing;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            return AssetLoad::Missing;
+        };
+        // 加载时校验：内容与安装时登记的摘要不符即拒绝投放（tamper-evident）。
+        if sha256_hex(&bytes) != expected_sha {
+            return AssetLoad::Mismatch;
+        }
+        AssetLoad::Bytes(bytes)
+    })
+    .await;
+    let bytes = match loaded {
+        Ok(AssetLoad::Bytes(bytes)) => bytes,
+        Ok(AssetLoad::Missing) => return not_found("extension asset missing"),
+        Ok(AssetLoad::Mismatch) => {
+            tracing::error!(digest = %digest_log, file = %file_log, "extension asset digest mismatch; refusing to serve");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": { "code": "digest_mismatch", "message": "extension asset failed integrity check" } })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            // join 失败（阻塞任务被取消）：不投放无法自证完整的资产。
+            tracing::error!(%error, "extension asset blocking task join failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": { "code": "digest_mismatch", "message": "extension asset failed integrity check" } })),
+            )
+                .into_response();
+        }
+    };
+    let content_type = match file_log.rsplit_once('.') {
         Some((_, "js")) => "application/javascript; charset=utf-8",
         Some((_, "css")) => "text/css; charset=utf-8",
         Some((_, "json")) => "application/json; charset=utf-8",
