@@ -203,6 +203,7 @@ intent 执行面合同以 [protocol/widget-intents.json](../protocol/widget-inte
 - C-P2 为最小合同：engine 无任何已注册执行器，一切 intent 返回 `403 intent_denied`（拒绝默认）。
 - C-P3 起按 `capability` 字段做逐调用强制。
 - 错误 code 封闭锁定集：`intent_invalid`（400，envelope 形状错误）/ `intent_denied`（403，授权失败或无执行器）。
+- 传输层拒收（畸形 JSON / 缺必填字段 / Content-Type 错误）由 axum Json 提取器在 handler 前拒收：4xx 纯文本响应，**无 error.code**（合同见 widget-intents.json 的 `transportRejections`）；宿主不得按 error.code 分支处理此类响应。
 - 宿主收到 403/400 不崩溃、不静默吞掉；向 widget 回传错误并留 console 痕迹。
 
 ## 8. 打包与安装
