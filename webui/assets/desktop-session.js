@@ -37,9 +37,11 @@
     // endpoint-guard / route-contract 的直接 fetch 扫描命中。
     const fetch = typeof opts.fetchImpl === 'function' ? opts.fetchImpl : globalThis.fetch;
     const base = String(opts.base || (globalThis.location && globalThis.location.origin) || '').replace(/\/+$/, '');
+    // 无 bearer 早退必须在 inflight 指派之前：否则陈旧 Promise 会永久卡住
+    // 去重槽位，后续所有续期尝试直接返回 false 而不再真正发起请求。
+    if (!currentBearer()) return Promise.resolve(false);
     inflight = (async () => {
       const bearer = currentBearer();
-      if (!bearer) return false;
       try {
         const resp = await fetch(base + '/v1/desktop-session/renew', {
           method: 'POST',
