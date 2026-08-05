@@ -660,7 +660,7 @@ pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationErro
 fn parse_host_api_major(host_api: Option<&str>) -> Result<u32, ValidationError> {
     let raw = match host_api {
         None => return Ok(1),
-        Some(s) if s.is_empty() => return Ok(1),
+        Some("") => return Ok(1),
         Some(s) => s,
     };
     let parts: Vec<&str> = raw.split('.').collect();
