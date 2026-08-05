@@ -33,6 +33,10 @@ use sha2::{Digest, Sha256};
 
 pub mod api;
 
+/// C-P4 第二批（#484）：host_api / capability 合同兼容回归装置（仅测试构型）。
+#[cfg(test)]
+mod compat;
+
 /// 单个包文件数上限（防 zip-bomb 式清单膨胀；widget 包本就只有几个文件）。
 pub const MAX_PACKAGE_FILES: usize = 32;
 /// 单个文件大小上限（1MB；widget 是文本资产，图片另走 CDN 不属本阶段）。
@@ -59,6 +63,29 @@ impl ValidationError {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+/// 变更类操作错误（#485 E1）。
+///
+/// 此前 `set_enabled` / `remove` 以 `Option::None` 同时表示「id 不存在」与
+/// 「持久化失败回滚后」，HTTP 面一律映射 404 not_found，掩盖了 500
+/// storage_error。改为 typed error 后 handler 可精确区分：
+/// `NotFound` → 404；`Storage` → 500 storage_error。
+#[derive(Debug)]
+pub enum MutationError {
+    /// 目标 id 不存在。
+    NotFound,
+    /// extensions.json 持久化失败（内存态已精确回滚）。
+    Storage(String),
+}
+
+impl std::fmt::Display for MutationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MutationError::NotFound => write!(f, "extension not found"),
+            MutationError::Storage(e) => write!(f, "storage error: {e}"),
+        }
     }
 }
 
@@ -307,7 +334,14 @@ impl ExtensionStore {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             target.granted_capabilities = granted;
-            target.granted_at = Some(now);
+            // #488 E1：空集语义归一化——空 grant = 无授权，与 revoke_grant 同语义，
+            // 不得留下「有签发时间戳但无任何授权」的脏状态（consent 层把空
+            // granted_capabilities 视为无授权，该时间戳只会误导审计面）。
+            target.granted_at = if target.granted_capabilities.is_empty() {
+                None
+            } else {
+                Some(now)
+            };
             (target.clone(), records.clone(), original)
         };
         if let Err(error) = self.persist(&snapshot) {
@@ -412,19 +446,28 @@ impl ExtensionStore {
         let digest = sha256_hex(canonical.join("\n").as_bytes());
 
         // 写包目录（锁外 I/O）。同 digest 目录已存在 = 同内容，复用。
+        // #485 E4：文件路径可为嵌套（validate_and_decode_files 接受
+        // `a/b.js` 形态），写前逐文件建父目录；写入失败时清理半写
+        // 包目录，不留半真（同 digest 重装会重建）。
         let package_dir = self.package_dir(&digest);
         if !package_dir.exists() {
-            std::fs::create_dir_all(&package_dir).map_err(|e| {
-                ValidationError::new(
+            let write_result = (|| -> std::io::Result<()> {
+                std::fs::create_dir_all(&package_dir)?;
+                for (path, bytes, _sha) in &files {
+                    let target = package_dir.join(path);
+                    if let Some(parent) = target.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&target, bytes)?;
+                }
+                Ok(())
+            })();
+            if let Err(e) = write_result {
+                let _ = std::fs::remove_dir_all(&package_dir);
+                return Err(ValidationError::new(
                     "storage_error",
-                    format!("failed to create package dir: {e}"),
-                )
-            })?;
-            for (path, bytes, _sha) in &files {
-                let target = package_dir.join(path);
-                std::fs::write(&target, bytes).map_err(|e| {
-                    ValidationError::new("storage_error", format!("failed to write file: {e}"))
-                })?;
+                    format!("failed to write package dir: {e}"),
+                ));
             }
         }
 
@@ -489,12 +532,16 @@ impl ExtensionStore {
         Ok(record)
     }
 
-    pub fn set_enabled(&self, id: &str, enabled: bool) -> Option<ExtensionRecord> {
+    /// 启用/停用扩展。`NotFound` = id 不存在；`Storage` = 持久化失败
+    /// （内存态已回滚）——#485 E1：不再以 Option 混淆两种失败。
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<ExtensionRecord, MutationError> {
         // W3：变更 + persist（含失败回滚）全程串行。
         let _serial = self.mutation_guard();
         let snapshot = {
             let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
-            let target = records.iter_mut().find(|r| r.id == id)?;
+            let Some(target) = records.iter_mut().find(|r| r.id == id) else {
+                return Err(MutationError::NotFound);
+            };
             target.enabled = enabled;
             let updated = target.clone();
             let snapshot = records.clone();
@@ -507,19 +554,22 @@ impl ExtensionStore {
             if let Some(target) = records.iter_mut().find(|r| r.id == id) {
                 target.enabled = !enabled;
             }
-            return None;
+            return Err(MutationError::Storage(format!("persist failed: {error}")));
         }
-        Some(snapshot.1)
+        Ok(snapshot.1)
     }
 
     /// 删除记录；若包目录不再被任何记录引用，一并清理（内容寻址可共享）。
-    pub fn remove(&self, id: &str) -> Option<ExtensionRecord> {
+    /// `NotFound` / `Storage` 语义同 [`Self::set_enabled`]（#485 E1）。
+    pub fn remove(&self, id: &str) -> Result<ExtensionRecord, MutationError> {
         // W3：删除 + persist + 孤儿目录清理全程串行，杜绝孤儿判定与
         // remove_dir_all 之间的 TOCTOU 窗口。
         let _serial = self.mutation_guard();
         let (removed, snapshot) = {
             let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
-            let index = records.iter().position(|r| r.id == id)?;
+            let Some(index) = records.iter().position(|r| r.id == id) else {
+                return Err(MutationError::NotFound);
+            };
             let removed = records.remove(index);
             (removed, records.clone())
         };
@@ -527,12 +577,12 @@ impl ExtensionStore {
             tracing::error!(%error, "extensions.json 持久化失败；回滚删除");
             let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
             records.push(removed.clone());
-            return None;
+            return Err(MutationError::Storage(format!("persist failed: {error}")));
         }
         if self.find_by_digest(&removed.digest).is_none() {
             let _ = std::fs::remove_dir_all(self.package_dir(&removed.digest));
         }
-        Some(removed)
+        Ok(removed)
     }
 
     fn persist(&self, records: &[ExtensionRecord]) -> Result<(), ValidationError> {
@@ -548,9 +598,17 @@ impl ExtensionStore {
 }
 
 /// tmp + rename 原子写（同盘 rename；extensions.json 与 tmp 同在 data_root）。
+///
+/// #485 E3：rename 只给原子可见性，不给崩溃耐久——数据可能仍停在
+/// page cache，掉电后 extensions.json 可能空/截断。故 tmp 先 `sync_all`
+/// 落盘再 rename。
 fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
@@ -581,6 +639,21 @@ pub const DEFAULT_SLOT_IDS: &[&str] = &[
 /// （前向兼容铁律：不静默尝试不兼容的 widget）。缺省 `host_api` 视为
 /// `"1"`（向后兼容已有 widget）。
 pub const HOST_API_MAJOR: u32 = 1;
+
+/// C-P4 第二批：engine policy 的 capability 封闭集（权威枚举）。
+///
+/// 与 docs/WIDGET-DEVELOPMENT.md §5「capability 枚举」严格一致；catalog
+/// 顶层以 `capabilities` 字段下发此封闭集，供 webui 授权 UI 渲染全集
+/// 清单（grant 面只能在此集内选择）。新增 capability 必须同步改此常量
+/// 与文档，compat harness 测试锁住两侧一致性。
+pub const KNOWN_CAPABILITIES: [&str; 6] = [
+    "read:memory",
+    "write:memory",
+    "read:worldbook",
+    "read:state",
+    "write:state",
+    "call:tool",
+];
 
 /// widget type 白名单：`ns.name` 两段，小写字母数字与 `.-_`，禁路径字符。
 fn validate_widget_type(widget_type: &str) -> Result<(), ValidationError> {
@@ -652,8 +725,9 @@ pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationErro
 
 /// 解析 `host_api` 字段的 major 版本。
 ///
-/// 接受 `"1"`、`"1.0"`、`"1.2.3"` 形态；取首段为 major。缺省 = `"1"`。
-/// 空串 / 非数字段 / 前导零（`"01"`）/ 超长 / 段缺数字（`"1."`、`"1.x"`）=
+/// 接受 `"1"`、`"1.0"`、`"1.2.3"` 形态；取首段为 major。缺省 / 空串视为
+/// `"1"`（向后兼容已有 widget；定夺见 docs/WIDGET-DEVELOPMENT.md §3）。
+/// 非数字段 / 前导零（`"01"`）/ 超长 / 段缺数字（`"1."`、`"1.x"`）=
 /// `invalid_manifest`。严格校验所有段为纯数字，避免 `"1.x"` 这类伪 semver
 /// 被宽松解析为 major 1 而掩盖声明错误。major 段额外拒绝 `"0"`（major 0
 /// 不合法）；minor/patch 段允许 `"0"`（如 `"1.0"`、`"1.2.0"` 合法）。
@@ -971,17 +1045,30 @@ mod tests {
             );
         }
 
-        // 非法格式 → invalid_manifest。
-        for bad in ["0", "01", "abc", "", "1.x"] {
+        // #489 E1：坏值分支用合法且唯一的 widget_type——此前以
+        // `format!("acme.bad-{bad:?}")` 拼接，`{:?}` 引入引号导致
+        // validate_widget_type 先于 host_api 校验失败，坏值实际未被测到。
+        for (i, bad) in ["0", "01", "abc", "1.x", "1.", "999999999"]
+            .iter()
+            .enumerate()
+        {
             let mut req = request(true);
-            req.manifest.widget_type = format!("acme.bad-{bad:?}");
+            req.manifest.widget_type = format!("acme.badhost{i}");
             req.manifest.host_api = Some(bad.to_string());
-            let code = store.install(req).unwrap_err().code;
-            assert!(
-                code == "invalid_manifest" || (bad.is_empty() && code == "host_api_incompatible"),
-                "host_api {bad:?} should be invalid_manifest or incompatible, got {code}"
+            assert_eq!(
+                store.install(req).unwrap_err().code,
+                "invalid_manifest",
+                "host_api {bad:?} must be rejected as invalid_manifest"
             );
         }
+
+        // #489 D1 定夺：空串视为缺省 "1" → 安装成功（文档与实现对齐）。
+        let mut req = request(true);
+        req.manifest.widget_type = "acme.emptyhost".to_string();
+        req.manifest.host_api = Some(String::new());
+        store
+            .install(req)
+            .expect("host_api empty string = default major 1 compat");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1054,7 +1141,44 @@ mod tests {
             !store.package_dir(&record.digest).exists(),
             "orphan package dir must be cleaned"
         );
-        assert!(store.remove(&record.id).is_none());
+        // #485 E1：重复删除返回 typed NotFound（非 Option::None 双义）。
+        assert!(matches!(
+            store.remove(&record.id),
+            Err(MutationError::NotFound)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #485 E4：嵌套文件路径（`assets/nested.js`）写包前必须建父目录，
+    /// 否则 std::fs::write 失败；安装成功后文件应可解析落盘。
+    #[test]
+    fn install_supports_nested_file_paths() {
+        let root = temp_root("nested");
+        let store = ExtensionStore::load(root.clone());
+        let nested = b"export const nested = true;";
+        let req = InstallRequest {
+            manifest: manifest(true),
+            files: vec![
+                file_payload("index.js", b"export default () => ({ mount() {} });"),
+                file_payload("assets/deep/nested.js", nested),
+            ],
+            slot: None,
+        };
+        let record = store.install(req).expect("nested paths install ok");
+        let on_disk = std::fs::read(
+            store
+                .package_dir(&record.digest)
+                .join("assets/deep/nested.js"),
+        )
+        .unwrap();
+        assert_eq!(on_disk, nested);
+        // 静态服务面的路径解析同样能命中嵌套文件。
+        let resolved = resolve_package_file(
+            &root.join("extensions"),
+            &record.digest,
+            "assets/deep/nested.js",
+        );
+        assert!(resolved.is_some(), "nested file must be servable");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1150,6 +1274,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// #488 E1：grant 空 capabilities 语义归一化——空集 = 无授权，
+    /// granted_at 必须清空（不得呈现「有签发时间戳但无任何授权」）。
+    #[test]
+    fn grant_empty_capabilities_normalizes_to_no_grant() {
+        let root = temp_root("grant-empty");
+        let store = ExtensionStore::load(root.clone());
+        let record = store.install(request(true)).unwrap();
+
+        // 先 grant 全集（manifest 声明 read:state）。
+        let granted = store.grant(&record.id, None).unwrap().unwrap();
+        assert!(!granted.granted_capabilities.is_empty());
+        assert!(granted.granted_at.is_some());
+
+        // 空子集 grant → 归一化为无授权：集合空且 granted_at 清空。
+        let after = store.grant(&record.id, Some(Vec::new())).unwrap().unwrap();
+        assert!(after.granted_capabilities.is_empty());
+        assert!(
+            after.granted_at.is_none(),
+            "空 grant 不得保留 granted_at（与 revoke_grant 空集语义对称）"
+        );
+
+        // 未 grant 起步的扩展直接空 grant 亦同。
+        let mut req = request(true);
+        req.manifest.widget_type = "acme.empty2".to_string();
+        let fresh = store.install(req).unwrap();
+        let after = store.grant(&fresh.id, Some(Vec::new())).unwrap().unwrap();
+        assert!(after.granted_capabilities.is_empty());
+        assert!(after.granted_at.is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn revoke_grant_clears_all_or_subset() {
         let root = temp_root("revoke");
@@ -1219,7 +1375,7 @@ mod tests {
         let record = store.install(request(true)).unwrap();
 
         assert!(store.find_enabled_by_type("acme.demo").is_some());
-        store.set_enabled(&record.id, false);
+        store.set_enabled(&record.id, false).unwrap();
         assert!(
             store.find_enabled_by_type("acme.demo").is_none(),
             "停用的扩展不应被 widget_intent 找到"

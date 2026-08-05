@@ -36,7 +36,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{sha256_hex, ExtensionStore, DEFAULT_SLOT_IDS};
+use super::{sha256_hex, ExtensionStore, DEFAULT_SLOT_IDS, HOST_API_MAJOR, KNOWN_CAPABILITIES};
 use crate::daemon::DaemonState;
 
 /// 内置默认 catalog（webui 无 engine / engine 无安装扩展时的权威默认计划，
@@ -49,6 +49,7 @@ const DEFAULT_CATALOG_JSON: &str = r#"{
       "type": "airp.clock",
       "version": "1.0.0",
       "title": "时钟",
+      "host_api": "1",
       "entry": { "kind": "builtin" }
     },
     {
@@ -56,6 +57,7 @@ const DEFAULT_CATALOG_JSON: &str = r#"{
       "version": "1.0.0",
       "title": "状态胶囊",
       "capabilities": ["read:state"],
+      "host_api": "1",
       "entry": { "kind": "esm", "source": "/assets/widgets/status.module.js", "sandbox": true }
     },
     {
@@ -64,6 +66,7 @@ const DEFAULT_CATALOG_JSON: &str = r#"{
       "title": "第三方示范 widget",
       "author": "AIRP C-P1 demo",
       "capabilities": ["read:state"],
+      "host_api": "1",
       "entry": { "kind": "esm", "source": "/assets/widgets/third-party-example.js", "sandbox": true }
     }
   ],
@@ -133,6 +136,19 @@ fn not_found(message: &str) -> Response {
         .into_response()
 }
 
+/// #485 E1：变更类操作失败的统一映射——NotFound → 404；Storage → 500
+/// storage_error（此前 Option::None 双义被一律映射 404，掩盖持久化失败）。
+fn mutation_error_response(error: super::MutationError) -> Response {
+    match error {
+        super::MutationError::NotFound => not_found("extension not found"),
+        super::MutationError::Storage(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": { "code": "storage_error", "message": message } })),
+        )
+            .into_response(),
+    }
+}
+
 fn store(state: &DaemonState) -> Arc<ExtensionStore> {
     state.extensions().clone()
 }
@@ -179,8 +195,8 @@ pub async fn list_extensions(State(state): State<Arc<DaemonState>>) -> Json<Valu
 async fn set_enabled(state: Arc<DaemonState>, id: String, enabled: bool) -> Response {
     let store = store(&state);
     match store.set_enabled(&id, enabled) {
-        Some(record) => (StatusCode::OK, Json(json!(record))).into_response(),
-        None => not_found("extension not found"),
+        Ok(record) => (StatusCode::OK, Json(json!(record))).into_response(),
+        Err(error) => mutation_error_response(error),
     }
 }
 
@@ -207,8 +223,8 @@ pub async fn delete_extension(
 ) -> Response {
     let store = store(&state);
     match store.remove(&id) {
-        Some(_) => StatusCode::NO_CONTENT.into_response(),
-        None => not_found("extension not found"),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => mutation_error_response(error),
     }
 }
 
@@ -290,10 +306,38 @@ pub async fn list_all_grants(State(state): State<Arc<DaemonState>>) -> Json<Valu
     Json(json!({ "grants": grants }))
 }
 
+/// `GET /v1/grants`：C-P4 第二批（#484）统一授权查询面。
+///
+/// 跨类型授权聚合的唯一权威入口：每个 grant 条目带 `kind` 判别字段，
+/// 本阶段仅有 `kind: "widget"`（扩展 grant）；后续 MCP/plugin 等授权
+/// 主体接入时 additive 追加新 kind，消费方按 kind 分支。
+/// `/v1/extensions/grants` 保留不动（consent.js 初始化面兼容）；本端点
+/// 面向授权总览/审计类消费（console-runtime 扩展管理页授权总览卡）。
+pub async fn list_unified_grants(State(state): State<Arc<DaemonState>>) -> Json<Value> {
+    let store = store(&state);
+    let grants: Vec<Value> = store
+        .list()
+        .iter()
+        .map(|record| {
+            let mut view = grant_view(record);
+            if let Some(object) = view.as_object_mut() {
+                object.insert("kind".to_string(), json!("widget"));
+            }
+            view
+        })
+        .collect();
+    Json(json!({ "grants": grants }))
+}
+
 /// `GET /v1/extensions/catalog`：机器可读下发（manifests + slot 计划）。
 ///
 /// 组装规则：内置默认计划打底；已启用扩展的 manifest 按 type upsert
 /// （第三方版本替换同名首方示范），并编入其安装时指定的 slot。
+///
+/// C-P4 第二批（catalog 完整化，#484）：顶层另下发两个 engine 权威
+/// 协商字段——`host_api_major`（engine 当前支持的宿主合同 major，webui
+/// 可据此预判兼容性）与 `capabilities`（engine policy capability 封闭集，
+/// 授权 UI 的全集清单权威来源）。二者皆 additive 字段，旧消费方不受影响。
 pub async fn get_catalog(State(state): State<Arc<DaemonState>>) -> Response {
     let mut catalog: Value = match serde_json::from_str(DEFAULT_CATALOG_JSON) {
         Ok(value) => value,
@@ -304,6 +348,14 @@ pub async fn get_catalog(State(state): State<Arc<DaemonState>>) -> Response {
             return (StatusCode::INTERNAL_SERVER_ERROR, "catalog unavailable").into_response();
         }
     };
+    // C-P4 第二批：engine 权威协商字段（additive）。
+    if let Some(object) = catalog.as_object_mut() {
+        object.insert("host_api_major".to_string(), Value::from(HOST_API_MAJOR));
+        object.insert(
+            "capabilities".to_string(),
+            Value::from(KNOWN_CAPABILITIES.to_vec()),
+        );
+    }
     let store = store(&state);
     for record in store.enabled() {
         // C-P4-1 fail-closed：安装面已校验 slot ∈ DEFAULT_SLOT_IDS，catalog 组装面
@@ -489,6 +541,9 @@ pub async fn widget_intent(
 /// 安全模型：内容寻址不可变 + 仅 loopback 拓扑 + nosniff；服务时按记录中
 /// 的文件摘要复检（防篡改）。未注册的 digest 一律 404——即使目录存在
 /// （不投放任何未经安装面登记的内容）。
+///
+/// #485 E2：磁盘读 + 全量 SHA-256 复检（≤1MB）移入 `spawn_blocking`，
+/// 不占用 tokio worker 线程；digest 复检语义不变。
 pub async fn serve_extension_asset(
     State(state): State<Arc<DaemonState>>,
     Path((digest, file)): Path<(String, String)>,
@@ -500,23 +555,54 @@ pub async fn serve_extension_asset(
     let Some(expected) = record.files.iter().find(|f| f.path == file) else {
         return not_found("file not in package manifest");
     };
+    let expected_sha = expected.sha256.clone();
     let extensions_root = state.data_root.join("extensions");
-    let Some(path) = super::resolve_package_file(&extensions_root, &digest, &file) else {
-        return not_found("extension asset missing");
-    };
-    let Ok(bytes) = std::fs::read(&path) else {
-        return not_found("extension asset missing");
-    };
-    // 加载时校验：内容与安装时登记的摘要不符即拒绝投放（tamper-evident）。
-    if sha256_hex(&bytes) != expected.sha256 {
-        tracing::error!(digest = %digest, file = %file, "extension asset digest mismatch; refusing to serve");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": { "code": "digest_mismatch", "message": "extension asset failed integrity check" } })),
-        )
-            .into_response();
+    // 留副本供响应段（content-type / 日志）使用；digest/file 被阻塞闭包 move。
+    let digest_log = digest.clone();
+    let file_log = file.clone();
+    /// 阻塞段结果：保留原 404/500 语义划分（#485 E2 仅移出线程，不改行为）。
+    enum AssetLoad {
+        Bytes(Vec<u8>),
+        Missing,
+        Mismatch,
     }
-    let content_type = match file.rsplit_once('.') {
+    // 阻塞 I/O + 摘要复检移出 async worker（内容不可变，读与复检幂等）。
+    let loaded = tokio::task::spawn_blocking(move || {
+        let Some(path) = super::resolve_package_file(&extensions_root, &digest, &file) else {
+            return AssetLoad::Missing;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            return AssetLoad::Missing;
+        };
+        // 加载时校验：内容与安装时登记的摘要不符即拒绝投放（tamper-evident）。
+        if sha256_hex(&bytes) != expected_sha {
+            return AssetLoad::Mismatch;
+        }
+        AssetLoad::Bytes(bytes)
+    })
+    .await;
+    let bytes = match loaded {
+        Ok(AssetLoad::Bytes(bytes)) => bytes,
+        Ok(AssetLoad::Missing) => return not_found("extension asset missing"),
+        Ok(AssetLoad::Mismatch) => {
+            tracing::error!(digest = %digest_log, file = %file_log, "extension asset digest mismatch; refusing to serve");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": { "code": "digest_mismatch", "message": "extension asset failed integrity check" } })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            // join 失败（阻塞任务被取消）：不投放无法自证完整的资产。
+            tracing::error!(%error, "extension asset blocking task join failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": { "code": "digest_mismatch", "message": "extension asset failed integrity check" } })),
+            )
+                .into_response();
+        }
+    };
+    let content_type = match file_log.rsplit_once('.') {
         Some((_, "js")) => "application/javascript; charset=utf-8",
         Some((_, "css")) => "text/css; charset=utf-8",
         Some((_, "json")) => "application/json; charset=utf-8",

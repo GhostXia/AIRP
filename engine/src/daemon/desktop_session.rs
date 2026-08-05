@@ -121,6 +121,20 @@ pub(crate) fn clear_desktop_session_tokens_for_test() {
         .clear();
 }
 
+/// 测试专用串行锁（#485 E6）：token store 是进程级全局，`cargo test`
+/// 并行线程里一个用例的 clear 会扫掉另一用例刚 mint 的 token，产生
+/// 随机竞态失败。所有触碰全局 token store 的测试（clear / mint /
+/// validate / 续期）必须在开头持有本锁至用例结束，把这类测试串行化。
+#[cfg(test)]
+static TOKEN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// 获取 token store 测试串行锁（poison 时 recover 而非 panic）。
+#[cfg(test)]
+#[must_use = "锁守卫必须持有至测试结束，否则串行化失效"]
+pub(crate) fn token_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TOKEN_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// `POST /v1/desktop-session`：进程互信换短时效 UI token。
 ///
 /// 请求无 body；鉴权由 v1 路由层的 `auth_middleware`（access key）完成。

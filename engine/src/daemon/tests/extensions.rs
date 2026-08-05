@@ -8,9 +8,13 @@
 //! - intent 执行面：拒绝默认 403 + envelope 形状校验；
 //! - token 续期：rotation（撤旧发新）、无效 401、无 key 403、access key 不得续期。
 
+// token_test_lock（#485 E6）有意跨 await 持有：串行化全局 token store，
+// 测试用 oneshot 请求无跨线程挂起风险，此处豁免 await_holding_lock。
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 use crate::daemon::desktop_session::{
-    clear_desktop_session_tokens_for_test, mint_desktop_session_token,
+    clear_desktop_session_tokens_for_test, mint_desktop_session_token, token_test_lock,
 };
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
@@ -79,6 +83,11 @@ fn ext_router(state: Arc<DaemonState>) -> Router {
             "/v1/extensions/grants",
             get(crate::extensions::api::list_all_grants),
         )
+        // C-P4 第二批（#484）：统一授权查询面。
+        .route(
+            "/v1/grants",
+            get(crate::extensions::api::list_unified_grants),
+        )
         .route(
             "/v1/widget-intents",
             post(crate::extensions::api::widget_intent),
@@ -136,6 +145,28 @@ async fn catalog_defaults_to_builtin_plan_when_no_extensions() {
         .map(|m| m["type"].as_str().unwrap())
         .collect();
     assert!(types.contains(&"airp.clock"));
+    // C-P4 第二批（catalog 完整化）：engine 权威协商字段。
+    assert_eq!(
+        catalog["host_api_major"],
+        serde_json::json!(crate::extensions::HOST_API_MAJOR),
+        "catalog 顶层必须下发 engine 支持的 host_api major"
+    );
+    let caps: Vec<&str> = catalog["capabilities"]
+        .as_array()
+        .expect("capabilities 封闭集必须随 catalog 下发")
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        caps,
+        crate::extensions::KNOWN_CAPABILITIES.to_vec(),
+        "catalog capabilities 与 engine policy 封闭集严格一致"
+    );
+    // 内置 manifests 均显式声明 host_api（与安装面缺省规则对齐，
+    // 使下发形状与安装记录序列化形状一致）。
+    for manifest in catalog["manifests"].as_array().unwrap() {
+        assert_eq!(manifest["host_api"], "1", "内置 manifest 应声明 host_api");
+    }
 }
 
 #[tokio::test]
@@ -370,6 +401,33 @@ async fn serve_extension_asset_is_digest_pinned_and_tamper_evident() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    // #485 E5：错误响应不得携带 immutable 长缓存（仅成功响应可缓存）。
+    assert!(
+        !resp.headers()[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .contains("immutable"),
+        "404 响应不得 immutable 缓存"
+    );
+
+    // #485 E5 同规则：已注册 digest 但文件不在包清单 → 404 亦不得 immutable。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/extensions/{digest}/missing.js"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(
+        !resp.headers()[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .contains("immutable"),
+        "包内缺失文件的 404 响应不得 immutable 缓存"
+    );
 
     // 负例：非 /extensions/ 前缀不得被附 ACAO:*（豁免即配负例测试）。
     let resp = router
@@ -472,6 +530,8 @@ async fn widget_intent_is_deny_by_default_and_validates_envelope() {
 
 #[tokio::test]
 async fn renew_rotates_token_and_rejects_stale_or_keyless() {
+    // #485 E6：token store 是进程级全局，持锁串行化防止并发测试互相清 token。
+    let _token_lock = token_test_lock();
     clear_desktop_session_tokens_for_test();
     let (state, _guard) = make_state_with_key(Some("renew-key"));
     let router = Router::new()
@@ -870,6 +930,63 @@ async fn cp3_get_extension_grants_and_list_all_grants() {
             .unwrap()
             .is_empty(),
         "未 grant 的扩展 granted_capabilities 必须为空"
+    );
+}
+
+#[tokio::test]
+async fn cp4_unified_grants_endpoint_aggregates_with_kind() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id_a = install_helper(&router, "acme.unified-a", &["read:state"]).await;
+    let _id_b = install_helper(&router, "acme.unified-b", &["read:state"]).await;
+    // 仅 grant A。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id_a}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // GET /v1/grants：统一面聚合全部授权主体，每条带 kind 判别字段。
+    let resp = router
+        .clone()
+        .oneshot(Request::get("/v1/grants").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let grants = body["grants"].as_array().unwrap();
+    assert_eq!(grants.len(), 2, "两个已安装扩展均入统一面");
+    for grant in grants {
+        assert_eq!(
+            grant["kind"], "widget",
+            "本阶段授权主体仅 widget 扩展，kind 必须为判别字段"
+        );
+        assert!(grant["id"].is_string());
+        assert!(grant["type"].is_string());
+        assert!(grant["granted_capabilities"].is_array());
+    }
+    let by_type: std::collections::HashMap<&str, &serde_json::Value> = grants
+        .iter()
+        .map(|g| (g["type"].as_str().unwrap(), g))
+        .collect();
+    assert_eq!(
+        by_type["acme.unified-a"]["granted_capabilities"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        by_type["acme.unified-a"]["granted_at"].is_u64(),
+        "已 grant 条目必须带签发时间戳"
+    );
+    assert!(
+        by_type["acme.unified-b"]["granted_at"].is_null(),
+        "未 grant 条目不得残留 granted_at"
     );
 }
 

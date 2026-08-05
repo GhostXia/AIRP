@@ -44,11 +44,18 @@
       }
     }
   },
+  "transportRejections": {
+    "description": "#485 P1：传输层拒收行为（axum Json extractor rejection）——不属于 envelope 错误码集，故不占用 error.code。畸形 JSON、缺必填字段或 Content-Type 非 application/json 的请求在进入 handler 前即被框架拒收：HTTP 4xx（畸形 JSON / 缺字段为 400，Content-Type 缺失为 415），响应体为纯文本（如 'Failed to deserialize the JSON body: ...' / 'Expected request with `Content-Type: application/json`），无 error.code 字段。消费端对此类响应不得按 error.code 分支处理；error.code 封闭锁定集仍为 {intent_invalid, intent_denied} 不变。",
+    "status": "4xx (400 malformed body / 415 wrong content-type)",
+    "bodyFormat": "text/plain",
+    "errorCodes": []
+  },
   "consumerContract": {
     "description": "webui 消费端行为约定。",
     "rules": [
       "宿主收到 403/400 不得崩溃或静默吞掉：应向 widget 回传错误并留 console 痕迹。",
-      "网络失败按瞬态处理，widget 可重试；403 为授权终态，重试无意义。"
+      "网络失败按瞬态处理，widget 可重试；403 为授权终态，重试无意义。",
+      "transportRejections（畸形 JSON 等框架拒收，纯文本 400）按形状错误处理：不解析 error.code，直接回传失败痕迹（#485 P1）。"
     ]
   }
 }

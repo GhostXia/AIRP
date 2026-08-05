@@ -40,6 +40,10 @@
     bearer: connection.bearer,
     onRequest: info => { if (info && info.status === 401) markAuthExpired(); },
     onUnauthorized: async () => {
+      // #485 W3：AIRPDesktopSession 仅桌面壳（entry.js）注入；local-webui
+      // 便携模式下全局不存在，直接引用会 ReferenceError 击穿 401 恢复
+      // 链。先 typeof 守卫，非桌面环境无续期可用，返回 false 走常规失败面。
+      if (typeof AIRPDesktopSession === 'undefined') return false;
       const renewed = await AIRPDesktopSession.renewDesktopSession({ base: connection.base });
       if (renewed) resetAuthExpired();
       return renewed;
@@ -1082,6 +1086,59 @@
     const listContainer = node('div', 'runtime-list'); listCard.appendChild(listContainer);
     listCard.appendChild(button('刷新列表', () => loadList()));
 
+    // C-P4 第二批（#484）：授权总览卡——消费统一授权查询面 GET /v1/grants
+    // （kind 判别字段聚合全部授权主体；本阶段仅 widget，后续 MCP/plugin
+    // additive 追加 kind）。只读总览，签发/撤销仍走各主体自己的端点。
+    const grantsCard = card('授权总览（统一面）', true);
+    view.appendChild(grantsCard);
+    grantsCard.appendChild(node('p', 'runtime-muted',
+      '数据源：GET /v1/grants（engine 统一授权查询面）。kind 判别字段区分授权主体类型，' +
+      '当前仅 widget 扩展；新增主体（如 MCP）接入时本卡自动分 kind 呈现。'));
+    const grantsInfo = node('p', 'runtime-muted', '');
+    grantsCard.appendChild(grantsInfo);
+    const grantsContainer = node('div', 'runtime-list'); grantsCard.appendChild(grantsContainer);
+
+    async function loadGrantsOverview() {
+      grantsContainer.replaceChildren();
+      grantsInfo.textContent = '加载中…';
+      let grants;
+      try {
+        const resp = await task('加载授权总览', () => client.request('GET', '/v1/grants'));
+        grants = (resp && resp.grants) || [];
+      } catch (error) {
+        grantsInfo.textContent = '加载失败：' + message(error);
+        return;
+      }
+      if (!grants.length) {
+        grantsInfo.textContent = '暂无授权主体（尚未安装扩展）';
+        return;
+      }
+      const grantedCount = grants.filter(g => (g.granted_capabilities || []).length > 0).length;
+      grantsInfo.textContent = '共 ' + grants.length + ' 个授权主体，其中 ' + grantedCount + ' 个已签发 capability';
+      grants.forEach(grant => {
+        const row = node('div', 'runtime-card runtime-extension-row');
+        const head = node('div', 'runtime-row-title');
+        head.appendChild(node('span', 'import-report-tag', grant.kind || 'unknown'));
+        head.appendChild(node('span', '', grant.type || grant.id || '?'));
+        const caps = grant.granted_capabilities || [];
+        head.appendChild(node('span', 'import-report-tag ' + (caps.length ? 'ok' : 'warn'),
+          caps.length ? '已授权 ' + caps.length + ' 项' : '未授权'));
+        row.appendChild(head);
+        const meta = node('dl', 'runtime-kv');
+        meta.appendChild(node('dt', '', 'ID'));
+        meta.appendChild(node('dd', '', grant.id || '?'));
+        meta.appendChild(node('dt', '', '已授权'));
+        meta.appendChild(node('dd', '', caps.join(', ') || '—'));
+        if (grant.granted_at) {
+          meta.appendChild(node('dt', '', '授权时间'));
+          meta.appendChild(node('dd', '', new Date(grant.granted_at * 1000).toLocaleString()));
+        }
+        row.appendChild(meta);
+        grantsContainer.appendChild(row);
+      });
+    }
+    loadGrantsOverview();
+
     async function loadList() {
       listContainer.replaceChildren();
       listInfo.textContent = '加载中…';
@@ -1098,7 +1155,13 @@
         return;
       }
       listInfo.textContent = '共 ' + items.length + ' 个扩展';
-      items.forEach(item => listContainer.appendChild(renderExtensionRow(item, loadList)));
+      items.forEach(item => listContainer.appendChild(renderExtensionRow(item, reloadAll)));
+    }
+
+    // 列表与授权总览同源变更（grant/revoke/删除），统一刷新。
+    function reloadAll() {
+      loadList();
+      loadGrantsOverview();
     }
 
     function renderExtensionRow(item, reload) {
@@ -1252,6 +1315,18 @@
         setStatus(error.message, true);
         return;
       }
+      // #488 W1：parseJson 只保证 JSON 合法，不保证形状。把非对象 manifest /
+      // 非数组 files 提前拦在客户端，避免 confirm 提示里出现 undefined 类型名、
+      // 也避免向 engine 发一个必然 400 的请求（传输层拒收无 error.code，
+      // 客户端形状校验是第一道面）。
+      if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+        setStatus('Manifest 必须是 JSON 对象（包含 type/version/entry 字段）', true);
+        return;
+      }
+      if (!Array.isArray(files)) {
+        setStatus('Files 必须是 JSON 数组（每个元素含 path/content_base64/sha256）', true);
+        return;
+      }
       if (!window.confirm('即将安装扩展 ' + (manifest.type || '?') + '。继续？')) return;
       try {
         const body = { manifest: manifest, files: files, slot: slotInput.control.value };
@@ -1260,6 +1335,7 @@
         manifestInput.control.value = '';
         filesInput.control.value = '';
         loadList();
+        loadGrantsOverview();
       } catch (error) { /* task 已 setStatus */ }
     }, 'btn-primary'));
 
