@@ -1,0 +1,11 @@
+/* C-P1：沙箱引导页复位样式。
+ * iframe 内是独立文档，看不到宿主令牌表；这里只做中性复位（透明背景、继承
+ * 字体），视觉随宿主透传。无任何色值硬编码（令牌纪律）。 */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
