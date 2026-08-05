@@ -1,0 +1,109 @@
+name: Windows desktop package
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "engine/**"
+      - "webui/**"
+      - "ui/**"
+      - ".github/workflows/desktop-windows-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Windows desktop shell (Tauri + bundled webui)
+    runs-on: windows-latest
+    env:
+      RUSTUP_HOME: ${{ github.workspace }}\.ci\.rustup
+      CARGO_HOME: ${{ github.workspace }}\.ci\.cargo
+      npm_config_prefix: ${{ github.workspace }}\.ci\npm-global
+      npm_config_cache: ${{ github.workspace }}\.ci\npm-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.0"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build engine sidecar
+        working-directory: ui
+        shell: pwsh
+        run: .\build-engine-sidecar.ps1
+
+      - name: Verify Rust UI shell
+        run: cargo test -p airp-ui
+
+      - name: Verify frontend
+        working-directory: ui
+        run: |
+          npm run typecheck
+          npm run test -- --run
+
+      - name: Build Windows package
+        working-directory: ui
+        shell: pwsh
+        run: .\build-tauri.ps1
+
+      - name: Smoke-test installed application and sidecar lifecycle
+        working-directory: ui
+        shell: pwsh
+        run: .\smoke-windows-installer.ps1
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: airp-desktop-windows-x64
+          if-no-files-found: error
+          path: |
+            target/release/airp-ui.exe
+            target/release/bundle/nsis/*.exe
+
+  publish-release:
+    name: Attach desktop artifacts to release
+    if: github.event_name == 'release'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified desktop artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: airp-desktop-windows-x64
+          path: release
+
+      - name: Attach installer and shell to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          shopt -s nullglob
+          files=(release/airp-ui.exe release/*-setup.exe)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no desktop artifacts found" >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
