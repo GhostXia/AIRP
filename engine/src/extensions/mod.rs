@@ -307,7 +307,14 @@ impl ExtensionStore {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             target.granted_capabilities = granted;
-            target.granted_at = Some(now);
+            // #488 E1：空集语义归一化——空 grant = 无授权，与 revoke_grant 同语义，
+            // 不得留下「有签发时间戳但无任何授权」的脏状态（consent 层把空
+            // granted_capabilities 视为无授权，该时间戳只会误导审计面）。
+            target.granted_at = if target.granted_capabilities.is_empty() {
+                None
+            } else {
+                Some(now)
+            };
             (target.clone(), records.clone(), original)
         };
         if let Err(error) = self.persist(&snapshot) {
@@ -652,8 +659,9 @@ pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationErro
 
 /// 解析 `host_api` 字段的 major 版本。
 ///
-/// 接受 `"1"`、`"1.0"`、`"1.2.3"` 形态；取首段为 major。缺省 = `"1"`。
-/// 空串 / 非数字段 / 前导零（`"01"`）/ 超长 / 段缺数字（`"1."`、`"1.x"`）=
+/// 接受 `"1"`、`"1.0"`、`"1.2.3"` 形态；取首段为 major。缺省 / 空串视为
+/// `"1"`（向后兼容已有 widget；定夺见 docs/WIDGET-DEVELOPMENT.md §3）。
+/// 非数字段 / 前导零（`"01"`）/ 超长 / 段缺数字（`"1."`、`"1.x"`）=
 /// `invalid_manifest`。严格校验所有段为纯数字，避免 `"1.x"` 这类伪 semver
 /// 被宽松解析为 major 1 而掩盖声明错误。major 段额外拒绝 `"0"`（major 0
 /// 不合法）；minor/patch 段允许 `"0"`（如 `"1.0"`、`"1.2.0"` 合法）。
@@ -971,17 +979,27 @@ mod tests {
             );
         }
 
-        // 非法格式 → invalid_manifest。
-        for bad in ["0", "01", "abc", "", "1.x"] {
+        // #489 E1：坏值分支用合法且唯一的 widget_type——此前以
+        // `format!("acme.bad-{bad:?}")` 拼接，`{:?}` 引入引号导致
+        // validate_widget_type 先于 host_api 校验失败，坏值实际未被测到。
+        for (i, bad) in ["0", "01", "abc", "1.x", "1.", "999999999"].iter().enumerate() {
             let mut req = request(true);
-            req.manifest.widget_type = format!("acme.bad-{bad:?}");
+            req.manifest.widget_type = format!("acme.badhost{i}");
             req.manifest.host_api = Some(bad.to_string());
-            let code = store.install(req).unwrap_err().code;
-            assert!(
-                code == "invalid_manifest" || (bad.is_empty() && code == "host_api_incompatible"),
-                "host_api {bad:?} should be invalid_manifest or incompatible, got {code}"
+            assert_eq!(
+                store.install(req).unwrap_err().code,
+                "invalid_manifest",
+                "host_api {bad:?} must be rejected as invalid_manifest"
             );
         }
+
+        // #489 D1 定夺：空串视为缺省 "1" → 安装成功（文档与实现对齐）。
+        let mut req = request(true);
+        req.manifest.widget_type = "acme.emptyhost".to_string();
+        req.manifest.host_api = Some(String::new());
+        store
+            .install(req)
+            .expect("host_api empty string = default major 1 compat");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1146,6 +1164,38 @@ mod tests {
         // 越界不改变现有 grant。
         let current = store.get(&record.id).unwrap();
         assert_eq!(current.granted_capabilities, vec!["read:state".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #488 E1：grant 空 capabilities 语义归一化——空集 = 无授权，
+    /// granted_at 必须清空（不得呈现「有签发时间戳但无任何授权」）。
+    #[test]
+    fn grant_empty_capabilities_normalizes_to_no_grant() {
+        let root = temp_root("grant-empty");
+        let store = ExtensionStore::load(root.clone());
+        let record = store.install(request(true)).unwrap();
+
+        // 先 grant 全集（manifest 声明 read:state）。
+        let granted = store.grant(&record.id, None).unwrap().unwrap();
+        assert!(!granted.granted_capabilities.is_empty());
+        assert!(granted.granted_at.is_some());
+
+        // 空子集 grant → 归一化为无授权：集合空且 granted_at 清空。
+        let after = store.grant(&record.id, Some(Vec::new())).unwrap().unwrap();
+        assert!(after.granted_capabilities.is_empty());
+        assert!(
+            after.granted_at.is_none(),
+            "空 grant 不得保留 granted_at（与 revoke_grant 空集语义对称）"
+        );
+
+        // 未 grant 起步的扩展直接空 grant 亦同。
+        let mut req = request(true);
+        req.manifest.widget_type = "acme.empty2".to_string();
+        let fresh = store.install(req).unwrap();
+        let after = store.grant(&fresh.id, Some(Vec::new())).unwrap().unwrap();
+        assert!(after.granted_capabilities.is_empty());
+        assert!(after.granted_at.is_none());
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -71,7 +71,7 @@ manifest 是 widget 的机器可读身份声明，engine 在安装时校验并�
 | `title` | string | 否 | 展示名 |
 | `author` | string | 否 | 作者 |
 | `capabilities` | string[] | 否 | 申请的 capability（见第 5 节）；缺省为空 |
-| `host_api` | string | 否 | C-P4-3：宿主合同 major 版本（如 `"1"`、`"1.2.3"`）；缺省视为 `"1"` |
+| `host_api` | string | 否 | C-P4-3：宿主合同 major 版本（如 `"1"`、`"1.2.3"`）；缺失或空串视为 `"1"` |
 | `entry` | object | 是 | 加载入口 |
 
 ### `entry` 字段
@@ -87,12 +87,12 @@ manifest 是 widget 的机器可读身份声明，engine 在安装时校验并�
 engine 当前支持 `HOST_API_MAJOR = 1`（见 `engine/src/extensions/mod.rs`）。安装时校验 `parse_host_api_major(manifest.host_api) == HOST_API_MAJOR`：
 
 - 接受 `"1"` / `"1.0"` / `"1.2.3"`，取首段为 major。
-- 拒绝 `"0"`（major 0 不合法）/ `"01"`（前导零）/ `"abc"` / `"1.x"` / `""` / 超长段 → `invalid_manifest`。
+- 拒绝 `"0"`（major 0 不合法）/ `"01"`（前导零）/ `"abc"` / `"1.x"` / `"1."` / 超长段（单段 >8 字符）→ `invalid_manifest`。
 - 跨 major（如 widget 声明 `"2"` 装到 major=1 的 engine）→ `host_api_incompatible`，拒绝安装。
 
-**前向兼容铁律**：engine 不会静默尝试不兼容的 widget。当 engine 升级到 `HOST_API_MAJOR = 2` 时，旧 widget（`host_api = "1"`）安装即被拒，强迫作者显式声明兼容性；反之亦然。这避免"widget 装上去但行为不符"的隐性故障，把不兼容暴露在安装面。
+**前向兼容铁律**：engine 不会静默尝试不兼容的 widget。当 engine 升级到 `HOST_API_MAJOR = 2` 时，旧 widget（`host_api = "1"`）安装即被拒，强迫作者显式声明兼容性；反之亦然。这避免“widget 装上去但行为不符”的隐性故障，把不兼容暴露在安装面。
 
-缺省 `host_api`（或空串）视为 `"1"`，向后兼容已有 widget。
+**空值规则（#489 D1 定夺，2026-08-05）**：`host_api` 缺失或空串（`""`）一律视为缺省 `"1"`，向后兼容已有 widget（实现见 `parse_host_api_major`）。空串不属于拒绝列表。
 
 ## 4. Widget SDK 骨架
 
@@ -158,7 +158,7 @@ const btn = h('button', {
 
 ### capability 枚举
 
-```
+```text
 read:memory | write:memory | read:worldbook | read:state | write:state | call:tool
 ```
 
