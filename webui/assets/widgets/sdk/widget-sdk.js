@@ -91,6 +91,17 @@ export function createWidget(factory, options) {
   const opts = options || {};
   const onError = typeof opts.onError === 'function' ? opts.onError : noop;
   const debug = opts.debug === true || (typeof globalThis !== 'undefined' && globalThis.__AIRP_WIDGET_DEBUG);
+  // guarded helper：onError 自身抛异常时必须吞掉（审计 #489 W1）。
+  // mount/unmount 错误容纳是 SDK 对宿主的合同；若上报回调再抛，会把原始
+  // 生命周期失败重新泄漏给宿主（同步路径逃逸 / async 路径变 rejected
+  // promise），违背容纳合同。onError 只是作者的可观测窗口，不是控制流。
+  const report = (e) => {
+    try {
+      onError(e);
+    } catch (_) {
+      // 吞掉上报异常：容纳优先于上报。
+    }
+  };
 
   return function wrappedFactory() {
     const mod = factory();
@@ -100,11 +111,11 @@ export function createWidget(factory, options) {
           if (debug) log('mount', ctx && ctx.instance && ctx.instance.type);
           const r = mod.mount(el, ctx);
           if (r && typeof r.then === 'function') {
-            return r.catch((e) => { onError(e); });
+            return r.catch((e) => { report(e); });
           }
           return r;
         } catch (e) {
-          onError(e);
+          report(e);
         }
       },
       unmount() {
@@ -113,7 +124,7 @@ export function createWidget(factory, options) {
           if (debug) log('unmount');
           mod.unmount();
         } catch (e) {
-          onError(e);
+          report(e);
         }
       },
     };
@@ -153,7 +164,18 @@ export function defineManifest(manifest) {
   if (manifest.entry && manifest.entry.kind === 'esm' && manifest.entry.sandbox !== true) {
     throw new Error('defineManifest: esm entry must have sandbox === true (BUG-6 fail-closed)');
   }
-  return Object.freeze({ ...manifest });
+  // 审计 #489 W2：只冻结外层不够——调用方在校验后仍可 mutate
+  // result.entry.sandbox / result.capabilities。clone 并深冻结嵌套的
+  // entry 与 capabilities，让 manifest 真正不可变（ESM strict 下赋值抛
+  // TypeError，sloppy 下静默失败但 isFrozen 可断言）。
+  const result = { ...manifest };
+  if (result.entry && typeof result.entry === 'object') {
+    result.entry = Object.freeze({ ...result.entry });
+  }
+  if (Array.isArray(result.capabilities)) {
+    result.capabilities = Object.freeze([...result.capabilities]);
+  }
+  return Object.freeze(result);
 }
 
 /**
