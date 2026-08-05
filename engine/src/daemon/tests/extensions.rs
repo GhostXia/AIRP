@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::daemon::desktop_session::{
-    clear_desktop_session_tokens_for_test, mint_desktop_session_token,
+    clear_desktop_session_tokens_for_test, mint_desktop_session_token, token_test_lock,
 };
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
@@ -370,6 +370,33 @@ async fn serve_extension_asset_is_digest_pinned_and_tamper_evident() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    // #485 E5：错误响应不得携带 immutable 长缓存（仅成功响应可缓存）。
+    assert!(
+        !resp.headers()[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .contains("immutable"),
+        "404 响应不得 immutable 缓存"
+    );
+
+    // #485 E5 同规则：已注册 digest 但文件不在包清单 → 404 亦不得 immutable。
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/extensions/{digest}/missing.js"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(
+        !resp.headers()[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .contains("immutable"),
+        "包内缺失文件的 404 响应不得 immutable 缓存"
+    );
 
     // 负例：非 /extensions/ 前缀不得被附 ACAO:*（豁免即配负例测试）。
     let resp = router
@@ -472,6 +499,8 @@ async fn widget_intent_is_deny_by_default_and_validates_envelope() {
 
 #[tokio::test]
 async fn renew_rotates_token_and_rejects_stale_or_keyless() {
+    // #485 E6：token store 是进程级全局，持锁串行化防止并发测试互相清 token。
+    let _token_lock = token_test_lock();
     clear_desktop_session_tokens_for_test();
     let (state, _guard) = make_state_with_key(Some("renew-key"));
     let router = Router::new()

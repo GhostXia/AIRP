@@ -2,13 +2,14 @@
 
 use super::*;
 use crate::daemon::desktop_session::{
-    clear_desktop_session_tokens_for_test, mint_desktop_session_token,
+    clear_desktop_session_tokens_for_test, mint_desktop_session_token, token_test_lock,
     validate_desktop_session_token, DESKTOP_SESSION_TTL_SECS,
 };
 use axum::http::{header, Request, StatusCode};
 
 #[test]
 fn mint_then_validate_roundtrip() {
+    let _token_lock = token_test_lock();
     clear_desktop_session_tokens_for_test();
     let (token, expires_in) = mint_desktop_session_token();
     assert_eq!(expires_in, DESKTOP_SESSION_TTL_SECS);
@@ -18,6 +19,7 @@ fn mint_then_validate_roundtrip() {
 
 #[test]
 fn unknown_or_empty_tokens_are_rejected() {
+    let _token_lock = token_test_lock();
     clear_desktop_session_tokens_for_test();
     assert!(!validate_desktop_session_token(""));
     assert!(!validate_desktop_session_token("not-a-minted-token"));
@@ -25,6 +27,7 @@ fn unknown_or_empty_tokens_are_rejected() {
 
 #[tokio::test]
 async fn desktop_session_endpoint_mints_token_behind_access_key() {
+    let _token_lock = token_test_lock();
     clear_desktop_session_tokens_for_test();
     let (state, _guard) = make_state_with_key(Some("desk-key-123"));
     let router = Router::new()
@@ -76,6 +79,7 @@ async fn desktop_session_endpoint_mints_token_behind_access_key() {
 
 #[tokio::test]
 async fn desktop_session_endpoint_fail_closed_without_access_key() {
+    let _token_lock = token_test_lock();
     clear_desktop_session_tokens_for_test();
     // local-webui 便携模式（无 key、无鉴权）：auth 层放行，端点自身 403 fail-closed。
     let (state, _guard) = make_state_no_key();
@@ -106,6 +110,7 @@ async fn desktop_session_endpoint_fail_closed_without_access_key() {
 
 #[tokio::test]
 async fn auth_middleware_accepts_desktop_token_and_rejects_foreign_token() {
+    let _token_lock = token_test_lock();
     clear_desktop_session_tokens_for_test();
     let (state, _guard) = make_state_with_key(Some("desk-key-456"));
     let router = make_router_for_test(state);

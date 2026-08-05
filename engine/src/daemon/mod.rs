@@ -873,6 +873,9 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
     // 且宿主以 event.source === iframe.contentWindow 门控消息来源。
     let is_sandbox_frame = request.uri().path() == "/assets/widgets/sandbox-frame.html";
     let mut response = next.run(request).await;
+    // #485 E5：immutable 长缓存只适用于成功响应；必须在 mutate headers
+    // 前捕获状态，否则 404/500 错误响应也会被客户端按 immutable 缓存。
+    let status = response.status();
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
@@ -908,9 +911,10 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
         header::CACHE_CONTROL,
         HeaderValue::from_static(if is_event_stream {
             "no-cache"
-        } else if is_extension_asset {
+        } else if is_extension_asset && status.is_success() {
             // 内容寻址不可变：安全长缓存（serve handler 已设同值，
-            // 此中间件会覆盖响应头，故必须在此重申）。
+            // 此中间件会覆盖响应头，故必须在此重申）。#485 E5：
+            // 仅成功响应适用；错误响应回落 no-store。
             "public, max-age=31536000, immutable"
         } else {
             "no-store"
