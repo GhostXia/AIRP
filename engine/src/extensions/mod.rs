@@ -80,6 +80,10 @@ pub struct WidgetEntry {
 ///
 /// C-P3 预留：`capabilities` 是权威授权的输入之一（manifest ∩ 用户同意 ∩
 /// engine policy），本阶段即原样持久化与下发。
+///
+/// C-P4 新增：`host_api` 声明 widget 所需的宿主合同 major 版本（semver
+/// major 匹配，如 `"1"` 或 `"1.2"`）。engine 当前支持 `HOST_API_MAJOR = 1`。
+/// 缺省视为 `"1"`（向后兼容已有 widget）；跨 major 拒绝安装（前向兼容铁律）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WidgetManifest {
     /// 全局唯一 widget 类型（如 `acme.clock`）。
@@ -93,6 +97,11 @@ pub struct WidgetManifest {
     /// 申请的 capabilities（C-P3 授权面输入；本阶段仅声明与透传）。
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// C-P4：widget 所需的宿主合同 major 版本（如 `"1"`、`"1.2"`）。
+    /// 缺省视为 `"1"`（向后兼容）。安装时校验 major == HOST_API_MAJOR，
+    /// 跨 major 拒绝（前向兼容铁律，禁止静默尝试）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_api: Option<String>,
     pub entry: WidgetEntry,
 }
 
@@ -565,6 +574,14 @@ pub const DEFAULT_SLOT_IDS: &[&str] = &[
     "workbench.grid",
 ];
 
+/// C-P4：engine 当前支持的宿主合同 major 版本。
+///
+/// widget manifest 的 `host_api` 字段声明所需 major；安装时校验
+/// `parse_host_api_major(host_api) == HOST_API_MAJOR`，跨 major 拒绝
+/// （前向兼容铁律：不静默尝试不兼容的 widget）。缺省 `host_api` 视为
+/// `"1"`（向后兼容已有 widget）。
+pub const HOST_API_MAJOR: u32 = 1;
+
 /// widget type 白名单：`ns.name` 两段，小写字母数字与 `.-_`，禁路径字符。
 fn validate_widget_type(widget_type: &str) -> Result<(), ValidationError> {
     if widget_type.is_empty() || widget_type.len() > 128 {
@@ -588,7 +605,7 @@ fn validate_widget_type(widget_type: &str) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// manifest 校验（安装面 fail-closed 三道：type/version/entry.sandbox）。
+/// manifest 校验（安装面 fail-closed 四道：type/version/entry.sandbox/hostApi）。
 pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationError> {
     validate_widget_type(&manifest.widget_type)?;
     if manifest.version.is_empty() || manifest.version.len() > 64 {
@@ -619,7 +636,57 @@ pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationErro
             ));
         }
     }
+    // C-P4：hostApi major 匹配（前向兼容铁律）。缺省视为 "1"（向后兼容）。
+    let declared_major = parse_host_api_major(manifest.host_api.as_deref())?;
+    if declared_major != HOST_API_MAJOR {
+        return Err(ValidationError::new(
+            "host_api_incompatible",
+            format!(
+                "widget requires host_api major {} but engine supports {} (upgrade widget or stay on compatible engine)",
+                declared_major, HOST_API_MAJOR
+            ),
+        ));
+    }
     Ok(())
+}
+
+/// 解析 `host_api` 字段的 major 版本。
+///
+/// 接受 `"1"`、`"1.0"`、`"1.2.3"` 形态；取首段为 major。缺省 = `"1"`。
+/// 空串 / 非数字段 / 前导零（`"01"`）/ 超长 / 段缺数字（`"1."`、`"1.x"`）=
+/// `invalid_manifest`。严格校验所有段为纯数字，避免 `"1.x"` 这类伪 semver
+/// 被宽松解析为 major 1 而掩盖声明错误。major 段额外拒绝 `"0"`（major 0
+/// 不合法）；minor/patch 段允许 `"0"`（如 `"1.0"`、`"1.2.0"` 合法）。
+fn parse_host_api_major(host_api: Option<&str>) -> Result<u32, ValidationError> {
+    let raw = match host_api {
+        None => return Ok(1),
+        Some("") => return Ok(1),
+        Some(s) => s,
+    };
+    let parts: Vec<&str> = raw.split('.').collect();
+    for (i, part) in parts.iter().enumerate() {
+        let is_major = i == 0;
+        if part.is_empty()
+            || part.len() > 8
+            || (is_major && *part == "0")
+            || (part.starts_with('0') && part.len() > 1)
+            || !part.chars().all(|c| c.is_ascii_digit())
+        {
+            return Err(ValidationError::new(
+                "invalid_manifest",
+                format!(
+                    "host_api segment must be a non-negative integer without leading zeros: {raw}"
+                ),
+            ));
+        }
+    }
+    let major: u32 = parts[0].parse().map_err(|_| {
+        ValidationError::new(
+            "invalid_manifest",
+            format!("host_api major not a number: {raw}"),
+        )
+    })?;
+    Ok(major)
 }
 
 /// 文件清单校验 + base64 解码 + 摘要比对（digest-pinned 的安装时校验）。
@@ -744,6 +811,7 @@ mod tests {
             title: Some("Demo".to_string()),
             author: None,
             capabilities: vec!["read:state".to_string()],
+            host_api: None,
             entry: WidgetEntry {
                 kind: "esm".to_string(),
                 source: Some("https://evil.example/w.js".to_string()),
@@ -870,6 +938,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // C-P4-3：hostApi semver major 匹配 + 前向兼容铁律。
+    #[test]
+    fn install_validates_host_api_major() {
+        let root = temp_root("hostapi");
+        let store = ExtensionStore::load(root.clone());
+
+        // 缺省 host_api → 视为 "1"，兼容（向后兼容已有 widget）。
+        let mut req = request(true);
+        req.manifest.widget_type = "acme.compat1".to_string();
+        store
+            .install(req)
+            .expect("host_api absent = major 1 compat");
+
+        // 显式 "1" / "1.0" / "1.2.3" → 兼容。
+        for (i, ver) in ["1", "1.0", "1.2.3"].iter().enumerate() {
+            let mut req = request(true);
+            req.manifest.widget_type = format!("acme.compat{i}");
+            req.manifest.host_api = Some(ver.to_string());
+            store.install(req).expect("host_api major 1 compat");
+        }
+
+        // 跨 major "2" / "2.0" → host_api_incompatible（前向兼容铁律，禁止静默尝试）。
+        for ver in ["2", "2.0", "2.1.0"] {
+            let mut req = request(true);
+            req.manifest.widget_type = format!("acme.future-{ver}");
+            req.manifest.host_api = Some(ver.to_string());
+            assert_eq!(
+                store.install(req).unwrap_err().code,
+                "host_api_incompatible",
+                "host_api {ver} must be rejected (engine major = 1)"
+            );
+        }
+
+        // 非法格式 → invalid_manifest。
+        for bad in ["0", "01", "abc", "", "1.x"] {
+            let mut req = request(true);
+            req.manifest.widget_type = format!("acme.bad-{bad:?}");
+            req.manifest.host_api = Some(bad.to_string());
+            let code = store.install(req).unwrap_err().code;
+            assert!(
+                code == "invalid_manifest" || (bad.is_empty() && code == "host_api_incompatible"),
+                "host_api {bad:?} should be invalid_manifest or incompatible, got {code}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parse_host_api_major_handles_edge_cases() {
+        // 缺省 / 空串 = 1（向后兼容）。
+        assert_eq!(parse_host_api_major(None).unwrap(), 1);
+        assert_eq!(parse_host_api_major(Some("")).unwrap(), 1);
+        // 合法 major。
+        assert_eq!(parse_host_api_major(Some("1")).unwrap(), 1);
+        assert_eq!(parse_host_api_major(Some("1.0")).unwrap(), 1);
+        assert_eq!(parse_host_api_major(Some("1.2.3")).unwrap(), 1);
+        assert_eq!(parse_host_api_major(Some("2")).unwrap(), 2);
+        // 非法：0 / 前导零 / 非数字。
+        assert!(parse_host_api_major(Some("0")).is_err());
+        assert!(parse_host_api_major(Some("01")).is_err());
+        assert!(parse_host_api_major(Some("abc")).is_err());
+        assert!(parse_host_api_major(Some("1.x")).is_err());
+    }
+
     #[test]
     fn install_rejects_unsafe_paths_and_missing_entry() {
         let root = temp_root("paths");
@@ -949,6 +1082,7 @@ mod tests {
             title: Some("Multi".to_string()),
             author: None,
             capabilities: caps.into_iter().map(String::from).collect(),
+            host_api: None,
             entry: WidgetEntry {
                 kind: "esm".to_string(),
                 source: Some("https://evil.example/w.js".to_string()),

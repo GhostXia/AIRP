@@ -36,7 +36,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{sha256_hex, ExtensionStore};
+use super::{sha256_hex, ExtensionStore, DEFAULT_SLOT_IDS};
 use crate::daemon::DaemonState;
 
 /// 内置默认 catalog（webui 无 engine / engine 无安装扩展时的权威默认计划，
@@ -306,6 +306,18 @@ pub async fn get_catalog(State(state): State<Arc<DaemonState>>) -> Response {
     };
     let store = store(&state);
     for record in store.enabled() {
+        // C-P4-1 fail-closed：安装面已校验 slot ∈ DEFAULT_SLOT_IDS，catalog 组装面
+        // 再校验一次（defense in depth）。未知 slot 不编入下发计划，并 log warn——
+        // 静默丢弃会让 webui 看到残缺计划却无法定位原因。
+        if !DEFAULT_SLOT_IDS.contains(&record.slot.as_str()) {
+            tracing::warn!(
+                extension_id = %record.id,
+                widget_type = %record.widget_type,
+                slot = %record.slot,
+                "enabled extension references unknown slot; skipping from catalog (install-time validation should have caught this)"
+            );
+            continue;
+        }
         let manifest = serde_json::to_value(&record.manifest).unwrap_or_default();
         let manifests = catalog.get_mut("manifests").and_then(Value::as_array_mut);
         if let Some(manifests) = manifests {
