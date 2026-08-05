@@ -152,6 +152,15 @@ pub struct InstallRequest {
 pub struct ExtensionStore {
     data_root: PathBuf,
     records: Mutex<Vec<ExtensionRecord>>,
+    /// W3：变更操作串行化锁。并发语义说明：
+    /// - install / remove / set_enabled 的「改内存 → persist → 孤儿清理」
+    ///   全程必须原子，否则并发同 type 安装的 persist 交叉可让
+    ///   extensions.json 停在旧真，孤儿判定与 remove_dir_all 之间也有
+    ///   TOCTOU 窗口；
+    /// - `records` 锁只保护内存快照读写，粒度不变；
+    /// - install 的包目录写入（内容寻址、幂等）仍可在锁外并发，审查
+    ///   确认安全；串行化仅覆盖记录变更段落。
+    mutations: Mutex<()>,
 }
 
 impl ExtensionStore {
@@ -173,7 +182,13 @@ impl ExtensionStore {
         Arc::new(Self {
             data_root,
             records: Mutex::new(extensions),
+            mutations: Mutex::new(()),
         })
+    }
+
+    /// W3：变更操作串行化守卫（poison 时 recover 而非 panic）。
+    fn mutation_guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.mutations.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn persist_path(&self) -> PathBuf {
@@ -290,6 +305,11 @@ impl ExtensionStore {
                 .collect(),
         };
 
+        // W3：以下记录变更 + persist + 孤儿清理全程串行（mutation_guard），
+        // 杜绝并发同 type 安装的 persist 交叉把 extensions.json 停在旧真；
+        // 上方包目录写入（内容寻址、幂等）不受此约束，可安全并发。
+        let _serial = self.mutation_guard();
+
         // 同一 type 至多一条记录：替换旧的，随后清理孤儿包目录。
         let (replaced, snapshot) = {
             let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
@@ -314,6 +334,8 @@ impl ExtensionStore {
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Option<ExtensionRecord> {
+        // W3：变更 + persist（含失败回滚）全程串行。
+        let _serial = self.mutation_guard();
         let snapshot = {
             let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
             let target = records.iter_mut().find(|r| r.id == id)?;
@@ -336,6 +358,9 @@ impl ExtensionStore {
 
     /// 删除记录；若包目录不再被任何记录引用，一并清理（内容寻址可共享）。
     pub fn remove(&self, id: &str) -> Option<ExtensionRecord> {
+        // W3：删除 + persist + 孤儿目录清理全程串行，杜绝孤儿判定与
+        // remove_dir_all 之间的 TOCTOU 窗口。
+        let _serial = self.mutation_guard();
         let (removed, snapshot) = {
             let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
             let index = records.iter().position(|r| r.id == id)?;
@@ -619,6 +644,40 @@ mod tests {
             1,
             "same type replaces, never duplicates"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// W3 回归：并发同 type 安装（各自不同内容 → 不同 digest，触发替换 +
+    /// 孤儿清理）必须串行化，内存与盘上均停在唯一胜出记录，不得残留
+    /// 旧真或重复条目。
+    #[test]
+    fn concurrent_same_type_installs_serialize_without_stale_persist() {
+        let root = temp_root("concurrent");
+        let store = ExtensionStore::load(root.clone());
+        let mut handles = Vec::new();
+        for i in 0..8u8 {
+            let store = store.clone();
+            handles.push(std::thread::spawn(move || {
+                let content = format!("export default () => ({{ v: {i} }});");
+                let req = InstallRequest {
+                    manifest: manifest(true),
+                    files: vec![file_payload("index.js", content.as_bytes())],
+                    slot: None,
+                };
+                store.install(req).expect("install ok")
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(
+            store.list().len(),
+            1,
+            "同 type 替换 + 串行 persist 后内存仅一条"
+        );
+        let reloaded = ExtensionStore::load(root.clone());
+        assert_eq!(reloaded.list().len(), 1, "盘上不得停在旧真/重复条目");
+        assert_eq!(reloaded.list()[0].id, store.list()[0].id);
         let _ = std::fs::remove_dir_all(&root);
     }
 

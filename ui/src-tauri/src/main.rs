@@ -582,16 +582,21 @@ fn spawn_readiness_and_navigate(
 
 /// C-P2：desktop session token 主动续期循环。
 ///
-/// 策略：按返回的 `expires_in / 2` 调度重新交换（access key 换新 token，
-/// 新 token 天然撤销旧的会话上下文价值）；成功后经 `webview.eval()` 推送
-/// 新 bearer 到 `sessionStorage.airp_bearer` 并 dispatch `airp-bearer-renewed`
-/// ——api-client 的函数形态 bearer 在下次请求即取新值。
+/// 策略：按返回的 `expires_in / 2` 调度重新交换（access key 换新 token）。
+/// 注意：壳这里故意用 exchange（只增不撤）而非 renew（rotation）——
+/// 若壳做 rotation，webui 尚持有的旧 token 会被立即撤销，两边互踢；
+/// 代价是旧 token 在自身 TTL 内仍有效（取舍见 C-P2 审查 S2）。
+/// 成功后经 `webview.eval()` 推送新 bearer 到 `sessionStorage.airp_bearer`
+/// 并 dispatch `airp-bearer-renewed`——api-client 的函数形态 bearer 在
+/// 下次请求即取新值。
 ///
 /// 为何不走 Tauri IPC：webview 运行在 `http://127.0.0.1:<port>` 远程 URL
 /// （engine 同源承载），无 Tauri IPC 通道；动态端口也无法枚举进
 /// dangerousRemoteUrlIpcAccess。eval 注入是同进程单向推送，不引入新攻击面。
 ///
-/// 失败处理：交换失败退避 60s 重试；连续无法续期时 webui 侧撞 401 还有
+/// 失败处理（W2）：交换失败置 `failed_fast` 标志，下轮等待切 60s 短间隔
+/// （而非先睡 60s 再回循环顶等半个 TTL——恰在循环该发挥作用的重试
+/// 时刻失灵）；成功后恢复 expires_in/2 节奏。webui 侧撞 401 另有
 /// `POST /v1/desktop-session/renew` 兜底（rotation），双保险。
 fn spawn_token_renewal_loop(
     app: tauri::AppHandle,
@@ -608,13 +613,20 @@ fn spawn_token_renewal_loop(
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
+        // W2：failed_fast —— 上一轮交换失败时下轮只等 60s 短间隔。
+        let mut failed_fast = false;
         loop {
             // TTL 过半即续期；下限 5s 防短 TTL 冒烟时热循环，上限 4h 防
-            // engine 返回异常大值时续期完全停摆。
-            let wait_secs = (expires_in / 2).clamp(5, 4 * 3600);
+            // engine 返回异常大值时续期完全停摆；失败后切 60s 短间隔重试。
+            let wait_secs = if failed_fast {
+                60
+            } else {
+                (expires_in / 2).clamp(5, 4 * 3600)
+            };
             tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
             match exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await {
                 Some((new_token, new_expires_in)) => {
+                    failed_fast = false;
                     if let Some(window) = app.get_webview_window("main") {
                         // JSON.stringify 转义 token（uuid hex 本无特殊字符，
                         // 防御性处理）；eval 失败（窗口已销毁/导航中）仅留痕。
@@ -639,13 +651,13 @@ fn spawn_token_renewal_loop(
                     expires_in = new_expires_in;
                 }
                 None => {
-                    // 交换失败（engine 重启/网络抖动）：退避后重试；
-                    // webui 侧 401 另有 renew 端点兜底。
+                    // 交换失败（engine 重启/网络抖动）：置标志，下轮等待
+                    // 切 60s 短间隔重试；webui 侧 401 另有 renew 端点兜底。
+                    failed_fast = true;
                     tracing::warn!(
                         retry_in_secs = 60,
                         "desktop session renewal exchange failed; will retry"
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 }
             }
         }

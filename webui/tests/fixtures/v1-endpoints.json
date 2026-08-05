@@ -406,7 +406,7 @@
     {
       "method": "POST",
       "path": "/v1/extensions/install",
-      "bodyLimit": "2MB",
+      "bodyLimit": "6MB",
       "ui": false,
       "reason": "C-P2 扩展注册面管理端点（digest-pinned 安装包投放）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
     },

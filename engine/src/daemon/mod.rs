@@ -740,8 +740,12 @@ pub fn create_router_with_conversation_policy_registry(
         // ── C-P2: 扩展注册面 / catalog / intent 执行面（最小合同） ──────────
         .route(
             "/v1/extensions/install",
+            // W1：包上限 MAX_PACKAGE_BYTES=4MB，经 base64 膨胀 33% ≈ 5.33MB
+            // + JSON 封套开销；路由 body 上限取 6MB，否则合法包会先撞 413
+            // 而非业务层校验（与 store 内 4MB 包级上限分工：传输层宽、
+            // 业务层严）。
             post(crate::extensions::api::install_extension)
-                .layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
         )
         .route(
             "/v1/extensions",
