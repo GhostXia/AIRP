@@ -128,6 +128,10 @@
           (name, params) => onIntent(name, params),
           (message) => {
             failed = message;
+            // W1（二轮审查）：onError 同为终态——必须销毁桥，否则 window 级
+            // message 监听器与其闭包持有的 iframe 引用泄漏至页面卸载。
+            // destroy() 幂等安全（off + transport.destroy）。
+            if (bridge) { bridge.destroy(); bridge = null; }
             render();
           },
         );
@@ -135,6 +139,8 @@
         bridge.pushState(currentState);
       } catch (e) {
         failed = errMsg(e);
+        // W1（二轮审查）：mount 失败（ready 超时/发送异常）终态同法销毁桥。
+        if (bridge) { bridge.destroy(); bridge = null; }
         render();
       }
     }

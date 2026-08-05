@@ -73,8 +73,9 @@
 
   /**
    * 扫描 doc 内全部 [data-slot] 元素并挂载已注册 widget。
-   * 返回挂载句柄数组（含 destroyAll 语义的句柄）；重复调用前先销毁旧挂载，
-   * 幂等（screen 重新渲染时可安全重挂）。
+   * 返回挂载句柄数组；重复调用只清空 slot DOM 占位并按当前计划重新挂载，
+   * 不会销毁此前返回的旧句柄（首次挂载语义，非幂等重挂）——当前调用路径
+   * 每页仅挂一次；动态重挂场景需调用方自行持有并销毁旧句柄。
    */
     function mountSlots(doc, options) {
     const d = doc || (typeof document !== 'undefined' ? document : null);

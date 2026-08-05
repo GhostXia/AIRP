@@ -110,15 +110,15 @@ test('registry: module widget register / resolve / unregister / registeredTypes'
 
 test('registry: esm widget resolves function module and { default } module via injectable importer', async () => {
   const asFunction = () => ({ mount() {} });
-  registry.registerEsmWidget('t.esm-fn', 'src-a', async () => asFunction);
+  registry.registerEsmWidget('t.esm-fn', 'src-a', { sandbox: true, importer: async () => asFunction });
   const modFn = await registry.resolveWidget('t.esm-fn').load();
   assert.equal(typeof modFn.mount, 'function');
 
-  registry.registerEsmWidget('t.esm-default', 'src-b', async () => ({ default: () => ({ mount() {} }) }));
+  registry.registerEsmWidget('t.esm-default', 'src-b', { sandbox: true, importer: async () => ({ default: () => ({ mount() {} }) }) });
   const modDefault = await registry.resolveWidget('t.esm-default').load();
   assert.equal(typeof modDefault.mount, 'function');
 
-  registry.registerEsmWidget('t.esm-bad', 'src-c', async () => ({}));
+  registry.registerEsmWidget('t.esm-bad', 'src-c', { sandbox: true, importer: async () => ({}) });
   await assert.rejects(() => registry.resolveWidget('t.esm-bad').load(), /WidgetFactory/);
 
   registry.unregisterWidget('t.esm-fn');
@@ -129,11 +129,34 @@ test('registry: esm widget resolves function module and { default } module via i
 test('registry: setDefaultEsmImporter overrides the global importer', async () => {
   const seen = [];
   registry.setDefaultEsmImporter(async source => { seen.push(source); return () => ({ mount() {} }); });
-  registry.registerEsmWidget('t.esm-global', 'global-src');
+  registry.registerEsmWidget('t.esm-global', 'global-src', { sandbox: true });
   await registry.resolveWidget('t.esm-global').load();
   assert.deepEqual(seen, ['global-src']);
   registry.setDefaultEsmImporter(source => import(source)); // 还原
   registry.unregisterWidget('t.esm-global');
+});
+
+test('registry: W2 — esm registration requires a manifest reference or sandbox:true; builtin unaffected', () => {
+  // 无标记 / 空 options / 遗留 function 形态：注册面即拒绝（BUG-6 纵深设防）。
+  assert.throws(() => registry.registerEsmWidget('t.nope', 'src'), /sandbox/);
+  assert.throws(() => registry.registerEsmWidget('t.nope', 'src', {}), /sandbox/);
+  assert.throws(() => registry.registerEsmWidget('t.nope', 'src', async () => ({})), /sandbox/);
+  assert.equal(registry.resolveWidget('t.nope'), undefined, 'rejected registration must not leak into the registry');
+
+  // 显式 sandbox:true 标记放行。
+  registry.registerEsmWidget('t.sbx', 'src', { sandbox: true, importer: async () => ({ mount() {} }) });
+  assert.ok(registry.resolveWidget('t.sbx'));
+  registry.unregisterWidget('t.sbx');
+
+  // manifest 引用形态放行（manifests.js / C-P2 catalog 的合法路径）。
+  registry.registerEsmWidget('t.with-manifest', 'src', { manifest: ESM_MANIFEST });
+  assert.ok(registry.resolveWidget('t.with-manifest'));
+  registry.unregisterWidget('t.with-manifest');
+
+  // 首方 builtin（module widget）不受此门禁影响。
+  registry.registerModuleWidget('t.builtin-safe', () => ({ mount() {} }));
+  assert.equal(registry.resolveWidget('t.builtin-safe').kind, 'module');
+  registry.unregisterWidget('t.builtin-safe');
 });
 
 // ══ 2. manifests ═════════════════════════════════════════════════════════
@@ -172,6 +195,16 @@ test('manifests: builtin entries are recorded but not registered as esm', () => 
   manifests.applyManifestMessage('set', [{ type: 't.builtin', version: '1.0.0', entry: { kind: 'builtin' } }]);
   assert.ok(manifests.getManifest('t.builtin'));
   assert.equal(registry.resolveWidget('t.builtin'), undefined);
+  manifests.clearManifests();
+});
+
+test('manifests: W2 — esm entry without sandbox:true is recorded but never registered', () => {
+  manifests.clearManifests();
+  manifests.registerEsmWidgetsFromManifests([
+    { type: 't.nosbx', version: '1.0.0', entry: { kind: 'esm', source: 'x.js' } },
+  ]);
+  assert.ok(manifests.getManifest('t.nosbx'), 'manifest must stay recorded so render can show the BUG-6 refusal');
+  assert.equal(registry.resolveWidget('t.nosbx'), undefined, 'no-sandbox esm must not reach the component registry');
   manifests.clearManifests();
 });
 
@@ -459,6 +492,42 @@ test('widget-host: sandbox runtime error surfaces the failed state', async () =>
   manifests.clearManifests();
 });
 
+test('widget-host: W1 — sandbox failure terminal states destroy the bridge (no leaked listeners)', async () => {
+  consent.clearGrants();
+  manifests.clearManifests();
+  manifests.registerManifest(ESM_MANIFEST);
+  consent.grant(ESM_MANIFEST);
+  const doc = createFakeDom();
+
+  // (a) onError 终态：widget 上报运行错误 → failed + destroy。
+  const container = doc.createElement('div');
+  const transport = createFakeTransport();
+  host.mountWidget(container, { id: 'w1', type: ESM_MANIFEST.type }, null, { doc, transportFactory: () => transport });
+  transport.emit({ kind: 'ready' });
+  await new Promise(r => setTimeout(r, 0));
+  transport.emit({ kind: 'error', message: 'import failed: CORS' });
+  await new Promise(r => setTimeout(r, 0));
+  assert.match(textOf(container), /import failed: CORS/);
+  assert.equal(transport.destroyed, true, 'onError terminal state must destroy the bridge (W1)');
+
+  // (b) catch 终态（mount 超时/发送异常同走此分支）：mount 成功后 pushState
+  // 发送抛错 → try 块内 reject → failed + 幂等销毁。
+  const container2 = doc.createElement('div');
+  const transport2 = createFakeTransport();
+  transport2.postMessage = (msg) => {
+    if (msg.kind === 'state') throw new Error('frame was detached');
+    transport2.sent.push(msg);
+  };
+  host.mountWidget(container2, { id: 'w2', type: ESM_MANIFEST.type }, null, { doc, transportFactory: () => transport2 });
+  transport2.emit({ kind: 'ready' });
+  await new Promise(r => setTimeout(r, 0));
+  assert.match(textOf(container2), /frame was detached/);
+  assert.equal(transport2.destroyed, true, 'catch terminal state must destroy the bridge (W1)');
+
+  consent.clearGrants();
+  manifests.clearManifests();
+});
+
 test('widget-host: a misbehaving widget must not break teardown', () => {
   const doc = createFakeDom();
   const container = doc.createElement('div');
@@ -512,7 +581,7 @@ test('slots: mountSlots scans [data-slot], mounts registered widgets, marks empt
   assert.equal(empty.getAttribute('data-slot-state'), 'empty');
   assert.match(textOf(filled), /mounted/);
 
-  // 幂等：重复挂载先清空旧内容。
+  // 重复挂载：只清空 slot DOM 并重新挂载（旧句柄不由 mountSlots 销毁，见 S2 注释修正）。
   slots.mountSlots(doc);
   assert.equal(filled.children.length, 1);
 
