@@ -199,7 +199,7 @@ async fn extension_lifecycle_install_catalog_disable_enable_delete() {
     let resp = router
         .clone()
         .oneshot(
-            Request::post(&format!("/v1/extensions/{id}/disable"))
+            Request::post(format!("/v1/extensions/{id}/disable"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -227,7 +227,7 @@ async fn extension_lifecycle_install_catalog_disable_enable_delete() {
     let resp = router
         .clone()
         .oneshot(
-            Request::post(&format!("/v1/extensions/{id}/enable"))
+            Request::post(format!("/v1/extensions/{id}/enable"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -239,7 +239,7 @@ async fn extension_lifecycle_install_catalog_disable_enable_delete() {
     let resp = router
         .clone()
         .oneshot(
-            Request::delete(&format!("/v1/extensions/{id}"))
+            Request::delete(format!("/v1/extensions/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -249,7 +249,7 @@ async fn extension_lifecycle_install_catalog_disable_enable_delete() {
     let resp = router
         .clone()
         .oneshot(
-            Request::delete(&format!("/v1/extensions/{id}"))
+            Request::delete(format!("/v1/extensions/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
