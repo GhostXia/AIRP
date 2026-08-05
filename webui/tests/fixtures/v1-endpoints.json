@@ -400,6 +400,47 @@
     },
     {
       "method": "POST",
+      "path": "/v1/desktop-session/renew",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/install",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "C-P2 扩展注册面管理端点（digest-pinned 安装包投放）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions",
+      "ui": false,
+      "reason": "C-P2 扩展注册面管理端点（枚举已安装扩展包：digest/状态/slot）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions/catalog",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/:extension_id/enable",
+      "ui": false,
+      "reason": "C-P2 扩展注册面管理端点（启用已安装扩展包）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/:extension_id/disable",
+      "ui": false,
+      "reason": "C-P2 扩展注册面管理端点（停用已安装扩展包）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/extensions/:extension_id",
+      "ui": false,
+      "reason": "C-P2 扩展注册面管理端点（卸载扩展包并清理孤儿资产）；扩展管理 UI 排期 C-P3/C-P4，当前阶段 WebUI 不消费"
+    },
+    {
+      "method": "POST",
       "path": "/v1/image/generate",
       "bodyLimit": "2MB",
       "ui": true
@@ -643,6 +684,11 @@
     {
       "method": "POST",
       "path": "/v1/users/:user_id/personas",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/widget-intents",
       "ui": true
     }
   ]

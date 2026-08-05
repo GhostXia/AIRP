@@ -150,6 +150,7 @@ const dynamicFetchCalls = new Map([
   ["entry.js|'health'", ['GET /health']],
   ['card-diff.js|url', ['GET /v1/characters/:param/revisions/diff']],
   ['timeline-export.js|url', ['GET /v1/sessions/:param/:param/timeline/export']],
+  ["desktop-session.js|base + '/v1/desktop-session/renew'", ['POST /v1/desktop-session/renew']],
 ]);
 const genericFetchTransports = new Set(['api-client.js', 'agent-test-harness.js']);
 

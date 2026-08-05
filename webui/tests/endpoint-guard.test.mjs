@@ -157,6 +157,7 @@ const dynamicFetchCalls = new Map([
   ["entry.js|'health'", ['GET /health']],
   ['card-diff.js|url', ['GET /v1/characters/:param/revisions/diff']],
   ['timeline-export.js|url', ['GET /v1/sessions/:param/:param/timeline/export']],
+  ["desktop-session.js|base + '/v1/desktop-session/renew'", ['POST /v1/desktop-session/renew']],
 ]);
 const genericFetchTransports = new Set(['api-client.js', 'agent-test-harness.js']);
 
@@ -178,6 +179,21 @@ const browserAssetLoads = [
       `'sessions/' + encodeURIComponent(sessionId)`,
       `'images/' + encodeURIComponent(item.filename)`,
     ],
+  },
+];
+
+// C-P2：widgets/ 子目录不在顶层 readdir 扫描面内，其直接 fetch 消费点
+// 在此声明并以源码标记校验（同 browserAssetLoads 的防腐化思路）。
+const subdirectoryConsumers = [
+  {
+    route: 'GET /v1/extensions/catalog',
+    file: 'widgets/boot.js',
+    markers: ["fetch('/v1/extensions/catalog'"],
+  },
+  {
+    route: 'POST /v1/widget-intents',
+    file: 'widgets/boot.js',
+    markers: ["fetch('/v1/widget-intents'"],
   },
 ];
 
@@ -244,6 +260,18 @@ async function collectUsedRoutes() {
       );
     }
     used.push([load.route, `${load.file}: <img src> asset load`]);
+  }
+
+  // widgets/ 子目录消费点（源码标记校验）
+  for (const consumer of subdirectoryConsumers) {
+    const source = await readFile(new URL(consumer.file, assetsUrl), 'utf8');
+    for (const marker of consumer.markers) {
+      assert.ok(
+        source.includes(marker),
+        `${consumer.file}: 子目录消费标记消失: ${marker}（端点 ${consumer.route} 的 ui:true 标注需要复核）`,
+      );
+    }
+    used.push([consumer.route, `${consumer.file}: ${consumer.markers[0]}`]);
   }
 
   return used;
