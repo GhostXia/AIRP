@@ -39,6 +39,16 @@ use super::DaemonState;
 /// 桌面会话 token 时效：8 小时（一个工作日量级；engine 重启即失效）。
 pub const DESKTOP_SESSION_TTL_SECS: u64 = 8 * 60 * 60;
 
+/// 生效 TTL：`AIRP_DESKTOP_SESSION_TTL_SECS` 可覆盖（clamp 10s..=8h）。
+/// 冒烟/测试用短 TTL 验证续期链路；生产不设即默认 8h。
+fn desktop_session_ttl_secs() -> u64 {
+    std::env::var("AIRP_DESKTOP_SESSION_TTL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|value| value.clamp(10, DESKTOP_SESSION_TTL_SECS))
+        .unwrap_or(DESKTOP_SESSION_TTL_SECS)
+}
+
 /// 进程级 token 存储：token -> 过期时刻（unix 秒）。仅内存，绝不落盘。
 /// daemon 单进程模型下全局唯一；测试并行时 token 为随机值，互不冲突。
 static DESKTOP_SESSION_TOKENS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
@@ -58,11 +68,29 @@ fn now_unix_secs() -> u64 {
 /// 顺带惰性清理过期条目，防止长期运行累积。
 pub fn mint_desktop_session_token() -> (String, u64) {
     let token = uuid::Uuid::new_v4().simple().to_string();
+    let ttl = desktop_session_ttl_secs();
     let now = now_unix_secs();
     let mut store = token_store().lock().unwrap_or_else(|e| e.into_inner());
     store.retain(|_, expires_at| *expires_at > now);
-    store.insert(token.clone(), now + DESKTOP_SESSION_TTL_SECS);
-    (token, DESKTOP_SESSION_TTL_SECS)
+    store.insert(token.clone(), now + ttl);
+    (token, ttl)
+}
+
+/// C-P2 token 续期：**rotation** 语义——旧 token 有效则撤销并签发新 token；
+/// 旧 token 无效/过期返回 `None`。单锁内原子完成，杜绝「旧新并存」窗口。
+/// rotation 而非延期：泄露的旧 token 立即失效，续期本身成为一次凭据刷新。
+pub fn renew_desktop_session_token(old_token: &str) -> Option<(String, u64)> {
+    if old_token.is_empty() {
+        return None;
+    }
+    let ttl = desktop_session_ttl_secs();
+    let now = now_unix_secs();
+    let mut store = token_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.retain(|_, expires_at| *expires_at > now);
+    store.remove(old_token).as_ref()?;
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    store.insert(token.clone(), now + ttl);
+    Some((token, ttl))
 }
 
 /// 校验桌面会话 token 是否有效（存在且未过期）。过期条目惰性移除。
@@ -127,4 +155,70 @@ pub async fn desktop_session_endpoint(
         })),
     )
         .into_response()
+}
+
+/// `POST /v1/desktop-session/renew`：C-P2 token 续期（rotation）。
+///
+/// 壳/webui 在 TTL 过半时主动续期，避免 8h 边界会话锁死（对应 C-P1
+/// 交接的 token 续期项）。请求以 `Authorization: Bearer <旧token>` 携带
+/// 待续期 token（鉴权层已接受它）；成功返回新 token 并**立即撤销旧 token**。
+/// fail-closed 与 exchange 端点一致：无 access key 配置时 403；旧 token
+/// 无效/过期时 401（壳收到 401 应回到 exchange 重交换路径）。
+pub async fn desktop_session_renew_endpoint(
+    State(state): State<std::sync::Arc<DaemonState>>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    let key_configured = {
+        let cfg = state.read_config();
+        cfg.access_api_key.as_deref().is_some_and(|k| !k.is_empty())
+    };
+    if !key_configured {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "desktop_session_unavailable",
+                    "message": "desktop session renewal requires daemon access key authentication",
+                }
+            })),
+        )
+            .into_response();
+    }
+    let provided = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+    let Some(old_token) = provided else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    // access key 本身也可通过鉴权层；但续期只接受 desktop token——
+    // 对 access key 做 rotation 无意义且会把全权凭据误当会话 token 撤销对象。
+    let is_access_key = {
+        let cfg = state.read_config();
+        cfg.access_api_key.as_deref() == Some(old_token)
+    };
+    if is_access_key {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "renew_requires_desktop_token",
+                    "message": "renewal expects a desktop session token, not the daemon access key",
+                }
+            })),
+        )
+            .into_response();
+    }
+    match renew_desktop_session_token(old_token) {
+        Some((token, expires_in)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "token": token,
+                "token_type": "Bearer",
+                "expires_in": expires_in,
+            })),
+        )
+            .into_response(),
+        None => (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+    }
 }
