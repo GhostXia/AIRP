@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-08-02 at `main@830426e`. Document pass aligned open residuals with #413 dependency remediation; runtime risks are not closed by documentation alone.
+> Last reviewed: 2026-08-06 at `main@e28ea02` (v0.0.4 docs-pass, audit residual #485 D1). Registered RR-015~RR-017 for the widget extension line (C-P0~C-P4); updated RR-003/RR-006/RR-007 statuses. Runtime risks are not closed by documentation alone.
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -24,8 +24,8 @@
 - **Status**: Mitigated for the supported local topology in PR #111; configurable origins extend bundled defaults and authenticated desktop mode uses a process-scoped bearer.
 - **Surface**: Engine routes are reachable on loopback; browser origins use an exact list and bearer authentication is topology-dependent.
 - **Risk**: A malicious browser origin or mistakenly exposed port may invoke local data and generation APIs.
-- **Current control**: Normal deployment binds loopback and rate-limits requests. Loopback is risk reduction, not caller authentication.
-- **Required direction**: Desktop mode gets an ephemeral launch token and precise origin policy. Remote mode must be explicit opt-in with durable authentication and safe CORS defaults.
+- **Current control**: Normal deployment binds loopback and rate-limits requests. Loopback is risk reduction, not caller authentication. PR #480 (C-P0) delivered the desktop-session token exchange/renewal loop for the Tauri shell (short-lived UI tokens, rotation on the webui 401 path), which is the ephemeral-launch-token direction; GUI real-device confirmation is still pending.
+- **Required direction**: Preserve the precise origin policy for the desktop webview. Remote mode must be explicit opt-in with durable authentication and safe CORS defaults.
 
 ## RR-004 · Divergent write paths and non-atomic persistence
 
@@ -45,19 +45,19 @@
 
 ## RR-006 · Tauri sidecar process lifecycle
 
-- **Status**: Mitigated in PR #111; desktop owns and terminates the sidecar. Packaged Windows smoke remains the release-level evidence gate.
-- **Surface**: Tauri owns the spawned child handle, polls readiness, and terminates the sidecar during application shutdown.
-- **Risk**: Packaged-runtime crashes, port conflicts, restart/backoff, and installer-specific shutdown behavior still require artifact evidence.
-- **Current control**: Managed child state, logged output, readiness polling, and explicit shutdown.
-- **Required direction**: Preserve lifecycle tests and require the packaged Windows smoke before release.
+- **Status**: Mitigated in PR #111; desktop owns and terminates the sidecar. Packaged Windows smoke remains the release-level evidence gate. Since PR #480 (C-P0) the shell hosts the engine-served WebUI and runs a token renewal loop; that loop has unit/contract evidence only and no GUI real-device confirmation yet.
+- **Surface**: Tauri owns the spawned child handle, polls readiness, and terminates the sidecar during application shutdown; the C-P0 readiness → webui hosting probe → navigation → renewal-loop chain adds packaged-runtime paths.
+- **Risk**: Packaged-runtime crashes, port conflicts, restart/backoff, installer-specific shutdown behavior, and long-session token renewal under real GUI conditions still require artifact evidence.
+- **Current control**: Managed child state, logged output, readiness polling, explicit shutdown, and failed-fast 60s retry on renewal exchange failure.
+- **Required direction**: Preserve lifecycle tests, require the packaged Windows smoke before release, and obtain GUI real-device confirmation of the renewal loop before claiming desktop readiness.
 
 ## RR-007 · Protocol and capability authority drift
 
-- **Status**: Partially mitigated in PR #111 through wire discriminant fixtures and engine-side capability/allowlist/confirm enforcement. Plugin hooks are now implemented, while broader widget/MCP authority and generated schemas remain open.
-- **Surface**: Rust and TypeScript protocol types are maintained manually; UI consent is not enforced by engine authorization.
+- **Status**: Partially mitigated in PR #111 through wire discriminant fixtures and engine-side capability/allowlist/confirm enforcement. PR #486/#491 (C-P3/C-P4) made widget capability authority engine-issued and engine-enforced per call (`/v1/widget-intents`, closed capability set, `GET /v1/grants` unified query); MCP/plugin grant subjects remain open, as do generated schemas.
+- **Surface**: Rust and TypeScript protocol types are maintained manually; SSE event shapes are locked by `protocol/sse-events.json` (PR #464) and widget intent shapes by `protocol/widget-intents.json`; UI consent is now cross-checked by engine authorization for widgets.
 - **Risk**: A client can pass UI checks yet invoke an operation the engine never authoritatively authorized; wire changes can fail only at runtime.
-- **Current control**: Both sides have unit tests and runtime guards.
-- **Required direction**: Single schema/codegen or shared golden fixtures, plus engine-issued and engine-enforced capabilities.
+- **Current control**: Both sides have unit tests and runtime guards; widget capability enforcement is engine-authoritative per call with audit logging.
+- **Required direction**: Single schema/codegen or shared golden fixtures for the remaining surfaces, and extension of the unified grant face beyond widgets.
 
 ## RR-008 · Automatic PR quality gate
 
@@ -117,4 +117,28 @@ The blanket local-path import switch remains forbidden in the browser package. A
 - **Current control**: Engine capability/allowlist/exact confirmation still gates dispatch; webhook redirects are disabled; plaintext HTTP is loopback-only. HTTPS hosts are checked at **registration and every request**: DNS resolution failures / empty answers are **fail-closed**; any resolved loopback/private/link-local/special-use address is rejected; domain targets are **pinned** via a one-shot `reqwest` client (`resolve_to_addrs`) built from the addresses observed in that pre-connect check. Protected hop-by-hop headers and URL userinfo are rejected. Script paths are canonicalized beneath `data_root/plugins/` at registration and execution; inherited environment is cleared. Calls have 1–30 second timeouts and 1 MiB input/output limits. Header values live in a separate restricted-permission file and list APIs expose only `headers_set`. Repository `.gitignore` covers all Provider/plugin runtime files and `data/plugins/`; `pr-gate.yml` verifies ignore coverage, rejects tracked runtime paths, and preserves the tracked fixture exceptions.
 - **Residual boundary**: These controls are not a code sandbox, signature system, permission manifest, provenance check, or proof that declared side effects are truthful. Pinning shrinks but does not eliminate all DNS-rebinding races against a hostile resolver after connect planning; TOCTOU against a compromised OS resolver remains. The plugin receives the `confirm` flag and is responsible for its own dry-run semantics. Ignore rules prevent ordinary accidental staging but do not protect copied, force-added, or filesystem-exposed secrets.
 - **Required direction**: Keep the repository-owned ignore assertions as a blocking PR check. Keep plugins disabled by default in distributed profiles; add explicit install provenance, permission manifests, reviewable parameter disclosure, revocation, audit events, and stronger process isolation before treating third-party plugins as a supported ecosystem.
+
+## RR-015 · Extension registry persistence consistency
+
+- **Status**: Open (registered 2026-08-06 at `main@e28ea02`, C-P2/C-P4 line).
+- **Surface**: `ExtensionStore::install` mutation path and the unauthenticated digest-pinned static serving route.
+- **Risk**: In `install`, the in-memory record set is updated before `persist`; when `extensions.json` persistence fails the API returns `storage_error` but the in-memory state is **not** rolled back (unlike `set_enabled`/`grant`/`revoke`, which roll back precisely). The process then keeps serving a record that a restart will drop, and the written package directory can outlive the record as an orphan. Separately, static extension assets are served outside bearer auth; the boundary relies on loopback-only topology, content-addressed immutability and serve-time digest recheck.
+- **Current control**: All record mutations are serialized by a mutation guard; `extensions.json` uses atomic write with `sync_all` durability (PR #491); serve-time SHA-256 recheck turns disk tampering into a 500 denial instead of silent substitution; unregistered digests always 404; typed errors distinguish 404/500.
+- **Required direction**: Roll back in-memory state (or re-validate on next load) when install persistence fails, and clean the package directory it wrote; before any non-loopback topology, re-review unauthenticated asset serving.
+
+## RR-016 · host_api contract bump requires manual matrix maintenance
+
+- **Status**: Accepted, with test-enforced visibility (registered 2026-08-06 at `main@e28ea02`, C-P4 line).
+- **Surface**: `engine/src/extensions/compat.rs` compat harness (test-only) plus `HOST_API_MAJOR` and the `KNOWN_CAPABILITIES` doc lock.
+- **Risk**: The forward-compatibility iron rule rejects every major other than the current one. When `HOST_API_MAJOR` is bumped, the parse/install matrices, the iron-rule assertion and the documentation lock must be extended by hand; a bump without that maintenance either fails CI loudly (intended) or, if someone weakens the assertion, silently accepts incompatible widgets (the real hazard). There is no multi-major compatibility transition mechanism.
+- **Current control**: The iron-rule test is deliberately independent of the concrete matrices and requires an explicit, reviewable edit to relax; the capability doc lock forces code/docs to move together.
+- **Required direction**: Treat every `HOST_API_MAJOR` bump as a contract-change review that lands matrices, docs and (future) migration story in one PR; do not loosen the iron rule to make a bump pass.
+
+## RR-017 · Desktop shell renewal loop unverified on GUI real device; superseded token TTL window
+
+- **Status**: Open (registered 2026-08-06 at `main@e28ea02`, C-P0/C-P2 line; #485 T1 follow-up tracked via #493).
+- **Surface**: `ui/src-tauri` token exchange/renewal loop and the webui 401 renew fallback.
+- **Risk**: The renewal loop is proven by unit/contract tests only; packaged GUI behavior (window lifecycle, eval injection timing, clock suspend/resume) has no real-device confirmation. The loop deliberately uses exchange (additive) rather than rotation to avoid kicking the webui's in-flight token, so superseded tokens remain valid for their own TTL; a leaked UI token stays usable until expiry. Known hygiene debt: the renewal failure warning repeats every 60s for the whole session and an initial-token parameter is unread (#485 T1).
+- **Current control**: TTL/2 scheduling clamped to 5s–4h, failed-fast 60s retry, webview eval as the only push channel (no Tauri IPC on remote URL), webui-side rotation fallback on 401, access key excluded from renewal.
+- **Required direction**: Obtain GUI real-device confirmation of the full exchange→navigate→renew chain; implement the T1 log-backoff and parameter cleanup next time `ui/src-tauri` is touched.
 
