@@ -674,13 +674,18 @@ fn parse_host_api_major(host_api: Option<&str>) -> Result<u32, ValidationError> 
         {
             return Err(ValidationError::new(
                 "invalid_manifest",
-                format!("host_api segment must be a non-negative integer without leading zeros: {raw}"),
+                format!(
+                    "host_api segment must be a non-negative integer without leading zeros: {raw}"
+                ),
             ));
         }
     }
-    let major: u32 = parts[0]
-        .parse()
-        .map_err(|_| ValidationError::new("invalid_manifest", format!("host_api major not a number: {raw}")))?;
+    let major: u32 = parts[0].parse().map_err(|_| {
+        ValidationError::new(
+            "invalid_manifest",
+            format!("host_api major not a number: {raw}"),
+        )
+    })?;
     Ok(major)
 }
 
@@ -942,7 +947,9 @@ mod tests {
         // 缺省 host_api → 视为 "1"，兼容（向后兼容已有 widget）。
         let mut req = request(true);
         req.manifest.widget_type = "acme.compat1".to_string();
-        store.install(req).expect("host_api absent = major 1 compat");
+        store
+            .install(req)
+            .expect("host_api absent = major 1 compat");
 
         // 显式 "1" / "1.0" / "1.2.3" → 兼容。
         for (i, ver) in ["1", "1.0", "1.2.3"].iter().enumerate() {
