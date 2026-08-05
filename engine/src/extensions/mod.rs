@@ -636,6 +636,21 @@ pub const DEFAULT_SLOT_IDS: &[&str] = &[
 /// `"1"`（向后兼容已有 widget）。
 pub const HOST_API_MAJOR: u32 = 1;
 
+/// C-P4 第二批：engine policy 的 capability 封闭集（权威枚举）。
+///
+/// 与 docs/WIDGET-DEVELOPMENT.md §5「capability 枚举」严格一致；catalog
+/// 顶层以 `capabilities` 字段下发此封闭集，供 webui 授权 UI 渲染全集
+/// 清单（grant 面只能在此集内选择）。新增 capability 必须同步改此常量
+/// 与文档，compat harness 测试锁住两侧一致性。
+pub const KNOWN_CAPABILITIES: [&str; 6] = [
+    "read:memory",
+    "write:memory",
+    "read:worldbook",
+    "read:state",
+    "write:state",
+    "call:tool",
+];
+
 /// widget type 白名单：`ns.name` 两段，小写字母数字与 `.-_`，禁路径字符。
 fn validate_widget_type(widget_type: &str) -> Result<(), ValidationError> {
     if widget_type.is_empty() || widget_type.len() > 128 {
@@ -1029,7 +1044,10 @@ mod tests {
         // #489 E1：坏值分支用合法且唯一的 widget_type——此前以
         // `format!("acme.bad-{bad:?}")` 拼接，`{:?}` 引入引号导致
         // validate_widget_type 先于 host_api 校验失败，坏值实际未被测到。
-        for (i, bad) in ["0", "01", "abc", "1.x", "1.", "999999999"].iter().enumerate() {
+        for (i, bad) in ["0", "01", "abc", "1.x", "1.", "999999999"]
+            .iter()
+            .enumerate()
+        {
             let mut req = request(true);
             req.manifest.widget_type = format!("acme.badhost{i}");
             req.manifest.host_api = Some(bad.to_string());

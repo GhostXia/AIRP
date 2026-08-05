@@ -36,7 +36,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{sha256_hex, ExtensionStore, DEFAULT_SLOT_IDS};
+use super::{sha256_hex, ExtensionStore, DEFAULT_SLOT_IDS, HOST_API_MAJOR, KNOWN_CAPABILITIES};
 use crate::daemon::DaemonState;
 
 /// 内置默认 catalog（webui 无 engine / engine 无安装扩展时的权威默认计划，
@@ -49,6 +49,7 @@ const DEFAULT_CATALOG_JSON: &str = r#"{
       "type": "airp.clock",
       "version": "1.0.0",
       "title": "时钟",
+      "host_api": "1",
       "entry": { "kind": "builtin" }
     },
     {
@@ -56,6 +57,7 @@ const DEFAULT_CATALOG_JSON: &str = r#"{
       "version": "1.0.0",
       "title": "状态胶囊",
       "capabilities": ["read:state"],
+      "host_api": "1",
       "entry": { "kind": "esm", "source": "/assets/widgets/status.module.js", "sandbox": true }
     },
     {
@@ -64,6 +66,7 @@ const DEFAULT_CATALOG_JSON: &str = r#"{
       "title": "第三方示范 widget",
       "author": "AIRP C-P1 demo",
       "capabilities": ["read:state"],
+      "host_api": "1",
       "entry": { "kind": "esm", "source": "/assets/widgets/third-party-example.js", "sandbox": true }
     }
   ],
@@ -307,6 +310,11 @@ pub async fn list_all_grants(State(state): State<Arc<DaemonState>>) -> Json<Valu
 ///
 /// 组装规则：内置默认计划打底；已启用扩展的 manifest 按 type upsert
 /// （第三方版本替换同名首方示范），并编入其安装时指定的 slot。
+///
+/// C-P4 第二批（catalog 完整化，#484）：顶层另下发两个 engine 权威
+/// 协商字段——`host_api_major`（engine 当前支持的宿主合同 major，webui
+/// 可据此预判兼容性）与 `capabilities`（engine policy capability 封闭集，
+/// 授权 UI 的全集清单权威来源）。二者皆 additive 字段，旧消费方不受影响。
 pub async fn get_catalog(State(state): State<Arc<DaemonState>>) -> Response {
     let mut catalog: Value = match serde_json::from_str(DEFAULT_CATALOG_JSON) {
         Ok(value) => value,
@@ -317,6 +325,14 @@ pub async fn get_catalog(State(state): State<Arc<DaemonState>>) -> Response {
             return (StatusCode::INTERNAL_SERVER_ERROR, "catalog unavailable").into_response();
         }
     };
+    // C-P4 第二批：engine 权威协商字段（additive）。
+    if let Some(object) = catalog.as_object_mut() {
+        object.insert("host_api_major".to_string(), Value::from(HOST_API_MAJOR));
+        object.insert(
+            "capabilities".to_string(),
+            Value::from(KNOWN_CAPABILITIES.iter().copied().collect::<Vec<_>>()),
+        );
+    }
     let store = store(&state);
     for record in store.enabled() {
         // C-P4-1 fail-closed：安装面已校验 slot ∈ DEFAULT_SLOT_IDS，catalog 组装面

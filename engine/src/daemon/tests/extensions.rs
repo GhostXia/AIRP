@@ -136,6 +136,28 @@ async fn catalog_defaults_to_builtin_plan_when_no_extensions() {
         .map(|m| m["type"].as_str().unwrap())
         .collect();
     assert!(types.contains(&"airp.clock"));
+    // C-P4 第二批（catalog 完整化）：engine 权威协商字段。
+    assert_eq!(
+        catalog["host_api_major"],
+        serde_json::json!(crate::extensions::HOST_API_MAJOR),
+        "catalog 顶层必须下发 engine 支持的 host_api major"
+    );
+    let caps: Vec<&str> = catalog["capabilities"]
+        .as_array()
+        .expect("capabilities 封闭集必须随 catalog 下发")
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        caps,
+        crate::extensions::KNOWN_CAPABILITIES.to_vec(),
+        "catalog capabilities 与 engine policy 封闭集严格一致"
+    );
+    // 内置 manifests 均显式声明 host_api（与安装面缺省规则对齐，
+    // 使下发形状与安装记录序列化形状一致）。
+    for manifest in catalog["manifests"].as_array().unwrap() {
+        assert_eq!(manifest["host_api"], "1", "内置 manifest 应声明 host_api");
+    }
 }
 
 #[tokio::test]
