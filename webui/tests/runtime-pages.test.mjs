@@ -400,3 +400,26 @@ test('PR #314 N-E bearer cross-origin protection is present in api-client', asyn
   assert.match(ac, /trustedOrigins/, 'N-E: must support trustedOrigins whitelist');
   assert.match(ac, /headers\(.*,\s*base\)/, 'N-E: headers must receive target base for origin check');
 });
+
+// 审计 #485 W3：chat-space 的 onUnauthorized 必须有 AIRPDesktopSession typeof 守卫。
+// chat-space.js 是浏览器 IIFE 脚本，node 无法实例化其闭包，故用源码标记
+// 契约（同本文件 PR #314 模式）锁定守卫存在；钩子 falsy → 不重试的行为面
+// 已由 token-renewal.test.mjs 的 api-client 契约覆盖。
+test('#485 W3: chat-space onUnauthorized guards against missing AIRPDesktopSession', async () => {
+  const cs = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
+  assert.match(
+    cs,
+    /typeof AIRPDesktopSession === 'undefined'/,
+    'W3: onUnauthorized 必须先做 typeof 守卫（key 模式浏览器直开时无该全局）',
+  );
+  assert.match(
+    cs,
+    /onUnauthorized:[\s\S]{0,200}return false;[\s\S]{0,200}renewDesktopSession/,
+    'W3: 守卫 undefined 分支必须返回 false（等价无 key 回退），再走续期',
+  );
+  assert.doesNotMatch(
+    cs,
+    /onUnauthorized:\s*\(\)\s*=>\s*AIRPDesktopSession\.renewDesktopSession/,
+    'W3: 不得回退到无守卫的直接调用（ReferenceError 会击穿 401 恢复链）',
+  );
+});

@@ -53,7 +53,13 @@
     },
     // C-P2：401 续期单次重试（含流启动前）。无 key 模式 renew 403 →
     // 钩子返回 false → 回退既有 401 错误展示行为。
-    onUnauthorized: () => AIRPDesktopSession.renewDesktopSession({ base }),
+    // 审计 #485 W3：AIRPDesktopSession 可能未加载（key 模式下浏览器直开，
+    // 桌面 session 脚本不在页面上）；先做 typeof 守卫，undefined 时返回
+    // false（等价无 key 回退），避免 ReferenceError 击穿 401 恢复链。
+    onUnauthorized: () => {
+      if (typeof AIRPDesktopSession === 'undefined') return false;
+      return AIRPDesktopSession.renewDesktopSession({ base });
+    },
   });
   $('#connection-address').textContent = client.base === location.origin ? '同源 Engine' : client.base;
 
