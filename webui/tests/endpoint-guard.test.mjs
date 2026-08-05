@@ -158,6 +158,14 @@ const dynamicFetchCalls = new Map([
   ['card-diff.js|url', ['GET /v1/characters/:param/revisions/diff']],
   ['timeline-export.js|url', ['GET /v1/sessions/:param/:param/timeline/export']],
   ["desktop-session.js|base + '/v1/desktop-session/renew'", ['POST /v1/desktop-session/renew']],
+  // 审计 #485 W1：扫描面改为递归后，widgets/ 子目录的 fetch 调用点由本 map
+  // 解析（engineUrl() 包装无法静态提路径）。替代原 subdirectoryConsumers
+  // 标记机制：新增子目录 fetch 若未登记会直接报 unresolved，不再静默漏扫。
+  ["widgets/boot.js|engineUrl('/v1/extensions/catalog')", ['GET /v1/extensions/catalog']],
+  ["widgets/boot.js|engineUrl('/v1/extensions/grants')", ['GET /v1/extensions/grants']],
+  ["widgets/boot.js|engineUrl('/v1/widget-intents')", ['POST /v1/widget-intents']],
+  // 降级读静态 slots.json：非 /v1 端点，不产生路由消费（空数组 = 已解析）。
+  ["widgets/boot.js|new URL('./slots.json', import.meta.url)", []],
 ]);
 const genericFetchTransports = new Set(['api-client.js', 'agent-test-harness.js']);
 
@@ -182,33 +190,20 @@ const browserAssetLoads = [
   },
 ];
 
-// C-P2/C-P3：widgets/ 子目录不在顶层 readdir 扫描面内，其直接 fetch 消费点
-// 在此声明并以源码标记校验（同 browserAssetLoads 的防腐化思路）。
-// C-P3 后 boot.js 统一用 engineUrl() 包装远程 base，markers 跟随更新。
-const subdirectoryConsumers = [
-  {
-    route: 'GET /v1/extensions/catalog',
-    file: 'widgets/boot.js',
-    markers: ["fetch(engineUrl('/v1/extensions/catalog')"],
-  },
-  {
-    route: 'GET /v1/extensions/grants',
-    file: 'widgets/boot.js',
-    markers: ["fetch(engineUrl('/v1/extensions/grants')"],
-  },
-  {
-    route: 'POST /v1/widget-intents',
-    file: 'widgets/boot.js',
-    markers: ["fetch(engineUrl('/v1/widget-intents')"],
-  },
-];
+// 审计 #485 W1：原非递归 readdir 扫不到 assets/ 子目录（如 widgets/）内的
+// fetch，子目录新增调用点时 ui:false 端点不告警。现改为递归扫描；子目录
+// 消费点若无法静态解析，照旧在 dynamicFetchCalls / dynamicCalls 登记，
+// 不再需要单独的 subdirectoryConsumers 标记面。
 
 // ── 扫描 WebUI 调用点 ────────────────────────────────────────────────────
 
 async function collectUsedRoutes() {
   const used = [];
   const fileSources = new Map();
-  const files = (await readdir(assetsUrl)).filter(file => file.endsWith('.js')).sort();
+  const files = (await readdir(assetsUrl, { recursive: true }))
+    .map(file => file.replaceAll('\\', '/'))
+    .filter(file => file.endsWith('.js'))
+    .sort();
 
   for (const file of files) {
     const source = await readFile(new URL(file, assetsUrl), 'utf8');
@@ -266,18 +261,6 @@ async function collectUsedRoutes() {
       );
     }
     used.push([load.route, `${load.file}: <img src> asset load`]);
-  }
-
-  // widgets/ 子目录消费点（源码标记校验）
-  for (const consumer of subdirectoryConsumers) {
-    const source = await readFile(new URL(consumer.file, assetsUrl), 'utf8');
-    for (const marker of consumer.markers) {
-      assert.ok(
-        source.includes(marker),
-        `${consumer.file}: 子目录消费标记消失: ${marker}（端点 ${consumer.route} 的 ui:true 标注需要复核）`,
-      );
-    }
-    used.push([consumer.route, `${consumer.file}: ${consumer.markers[0]}`]);
   }
 
   return used;
