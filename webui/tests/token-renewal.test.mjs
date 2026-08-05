@@ -25,6 +25,18 @@ function memorySessionStorage() {
   };
 }
 
+// 审计 #485 W2：replace globalThis.sessionStorage 后直接 delete，若环境预置了
+// 该 global（如未来 jsdom 预设 / 并行测试垫片）会清掉其状态，产生顺序依赖。
+// 保存并还原原 descriptor，让每个测试对 global 的介入可逆。
+function installSessionStorage(storage) {
+  const prev = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  globalThis.sessionStorage = storage;
+  return () => {
+    if (prev) Object.defineProperty(globalThis, 'sessionStorage', prev);
+    else delete globalThis.sessionStorage;
+  };
+}
+
 test('C-P2: function bearer is resolved per request (rotation-ready)', async () => {
   let token = 'token-1';
   const seen = [];
@@ -122,7 +134,7 @@ test('C-P2: stream start also honors 401 renewal retry', async () => {
 test('C-P2: renewDesktopSession rotates, stores the new bearer and dispatches the event', async () => {
   const storage = memorySessionStorage();
   storage.setItem(desktopSession.STORAGE_KEY, 'old-token');
-  globalThis.sessionStorage = storage;
+  const restoreStorage = installSessionStorage(storage);
   // Node 无浏览器全局事件 API：以 EventTarget 垫片承接 dispatchEvent。
   const bus = new EventTarget();
   const prevDispatch = globalThis.dispatchEvent;
@@ -149,14 +161,14 @@ test('C-P2: renewDesktopSession rotates, stores the new bearer and dispatches th
   } finally {
     bus.removeEventListener('airp-bearer-renewed', listener);
     if (prevDispatch) globalThis.dispatchEvent = prevDispatch; else delete globalThis.dispatchEvent;
-    delete globalThis.sessionStorage;
+    restoreStorage();
   }
 });
 
 test('C-P2: renewDesktopSession returns false on failure and keeps the old bearer', async () => {
   const storage = memorySessionStorage();
   storage.setItem(desktopSession.STORAGE_KEY, 'old-token');
-  globalThis.sessionStorage = storage;
+  const restoreStorage = installSessionStorage(storage);
   try {
     const ok = await desktopSession.renewDesktopSession({
       base: 'http://engine.test',
@@ -165,13 +177,13 @@ test('C-P2: renewDesktopSession returns false on failure and keeps the old beare
     assert.equal(ok, false);
     assert.equal(storage.getItem(desktopSession.STORAGE_KEY), 'old-token');
   } finally {
-    delete globalThis.sessionStorage;
+    restoreStorage();
   }
 });
 
 test('C-P2: renewDesktopSession returns false without a bearer (no-key mode)', async () => {
   const storage = memorySessionStorage();
-  globalThis.sessionStorage = storage;
+  const restoreStorage = installSessionStorage(storage);
   try {
     const ok = await desktopSession.renewDesktopSession({
       base: 'http://engine.test',
@@ -179,14 +191,14 @@ test('C-P2: renewDesktopSession returns false without a bearer (no-key mode)', a
     });
     assert.equal(ok, false);
   } finally {
-    delete globalThis.sessionStorage;
+    restoreStorage();
   }
 });
 
 test('C-P2: concurrent 401s share one in-flight renewal (dedupe)', async () => {
   const storage = memorySessionStorage();
   storage.setItem(desktopSession.STORAGE_KEY, 'old-token');
-  globalThis.sessionStorage = storage;
+  const restoreStorage = installSessionStorage(storage);
   let fetchCount = 0;
   try {
     const fetchImpl = async () => {
@@ -202,6 +214,6 @@ test('C-P2: concurrent 401s share one in-flight renewal (dedupe)', async () => {
     assert.deepEqual([a, b, c], [true, true, true]);
     assert.equal(fetchCount, 1, 'rotation 语义下并发续期必须去重为单次请求');
   } finally {
-    delete globalThis.sessionStorage;
+    restoreStorage();
   }
 });
