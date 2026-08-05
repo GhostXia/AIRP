@@ -182,18 +182,24 @@ const browserAssetLoads = [
   },
 ];
 
-// C-P2：widgets/ 子目录不在顶层 readdir 扫描面内，其直接 fetch 消费点
+// C-P2/C-P3：widgets/ 子目录不在顶层 readdir 扫描面内，其直接 fetch 消费点
 // 在此声明并以源码标记校验（同 browserAssetLoads 的防腐化思路）。
+// C-P3 后 boot.js 统一用 engineUrl() 包装远程 base，markers 跟随更新。
 const subdirectoryConsumers = [
   {
     route: 'GET /v1/extensions/catalog',
     file: 'widgets/boot.js',
-    markers: ["fetch('/v1/extensions/catalog'"],
+    markers: ["fetch(engineUrl('/v1/extensions/catalog')"],
+  },
+  {
+    route: 'GET /v1/extensions/grants',
+    file: 'widgets/boot.js',
+    markers: ["fetch(engineUrl('/v1/extensions/grants')"],
   },
   {
     route: 'POST /v1/widget-intents',
     file: 'widgets/boot.js',
-    markers: ["fetch('/v1/widget-intents'"],
+    markers: ["fetch(engineUrl('/v1/widget-intents')"],
   },
 ];
 

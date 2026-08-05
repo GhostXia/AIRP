@@ -1060,6 +1060,212 @@
     loadList();
   }
 
+  // C-P3：扩展管理 UI——install / enable / disable / delete / grant 消费面。
+  // 与 renderBackup 同模式：card + runtime-list + 内联操作。安全提示明示
+  // 「安装即信任」「capability 授权由 engine 权威签发」「digest-pinned 锚定」。
+  // 端点合同：POST /v1/extensions/install、GET /v1/extensions、
+  // POST /v1/extensions/:id/enable|disable、DELETE /v1/extensions/:id、
+  // POST /v1/extensions/:id/grants（action=grant|revoke，capabilities 可选子集）。
+  async function renderPlugins() {
+    const view = $('#view'); view.replaceChildren();
+
+    const securityCard = card('扩展管理', true);
+    securityCard.appendChild(node('div', 'runtime-warning',
+      '扩展是第三方代码。安装即信任——我们不审计 widget 代码，安装/批准它是用户的选择与风险（docs/SECURITY.md）。' +
+      'capability 授权由 engine 权威签发（POST /v1/extensions/:id/grants），consent.js 仅维护内存镜像。'));
+    view.appendChild(securityCard);
+
+    const listCard = card('已安装扩展', true);
+    view.appendChild(listCard);
+    const listInfo = node('p', 'runtime-muted', '');
+    listCard.appendChild(listInfo);
+    const listContainer = node('div', 'runtime-list'); listCard.appendChild(listContainer);
+    listCard.appendChild(button('刷新列表', () => loadList()));
+
+    async function loadList() {
+      listContainer.replaceChildren();
+      listInfo.textContent = '加载中…';
+      let items;
+      try {
+        const resp = await task('加载扩展列表', () => client.request('GET', '/v1/extensions'));
+        items = (resp && resp.extensions) || [];
+      } catch (error) {
+        listInfo.textContent = '加载失败：' + message(error);
+        return;
+      }
+      if (!items.length) {
+        listInfo.textContent = '暂无已安装扩展';
+        return;
+      }
+      listInfo.textContent = '共 ' + items.length + ' 个扩展';
+      items.forEach(item => listContainer.appendChild(renderExtensionRow(item, loadList)));
+    }
+
+    function renderExtensionRow(item, reload) {
+      const row = node('div', 'runtime-card runtime-extension-row');
+      const head = node('div', 'runtime-row-title');
+      const widgetType = (item.manifest && item.manifest.type) || item.type || '?';
+      head.appendChild(node('span', '', widgetType));
+      head.appendChild(node('span', 'runtime-muted', 'v' + ((item.manifest && item.manifest.version) || item.version || '?')));
+      head.appendChild(node('span', 'import-report-tag ' + (item.enabled ? 'ok' : 'warn'), item.enabled ? '已启用' : '已停用'));
+      const grantedCount = (item.granted_capabilities && item.granted_capabilities.length) || 0;
+      head.appendChild(node('span', 'import-report-tag ' + (grantedCount ? 'ok' : 'warn'), grantedCount ? '已授权 ' + grantedCount + ' 项' : '未授权'));
+      row.appendChild(head);
+
+      const meta = node('dl', 'runtime-kv');
+      const appendMeta = (label, value) => {
+        meta.appendChild(node('dt', '', label));
+        meta.appendChild(node('dd', '', value));
+      };
+      appendMeta('ID', item.id || '?');
+      appendMeta('Digest', (item.digest || '').slice(0, 12) + '…');
+      appendMeta('Slot', item.slot || '—');
+      appendMeta('Capabilities', ((item.manifest && item.manifest.capabilities) || []).join(', ') || '—');
+      appendMeta('已授权', (item.granted_capabilities || []).join(', ') || '—');
+      if (item.granted_at) {
+        appendMeta('授权时间', new Date(item.granted_at * 1000).toLocaleString());
+      }
+      row.appendChild(meta);
+
+      let grantPanel = null;
+      const actionBox = actions();
+      row.appendChild(actionBox);
+
+      // 启用/停用：路径用纯字面量拼接，便于 endpoint-guard 静态解析
+      // （ternary 表达式会被 staticPath 截断为 :param，无法匹配子路径）。
+      if (item.enabled) {
+        actionBox.appendChild(button('停用', async () => {
+          try {
+            await task('停用扩展',
+              () => client.request('POST', '/v1/extensions/' + encodeURIComponent(item.id) + '/disable'));
+            reload();
+          } catch (error) { /* task 已 setStatus */ }
+        }));
+      } else {
+        actionBox.appendChild(button('启用', async () => {
+          try {
+            await task('启用扩展',
+              () => client.request('POST', '/v1/extensions/' + encodeURIComponent(item.id) + '/enable'));
+            reload();
+          } catch (error) { /* task 已 setStatus */ }
+        }));
+      }
+
+      actionBox.appendChild(button('授权管理', () => {
+        if (grantPanel) {
+          grantPanel.remove();
+          grantPanel = null;
+          return;
+        }
+        grantPanel = renderGrantPanel(item, reload);
+        row.appendChild(grantPanel);
+      }));
+
+      actionBox.appendChild(button('删除', async () => {
+        if (!window.confirm('确定删除扩展 ' + widgetType + '？此操作不可恢复，相关文件目录会被清理。')) return;
+        try {
+          await task('删除扩展', () => client.request('DELETE', '/v1/extensions/' + encodeURIComponent(item.id)));
+          reload();
+        } catch (error) { /* task 已 setStatus */ }
+      }, 'btn-danger'));
+
+      return row;
+    }
+
+    function renderGrantPanel(item, reload) {
+      const panel = node('div', 'runtime-grant-panel');
+      panel.appendChild(node('h3', '', 'Capability 授权管理'));
+      panel.appendChild(node('p', 'runtime-muted',
+        'engine 权威签发 grant 后，consent.js 在下次 boot 时同步缓存，widget 才能挂载与发起 intent。' +
+        '未声明的 capability 不可授权（manifest 约束）。'));
+      const declared = (item.manifest && item.manifest.capabilities) || [];
+      const granted = new Set(item.granted_capabilities || []);
+      if (!declared.length) {
+        panel.appendChild(node('p', 'runtime-warning', '该扩展未声明任何 capability，无需授权。'));
+        return panel;
+      }
+      const checkboxes = [];
+      declared.forEach(cap => {
+        const label = node('label', 'runtime-checkbox-row');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = granted.has(cap);
+        label.appendChild(cb);
+        label.appendChild(node('span', '', cap));
+        panel.appendChild(label);
+        checkboxes.push({ cap: cap, cb: cb });
+      });
+      const grantActions = actions();
+      panel.appendChild(grantActions);
+      grantActions.appendChild(button('保存授权', async () => {
+        const selected = checkboxes.filter(c => c.cb.checked).map(c => c.cap);
+        const ok = window.confirm(
+          '即将为 ' + ((item.manifest && item.manifest.type) || item.id) + ' 签发授权：\n' +
+          (selected.length ? selected.join('\n') : '（清空，撤销全部授权）') + '\n\n' +
+          '授权后 widget 即可发起对应 capability 的 intent。继续？'
+        );
+        if (!ok) return;
+        try {
+          const body = selected.length
+            ? { action: 'grant', capabilities: selected }
+            : { action: 'revoke' };
+          await task('保存授权', () => client.request('POST',
+            '/v1/extensions/' + encodeURIComponent(item.id) + '/grants', body));
+          reload();
+        } catch (error) { /* task 已 setStatus */ }
+      }, 'btn-primary'));
+      return panel;
+    }
+
+    const installCard = card('安装新扩展', true);
+    view.appendChild(installCard);
+    installCard.appendChild(node('div', 'runtime-warning',
+      '安装前请确认来源可信。包内容 base64 编码并以 SHA-256 摘要锚定（digest-pinned），' +
+      '篡改复检会拒绝不一致的包。安装即替换同 type 的旧版本（grant 不跨身份延续，需重新授权）。'));
+    const form = node('div', 'runtime-form'); installCard.appendChild(form);
+    const slotInput = input('挂载 slot', 'workbench.grid', {
+      select: [
+        { value: 'workbench.grid', label: 'workbench.grid（工作台主视图）' },
+        { value: 'chat.sidebar', label: 'chat.sidebar（聊天侧栏）' },
+        { value: 'diagnostics.context', label: 'diagnostics.context（诊断上下文栏）' },
+      ],
+    });
+    form.append(slotInput.wrap);
+    const manifestInput = input('Manifest JSON', '', {
+      multiline: true, code: true,
+      placeholder: '{"type":"acme.demo","version":"1.0.0","capabilities":["read:state"],"entry":{"kind":"esm","source":"https://example.com/w.js","sandbox":true}}',
+    });
+    manifestInput.control.rows = 8;
+    form.append(manifestInput.wrap);
+    const filesInput = input('Files JSON', '', {
+      multiline: true, code: true,
+      placeholder: '[{"path":"index.js","content_base64":"...","sha256":"..."}]',
+    });
+    filesInput.control.rows = 6;
+    form.append(filesInput.wrap);
+    form.appendChild(button('安装扩展', async () => {
+      let manifest, files;
+      try {
+        manifest = parseJson(manifestInput.control.value, 'Manifest');
+        files = parseJson(filesInput.control.value, 'Files');
+      } catch (error) {
+        setStatus(error.message, true);
+        return;
+      }
+      if (!window.confirm('即将安装扩展 ' + (manifest.type || '?') + '。继续？')) return;
+      try {
+        const body = { manifest: manifest, files: files, slot: slotInput.control.value };
+        const resp = await task('安装扩展', () => client.request('POST', '/v1/extensions/install', body));
+        setStatus('已安装：' + resp.type + '（digest=' + (resp.digest || '').slice(0, 12) + '…）');
+        manifestInput.control.value = '';
+        filesInput.control.value = '';
+        loadList();
+      } catch (error) { /* task 已 setStatus */ }
+    }, 'btn-primary'));
+
+    loadList();
+  }
+
   async function renderUnavailable(kind) {
     const view = $('#view'); view.replaceChildren(); const box = card(kind === 'backup' ? '备份与恢复' : '插件管理', true); box.append(node('div', 'runtime-warning', kind === 'backup' ? '当前 Engine 没有备份/恢复 HTTP API。为避免制造“已备份”的假象，本页不提供不可验证的操作。请先通过文件系统或部署层备份 AIRP 数据目录。' : '当前 Engine 没有插件发现、安装或权限管理 API。本页只声明能力缺口，不伪造插件状态。'), node('p', 'runtime-muted', '后端提供正式契约后，可在此接入并加入 smoke 验收。')); view.appendChild(box);
   }
@@ -1091,7 +1297,7 @@
       // 旧代码会落入 renderDiagnostics fallback 而非跳到正确的专用页面。
       // 这里加 redirect renderer，把这类请求转发到对应的 HTML 页面。
       const redirectRenderer = href => () => { location.href = pathWithState(href); };
-      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: renderBackup, plugins: () => renderUnavailable('plugins'), notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; }, stylelearn: redirectRenderer('38-style-learn.html'), dialoguegen: redirectRenderer('39-dialogue-gen.html'), wbgraph: redirectRenderer('40-worldbook-graph.html'), timeline: redirectRenderer('41-timeline-export.html'), carddiff: redirectRenderer('42-card-diff.html') };
+      const renderers = { workbench: renderWorkbench, worldbook: renderWorldbook, presets: renderPresets, persona: renderPersona, agent: renderAgent, settings: renderSettings, memory: renderMemory, scenes: renderScenes, branches: renderBranches, preview: renderPreview, quota: renderQuota, diagnostics: renderDiagnostics, style: renderStyle, backup: renderBackup, plugins: renderPlugins, notes: renderNotes, onboarding: () => { location.href = '16-onboarding.html'; }, wizardmodel: () => { location.href = '16-onboarding.html'; }, stylelearn: redirectRenderer('38-style-learn.html'), dialoguegen: redirectRenderer('39-dialogue-gen.html'), wbgraph: redirectRenderer('40-worldbook-graph.html'), timeline: redirectRenderer('41-timeline-export.html'), carddiff: redirectRenderer('42-card-diff.html') };
       await (renderers[screen] || renderDiagnostics)();
       // C-P1 widget slots：屏渲染完成后挂载 [data-slot]。boot.js 是 module
       // 脚本（defer），晚于本经典脚本执行；它把挂载完成 Promise 赋给
