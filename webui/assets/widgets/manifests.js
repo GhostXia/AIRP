@@ -49,8 +49,13 @@
     for (const manifest of list || []) {
       registerManifest(manifest);
       if (manifest.entry && manifest.entry.kind === 'esm' && manifest.entry.source) {
-        registry.registerEsmWidget(manifest.type, manifest.entry.source, importer);
-        esmRegistered.add(manifest.type);
+        // 纵深设防（W2）：注册面只接受声明了 sandbox:true 的 esm；
+        // 未声明者仍记录 manifest，由 widget-host render 层的 BUG-6
+        // fail-closed 拒载展示（行为不变，双点设防）。
+        if (manifest.entry.sandbox === true) {
+          registry.registerEsmWidget(manifest.type, manifest.entry.source, { sandbox: true, importer });
+          esmRegistered.add(manifest.type);
+        }
       }
     }
   }

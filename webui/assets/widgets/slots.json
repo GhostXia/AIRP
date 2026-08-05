@@ -1,0 +1,73 @@
+{
+  "manifests": [
+    {
+      "type": "airp.clock",
+      "version": "1.0.0",
+      "title": "时钟",
+      "entry": { "kind": "builtin" }
+    },
+    {
+      "type": "airp.status-pill",
+      "version": "1.0.0",
+      "title": "状态胶囊",
+      "capabilities": ["read:state"],
+      "entry": { "kind": "esm", "source": "../assets/widgets/status.module.js", "sandbox": true }
+    },
+    {
+      "type": "acme.third-party-example",
+      "version": "0.1.0",
+      "title": "第三方示范 widget",
+      "author": "AIRP C-P1 demo",
+      "capabilities": ["read:state"],
+      "entry": { "kind": "esm", "source": "../assets/widgets/third-party-example.js", "sandbox": true }
+    }
+  ],
+  "slots": [
+    {
+      "id": "chat.sidebar",
+      "screen": "chat",
+      "region": "sidebar",
+      "description": "对话空间左侧栏底部（会话列表之下）",
+      "widgets": [
+        { "instance": { "id": "clock-chat", "type": "airp.clock" }, "state": { "label": "chat" } }
+      ]
+    },
+    {
+      "id": "chat.panel-right",
+      "screen": "chat",
+      "region": "panel-right",
+      "description": "对话空间右侧面板顶部（事件日志之上）",
+      "widgets": [
+        { "instance": { "id": "status-chat", "type": "airp.status-pill" }, "state": { "label": "Engine", "on": false } }
+      ]
+    },
+    {
+      "id": "settings.context",
+      "screen": "settings",
+      "region": "context",
+      "description": "设置屏右侧上下文栏底部",
+      "widgets": [
+        { "instance": { "id": "status-settings", "type": "airp.status-pill" }, "state": { "label": "设置页", "on": true } }
+      ]
+    },
+    {
+      "id": "diagnostics.context",
+      "screen": "diagnostics",
+      "region": "context",
+      "description": "诊断屏右侧上下文栏底部",
+      "widgets": [
+        { "instance": { "id": "third-party-diagnostics", "type": "acme.third-party-example" }, "state": { "label": "诊断页" } }
+      ]
+    },
+    {
+      "id": "workbench.grid",
+      "screen": "workbench",
+      "region": "grid",
+      "description": "工作台主视图末尾（widget 组合示范区）",
+      "widgets": [
+        { "instance": { "id": "clock-workbench", "type": "airp.clock" }, "state": { "label": "workbench" } },
+        { "instance": { "id": "status-workbench", "type": "airp.status-pill" }, "state": { "label": "Engine", "on": true } }
+      ]
+    }
+  ]
+}
