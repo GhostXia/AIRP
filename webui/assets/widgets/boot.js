@@ -13,8 +13,15 @@
 // （含已安装第三方扩展的 manifest upsert + slot 编入）；engine 不可用
 // （网络失败/非 2xx，如纯静态部署或 engine 无配置）时降级为本地静态
 // slots.json——双保险，任何失败都不硬失败（slot 保持空占位也可接受）。
-// intent 执行面接 `POST /v1/widget-intents`（C-P2 拒绝默认，合同见
+// intent 执行面接 `POST /v1/widget-intents`（C-P3 逐调用强制，合同见
 // protocol/widget-intents.json）。
+//
+// C-P3 base 统一 + consent 异步初始化：
+// - catalog / grants / intent 远程调用统一用 engineBase()（airp_engine_url
+//   优先，缺省 location.origin），跨源联调时不再因相对路径失败；
+// - boot() 先 fetchEngineGrants() 注入 consent.js（engine 权威 grant 缓存），
+//   再拉 catalog 与挂载；engine 不可达时降级到 consent.js 的 localStorage
+//   UX 层缓存（C-P1 行为保留）。
 import { createClockWidget } from './clock.module.js';
 
 const registry = globalThis.AIRPWidgetRegistry;
@@ -31,9 +38,47 @@ export function setAuthFailureHandler(fn) {
   onAuthFailure = typeof fn === 'function' ? fn : null;
 }
 
+/**
+ * C-P3：engine 远程 base 统一。与 console-runtime.js 的 connection.base 同语义：
+ * airp_engine_url 优先（跨源联调），缺省 location.origin（同源 local-webui/desktop）。
+ * 末尾斜杠归一，确保 `new URL('/v1/...', engineBase())` 拼接正确。
+ */
+function engineBase() {
+  if (typeof sessionStorage !== 'undefined') {
+    const url = sessionStorage.getItem('airp_engine_url');
+    if (url) return url.replace(/\/+$/, '');
+  }
+  return typeof location !== 'undefined' ? location.origin : '';
+}
+
+/** 拼接 engine 绝对 URL；base 缺省时退化为相对路径（同源场景兼容）。 */
+function engineUrl(path) {
+  const base = engineBase();
+  if (!base) return path;
+  try {
+    return new URL(path, base + '/').toString();
+  } catch {
+    return path;
+  }
+}
+
+/** 取当前 bearer（与 console-runtime.js 同源：sessionStorage airp_bearer）。 */
+function bearerToken() {
+  return typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('airp_bearer') : null;
+}
+
+function authedHeaders(extra) {
+  const headers = Object.assign({}, extra || {});
+  const bearer = bearerToken();
+  if (bearer) headers.Authorization = 'Bearer ' + bearer;
+  return headers;
+}
+
 function defaultIntentHandler(name, params, instance) {
-  // C-P2：intent 执行面最小合同——POST /v1/widget-intents（拒绝默认）。
+  // C-P3：intent 执行面逐调用强制——POST /v1/widget-intents。
   // envelope 的 widget_type/instance_id 由宿主从 slot 计划补齐（第三参）。
+  // capability 字段由 widget 在 instance.capability 声明（C-P3 boot.js base
+  // 统一后，intent handler 不再省略 capability——engine 逐调用强制需要它）。
   // 失败不回传假交互：只留 console 痕迹（合同见 protocol/widget-intents.json）。
   const envelope = {
     name,
@@ -41,10 +86,12 @@ function defaultIntentHandler(name, params, instance) {
     widget_type: (instance && instance.type) || 'unknown',
     instance_id: (instance && instance.id) || 'unknown',
   };
-  const headers = { 'Content-Type': 'application/json' };
-  const bearer = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('airp_bearer') : null;
-  if (bearer) headers.Authorization = 'Bearer ' + bearer;
-  fetch('/v1/widget-intents', { method: 'POST', headers, body: JSON.stringify(envelope) })
+  if (instance && instance.capability) envelope.capability = instance.capability;
+  fetch(engineUrl('/v1/widget-intents'), {
+    method: 'POST',
+    headers: authedHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(envelope),
+  })
     .then(async (resp) => {
       if (!resp.ok) {
         const body = await resp.json().catch(() => null);
@@ -59,12 +106,29 @@ function defaultIntentHandler(name, params, instance) {
 
 /** engine 权威下发计划（bearer 可选：local-webui 无鉴权模式无 token 也能拉）。 */
 async function fetchEngineCatalog() {
-  const headers = { Accept: 'application/json' };
-  const bearer = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('airp_bearer') : null;
-  if (bearer) headers.Authorization = 'Bearer ' + bearer;
-  const resp = await fetch('/v1/extensions/catalog', { headers });
+  const resp = await fetch(engineUrl('/v1/extensions/catalog'), {
+    headers: authedHeaders({ Accept: 'application/json' }),
+  });
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return resp.json();
+}
+
+/**
+ * C-P3：拉取 engine 权威 grant 状态并注入 consent.js。
+ * 失败（engine 不可达 / 非 2xx）时静默降级——consent.js 仍用 localStorage
+ * UX 层缓存（initGrants 已在 boot() 开头调用），canMount 行为同 C-P1。
+ */
+async function fetchEngineGrants() {
+  try {
+    const resp = await fetch(engineUrl('/v1/extensions/grants'), {
+      headers: authedHeaders({ Accept: 'application/json' }),
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const grants = await resp.json();
+    consent.initGrantsFromEngine(grants);
+  } catch (error) {
+    console.warn('[widget-boot] engine grants 不可用，降级 consent localStorage 缓存：', error.message || error);
+  }
 }
 
 async function boot() {
@@ -74,6 +138,10 @@ async function boot() {
 
   // builtin 首方 widget 注册（module kind，进程内、无 consent）。
   registry.registerModuleWidget('airp.clock', () => createClockWidget());
+
+  // C-P3：先拉 engine 权威 grant 状态注入 consent（异步），再拉 catalog。
+  // 两者都失败时降级为本地 slots.json + localStorage consent（C-P1 行为）。
+  await fetchEngineGrants();
 
   // 机器可读计划：优先 engine 权威下发，失败降级本地静态 slots.json；
   // 两者都失败时降级为空计划——slot 保持空占位，不硬失败。
