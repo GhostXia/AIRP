@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-08-03
-> 代码基线：`main@e931bf7`（合并 PR #445 `feat(engine): backup/restore closed loop (E-P2-1, closes #342)`）
+> 基线日期：2026-08-06
+> 代码基线：`main@e28ea02`（合并 PR #492 `[审计遗留] webui 侧遗留收束：#489 W1/W2/W3/D2 + #485 W1/W2/W3（两半齐）`）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -15,6 +15,8 @@
 
 增量校准（2026-08-03，W-06 闭合）：代码锚点从 `main@830426e` 推进到 `main@e931bf7`，吸收 PR #436/#439/#441（R1 锁序收敛 + 运行时强制 + 回归测试，closes #437/#438/#440）与 PR #445（#342 backup/restore 最小闭环）的交付事实。#342 标记为已交付（v1 限制见 §2.2）；R1 锁序合同补全见 [LOCK-ORDER-CONTRACT.md](LOCK-ORDER-CONTRACT.md) §1.5/§2.9/R4。本次为 docs-only 增量校准，§6 验证快照的 full-workspace 数字未在本 docs-pass 重跑，仅追加 #342 与 R1 回归测试的 PR 级证据。
 
+增量校准（2026-08-06，v0.0.4 docs-pass / 审计遗留 #485 D1）：代码锚点从 `main@e931bf7` 推进到 `main@e28ea02`，吸收 PR #462–#465（深度审计报告修正、BUG-1/BUG-2 会话修复、SSE 事件合同固化与 v1 端点守卫、STYLEGUIDE 与截图套件机制）与 PR #480–#487/#491/#492（C-P0 桌面壳承载 webui 与 bearer 注入 → C-P1 widget 运行时与沙箱安全边界及 slot 挂载接线 → C-P2 engine 扩展注册面 → C-P3 capability 权威授权与扩展管理 UI → C-P4 扩展合同收口两批 → webui 侧遗留收束）的交付事实。桌面线从「暂停」转为「Tauri 壳承载 webui」（§1/§2.1）；widget 扩展体系与 capability 授权落地为首批闭环（§2.3），**不外推为成熟生态**。本次为 docs-only 增量校准，§6 验证快照的 full-workspace 数字未在本 docs-pass 重跑，仅追加 C-P0~C-P4 的 PR 级证据。
+
 ## 1. 产品与仓库边界
 
 AIRP 是面向 Role Play 的 AI Agent 客户端，采用“无头 Engine + 可换 UI”结构。
@@ -22,10 +24,10 @@ AIRP 是面向 Role Play 的 AI Agent 客户端，采用“无头 Engine + 可�
 | 路径 | 当前职责 | 产品状态 |
 |---|---|---|
 | `engine/` | `airp-core`：RP 数据、prompt 装配、LLM adapter、Agent loop、HTTP/SSE | 唯一业务内核 |
-| `webui/` | 无构建、多页面、同源 WebUI（当前 44 屏） | **正式产品交付主面** |
+| `webui/` | 无构建、多页面、同源 WebUI（当前 44 屏；`assets/widgets/` 为 widget 运行时与 SDK 资产面） | **正式产品交付主面** |
 | `airp-engine-console/` | WebUI 视觉与交互样板 | 设计基线，不是第二套运行时 |
 | `protocol/` | `airp-state-protocol`：共享线协议类型 | Rust workspace 成员 |
-| `ui/`、`ui/src-tauri/` | Vue + Tauri 桌面客户端 | 保留维护线，**近期发布暂停** |
+| `ui/`、`ui/src-tauri/` | Tauri 桌面壳：同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；Vue 主面已归档 | **桌面线重启**，v0.0.4 交付面，边界与限制见 §2.3 |
 | `deploy/windows-webui/` | Windows 便携 WebUI 包 | 当前优先 artifact |
 | `deploy/linux-webui/` | Linux musl 便携包 | 手动构建 artifact |
 | `deploy/production/` | 单实例自托管 HTTPS preview | P0 拓扑，不是正式发布 |
@@ -47,6 +49,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | Agent 与剧情 | 有界 loop、Director、Council、NPC、剧情弧、世界时钟、定时事件、遗忘曲线 | 约 30 个内置工具 + 可动态加载插件工具 | Agent run、剧情弧、群聊、世界事件 | 并发/失败路径有开放审计项（#284/#344/#381）；不是通用多 Agent 平台 |
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP | 屏 36–42 等已接入 | 功能存在 ≠ 真实 provider/工作流已验收 |
 | Provider / 扩展 | 多 Provider 路由、OpenAI-compatible/Anthropic/Ollama、本地脚本/HTTP webhook 插件 | providers/routing/plugin-tools API；Agent registry 动态合并 | 设置与插件管理入口 | 插件非沙箱；HTTPS webhook 注册+请求 fail-closed DNS 与域名 pin 已落地（RR-014 近端修复 / #381 E-P0-3 / #329 N3）；非通用代码沙箱 |
+| Widget 扩展与桌面壳（v0.0.4 新增） | engine `extensions/`：digest-pinned 安装、catalog 权威下发、capability 封闭集与 grant/revoke、desktop session token 签发与 rotation | `/v1/extensions*`、`/v1/widget-intents`（拒绝默认）、`/v1/grants` 统一授权查询面、`/v1/desktop-session*`；digest-pinned 静态包服务在鉴权层外投放、服务时复检摘要 | Tauri 壳同源承载 webui（C-P0）；slot 挂载、opaque-origin iframe 沙箱、consent 授权 UI、扩展管理 UI、Widget SDK | capability 授权由 engine 逐调用强制（C-P3）；第三方 esm 只有同源 digest 目录加载路径；compat harness 锁 hostApi semver 与 capability 封闭集；intent 面无真实执行器；GUI 真机验证未完成（§2.3） |
 | 部署 | production fail-closed 校验、原子配置更新、secret 脱敏 | loopback 默认；首方 gateway 同源代理 | Windows/Linux 便携包与 production preview | 非多租户；P1/P2/P3 发布门未闭合 |
 
 ### 2.1 结构性事实（2026-08-02 审查确认）
@@ -57,7 +60,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 2. **单资源原子写 ≠ 跨资源事务**：`finalize` 可对 message → state → volume 逐步 fail-closed，崩溃后跨资源一致性仍是 best-effort（RR-004 / #286）。  
 3. **Domain 写路径未完全闭合**：shared service 是目标边界；Agent tools 等路径仍可能直接 `replace_file` / `fs` 写（#381 E-P1-3 / #160）。  
 4. **锁模型分裂**：character/session/state/persona/conversation/decay/FTS/quota 等多套锁；async 路径上存在 std 锁 + 锁内磁盘 I/O；poison 策略不一致（#284/#220/#381）。  
-5. **桌面线暂停**：`ui/` 保留；画布接力等草案在 archive，不进入当前执行队列。
+5. **桌面线暂停** ⚠️ superseded（2026-08-06）：C-P0（PR #480）起桌面线转为「Tauri 壳同源承载 webui + bearer 注入通道」，Vue 主面归档；当前事实与限制见 §2.3。原结论中「画布接力等草案在 archive、不进入当前执行队列」仍然成立。
 
 ### 2.2 v0.0.3 收敛切片的已交付边界
 
@@ -72,6 +75,19 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | #413 | lock-only 更新 `brace-expansion` 2.1.1→2.1.4、`postcss` 8.5.16→8.5.25、`nanoid` 3.3.15→3.3.16；`npm audit --json` 与 `--omit=dev` 均为 0。当前 SBOM 生成报告 693 third-party、unknown license 0、blocked 0；inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。 | SBOM/notice 生成仍未成为 release pipeline 强制门禁；`ui` 依赖用于构建/测试，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime。 |
 | #436/#439/#441（R1 锁序收敛 + 运行时强制） | `advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` / `run_seal_flow` 五个 agent-tool 路径补齐外层 `character_lock.read()`（R1）；`StateService::mutate` 拆为 `mutate_locked` + `mutate` 消除 re-entrancy；`lock_order` 模块提供 R1+R2 运行时 `debug_assert!` 强制（thread-local 栈 + RAII Guard，release 零开销）；4 条并发回归测试（各路径与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + TOCTOU）；lock-map cleanup race 修复（`remove_deleted_*_lock` 移到 write guard drop 之后）。 | R1/R2 仅在 `debug_assertions` 下强制，release build 无运行时强制；`advance_plot` 仍持 std 锁做同步 I/O（A3 debt）；W-01~W-04 follow-up 见 #442/#443/#444。 |
 | #342（PR #445，backup/restore 最小闭环） | 手动 backup（Full / Character / Session scope）+ manifest schema v1（per-file SHA-256 + tree SHA-256）+ `verify_against_disk` 完整性校验 + restore（Full + scoped `swap_scoped_subtree`）+ `PreRestoreRollback` 回滚备份 + post-restore 校验 + `PreDelete` 自动备份（`delete_character` / `delete_session`，`force=true` 可跳过）+ secret 排除（`secrets.json` / `settings.json`）+ `BACKUP_LOCK` 串行化 + WebUI backup 管理界面。82 条 backup 测试通过（PR #445）。 | v1 限制：无自动定时备份；restore swap 阶段不持 `character_lock`（W-02，#447，v1 缓解为维护窗口执行）；Windows `sync_dir` no-op（W-03，#448）；跨资源一致性 backup 未交付；完整 migration / 导出未交付（#346）。审计遗留 W-01~W-06 见 #446/#447/#448/#449/#450/#451。 |
+
+### 2.3 v0.0.4 收敛切片：桌面线与扩展合同（`main@e28ea02`）
+
+以下记录 v0.0.3 → `main@e28ea02` 桌面线与扩展合同的已交付边界与已知限制，不把合同闭环外推为成熟生态：
+
+| 切片 | 已实现 / 已验证 | 明确未包含 |
+|---|---|---|
+| C-P0（PR #480，桌面壳） | Tauri 壳经 `AIRP_DESKTOP_WEBUI_DIR` 同源承载 engine webui 资产（与浏览器宿主跑同一份）；壳持 access key 调 `POST /v1/desktop-session` 换短时效 UI token，以 URL fragment（`#airp-token=...`，不进服务端日志/Referer）导航首屏，首屏写入 `sessionStorage.airp_bearer` 后清理；导航成功后壳按 `expires_in/2`（clamp 5s~4h）调度续期循环——故意用 exchange（只增不撤）而非 renew（rotation），避免与 webui 持有的旧 token 互踢，代价是旧 token 在自身 TTL 内仍有效；交换失败后切 60s 短间隔重试（failed_fast）；webui 撞 401 另有 `POST /v1/desktop-session/renew`（rotation）兜底。Vue 主面随 C-P0 归档。 | 壳续期循环无 GUI 真机验证证据（发布级证据仍为 packaged smoke，RR-006）；不改变浏览器 WebUI 拓扑。 |
+| C-P1（PR #481/#482，widget 运行时） | `webui/assets/widgets/`：widget-host 与 slot 挂载（5 个内置 slot：`chat.sidebar`/`chat.panel-right`/`settings.context`/`diagnostics.context`/`workbench.grid`）；第三方 esm 运行于 `sandbox="allow-scripts"` 的 opaque-origin iframe（读不到宿主 DOM/存储/cookie，仅经 postMessage 通信）；首批 widget（时钟/状态胶囊/第三方示范）接线 + 契约测试。 | 非通用代码沙箱：无 CPU/网络/资源隔离；首方 builtin widget 不走 iframe。 |
+| C-P2（PR #483，engine 扩展注册面） | `POST /v1/extensions/install` digest-pinned 安装：逐文件 SHA-256 校验、包级摘要即内容寻址目录名（`data_root/extensions/<digest>/`）；安装面强制改写 `entry.source` 为 `/extensions/<digest>/index.js` 且 `sandbox=true`（跨源加载路径在安装面消灭，R0 硬门禁）；slot 必须 ∈ 内置封闭集；`GET /v1/extensions/catalog` 权威下发（内置默认计划打底，engine 无安装扩展时不硬失败；webui 静态 `slots.json` 仅作降级）；`/v1/widget-intents` 拒绝默认合同；digest-pinned 静态包服务在鉴权层外投放（内容寻址不可变 + nosniff + ACAO:*），服务时复检摘要，未注册 digest 一律 404；`POST /v1/desktop-session/renew` token rotation（撤旧发新，旧 token 立即失效；access key 不得被续期）。 | C-P3 无 intent 执行器：授权通过即视为 intent 被接受并留痕，不是真实执行。 |
+| C-P3（PR #486，capability 权威授权） | engine 签发/撤销 capability grant（`POST /v1/extensions/:id/grants`，子集授权须 ∈ manifest）；`POST /v1/widget-intents` 逐调用强制：按 widget_type 找已启用记录，capability ∈ `granted_capabilities` 否则 403 `intent_denied`；新装/重装一律从无 grant 起步（consent 不跨身份延续）；授权决策全部 tracing 审计留痕；扩展管理与 consent 授权 UI。 | capability 封闭集仅 6 项（`read/write:memory`、`read:worldbook`、`read/write:state`、`call:tool`）；无执行器；MCP/plugin 授权主体未接入统一面。 |
+| C-P4 两批（PR #487/#491，扩展合同收口） | catalog fail-closed：未知 slot 不编入下发计划并 warn；hostApi semver：`host_api` 声明 major 必须等于 `HOST_API_MAJOR=1`，缺省视为 `"1"`，跨 major 一律拒绝安装（前向兼容铁律，不静默尝试）；Widget SDK（onError 容纳合同、manifest 深冻结、esm 必须显式 `sandbox:true`）；compat harness（仅测试构型编译，不进产物）：解析/安装矩阵、前向兼容铁律独立测试、host_api serde 往返、`KNOWN_CAPABILITIES` 与 `docs/WIDGET-DEVELOPMENT.md` §5 文档锁；catalog 顶层下发 `host_api_major` 与 capability 封闭集；`GET /v1/grants` 统一授权查询面（每条带 `kind` 判别字段，当前仅 `kind: "widget"`，additive）；typed error 区分 404/500 storage_error；静态包服务 digest 复检移入 `spawn_blocking`。 | HOST_API_MAJOR bump 时需人工补 compat 矩阵项（见 RISK-REGISTER）；无多 major 兼容过渡机制。 |
+| webui 侧收束（PR #492） | SDK onError 容纳（onError 自身抛错也吞掉，不炸宿主）、manifest 深冻结、endpoint-guard 递归扫描（`readdir(..., {recursive:true})`）、token-renewal 测试环境还原、`onUnauthorized` undefined 守卫。 | #485 剩余 W4（applySlotPlan 守卫）/W5（intent handler 结果回传）/W6（catalog 拉取超时）/T1（壳续期日志退避与未读参数）未修，去向见 #493（W4~W6 绑入下一轮桌面线工作，T1 搭进下次触碰 `ui/src-tauri` 的 PR）。 |
 
 ## 3. 必须保持的不变式
 
@@ -94,11 +110,15 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 - 不能把 Worldbook/Preset **advisory** 字段写成已执行语义；以 [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md) 为准。  
 - 不能把「已开 GitHub issue / 已写审计 umbrella」写成「风险已关闭」。
 - 不能把 #398–#411 的取消、marker、Recovering 或 harness 证据外推为自动 replay/repair、Agent/tool 单 owner、性能 SLO、backup/restore 或真实 provider/browser/Compose 验收。
+- 不能把 Tauri 桌面壳的 webui 承载与 token 续期循环外推为 GUI 真机验证、打包安装器证据或发布级 smoke 已完成；壳续期循环的 GUI 真机确认仍是开放项。
+- 不能把 widget 扩展体系的契约测试与 compat harness 外推为成熟扩展生态：无签名、无市场、无吊销、无多 major 兼容；intent 面当前无真实执行器（C-P3 授权通过即接受）；capability 封闭集仅 6 项。
 - #346 完整导出/migration、跨资源一致性 backup、自动定时备份/恢复、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的 SBOM release gate、签名、browser matrix、soak 仍未交付；它们是后续正式 release gates，不是当前代码已具备的能力。#342 backup/restore **最小闭环已交付**（PR #445，v1 限制见 §2.2），但不得外推为完整灾难恢复或自动定时备份。
 
 ## 5. 当前优先级
 
 当前主线不是扩大功能面，而是把已合入能力收敛成可验证、可恢复的 **P1 有限试用**（**v0.0.3 后端门禁窗口**）：
+
+**v0.0.4 准备（2026-08-06）**：桌面线与扩展合同切片（C-P0~C-P4，PR #480–#487/#491/#492）已全部合入；本窗口 docs-pass（审计遗留 #485 D1）将基线/安全/风险文档对齐到 `main@e28ea02`。剩余 #485 项 W4/W5/W6/T1 随 [#493](https://github.com/GhostXia/AIRP/issues/493) 跟进；壳续期循环的 GUI 真机确认与打包 artifact 证据仍属发布级门禁。
 
 **v0.0.3 P1 门状态（2026-08-02）**：代码与 mock/CI 证据已覆盖 #398–#413 的上述收敛切片；对 P1 有限试用，唯一尚未完成的外部硬阻塞是 [#130](https://github.com/GhostXia/AIRP/issues/130) 的维护者验收：真实 provider + 真实 browser + production Compose。CI mock、system Chrome 或本地单元测试不能替代该验收。
 
@@ -134,6 +154,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | Conversation migration 解耦 | [#371](https://github.com/GhostXia/AIRP/issues/371) |
 | WebUI 能力展现 / 契约门禁 | [#311](https://github.com/GhostXia/AIRP/issues/311)、[#345](https://github.com/GhostXia/AIRP/issues/345) |
 | 范围收敛 / 路线图索引 | [#242](https://github.com/GhostXia/AIRP/issues/242)、[#312](https://github.com/GhostXia/AIRP/issues/312) |
+| 桌面线 / 扩展合同遗留（#485 W4~W6/T1） | [#493](https://github.com/GhostXia/AIRP/issues/493)、[#485](https://github.com/GhostXia/AIRP/issues/485) |
 
 ## 6. 验证快照
 
@@ -150,7 +171,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | dependency governance / SBOM | `discover-deps.mjs --fail-on-block`；`generate-sbom.mjs --fail-on-unknown` | 均 exit 0；**693 third-party / unknown 0 / blocked 0**。inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。 |
 | production topology / 真实 provider·browser | CI mock/system-Chrome 与本地检查 | 不能替代 #130 维护者真实 provider + 真实 browser + Compose 验收；当前不宣称通过。 |
 
-未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact、网络故障、进程崩溃和真实 provider 长会话，不得由本表推断为通过。本 docs-pass（2026-08-03）未重跑 full-workspace 测试；#342 与 R1 行为 PR 级证据，其余行仍为 `main@830426e` 证据。
+未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact、网络故障、进程崩溃、真实 provider 长会话，以及 Tauri 壳续期循环的 GUI 真机确认，不得由本表推断为通过。本 docs-pass（2026-08-06）未重跑 full-workspace 测试；除 #342/R1 与 C-P0~C-P4 的 PR 级证据外，其余行仍为 `main@830426e` 证据。
 
 ## 7. 文档职责（校准后）
 
@@ -177,5 +198,6 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | 归档 | `docs/archive/2026-07-29-desktop-ui-canvas-relay-plan.md`（原未跟踪活路径草案） | 桌面发布暂停；草案不占活文档位 |
 | 保留 | `docs/audits/2026-07-28-desktop-ui-relay-plan-audit.md` | 计划级审计原始记录 |
 | 刷新 | 本文、DEV-GUIDE、WEBUI-PRODUCTION-PLAN 及直接相关事实入口 | 对齐 `830426e`、#398–#413 与 #130 未解除状态 |
+| 刷新（2026-08-06） | 本文、SECURITY、RISK-REGISTER、UI-PROTOCOL-DECISION | 对齐 `main@e28ea02` 的 C-P0~C-P4 交付事实（审计遗留 #485 D1） |
 
 完整阅读路径与维护规则见 [README.md](README.md)。
