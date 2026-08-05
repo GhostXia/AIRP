@@ -458,6 +458,12 @@
       "note": "C-P3 consent.js boot 时批量拉取权威 grant 状态（type → granted_capabilities）"
     },
     {
+      "method": "GET",
+      "path": "/v1/grants",
+      "ui": true,
+      "note": "C-P4 第二批（#484）统一授权查询面：kind 判别字段聚合全部授权主体（本阶段仅 widget），扩展管理页授权总览卡消费"
+    },
+    {
       "method": "POST",
       "path": "/v1/image/generate",
       "bodyLimit": "2MB",

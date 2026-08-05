@@ -306,6 +306,29 @@ pub async fn list_all_grants(State(state): State<Arc<DaemonState>>) -> Json<Valu
     Json(json!({ "grants": grants }))
 }
 
+/// `GET /v1/grants`：C-P4 第二批（#484）统一授权查询面。
+///
+/// 跨类型授权聚合的唯一权威入口：每个 grant 条目带 `kind` 判别字段，
+/// 本阶段仅有 `kind: "widget"`（扩展 grant）；后续 MCP/plugin 等授权
+/// 主体接入时 additive 追加新 kind，消费方按 kind 分支。
+/// `/v1/extensions/grants` 保留不动（consent.js 初始化面兼容）；本端点
+/// 面向授权总览/审计类消费（console-runtime 扩展管理页授权总览卡）。
+pub async fn list_unified_grants(State(state): State<Arc<DaemonState>>) -> Json<Value> {
+    let store = store(&state);
+    let grants: Vec<Value> = store
+        .list()
+        .iter()
+        .map(|record| {
+            let mut view = grant_view(record);
+            if let Some(object) = view.as_object_mut() {
+                object.insert("kind".to_string(), json!("widget"));
+            }
+            view
+        })
+        .collect();
+    Json(json!({ "grants": grants }))
+}
+
 /// `GET /v1/extensions/catalog`：机器可读下发（manifests + slot 计划）。
 ///
 /// 组装规则：内置默认计划打底；已启用扩展的 manifest 按 type upsert

@@ -79,6 +79,8 @@ fn ext_router(state: Arc<DaemonState>) -> Router {
             "/v1/extensions/grants",
             get(crate::extensions::api::list_all_grants),
         )
+        // C-P4 第二批（#484）：统一授权查询面。
+        .route("/v1/grants", get(crate::extensions::api::list_unified_grants))
         .route(
             "/v1/widget-intents",
             post(crate::extensions::api::widget_intent),
@@ -921,6 +923,63 @@ async fn cp3_get_extension_grants_and_list_all_grants() {
             .unwrap()
             .is_empty(),
         "未 grant 的扩展 granted_capabilities 必须为空"
+    );
+}
+
+#[tokio::test]
+async fn cp4_unified_grants_endpoint_aggregates_with_kind() {
+    let (state, _guard) = make_state_no_key();
+    let router = ext_router(state);
+    let id_a = install_helper(&router, "acme.unified-a", &["read:state"]).await;
+    let _id_b = install_helper(&router, "acme.unified-b", &["read:state"]).await;
+    // 仅 grant A。
+    let resp = router
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/extensions/{id_a}/grants"),
+            &grant_request("grant", None),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // GET /v1/grants：统一面聚合全部授权主体，每条带 kind 判别字段。
+    let resp = router
+        .clone()
+        .oneshot(Request::get("/v1/grants").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let grants = body["grants"].as_array().unwrap();
+    assert_eq!(grants.len(), 2, "两个已安装扩展均入统一面");
+    for grant in grants {
+        assert_eq!(
+            grant["kind"], "widget",
+            "本阶段授权主体仅 widget 扩展，kind 必须为判别字段"
+        );
+        assert!(grant["id"].is_string());
+        assert!(grant["type"].is_string());
+        assert!(grant["granted_capabilities"].is_array());
+    }
+    let by_type: std::collections::HashMap<&str, &serde_json::Value> = grants
+        .iter()
+        .map(|g| (g["type"].as_str().unwrap(), g))
+        .collect();
+    assert_eq!(
+        by_type["acme.unified-a"]["granted_capabilities"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        by_type["acme.unified-a"]["granted_at"].is_u64(),
+        "已 grant 条目必须带签发时间戳"
+    );
+    assert!(
+        by_type["acme.unified-b"]["granted_at"].is_null(),
+        "未 grant 条目不得残留 granted_at"
     );
 }
 
