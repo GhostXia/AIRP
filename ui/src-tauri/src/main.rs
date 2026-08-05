@@ -540,7 +540,8 @@ fn spawn_readiness_and_navigate(
         }
 
         // 3. bearer 注入通道：进程互信（access key）换短时效 UI token。
-        let token = exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await;
+        let exchanged = exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await;
+        let token = exchanged.as_ref().map(|(token, _)| token.clone());
 
         // 4. 导航首屏。fragment 不发送到服务端；entry.js 承接写入 sessionStorage。
         let mut target = format!("{engine_url}/");
@@ -554,6 +555,18 @@ fn spawn_readiness_and_navigate(
                     if let Err(error) = window.navigate(url) {
                         tracing::error!(%error, "failed to navigate main window to WebUI");
                         show_engine_error(&app, &format!("Failed to open the WebUI: {error}"));
+                    } else {
+                        // C-P2：导航成功后启动 token 续期循环，避免 8h TTL
+                        // 边界会话锁死（C-P1 交接项 / issue #479）。
+                        if let Some((token, expires_in)) = exchanged {
+                            spawn_token_renewal_loop(
+                                app.clone(),
+                                engine_url.clone(),
+                                access_key.clone(),
+                                token,
+                                expires_in,
+                            );
+                        }
                     }
                 } else {
                     tracing::error!("main window disappeared before WebUI navigation");
@@ -562,6 +575,78 @@ fn spawn_readiness_and_navigate(
             Err(error) => {
                 tracing::error!(%error, url = %target, "invalid WebUI navigation URL");
                 show_engine_error(&app, &format!("Invalid WebUI URL: {error}"));
+            }
+        }
+    });
+}
+
+/// C-P2：desktop session token 主动续期循环。
+///
+/// 策略：按返回的 `expires_in / 2` 调度重新交换（access key 换新 token，
+/// 新 token 天然撤销旧的会话上下文价值）；成功后经 `webview.eval()` 推送
+/// 新 bearer 到 `sessionStorage.airp_bearer` 并 dispatch `airp-bearer-renewed`
+/// ——api-client 的函数形态 bearer 在下次请求即取新值。
+///
+/// 为何不走 Tauri IPC：webview 运行在 `http://127.0.0.1:<port>` 远程 URL
+/// （engine 同源承载），无 Tauri IPC 通道；动态端口也无法枚举进
+/// dangerousRemoteUrlIpcAccess。eval 注入是同进程单向推送，不引入新攻击面。
+///
+/// 失败处理：交换失败退避 60s 重试；连续无法续期时 webui 侧撞 401 还有
+/// `POST /v1/desktop-session/renew` 兜底（rotation），双保险。
+fn spawn_token_renewal_loop(
+    app: tauri::AppHandle,
+    engine_url: String,
+    access_key: Option<String>,
+    _initial_token: String,
+    mut expires_in: u64,
+) {
+    if access_key.is_none() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        loop {
+            // TTL 过半即续期；下限 5s 防短 TTL 冒烟时热循环，上限 4h 防
+            // engine 返回异常大值时续期完全停摆。
+            let wait_secs = (expires_in / 2).clamp(5, 4 * 3600);
+            tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+            match exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await {
+                Some((new_token, new_expires_in)) => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        // JSON.stringify 转义 token（uuid hex 本无特殊字符，
+                        // 防御性处理）；eval 失败（窗口已销毁/导航中）仅留痕。
+                        let script = format!(
+                            "try {{ sessionStorage.setItem('airp_bearer', {}); \
+                             window.dispatchEvent(new CustomEvent('airp-bearer-renewed', \
+                             {{ detail: {{ expires_in: {new_expires_in} }} }})); }} catch (e) {{}}",
+                            serde_json::to_string(&new_token).unwrap_or_else(|_| "''".to_string())
+                        );
+                        if let Err(error) = window.eval(&script) {
+                            tracing::warn!(%error, "failed to push renewed bearer into webview");
+                        } else {
+                            tracing::info!(
+                                expires_in = new_expires_in,
+                                "desktop session token renewed and pushed to webview"
+                            );
+                        }
+                    } else {
+                        tracing::warn!("main window gone; stopping token renewal loop");
+                        return;
+                    }
+                    expires_in = new_expires_in;
+                }
+                None => {
+                    // 交换失败（engine 重启/网络抖动）：退避后重试；
+                    // webui 侧 401 另有 renew 端点兜底。
+                    tracing::warn!(
+                        retry_in_secs = 60,
+                        "desktop session renewal exchange failed; will retry"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                }
             }
         }
     });
@@ -586,13 +671,14 @@ fn show_port_conflict_error(app: &tauri::AppHandle, port: u16) {
 }
 
 /// 持 access key 调 `POST /v1/desktop-session` 换短时效 UI token。
-/// 失败（无 key / engine 不支持 / 网络）时返回 None：导航降级为无 bearer，
-/// webui 连接卡可手动输入（不阻断桌面可用性）。
+/// 返回 `(token, expires_in_secs)`；失败（无 key / engine 不支持 / 网络）
+/// 时返回 None：导航降级为无 bearer，webui 连接卡可手动输入（不阻断桌面
+/// 可用性）。expires_in 缺失时保守按 60s（宁可多续一次，不长期裸奔）。
 async fn exchange_desktop_token(
     client: &reqwest::Client,
     engine_url: &str,
     access_key: Option<&str>,
-) -> Option<String> {
+) -> Option<(String, u64)> {
     let key = access_key?;
     let response = client
         .post(format!("{engine_url}/v1/desktop-session"))
@@ -606,15 +692,21 @@ async fn exchange_desktop_token(
                     .get("token")
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
-                if token.is_none() {
-                    tracing::warn!("desktop-session response missing token field");
-                } else {
-                    tracing::info!(
-                        expires_in = body.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(0),
-                        "desktop session token exchanged"
-                    );
+                match token {
+                    Some(token) => {
+                        let expires_in = body
+                            .get("expires_in")
+                            .and_then(|v| v.as_u64())
+                            .filter(|v| *v > 0)
+                            .unwrap_or(60);
+                        tracing::info!(expires_in, "desktop session token exchanged");
+                        Some((token, expires_in))
+                    }
+                    None => {
+                        tracing::warn!("desktop-session response missing token field");
+                        None
+                    }
                 }
-                token
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to parse desktop-session response");
