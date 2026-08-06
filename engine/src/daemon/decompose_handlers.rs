@@ -68,10 +68,12 @@ pub struct AnalysisFileContent {
 }
 
 /// A1 修复：enhance 端点返回 diff 预览，不写盘
+/// #432：新增 `original_md_hash` 供 apply 阶段做 CAS 校验
 #[derive(Serialize)]
 pub struct EnhancePreview {
     pub filename: String,
     pub original_md: String,
+    pub original_md_hash: String,
     pub enhanced_md: String,
     pub has_changes: bool,
 }
@@ -82,10 +84,14 @@ pub struct EnhancePreview {
 /// 因此合并为单 POST 端点，用 `action` 字段区分：
 /// - `action: "enhance"` — 只读返回 diff 预览（enhanced_md 由 LLM 真实生成，见 enhance_md_via_llm；issue #92 L3 修复）
 /// - `action: "apply"` — 写入 `enhanced_md` 到文件（需用户提供 enhanced_md 字段）
+///
+/// #432：`expected_hash` 可选，来自 enhance 返回的 `original_md_hash`。
+/// 不传则跳过 CAS 校验（向后兼容）。
 #[derive(Deserialize)]
 pub struct EnhanceApplyRequest {
     pub action: String,
     pub enhanced_md: Option<String>,
+    pub expected_hash: Option<String>,
 }
 
 // ── Query params ─────────────────────────────────────────────────────────────
@@ -304,9 +310,12 @@ pub(super) async fn enhance_or_apply_character_analysis(
             // 与 EnhanceAnalysisTool 同路径：state.config + http_client + call_streaming_api_auto。
             let enhanced_md = enhance_md_via_llm(&state, &original_md, &filename).await?;
             let has_changes = enhanced_md != original_md.trim();
+            // #432: 返回 original_md_hash 供 apply 阶段 CAS 校验
+            let original_md_hash = AnalysisService::content_hash(&original_md);
             Ok(Json(serde_json::to_value(EnhancePreview {
                 filename,
                 original_md,
+                original_md_hash,
                 enhanced_md,
                 has_changes,
             })?))
@@ -316,8 +325,14 @@ pub(super) async fn enhance_or_apply_character_analysis(
                 AirpError::BadRequest("action=apply requires enhanced_md field".into())
             })?;
             let filename_str = filename.clone();
+            let expected_hash = body.expected_hash;
             tokio::task::spawn_blocking(move || {
-                svc.save_file(&cid_str, &filename_str, &enhanced_md)
+                svc.save_file(
+                    &cid_str,
+                    &filename_str,
+                    &enhanced_md,
+                    expected_hash.as_deref(),
+                )
             })
             .await
             .map_err(|e| AirpError::Internal(format!("analysis save task failed: {e}")))??;

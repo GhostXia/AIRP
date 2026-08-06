@@ -199,10 +199,14 @@ impl Tool for EnhanceAnalysisTool {
             // L3：调共享 helper 增强 MD（审计 CR5：抽公共逻辑防两路径漂移）。
             let enhanced_md = enhance_md_via_llm_shared(&state, &original_md, filename).await?;
             let has_changes = enhanced_md != original_md.trim();
+            // #432: 返回 original_md_hash 供 apply 阶段做 CAS 校验，防止 enhance→apply
+            // 之间文件被修改导致 last-write-wins 静默丢失。
+            let original_md_hash = AnalysisService::content_hash(&original_md);
             Ok(ToolResult {
                 output: serde_json::json!({
                     "filename": filename,
                     "original_md": original_md,
+                    "original_md_hash": original_md_hash,
                     "enhanced_md": enhanced_md,
                     "has_changes": has_changes,
                 }),
@@ -251,6 +255,12 @@ impl Tool for ApplyEnhancedAnalysisTool {
                 .get("enhanced_md")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AirpError::BadRequest("missing enhanced_md".into()))?;
+            // #432: 可选 expected_hash（来自 enhance 返回的 original_md_hash）。
+            // 不传则跳过 CAS 校验（向后兼容旧调用方）。
+            let expected_hash = params
+                .get("expected_hash")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             let cid = required_character_id(&params)?;
 
@@ -274,14 +284,18 @@ impl Tool for ApplyEnhancedAnalysisTool {
             // - 串行化：`character_lock(character_id).read()`，与 `LorebookService` 读路径一致。
             // - spawn_blocking：Service 内部同步 `std::fs`，相对原 `tokio::fs::write`
             //   （内部已卸载到 blocking 池）必须显式包装，避免占用 tokio worker 线程（审计 Point 4）。
-            // - 已知 gap（审计 Point 1）：character_lock 不检测语义冲突，last-write-wins
-            //   静默丢失风险由未来 revision 合同/CAS 解决。
+            // - #432 CAS：expected_hash 匹配才写入，否则返回 Conflict 让调用方 re-enhance。
             let svc = AnalysisService::new(state.data_root.clone());
             let cid_str = cid.as_str().to_string();
             let filename_str = filename.to_string();
             let enhanced_md_owned = enhanced_md.to_string();
             tokio::task::spawn_blocking(move || {
-                svc.save_file(&cid_str, &filename_str, &enhanced_md_owned)
+                svc.save_file(
+                    &cid_str,
+                    &filename_str,
+                    &enhanced_md_owned,
+                    expected_hash.as_deref(),
+                )
             })
             .await
             .map_err(|e| AirpError::Internal(format!("analysis save task failed: {e}")))??;
