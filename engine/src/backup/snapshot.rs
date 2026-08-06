@@ -16,9 +16,27 @@
 //! ## 一致性限制（v1）
 //!
 //! v1 **不**实现跨资源锁串行化所有写路径。backup 期间并发写可能产生混合快照。
-//! 调用方应在维护窗口或无活跃 session 时执行 backup。`PreDelete` / `PreRestoreRollback`
-//! 场景由调用方持有的 character_lock / backup_lock 自然串行化相关资源。
-//! follow-up issue 将实现跨资源强一致性备份。
+//! 调用方应在维护窗口或无活跃 session 时执行 backup。
+//!
+//! ## `PreDelete` / `PreRestoreRollback` 串行化范围（#447 修正）
+//!
+//! 上述说法曾写作"由调用方持有的 character_lock / backup_lock 自然串行化相关
+//! 资源"，但该措辞不准确：
+//!
+//! - `PreDelete`：`delete_character` / `delete_session` 持 `character_lock` 调
+//!   `create_backup`，**backup 创建阶段**确实被 character_lock 串行化。但
+//!   `delete_character` 的 `remove_dir_all` 在 `BACKUP_LOCK` 释放后、character
+//!   write guard 持有期间执行——若并发 `restore_backup`，restore swap 与 delete
+//!   的 remove_dir_all 竞态。
+//! - `PreRestoreRollback`：`restore_backup` 内部调 `create_backup_locked`（持
+//!   `BACKUP_LOCK`），**rollback backup 创建阶段**确实串行化。但 restore 的 swap
+//!   阶段（`swap_full_data_root` / `swap_scoped_subtree`）不持任何 character_lock，
+//!   可与并发的 `append_to_current`（持 character.read + session_lock）、
+//!   `StateService::mutate`（持 character.read + state_lock）竞态。
+//!
+//! 结论：仅 backup **创建阶段**被串行化；restore swap 阶段不持 character_lock，
+//! 必须确保无活跃写（维护窗口或暂停 daemon）。follow-up issue 将在 swap 阶段
+//! acquire character_lock 以实现跨资源强一致性。
 //!
 //! ## Scoped restore（v1）
 //!
@@ -1449,5 +1467,86 @@ mod tests {
         assert!(alice_dir.join("card.json").exists());
         let alice_card = fs::read_to_string(alice_dir.join("card.json")).unwrap();
         assert_eq!(alice_card, r#"{"name":"alice"}"#);
+    }
+
+    /// #449: restore swap 阶段失败后必须保留 staging + rollback backup，
+    /// 供人工恢复。不清理现场，data_root 不半删。
+    ///
+    /// 触发方式：scoped restore 的 `swap_scoped_subtree` 在 `create_dir_all(parent)`
+    /// 时失败——把 `data_root/characters` 从目录替换为文件，使 `create_dir_all`
+    /// 无法创建 `characters/alice` 的父目录 `characters/`。
+    #[test]
+    fn restore_swap_failure_preserves_staging_and_rollback() {
+        let dir = tempdir().unwrap();
+        // 创建 character 子树
+        let alice_dir = dir.path().join("characters").join("alice");
+        fs::create_dir_all(&alice_dir).unwrap();
+        fs::write(alice_dir.join("card.json"), r#"{"name":"alice"}"#).unwrap();
+
+        // 创建 Character scope backup
+        let opts = make_opts(
+            dir.path(),
+            BackupSource::Manual,
+            BackupScope::Character {
+                character_id: "alice".to_string(),
+            },
+        );
+        let created = create_backup(&opts).unwrap();
+
+        // 破坏 data_root：把 characters/ 目录替换成同名文件，
+        // 使 swap_scoped_subtree 的 create_dir_all(data_root/characters) 失败
+        fs::remove_dir_all(dir.path().join("characters")).unwrap();
+        fs::write(dir.path().join("characters"), "not a directory").unwrap();
+
+        // restore 应失败（swap 阶段 create_dir_all 失败）
+        let result = restore_backup(dir.path(), &created.backup_id);
+        assert!(
+            result.is_err(),
+            "restore should fail when swap cannot create parent dir"
+        );
+
+        // 1. staging 目录应保留（.restore-staging-{backup_id}）
+        let staging_dir = dir
+            .path()
+            .join(format!(".restore-staging-{}", created.backup_id));
+        assert!(
+            staging_dir.exists(),
+            "staging dir should be preserved on swap failure: {}",
+            staging_dir.display()
+        );
+
+        // 2. rollback backup 应存在且可读（PreRestoreRollback source）
+        //    restore_backup 返回 Err 无法直接拿 rollback_id，从 backups/ 目录中查找
+        let backups_dir = dir.path().join("backups");
+        let mut found_rollback = false;
+        for entry in fs::read_dir(&backups_dir).unwrap() {
+            let entry = entry.unwrap();
+            let backup_id = entry.file_name().to_str().unwrap().to_string();
+            if backup_id == created.backup_id {
+                continue; // 跳过源 backup
+            }
+            let manifest = read_backup_manifest(dir.path(), &backup_id).unwrap();
+            if manifest.source == BackupSource::PreRestoreRollback {
+                found_rollback = true;
+                // rollback backup 完整性校验应通过
+                let backup_dir = backups_dir.join(&backup_id);
+                manifest.verify_against_disk(&backup_dir).unwrap();
+                break;
+            }
+        }
+        assert!(
+            found_rollback,
+            "rollback backup (PreRestoreRollback) should exist and pass verify_against_disk"
+        );
+
+        // 3. data_root 不半删：characters 仍是文件（swap 未完成，alice 未恢复）
+        assert!(
+            dir.path().join("characters").is_file(),
+            "data_root should not be half-deleted: characters should still be the file we created"
+        );
+        assert!(
+            !alice_dir.exists(),
+            "alice subtree should not exist (restore did not complete)"
+        );
     }
 }

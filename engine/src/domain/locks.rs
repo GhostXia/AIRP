@@ -200,4 +200,50 @@ mod tests {
         remove_deleted_state_lock("#422-test-nonexistent-state");
         remove_deleted_persona_lock("#422-test-nonexistent-persona");
     }
+
+    /// #435: `delete_character` 删除整个 `characters/{id}/` 目录（含所有 sessions），
+    /// 需批量清理该 character 下所有 session 的 SESSION_LOCKS 条目，避免内存泄漏
+    /// 和 ghost session lock 复用。本测试验证逐个调用 `remove_deleted_session_lock`
+    ///（`delete_character` 的实际清理路径）后，所有 session lock 条目均被移除。
+    #[test]
+    fn remove_deleted_session_locks_for_character_bulk_cleanup() {
+        let cid = unique_id("bulk-char");
+        let sid1 = SessionId::new();
+        let sid2 = SessionId::new();
+        let sid3 = SessionId::new();
+
+        // 模拟 3 个活跃 session 的 lock（delete_character 前的状态）
+        let arc1_before = session_lock(&cid, Some(&sid1));
+        let arc2_before = session_lock(&cid, Some(&sid2));
+        let arc3_before = session_lock(&cid, Some(&sid3));
+
+        // delete_character 的清理路径：遍历已知 sessions 逐个清理
+        for sid in [&sid1, &sid2, &sid3] {
+            remove_deleted_session_lock(&cid, sid);
+        }
+
+        // 所有 session lock 条目应被移除：再次获取返回新 Arc（非 ptr_eq）
+        let arc1_after = session_lock(&cid, Some(&sid1));
+        let arc2_after = session_lock(&cid, Some(&sid2));
+        let arc3_after = session_lock(&cid, Some(&sid3));
+
+        assert!(
+            !Arc::ptr_eq(&arc1_before, &arc1_after),
+            "session lock for sid1 should be removed"
+        );
+        assert!(
+            !Arc::ptr_eq(&arc2_before, &arc2_after),
+            "session lock for sid2 should be removed"
+        );
+        assert!(
+            !Arc::ptr_eq(&arc3_before, &arc3_after),
+            "session lock for sid3 should be removed"
+        );
+
+        // 清理测试产生的条目，避免污染全局 lock map
+        for sid in [&sid1, &sid2, &sid3] {
+            remove_deleted_session_lock(&cid, sid);
+        }
+        remove_deleted_character_lock(&cid);
+    }
 }
