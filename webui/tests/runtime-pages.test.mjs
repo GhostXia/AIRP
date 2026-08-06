@@ -8,6 +8,7 @@ import { sanitizeDomSnapshot } from '../../tools/agent-exploration/dom-privacy.m
 const rolePage = await readFile(new URL('../screens/01-role-list.html', import.meta.url), 'utf8');
 const chatPage = await readFile(new URL('../screens/02-chat-space.html', import.meta.url), 'utf8');
 const backupPage = await readFile(new URL('../screens/22-backup-restore.html', import.meta.url), 'utf8');
+const pluginsPage = await readFile(new URL('../screens/24-plugins.html', import.meta.url), 'utf8');
 const onboardingPage = await readFile(new URL('../screens/16-onboarding.html', import.meta.url), 'utf8');
 const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
@@ -312,6 +313,42 @@ test('backup page calls backup API and renders list with secret/restore warnings
   assert.match(backupRenderer, /pre_restore_rollback/, 'must label pre_restore_rollback source');
 });
 
+// C-P3：扩展管理 UI 接入契约测试。原 renderUnavailable('plugins') 占位已废弃，
+// 改为断言 renderPlugins 调用 /v1/extensions 系列端点（install/list/enable/disable/
+// delete/grants），并向用户明示安全风险（安装即信任、digest-pinned、capability 权威）。
+test('plugins page calls extensions API and renders list with security warnings', () => {
+  assert.match(pluginsPage, /data-screen="plugins"/);
+  // renderer 已从 renderUnavailable('plugins') 切换为 renderPlugins
+  assert.ok(consoleRuntime.includes('plugins: renderPlugins'),
+    'renderers map must bind plugins to renderPlugins');
+  assert.doesNotMatch(consoleRuntime, /plugins:\s*\(\)\s*=>\s*renderUnavailable\('plugins'\)/,
+    'must not keep the old unavailable renderer for plugins');
+  // renderPlugins 函数定义存在
+  assert.match(consoleRuntime, /async function renderPlugins\b/,
+    'missing renderPlugins function');
+  const start = consoleRuntime.indexOf('async function renderPlugins');
+  const end = consoleRuntime.indexOf('async function renderUnavailable', start);
+  assert.ok(start >= 0 && end > start, 'renderPlugins must be a bounded renderer');
+  const pluginsRenderer = consoleRuntime.slice(start, end);
+  // 调用 extensions API 契约：list / install / enable / disable / delete / grants
+  assert.match(pluginsRenderer, /GET.*\/v1\/extensions'/, 'must list extensions via GET /v1/extensions');
+  assert.match(pluginsRenderer, /POST.*\/v1\/extensions\/install/, 'must install via POST /v1/extensions/install');
+  assert.match(pluginsRenderer, /POST.*\/v1\/extensions\/.*\/enable/, 'must enable via POST /v1/extensions/:id/enable');
+  assert.match(pluginsRenderer, /POST.*\/v1\/extensions\/.*\/disable/, 'must disable via POST /v1/extensions/:id/disable');
+  assert.match(pluginsRenderer, /DELETE.*\/v1\/extensions\//, 'must delete via DELETE /v1/extensions/:id');
+  assert.match(pluginsRenderer, /POST.*\/v1\/extensions\/.*\/grants/, 'must grant/revoke via POST /v1/extensions/:id/grants');
+  // 安全提示：安装即信任
+  assert.match(pluginsRenderer, /安装即信任/, 'must warn install = trust');
+  // digest-pinned 摘要锚定提示
+  assert.match(pluginsRenderer, /digest-pinned/, 'must mention digest-pinned integrity');
+  // capability 权威签发提示
+  assert.match(pluginsRenderer, /capability 授权由 engine 权威签发/, 'must mention engine authoritative grant');
+  // 删除确认对话框明示不可恢复
+  assert.match(pluginsRenderer, /不可恢复/, 'delete dialog must warn irreversible');
+  // grant 确认对话框明示授权后果
+  assert.match(pluginsRenderer, /授权后 widget 即可发起对应 capability 的 intent/, 'grant dialog must warn capability consequences');
+});
+
 // N-K 修复：PR #314 Phase 1 WebUI 关键修复点契约测试
 test('PR #314 B1/B2/B3/N-D fixes are present in console-runtime and chat-space', async () => {
   const rt = await readFile(new URL('../assets/console-runtime.js', import.meta.url), 'utf8');
@@ -362,4 +399,27 @@ test('PR #314 N-E bearer cross-origin protection is present in api-client', asyn
   assert.match(ac, /shouldSendBearer/, 'N-E: must have shouldSendBearer guard');
   assert.match(ac, /trustedOrigins/, 'N-E: must support trustedOrigins whitelist');
   assert.match(ac, /headers\(.*,\s*base\)/, 'N-E: headers must receive target base for origin check');
+});
+
+// 审计 #485 W3：chat-space 的 onUnauthorized 必须有 AIRPDesktopSession typeof 守卫。
+// chat-space.js 是浏览器 IIFE 脚本，node 无法实例化其闭包，故用源码标记
+// 契约（同本文件 PR #314 模式）锁定守卫存在；钩子 falsy → 不重试的行为面
+// 已由 token-renewal.test.mjs 的 api-client 契约覆盖。
+test('#485 W3: chat-space onUnauthorized guards against missing AIRPDesktopSession', async () => {
+  const cs = await readFile(new URL('../assets/chat-space.js', import.meta.url), 'utf8');
+  assert.match(
+    cs,
+    /typeof AIRPDesktopSession === 'undefined'/,
+    'W3: onUnauthorized 必须先做 typeof 守卫（key 模式浏览器直开时无该全局）',
+  );
+  assert.match(
+    cs,
+    /onUnauthorized:[\s\S]{0,200}return false;[\s\S]{0,200}renewDesktopSession/,
+    'W3: 守卫 undefined 分支必须返回 false（等价无 key 回退），再走续期',
+  );
+  assert.doesNotMatch(
+    cs,
+    /onUnauthorized:\s*\(\)\s*=>\s*AIRPDesktopSession\.renewDesktopSession/,
+    'W3: 不得回退到无守卫的直接调用（ReferenceError 会击穿 401 恢复链）',
+  );
 });

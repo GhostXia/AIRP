@@ -243,6 +243,91 @@ pub(crate) fn recover_completed_turn(
     }
 }
 
+/// Outcome of moving a pending marker out of the session history directory.
+#[derive(Debug)]
+pub(crate) struct QuarantinedMarker {
+    pub(crate) generation_id: String,
+    pub(crate) phase: TurnCommitPhase,
+    pub(crate) quarantine_path: PathBuf,
+}
+
+/// User-directed recovery bypass: archive a pending marker instead of
+/// replaying it.
+///
+/// The marker is moved from the session history directory into
+/// `<data_root>/quarantine/turn-commit/<character>/<session>/` with a
+/// timestamped name.  It is never deleted: the original bytes stay
+/// recoverable for a later payload-aware replay slice or manual inspection.
+/// Callers must only invoke this when no active command lease owns the
+/// session (the admission path keeps failing closed while a marker exists,
+/// so an idle/recovering Coordinator status is the required precondition).
+pub(crate) fn quarantine_pending_marker(
+    data_root: &Path,
+    character_id: &CharacterId,
+    session_id: Option<&SessionId>,
+) -> Result<QuarantinedMarker, AirpError> {
+    let marker = pending_turn(data_root, character_id, session_id).ok_or_else(|| {
+        AirpError::NotFound("no pending turn commit marker for this session".to_string())
+    })?;
+    let source = marker_path(data_root, character_id, session_id);
+    let session_segment = session_id
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "legacy".to_string());
+    let quarantine_dir = data_root
+        .join("quarantine")
+        .join("turn-commit")
+        .join(character_id.as_str())
+        .join(session_segment);
+    fs::create_dir_all(&quarantine_dir)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let mut quarantine_path =
+        quarantine_dir.join(format!("turn_commit.quarantined.{timestamp}.json"));
+    let mut suffix = 1u32;
+    while quarantine_path.exists() {
+        quarantine_path =
+            quarantine_dir.join(format!("turn_commit.quarantined.{timestamp}.{suffix}.json"));
+        suffix += 1;
+    }
+    match fs::rename(&source, &quarantine_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // The marker disappeared between the pending check and the rename
+            // (e.g. a concurrent observer auto-recovered a terminal marker).
+            return Err(AirpError::Conflict(
+                "turn commit marker was resolved concurrently".to_string(),
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    for dir in [source.parent(), Some(quarantine_dir.as_path())]
+        .into_iter()
+        .flatten()
+    {
+        if let Err(error) = crate::revision::atomic::sync_dir(dir) {
+            // The rename itself succeeded; a directory sync failure only
+            // weakens crash durability of the directory entry.  Keep the
+            // signal in logs instead of failing the recovery.
+            tracing::error!(dir = %dir.display(), %error, "quarantine directory sync failed");
+        }
+    }
+    tracing::info!(
+        event = "turn_commit_marker_quarantined",
+        source = %source.display(),
+        quarantine_path = %quarantine_path.display(),
+        generation_id = %marker.generation_id,
+        phase = ?marker.phase,
+        "pending turn commit marker quarantined; session unblocked"
+    );
+    Ok(QuarantinedMarker {
+        generation_id: marker.generation_id,
+        phase: marker.phase,
+        quarantine_path,
+    })
+}
+
 impl TurnCommitMarker {
     fn expected_phase(&self) -> TurnCommitPhase {
         if self.volume_expected {
@@ -639,5 +724,72 @@ mod tests {
             pending_turn(tmp.path(), &character, None).unwrap().phase,
             TurnCommitPhase::Prepared
         );
+    }
+
+    #[test]
+    fn quarantine_moves_non_terminal_marker_and_unblocks_the_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-quarantine").unwrap();
+        let session = SessionId::new();
+        let mut commit = TurnCommit::begin(
+            tmp.path(),
+            &character,
+            Some(&session),
+            "generation-quarantine".to_string(),
+            true,
+            true,
+            false,
+        )
+        .unwrap();
+        commit.mark_message_committed().unwrap();
+        std::mem::forget(commit);
+
+        let quarantined =
+            quarantine_pending_marker(tmp.path(), &character, Some(&session)).unwrap();
+        assert_eq!(quarantined.generation_id, "generation-quarantine");
+        assert_eq!(quarantined.phase, TurnCommitPhase::MessageCommitted);
+        assert!(
+            quarantined
+                .quarantine_path
+                .starts_with(tmp.path().join("quarantine")),
+            "marker must be archived under the data root quarantine directory"
+        );
+        let file_name = quarantined
+            .quarantine_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        assert!(file_name.starts_with("turn_commit.quarantined."));
+        // Original bytes survive for a later payload-aware replay slice.
+        let archived = fs::read(&quarantined.quarantine_path).unwrap();
+        let marker: TurnCommitMarker = serde_json::from_slice(&archived).unwrap();
+        assert_eq!(marker.generation_id, "generation-quarantine");
+        assert!(pending_turn(tmp.path(), &character, Some(&session)).is_none());
+    }
+
+    #[test]
+    fn quarantine_without_pending_marker_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-quarantine-empty").unwrap();
+        let error = quarantine_pending_marker(tmp.path(), &character, None)
+            .expect_err("a clean session has nothing to quarantine");
+        assert!(matches!(error, AirpError::NotFound(_)));
+    }
+
+    #[test]
+    fn quarantine_preserves_unreadable_marker_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("marker-quarantine-corrupt").unwrap();
+        let path = marker_path(tmp.path(), &character, None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{not-json").unwrap();
+
+        let quarantined = quarantine_pending_marker(tmp.path(), &character, None).unwrap();
+        assert_eq!(
+            fs::read(&quarantined.quarantine_path).unwrap(),
+            b"{not-json"
+        );
+        assert!(!path.exists());
+        assert!(pending_turn(tmp.path(), &character, None).is_none());
     }
 }

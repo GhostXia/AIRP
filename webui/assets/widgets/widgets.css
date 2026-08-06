@@ -1,0 +1,124 @@
+/* C-P1：widget slot 与宿主四态样式。
+ * 令牌纪律（webui/STYLEGUIDE.md §9.2.1）：只引用 var(--*) 令牌，
+ * 零硬编码色值（token-contract.test.mjs 门禁）。
+ * 沙箱 iframe 内部是独立文档（看不到本表），引导脚本已设 inherit，
+ * 视觉随宿主令牌透传（color/font/background: transparent）。 */
+
+/* slot 占位：屏 HTML 中的 [data-slot] 挂载点 */
+[data-slot] {
+  display: block;
+  min-height: 0;
+}
+
+.widget-slot-instance {
+  display: block;
+}
+
+.widget-slot-instance + .widget-slot-instance {
+  margin-top: var(--space-2);
+}
+
+/* 宿主容器 */
+.widget-host,
+.widget-mount {
+  min-height: 0;
+}
+
+.widget-mount {
+  padding: var(--space-2);
+}
+
+.widget-sandbox {
+  min-height: 72px;
+}
+
+.widget-sandbox iframe {
+  border: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* widget 内部通用标题（进程内挂载时消费宿主令牌） */
+.w-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.widget-clock-time {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  color: var(--text-primary);
+}
+
+.widget-clock-note {
+  opacity: 0.7;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 四态：failed / missing */
+.widget-missing,
+.widget-error {
+  padding: var(--space-2);
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--danger-tint);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-input);
+  word-break: break-all;
+}
+
+/* 四态：gated（第三方 consent 授权 UI） */
+.widget-consent {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--warning-tint);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+}
+
+.widget-consent .w-title {
+  color: var(--text-primary);
+  margin-bottom: 0;
+}
+
+.widget-consent-source {
+  opacity: 0.8;
+  word-break: break-all;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.widget-consent-caps code {
+  margin-right: var(--space-1);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.widget-consent-note {
+  opacity: 0.7;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 屏侧 slot 区块包装（各屏 context 栏的 widget 区） */
+.widget-slot-block {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-default);
+}
+
+.widget-slot-block .context-title {
+  margin-bottom: var(--space-2);
+}

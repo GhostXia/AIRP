@@ -33,6 +33,17 @@ try {
     }
     if (-not $ready) { throw "bundled engine did not become ready on port $port" }
 
+    # C-P0：安装包必须携带 webui 资产（bundle-webui.ps1 暂存 -> bundle.resources）。
+    $bundledWebui = Get-ChildItem -LiteralPath $installDir -Recurse -Filter "index.html" -File |
+        Where-Object { $_.Directory.Name -in @("webui", "webui-bundle") } |
+        Select-Object -First 1
+    if (-not $bundledWebui) { throw "installed package is missing the bundled webui (webui-bundle/index.html)" }
+
+    # C-P0：sidecar 必须经 AIRP_DESKTOP_WEBUI_DIR 同源承载 webui（desktop mode）。
+    $runtimeConfig = Invoke-WebRequest -Uri "http://127.0.0.1:$port/runtime-config.js" -TimeoutSec 5
+    if ($runtimeConfig.StatusCode -ne 200) { throw "engine is not hosting the WebUI (runtime-config.js -> $($runtimeConfig.StatusCode))" }
+    if ($runtimeConfig.Content -notmatch "mode: 'desktop'") { throw "runtime-config.js does not report desktop mode: $($runtimeConfig.Content)" }
+
     if (-not $uiProcess.CloseMainWindow()) { throw "could not request a graceful UI shutdown" }
     if (-not $uiProcess.WaitForExit(10000)) { throw "AIRP UI did not exit after window close" }
     $stopped = $false
@@ -42,7 +53,7 @@ try {
         Start-Sleep -Milliseconds 250
     }
     if (-not $stopped) { throw "engine sidecar remained alive after UI exit" }
-    Write-Host "Installer smoke passed: install, launch, readiness, and sidecar shutdown."
+    Write-Host "Installer smoke passed: install, launch, readiness, webui hosting, and sidecar shutdown."
 }
 finally {
     if ($uiProcess -and -not $uiProcess.HasExited) { Stop-Process -Id $uiProcess.Id -Force }

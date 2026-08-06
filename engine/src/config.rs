@@ -135,7 +135,7 @@ impl Default for AppConfig {
             endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
             api_key: None,
             model: "gpt-4o".to_string(),
-            daemon_port: 8000,
+            daemon_port: 8765,
             volume: VolumeConfig::default(),
             access_api_key: None,
             engine: BackendEngine::default(),

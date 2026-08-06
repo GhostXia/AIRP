@@ -161,6 +161,12 @@ npm run test -- --run
 Pop-Location
 ```
 
+webui↔engine 端点契约由 `webui/tests/endpoint-guard.test.mjs` 守卫：它对照 golden 清单
+`webui/tests/fixtures/v1-endpoints.json` 断言「WebUI 调用的每个 /v1 端点在清单中且 method 匹配」
+与「清单中每个 ui:true 端点确有 WebUI 消费，ui:false 必须给出引擎独有理由」，随
+`node --test webui/tests/*.test.mjs` 在 pr-gate 运行。engine 新增/删除 /v1 路由后需同步清单：
+运行 `node webui/tests/extract-v1-endpoints.mjs` 重新对账，再人工补充 ui 标注与 reason。
+
 当前基线的可复现 backend/protocol 计数使用
 `cargo test --workspace --exclude airp-ui --locked`；完整 workspace 还需要生成的
 `ui/src-tauri/binaries/airp-core-x86_64-pc-windows-gnu.exe` sidecar，缺失时只能说明

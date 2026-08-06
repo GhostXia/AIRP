@@ -7,6 +7,12 @@ AIRP Windows WebUI preview
 3. Complete onboarding and enter your own provider endpoint, API key, and model.
 4. Keep the launcher window open while using AIRP. Closing it stops AIRP.
 
+Desktop UI (v0.0.4+): double-click airp-ui.exe instead of Start-AIRP.cmd to run
+AIRP in a desktop window. Both entry points share this same folder: the same
+airp-core.exe engine, the same webui\ assets, and the same data\ folder, so your
+characters and sessions are identical either way. Do not run both at the same
+time (each starts its own engine instance).
+
 No Rust, Node.js, Docker, WSL, or Tauri installation is required.
 All mutable AIRP files stay inside this extracted folder: user content is in
 data\ and process configuration is in config.json. Back up data\ before an
