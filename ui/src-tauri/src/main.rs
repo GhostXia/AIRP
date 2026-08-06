@@ -227,10 +227,7 @@ fn resolve_data_root(app: &tauri::AppHandle) -> std::io::Result<PathBuf> {
     if let Some(portable) = portable_data_dir() {
         return Ok(portable);
     }
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| std::io::Error::other(error))?;
+    let dir = app.path().app_data_dir().map_err(std::io::Error::other)?;
     Ok(dir.join("data"))
 }
 
