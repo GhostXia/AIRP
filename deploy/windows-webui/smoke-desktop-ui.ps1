@@ -135,5 +135,15 @@ finally {
     if ($uiProcess -and -not $uiProcess.HasExited) {
         Stop-Process -Id $uiProcess.Id -Force
     }
+    # 防御冗余（审计 N-03）：锁文件路径依赖壳的便携模式判定。若壳异常
+    # 回落 %APPDATA%（前置预检应已拦截），锁不在包内 $lock 路径，上方锁级
+    # 清理会跳过。此时按端口查找 LISTENING 进程并清理，确保不残留 engine。
+    $portConn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if ($portConn) {
+        $portConn | ForEach-Object {
+            Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+            Write-Host "Cleaned up leftover process on port $Port (PID $($_.OwningProcess))"
+        }
+    }
     Remove-Item Env:AIRP_DAEMON_PORT -ErrorAction SilentlyContinue
 }

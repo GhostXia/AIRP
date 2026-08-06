@@ -29,7 +29,11 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_ENGINE_PORT: u16 = 8000;
+/// 8765 与 deploy/windows-webui/Start-AIRP.cmd、deploy/linux-webui/start-airp.sh
+/// 及 README 中面向用户的端口一致；壳读 settings.json 的 daemon_port 缺省时
+/// 用此值，避免桌面入口（8765）与浏览器入口（cmd 硬编码 8765）端口错位
+/// （审计 N-02）。
+const DEFAULT_ENGINE_PORT: u16 = 8765;
 
 #[derive(Debug, serde::Deserialize, Default)]
 struct SidecarSettings {

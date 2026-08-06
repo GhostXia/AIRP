@@ -125,34 +125,35 @@ if ($existingEngine) {
 
 ## 3. 独立发现（非 CodeRabbit 提出）
 
-### N-01：跨入口双开未技术防护（非阻塞，建议后续 issue）
+### N-01：跨入口双开未技术防护（已修复）
 
 `lifecycle.rs` 的防双开基于锁文件 `shell_pid` 身份探测（映像名须为 `airp-ui`），仅覆盖 `airp-ui.exe` 双开。但 `Start-AIRP.cmd` 直接运行 `airp-core.exe`，不写锁文件：
 
 - **cmd → 桌面**（先 `Start-AIRP.cmd` 后 `airp-ui.exe`）：壳探到端口占用且承载 webui → `ReuseExternalHosting` 分支优雅复用。**安全。**
-- **桌面 → cmd**（先 `airp-ui.exe` 后 `Start-AIRP.cmd`）：cmd 不读锁、不探端口，直接 `airp-core.exe --port 8765`。壳默认端口 8000（`main.rs:32` + `settings.json` 默认 8000），cmd 强制 8765。**两个 engine 同时跑在不同端口，共用同一 `data\`。**
+- **桌面 → cmd**（先 `airp-ui.exe` 后 `Start-AIRP.cmd`）：cmd 不读锁、不探端口，直接 `airp-core.exe --port 8765`。**两个 engine 同时跑在不同端口，共用同一 `data\`。**
 
-README.txt:13 已警告"Do not run both at the same time"，但无技术防护。引擎层文件锁可防数据损坏，但用户会看到两个窗口、两次 onboarding、会话状态混乱。
+README.txt:13 已警告"Do not run both at the same time"，但无技术防护。
 
-**建议**：后续 issue 跟踪——考虑让 `Start-AIRP.cmd` 也写/读锁文件，或让引擎自身在 `data\` 写一个 engine 级锁（独立于壳），任何第二个 engine 启动时检测到即拒绝。
+**修复**：`Start-AIRP.cmd` 新增 `netstat + findstr` 端口预检（纯 batch，不依赖外部脚本运行器——打包 smoke 断言 Start-AIRP.cmd 不得调用它们）。端口 8765 已有 LISTENING 进程时直接退出并提示用户清理。实测三场景（空闲→放行 / engine 运行→拦截 / engine 停止→放行）全过。
 
-### N-02：`Start-AIRP.cmd` 端口（8765）与壳默认端口（8000）不一致（非阻塞，与 N-01 同源）
+### N-02：`Start-AIRP.cmd` 端口（8765）与壳默认端口（8000）不一致（已修复）
 
-`Start-AIRP.cmd:32` 硬编码 `--port 8765`；`main.rs:32` `DEFAULT_ENGINE_PORT = 8000`；`engine/src/data_dir/paths.rs:78` `ensure_data_dirs` 创建的 `settings.json` 默认 `daemon_port: 8000`。
+`Start-AIRP.cmd:32` 硬编码 `--port 8765`；`main.rs:32` `DEFAULT_ENGINE_PORT = 8000`；`engine/src/data_dir/paths.rs:78` `settings.json` 默认 `daemon_port: 8000`；`engine/src/config.rs:138` `AppConfig::default().daemon_port = 8000`。
 
-`Start-AIRP.cmd` 用 CLI `--port 8765` 覆盖，但**不更新 `settings.json`**。因此：
+壳读 `settings.json` 得 8000，cmd 强制 8765——用户先跑 cmd 后跑桌面端会换端口。
 
-1. 用户先跑 `Start-AIRP.cmd` → engine 在 8765，`settings.json` 仍写 8000。
-2. 用户关掉 cmd，双击 `airp-ui.exe` → 壳读 `settings.json` 得 8000 → 在 8000 拉起新 engine。
-3. 浏览器书签指向 8765（cmd 路径），桌面窗口在 8000——用户困惑。
+**修复**：将三处内部默认值从 8000 → 8765，与 `Start-AIRP.cmd` 硬编码端口及 README 文档一致。8765 是面向用户的文档端口（webui 测试 `widget-runtime.test.mjs` 也用 8765），8000 是内部 outlier。改动：
+- `ui/src-tauri/src/main.rs:36`：`DEFAULT_ENGINE_PORT: u16 = 8765`
+- `engine/src/config.rs:138`：`daemon_port: 8765`
+- `engine/src/data_dir/paths.rs:78`：`"daemon_port": 8765`
 
-此为既有问题（C-P0 即如此），本 PR 未恶化但未修复。**建议**：后续 issue 跟踪 `Start-AIRP.cmd` 与壳端口默认值对齐，或壳读 `config.json` 而非 `settings.json` 的 `daemon_port`。
+测试验证：`cargo test -p airp-ui` 17 passed；`cargo test -p airp-core --lib config::tests` 22 passed（测试用 `AppConfig::default().daemon_port` 对比，不硬编码值，改默认值不破坏断言）。
 
-### N-03：smoke `finally` 清理依赖锁文件存在（非阻塞）
+### N-03：smoke `finally` 清理依赖锁文件存在（已修复）
 
-`smoke-desktop-ui.ps1:115-128` 的 `finally` 块按锁文件 `engine_pid` 清理残留 engine。若壳因便携检测失败（极罕见，需 `airp-core.exe` 或 `webui/index.html` 缺失）回落 `%APPDATA%`，锁文件写到 `%APPDATA%`，`Test-Path $lock`（包内路径）为 false，`finally` 跳过 engine 清理。此时 `Stop-Process -Id $uiProcess.Id -Force` 强杀壳，壳的 `RunEvent::Exit` 不一定触发（`-Force` 走 `TerminateProcess`），engine 残留。
+`smoke-desktop-ui.ps1` 的 `finally` 块按锁文件 `engine_pid` 清理残留 engine。若壳异常回落 `%APPDATA%`（前置预检应已拦截），锁不在包内 `$lock` 路径，锁级清理跳过。
 
-但此场景被 smoke 第 14-22 行的预检（`airp-core.exe` / `webui/index.html` 缺失即 throw）前置拦截，实际不会发生。**非阻塞，记录供未来 smoke 改进参考。**
+**修复**：`finally` 块新增端口级兜底——`Get-NetTCPConnection -LocalPort $Port -State Listen` 查找 LISTENING 进程并清理，不依赖锁文件路径。防御冗余，确保任何情况下 engine 不残留。
 
 ## 4. 其他复核项（通过）
 
@@ -175,11 +176,11 @@ README.txt:13 已警告"Do not run both at the same time"，但无技术防护�
 |---|---|---|---|---|
 | **B-01** | **BLOCKING** | CodeRabbit CR-2 + 本审计实测复现 | **已修复（实测验证）** | smoke 端口预检改 `$portOccupied` 标志位 + `try` 外 `throw`；mock server 实测三场景全过 |
 | CR-1 | 非阻塞（stale） | CodeRabbit CR-1 | 已解决 | commit `4c932ef` 以包体标记判定方案解决，CodeRabbit 建议的预建 `data\` 方案非唯一解 |
-| N-01 | 非阻塞 | 本审计独立发现 | 新增 | 跨入口双开未技术防护，README 警告为唯一缓解 |
-| N-02 | 非阻塞 | 本审计独立发现 | 新增 | cmd 端口 8765 与壳默认 8000 不一致，既有问题 |
-| N-03 | 非阻塞 | 本审计独立发现 | 新增 | smoke finally 依赖锁文件路径，被前置预检兜底 |
+| N-01 | 非阻塞 | 本审计独立发现 | **已修复** | `Start-AIRP.cmd` 新增 netstat+findstr 端口预检；实测三场景全过 |
+| N-02 | 非阻塞 | 本审计独立发现 | **已修复** | 三处内部默认端口 8000→8765（main.rs + config.rs + paths.rs）；17+22 测试通过 |
+| N-03 | 非阻塞 | 本审计独立发现 | **已修复** | smoke finally 新增 `Get-NetTCPConnection` 端口级兜底清理 |
 
-**B-01 已修复且实测验证通过，本审计无阻塞意见。** CR-1 已 stale 无需处理。N-01/N-02 建议合并后建 issue 跟踪（按 AGENTS.md「审计遗留项处理」时序约束，PR 合并后提交）。
+**B-01 + N-01/N-02/N-03 全部已修复且实测验证通过，本审计无阻塞意见，无遗留 issue 需合并后跟踪。** CR-1 已 stale 无需处理。
 
 ## 6. 修复确认（B-01）
 
