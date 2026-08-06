@@ -83,26 +83,35 @@ async fn run_style_review_handler(
         .join("styles")
         .join("profiles")
         .join(format!("{}.md", profile_id));
-    // 审计修复：NotFound 返回空 profile，其他 I/O 错误向上传播。
-    let style_profile = std::fs::read_to_string(&profile_path).or_else(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Ok(String::new())
-        } else {
-            Err(AirpError::from(e))
-        }
-    })?;
-
-    let history = crate::domain::ChatService::new(&state.data_root).history(&cid, sid.as_ref())?;
-    let recent_messages: Vec<String> = history
-        .messages
-        .iter()
-        .filter(|m| m.role == crate::adapter::MessageRole::Assistant)
-        .rev()
-        .take(10)
-        .map(|m| m.content.clone())
-        .collect();
-
-    let current_drift = crate::style::read_soul_drift(&state.data_root, cid.as_str())?;
+    let data_root = state.data_root.clone();
+    let cid_for_io = cid.clone();
+    // #433: style_profile（std::fs::read_to_string）+ ChatService::history +
+    // read_soul_drift 均为同步文件 IO，合并到同一 spawn_blocking 避免阻塞 tokio worker。
+    let (style_profile, recent_messages, current_drift) =
+        tokio::task::spawn_blocking(move || -> Result<_, AirpError> {
+            // 审计修复：NotFound 返回空 profile，其他 I/O 错误向上传播。
+            let style_profile = std::fs::read_to_string(&profile_path).or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(String::new())
+                } else {
+                    Err(AirpError::from(e))
+                }
+            })?;
+            let history =
+                crate::domain::ChatService::new(&data_root).history(&cid_for_io, sid.as_ref())?;
+            let recent_messages: Vec<String> = history
+                .messages
+                .iter()
+                .filter(|m| m.role == crate::adapter::MessageRole::Assistant)
+                .rev()
+                .take(10)
+                .map(|m| m.content.clone())
+                .collect();
+            let current_drift = crate::style::read_soul_drift(&data_root, cid_for_io.as_str())?;
+            Ok((style_profile, recent_messages, current_drift))
+        })
+        .await
+        .map_err(|e| AirpError::Internal(format!("style review io join failed: {e}")))??;
 
     let snapshot = state.read_config().clone();
 

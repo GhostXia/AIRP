@@ -32,37 +32,54 @@ use std::sync::Arc;
 // `user_id` 走路径参数，经 UserId::new 校验（拒绝路径遍历）；`default_name` 走 query string。
 
 /// GET /v1/users/:user_id/persona — 读当前 Persona；不存在返回兜底（revision=0）。
+///
+/// `PersonaService::get_default` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn get_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<Json<Persona>, AirpError> {
     let uid = UserId::new(user_id)?;
-    let persona = PersonaService::new(&state.data_root).get_default(&uid, "User")?;
+    let data_root = state.data_root.clone();
+    let persona = tokio::task::spawn_blocking(move || {
+        PersonaService::new(&data_root).get_default(&uid, "User")
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona get_default join failed: {e}")))??;
     Ok(Json(persona))
 }
 
 /// PUT /v1/users/:user_id/persona — 原子写入 Persona；revision 不匹配返回 400。
+///
+/// `PersonaService::get_default` + `save_default` 是同步文件 IO；在 async handler
+/// 中用 `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。两步合并到同一
+/// blocking task 保持原子性（避免两次线程切换 + 中间窗口）。
 pub(in crate::daemon) async fn update_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
     Json(payload): Json<UpdatePersonaRequest>,
 ) -> Result<Json<Persona>, AirpError> {
     let uid = UserId::new(user_id)?;
-    let service = PersonaService::new(&state.data_root);
-    let current = service.get_default(&uid, "User")?;
-    let persona = Persona {
-        schema: Persona::SCHEMA,
-        revision: 0, // save 内会 bump；payload 的 revision 不信，用 expected_revision 校验
-        updated_at: String::new(),
-        name: payload.name,
-        description: payload.description,
-        variables: payload.variables,
-        id: current.id,
-        // The legacy endpoint does not own schema-v2 binding fields. Preserve
-        // them so editing a name or description cannot silently unbind chats.
-        bindings: current.bindings,
-    };
-    let saved = service.save_default(&uid, payload.expected_revision, persona)?;
+    let data_root = state.data_root.clone();
+    let saved = tokio::task::spawn_blocking(move || -> Result<Persona, AirpError> {
+        let service = PersonaService::new(&data_root);
+        let current = service.get_default(&uid, "User")?;
+        let persona = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0, // save 内会 bump；payload 的 revision 不信，用 expected_revision 校验
+            updated_at: String::new(),
+            name: payload.name,
+            description: payload.description,
+            variables: payload.variables,
+            id: current.id,
+            // The legacy endpoint does not own schema-v2 binding fields. Preserve
+            // them so editing a name or description cannot silently unbind chats.
+            bindings: current.bindings,
+        };
+        service.save_default(&uid, payload.expected_revision, persona)
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona save_default join failed: {e}")))??;
     Ok(Json(saved))
 }
 
@@ -89,17 +106,26 @@ pub(in crate::daemon) struct UpdatePersonaRequest {
 // find_for_character 自动激活留 A1b（独立 PR，会改 ChatCompletionRequest contract）。
 
 /// GET /v1/users/:user_id/personas — 列出该用户所有 Persona id（含 "default"）。
+///
+/// `PersonaService::list` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn list_personas_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<String>>, AirpError> {
     let uid = UserId::new(user_id)?;
-    let ids = PersonaService::new(&state.data_root).list(&uid)?;
+    let data_root = state.data_root.clone();
+    let ids = tokio::task::spawn_blocking(move || PersonaService::new(&data_root).list(&uid))
+        .await
+        .map_err(|e| AirpError::Internal(format!("persona list join failed: {e}")))??;
     Ok(Json(ids))
 }
 
 /// POST /v1/users/:user_id/personas — 创建新 Persona（非 default）。
 /// "default" 走 legacy PUT /v1/users/:id/persona；重复 id 由 revision 冲突拒绝。
+///
+/// `PersonaService::save` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn create_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
@@ -111,69 +137,99 @@ pub(in crate::daemon) async fn create_persona_endpoint(
         ));
     }
     let uid = UserId::new(user_id)?;
-    let persona = Persona {
-        schema: Persona::SCHEMA,
-        revision: 0, // save 内 bump；payload 的 revision 不信
-        updated_at: String::new(),
-        name: payload.name,
-        description: payload.description,
-        variables: payload.variables,
-        id: payload.persona_id.clone(),
-        bindings: Vec::new(),
-    };
-    // expected_revision=0：不存在的文件 current_revision_at=0 匹配 → 创建；
-    // 已存在则 current_revision≥1，0≠current → BadRequest(PersonaRevisionConflict)。
-    let saved =
-        PersonaService::new(&state.data_root).save(&uid, &payload.persona_id, 0, persona)?;
+    let data_root = state.data_root.clone();
+    let saved = tokio::task::spawn_blocking(move || -> Result<Persona, AirpError> {
+        let persona = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0, // save 内 bump；payload 的 revision 不信
+            updated_at: String::new(),
+            name: payload.name,
+            description: payload.description,
+            variables: payload.variables,
+            id: payload.persona_id.clone(),
+            bindings: Vec::new(),
+        };
+        // expected_revision=0：不存在的文件 current_revision_at=0 匹配 → 创建；
+        // 已存在则 current_revision≥1，0≠current → BadRequest(PersonaRevisionConflict)。
+        PersonaService::new(&data_root).save(&uid, &payload.persona_id, 0, persona)
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona save join failed: {e}")))??;
     Ok(Json(saved))
 }
 
 /// GET /v1/users/:user_id/personas/:persona_id — 读取指定 Persona。
 /// default 不存在时返回 initial（不写盘）；非 default 不存在返回 404。
+///
+/// `PersonaService::get` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn get_persona_multi_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
 ) -> Result<Json<Persona>, AirpError> {
     let uid = UserId::new(user_id)?;
-    let persona = PersonaService::new(&state.data_root).get(&uid, &persona_id, "User")?;
+    let data_root = state.data_root.clone();
+    let persona = tokio::task::spawn_blocking(move || {
+        PersonaService::new(&data_root).get(&uid, &persona_id, "User")
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona get join failed: {e}")))??;
     Ok(Json(persona))
 }
 
 /// PUT /v1/users/:user_id/personas/:persona_id — 更新指定 Persona；保留 bindings。
+///
+/// `PersonaService::get` + `save` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。两步合并到同一
+/// blocking task 保持原子性。
 pub(in crate::daemon) async fn update_persona_multi_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
     Json(payload): Json<UpdateMultiPersonaRequest>,
 ) -> Result<Json<Persona>, AirpError> {
     let uid = UserId::new(user_id)?;
-    let service = PersonaService::new(&state.data_root);
-    let current = service.get(&uid, &persona_id, "User")?;
-    let persona = Persona {
-        schema: Persona::SCHEMA,
-        revision: 0, // save 内 bump
-        updated_at: String::new(),
-        name: payload.name,
-        description: payload.description,
-        variables: payload.variables,
-        id: current.id,
-        // 编辑 name/description/variables 不能静默解绑；bindings 由 bind/unbind 专门管理。
-        bindings: current.bindings,
-    };
-    let saved = service.save(&uid, &persona_id, payload.expected_revision, persona)?;
+    let data_root = state.data_root.clone();
+    let saved = tokio::task::spawn_blocking(move || -> Result<Persona, AirpError> {
+        let service = PersonaService::new(&data_root);
+        let current = service.get(&uid, &persona_id, "User")?;
+        let persona = Persona {
+            schema: Persona::SCHEMA,
+            revision: 0, // save 内 bump
+            updated_at: String::new(),
+            name: payload.name,
+            description: payload.description,
+            variables: payload.variables,
+            id: current.id,
+            // 编辑 name/description/variables 不能静默解绑；bindings 由 bind/unbind 专门管理。
+            bindings: current.bindings,
+        };
+        service.save(&uid, &persona_id, payload.expected_revision, persona)
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona save join failed: {e}")))??;
     Ok(Json(saved))
 }
 
 /// DELETE /v1/users/:user_id/personas/:persona_id — 删除指定 Persona（default 不可删）。
+///
+/// `PersonaService::delete` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn delete_persona_multi_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
 ) -> Result<StatusCode, AirpError> {
     let uid = UserId::new(user_id)?;
-    PersonaService::new(&state.data_root).delete(&uid, &persona_id)?;
+    let data_root = state.data_root.clone();
+    tokio::task::spawn_blocking(move || PersonaService::new(&data_root).delete(&uid, &persona_id))
+        .await
+        .map_err(|e| AirpError::Internal(format!("persona delete join failed: {e}")))??;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /v1/users/:user_id/personas/:persona_id/bindings — 添加绑定（幂等）。
+///
+/// `PersonaService::bind` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn bind_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
@@ -184,12 +240,20 @@ pub(in crate::daemon) async fn bind_persona_endpoint(
         character_id: payload.character_id,
         session_id: payload.session_id,
     };
-    let updated = PersonaService::new(&state.data_root).bind(&uid, &persona_id, binding)?;
+    let data_root = state.data_root.clone();
+    let updated = tokio::task::spawn_blocking(move || {
+        PersonaService::new(&data_root).bind(&uid, &persona_id, binding)
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona bind join failed: {e}")))??;
     Ok(Json(updated))
 }
 
 /// DELETE /v1/users/:user_id/personas/:persona_id/bindings — 移除绑定（幂等）。
 /// character_id 必填（query），session_id 可选（query）。
+///
+/// `PersonaService::unbind` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn unbind_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((user_id, persona_id)): axum::extract::Path<(String, String)>,
@@ -201,12 +265,19 @@ pub(in crate::daemon) async fn unbind_persona_endpoint(
     let axum::extract::Query(query) =
         query.map_err(|error| AirpError::BadRequest(error.to_string()))?;
     let uid = UserId::new(user_id)?;
-    let updated = PersonaService::new(&state.data_root).unbind(
-        &uid,
-        &persona_id,
-        &query.character_id,
-        query.session_id.as_deref(),
-    )?;
+    let data_root = state.data_root.clone();
+    let character_id = query.character_id.clone();
+    let session_id = query.session_id.clone();
+    let updated = tokio::task::spawn_blocking(move || {
+        PersonaService::new(&data_root).unbind(
+            &uid,
+            &persona_id,
+            &character_id,
+            session_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona unbind join failed: {e}")))??;
     Ok(Json(updated))
 }
 
@@ -275,6 +346,10 @@ pub(in crate::daemon) struct UnbindPersonaQuery {
 
 /// GET /v1/users/:user_id/persona/effective?character_id=X&session_id=Y —
 /// 返回该角色/会话下生效的 Persona（binding 命中或 default）+ 来源 + 两 scope owner。
+///
+/// `PersonaService::resolve_effective_persona` + `get` / `get_default` 是同步文件 IO；
+/// 在 async handler 中用 `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
+/// 三步合并到同一 blocking task 保持一致性（避免多次线程切换 + 中间窗口）。
 pub(in crate::daemon) async fn get_effective_persona_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
@@ -286,16 +361,21 @@ pub(in crate::daemon) async fn get_effective_persona_endpoint(
     let axum::extract::Query(query) =
         query.map_err(|error| AirpError::BadRequest(error.to_string()))?;
     let uid = UserId::new(user_id)?;
-    let service = PersonaService::new(&state.data_root);
-    let resolution = service.resolve_effective_persona(
-        &uid,
-        &query.character_id,
-        query.session_id.as_deref(),
-    )?;
-    let persona = match &resolution.effective_persona_id {
-        Some(pid) => service.get(&uid, pid, "User")?,
-        None => service.get_default(&uid, "User")?,
-    };
+    let data_root = state.data_root.clone();
+    let character_id = query.character_id.clone();
+    let session_id = query.session_id.clone();
+    let (persona, resolution) = tokio::task::spawn_blocking(move || -> Result<_, AirpError> {
+        let service = PersonaService::new(&data_root);
+        let resolution =
+            service.resolve_effective_persona(&uid, &character_id, session_id.as_deref())?;
+        let persona = match &resolution.effective_persona_id {
+            Some(pid) => service.get(&uid, pid, "User")?,
+            None => service.get_default(&uid, "User")?,
+        };
+        Ok((persona, resolution))
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("persona effective join failed: {e}")))??;
     Ok(Json(EffectivePersonaResponse {
         persona,
         source: resolution.source,

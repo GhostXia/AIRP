@@ -16,22 +16,36 @@ use axum::Json;
 use std::sync::Arc;
 
 /// GET /v1/sessions/:character_id — list all named sessions for a character.
+///
+/// `ChatService::list_sessions` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn list_sessions_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<SessionId>>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let sessions = ChatService::new(&state.data_root).list_sessions(&cid)?;
+    let data_root = state.data_root.clone();
+    let sessions =
+        tokio::task::spawn_blocking(move || ChatService::new(&data_root).list_sessions(&cid))
+            .await
+            .map_err(|e| AirpError::Internal(format!("list_sessions join failed: {e}")))??;
     Ok(Json(sessions))
 }
 
 /// POST /v1/sessions/:character_id — create a new named session, return its ID.
+///
+/// `ChatService::create_session` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn create_session_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
 ) -> Result<Json<SessionId>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let sid = ChatService::new(&state.data_root).create_session(&cid)?;
+    let data_root = state.data_root.clone();
+    let sid =
+        tokio::task::spawn_blocking(move || ChatService::new(&data_root).create_session(&cid))
+            .await
+            .map_err(|e| AirpError::Internal(format!("create_session join failed: {e}")))??;
     Ok(Json(sid))
 }
 
