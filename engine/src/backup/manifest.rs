@@ -271,7 +271,10 @@ impl BackupManifest {
 }
 
 /// 校验 `backup_id` 是否可作为路径段。
-fn validate_backup_id(backup_id: &str) -> Result<(), BackupManifestError> {
+///
+/// 同时被 manifest 加载（`from_json_bytes`）和 HTTP handler（`validate_backup_id_segment`）
+/// 复用，确保两层校验规则单一来源（#450）。
+pub(crate) fn validate_backup_id(backup_id: &str) -> Result<(), BackupManifestError> {
     if backup_id.is_empty() {
         return Err(BackupManifestError::InvalidBackupId(backup_id.to_string()));
     }

@@ -68,6 +68,19 @@ pub(super) fn remove_deleted_session_lock(character_id: &str, session_id: &Sessi
     locks.remove(&key);
 }
 
+/// #435: 清理 `SESSION_LOCKS` 中 default-session 的 stale 条目。
+///
+/// `session_lock(character_id, None)` 的键为 `character_id` 本身（无 `/session_id`
+/// 后缀），`remove_deleted_session_lock` 无法触达。`delete_character` 删除整个
+/// character 目录后必须单独清理此条目，避免内存泄漏与 ghost default-session lock。
+pub(super) fn remove_deleted_default_session_lock(character_id: &str) {
+    let Some(lock_map) = SESSION_LOCKS.get() else {
+        return;
+    };
+    let mut locks = lock_map.lock().unwrap_or_else(|p| p.into_inner());
+    locks.remove(character_id);
+}
+
 /// #422: 清理 `CHARACTER_LOCKS` 中已删除 character 的 stale 条目。
 ///
 /// `delete_character` durable 完成后调用。正在等待旧 Arc 的 waiter 拿到锁后
@@ -199,5 +212,76 @@ mod tests {
         remove_deleted_character_lock("#422-test-nonexistent-char");
         remove_deleted_state_lock("#422-test-nonexistent-state");
         remove_deleted_persona_lock("#422-test-nonexistent-persona");
+    }
+
+    /// #435: `delete_character` 删除整个 `characters/{id}/` 目录（含所有 sessions），
+    /// 需批量清理该 character 下所有 session 的 SESSION_LOCKS 条目，避免内存泄漏
+    /// 和 ghost session lock 复用。本测试验证逐个调用 `remove_deleted_session_lock`
+    ///（`delete_character` 的实际清理路径）后，所有 session lock 条目均被移除。
+    #[test]
+    fn remove_deleted_session_locks_for_character_bulk_cleanup() {
+        let cid = unique_id("bulk-char");
+        let sid1 = SessionId::new();
+        let sid2 = SessionId::new();
+        let sid3 = SessionId::new();
+
+        // 模拟 3 个活跃 session 的 lock（delete_character 前的状态）
+        let arc1_before = session_lock(&cid, Some(&sid1));
+        let arc2_before = session_lock(&cid, Some(&sid2));
+        let arc3_before = session_lock(&cid, Some(&sid3));
+
+        // delete_character 的清理路径：遍历已知 sessions 逐个清理
+        for sid in [&sid1, &sid2, &sid3] {
+            remove_deleted_session_lock(&cid, sid);
+        }
+
+        // 所有 session lock 条目应被移除：再次获取返回新 Arc（非 ptr_eq）
+        let arc1_after = session_lock(&cid, Some(&sid1));
+        let arc2_after = session_lock(&cid, Some(&sid2));
+        let arc3_after = session_lock(&cid, Some(&sid3));
+
+        assert!(
+            !Arc::ptr_eq(&arc1_before, &arc1_after),
+            "session lock for sid1 should be removed"
+        );
+        assert!(
+            !Arc::ptr_eq(&arc2_before, &arc2_after),
+            "session lock for sid2 should be removed"
+        );
+        assert!(
+            !Arc::ptr_eq(&arc3_before, &arc3_after),
+            "session lock for sid3 should be removed"
+        );
+
+        // 清理测试产生的条目，避免污染全局 lock map
+        for sid in [&sid1, &sid2, &sid3] {
+            remove_deleted_session_lock(&cid, sid);
+        }
+        remove_deleted_character_lock(&cid);
+    }
+
+    /// #435: `session_lock(cid, None)` 的键为 `cid` 本身，`remove_deleted_session_lock`
+    /// 触达不到。`delete_character` 必须额外调 `remove_deleted_default_session_lock`，
+    /// 否则 default-session lock 残留为 ghost，新 caller 复用旧 Arc 绕过串行化。
+    #[test]
+    fn remove_deleted_default_session_lock_cleanup() {
+        let cid = unique_id("default-sess-char");
+
+        // 创建 default-session lock
+        let arc_before = session_lock(&cid, None);
+
+        // delete_character 的清理路径
+        remove_deleted_default_session_lock(&cid);
+
+        // 再次获取应返回新 Arc（条目已移除）
+        let arc_after = session_lock(&cid, None);
+        assert!(
+            !Arc::ptr_eq(&arc_before, &arc_after),
+            "default-session lock should be removed"
+        );
+
+        // 清理测试产生的条目
+        remove_deleted_default_session_lock(&cid);
+        remove_deleted_character_lock(&cid);
     }
 }

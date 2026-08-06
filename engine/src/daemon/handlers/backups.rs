@@ -221,26 +221,13 @@ fn total_bytes(files: &[crate::revision::manifest::ApprovedFile]) -> u64 {
 }
 
 /// backup_id 路径段校验（防 traversal）。
+///
+/// 复用 `manifest::validate_backup_id` 作为单一来源，确保 HTTP 入口与 manifest
+/// 加载阶段校验规则一致（#450）。manifest 校验更严格（仅允许 alphanumeric +
+/// `-` + `_`，拒绝 `:` 等 Windows 非法文件名字符），HTTP 入口采用同一规则。
 fn validate_backup_id_segment(backup_id: &str) -> Result<(), AirpError> {
-    if backup_id.is_empty() {
-        return Err(AirpError::BadRequest("backup_id 不能为空".to_string()));
-    }
-    if backup_id.contains('/') || backup_id.contains('\\') {
-        return Err(AirpError::BadRequest(format!(
-            "backup_id 含路径分隔符: {backup_id:?}"
-        )));
-    }
-    if backup_id == "." || backup_id == ".." || backup_id.starts_with('.') {
-        return Err(AirpError::BadRequest(format!(
-            "backup_id 不能为 . / .. / 以 . 开头: {backup_id:?}"
-        )));
-    }
-    if backup_id.contains('\0') {
-        return Err(AirpError::BadRequest(format!(
-            "backup_id 含空字节: {backup_id:?}"
-        )));
-    }
-    Ok(())
+    crate::backup::manifest::validate_backup_id(backup_id)
+        .map_err(|e| AirpError::BadRequest(format!("backup_id 非法: {e}")))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────

@@ -14,8 +14,8 @@ use crate::ulid;
 
 use super::lock_order;
 use super::locks::{
-    character_lock, remove_deleted_character_lock, remove_deleted_session_lock,
-    remove_deleted_state_lock, session_lock,
+    character_lock, remove_deleted_character_lock, remove_deleted_default_session_lock,
+    remove_deleted_session_lock, remove_deleted_state_lock, session_lock,
 };
 
 /// Immutable target state captured before a regen proposal is generated.
@@ -905,6 +905,12 @@ impl ChatService {
             None
         };
 
+        // #435: 在删除目录之前枚举该 character 的所有 sessions，用于删除后批量清理
+        // SESSION_LOCKS 中以 `{character_id}/` 为前缀的 stale 条目。
+        // best-effort：枚举失败不阻塞删除（locks 残留不致数据损坏，仅内存泄漏）。
+        let known_sessions =
+            data_dir::list_sessions(&self.data_root, character_id.as_str()).unwrap_or_default();
+
         let result = data_dir::delete_character(&self.data_root, character_id);
         // #440: 必须在 write guard 释放之后再清理 lock-map 条目。否则新 caller
         // 调 `character_lock` 会拿到新 Arc（条目已移除），不与本次 write guard
@@ -918,11 +924,17 @@ impl ChatService {
             // 正在等待旧 Arc 的 waiter 拿到锁后操作已删除资源会 fail closed
             //（NotFound）；新 caller 调 `character_lock`/`state_lock` 会创建新
             // Arc 走正常 create 流程。与 `delete_session` 清理 session lock 同模式。
-            // 已知 gap：SESSION_LOCKS 中该 character 下所有 `{cid}/*` 条目也会
-            // stale，但批量前缀清理需遍历整表且 `delete_session` 已有 per-session
-            // 清理路径；character 级批量 session lock 清理留作后续。
+            // #435: 同时批量清理该 character 下所有已知 session 的 SESSION_LOCKS
+            // 条目（O(sessions) 定点清理，而非遍历全表）。已删除的 session（经
+            // delete_session 路径）的 lock 此前已清理，这里只处理仍存在的 session。
             remove_deleted_character_lock(character_id.as_str());
             remove_deleted_state_lock(character_id.as_str());
+            // #435: default-session lock 的键为 character_id 本身（无 /session_id
+            // 后缀），逐个清理 named session 触达不到，需单独清理。
+            remove_deleted_default_session_lock(character_id.as_str());
+            for session_id in &known_sessions {
+                remove_deleted_session_lock(character_id.as_str(), session_id);
+            }
         }
         result?;
         Ok(backup_id)
