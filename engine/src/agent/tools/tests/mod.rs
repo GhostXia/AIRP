@@ -41,6 +41,7 @@ pub(super) fn make_state(data_root: PathBuf) -> Arc<DaemonState> {
         provider_routing_update: Default::default(),
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
+        extensions: std::sync::OnceLock::new(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: "https://example.test/v1/chat/completions".to_string(),

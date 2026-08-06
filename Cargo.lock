@@ -83,8 +83,7 @@ dependencies = [
 name = "airp-ui"
 version = "0.1.0"
 dependencies = [
- "airp-state-protocol",
- "futures-util",
+ "dirs",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -95,6 +94,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

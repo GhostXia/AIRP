@@ -27,6 +27,7 @@ mod presets;
 mod provider_routing;
 mod scenes;
 mod search;
+mod session_recovery;
 mod sessions;
 mod settings;
 mod state;
@@ -97,6 +98,8 @@ pub(super) use scenes::{
     add_scene_character_endpoint, create_scene_endpoint, get_scene_endpoint, list_scenes_endpoint,
 };
 pub(super) use search::chat_search;
+// BUG-2 缓解切片：会话锁死的用户侧恢复端点（additive，不改既有 handler）。
+pub(super) use session_recovery::recover_chat_session;
 pub(super) use sessions::{
     create_session_endpoint, delete_session_endpoint, list_sessions_endpoint,
 };

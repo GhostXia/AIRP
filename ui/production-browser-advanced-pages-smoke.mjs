@@ -16,6 +16,8 @@ const characterId = apiResult.character_id;
 const sessionId = apiResult.session_id;
 assert.ok(characterId && sessionId, 'API smoke must provide a durable character/session');
 
+// 新屏 CI 注册点：每个新增屏必须在此 pages 数组注册（file/title/ready 锚点），
+// 否则不进入 CI 门禁。规范见 webui/STYLEGUIDE.md §9「扩充新页面清单」。
 const pages = [
   { file: '34-relationship-graph.html', title: '角色关系图谱', ready: '#graph-character', refresh: '#graph-refresh' },
   { file: '35-plot-arc.html', title: '剧情弧编辑器', ready: '#arc-character' },

@@ -298,6 +298,21 @@ AIRP_CHROME_SPKI="$chrome_spki" \
 NODE_EXTRA_CA_CERTS="$trust_bundle" \
 node "$repo/ui/production-browser-advanced-pages-smoke.mjs"
 
+# Task #12 截图验证套件：44 屏功能完整性截图 + tokens.css 令牌精确值断言 +
+# CSP/pageerror 门禁 + 关键流步骤截图。输出目录随 pr-gate 的
+# upload-artifact 步骤上传；套件内部任一断言失败或截图文件生成失败即非零
+# 退出，由 set -eu 终止整体 smoke。
+screenshots_dir="$deploy/smoke-screenshots"
+rm -rf "$screenshots_dir"
+mkdir -p "$screenshots_dir"
+AIRP_SMOKE_ORIGIN="$origin" \
+AIRP_SMOKE_ADMIN_USER="$admin_user" \
+AIRP_SMOKE_ADMIN_PASSWORD="$admin_password" \
+AIRP_SMOKE_RESULT_FILE="$result_file" \
+AIRP_CHROME_SPKI="$chrome_spki" \
+NODE_EXTRA_CA_CERTS="$trust_bundle" \
+node "$repo/ui/webui-screenshot-suite.mjs" --mode ci --out "$screenshots_dir" || { dump_failure_logs; exit 1; }
+
 $compose restart engine gateway >/dev/null
 WAIT_FOR_ENGINE_READY_CHAT_PROBE=1 wait_for_engine_ready || { dump_failure_logs; exit 1; }
 AIRP_SMOKE_ORIGIN="$origin" \

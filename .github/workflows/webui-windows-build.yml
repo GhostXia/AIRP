@@ -11,7 +11,7 @@ on:
       - "engine/**"
       - "webui/**"
       - "deploy/windows-webui/**"
-      - "ui/local-webui-browser-smoke.mjs"
+      - "ui/**"
       - ".github/workflows/webui-windows-build.yml"
 
 permissions:
@@ -50,11 +50,15 @@ jobs:
 
       - name: Build portable WebUI package
         shell: pwsh
-        run: .\deploy\windows-webui\build.ps1
+        run: .\deploy\windows-webui\build.ps1 -IncludeDesktop
 
       - name: Smoke packaged engine and real Chrome
         shell: pwsh
         run: .\deploy\windows-webui\smoke-package.ps1 -BrowserSmoke
+
+      - name: Smoke desktop UI inside the package
+        shell: pwsh
+        run: .\deploy\windows-webui\smoke-desktop-ui.ps1
 
       - name: Upload portable WebUI package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
