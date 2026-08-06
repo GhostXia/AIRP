@@ -36,12 +36,15 @@ struct SidecarSettings {
     daemon_port: Option<u16>,
 }
 
-/// 壳自启 sidecar 的句柄与本实例标识。
-/// instance_id 用于退出清理时只删除归属本实例的锁文件。
+/// 壳自启 sidecar 的句柄、本实例标识与数据根目录。
+/// instance_id 用于退出清理时只删除归属本实例的锁文件；
+/// data_root 供 RunEvent::Exit 复用 setup 期解析结果（便携包体模式下
+/// 不等于 %APPDATA%，退出清理必须使用同一路径才能删对锁）。
 #[derive(Default)]
 struct EngineSidecar {
     child: Mutex<Option<CommandChild>>,
     instance_id: Mutex<Option<String>>,
+    data_root: Mutex<Option<PathBuf>>,
 }
 
 /// 捆绑 sidecar 启动序列所需的全部上下文（setup 同步段解析，
@@ -62,8 +65,14 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(EngineSidecar::default())
         .setup(|app| {
-            let data_root = app.path().app_data_dir()?.join("data");
+            let data_root = resolve_data_root(app.handle())?;
             std::fs::create_dir_all(&data_root)?;
+            // 供 RunEvent::Exit 清理锁时复用同一数据根（便携包体模式下
+            // 数据根在包内 data/，不在 %APPDATA%，不可重新推导）。
+            *app.state::<EngineSidecar>()
+                .data_root
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(data_root.clone());
             let (port, configured_access_key) = load_sidecar_settings(&data_root);
             let env_engine_url = std::env::var("AIRP_ENGINE_URL")
                 .ok()
@@ -139,9 +148,14 @@ fn main() {
                     .unwrap_or_else(|error| error.into_inner())
                     .clone();
                 if let Some(instance_id) = instance_id {
-                    if let Ok(data_root) = app.path().app_data_dir() {
+                    let data_root = sidecar
+                        .data_root
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .clone();
+                    if let Some(data_root) = data_root {
                         lifecycle::remove_lock_if_owned(
-                            &data_root.join("data").join(lifecycle::LOCK_FILE_NAME),
+                            &data_root.join(lifecycle::LOCK_FILE_NAME),
                             &instance_id,
                         );
                     }
@@ -194,6 +208,43 @@ fn load_sidecar_settings(data_root: &Path) -> (u16, Option<String>) {
     }
 
     (port, access_key)
+}
+
+/// 数据根目录解析（v0.0.4：桌面壳与 webui 便携包体共存、共用包内目录）。
+///
+/// 优先级：
+/// 1. `AIRP_DATA_DIR` 环境变量（显式覆盖，与 webui 便携包 Start-AIRP.cmd
+///    的包内数据语义同源）；
+/// 2. 可执行文件同目录 `data/`（portable 包体模式：airp-ui.exe 与
+///    Start-AIRP.cmd 共用一个解压目录，角色卡/会话/密钥等用户数据两侧一致）；
+/// 3. 默认 `%APPDATA%/<identifier>/data`（开发/安装场景，C-P0 原语义）。
+fn resolve_data_root(app: &tauri::AppHandle) -> std::io::Result<PathBuf> {
+    if let Ok(dir) = std::env::var("AIRP_DATA_DIR") {
+        if !dir.trim().is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
+    }
+    if let Some(portable) = portable_data_dir() {
+        return Ok(portable);
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| std::io::Error::other(error))?;
+    Ok(dir.join("data"))
+}
+
+/// 便携包体模式：可执行文件同目录存在 `data/` 目录则使用之。
+/// 判定只认目录存在（与 webui 便携包 data/ 同源），不存在则回退默认；
+/// 判定后由 setup 的 create_dir_all 补齐（桌面用户首次双击时自动创建）。
+fn portable_data_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    portable_data_dir_from(exe.parent()?)
+}
+
+fn portable_data_dir_from(exe_dir: &Path) -> Option<PathBuf> {
+    let dir = exe_dir.join("data");
+    dir.is_dir().then_some(dir)
 }
 
 /// C-P0: 定位 webui 资产目录（engine 同源承载的内容面）。
@@ -791,6 +842,15 @@ mod tests {
         let (port, access_key) = load_sidecar_settings(&root);
         assert_eq!(port, 8123);
         assert_eq!(access_key, None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn portable_data_dir_requires_existing_data_dir() {
+        let root = temp_data_root("portable");
+        assert_eq!(portable_data_dir_from(&root), None);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        assert_eq!(portable_data_dir_from(&root), Some(root.join("data")));
         let _ = std::fs::remove_dir_all(root);
     }
 
