@@ -1498,7 +1498,10 @@ mod tests {
         fs::remove_dir_all(dir.path().join("characters")).unwrap();
         fs::write(dir.path().join("characters"), "not a directory").unwrap();
 
-        // restore 应失败（swap 阶段 create_dir_all 失败）
+        // restore 应失败（swap 阶段 create_dir_all 失败）。
+        // 不断言具体错误变体：`create_dir_all` 失败走 `?` 返回 `AirpError::Io`，
+        // 且 io::Error kind 因 OS 而异（Windows: AlreadyExists, Linux: NotADirectory）。
+        // 测试本意是验证 swap 失败后现场保留，错误类型不是契约。
         let result = restore_backup(dir.path(), &created.backup_id);
         assert!(
             result.is_err(),

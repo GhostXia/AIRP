@@ -14,8 +14,8 @@ use crate::ulid;
 
 use super::lock_order;
 use super::locks::{
-    character_lock, remove_deleted_character_lock, remove_deleted_session_lock,
-    remove_deleted_state_lock, session_lock,
+    character_lock, remove_deleted_character_lock, remove_deleted_default_session_lock,
+    remove_deleted_session_lock, remove_deleted_state_lock, session_lock,
 };
 
 /// Immutable target state captured before a regen proposal is generated.
@@ -908,11 +908,8 @@ impl ChatService {
         // #435: 在删除目录之前枚举该 character 的所有 sessions，用于删除后批量清理
         // SESSION_LOCKS 中以 `{character_id}/` 为前缀的 stale 条目。
         // best-effort：枚举失败不阻塞删除（locks 残留不致数据损坏，仅内存泄漏）。
-        let known_sessions = data_dir::list_sessions(
-            &self.data_root,
-            character_id.as_str(),
-        )
-        .unwrap_or_default();
+        let known_sessions =
+            data_dir::list_sessions(&self.data_root, character_id.as_str()).unwrap_or_default();
 
         let result = data_dir::delete_character(&self.data_root, character_id);
         // #440: 必须在 write guard 释放之后再清理 lock-map 条目。否则新 caller
@@ -932,6 +929,9 @@ impl ChatService {
             // delete_session 路径）的 lock 此前已清理，这里只处理仍存在的 session。
             remove_deleted_character_lock(character_id.as_str());
             remove_deleted_state_lock(character_id.as_str());
+            // #435: default-session lock 的键为 character_id 本身（无 /session_id
+            // 后缀），逐个清理 named session 触达不到，需单独清理。
+            remove_deleted_default_session_lock(character_id.as_str());
             for session_id in &known_sessions {
                 remove_deleted_session_lock(character_id.as_str(), session_id);
             }

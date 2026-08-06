@@ -226,9 +226,8 @@ fn total_bytes(files: &[crate::revision::manifest::ApprovedFile]) -> u64 {
 /// 加载阶段校验规则一致（#450）。manifest 校验更严格（仅允许 alphanumeric +
 /// `-` + `_`，拒绝 `:` 等 Windows 非法文件名字符），HTTP 入口采用同一规则。
 fn validate_backup_id_segment(backup_id: &str) -> Result<(), AirpError> {
-    crate::backup::manifest::validate_backup_id(backup_id).map_err(|e| {
-        AirpError::BadRequest(format!("backup_id 非法: {e}"))
-    })
+    crate::backup::manifest::validate_backup_id(backup_id)
+        .map_err(|e| AirpError::BadRequest(format!("backup_id 非法: {e}")))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
