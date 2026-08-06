@@ -233,7 +233,7 @@ pub struct SwitchBranchRequest {
 /// - 传 `before` → cursor 分页：返回该 durable ID 严格之前（更早）的消息。
 ///   `before` 必须命中当前 session 的某条 durable ID，否则 `BadRequest`
 ///   （cursor 不能跨 character/session）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryQuery {
     /// 待查询角色 ID。

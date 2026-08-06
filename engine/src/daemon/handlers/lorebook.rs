@@ -18,6 +18,9 @@ use std::sync::Arc;
 
 /// GET /v1/characters/:character_id/lorebook — 返回角色级世界书 JSON。
 /// 不存在 → 404（与空对象 {} 区分）。
+///
+/// `LorebookService::read` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn get_character_lorebook(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
@@ -25,7 +28,11 @@ pub(in crate::daemon) async fn get_character_lorebook(
     // #67 #5 fix: 改用 Result<Json<Value>, AirpError> 统一错误格式。
     // 之前返回 Response + 裸 StatusCode::BAD_REQUEST，客户端 formatError 拿不到结构化 error body。
     let char_id = CharacterId::new(character_id)?;
-    let lorebook = LorebookService::new(&state.data_root).read(&char_id)?;
+    let data_root = state.data_root.clone();
+    let lorebook =
+        tokio::task::spawn_blocking(move || LorebookService::new(&data_root).read(&char_id))
+            .await
+            .map_err(|e| AirpError::Internal(format!("lorebook read join failed: {e}")))??;
     Ok(Json(serde_json::to_value(lorebook)?))
 }
 
@@ -39,27 +46,38 @@ pub(in crate::daemon) async fn get_character_lorebook(
 ///
 /// 返回写入的 canonical Lorebook 条目数 + 归一化诊断报告。
 /// 角色不存在 → 404。
+///
+/// `data_dir::list_characters` + `LorebookService::write` 是同步文件 IO；
+/// 在 async handler 中用 `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
+/// normalize_worldbook 是纯 CPU 计算，一并搬到 blocking pool 减少线程切换。
 pub(in crate::daemon) async fn update_character_lorebook(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    // 校验角色已存在
-    let exists = data_dir::list_characters(&state.data_root)?
-        .into_iter()
-        .any(|c| c == cid.as_str());
-    if !exists {
-        return Err(AirpError::NotFound(format!(
-            "character {} does not exist",
-            cid
-        )));
-    }
-    let (lorebook, report) = crate::orchestrator::normalize_worldbook(&body);
-    if let Some(reason) = report.replacement_error() {
-        return Err(AirpError::BadRequest(format!("invalid lorebook: {reason}")));
-    }
-    LorebookService::new(&state.data_root).write(&cid, &lorebook)?;
+    let data_root = state.data_root.clone();
+    let cid_for_io = cid.clone();
+    let (lorebook, report) = tokio::task::spawn_blocking(move || -> Result<_, AirpError> {
+        // 校验角色已存在
+        let exists = data_dir::list_characters(&data_root)?
+            .into_iter()
+            .any(|c| c == cid_for_io.as_str());
+        if !exists {
+            return Err(AirpError::NotFound(format!(
+                "character {} does not exist",
+                cid_for_io
+            )));
+        }
+        let (lorebook, report) = crate::orchestrator::normalize_worldbook(&body);
+        if let Some(reason) = report.replacement_error() {
+            return Err(AirpError::BadRequest(format!("invalid lorebook: {reason}")));
+        }
+        LorebookService::new(&data_root).write(&cid_for_io, &lorebook)?;
+        Ok((lorebook, report))
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("lorebook write join failed: {e}")))??;
     Ok(Json(serde_json::json!({
         "character_id": cid.as_str(),
         "entries_count": lorebook.entries.len(),

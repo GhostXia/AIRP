@@ -27,6 +27,9 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 /// POST /v1/chat/history — get chat history for a character
+///
+/// `ChatService::history_window` / `history` 是同步文件 IO；在 async handler 中用
+/// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 pub(in crate::daemon) async fn get_chat_history(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(query): Json<HistoryQuery>,
@@ -37,17 +40,33 @@ pub(in crate::daemon) async fn get_chat_history(
         crate::data_dir::resolve_effective_root(&state.data_root, query.user_id.as_deref())?;
     // #37 cursor 分页：传 limit/before 走窗口；不传 → 全量（向后兼容旧客户端）。
     if query.limit.is_some() || query.before.is_some() {
-        let window = ChatService::new(&effective_root).history_window(
-            &query.character_id,
-            query.session_id.as_ref(),
-            query.limit,
-            query.before.as_deref(),
-        )?;
+        let window = tokio::task::spawn_blocking({
+            let effective_root = effective_root.clone();
+            let character_id = query.character_id.clone();
+            let session_id = query.session_id;
+            let limit = query.limit;
+            let before = query.before.clone();
+            move || {
+                ChatService::new(&effective_root).history_window(
+                    &character_id,
+                    session_id.as_ref(),
+                    limit,
+                    before.as_deref(),
+                )
+            }
+        })
+        .await
+        .map_err(|e| AirpError::Internal(format!("history_window join failed: {e}")))??;
         return Ok(Json(serde_json::to_value(window)?));
     }
     // legacy 全量返回必须保留 ChatLog 的既有响应形状。
-    let log = ChatService::new(&effective_root)
-        .history(&query.character_id, query.session_id.as_ref())?;
+    let log = tokio::task::spawn_blocking({
+        let character_id = query.character_id.clone();
+        let session_id = query.session_id;
+        move || ChatService::new(&effective_root).history(&character_id, session_id.as_ref())
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("history join failed: {e}")))??;
     Ok(Json(serde_json::to_value(log)?))
 }
 
