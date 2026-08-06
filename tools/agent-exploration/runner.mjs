@@ -331,19 +331,25 @@ async function generateAndRunScript(mod, ctx, taskDir) {
   let lastScriptPath = null;
   // ES module strict mode 要求显式声明；否则首次 lastScriptContent = scriptContent 抛 ReferenceError
   let lastScriptContent = '';
+  // DeepSeek thinking mode 要求把 reasoning_content 回传给 API，否则 revision > 0
+  // 时 API 会报 "reasoning_content must be passed back" 拒绝请求或返回空。
+  let lastReasoning = '';
   for (let revision = 0; revision <= MAX_REVISIONS; revision++) {
     const messages = revision === 0
       ? [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }]
       : [
           { role: 'system', content: prompt.system },
           { role: 'user', content: prompt.user },
-          { role: 'assistant', content: lastScriptContent },
+          // DeepSeek thinking mode：assistant 消息必须包含 reasoning_content 字段，
+          // 否则 API 拒绝请求。content 传上次提取的脚本（可能为空，但字段必须存在）。
+          { role: 'assistant', content: lastScriptContent, reasoning_content: lastReasoning },
           { role: 'user', content: 'Previous script failed with:\n' + lastError + '\n\nRevise and output a complete corrected script.' },
         ];
 
-    const content = await chatCompletion(messages, { maxTokens: MAX_TOKENS, temperature: 0.2 });
+    const { content, reasoning } = await chatCompletion(messages, { maxTokens: MAX_TOKENS, temperature: 0.2 });
     const scriptContent = extractCodeBlock(content);
     lastScriptContent = scriptContent;
+    lastReasoning = reasoning || '';
     const scriptPath = join(taskDir, 'agent-script-revision-' + revision + '.mjs');
     await writeFile(scriptPath, scriptContent);
     lastScriptPath = scriptPath;

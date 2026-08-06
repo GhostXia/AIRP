@@ -106,7 +106,31 @@ export async function chatCompletion(messages, { maxTokens = 2048, temperature =
     throw new Error(`LLM ${res.status}: ${text}`);
   }
   const json = await res.json();
-  return json.choices?.[0]?.message?.content || '';
+  const message = json.choices?.[0]?.message || {};
+  // DeepSeek thinking mode 兼容：当 content 为空时，实际输出在 reasoning_content。
+  // 不做这层 fallback，runner 会把空串写入脚本文件（0 bytes），validateScript
+  // 报 "Missing required module export"，所有 revision 都失败。
+  // 参考：https://api-docs.deepseek.com/guides/reasoning_model
+  const content = message.content || '';
+  const reasoning = message.reasoning_content || '';
+  // 返回 content；若为空，从 reasoning_content 提取（LLLM 可能把代码块放在思考过程里）。
+  // 同时保留 reasoning 供 runner revision > 0 时回传给 API（deepseek 要求）。
+  return {
+    content: content || extractCodeBlockFromReasoning(reasoning),
+    reasoning,
+  };
+}
+
+// DeepSeek thinking mode 下，代码块可能出现在 reasoning_content 而非 content。
+// 提取最后一个 ```js/javascript 代码块（LLM 通常在思考末尾才输出最终脚本）。
+function extractCodeBlockFromReasoning(reasoning) {
+  if (!reasoning) return '';
+  const matches = reasoning.matchAll(/```(?:javascript|js)?\n([\s\S]*?)```/g);
+  let last = '';
+  for (const m of matches) {
+    last = m[1];
+  }
+  return last;
 }
 
 export function getModel() {
