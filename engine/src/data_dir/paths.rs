@@ -75,7 +75,7 @@ pub fn ensure_data_dirs(root: &Path) -> Result<(), AirpError> {
             "endpoint": "",
             "api_key": "",
             "model": "gpt-4o",
-            "daemon_port": 8000,
+            "daemon_port": 8765,
             "default_user_name": "User",
             "default_filters": []
         });

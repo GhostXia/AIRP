@@ -115,6 +115,8 @@ pub struct RollbackRequest {
     /// A6：可选 session ID。指定则操作 `characters/{id}/sessions/{session_id}/history/`；
     /// 省略则回退 legacy per-character `characters/{id}/history/`。
     pub session_id: Option<SessionId>,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。省略或空串 → daemon root（旧请求行为不变）。
+    pub user_id: Option<String>,
 }
 
 impl RollbackRequest {
@@ -242,6 +244,8 @@ pub struct HistoryQuery {
     pub limit: Option<usize>,
     /// #37：cursor；某条消息的 durable ID，返回该 ID 严格之前（更早）的消息。
     pub before: Option<String>,
+    /// DX-1：可选用户 ID（per-user 数据隔离）。省略或空串 → daemon root（旧请求行为不变）。
+    pub user_id: Option<String>,
 }
 
 /// `POST /v1/chat/session-state` request for the observable Coordinator state.
@@ -266,4 +270,37 @@ pub struct CancelGenerationRequest {
     pub generation_id: String,
     /// Optional user scope, following the generation endpoints' effective-root rule.
     pub user_id: Option<String>,
+}
+
+/// `POST /v1/chat/session-recover` request for the user-directed recovery
+/// bypass of a fail-closed session.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRecoverRequest {
+    /// Character that owns the locked session.
+    pub character_id: CharacterId,
+    /// Optional named session; absence selects the legacy character session.
+    pub session_id: Option<SessionId>,
+    /// Optional user scope, following the mutation endpoints' effective-root rule.
+    pub user_id: Option<String>,
+}
+
+/// `POST /v1/chat/session-recover` response for a successful quarantine.
+#[derive(Debug, Serialize)]
+pub struct SessionRecoverResponse {
+    /// Always `"recovered"` for successful responses.
+    pub status: &'static str,
+    /// Character whose session was unblocked.
+    pub character_id: String,
+    /// Named session that was unblocked, if any.
+    pub session_id: Option<String>,
+    /// Generation recorded by the quarantined marker; empty when the marker
+    /// was unreadable.
+    pub generation_id: String,
+    /// Commit phase recorded by the quarantined marker (snake_case, e.g.
+    /// `message_committed`).
+    pub phase: String,
+    /// Durable archive location of the original marker bytes. The marker is
+    /// never deleted; this path lets operators or a future replay slice find it.
+    pub quarantined_marker: String,
 }

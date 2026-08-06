@@ -34,6 +34,34 @@ test('coordinator status reuses the authoritative sample tag tokens', () => {
   assert.doesNotMatch(chatStyle, /session-operation-status[^}]*#[0-9a-f]{3,8}/i);
 });
 
+// ── BUG-2 mitigation: user-side recovery for fail-closed sessions ──────────
+
+test('chat space offers a confirmed recovery action for recovering sessions', () => {
+  // Button appears only while the coordinator reports the fail-closed phase.
+  assert.match(chatScript, /coordinatorPhase !== 'recovering'/);
+  assert.match(chatScript, /id = 'session-recover'|id: 'session-recover'|\.id = 'session-recover'/);
+  assert.match(chatScript, /尝试恢复会话/);
+  // Confirmation before the mutating call, then the new endpoint.
+  assert.match(chatScript, /window\.confirm\(/);
+  assert.match(chatScript, /client\.request\('POST', '\/v1\/chat\/session-recover'/);
+  assert.match(chatScript, /character_id: characterId, session_id: sessionId/);
+  // Success refreshes the coordinator state; failure stays actionable.
+  assert.match(chatScript, /session\.recover[\s\S]*refreshCoordinatorState/);
+  assert.match(chatScript, /session\.recover\.error/);
+});
+
+test('diagnostics screen exposes the session recovery entry', () => {
+  assert.match(consoleScript, /client\.request\('POST', '\/v1\/chat\/session-recover'/);
+  assert.match(consoleScript, /会话恢复（写入中断锁死）/);
+  assert.match(consoleScript, /尝试恢复会话/);
+  assert.match(consoleScript, /phase === 'recovering'/);
+});
+
+test('chat space styles the recovery button with design tokens only', () => {
+  assert.match(chatStyle, /\.session-recover-btn \{/);
+  assert.doesNotMatch(chatStyle, /session-recover-btn[^}]*#[0-9a-f]{3,8}/i);
+});
+
 // ── B11: Delete character ──────────────────────────────────────────────────
 
 test('role list wires DELETE /v1/characters/:id with confirmation', () => {

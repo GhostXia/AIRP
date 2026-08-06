@@ -1,0 +1,719 @@
+{
+  "$schemaVersion": 1,
+  "description": "engine /v1 端点契约 golden 清单。由 webui/tests/extract-v1-endpoints.mjs 从 engine/src/daemon/mod.rs 抽取后人工补充 ui 标注。更新方式见 DEV-GUIDE「端点契约守卫」。",
+  "generatedFrom": {
+    "file": "engine/src/daemon/mod.rs",
+    "ref": "desktop/c-p3-capability-auth@bd22c52",
+    "date": "2026-08-05"
+  },
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/agent/run",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent/tools",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/backups/:backup_id/restore",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/backups/:backup_id/verify",
+      "ui": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/backups/:backup_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/backups/:backup_id",
+      "ui": false,
+      "reason": "WebUI 备份面板仅用列表/创建/校验/恢复/删除（console-runtime.js 备份调用契约注释），单项详情留给 API 客户端"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/backups",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/backups",
+      "bodyLimit": "64KB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/character-templates/:template_id/instantiate",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/character-templates/:template_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/character-templates",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/analysis/*filename",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/characters/:character_id/analysis/*filename",
+      "bodyLimit": "1MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/analysis",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/avatar",
+      "ui": false,
+      "reason": "WebUI 聊天界面使用首字母占位头像，未请求此端点；保留给桌面 UI 与外部集成"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/characters/:character_id/decompose",
+      "bodyLimit": "1MB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/characters/:character_id/dialogue-examples",
+      "bodyLimit": "64KB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/characters/:character_id/drift/rollback",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/drift",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/characters/:character_id/drift",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/images/:filename",
+      "ui": true,
+      "note": "经 <img src> 直接加载（image-gen.js），不经 client.request"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/images",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/lorebook/graph",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/lorebook",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/characters/:character_id/lorebook",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/plot-arc",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/characters/:character_id/plot-arc",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/characters/:character_id/reextract",
+      "ui": true,
+      "note": "经注入 transport 消费（workbench-reextract.js 的 options.request → client.request）"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/revisions/:revision_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/revisions/diff",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/revisions",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/sessions/:session_id/images/:filename",
+      "ui": true,
+      "note": "经 <img src> 直接加载（image-gen.js），不经 client.request"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/state/history",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/state/schema",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/state",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id/world-events",
+      "ui": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/characters/:character_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters/:character_id",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/characters/:character_id",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/characters/import",
+      "bodyLimit": "10MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/characters",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/branch/switch",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/cancel",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/continue",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/delete",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/history",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/chat/message",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/preview",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/regen",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/rollback",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/search",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/session-recover",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/session-state",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/swipe",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversation-capabilities",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversation-migrations/:migration_id/export",
+      "ui": false,
+      "reason": "Conversation 迁移工具链专用，WebUI 不消费"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversation-migrations/:migration_id/rollback",
+      "ui": false,
+      "reason": "Conversation 迁移工具链专用，WebUI 不消费"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversation-migrations/plan",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 迁移工具链专用，WebUI 不消费"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversation-migrations",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 迁移工具链专用，WebUI 不消费"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversation-policies",
+      "ui": false,
+      "reason": "Conversation 策略由引擎中间件（axum Extension）注入，无 WebUI 消费面"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations/:conversation_id/events",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/events",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/turns/:turn_id/cancel",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations/:conversation_id/turns/:turn_id/observability",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations/:conversation_id/turns/:turn_id",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations/:conversation_id/turns",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations/:conversation_id",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/conversations",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/desktop-session",
+      "ui": false,
+      "reason": "C-P0 桌面壳（Tauri）专属：壳持进程级 access key 经此端点换短时效 UI token（bearer 注入通道），WebUI JS 不直接调用——token 由壳以 URL fragment 传入首屏写 sessionStorage"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/desktop-session/renew",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/install",
+      "bodyLimit": "6MB",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI（24-plugins.html renderPlugins）——digest-pinned 安装包投放"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——枚举已安装扩展包（digest/状态/slot/grant）"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions/catalog",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/:extension_id/enable",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——启用已安装扩展包"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/:extension_id/disable",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——停用已安装扩展包"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/extensions/:extension_id",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——卸载扩展包并清理孤儿资产"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/extensions/:extension_id/grants",
+      "ui": true,
+      "note": "C-P3 扩展管理 UI——capability 权威签发/撤销（action=grant|revoke，capabilities 可选子集）"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions/:extension_id/grants",
+      "ui": false,
+      "reason": "C-P3 grant 查询由 GET /v1/extensions/grants 批量拉取（consent.js 初始化），单扩展查询留给 API 客户端"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/extensions/grants",
+      "ui": true,
+      "note": "C-P3 consent.js boot 时批量拉取权威 grant 状态（type → granted_capabilities）"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/grants",
+      "ui": true,
+      "note": "C-P4 第二批（#484）统一授权查询面：kind 判别字段聚合全部授权主体（本阶段仅 widget），扩展管理页授权总览卡消费"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/image/generate",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/memory/resident",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/memory/resident",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/memory/user-model",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/memory/user-model",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/onboarding/complete",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/plugin-tools/:name/test",
+      "bodyLimit": "1MB",
+      "ui": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/plugin-tools/:name",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/plugin-tools",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/plugin-tools",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/presets/:preset_id/decompose",
+      "bodyLimit": "1MB",
+      "ui": false,
+      "reason": "WebUI 仅暴露角色卡拆解入口（/v1/characters/:character_id/decompose），预设拆解留给 API 客户端"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/presets/:preset_id",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/presets/import",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/presets",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/provider-routing",
+      "ui": false,
+      "reason": "WebUI 路由管理仅写入配置（PUT），读取经由 /v1/providers/resolve"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/provider-routing",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/providers/resolve",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/providers",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/providers",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/scenes/:scene_id/characters",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/scenes/:scene_id/conversations",
+      "bodyLimit": "2MB",
+      "ui": false,
+      "reason": "场景会话属 Conversation 聚合双轨，WebUI 场景走 sessions 轨"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/scenes/:scene_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/scenes",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/scenes",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/:character_id/:session_id/timeline/export",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/:character_id/:session_id/timeline",
+      "ui": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/sessions/:character_id/:session_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/:character_id",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/:character_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/settings",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/settings",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/style/learn",
+      "bodyLimit": "2MB",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/style/profiles/:profile_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/style/profiles",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/style/review",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/users/:user_id/persona/effective",
+      "ui": false,
+      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/users/:user_id/persona",
+      "ui": false,
+      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/users/:user_id/persona",
+      "ui": false,
+      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/users/:user_id/personas/:persona_id/bindings",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/users/:user_id/personas/:persona_id/bindings",
+      "ui": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/users/:user_id/personas/:persona_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/users/:user_id/personas/:persona_id",
+      "ui": true
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/users/:user_id/personas/:persona_id",
+      "ui": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/users/:user_id/personas",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/users/:user_id/personas",
+      "ui": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/widget-intents",
+      "ui": true
+    }
+  ]
+}

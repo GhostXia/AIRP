@@ -10,6 +10,11 @@ description = "AIRP UI desktop shell"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Dev-mode 兜底钩子（build.rs）：读锁文件杀残留 engine，避免残留进程
+# 锁住 target/ 下的 sidecar 拷贝导致构建 PermissionDenied。
+dirs = "6"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -19,13 +24,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
-futures-util = { workspace = true }
-uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-# Workspace-internal path dep: the Tauri shell mirrors the same wire types the
-# UI/Gateway use.
-airp-state-protocol = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+# C-P0：内容面换为 engine 同源 webui；bus.rs intent relay 与 State Protocol
+# 桥归档到 docs/archive/2026-08-04-c-p0-desktop-shell/（airp-state-protocol /
+# futures-util 依赖随之移除；协议线型仍由 protocol crate 权威持有）。
 
 [[bin]]
 name = "airp-ui"

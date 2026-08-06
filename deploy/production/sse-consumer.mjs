@@ -1,5 +1,10 @@
 // Strict AIRP Engine SSE consumer used by production smoke.
 //
+// Frame shapes follow the machine-readable contract protocol/sse-events.json
+// (additive-only): every locked message data type is accepted, unknown message
+// data types and unknown fields are tolerated, and the typed error envelope
+// must carry code/message/retryable/commit_state.
+//
 // A successful generation must terminate with the Engine's typed
 // `event: message` / `{ "type": "done" }` frame.  An error frame is terminal
 // only when its structured error envelope is valid; an early EOF is never
@@ -26,6 +31,8 @@ export async function consumeGenerationSse(
     error: null,
     timedOut: false,
     elapsedMs: 0,
+    unknownTypes: [],
+    optionFrames: 0,
   };
   if (!response?.body?.getReader) {
     return { ...empty, terminal: 'unavailable', error: 'SSE response has no readable body', elapsedMs: Date.now() - startedAt };
@@ -74,7 +81,15 @@ export async function consumeGenerationSse(
     }
     if (eventIsError && payloadIsError) {
       const detail = payload?.error;
-      if (payload?.type !== 'error' || !detail || typeof detail.code !== 'string' || typeof detail.commit_state !== 'string') {
+      const envelopeValid =
+        payload?.type === 'error' &&
+        typeof payload?.text === 'string' &&
+        detail &&
+        typeof detail.code === 'string' &&
+        typeof detail.message === 'string' &&
+        typeof detail.retryable === 'boolean' &&
+        typeof detail.commit_state === 'string';
+      if (!envelopeValid) {
         finish('malformed_error', 'SSE error frame lacks the typed error envelope');
         return;
       }
@@ -107,7 +122,18 @@ export async function consumeGenerationSse(
       if (payload.type === 'body_chunk') result.text += payload.text;
       return;
     }
-    finish('invalid_message', `unexpected SSE message type: ${payload?.type || 'missing'}`);
+    if (payload?.type === 'action_options') {
+      // serde adjacent-tagged shape: {"type":"action_options","text":{"options":[...]}}
+      const options = payload?.text?.options;
+      if (!Array.isArray(options) || !options.every(option => typeof option === 'string')) {
+        finish('malformed', 'action_options frame lacks a string options array');
+        return;
+      }
+      result.optionFrames++;
+      return;
+    }
+    // additive-only contract: unknown message data types are tolerated.
+    result.unknownTypes.push(String(payload?.type ?? 'missing'));
   };
 
   try {

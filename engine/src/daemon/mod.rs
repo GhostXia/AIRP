@@ -1,6 +1,7 @@
 //! Daemon state, config, auth middleware, and axum router factory.
 
 pub(crate) mod decompose_handlers;
+pub(crate) mod desktop_session;
 pub(crate) mod handlers;
 pub mod types;
 
@@ -17,7 +18,7 @@ use axum::{
     http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -57,9 +58,9 @@ use handlers::{
     list_conversations_endpoint, list_images_endpoint, list_models, list_personas_endpoint,
     list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
     list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
-    plan_conversation_migration_endpoint, preview_chat_assembly, reextract_character_assets,
-    regen_chat, resolve_provider_endpoint, restore_backup_endpoint, rollback_chat,
-    rollback_conversation_migration_endpoint, rollback_drift, serve_image_endpoint,
+    plan_conversation_migration_endpoint, preview_chat_assembly, recover_chat_session,
+    reextract_character_assets, regen_chat, resolve_provider_endpoint, restore_backup_endpoint,
+    rollback_chat, rollback_conversation_migration_endpoint, rollback_drift, serve_image_endpoint,
     serve_session_image_endpoint, style_learn, style_review, swipe_chat, switch_branch,
     test_plugin_tool_endpoint, unbind_persona_endpoint, update_character_card,
     update_character_lorebook, update_drift, update_persona_endpoint,
@@ -97,6 +98,10 @@ pub struct DaemonState {
     /// Phase 5.3 (Major1, 2026-07-26)：plugin tools 写操作（upsert / delete）
     /// 协调器，串行化 read-persist-commit，避免并发写造成盘-内存不一致。
     pub plugin_tools_update: tokio::sync::Mutex<()>,
+    /// C-P2：扩展注册面（registry / catalog / digest-pinned 包）。
+    /// 惰性初始化（首次访问 extensions 端点时从 data_root 加载），
+    /// 避免全部 18 个构造点承担加载成本与测试 tmp 目录差异。
+    pub extensions: std::sync::OnceLock<Arc<crate::extensions::ExtensionStore>>,
 }
 
 impl DaemonState {
@@ -118,6 +123,12 @@ impl DaemonState {
             tracing::warn!("config write lock poisoned; recovering");
             e.into_inner()
         })
+    }
+
+    /// C-P2：扩展存储惰性访问器（首次调用时从 `data_root` 加载）。
+    pub fn extensions(&self) -> &Arc<crate::extensions::ExtensionStore> {
+        self.extensions
+            .get_or_init(|| crate::extensions::ExtensionStore::load(self.data_root.clone()))
     }
 }
 
@@ -269,6 +280,13 @@ pub async fn auth_middleware(
             let ok = provided
                 .map(|k| constant_time_eq(k.as_bytes(), key.as_bytes()))
                 .unwrap_or(false);
+            // C-P0：桌面壳 bearer 注入通道——access key 不匹配时再尝试短时效
+            // desktop session token（POST /v1/desktop-session 签发，仅内存存储）。
+            // 两个分支均失败才拒绝；token 校验是哈希表查找，无时序通道顾虑。
+            let ok = ok
+                || provided
+                    .map(desktop_session::validate_desktop_session_token)
+                    .unwrap_or(false);
             if !ok {
                 return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
             }
@@ -376,11 +394,24 @@ pub fn create_router_with_conversation_policy_registry(
 
     let v1_routes = Router::new()
         .route("/v1/chat/completions", post(chat_completion))
+        // C-P0：桌面壳进程互信换短时效 UI token（bearer 注入通道）。
+        .route(
+            "/v1/desktop-session",
+            post(desktop_session::desktop_session_endpoint),
+        )
+        // C-P2：token 续期（rotation：撤旧发新，避免 8h 边界会话锁死）。
+        .route(
+            "/v1/desktop-session/renew",
+            post(desktop_session::desktop_session_renew_endpoint),
+        )
         .route("/v1/chat/preview", post(preview_chat_assembly))
         .route("/v1/agent/run", post(agent_run))
         .route("/v1/agent/tools", get(list_agent_tools))
         .route("/v1/chat/history", post(get_chat_history))
         .route("/v1/chat/session-state", post(get_chat_session_state))
+        // BUG-2 mitigation slice: user-directed recovery bypass for sessions
+        // fail-closed by a pending TurnCommit marker (quarantine, no replay).
+        .route("/v1/chat/session-recover", post(recover_chat_session))
         .route("/v1/chat/cancel", post(cancel_chat_generation))
         .route("/v1/chat/rollback", post(rollback_chat))
         .route("/v1/chat/regen", post(regen_chat))
@@ -706,6 +737,60 @@ pub fn create_router_with_conversation_policy_registry(
             "/v1/backups/:backup_id/restore",
             post(restore_backup_endpoint),
         )
+        // ── C-P2: 扩展注册面 / catalog / intent 执行面（最小合同） ──────────
+        .route(
+            "/v1/extensions/install",
+            // W1：包上限 MAX_PACKAGE_BYTES=4MB，经 base64 膨胀 33% ≈ 5.33MB
+            // + JSON 封套开销；路由 body 上限取 6MB，否则合法包会先撞 413
+            // 而非业务层校验（与 store 内 4MB 包级上限分工：传输层宽、
+            // 业务层严）。
+            post(crate::extensions::api::install_extension)
+                .layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/extensions",
+            get(crate::extensions::api::list_extensions),
+        )
+        .route(
+            "/v1/extensions/catalog",
+            get(crate::extensions::api::get_catalog),
+        )
+        .route(
+            "/v1/extensions/:extension_id/enable",
+            post(crate::extensions::api::enable_extension),
+        )
+        .route(
+            "/v1/extensions/:extension_id/disable",
+            post(crate::extensions::api::disable_extension),
+        )
+        .route(
+            "/v1/extensions/:extension_id",
+            delete(crate::extensions::api::delete_extension),
+        )
+        // ── C-P3: capability 权威授权面（grant / revoke / 查询） ──────────
+        // grant_extension 处理 POST（签发/撤销）；get_extension_grants 处理
+        // GET（查询单扩展 grant 状态）。action=grant|revoke 在 body 中区分。
+        .route(
+            "/v1/extensions/:extension_id/grants",
+            post(crate::extensions::api::grant_extension)
+                .get(crate::extensions::api::get_extension_grants),
+        )
+        // list_all_grants：列出全部扩展 grant（webui consent.js 初始化用）。
+        // 字面量段 `grants` 优先于参数段 `:extension_id`，无路由冲突。
+        .route(
+            "/v1/extensions/grants",
+            get(crate::extensions::api::list_all_grants),
+        )
+        // C-P4 第二批（#484）：统一授权查询面（kind 判别字段，本阶段仅
+        // widget 扩展 grant；additive，不动 /v1/extensions/grants）。
+        .route(
+            "/v1/grants",
+            get(crate::extensions::api::list_unified_grants),
+        )
+        .route(
+            "/v1/widget-intents",
+            post(crate::extensions::api::widget_intent),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -718,6 +803,15 @@ pub fn create_router_with_conversation_policy_registry(
     Router::new()
         .route("/version", get(version_handler))
         .route("/health", get(health_handler))
+        // C-P2：digest-pinned 扩展静态包服务。故意挂在鉴权层外：
+        // 内容寻址不可变 + 仅 loopback 拓扑 + nosniff；opaque-origin 沙箱
+        // iframe 的 module import 属 CORS 请求，ACAO:* 由
+        // local_webui_security_headers 对 /extensions/ 前缀精确附。
+        // 未注册 digest 一律 404（不投放未经安装面登记的内容）。
+        .route(
+            "/extensions/:digest/*file",
+            get(crate::extensions::api::serve_extension_asset),
+        )
         .merge(v1_routes)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -733,16 +827,36 @@ pub fn create_router_with_conversation_policy_registry(
 /// This remains opt-in so API-only and Tauri callers retain their existing
 /// router, while the local WebUI package gets a single same-origin process.
 pub fn create_local_webui_router(state: Arc<DaemonState>, webui_dir: PathBuf) -> Router {
+    webui_router_with_mode(state, webui_dir, "local")
+}
+
+/// C-P0: 桌面壳（Tauri）同源承载 webui 的 router。
+///
+/// 与 [`create_local_webui_router`] 结构完全一致（同样的硬 CSP / 安全头 /
+/// no-store），仅 runtime-config 的 mode 为 `desktop`，供 webui 识别宿主。
+/// 桌面场景下 daemon 带进程级 access key（由壳注入），webui 侧鉴权走
+/// `POST /v1/desktop-session` 签发的短时效 token（见 `desktop_session` 模块）。
+pub fn create_desktop_webui_router(state: Arc<DaemonState>, webui_dir: PathBuf) -> Router {
+    webui_router_with_mode(state, webui_dir, "desktop")
+}
+
+fn webui_router_with_mode(
+    state: Arc<DaemonState>,
+    webui_dir: PathBuf,
+    mode: &'static str,
+) -> Router {
+    let runtime_config =
+        format!("window.AIRP_WEBUI_CONFIG = Object.freeze({{ mode: '{mode}' }});\n");
     create_router(state)
         .route(
             "/runtime-config.js",
-            get(|| async {
+            get(move || async move {
                 (
                     [(
                         header::CONTENT_TYPE,
                         "application/javascript; charset=utf-8",
                     )],
-                    "window.AIRP_WEBUI_CONFIG = Object.freeze({ mode: 'local' });\n",
+                    runtime_config,
                 )
             }),
         )
@@ -751,19 +865,46 @@ pub fn create_local_webui_router(state: Arc<DaemonState>, webui_dir: PathBuf) ->
 }
 
 async fn local_webui_security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
+    // C-P1：widget 沙箱 iframe 以 sandbox="allow-scripts"（无 allow-same-origin）
+    // 运行于 opaque origin，其内 import() widget module 属 CORS 请求。
+    // /assets/widgets/ 是 loopback 静态公开资产（不含任何秘密），附
+    // Access-Control-Allow-Origin:* 使沙箱可加载；其余路径一律不加。
+    let is_widget_asset = request.uri().path().starts_with("/assets/widgets/");
+    // C-P2：digest-pinned 扩展静态包。与 widget 资产同理（opaque-origin
+    // 沙箱的 CORS module import 需要 ACAO:*），且内容寻址不可变，可附
+    // immutable 缓存。仅精确前缀匹配；其余路径一律不加。
+    let is_extension_asset = request.uri().path().starts_with("/extensions/");
+    // 沙箱引导页自身要被宿主 iframe 嵌入：X-Frame-Options DENY 会拒绝它。
+    // 不削弱安全：该页 CSP 仍带 frame-ancestors 'none'（第三方不得嵌它），
+    // 且宿主以 event.source === iframe.contentWindow 门控消息来源。
+    let is_sandbox_frame = request.uri().path() == "/assets/widgets/sandbox-frame.html";
     let mut response = next.run(request).await;
+    // #485 E5：immutable 长缓存只适用于成功响应；必须在 mutate headers
+    // 前捕获状态，否则 404/500 错误响应也会被客户端按 immutable 缓存。
+    let status = response.status();
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-        ),
+        HeaderValue::from_static(if is_sandbox_frame {
+            // 引导页须被同源宿主页嵌入：frame-ancestors 放宽为 'self'。
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+        } else {
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        }),
     );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if !is_sandbox_frame {
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
+    if is_widget_asset || is_extension_asset {
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        );
+    }
     headers.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
@@ -776,6 +917,11 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
         header::CACHE_CONTROL,
         HeaderValue::from_static(if is_event_stream {
             "no-cache"
+        } else if is_extension_asset && status.is_success() {
+            // 内容寻址不可变：安全长缓存（serve handler 已设同值，
+            // 此中间件会覆盖响应头，故必须在此重申）。#485 E5：
+            // 仅成功响应适用；错误响应回落 no-store。
+            "public, max-age=31536000, immutable"
         } else {
             "no-store"
         }),

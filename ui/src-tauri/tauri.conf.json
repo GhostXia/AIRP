@@ -4,22 +4,23 @@
   "version": "0.1.0",
   "identifier": "com.airp.ui",
   "build": {
-    "frontendDist": "../dist",
-    "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build:engine-sidecar && npm run build"
+    "frontendDist": "../splash",
+    "beforeBuildCommand": "npm run build:engine-sidecar && npm run bundle:webui"
   },
   "app": {
     "windows": [
       { "title": "AIRP UI", "width": 1200, "height": 800 }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+    }
   },
   "bundle": {
     "active": true,
     "useLocalToolsDir": true,
     "targets": ["nsis"],
     "externalBin": ["binaries/airp-core"],
+    "resources": ["webui-bundle/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

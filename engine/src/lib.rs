@@ -43,6 +43,7 @@ pub mod decompose;
 pub mod dialogue_gen;
 pub mod domain;
 pub mod error;
+pub mod extensions;
 pub mod image_gen;
 pub mod memory;
 pub mod orchestrator;

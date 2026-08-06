@@ -8,8 +8,8 @@ use tokio::net::TcpListener;
 use airp_core::chat_pipeline;
 use airp_core::config::{AppConfig, DeploymentMode};
 use airp_core::daemon::{
-    create_local_webui_router, create_router, ChatCompletionRequest, DaemonState, MutableConfig,
-    UserProfile,
+    create_desktop_webui_router, create_local_webui_router, create_router, ChatCompletionRequest,
+    DaemonState, MutableConfig, UserProfile,
 };
 use airp_core::error::AirpError;
 use airp_core::types::CharacterId;
@@ -86,6 +86,27 @@ fn validate_local_webui_options(
         return Err("--webui-dir cannot be used while access API key authentication is configured");
     }
     Ok(())
+}
+
+/// C-P0：解析桌面壳注入的同源 webui 承载目录（`AIRP_DESKTOP_WEBUI_DIR`）。
+///
+/// 该环境变量只由 Tauri 桌面壳在 spawn sidecar 时设置（进程互信通道）；
+/// 未设置时返回 None，daemon 行为与旧版完全一致（API-only）。
+/// 目录非法时 fail-fast，避免壳配置错误时静默退化为纯 API 模式。
+fn resolve_desktop_webui_dir() -> Result<Option<PathBuf>, String> {
+    let raw = match std::env::var("AIRP_DESKTOP_WEBUI_DIR") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => return Ok(None),
+    };
+    let dir = std::fs::canonicalize(&raw)
+        .map_err(|error| format!("cannot open AIRP_DESKTOP_WEBUI_DIR {raw}: {error}"))?;
+    if !dir.join("index.html").is_file() {
+        return Err(format!(
+            "AIRP_DESKTOP_WEBUI_DIR {} does not contain index.html",
+            dir.display()
+        ));
+    }
+    Ok(Some(dir))
 }
 
 #[cfg(target_os = "windows")]
@@ -234,6 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 provider_routing_update: tokio::sync::Mutex::new(()),
                 plugin_tools: std::sync::RwLock::new(plugin_tools),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
+                extensions: std::sync::OnceLock::new(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
@@ -262,7 +284,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     create_local_webui_router(state, dir)
                 }
-                None => create_router(state),
+                None => match resolve_desktop_webui_dir()? {
+                    // C-P0：桌面壳同源承载。与 --webui-dir 的区别：允许同时启用
+                    // access key 鉴权（壳经进程 env 注入随机 key，webui 用
+                    // /v1/desktop-session 短时效 token）；CLI --webui-dir 与
+                    // access key 互斥的既有约束不放开。
+                    Some(_) if !bind_ip.is_loopback() => {
+                        return Err(
+                            "AIRP_DESKTOP_WEBUI_DIR hosting is restricted to a loopback --host"
+                                .into(),
+                        );
+                    }
+                    Some(dir) => {
+                        tracing::info!(webui_dir = %dir.display(), "desktop webui hosting enabled");
+                        create_desktop_webui_router(state, dir)
+                    }
+                    None => create_router(state),
+                },
             };
             let addr = SocketAddr::new(bind_ip, daemon_port);
             let listener = TcpListener::bind(&addr).await?;
@@ -340,6 +378,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 provider_routing_update: tokio::sync::Mutex::new(()),
                 plugin_tools: Default::default(),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
+                extensions: std::sync::OnceLock::new(),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,

@@ -1,8 +1,8 @@
 # Security and deployment boundary
 
-> Baseline reviewed: 2026-07-30 (v0.0.3 engine gate in progress). Plugin HTTPS webhook DNS is fail-closed with request-time re-resolve/pin (#381 E-P0-3 / #329 N3); plugins remain trusted-user extensions, not a code sandbox (RR-014). See RISK-REGISTER and CURRENT-BASELINE.
+> Baseline reviewed: 2026-08-06 (v0.0.4 docs-pass, `main@e28ea02`). Plugin HTTPS webhook DNS is fail-closed with request-time re-resolve/pin (#381 E-P0-3 / #329 N3); plugins remain trusted-user extensions, not a code sandbox (RR-014). The widget extension line (C-P0~C-P4) adds digest-pinned install, engine-authoritative capability grants and an opaque-origin iframe sandbox; see the Widget extension boundary section below, RISK-REGISTER and CURRENT-BASELINE.
 
-AIRP defaults to a single-user local topology. The current priority artifact is a portable Windows WebUI package; Tauri remains a long-term client line.
+AIRP defaults to a single-user local topology. The current priority artifact is a portable Windows WebUI package; the Tauri desktop line now hosts the same-origin WebUI through the engine (C-P0) rather than its former Vue surface.
 
 ## Credentials
 
@@ -59,6 +59,20 @@ UI consent is a user-experience gate, not the authority. Agent tools are disable
 Third-party widgets must never receive the daemon bearer key directly. The trusted host should translate a user grant into the smallest capability/allowlist request needed for one operation.
 
 `GET /v1/agent/tools` exposes names, descriptions, and side-effect classes only; it grants no capability. `export_context_bundle` writes beneath the engine data root, validates identifiers, and applies the same model-facing size limit as lorebook reads. `update_lorebook` and `seal_volume` are destructive and therefore require exact-name confirmation.
+
+## Widget extension boundary (install, sandbox, capability grants, token rotation)
+
+The widget extension line (C-P0~C-P4, `main@e28ea02`) adds a first install/authorization surface for third-party browser code. Its security boundaries, as implemented in code:
+
+**Desktop shell bearer channel.** The Tauri shell holds the access key, exchanges it via `POST /v1/desktop-session` for a short-lived UI token, and navigates the first screen with the token in the URL fragment (`#airp-token=`), which does not reach server logs or Referer; the WebUI moves it into `sessionStorage.airp_bearer` and clears the fragment. The shell renewal loop deliberately uses exchange (additive) rather than rotation so the WebUI's in-flight token is not revoked mid-flight; the tradeoff is that superseded tokens stay valid for their own TTL. The renewal loop has no GUI real-device verification yet (see RISK-REGISTER).
+
+**Widget sandbox.** Third-party esm widgets run inside an opaque-origin iframe with `sandbox="allow-scripts"`: they cannot read host DOM, storage or cookies, and communicate with the host only through a postMessage bridge. First-party builtin widgets do not use the iframe. This is a browser isolation boundary, not a full code sandbox: there is no CPU, network or resource isolation, and a widget can still issue same-origin requests subject to bearer authentication.
+
+**Digest-pinned install.** `POST /v1/extensions/install` verifies each file's SHA-256 against the declared payload and rejects the whole package on mismatch; the package-level digest becomes the content-addressed directory (`data_root/extensions/<digest>/`). Install forces `entry.source` to the same-origin `/extensions/<digest>/index.js` and `entry.sandbox=true`, so no cross-origin module load path exists at the registry surface; slot must be within the built-in closed set. Static package serving (`GET /extensions/:digest/*file`) intentionally sits outside bearer auth because content is immutable and content-addressed, and opaque-origin sandbox frames need `Access-Control-Allow-Origin: *` for module imports; every serve re-checks the file digest and refuses with 500 on mismatch, and unregistered digests always 404. Residual: any local process that can write the data root can replace package files between install and serve, which the serve-time digest recheck turns into a denial rather than silent substitution.
+
+**Capability grants.** Capability authority lives in the engine, not the UI. Grants are a closed set of six capabilities (`read/write:memory`, `read:worldbook`, `read/write:state`, `call:tool`), subset grants must be declared in the installed manifest, and reinstalling a type clears all grants (consent never carries across package identity). `POST /v1/widget-intents` enforces per call: the widget type must map to an enabled extension and the requested capability must be granted, otherwise 403 `intent_denied`; grant/revoke/deny decisions are audit-logged. The WebUI consent UI is a user-experience gate only. Residual: the intent face has no executor yet (authorization accepted is not execution), and the closed set predates any MCP/plugin grant subjects.
+
+**Token rotation.** `POST /v1/desktop-session/renew` rotates: it revokes the presented token and issues a new one immediately; stale tokens get 401 and the full access key cannot be renewed (full-authority credentials never participate in rotation).
 
 ## Plugin/custom tool boundary
 

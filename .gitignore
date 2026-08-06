@@ -18,6 +18,7 @@ ui/src-tauri/Cargo.lock
 ui/node_modules/
 ui/dist/
 ui/dist-ssr/
+ui/src-tauri/webui-bundle/
 ui/.vite/
 *.local
 

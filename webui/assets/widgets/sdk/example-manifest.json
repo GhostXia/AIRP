@@ -1,0 +1,14 @@
+{
+  "type": "acme.sdk-example",
+  "version": "1.0.0",
+  "title": "SDK 示例 widget",
+  "author": "AIRP",
+  "capabilities": ["read:state"],
+  "host_api": "1",
+  "entry": {
+    "kind": "esm",
+    "source": "./index.js",
+    "sandbox": true
+  },
+  "files": ["index.js", "example-widget.js", "widget-sdk.js"]
+}

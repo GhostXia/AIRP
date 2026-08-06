@@ -39,6 +39,7 @@ async fn enhance_analysis_returns_preview_and_rejects_world_book() {
         provider_routing_update: Default::default(),
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
+        extensions: std::sync::OnceLock::new(),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: format!("{}/v1/chat/completions", mock_server.uri()),
