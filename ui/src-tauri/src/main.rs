@@ -215,8 +215,9 @@ fn load_sidecar_settings(data_root: &Path) -> (u16, Option<String>) {
 /// 优先级：
 /// 1. `AIRP_DATA_DIR` 环境变量（显式覆盖，与 webui 便携包 Start-AIRP.cmd
 ///    的包内数据语义同源）；
-/// 2. 可执行文件同目录 `data/`（portable 包体模式：airp-ui.exe 与
-///    Start-AIRP.cmd 共用一个解压目录，角色卡/会话/密钥等用户数据两侧一致）；
+/// 2. 便携包体模式：exe 同目录同时存在 `airp-core.exe` 与 `webui/index.html`
+///    （包体标记）时使用同目录 `data/`（airp-ui.exe 与 Start-AIRP.cmd
+///    共用一个解压目录，角色卡/会话/密钥等用户数据从首次启动即两侧一致）；
 /// 3. 默认 `%APPDATA%/<identifier>/data`（开发/安装场景，C-P0 原语义）。
 fn resolve_data_root(app: &tauri::AppHandle) -> std::io::Result<PathBuf> {
     if let Ok(dir) = std::env::var("AIRP_DATA_DIR") {
@@ -231,9 +232,11 @@ fn resolve_data_root(app: &tauri::AppHandle) -> std::io::Result<PathBuf> {
     Ok(dir.join("data"))
 }
 
-/// 便携包体模式：可执行文件同目录存在 `data/` 目录则使用之。
-/// 判定只认目录存在（与 webui 便携包 data/ 同源），不存在则回退默认；
-/// 判定后由 setup 的 create_dir_all 补齐（桌面用户首次双击时自动创建）。
+/// 便携包体模式：可执行文件同目录同时存在捆绑 sidecar（`airp-core.exe`）
+/// 与同源承载资产（`webui/index.html`）即视为与 webui 便携包共存，
+/// 数据根使用包内 `data/`（目录由 setup 的 create_dir_all 补齐——全新
+/// 解压包首次双击桌面端即命中，角色/会话与 webui 入口从第一次就共享）。
+/// 判定只认包体标记，不认副作用目录（空目录/解压工具丢弃不可改变判定）。
 fn portable_data_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     portable_data_dir_from(exe.parent()?)
@@ -241,7 +244,12 @@ fn portable_data_dir() -> Option<PathBuf> {
 
 fn portable_data_dir_from(exe_dir: &Path) -> Option<PathBuf> {
     let dir = exe_dir.join("data");
-    dir.is_dir().then_some(dir)
+    if exe_dir.join("airp-core.exe").is_file() && exe_dir.join("webui").join("index.html").is_file()
+    {
+        Some(dir)
+    } else {
+        None
+    }
 }
 
 /// C-P0: 定位 webui 资产目录（engine 同源承载的内容面）。
@@ -843,10 +851,19 @@ mod tests {
     }
 
     #[test]
-    fn portable_data_dir_requires_existing_data_dir() {
+    fn portable_data_dir_requires_package_markers() {
         let root = temp_data_root("portable");
+        // 无包体标记 → 非便携。
         assert_eq!(portable_data_dir_from(&root), None);
+        // 只有 data/ 目录 → 仍非便携（不能凭副作用目录判定，
+        // 否则全新解压包首次启动会回落 %APPDATA%，与共享数据目标冲突）。
         std::fs::create_dir_all(root.join("data")).unwrap();
+        assert_eq!(portable_data_dir_from(&root), None);
+        // 包体标记齐备（airp-core.exe + webui/index.html）→ 便携；
+        // data/ 由 setup 的 create_dir_all 补齐。
+        std::fs::write(root.join("airp-core.exe"), b"x").unwrap();
+        std::fs::create_dir_all(root.join("webui")).unwrap();
+        std::fs::write(root.join("webui").join("index.html"), b"x").unwrap();
         assert_eq!(portable_data_dir_from(&root), Some(root.join("data")));
         let _ = std::fs::remove_dir_all(root);
     }

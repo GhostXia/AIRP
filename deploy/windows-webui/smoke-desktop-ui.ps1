@@ -21,21 +21,24 @@ if (-not (Test-Path -LiteralPath (Join-Path $webui 'index.html') -PathType Leaf)
     throw 'Portable webui/index.html is missing.'
 }
 
-# 便携包体数据共用前提：包内 data/ 目录存在（webui 用户运行过
-# Start-AIRP.cmd 即已创建；桌面壳便携模式以 exe 同目录 data/ 为数据根，
-# 未运行过时由壳 setup 自动创建，这里模拟已存在场景）。
-New-Item -ItemType Directory -Force -Path $data | Out-Null
+# 便携包体数据共用前提：包内 data/ 不预建。壳在便携模式（包体标记
+# airp-core.exe + webui/index.html 齐备）下以 exe 同目录 data/ 为数据根，
+# setup 会 create_dir_all 补齐；保持全新解压包状态可顺带回归断言
+# "首次桌面启动即共享包内 data/"（审计 P1 修复）。
 
 # 端口必须空闲：若残留 engine 占用（壳会走 ReuseExternalHosting 分支，
 # 退出不 kill 外部进程，后面"退出即停止"断言会误判），直接失败提示。
+# 判定"任何 HTTP 响应即视为占用"：非 2xx 也会抛异常，异常携带 Response。
 try {
-    $probe = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/version" -TimeoutSec 1
-    if ($probe.StatusCode -eq 200) {
-        throw "Port $Port is already serving an engine; clean up the leftover process before desktop smoke."
-    }
+    $null = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/version" -TimeoutSec 1
+    throw "Port $Port is already serving an engine; clean up the leftover process before desktop smoke."
 }
 catch {
-    # 连接失败 = 端口空闲，继续
+    if ($_.Exception.Response) {
+        # 服务器回了 HTTP 响应（任意状态码）→ 端口被占用。
+        throw "Port $Port is already occupied; clean up the leftover process before desktop smoke."
+    }
+    # 连接失败且无 HTTP 响应 = 端口空闲，继续
 }
 
 # 清环境干扰：继承的 engine 地址/access key 会让壳跳过捆绑 sidecar 或
@@ -107,6 +110,22 @@ try {
     Write-Host 'Desktop UI smoke passed: readiness, same-origin hosting, shared data folder, graceful exit, and lock cleanup.'
 }
 finally {
+    # 失败路径清理：壳被强杀时 sidecar 可能存活（锁文件还在），先按归属
+    # 锁的 engine_pid 清理残留 engine，再强杀壳，避免占端口/挡下次 smoke。
+    if (Test-Path -LiteralPath $lock -PathType Leaf) {
+        try {
+            $lockJson = Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
+            if ($lockJson.engine_pid) {
+                if (Get-Process -Id $lockJson.engine_pid -ErrorAction SilentlyContinue) {
+                    Stop-Process -Id $lockJson.engine_pid -Force
+                    Write-Host "Cleaned up leftover engine process $($lockJson.engine_pid)"
+                }
+            }
+        }
+        catch {
+            Write-Warning "Failed to clean leftover engine from lock: $_"
+        }
+    }
     if ($uiProcess -and -not $uiProcess.HasExited) {
         Stop-Process -Id $uiProcess.Id -Force
     }
