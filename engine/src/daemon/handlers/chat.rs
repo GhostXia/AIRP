@@ -101,6 +101,10 @@ pub(in crate::daemon) async fn cancel_chat_generation(
 }
 
 /// POST /v1/chat/rollback — rollback to a specific message index
+///
+/// #433: ChatService 的 rollback / rollback_to_id 是同步文件 IO，在 async
+/// handler 中用 `spawn_blocking` 包装避免阻塞 tokio worker 线程。lease
+/// 仍在 async 上下文持有，保证 IO 完成前不会被释放。
 pub(in crate::daemon) async fn rollback_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RollbackRequest>,
@@ -122,19 +126,23 @@ pub(in crate::daemon) async fn rollback_chat(
         req.session_id.as_ref(),
         SessionCommand::Rollback,
     )?;
-    let service = ChatService::new(&effective_root);
-    let (log, _) = match (req.message_index, req.message_id.as_deref()) {
-        (Some(idx), None) => service.rollback(&req.character_id, req.session_id.as_ref(), idx)?,
-        (None, Some(id)) => {
-            service.rollback_to_id(&req.character_id, req.session_id.as_ref(), id)?
-        }
-        // validate_rollback_target 已挡住二义与都空，这里不可达。
-        _ => {
-            return Err(AirpError::BadRequest(
+    let character_id = req.character_id.clone();
+    let session_id = req.session_id;
+    let message_index = req.message_index;
+    let message_id = req.message_id.clone();
+    let (log, _) = tokio::task::spawn_blocking(move || -> Result<_, AirpError> {
+        let service = ChatService::new(&effective_root);
+        match (message_index, message_id.as_deref()) {
+            (Some(idx), None) => service.rollback(&character_id, session_id.as_ref(), idx),
+            (None, Some(id)) => service.rollback_to_id(&character_id, session_id.as_ref(), id),
+            // validate_rollback_target 已挡住二义与都空，这里不可达。
+            _ => Err(AirpError::BadRequest(
                 "rollback target invariant violated".into(),
-            ))
+            )),
         }
-    };
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("rollback join failed: {e}")))??;
     Ok(Json(log))
 }
 
@@ -255,6 +263,8 @@ pub(in crate::daemon) async fn continue_chat(
 }
 
 /// POST /v1/chat/delete — delete a single message by durable ID
+///
+/// #433: ChatService::delete_message 是同步文件 IO，用 `spawn_blocking` 包装。
 pub(in crate::daemon) async fn delete_message(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<DeleteMessageRequest>,
@@ -267,17 +277,26 @@ pub(in crate::daemon) async fn delete_message(
         req.session_id.as_ref(),
         SessionCommand::DeleteMessage,
     )?;
-    let log = ChatService::new(&effective_root).delete_message(
-        &req.character_id,
-        req.session_id.as_ref(),
-        &req.message_id,
-    )?;
+    let character_id = req.character_id.clone();
+    let session_id = req.session_id;
+    let message_id = req.message_id.clone();
+    let log = tokio::task::spawn_blocking(move || {
+        ChatService::new(&effective_root).delete_message(
+            &character_id,
+            session_id.as_ref(),
+            &message_id,
+        )
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("delete_message join failed: {e}")))??;
     Ok(Json(log))
 }
 
 /// POST /v1/chat/swipe — #249 Swipe：切换指定消息的激活候选。
 ///
 /// #252 D3：返回 `SwipeResponse` 增量响应，不再回完整 `ChatLog`。
+///
+/// #433: ChatService::switch_swipe 是同步文件 IO，用 `spawn_blocking` 包装。
 pub(in crate::daemon) async fn swipe_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<SwipeRequest>,
@@ -290,12 +309,20 @@ pub(in crate::daemon) async fn swipe_chat(
         req.session_id.as_ref(),
         SessionCommand::Swipe,
     )?;
-    let resp = ChatService::new(&effective_root).switch_swipe(
-        &req.character_id,
-        req.session_id.as_ref(),
-        &req.message_id,
-        req.index,
-    )?;
+    let character_id = req.character_id.clone();
+    let session_id = req.session_id;
+    let message_id = req.message_id.clone();
+    let index = req.index;
+    let resp = tokio::task::spawn_blocking(move || {
+        ChatService::new(&effective_root).switch_swipe(
+            &character_id,
+            session_id.as_ref(),
+            &message_id,
+            index,
+        )
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("swipe join failed: {e}")))??;
     // #252 H.3：swipe 可审计性——记录 trace 事件。
     // regen/continue 通过 quota::check_and_increment 间接留下审计痕迹；
     // swipe 不走 quota，此处显式记录以保持 mutation 审计一致性。
@@ -312,6 +339,8 @@ pub(in crate::daemon) async fn swipe_chat(
 }
 
 /// PUT /v1/chat/message — edit a user message's content by durable ID.
+///
+/// #433: ChatService::edit_message 是同步文件 IO，用 `spawn_blocking` 包装。
 pub(in crate::daemon) async fn edit_message(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<EditMessageRequest>,
@@ -324,12 +353,20 @@ pub(in crate::daemon) async fn edit_message(
         req.session_id.as_ref(),
         SessionCommand::EditMessage,
     )?;
-    let log = ChatService::new(&effective_root).edit_message(
-        &req.character_id,
-        req.session_id.as_ref(),
-        &req.message_id,
-        &req.content,
-    )?;
+    let character_id = req.character_id.clone();
+    let session_id = req.session_id;
+    let message_id = req.message_id.clone();
+    let content = req.content.clone();
+    let log = tokio::task::spawn_blocking(move || {
+        ChatService::new(&effective_root).edit_message(
+            &character_id,
+            session_id.as_ref(),
+            &message_id,
+            &content,
+        )
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("edit_message join failed: {e}")))??;
     tracing::info!(
         character_id = %req.character_id,
         session_id = ?req.session_id,
@@ -383,6 +420,8 @@ pub(in crate::daemon) async fn preview_chat_assembly(
 }
 
 /// POST /v1/chat/branch/switch — switch the active branch to a target leaf.
+///
+/// #433: ChatService::switch_branch 是同步文件 IO，用 `spawn_blocking` 包装。
 pub(in crate::daemon) async fn switch_branch(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<SwitchBranchRequest>,
@@ -395,11 +434,18 @@ pub(in crate::daemon) async fn switch_branch(
         req.session_id.as_ref(),
         SessionCommand::SwitchBranch,
     )?;
-    let log = ChatService::new(&effective_root).switch_branch(
-        &req.character_id,
-        req.session_id.as_ref(),
-        &req.target_leaf_id,
-    )?;
+    let character_id = req.character_id.clone();
+    let session_id = req.session_id;
+    let target_leaf_id = req.target_leaf_id.clone();
+    let log = tokio::task::spawn_blocking(move || {
+        ChatService::new(&effective_root).switch_branch(
+            &character_id,
+            session_id.as_ref(),
+            &target_leaf_id,
+        )
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("switch_branch join failed: {e}")))??;
     tracing::info!(
         character_id = %req.character_id,
         session_id = ?req.session_id,
