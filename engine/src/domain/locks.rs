@@ -284,4 +284,58 @@ mod tests {
         remove_deleted_default_session_lock(&cid);
         remove_deleted_character_lock(&cid);
     }
+
+    /// #443: 正向对照——未调用 cleanup 时，多次获取同 key 返回同一 Arc。
+    ///
+    /// `remove_deleted_*_lock_clears_entry` 系列断言 cleanup 后 `!Arc::ptr_eq`，
+    /// 但若 lock map 实现每次都创建新 Arc，`!Arc::ptr_eq` 永远成立、断言无意义。
+    /// 本测试提供正向基线：未 cleanup 时 `Arc::ptr_eq` 必须成立，证明 cleanup 后
+    /// 的 `!Arc::ptr_eq` 确实由 entry 移除导致，而非其他副作用。
+    ///
+    /// 覆盖 4 种 lock（character / state / persona / named session），与 issue
+    /// #443 验收标准「同模式覆盖 delete_session / delete_persona」对齐。
+    #[test]
+    fn same_arc_returned_when_cleanup_not_called() {
+        let cid = unique_id("pos-char");
+        let uid = unique_id("pos-persona");
+        let sid = SessionId::new();
+
+        // character lock：两次获取应同一 Arc
+        let char_a = character_lock(&cid);
+        let char_b = character_lock(&cid);
+        assert!(
+            Arc::ptr_eq(&char_a, &char_b),
+            "character lock should reuse entry when not cleaned up"
+        );
+
+        // state lock
+        let state_a = state_lock(&cid);
+        let state_b = state_lock(&cid);
+        assert!(
+            Arc::ptr_eq(&state_a, &state_b),
+            "state lock should reuse entry when not cleaned up"
+        );
+
+        // persona lock
+        let persona_a = persona_lock(&uid);
+        let persona_b = persona_lock(&uid);
+        assert!(
+            Arc::ptr_eq(&persona_a, &persona_b),
+            "persona lock should reuse entry when not cleaned up"
+        );
+
+        // named session lock
+        let sess_a = session_lock(&cid, Some(&sid));
+        let sess_b = session_lock(&cid, Some(&sid));
+        assert!(
+            Arc::ptr_eq(&sess_a, &sess_b),
+            "session lock should reuse entry when not cleaned up"
+        );
+
+        // 清理测试产生的条目
+        remove_deleted_character_lock(&cid);
+        remove_deleted_state_lock(&cid);
+        remove_deleted_persona_lock(&uid);
+        remove_deleted_session_lock(&cid, &sid);
+    }
 }
