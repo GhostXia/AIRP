@@ -28,17 +28,23 @@ if (-not (Test-Path -LiteralPath (Join-Path $webui 'index.html') -PathType Leaf)
 
 # 端口必须空闲：若残留 engine 占用（壳会走 ReuseExternalHosting 分支，
 # 退出不 kill 外部进程，后面"退出即停止"断言会误判），直接失败提示。
-# 判定"任何 HTTP 响应即视为占用"：非 2xx 也会抛异常，异常携带 Response。
+# 判定"任何 HTTP 响应即视为占用"：IWR 成功（2xx）走 try，非 2xx 抛异常
+# 且 Exception.Response 非 null；连接失败（端口空闲）抛异常但 Response 为 null。
+# 必须用标志位 + try 外 throw：脚本自身 throw 抛 RuntimeException（无 Response），
+# 若放在 try 内会被 catch 吞掉（审计 B-01 实测复现）。
+$portOccupied = $false
 try {
     $null = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/version" -TimeoutSec 1
-    throw "Port $Port is already serving an engine; clean up the leftover process before desktop smoke."
+    $portOccupied = $true
 }
 catch {
     if ($_.Exception.Response) {
-        # 服务器回了 HTTP 响应（任意状态码）→ 端口被占用。
-        throw "Port $Port is already occupied; clean up the leftover process before desktop smoke."
+        $portOccupied = $true
     }
     # 连接失败且无 HTTP 响应 = 端口空闲，继续
+}
+if ($portOccupied) {
+    throw "Port $Port is already serving an engine; clean up the leftover process before desktop smoke."
 }
 
 # 清环境干扰：继承的 engine 地址/access key 会让壳跳过捆绑 sidecar 或
