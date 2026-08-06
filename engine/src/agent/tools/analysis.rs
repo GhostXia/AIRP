@@ -281,7 +281,9 @@ impl Tool for ApplyEnhancedAnalysisTool {
             // - world_book/ 拒绝已移入 Service。
             // - 路径安全校验由 `char_analysis_file_path` 内置。
             // - 原子写：`replace_file`（tmp + rename + fsync），消除原 `tokio::fs::write` 的半写可见。
-            // - 串行化：`character_lock(character_id).read()`，与 `LorebookService` 读路径一致。
+            // - 串行化：`character_lock(character_id).write()`（#503 修复：写锁保证
+            //   CAS 检查 + replace_file 写入原子性；读锁会导致 TOCTOU 竞态，两写入者
+            //   同时过 CAS 后 last-write-wins 静默丢失）。
             // - spawn_blocking：Service 内部同步 `std::fs`，相对原 `tokio::fs::write`
             //   （内部已卸载到 blocking 池）必须显式包装，避免占用 tokio worker 线程（审计 Point 4）。
             // - #432 CAS：expected_hash 匹配才写入，否则返回 Conflict 让调用方 re-enhance。

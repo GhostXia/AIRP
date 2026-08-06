@@ -5,7 +5,10 @@
 //! - Writes are now atomic (`data_dir::replace_file` — tmp + rename + fsync),
 //!   eliminating half-write visibility of the original `tokio::fs::write`.
 //! - Concurrent writes for the same character are now serialized via
-//!   `character_lock(character_id).read()`.
+//!   `character_lock(character_id).write()` (#503 post-merge fix: write-lock
+//!   required for CAS+write atomicity; `.read()` caused a TOCTOU race where
+//!   two writers with identical `expected_hash` could both pass CAS then
+//!   silently overwrite each other).
 //!
 //! # Boundary assumptions (callers MUST read)
 //!
@@ -105,7 +108,8 @@ impl AnalysisService {
     /// - 拒绝 `world_book/` 前缀（资产边界规则，#160 A2）。
     /// - 路径安全校验由 `data_dir::char_analysis_file_path` 内置。
     /// - 写盘走 `data_dir::replace_file`（tmp + rename + fsync），消除半写可见。
-    /// - `character_lock` 串行化同一 character 的并发写。
+    /// - `character_lock` **写锁** 串行化同一 character 的并发写，保证 CAS 检查
+    ///   + 写入的原子性（TOCTOU 安全，#503 修复）。
     /// - `expected_hash = Some(h)`：写入前校验当前文件 SHA-256 是否匹配，不匹配返回
     ///   `AirpError::Conflict`（HTTP 409）。文件不存在但 expected_hash 为 Some 也返回
     ///   Conflict（enhance 时文件存在，现在不存在说明被删/改名）。
@@ -123,10 +127,13 @@ impl AnalysisService {
             return Err(AirpError::BadRequest(WORLD_BOOK_REJECT_MSG.into()));
         }
         let character = character_lock(character_id);
-        let _guard = character.read().unwrap_or_else(|p| p.into_inner());
+        // #503 修复：必须用写锁（write）而非读锁（read）。CAS 检查 + 文件写入必须
+        // 在同一临界区内原子完成，否则两写入者可同时通过 CAS 后 last-write-wins 静默丢失。
+        let _guard = character.write().unwrap_or_else(|p| p.into_inner());
         let path = data_dir::char_analysis_file_path(&self.data_root, character_id, filename)?;
 
         // CAS: 如果调用方传了 expected_hash，写入前校验当前文件未被修改。
+        // 与 replace_file 写盘受同一把写锁保护，TOCTOU 安全。
         if let Some(expected) = expected_hash {
             let current = std::fs::read_to_string(&path).map_err(|e| {
                 // 文件不存在但 expected_hash 为 Some → 冲突（enhance 时文件存在）
@@ -281,5 +288,154 @@ mod tests {
         let h2 = AnalysisService::content_hash(content);
         assert_eq!(h1, h2);
         assert_ne!(h1, AnalysisService::content_hash("# Test\n\nhello WORLD"));
+    }
+
+    // ── #503 回归：TOCTOU 并发写锁正确性 ────────────────────────────────
+    //
+    // 模拟真实场景：两用户几乎同时 enhance（拿到相同 original_md_hash = H），
+    // 然后同时 apply 传 expected_hash = H。修复前（.read() 锁）两写入者都能
+    // 通过 CAS 检查后先后写入，后者覆盖前者，静默数据丢失。修复后（.write() 锁）
+    // 第一个进入临界区的写入成功，第二个在临界区内重新读文件发现 hash 已变，
+    // 返回 Conflict 拒绝写入，不丢数据。
+
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    /// #503：两写入者传同一 expected_hash 并发 save_file → 恰好 1 个成功、1 个 Conflict。
+    /// 验证写锁把 CAS 检查 + 写入包成了原子临界区，无 TOCTOU 静默丢失。
+    #[test]
+    fn concurrent_save_with_same_expected_hash_serializes_via_write_lock() {
+        let tmp = TempDir::new().unwrap();
+        let cid = "concurrent-char";
+        let original = "# Basic Info\n\nplaceholder";
+        let filename = "basic_info.md";
+        let svc = Arc::new(setup_file(&tmp, cid, filename, original));
+
+        let n_writers = 2usize;
+        let barrier = Arc::new(Barrier::new(n_writers));
+        let hash = AnalysisService::content_hash(original);
+
+        let mut handles = Vec::with_capacity(n_writers);
+        for i in 0..n_writers {
+            let svc = Arc::clone(&svc);
+            let barrier = Arc::clone(&barrier);
+            let hash = hash.clone();
+            let cid = cid.to_string();
+            let filename = filename.to_string();
+            handles.push(thread::spawn(move || {
+                // 两线程尽量同时进入 save_file，放大竞态窗口
+                barrier.wait();
+                let content = format!("# Basic Info\n\nwritten by writer-{}", i);
+                (i, svc.save_file(&cid, &filename, &content, Some(&hash)))
+            }));
+        }
+
+        let mut results = Vec::with_capacity(n_writers);
+        for h in handles {
+            results.push(h.join().unwrap());
+        }
+
+        // 统计：恰好 1 个 Ok(())，恰好 1 个 Conflict
+        let mut ok_count = 0usize;
+        let mut conflict_count = 0usize;
+        let mut winner_content: Option<String> = None;
+        for (i, r) in &results {
+            match r {
+                Ok(()) => {
+                    ok_count += 1;
+                    // 读回实际文件内容，确认胜出者写入的内容确实落盘
+                    let loaded = svc.load_file(cid, filename).unwrap();
+                    let expected = format!("# Basic Info\n\nwritten by writer-{}", i);
+                    assert_eq!(
+                        loaded, expected,
+                        "winner writer-{} content should match actual file",
+                        i
+                    );
+                    winner_content = Some(loaded);
+                }
+                Err(AirpError::Conflict(msg)) => {
+                    conflict_count += 1;
+                    assert!(
+                        msg.contains("changed after enhance"),
+                        "Conflict message should mention stale content, got: {}",
+                        msg
+                    );
+                }
+                Err(other) => {
+                    panic!("unexpected error for writer-{}: {:?}", i, other);
+                }
+            }
+        }
+        assert_eq!(ok_count, 1, "exactly 1 writer must succeed (write lock serializes CAS+write)");
+        assert_eq!(
+            conflict_count, 1,
+            "exactly 1 writer must get Conflict (loser detects hash changed inside write lock)"
+        );
+        // 额外保险：最终文件内容不是 original，也不是两写入者内容的混合
+        let final_content = svc.load_file(cid, filename).unwrap();
+        assert_ne!(final_content, original, "file must be changed by the winner");
+        assert!(
+            winner_content.as_ref().unwrap() == &final_content,
+            "final file must equal the winner's write, no silent overwrite"
+        );
+    }
+
+    /// #503：三写入者并发（1 传 None 跳过 CAS + 2 传同一 expected_hash）→
+    /// 写锁保证三者不重叠；跳过 CAS 的若第一个写则两传 hash 的都 Conflict；
+    /// 若跳过 CAS 的最后写则它直接覆盖（符合 expected_hash=None 的语义）。
+    /// 这里验证不崩溃、无数据损坏。
+    #[test]
+    fn concurrent_save_mixed_cas_modes_no_corruption() {
+        let tmp = TempDir::new().unwrap();
+        let cid = "mixed-cas-char";
+        let original = "# Mixed\n\nstart";
+        let filename = "mixed.md";
+        let svc = Arc::new(setup_file(&tmp, cid, filename, original));
+
+        let n = 3usize;
+        let barrier = Arc::new(Barrier::new(n));
+        let hash = AnalysisService::content_hash(original);
+
+        let mut handles = Vec::with_capacity(n);
+        for i in 0..n {
+            let svc = Arc::clone(&svc);
+            let barrier = Arc::clone(&barrier);
+            let hash = hash.clone();
+            let cid = cid.to_string();
+            let filename = filename.to_string();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                let content = format!("# Mixed\n\nwriter-{} content here", i);
+                // writer-1 跳过 CAS，其他传 expected_hash
+                let eh = if i == 1 { None } else { Some(hash.clone()) };
+                (i, svc.save_file(&cid, &filename, &content, eh.as_deref()))
+            }));
+        }
+
+        for h in handles {
+            let (i, r) = h.join().unwrap();
+            match r {
+                Ok(()) => {} // 成功：跳过 CAS 的，或第一个拿写锁传 hash 的
+                Err(AirpError::Conflict(_)) => {} // 预期：拿锁晚的传 hash 者
+                Err(other) => panic!("writer-{} unexpected error: {:?}", i, other),
+            }
+        }
+
+        // 文件必须是有效的 UTF-8 完整内容（无半写、无截断、无两个 writer 内容混合）
+        let final_content = svc.load_file(cid, filename).unwrap();
+        assert!(
+            final_content.starts_with("# Mixed\n\n"),
+            "final file must preserve MD heading structure, got: {:?}",
+            final_content
+        );
+        // 精确匹配某个 writer 的完整输出，确认不是两段写入的混合
+        let valid_writes: Vec<String> = (0..n)
+            .map(|i| format!("# Mixed\n\nwriter-{} content here", i))
+            .collect();
+        assert!(
+            valid_writes.iter().any(|w| w == &final_content),
+            "final file must equal exactly one writer's full write (no mix/truncate/partial), got: {:?}",
+            final_content
+        );
     }
 }
