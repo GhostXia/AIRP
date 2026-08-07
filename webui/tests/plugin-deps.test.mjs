@@ -208,7 +208,60 @@ test('widget-host: missing trusted plugin renders a non-blocking hint above the 
   assert.match(text, /com\.example\.ocr/, '未安装的插件 id 出现在提示中');
   assert.doesNotMatch(text, /com\.example\.tts（/, '已运行的插件不得出现在提示中');
   // 非阻塞：提示条之外 widget 仍挂载（sandbox target 存在）。
-  assert.ok(container.children.some(c => c.className === 'widget-sandbox'), 'widget 必须仍加载');
+  const sandboxIdx = container.children.findIndex(c => c.className === 'widget-sandbox');
+  const hintIdx = container.children.findIndex(c => c.className === 'widget-plugin-hint');
+  assert.ok(sandboxIdx >= 0, 'widget 必须仍加载');
+  assert.ok(hintIdx >= 0, '提示条必须存在');
+  assert.ok(hintIdx < sandboxIdx, '提示条必须在 sandbox 之前（上方）');
+  // 提示条内部结构：title + list（list 里放 item span）。
+  const hint = container.children[hintIdx];
+  assert.equal(hint.children.length, 2, 'hint 必须包含 title + list 两个子元素');
+  assert.equal(hint.children[0].className, 'widget-plugin-hint-title');
+  assert.equal(hint.children[1].className, 'widget-plugin-hint-list');
+});
+
+test('widget-host: hint labels distinguish stopped / not-installed / version-too-low', async () => {
+  consent.clearGrants();
+  manifests.clearManifests();
+  const DEP_MANIFEST = {
+    type: 'acme.dep-labels',
+    version: '1.0.0',
+    entry: { kind: 'esm', source: 'https://example.test/w.js', sandbox: true },
+    trusted_plugins: [
+      { id: 'com.example.stopped' },
+      { id: 'com.example.missing' },
+      { id: 'com.example.lowver', min_host_api: '9' },
+    ],
+  };
+  manifests.registerManifest(DEP_MANIFEST);
+  consent.grant(DEP_MANIFEST);
+  deps.initFromEngine({
+    plugins: [
+      { id: 'com.example.stopped', status: 'stopped' },
+      { id: 'com.example.lowver', host_api: '1', status: 'running' },
+    ],
+  });
+
+  const doc = createFakeDom();
+  const container = doc.createElement('div');
+  const transport = {
+    sent: [], handlers: new Set(), destroyed: false,
+    postMessage(msg) { transport.sent.push(msg); },
+    onMessage(cb) { cb({ kind: 'ready' }); return () => transport.handlers.delete(cb); },
+    destroy() { transport.destroyed = true; },
+  };
+  host.mountWidget(container, { id: 'w1', type: DEP_MANIFEST.type }, null, {
+    doc, sandbox, pluginDeps: deps, transportFactory: () => transport,
+  });
+  await new Promise(r => setTimeout(r, 0));
+
+  const list = container.children.find(c => c.className === 'widget-plugin-hint')?.children[1];
+  assert.ok(list, 'hint list 必须存在');
+  const labels = list.children.map(c => textOf(c));
+  assert.equal(labels.length, 3, '三个原因都必须出标签');
+  assert.match(labels[0], /（已停止）/, 'stopped → （已停止）');
+  assert.match(labels[1], /（未安装）/, 'not-installed → （未安装）');
+  assert.match(labels[2], /（版本过低）/, 'version-too-low → （版本过低）');
 });
 
 test('widget-host: satisfied dependencies render no hint', async () => {

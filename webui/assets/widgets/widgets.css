@@ -131,9 +131,15 @@
   font-weight: 600;
 }
 
+.widget-plugin-hint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
 .widget-plugin-hint-item {
   font-family: var(--font-mono);
-  margin-right: var(--space-2);
   background: var(--bg-subtle);
   color: var(--text-primary);
   border: 1px solid var(--border-default);
