@@ -148,6 +148,14 @@ test('plugin-deps: versionAtLeast compares segment-wise and fails closed on dirt
   assert.equal(deps.versionAtLeast('x', '1'), false); // 脏数据 fail-closed
   assert.equal(deps.versionAtLeast('1', null), true); // 未声明不比对
   assert.equal(deps.versionAtLeast('1', ''), true);   // 空 min 不比对
+  // 审计 #507 N2：hex / 科学计数法 / 带符号段一律拒绝（旧 Number() 误接受）。
+  assert.equal(deps.versionAtLeast('0x10', '1'), false);  // hex → 不是 16
+  assert.equal(deps.versionAtLeast('1e2', '1'), false);   // 科学计数法 → 不是 100
+  assert.equal(deps.versionAtLeast(' 1', '1'), false);    // 前导空格 → 拒绝
+  assert.equal(deps.versionAtLeast('+1', '1'), false);    // 带符号 → 拒绝
+  assert.equal(deps.versionAtLeast('1', '0x10'), false);  // min 侧同样拒绝
+  assert.equal(deps.versionAtLeast('1', '1e2'), false);
+  assert.equal(deps.versionAtLeast('01', '1'), true);     // 前导零合法
 });
 
 test('plugin-deps: no declaration → no missing; empty cache → all missing (fail-closed)', () => {

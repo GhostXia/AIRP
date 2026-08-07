@@ -35,8 +35,12 @@
 
   /**
    * installed 版本是否 >= min（逐段数值比较，缺段视为 0）。
-   * min 缺省 / 空 → 不比对（true）；任一段非数字 → false（fail-closed：
+   * min 缺省 / 空 → 不比对（true）；任一段非纯数字 → false（fail-closed：
    * 脏数据一律按不满足提示，不静默放行）。
+   *
+   * 审计 #507 N2 修复：用 `^\d+$` 严格校验每段，拒绝 `Number()` 会误接受
+   * 的 hex（`'0x10'` → 16）和科学计数法（`'1e2'` → 100）。semver 段只
+   * 允许纯十进制数字。
    */
   function versionAtLeast(installedVersion, min) {
     if (min == null || min === '') return true;
@@ -44,9 +48,11 @@
     const b = String(min).split('.');
     const len = Math.max(a.length, b.length);
     for (let i = 0; i < len; i++) {
-      const x = Number(a[i] || 0);
-      const y = Number(b[i] || 0);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      const segA = a[i] || '0';
+      const segB = b[i] || '0';
+      if (!/^\d+$/.test(segA) || !/^\d+$/.test(segB)) return false;
+      const x = parseInt(segA, 10);
+      const y = parseInt(segB, 10);
       if (x < y) return false;
       if (x > y) return true;
     }

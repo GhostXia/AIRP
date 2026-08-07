@@ -65,7 +65,7 @@ widget manifest 的 `trusted_plugins` 软依赖字段 + webui 非阻塞降级提
 | 编号 | 项 | 说明 |
 |------|----|------|
 | N1 | ~~rebase 后需重跑全部测试~~ 已完成 | rebase 后 1418 tests 全绿（含 B2/B3/B4 新增测试 + #507 compat 测试），原 N1 关闭 |
-| N2 | `versionAtLeast` 用 `Number()` 而非 `parseInt` | `Number('0x10')` = 16（hex），`Number('1e2')` = 100（科学计数法）。semver 段不应含 hex/科学计数法，但 `Number.isFinite` 检查会让 `Infinity`/`NaN` fail-closed。当前实现安全但可考虑 `parseInt` 更严格。 |
+| ~~N2~~ | ~~`versionAtLeast` 用 `Number()` 而非 `parseInt`~~ **已修复** | 改为 `/^\d+$/` 严格校验每段 + `parseInt(seg, 10)`。拒绝 hex（`'0x10'`）、科学计数法（`'1e2'`）、带符号（`'+1'`）、前导空格（`' 1'`）。测试覆盖全部新边界。 |
 | N3 | 提示条文案无 i18n | `widget-plugin-hint-title` 硬编码中文「依赖的 trusted plugin 不可用」。与既有 widget-host 文案一致（均为中文），但后续 i18n 时需统一。 |
 | N4 | `min_host_api` 不钉 major 的文档化 | engine 只校验格式不钉 major（软依赖不是安装合同），但 `parse_host_api_major` 函数名暗示会钉 major。建议在 `TrustedPluginDependency` 的 doc comment 中明确说明「只校验格式，不钉 major」。 |
 
