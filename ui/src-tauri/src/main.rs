@@ -618,12 +618,11 @@ fn spawn_readiness_and_navigate(
                     } else {
                         // C-P2：导航成功后启动 token 续期循环，避免 8h TTL
                         // 边界会话锁死（C-P1 交接项 / issue #479）。
-                        if let Some((token, expires_in)) = exchanged {
+                        if let Some((_token, expires_in)) = exchanged {
                             spawn_token_renewal_loop(
                                 app.clone(),
                                 engine_url.clone(),
                                 access_key.clone(),
-                                token,
                                 expires_in,
                             );
                         }
@@ -658,11 +657,13 @@ fn spawn_readiness_and_navigate(
 /// （而非先睡 60s 再回循环顶等半个 TTL——恰在循环该发挥作用的重试
 /// 时刻失灵）；成功后恢复 expires_in/2 节奏。webui 侧撞 401 另有
 /// `POST /v1/desktop-session/renew` 兜底（rotation），双保险。
+/// 失败退避（T1）：连续失败按 60s 起指数退避（60s · 2^(n-1)，封顶 15min）；
+/// 日志降级——仅首次失败 warn，连续失败期间 debug，防止 engine 长时间
+/// 宕机时每轮一条 warn 刷满日志。
 fn spawn_token_renewal_loop(
     app: tauri::AppHandle,
     engine_url: String,
     access_key: Option<String>,
-    _initial_token: String,
     mut expires_in: u64,
 ) {
     if access_key.is_none() {
@@ -675,11 +676,15 @@ fn spawn_token_renewal_loop(
             .unwrap_or_else(|_| reqwest::Client::new());
         // W2：failed_fast —— 上一轮交换失败时下轮只等 60s 短间隔。
         let mut failed_fast = false;
+        // T1（#485）：连续失败计数 —— 退避 60s * 2^(n-1) 封顶 15min；日志仅
+        // 首次失败 warn，连续失败期间降级 debug（engine 宕机时不刷 warn）。
+        let mut consecutive_failures: u32 = 0;
+        let retry_wait = |failures: u32| -> u64 { (60u64 << failures.min(4)).min(900) };
         loop {
             // TTL 过半即续期；下限 5s 防短 TTL 冒烟时热循环，上限 4h 防
-            // engine 返回异常大值时续期完全停摆；失败后切 60s 短间隔重试。
+            // engine 返回异常大值时续期完全停摆；失败后按连续次数指数退避。
             let wait_secs = if failed_fast {
-                60
+                retry_wait(consecutive_failures)
             } else {
                 (expires_in / 2).clamp(5, 4 * 3600)
             };
@@ -687,6 +692,7 @@ fn spawn_token_renewal_loop(
             match exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await {
                 Some((new_token, new_expires_in)) => {
                     failed_fast = false;
+                    consecutive_failures = 0;
                     if let Some(window) = app.get_webview_window("main") {
                         // JSON.stringify 转义 token（uuid hex 本无特殊字符，
                         // 防御性处理）；eval 失败（窗口已销毁/导航中）仅留痕。
@@ -711,13 +717,24 @@ fn spawn_token_renewal_loop(
                     expires_in = new_expires_in;
                 }
                 None => {
-                    // 交换失败（engine 重启/网络抖动）：置标志，下轮等待
-                    // 切 60s 短间隔重试；webui 侧 401 另有 renew 端点兜底。
+                    // 交换失败（engine 重启/网络抖动）：置标志，下轮按连续失败
+                    // 次数指数退避（60s 起，封顶 15min）；webui 侧 401 另有
+                    // renew 端点兜底。日志降级：仅首次失败 warn，连续期间 debug。
                     failed_fast = true;
-                    tracing::warn!(
-                        retry_in_secs = 60,
-                        "desktop session renewal exchange failed; will retry"
-                    );
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    let next_wait = retry_wait(consecutive_failures);
+                    if consecutive_failures == 1 {
+                        tracing::warn!(
+                            retry_in_secs = next_wait,
+                            "desktop session renewal exchange failed; will retry"
+                        );
+                    } else {
+                        tracing::debug!(
+                            retries = consecutive_failures,
+                            retry_in_secs = next_wait,
+                            "desktop session renewal exchange still failing"
+                        );
+                    }
                 }
             }
         }

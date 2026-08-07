@@ -88,27 +88,58 @@ function defaultIntentHandler(name, params, instance) {
     instance_id: (instance && instance.id) || 'unknown',
   };
   if (instance && instance.capability) envelope.capability = instance.capability;
-  fetch(engineUrl('/v1/widget-intents'), {
-    method: 'POST',
-    headers: authedHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(envelope),
-  })
-    .then(async (resp) => {
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => null);
-        const code = body && body.error && body.error.code ? body.error.code : resp.status;
-        console.warn('[widget-intent] engine 拒绝：' + name + '（' + code + '）');
-      }
-    })
-    .catch((error) => {
-      console.warn('[widget-intent] 投递失败：' + name, error);
+  const api = globalThis.AIRPApi;
+  if (!api) {
+    // api-client.js 未加载的页面（理论不应发生——四屏均先加载）回退裸 fetch：
+    // 行为同 C-P3，仍返回 promise，widget 可观测语义不丢失。
+    const fallback = fetch(engineUrl('/v1/widget-intents'), {
+      method: 'POST',
+      headers: authedHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(envelope),
+    }).then(async (resp) => {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json().catch(() => null);
     });
+    return traceIntent(fallback, name);
+  }
+  // W5（#485）：走 api-client.js request helper——获得 30s 超时与 401 单次
+  // 续期重试（W3 同构的 desktop-session 兜底，typeof 守卫防 ReferenceError）；
+  // 401 撞鉴权过期时复用 notifyAuthFailure 可见化入口（屏运行时注入）。
+  const client = api.createClient({
+    base: engineBase(),
+    bearer: () => bearerToken(),
+    onRequest: (info) => { if (info && info.status === 401) notifyAuthFailure({ source: 'widget-intent' }); },
+    onUnauthorized: async () => {
+      if (typeof AIRPDesktopSession === 'undefined') return false;
+      return AIRPDesktopSession.renewDesktopSession({ base: engineBase() });
+    },
+  });
+  return traceIntent(client.request('POST', '/v1/widget-intents', envelope), name);
 }
 
-/** engine 权威下发计划（bearer 可选：local-webui 无鉴权模式无 token 也能拉）。 */
+/**
+ * W5：统一失败留痕并返回原 promise——module widget 的 ctx.emit() 可 await 观测
+ * 完成/拒绝/网络失败（合同 consumerContract：回传错误 + console 痕迹）；附兜底
+ * rejection 处理器，widget 未观测时也不产生 unhandled rejection 噪音。
+ */
+function traceIntent(pending, name) {
+  pending.catch((error) => {
+    const engineCode = error && error.data && error.data.error && error.data.error.code;
+    const label = error && error.status ? 'engine 拒绝' : '投递失败';
+    const code = engineCode || (error && error.status ? 'HTTP ' + error.status : (error && error.name) || 'network');
+    console.warn('[widget-intent] ' + label + '：' + name + '（' + code + '）', error);
+  });
+  return pending;
+}
+
+/** engine 权威下发计划（bearer 可选：local-webui 无鉴权模式无 token 也能拉）。
+ * W6（#485）：5s 超时（AbortSignal.timeout，同 fetchEnginePlugins #507 模式）——
+ * engine 挂起时 boot 不悬挂，超时后走既有降级（静态 slots.json）。
+ */
 async function fetchEngineCatalog() {
   const resp = await fetch(engineUrl('/v1/extensions/catalog'), {
     headers: authedHeaders({ Accept: 'application/json' }),
+    signal: AbortSignal.timeout(5000),
   });
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return resp.json();
@@ -192,7 +223,13 @@ async function boot() {
   }
   if (plan) {
     if (Array.isArray(plan.manifests)) manifests.applyManifestMessage('set', plan.manifests);
-    slotsApi.applySlotPlan(plan, 'replace');
+    // W4（#485）：apply 步同样不硬失败——plan.slots 畸形/缺失时保留空计划继续
+    // mountSlots（slot 保持空占位），与 catalog 拉取失败的降级语义一致。
+    try {
+      slotsApi.applySlotPlan(plan, 'replace');
+    } catch (error) {
+      console.warn('[widget-boot] slot 计划应用失败，继续以空计划挂载：', error);
+    }
   }
 
   handles = slotsApi.mountSlots(document, { onIntent: defaultIntentHandler });
