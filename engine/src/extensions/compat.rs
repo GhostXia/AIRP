@@ -229,7 +229,11 @@ fn compat_host_api_roundtrip() {
     let legacy = r#"{"type":"acme.legacy","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true}}"#;
     let restored: WidgetManifest = serde_json::from_str(legacy).unwrap();
     assert_eq!(restored.host_api, None, "旧记录缺 host_api 反序列化为 None");
-    assert_eq!(restored.trusted_plugins.len(), 0, "旧记录缺 trusted_plugins 反序列化为空");
+    assert_eq!(
+        restored.trusted_plugins.len(),
+        0,
+        "旧记录缺 trusted_plugins 反序列化为空"
+    );
     assert_eq!(
         parse_host_api_major(restored.host_api.as_deref()).unwrap(),
         1
@@ -251,17 +255,34 @@ fn compat_trusted_plugins_roundtrip_and_validation() {
     let reserialized = serde_json::to_string(&parsed).unwrap();
     let restored: WidgetManifest = serde_json::from_str(&reserialized).unwrap();
     assert_eq!(restored, parsed, "trusted_plugins 往返必须保真");
-    assert!(validate_manifest(&parsed).is_ok(), "合法软依赖应通过安装校验");
+    assert!(
+        validate_manifest(&parsed).is_ok(),
+        "合法软依赖应通过安装校验"
+    );
 
     // 安装面 fail-closed：坏 id（路径分隔符）拒绝整包。
     let bad_id = r#"{"type":"acme.dep","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true},"trusted_plugins":[{"id":"../evil"}]}"#;
     let bad: WidgetManifest = serde_json::from_str(bad_id).unwrap();
-    assert_eq!(validate_manifest(&bad).unwrap_err().code, "invalid_manifest");
+    assert_eq!(
+        validate_manifest(&bad).unwrap_err().code,
+        "invalid_manifest"
+    );
 
     // 非法 min_host_api（伪 semver）拒绝整包。
     let bad_min = r#"{"type":"acme.dep","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true},"trusted_plugins":[{"id":"com.example.tts","min_host_api":"1.x"}]}"#;
     let bad: WidgetManifest = serde_json::from_str(bad_min).unwrap();
-    assert_eq!(validate_manifest(&bad).unwrap_err().code, "invalid_manifest");
+    assert_eq!(
+        validate_manifest(&bad).unwrap_err().code,
+        "invalid_manifest"
+    );
+
+    // 显式空串 min_host_api 同样拒绝（缺省语义只能靠 omit 字段表达）。
+    let bad_empty = r#"{"type":"acme.dep","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true},"trusted_plugins":[{"id":"com.example.tts","min_host_api":""}]}"#;
+    let bad: WidgetManifest = serde_json::from_str(bad_empty).unwrap();
+    assert_eq!(
+        validate_manifest(&bad).unwrap_err().code,
+        "invalid_manifest"
+    );
 
     // 跨 major 的 min_host_api 只做格式校验，不钉 major（软依赖声明
     // 不是安装合同——engine 不强制匹配，由 webui 决定提示）。

@@ -7,7 +7,9 @@
 // widget 自行处理，engine 不强制匹配，见 docs/TRUSTED-PLUGINS.md §4.2/§6）。
 //
 // `status` 仅反映 spawn 结果（`running` / `stopped`，engine 不探活）：
-// 未装、已崩、spawn 失败（端口冲突）的插件一律视为「不可用」。
+// 未装、已崩、spawn 失败（端口冲突）的插件一律视为「不可用」；
+// 已运行但 `host_api` 低于声明的 `min_host_api` 视为「版本过低」
+// （审计 #507：running 不等于可用，宿主合同版本同样参与判定）。
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -32,20 +34,44 @@
   }
 
   /**
+   * installed 版本是否 >= min（逐段数值比较，缺段视为 0）。
+   * min 缺省 / 空 → 不比对（true）；任一段非数字 → false（fail-closed：
+   * 脏数据一律按不满足提示，不静默放行）。
+   */
+  function versionAtLeast(installedVersion, min) {
+    if (min == null || min === '') return true;
+    const a = String(installedVersion).split('.');
+    const b = String(min).split('.');
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+      const x = Number(a[i] || 0);
+      const y = Number(b[i] || 0);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      if (x < y) return false;
+      if (x > y) return true;
+    }
+    return true;
+  }
+
+  /**
    * 计算 manifest.trusted_plugins 中不可用的依赖条目。
-   * 返回 [{id, min_host_api, reason}]；`reason` 区分 `not-installed` 与
-   * `stopped`（spawn 失败/崩溃），供提示文案区分。无声明 → []。
+   * 返回 [{id, min_host_api, reason}]；`reason` 区分 `not-installed` /
+   * `stopped`（spawn 失败/崩溃）/ `version-too-low`（host_api 低于声明），
+   * 供提示文案区分。无声明 → []。
    */
   function missingDependencies(manifest) {
     const deps = (manifest && manifest.trusted_plugins) || [];
     const missing = [];
     for (const dep of deps) {
       if (!dep || typeof dep.id !== 'string' || !dep.id) continue;
+      const minHostApi = dep.min_host_api || null;
       const info = installed.get(dep.id);
       if (!info) {
-        missing.push({ id: dep.id, min_host_api: dep.min_host_api || null, reason: 'not-installed' });
+        missing.push({ id: dep.id, min_host_api: minHostApi, reason: 'not-installed' });
       } else if (info.status !== 'running') {
-        missing.push({ id: dep.id, min_host_api: dep.min_host_api || null, reason: 'stopped' });
+        missing.push({ id: dep.id, min_host_api: minHostApi, reason: 'stopped' });
+      } else if (!versionAtLeast(info.host_api, minHostApi)) {
+        missing.push({ id: dep.id, min_host_api: minHostApi, reason: 'version-too-low' });
       }
     }
     return missing;
@@ -56,5 +82,5 @@
     return [...installed.values()];
   }
 
-  return { initFromEngine, missingDependencies, allInstalled };
+  return { initFromEngine, missingDependencies, allInstalled, versionAtLeast };
 });

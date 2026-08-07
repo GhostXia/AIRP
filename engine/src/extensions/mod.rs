@@ -745,6 +745,15 @@ pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationErro
             ));
         }
         if let Some(min) = &dep.min_host_api {
+            // 显式声明空串是坏数据：缺省语义用 `omit`（None），空串拒绝而非
+            // 静默视为 1（parse_host_api_major 的 Some("") = 1 只服务
+            // manifest.host_api 的向后兼容，不适用于软依赖声明）。
+            if min.trim().is_empty() {
+                return Err(ValidationError::new(
+                    "invalid_manifest",
+                    "trusted_plugins[].min_host_api must not be empty (omit the field to skip the check)",
+                ));
+            }
             // 复用纯 semver 解析（只校验格式，不钉 major：软依赖声明不是
             // 安装合同，engine 不强制匹配）。
             if let Err(e) = parse_host_api_major(Some(min)) {

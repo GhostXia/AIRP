@@ -200,7 +200,9 @@
         hint.appendChild(el(doc, 'div', 'widget-plugin-hint-title', '依赖的 trusted plugin 不可用'));
         const list = el(doc, 'div', 'widget-plugin-hint-list');
         for (const m of missing) {
-          const label = m.reason === 'stopped' ? '（已停止）' : '（未安装）';
+          const label = m.reason === 'stopped' ? '（已停止）'
+            : m.reason === 'version-too-low' ? '（版本过低）'
+            : '（未安装）';
           list.appendChild(el(doc, 'span', 'widget-plugin-hint-item', m.id + label));
         }
         hint.appendChild(list);

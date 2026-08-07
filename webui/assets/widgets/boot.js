@@ -134,8 +134,9 @@ async function fetchEngineGrants() {
 
 /**
  * #498 §7.4：拉取已安装 trusted plugin 状态注入 plugin-deps.js。
- * 失败（engine 不可达 / 非 2xx）保持空缓存 → widget 声明的软依赖
+ * 失败（engine 不可达 / 非 2xx / 5s 超时）保持空缓存 → widget 声明的软依赖
  * 全部提示缺失（fail-closed：宁可多提示，不静默假装插件可用）。
+ * 超时用 AbortSignal.timeout（审计 #507）：engine 挂起时 boot 不悬挂。
  */
 async function fetchEnginePlugins() {
   if (!pluginDeps) {
@@ -145,6 +146,7 @@ async function fetchEnginePlugins() {
   try {
     const resp = await fetch(engineUrl('/v1/plugins'), {
       headers: authedHeaders({ Accept: 'application/json' }),
+      signal: AbortSignal.timeout(5000),
     });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const plugins = await resp.json();

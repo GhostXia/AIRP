@@ -111,10 +111,15 @@
       this.transport.postMessage({ kind: 'state', state });
     }
 
-    /** 拆除：停止转发、销毁 iframe。 */
+    /** 拆除：停止转发、销毁 iframe，并清理未触发的 ready 超时定时器。 */
     destroy() {
       if (this.destroyed) return;
       this.destroyed = true;
+      // 审计 #507：iframe 未 ready 就卸载时，mount() 的 5s 超时定时器
+      // 仍挂着——不清理会让测试进程/页面悬挂到定时器触发（且触发后
+      // reject 一个已被销毁的桥）。waiter.timer 是 mount() 预留的清理钩子。
+      for (const w of this.readyWaiters) clearTimeout(w.timer);
+      this.readyWaiters = [];
       this.off();
       this.transport.destroy();
     }

@@ -2,7 +2,7 @@
 //
 // 覆盖 plugin-deps.js 的权威缓存与缺失依赖计算：
 //   1. initFromEngine 全量替换（含脏数据过滤）
-//   2. missingDependencies 三态：未安装 / 已停止 / 正常运行
+//   2. missingDependencies 四态：未安装 / 已停止 / 版本过低 / 正常运行
 //   3. 无声明 / 引擎不可达（空缓存）→ fail-closed 全提示
 //   4. widget-host render 的非阻塞降级提示条（缺失才出现，满足则不出现）
 import test from 'node:test';
@@ -88,11 +88,12 @@ test('plugin-deps: initFromEngine replaces the cache and filters dirty rows', ()
   assert.equal(deps.allInstalled().length, 1);
 });
 
-// ── 2. missingDependencies 三态 ─────────────────────────────────────
+// ── 2. missingDependencies 四态 ─────────────────────────────────────
 test('plugin-deps: missingDependencies distinguishes not-installed / stopped / running', () => {
   deps.initFromEngine({
     plugins: [
-      { id: 'com.example.tts', status: 'running' },
+      // engine `/v1/plugins` 保证带 host_api（manifest 必填字段）。
+      { id: 'com.example.tts', host_api: '1', status: 'running' },
       { id: 'com.example.stt', status: 'stopped' },
     ],
   });
@@ -108,6 +109,45 @@ test('plugin-deps: missingDependencies distinguishes not-installed / stopped / r
   assert.equal(missing.length, 2);
   assert.deepEqual(missing[0], { id: 'com.example.stt', min_host_api: null, reason: 'stopped' });
   assert.deepEqual(missing[1], { id: 'com.example.ocr', min_host_api: null, reason: 'not-installed' });
+});
+
+test('plugin-deps: running but host_api below min_host_api is version-too-low', () => {
+  deps.initFromEngine({
+    plugins: [
+      { id: 'com.example.tts', host_api: '1', status: 'running' },
+      { id: 'com.example.tts2', host_api: '1', status: 'running' },
+      { id: 'com.example.stt', host_api: '1.2', status: 'running' },
+      { id: 'com.example.ocr', host_api: 'garbage', status: 'running' },
+      { id: 'com.example.any', host_api: '1', status: 'running' },
+    ],
+  });
+  const manifest = {
+    type: 'acme.tts-ui',
+    trusted_plugins: [
+      { id: 'com.example.tts', min_host_api: '1' },   // 满足
+      { id: 'com.example.tts2', min_host_api: '2' },  // major 不足
+      { id: 'com.example.stt', min_host_api: '1.3' }, // patch 不足
+      { id: 'com.example.ocr', min_host_api: '1' },   // 脏数据 fail-closed
+      { id: 'com.example.any' },                      // 未声明 → 不比对
+    ],
+  };
+  const missing = deps.missingDependencies(manifest);
+  assert.equal(missing.length, 3);
+  assert.deepEqual(missing[0], { id: 'com.example.tts2', min_host_api: '2', reason: 'version-too-low' });
+  assert.deepEqual(missing[1], { id: 'com.example.stt', min_host_api: '1.3', reason: 'version-too-low' });
+  assert.deepEqual(missing[2], { id: 'com.example.ocr', min_host_api: '1', reason: 'version-too-low' });
+});
+
+test('plugin-deps: versionAtLeast compares segment-wise and fails closed on dirty data', () => {
+  assert.equal(deps.versionAtLeast('1', '1'), true);
+  assert.equal(deps.versionAtLeast('1.2', '1'), true);
+  assert.equal(deps.versionAtLeast('2', '1.9'), true);
+  assert.equal(deps.versionAtLeast('1', '2'), false);
+  assert.equal(deps.versionAtLeast('1.2', '1.3'), false);
+  assert.equal(deps.versionAtLeast('', '1'), false);  // 空 installed 不满足
+  assert.equal(deps.versionAtLeast('x', '1'), false); // 脏数据 fail-closed
+  assert.equal(deps.versionAtLeast('1', null), true); // 未声明不比对
+  assert.equal(deps.versionAtLeast('1', ''), true);   // 空 min 不比对
 });
 
 test('plugin-deps: no declaration → no missing; empty cache → all missing (fail-closed)', () => {
@@ -141,7 +181,13 @@ test('widget-host: missing trusted plugin renders a non-blocking hint above the 
   const transport = {
     sent: [], handlers: new Set(), destroyed: false,
     postMessage(msg) { transport.sent.push(msg); },
-    onMessage(cb) { transport.handlers.add(cb); return () => transport.handlers.delete(cb); },
+    onMessage(cb) {
+      transport.handlers.add(cb);
+      // 模拟真实 iframe：引导脚本加载后立即回发 ready（早于宿主 mount），
+      // 避免 mount() 的 5s 超时定时器挂起测试进程（审计 #507）。
+      cb({ kind: 'ready' });
+      return () => transport.handlers.delete(cb);
+    },
     destroy() { transport.destroyed = true; },
   };
   host.mountWidget(container, { id: 'w1', type: DEP_MANIFEST.type }, null, {
@@ -174,7 +220,14 @@ test('widget-host: satisfied dependencies render no hint', async () => {
   const container = doc.createElement('div');
   const transport = {
     sent: [], handlers: new Set(), destroyed: false,
-    postMessage() {}, onMessage() { return () => {}; }, destroy() {},
+    postMessage(msg) { transport.sent.push(msg); },
+    onMessage(cb) {
+      transport.handlers.add(cb);
+      // 同前：回发 ready，让 mount() 立即完成，不挂 5s 超时定时器。
+      cb({ kind: 'ready' });
+      return () => transport.handlers.delete(cb);
+    },
+    destroy() { transport.destroyed = true; },
   };
   host.mountWidget(container, { id: 'w1', type: DEP_MANIFEST.type }, null, {
     doc, sandbox, pluginDeps: deps, transportFactory: () => transport,

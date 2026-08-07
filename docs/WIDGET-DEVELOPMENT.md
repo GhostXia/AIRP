@@ -72,6 +72,7 @@ manifest 是 widget 的机器可读身份声明，engine 在安装时校验并�
 | `author` | string | 否 | 作者 |
 | `capabilities` | string[] | 否 | 申请的 capability（见第 5 节）；缺省为空 |
 | `host_api` | string | 否 | C-P4-3：宿主合同 major 版本（如 `"1"`、`"1.2.3"`）；缺失或空串视为 `"1"` |
+| `trusted_plugins` | object[] | 否 | #498 §7.1：trusted plugin 软依赖声明（见下文）；缺省为空 |
 | `entry` | object | 是 | 加载入口 |
 
 ### `entry` 字段
@@ -93,6 +94,20 @@ engine 当前支持 `HOST_API_MAJOR = 1`（见 `engine/src/extensions/mod.rs`）
 **前向兼容铁律**：engine 不会静默尝试不兼容的 widget。当 engine 升级到 `HOST_API_MAJOR = 2` 时，旧 widget（`host_api = "1"`）安装即被拒，强迫作者显式声明兼容性；反之亦然。这避免“widget 装上去但行为不符”的隐性故障，把不兼容暴露在安装面。
 
 **空值规则（#489 D1 定夺，2026-08-05）**：`host_api` 缺失或空串（`""`）一律视为缺省 `"1"`，向后兼容已有 widget（实现见 `parse_host_api_major`）。空串不属于拒绝列表。
+
+### `trusted_plugins` 软依赖（#498 §7.1）
+
+widget 可声明可选依赖的 trusted plugin（跨进程 HTTP 调用目标，见 [TRUSTED-PLUGINS.md §6.1](TRUSTED-PLUGINS.md)）：
+
+```json
+"trusted_plugins": [
+  { "id": "com.example.tts", "min_host_api": "1.2" }
+]
+```
+
+- **软依赖**：声明了但插件缺失/未运行 → widget **仍可加载**并自行降级；engine 不强制匹配，只随 catalog 下发，由 webui 决定怎么提示。
+- **engine 安装面校验**（fail-closed：坏条目拒绝整包）：`id` 非空、≤128 字符、无路径分隔符（同插件 id 规则）；`min_host_api` 若出现必须是纯 semver 格式。**显式空串 `""` 也拒绝**（#507 定夺）——缺省语义只能靠 omit 字段表达，空串不沿用 `host_api` 的"空串视为 1"向后兼容规则。
+- **webui 四态判定**（挂载前对照 `/v1/plugins` 缓存，`plugin-deps.js`）：`not-installed`（插件不存在）/ `stopped`（已安装未运行）/ `version-too-low`（运行中但 `host_api` 低于 `min_host_api`，逐段数值比较，脏数据 fail-closed）/ 满足（running 且版本足够）。前三态渲染非阻塞降级提示条；engine 不可达或 5s 超时（`AbortSignal.timeout`）时缓存为空 → 全部按缺失提示。
 
 ## 4. Widget SDK 骨架
 
