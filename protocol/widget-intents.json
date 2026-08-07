@@ -1,12 +1,12 @@
 {
   "$schema_note": "widget intent 执行面合同的机器可读唯一事实源（权威执行端：engine/src/extensions/api.rs 的 widget_intent handler；消费端：webui/assets/widgets/boot.js 的 onIntent）。",
   "version": 1,
-  "description": "widget 通过 WidgetContext.emit() 发出的 intent 经宿主 webui 以 POST /v1/widget-intents 送达 engine。C-P2 为最小合同：engine 无任何已注册执行器，一切 intent 拒绝默认（403 intent_denied），但合同形状已锁定——C-P3 接入 capability 权威授权与逐调用强制时只追加行为，不改形状。",
+  "description": "widget 通过 WidgetContext.emit() 发出的 intent 经宿主 webui 以 POST /v1/widget-intents 送达 engine。C-P2 为最小合同：engine 无任何已注册执行器，一切 intent 拒绝默认（403 intent_denied），但合同形状已锁定——C-P3 接入 capability 权威授权与逐调用强制、C-P4.1 接入 read 三件套真实执行器（read:memory/read:state/read:worldbook）时只追加行为，不改形状。",
   "compatibility": "additive-only",
   "extensionRules": [
     "envelope 既有字段不得删除、改名或改类型；消费端必须忽略未知字段。",
     "新字段只允许追加且可空（缺省有良默认）；C-P3 的授权结果字段将按此规则追加。",
-    "error.code 集合为封闭锁定集：intent_invalid / intent_denied；追加新 code 必须同步本文件。",
+    "error.code 集合为封闭锁定集：intent_invalid / intent_denied / intent_bad_params / intent_target_missing / intent_executor_error；追加新 code 必须同步本文件。",
     "intent name 为自由命名空间（建议 ns.action 形态），engine 不得以名字白名单拒绝——拒绝语义只来自授权层。"
   ],
   "endpoint": {
@@ -25,6 +25,26 @@
     }
   },
   "responses": {
+    "200": {
+      "description": "授权通过。无 capability 的 intent → echo（无 result 字段）；read 三件套（read:memory/read:state/read:worldbook）→ 执行器返回 result（C-P4.1）；其余 capability 在 C-P4.2 执行器落地前保持 echo。",
+      "body": {
+        "ok": true,
+        "name": "string",
+        "widget_type": "string",
+        "instance_id": "string",
+        "capability": "string（仅当 envelope 携带 capability 时返回）",
+        "result": "object（可选，仅执行器派发时返回）：read:memory → {content, char_count, capacity}；read:state → live.json 的 JSON 值；read:worldbook → lorebook JSON"
+      }
+    },
+    "400": {
+      "description": "envelope 形状校验失败（name 越界 / widget_type / instance_id 缺失），或执行器参数非法（缺 params.character_id / character_id 或 session_id 格式非法）→ intent_invalid / intent_bad_params。",
+      "body": {
+        "error": {
+          "code": "intent_invalid | intent_bad_params",
+          "message": "string"
+        }
+      }
+    },
     "403": {
       "description": "拒绝默认——C-P2 无执行器，一切合法 envelope 都返回此响应。C-P3 起亦为授权失败的标准响应。",
       "body": {
@@ -34,18 +54,27 @@
         }
       }
     },
-    "400": {
-      "description": "envelope 形状校验失败（name 越界 / widget_type / instance_id 缺失）。",
+    "404": {
+      "description": "执行器目标不存在（角色 state / lorebook 缺失）→ intent_target_missing（C-P4.1）。",
       "body": {
         "error": {
-          "code": "intent_invalid",
+          "code": "intent_target_missing",
+          "message": "string"
+        }
+      }
+    },
+    "500": {
+      "description": "执行器内部失败（IO / JSON 解析 / 阻塞任务 join 失败）→ intent_executor_error（C-P4.1）。",
+      "body": {
+        "error": {
+          "code": "intent_executor_error",
           "message": "string"
         }
       }
     }
   },
   "transportRejections": {
-    "description": "#485 P1：传输层拒收行为（axum Json extractor rejection）——不属于 envelope 错误码集，故不占用 error.code。畸形 JSON、缺必填字段或 Content-Type 非 application/json 的请求在进入 handler 前即被框架拒收：HTTP 4xx（畸形 JSON / 缺字段为 400，Content-Type 缺失为 415），响应体为纯文本（如 'Failed to deserialize the JSON body: ...' / 'Expected request with `Content-Type: application/json`），无 error.code 字段。消费端对此类响应不得按 error.code 分支处理；error.code 封闭锁定集仍为 {intent_invalid, intent_denied} 不变。",
+    "description": "#485 P1：传输层拒收行为（axum Json extractor rejection）——不属于 envelope 错误码集，故不占用 error.code。畸形 JSON、缺必填字段或 Content-Type 非 application/json 的请求在进入 handler 前即被框架拒收：HTTP 4xx（畸形 JSON / 缺字段为 400，Content-Type 缺失为 415），响应体为纯文本（如 'Failed to deserialize the JSON body: ...' / 'Expected request with `Content-Type: application/json`），无 error.code 字段。消费端对此类响应不得按 error.code 分支处理；error.code 封闭锁定集仍为 {intent_invalid, intent_denied, intent_bad_params, intent_target_missing, intent_executor_error} 不变。",
     "status": "4xx (400 malformed body / 415 wrong content-type)",
     "bodyFormat": "text/plain",
     "errorCodes": []
