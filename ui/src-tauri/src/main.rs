@@ -679,7 +679,8 @@ fn spawn_token_renewal_loop(
         // T1（#485）：连续失败计数 —— 退避 60s * 2^(n-1) 封顶 15min；日志仅
         // 首次失败 warn，连续失败期间降级 debug（engine 宕机时不刷 warn）。
         let mut consecutive_failures: u32 = 0;
-        let retry_wait = |failures: u32| -> u64 { (60u64 << failures.min(4)).min(900) };
+        let retry_wait =
+            |failures: u32| -> u64 { (60u64 << failures.saturating_sub(1).min(4)).min(900) };
         loop {
             // TTL 过半即续期；下限 5s 防短 TTL 冒烟时热循环，上限 4h 防
             // engine 返回异常大值时续期完全停摆；失败后按连续次数指数退避。
