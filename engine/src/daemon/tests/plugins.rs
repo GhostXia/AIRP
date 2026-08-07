@@ -16,6 +16,11 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// loopback peer 地址（B4 修复后反代 fail-closed，测试需显式注入）。
+fn loopback_addr() -> std::net::SocketAddr {
+    "127.0.0.1:0".parse().unwrap()
+}
+
 fn manifest_with_port(id: &str, port: u16) -> TrustedPluginManifest {
     TrustedPluginManifest {
         id: id.to_string(),
@@ -75,6 +80,7 @@ async fn proxy_forwards_get_with_query() {
     let resp = router
         .oneshot(
             Request::get("/api/plugins/com.example.echo/hello?x=1&y=2")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -102,6 +108,7 @@ async fn proxy_forwards_post_with_body() {
     let resp = router
         .oneshot(
             Request::post("/api/plugins/com.example.echo/speak")
+                .extension(ConnectInfo(loopback_addr()))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(r#"{"text":"hi"}"#))
                 .unwrap(),
@@ -123,6 +130,7 @@ async fn proxy_unknown_id_returns_404() {
     let resp = router
         .oneshot(
             Request::get("/api/plugins/com.example.ghost/anything")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -146,6 +154,7 @@ async fn proxy_unreachable_port_returns_502() {
     let resp = router
         .oneshot(
             Request::get("/api/plugins/com.example.dead/ping")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -170,11 +179,12 @@ async fn proxy_is_outside_auth_layer_while_list_is_inside() {
         .push(manifest_with_port("com.example.echo", port));
     let router = create_router(state);
 
-    // 无 token 反代 → 200
+    // 无 token 反代 → 200（loopback ConnectInfo 注入，B4 fail-closed）
     let proxied = router
         .clone()
         .oneshot(
             Request::get("/api/plugins/com.example.echo/ping")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -258,6 +268,7 @@ async fn proxy_streams_sse_and_stops_on_shutdown() {
     let resp = router
         .oneshot(
             Request::get("/api/plugins/com.example.sse/stream")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -320,6 +331,7 @@ async fn proxy_rejects_oversized_response() {
     let resp = router
         .oneshot(
             Request::get("/api/plugins/com.example.big/big")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -356,6 +368,33 @@ async fn proxy_rejects_remote_clients() {
     assert_eq!(body["error"]["code"], "plugin_remote_forbidden");
 }
 
+/// 审计 B4：无 ConnectInfo 时 fail-closed（非 fail-open）——
+/// 反代挂鉴权层外，无 peer 信息时必须拒绝，不应放行。
+#[tokio::test]
+async fn proxy_rejects_missing_connect_info() {
+    let (port, _plugin) = spawn_fake_plugin().await;
+    let (state, _tmp) = make_state_no_key();
+    state
+        .plugins
+        .write()
+        .unwrap()
+        .push(manifest_with_port("com.example.echo", port));
+    let router = create_router(state);
+
+    // 不注入 ConnectInfo → 403（fail-closed）
+    let resp = router
+        .oneshot(
+            Request::get("/api/plugins/com.example.echo/ping")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "plugin_remote_forbidden");
+}
+
 /// 审计 W5：RawPathParams 保留原始编码（%2F / %23 / %20 不被二次解码），
 /// 裸非 ASCII（中文）补码为 %XX，插件收到的路径与浏览器语义一致。
 #[tokio::test]
@@ -374,6 +413,7 @@ async fn proxy_preserves_encoding_and_reencodes_raw_utf8() {
         .clone()
         .oneshot(
             Request::get("/api/plugins/com.example.echo/a%2Fb%23c%20d?q=%2F%23%20x")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -388,6 +428,7 @@ async fn proxy_preserves_encoding_and_reencodes_raw_utf8() {
     let resp = router
         .oneshot(
             Request::get("/api/plugins/com.example.echo/你好")
+                .extension(ConnectInfo(loopback_addr()))
                 .body(Body::empty())
                 .unwrap(),
         )

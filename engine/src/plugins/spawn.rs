@@ -3,6 +3,14 @@
 //! daemon 启动时 spawn 全部合法 manifest 的子进程；daemon 退出时终止
 //! （Unix：SIGTERM → 等 5s → SIGKILL；Windows 无 SIGTERM 语义，直接强杀）。
 //! 不做自动重启（§6.7：崩溃 = 用户重启 daemon）。
+//!
+//! 级联 kill（审计 A2/B2）：trusted plugin 可能自己 spawn 子进程（如 TTS
+//! 插件调 ffmpeg）。只 kill 直接子会让孙进程变孤儿，Windows 下端口仍占。
+//! - Unix：`process_group(0)` 让子进程成为新进程组组长（PGID = PID），
+//!   `killpg` 终止整个组（含孙进程）。
+//! - Windows：`taskkill /T /F` 终止整个进程树（内部用 Job Object 实现）。
+//! - panic/SIGKILL：`kill_on_drop(true)` 保证直接子在 Child drop 时被 kill；
+//!   孙进程在 panic 路径仍可能变孤儿（已知限制，MVP 可接受，跟踪 issue）。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -69,7 +77,17 @@ async fn spawn_one(manifest: &TrustedPluginManifest, data_root: &Path) -> Result
         // 阻塞子进程写日志）。
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::inherit())
+        // 审计 B3：kill_on_drop 保证 Child drop 时（含 panic / SIGKILL /
+        // runtime 异常退出）直接子进程被 kill，不留孤儿进程。
+        .kill_on_drop(true);
+    // 审计 B2（Unix）：process_group(0) 让子进程成为新进程组组长
+    //（PGID = PID），terminate_graceful 用 killpg 终止整个组（含孙进程）。
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     cmd.spawn()
         .map_err(|e| format!("spawn `{}` failed: {e}", command.display()))
 }
@@ -87,10 +105,11 @@ pub async fn terminate_all(children: &mut HashMap<String, Child>) {
 async fn terminate_graceful(_id: &str, child: &mut Child) {
     #[cfg(unix)]
     {
-        // 先发 SIGTERM 请求优雅退出，5s 内未退出再 SIGKILL。
+        // killpg 终止整个进程组（含孙进程，审计 B2）。
         if let Some(pid) = child.id() {
-            // SAFETY: pid 是自有子进程，kill 语义（发信号）无内存安全风险。
-            let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            // SAFETY: pid 是自有子进程的 PGID（process_group(0) 在 spawn
+            // 时设置），killpg 发信号给整个组，语义同 kill 无内存安全风险。
+            let _ = unsafe { libc::killpg(pid as i32, libc::SIGTERM) };
         }
         match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
             Ok(Ok(_)) => return,
@@ -100,15 +119,26 @@ async fn terminate_graceful(_id: &str, child: &mut Child) {
             }
             Err(_) => {
                 tracing::warn!(id = %_id, "trusted plugin ignored SIGTERM, sending SIGKILL");
-                let _ = child.start_kill();
+                // SIGKILL 整个进程组（孙进程也一并强杀）。
+                if let Some(pid) = child.id() {
+                    let _ = unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+                }
                 let _ = child.wait().await;
             }
         }
     }
     #[cfg(windows)]
     {
-        // Windows 无 SIGTERM 语义：直接 TerminateProcess。
-        let _ = child.start_kill();
+        // Windows 无 SIGTERM 语义：taskkill /T /F 终止整个进程树（含孙进程，
+        // 审计 B2）。taskkill 内部用 Job Object 实现 tree kill，比
+        // TerminateProcess（只 kill 直接子）覆盖面更广。
+        if let Some(pid) = child.id() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
         let _ = child.wait().await;
     }
 }

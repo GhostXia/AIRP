@@ -166,17 +166,30 @@ pub async fn proxy_plugin(
     connect_info: Option<ConnectInfo<std::net::SocketAddr>>,
     req: axum::extract::Request,
 ) -> Response {
-    // 审计 W7：反代挂在鉴权层外，0.0.0.0 监听时远程请求可直达插件。
-    // 用 peer 地址强制 loopback-only（生产 serve 注入 ConnectInfo；
-    // 测试构造请求无 ConnectInfo 时放行，行为由集成测试覆盖）。
-    if let Some(ConnectInfo(addr)) = connect_info {
-        if !addr.ip().is_loopback() {
+    // 审计 W7 / B4 修复：反代挂在鉴权层外，0.0.0.0 监听时远程请求可直达
+    // 插件。用 peer 地址强制 loopback-only。fail-closed：无 ConnectInfo
+    // 时直接拒绝——生产 serve 必经 into_make_service_with_connect_info
+    // 注入 peer 地址，缺失意味着 serve 拓扑异常（自定义 router 嵌入等），
+    // 不应放行。测试通过 Extension(ConnectInfo(loopback)) 显式注入。
+    let addr = match connect_info {
+        Some(ConnectInfo(addr)) => addr,
+        None => {
+            tracing::warn!(
+                "trusted plugin proxy request without ConnectInfo — rejecting (fail-closed)"
+            );
             return error_body(
                 StatusCode::FORBIDDEN,
                 "plugin_remote_forbidden",
                 "trusted plugin proxy is restricted to loopback clients",
             );
         }
+    };
+    if !addr.ip().is_loopback() {
+        return error_body(
+            StatusCode::FORBIDDEN,
+            "plugin_remote_forbidden",
+            "trusted plugin proxy is restricted to loopback clients",
+        );
     }
 
     let Some(manifest) = find_manifest(&state, &plugin_id) else {
