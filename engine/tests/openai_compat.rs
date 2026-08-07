@@ -94,6 +94,11 @@ async fn setup_with_quota(
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -134,6 +139,11 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,
@@ -169,6 +179,11 @@ async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::T
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint,

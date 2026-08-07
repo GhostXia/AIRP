@@ -18,7 +18,7 @@ use axum::{
     http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{any, delete, get, post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -102,6 +102,18 @@ pub struct DaemonState {
     /// 惰性初始化（首次访问 extensions 端点时从 data_root 加载），
     /// 避免全部 18 个构造点承担加载成本与测试 tmp 目录差异。
     pub extensions: std::sync::OnceLock<Arc<crate::extensions::ExtensionStore>>,
+    /// #498 §6：trusted plugin 声明（daemon 启动时扫描
+    /// `data/plugins/manifests/*.json`，main.rs 负责 spawn）。
+    pub plugins: std::sync::RwLock<Vec<crate::plugins::TrustedPluginManifest>>,
+    /// #498 §6.3：trusted plugin 子进程句柄（spawn 成功才入表；
+    /// daemon 退出时 `crate::plugins::spawn::terminate_all` 统一终止）。
+    /// Arc 包裹供崩溃监控任务共享（审计 W4）。
+    pub plugin_children: std::sync::Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, tokio::process::Child>>,
+    >,
+    /// #498 §6.4：shutdown 广播（graceful shutdown 时置 true）。SSE 流式
+    /// 反代监听此通道提前断开，防止在飞长连接阻塞 daemon 退出（审计 W1）。
+    pub shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl DaemonState {
@@ -791,6 +803,9 @@ pub fn create_router_with_conversation_policy_registry(
             "/v1/widget-intents",
             post(crate::extensions::api::widget_intent),
         )
+        // #498 §7.3：已安装 trusted plugin 列表（webui 加载 widget 时对照
+        // manifest.trusted_plugins 软依赖做降级提示）。
+        .route("/v1/plugins", get(crate::plugins::proxy::list_plugins))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -811,6 +826,13 @@ pub fn create_router_with_conversation_policy_registry(
         .route(
             "/extensions/:digest/*file",
             get(crate::extensions::api::serve_extension_asset),
+        )
+        // #498 §6.4：trusted plugin 反代。故意挂在鉴权层外：widget iframe
+        // 沙箱无 daemon token，且 §6.4 不做 caller 限制（loopback 上任何
+        // 进程都能调，trusted plugin 自己校验请求）。未注册 id 一律 404。
+        .route(
+            "/api/plugins/:plugin_id/*path",
+            any(crate::plugins::proxy::proxy_plugin),
         )
         .merge(v1_routes)
         .layer(middleware::from_fn_with_state(

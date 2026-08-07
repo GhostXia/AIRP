@@ -104,6 +104,11 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: format!("{}/v1/chat/completions", upstream_url),

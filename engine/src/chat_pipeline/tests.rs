@@ -83,6 +83,11 @@ mod tests {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            plugins: Default::default(),
+            plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            shutdown: tokio::sync::watch::channel(false).0,
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1010,6 +1015,11 @@ mod tests_ms6 {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            plugins: Default::default(),
+            plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            shutdown: tokio::sync::watch::channel(false).0,
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1243,6 +1253,11 @@ mod tests_issue27 {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            plugins: Default::default(),
+            plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            shutdown: tokio::sync::watch::channel(false).0,
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1407,6 +1422,11 @@ mod tests_dx1 {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            plugins: Default::default(),
+            plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            shutdown: tokio::sync::watch::channel(false).0,
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),
@@ -1968,6 +1988,11 @@ mod tests_a1b_pipeline_e2e {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            plugins: Default::default(),
+            plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            shutdown: tokio::sync::watch::channel(false).0,
             config: std::sync::RwLock::new(MutableConfig {
                 provider: Provider::OpenAI,
                 endpoint: "https://example.test/v1/chat/completions".to_string(),

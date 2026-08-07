@@ -50,6 +50,8 @@ flate2 = { workspace = true }
 # M_AGENT-1: CancellationToken for agent loop cooperative cancellation.
 tokio-util = { workspace = true }
 unicode-normalization = { workspace = true }
+# #498 §6.3：trusted plugin 优雅终止（Unix SIGTERM）
+libc = { workspace = true }
 airp-state-protocol = { workspace = true }
 # 4.3 FTS5 历史检索
 rusqlite = { version = "0.32", features = ["bundled"] }

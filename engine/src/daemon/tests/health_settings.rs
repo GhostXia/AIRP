@@ -62,6 +62,11 @@ async fn test_health_endpoint_returns_status() {
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),
@@ -125,6 +130,11 @@ async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "https://api.openai.com".to_string(),

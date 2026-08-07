@@ -45,6 +45,7 @@ dependencies = [
  "dirs",
  "flate2",
  "futures-util",
+ "libc",
  "once_cell",
  "proptest",
  "regex",

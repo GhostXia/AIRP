@@ -25,6 +25,7 @@ mod images;
 mod local_webui;
 mod memory;
 mod persona;
+mod plugins;
 mod security;
 mod session_recovery;
 mod sessions;
@@ -47,6 +48,11 @@ pub(super) fn make_state_with_key(key: Option<&str>) -> (Arc<DaemonState>, tempf
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),
@@ -100,6 +106,11 @@ pub(super) fn make_state_no_key() -> (Arc<DaemonState>, tempfile::TempDir) {
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),
@@ -131,6 +142,11 @@ pub(super) fn make_state_with_data_root(data_root: std::path::PathBuf) -> Arc<Da
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        shutdown: tokio::sync::watch::channel(false).0,
         config: std::sync::RwLock::new(MutableConfig {
             provider: crate::adapter::Provider::OpenAI,
             endpoint: "http://localhost".to_string(),
