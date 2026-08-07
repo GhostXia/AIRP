@@ -147,6 +147,10 @@ pub(in crate::daemon) async fn rollback_chat(
 }
 
 /// POST /v1/chat/regen — stream a new candidate for the active assistant message (SSE)
+///
+/// #433 batch 3: quota / regen_snapshot / prepare_regen_pipeline 均为同步文件 IO，
+/// 统一用 `spawn_blocking` 包装避免阻塞 tokio worker 线程；租约留在闭包外，
+/// join 完成后再存入 pipeline。
 pub(in crate::daemon) async fn regen_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<RegenRequest>,
@@ -167,16 +171,14 @@ pub(in crate::daemon) async fn regen_chat(
         let cfg = state.read_config();
         cfg.quota.clone()
     };
-    crate::quota::check_and_increment(&effective_root, &quota_config)?;
 
-    // 1. Capture the active assistant without mutating durable history.
-    let snapshot = ChatService::new(&effective_root).regen_snapshot(
-        &req.character_id,
-        req.session_id.as_ref(),
-        operation.generation_id().to_string(),
-    )?;
+    // #433 batch 3：同步 IO 阶段（quota → snapshot → prepare）整体下沉到
+    // blocking 线程池；lease 不 move 入闭包，join 后再存入 pipeline。
+    let character_id = req.character_id.clone();
+    let snapshot_session_id = req.session_id;
+    let generation_id = operation.generation_id().to_string();
 
-    // 2. Build a regen pipeline (no new user message, no timeline advancement).
+    // Build the request payload consumed by the blocking prepare closure.
     let payload = ChatCompletionRequest {
         character_id: Some(req.character_id),
         character_card_id: None,
@@ -203,12 +205,30 @@ pub(in crate::daemon) async fn regen_chat(
         swipe_candidates: Vec::new(),
         branch_from: None,
     };
-    let mut pipeline = chat_pipeline::prepare_regen_pipeline(&payload, &state, snapshot)?;
+    let state_bg = state.clone();
+    let mut pipeline = tokio::task::spawn_blocking(
+        move || -> Result<chat_pipeline::PreparedPipeline, AirpError> {
+            crate::quota::check_and_increment(&effective_root, &quota_config)?;
+            // 1. Capture the active assistant without mutating durable history.
+            let snapshot = ChatService::new(&effective_root).regen_snapshot(
+                &character_id,
+                snapshot_session_id.as_ref(),
+                generation_id,
+            )?;
+            // 2. Build a regen pipeline (no new user message, no timeline advancement).
+            chat_pipeline::prepare_regen_pipeline(&payload, &state_bg, snapshot)
+        },
+    )
+    .await
+    .map_err(|e| AirpError::Internal(format!("regen prepare join failed: {e}")))??;
     pipeline.finalizer.session_operation_lease = Some(operation);
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
 }
 
 /// POST /v1/chat/continue — continue generating, appending to the last assistant message (SSE)
+///
+/// #433 batch 3: quota / prepare_continue_pipeline 为同步文件 IO，用 `spawn_blocking`
+/// 包装；租约留在闭包外，join 完成后再存入 pipeline。
 pub(in crate::daemon) async fn continue_chat(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(req): Json<ContinueRequest>,
@@ -257,7 +277,15 @@ pub(in crate::daemon) async fn continue_chat(
         swipe_candidates: Vec::new(),
         branch_from: None,
     };
-    let mut pipeline = chat_pipeline::prepare_continue_pipeline(&payload, &state)?;
+    let state_bg = state.clone();
+    let mut pipeline = tokio::task::spawn_blocking(
+        move || -> Result<chat_pipeline::PreparedPipeline, AirpError> {
+            crate::quota::check_and_increment(&effective_root, &quota_config)?;
+            chat_pipeline::prepare_continue_pipeline(&payload, &state_bg)
+        },
+    )
+    .await
+    .map_err(|e| AirpError::Internal(format!("continue prepare join failed: {e}")))??;
     pipeline.finalizer.session_operation_lease = Some(operation);
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
 }
@@ -377,6 +405,11 @@ pub(in crate::daemon) async fn edit_message(
     Ok(Json(log))
 }
 
+/// POST /v1/chat/completions — SSE 流式补全。
+///
+/// #433 batch 3：quota 与 prepare_pipeline（Chat 模式含同步写：append_with_branch /
+/// advance_timeline_and_checkpoint）整体用 `spawn_blocking` 包装；条件性租约留在
+/// 闭包外，join 完成后再存入 pipeline。
 pub(in crate::daemon) async fn chat_completion(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(payload): Json<ChatCompletionRequest>,
@@ -404,8 +437,15 @@ pub(in crate::daemon) async fn chat_completion(
             )
         })
         .transpose()?;
-    crate::quota::check_and_increment(&effective_root, &quota_config)?;
-    let mut pipeline = chat_pipeline::prepare_pipeline(&payload, &state)?;
+    let state_bg = state.clone();
+    let mut pipeline = tokio::task::spawn_blocking(
+        move || -> Result<chat_pipeline::PreparedPipeline, AirpError> {
+            crate::quota::check_and_increment(&effective_root, &quota_config)?;
+            chat_pipeline::prepare_pipeline(&payload, &state_bg)
+        },
+    )
+    .await
+    .map_err(|e| AirpError::Internal(format!("completion prepare join failed: {e}")))??;
     pipeline.finalizer.session_operation_lease = operation;
     Ok(Sse::new(chat_pipeline::build_sse_stream(pipeline)))
 }
