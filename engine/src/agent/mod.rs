@@ -690,6 +690,8 @@ mod tests {
             plugin_tools: Default::default(),
             plugin_tools_update: tokio::sync::Mutex::new(()),
             extensions: std::sync::OnceLock::new(),
+            plugins: Default::default(),
+            plugin_children: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             config: std::sync::RwLock::new(crate::daemon::MutableConfig {
                 provider: crate::adapter::Provider::OpenAI,
                 endpoint: "http://127.0.0.1:1/v1/chat/completions".to_string(),

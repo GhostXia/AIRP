@@ -245,6 +245,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
 
+            // #498 §6.3：加载 trusted plugin manifest 并 spawn 子进程。
+            // 单个 manifest 坏 / spawn 失败仅 warn 跳过（见 plugins 模块）。
+            let plugin_manifests = airp_core::plugins::load_manifests(&data_root);
+            if !plugin_manifests.is_empty() {
+                tracing::info!(
+                    count = plugin_manifests.len(),
+                    "loaded trusted plugin manifests"
+                );
+            }
+            let plugin_children =
+                airp_core::plugins::spawn::spawn_all(&plugin_manifests, &data_root).await;
+
             let state = Arc::new(DaemonState {
                 data_root,
                 http_client: http_client.clone(),
@@ -256,6 +268,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 plugin_tools: std::sync::RwLock::new(plugin_tools),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
                 extensions: std::sync::OnceLock::new(),
+                plugins: std::sync::RwLock::new(plugin_manifests),
+                plugin_children: tokio::sync::Mutex::new(plugin_children),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
@@ -282,7 +296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .into());
                     }
-                    create_local_webui_router(state, dir)
+                    create_local_webui_router(state.clone(), dir)
                 }
                 None => match resolve_desktop_webui_dir()? {
                     // C-P0：桌面壳同源承载。与 --webui-dir 的区别：允许同时启用
@@ -297,9 +311,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Some(dir) => {
                         tracing::info!(webui_dir = %dir.display(), "desktop webui hosting enabled");
-                        create_desktop_webui_router(state, dir)
+                        create_desktop_webui_router(state.clone(), dir)
                     }
-                    None => create_router(state),
+                    None => create_router(state.clone()),
                 },
             };
             let addr = SocketAddr::new(bind_ip, daemon_port);
@@ -322,6 +336,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 listener,
                 router.into_make_service_with_connect_info::<SocketAddr>(),
             )
+            // #498 §6.3：Ctrl+C / SIGTERM 后先终止 trusted plugin 子进程再退出。
+            .with_graceful_shutdown(shutdown_signal(state.clone()))
             .await?;
         }
         Commands::Run {
@@ -379,6 +395,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 plugin_tools: Default::default(),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
                 extensions: std::sync::OnceLock::new(),
+                // Run 命令不 spawn trusted plugin（#498 §6.3 仅 daemon 生命周期）。
+                plugins: Default::default(),
+                plugin_children: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 config: std::sync::RwLock::new(MutableConfig {
                     provider: app_config.provider,
                     endpoint: app_config.endpoint,
@@ -434,6 +453,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// #498 §6.3：graceful shutdown 信号（Ctrl+C / SIGTERM）。
+/// 收到信号后先终止全部 trusted plugin 子进程（SIGTERM → 5s → SIGKILL），
+/// 再由 axum::serve 完成在飞请求排空后退出。
+async fn shutdown_signal(state: Arc<DaemonState>) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("shutdown signal received, terminating trusted plugins");
+    let mut children = state.plugin_children.lock().await;
+    airp_core::plugins::spawn::terminate_all(&mut children).await;
 }
 
 #[cfg(test)]

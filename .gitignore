@@ -50,6 +50,9 @@ data/provider_keys.json
 data/plugin_tools.json
 data/plugin_tool_headers.json
 data/plugins/
+# engine 工作目录下的运行时数据根（cwd 模式 daemon 写 engine/data/，含 trusted plugin 的
+# manifests/ 与插件目录；根级 data/ 是样板，两者都不入库运行产物）
+engine/data/
 
 # 个人 RP 数据不入库（角色卡/预设含个人内容，历史泄露已用 filter-repo 清除）。
 # 引擎运行时会在这两个目录下读写用户导入的卡/预设；测试用合成 fixture 另置，勿放个人数据。

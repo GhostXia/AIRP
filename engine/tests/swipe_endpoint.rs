@@ -43,6 +43,8 @@ async fn setup() -> (Arc<DaemonState>, tempfile::TempDir) {
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        plugins: Default::default(),
+        plugin_children: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         config: std::sync::RwLock::new(MutableConfig {
             provider: Provider::OpenAI,
             endpoint: "https://example.test/v1/chat/completions".to_string(),

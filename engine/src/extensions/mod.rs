@@ -731,7 +731,8 @@ pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationErro
 /// `invalid_manifest`。严格校验所有段为纯数字，避免 `"1.x"` 这类伪 semver
 /// 被宽松解析为 major 1 而掩盖声明错误。major 段额外拒绝 `"0"`（major 0
 /// 不合法）；minor/patch 段允许 `"0"`（如 `"1.0"`、`"1.2.0"` 合法）。
-fn parse_host_api_major(host_api: Option<&str>) -> Result<u32, ValidationError> {
+/// `pub(crate)`：trusted plugin manifest 的 `host_api` 复用同一校验（#498 §6.2）。
+pub(crate) fn parse_host_api_major(host_api: Option<&str>) -> Result<u32, ValidationError> {
     let raw = match host_api {
         None => return Ok(1),
         Some("") => return Ok(1),
