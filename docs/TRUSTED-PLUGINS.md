@@ -122,3 +122,28 @@ data/plugins/
 - widget → trusted plugin 走**普通 HTTP fetch**（`/api/plugins/...`），
   **不走 widget_intent**（widget_intent = widget → engine 的 capability 通道）。
 - 混合架构包是两个独立安装体，engine 不做绑定。
+
+### 6.1 widget manifest 的软依赖声明（#498 §7.1，已实现）
+
+widget manifest 可声明可选字段 `trusted_plugins`：
+
+```json
+"trusted_plugins": [
+  { "id": "com.example.tts", "min_host_api": "1.2" }
+]
+```
+
+- **软依赖**：声明了但 trusted plugin 不存在/未运行 → widget **仍可加载**，
+  自行降级；engine 不强制匹配，只随 catalog 下发，由 webui 决定怎么提示。
+- **engine 校验**（fail-closed：坏条目拒绝整包，不让声明不完整的依赖进入
+  catalog 误导 webui）：
+  - `id` 非空、≤128 字符、不以 `.` 开头/结尾、不含 `/` 或 `\\`
+    （与插件 id 同规则，无路径分隔符）；
+  - `min_host_api` 若出现，必须是纯 semver 格式（复用 `parse_host_api_major`，
+    只校验格式，**不 pin major**——软依赖声明不是安装合同；设计稿示例中的
+    `">=0.1"` range 写法不采用）。
+- **传递**：`GET /v1/extensions/catalog` 直接序列化 manifest，新字段自动下发。
+- **webui 消费**（#498 §7.4，已实现）：boot 时查 `GET /v1/plugins` 填充
+  `plugin-deps` 缓存（`status !== 'running'` 视为不可用，不探活 §6.6），
+  widget 挂载前对照声明渲染**非阻塞降级提示条**（未安装/已停止逐条列出）；
+  engine 不可达时缓存保持空 → 全部声明按缺失提示（fail-closed）。

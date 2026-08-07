@@ -548,6 +548,12 @@
     },
     {
       "method": "GET",
+      "path": "/v1/plugins",
+      "ui": true,
+      "note": "#498 §7.4 widgets/boot.js fetchEnginePlugins——trusted plugin 列表（软依赖降级提示对照）"
+    },
+    {
+      "method": "GET",
       "path": "/v1/provider-routing",
       "ui": false,
       "reason": "WebUI 路由管理仅写入配置（PUT），读取经由 /v1/providers/resolve"

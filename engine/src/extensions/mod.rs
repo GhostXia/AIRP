@@ -129,7 +129,24 @@ pub struct WidgetManifest {
     /// 跨 major 拒绝（前向兼容铁律，禁止静默尝试）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_api: Option<String>,
+    /// #498 §7.1：软依赖的 trusted plugin 声明。widget 需要这些插件才能
+    /// 完整工作；缺失时 widget **仍可加载**并自行降级（engine 不强制匹配，
+    /// 只随 catalog 下发，由 webui 决定怎么提示）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_plugins: Vec<TrustedPluginDependency>,
     pub entry: WidgetEntry,
+}
+
+/// #498 §7.1：widget 对 trusted plugin 的软依赖条目。
+///
+/// `id` 必须能匹配 `data/plugins/<id>/` 目录名（安装面拒绝路径分隔符，
+/// 与 trusted plugin 自己的 id 校验同规则）；`min_host_api` 声明该插件
+/// 所需的最小宿主合同版本（纯 semver，可选；engine 不强制匹配）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrustedPluginDependency {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_host_api: Option<String>,
 }
 
 /// 包内单个文件的摘要锚（digest-pinned）。
@@ -709,6 +726,35 @@ pub fn validate_manifest(manifest: &WidgetManifest) -> Result<(), ValidationErro
             ));
         }
     }
+    // #498 §7.1：trusted_plugins 软依赖条目校验（fail-closed：坏条目拒绝
+    // 整包，不让声明不完整的依赖进入 catalog 误导 webui）。
+    for dep in &manifest.trusted_plugins {
+        if dep.id.is_empty()
+            || dep.id.len() > 128
+            || dep.id.starts_with('.')
+            || dep.id.ends_with('.')
+            || dep.id.contains('/')
+            || dep.id.contains('\\')
+        {
+            return Err(ValidationError::new(
+                "invalid_manifest",
+                format!(
+                    "trusted_plugins[].id must be 'ns.name' without path separators: {:?}",
+                    dep.id
+                ),
+            ));
+        }
+        if let Some(min) = &dep.min_host_api {
+            // 复用纯 semver 解析（只校验格式，不钉 major：软依赖声明不是
+            // 安装合同，engine 不强制匹配）。
+            if let Err(e) = parse_host_api_major(Some(min)) {
+                return Err(ValidationError::new(
+                    "invalid_manifest",
+                    format!("trusted_plugins[].min_host_api invalid: {e}"),
+                ));
+            }
+        }
+    }
     // C-P4：hostApi major 匹配（前向兼容铁律）。缺省视为 "1"（向后兼容）。
     let declared_major = parse_host_api_major(manifest.host_api.as_deref())?;
     if declared_major != HOST_API_MAJOR {
@@ -887,6 +933,7 @@ mod tests {
             author: None,
             capabilities: vec!["read:state".to_string()],
             host_api: None,
+            trusted_plugins: Vec::new(),
             entry: WidgetEntry {
                 kind: "esm".to_string(),
                 source: Some("https://evil.example/w.js".to_string()),
@@ -1208,6 +1255,7 @@ mod tests {
             author: None,
             capabilities: caps.into_iter().map(String::from).collect(),
             host_api: None,
+            trusted_plugins: Vec::new(),
             entry: WidgetEntry {
                 kind: "esm".to_string(),
                 source: Some("https://evil.example/w.js".to_string()),

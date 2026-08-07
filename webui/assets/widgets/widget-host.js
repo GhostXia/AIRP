@@ -27,6 +27,8 @@
       manifests: o.manifests || root.AIRPWidgetManifests,
       consent: o.consent || root.AIRPWidgetConsent,
       sandbox: o.sandbox || root.AIRPSandboxBridge,
+      // #498 §7.4：trusted plugin 软依赖状态（boot 时从 GET /v1/plugins 注入）。
+      pluginDeps: o.pluginDeps || root.AIRPWidgetPluginDeps,
       doc: o.doc || (typeof document !== 'undefined' ? document : null),
       // 可注入 transport 工厂（测试用假 transport，浏览器用真 iframe）。
       transportFactory: o.transportFactory || null,
@@ -187,6 +189,22 @@
         box.appendChild(el(doc, 'div', 'widget-consent-note', '未授权前不会加载、不获得任何权限。我们不审核其代码，风险自担。'));
         container.appendChild(box);
         return;
+      }
+
+      // #498 §7.4：trusted plugin 软依赖降级提示（非阻塞——widget 仍加载，
+      // 缺失时提示哪些插件未装/未起，由 widget 或用户自行处理降级）。
+      // engine 不可达时 plugin-deps 保持空 → 全部声明都按缺失提示（fail-closed）。
+      const missing = d.pluginDeps ? d.pluginDeps.missingDependencies(manifest) : [];
+      if (missing.length) {
+        const hint = el(doc, 'div', 'widget-plugin-hint');
+        hint.appendChild(el(doc, 'div', 'widget-plugin-hint-title', '依赖的 trusted plugin 不可用'));
+        const list = el(doc, 'div', 'widget-plugin-hint-list');
+        for (const m of missing) {
+          const label = m.reason === 'stopped' ? '（已停止）' : '（未安装）';
+          list.appendChild(el(doc, 'span', 'widget-plugin-hint-item', m.id + label));
+        }
+        hint.appendChild(list);
+        container.appendChild(hint);
       }
 
       const sandboxed = Boolean(manifest && manifest.entry && manifest.entry.kind === 'esm' && manifest.entry.sandbox === true);

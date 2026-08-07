@@ -28,6 +28,7 @@ const registry = globalThis.AIRPWidgetRegistry;
 const manifests = globalThis.AIRPWidgetManifests;
 const consent = globalThis.AIRPWidgetConsent;
 const slotsApi = globalThis.AIRPWidgetSlots;
+const pluginDeps = globalThis.AIRPWidgetPluginDeps;
 
 let booted = false;
 let handles = [];
@@ -131,6 +132,28 @@ async function fetchEngineGrants() {
   }
 }
 
+/**
+ * #498 §7.4：拉取已安装 trusted plugin 状态注入 plugin-deps.js。
+ * 失败（engine 不可达 / 非 2xx）保持空缓存 → widget 声明的软依赖
+ * 全部提示缺失（fail-closed：宁可多提示，不静默假装插件可用）。
+ */
+async function fetchEnginePlugins() {
+  if (!pluginDeps) {
+    console.warn('[widget-boot] plugin-deps.js 未加载，trusted plugin 降级提示不可用');
+    return;
+  }
+  try {
+    const resp = await fetch(engineUrl('/v1/plugins'), {
+      headers: authedHeaders({ Accept: 'application/json' }),
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const plugins = await resp.json();
+    pluginDeps.initFromEngine(plugins);
+  } catch (error) {
+    console.warn('[widget-boot] engine plugins 不可用，trusted plugin 软依赖按缺失提示：', error.message || error);
+  }
+}
+
 async function boot() {
   if (booted) return handles;
   booted = true;
@@ -142,6 +165,9 @@ async function boot() {
   // C-P3：先拉 engine 权威 grant 状态注入 consent（异步），再拉 catalog。
   // 两者都失败时降级为本地 slots.json + localStorage consent（C-P1 行为）。
   await fetchEngineGrants();
+
+  // #498 §7.4：拉 trusted plugin 状态（降级提示的数据源；失败不阻塞）。
+  await fetchEnginePlugins();
 
   // 机器可读计划：优先 engine 权威下发，失败降级本地静态 slots.json；
   // 两者都失败时降级为空计划——slot 保持空占位，不硬失败。

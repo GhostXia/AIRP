@@ -42,6 +42,7 @@ fn request_with_host_api(host_api: Option<&str>) -> InstallRequest {
             author: None,
             capabilities: vec!["read:state".to_string()],
             host_api: host_api.map(str::to_string),
+            trusted_plugins: Vec::new(),
             entry: WidgetEntry {
                 kind: "esm".to_string(),
                 source: Some("https://example.com/w.js".to_string()),
@@ -228,10 +229,45 @@ fn compat_host_api_roundtrip() {
     let legacy = r#"{"type":"acme.legacy","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true}}"#;
     let restored: WidgetManifest = serde_json::from_str(legacy).unwrap();
     assert_eq!(restored.host_api, None, "旧记录缺 host_api 反序列化为 None");
+    assert_eq!(restored.trusted_plugins.len(), 0, "旧记录缺 trusted_plugins 反序列化为空");
     assert_eq!(
         parse_host_api_major(restored.host_api.as_deref()).unwrap(),
         1
     );
+}
+
+/// #498 §7.1 合同：trusted_plugins 软依赖字段的 serde 往返 + 校验矩阵。
+/// 安装面拒绝坏条目（路径分隔符 / 非法 min_host_api），合法声明随
+/// catalog 原样下发（webui 据此做降级提示）。
+#[test]
+fn compat_trusted_plugins_roundtrip_and_validation() {
+    // 往返保真：id + min_host_api 全字段。
+    let json = r#"{"type":"acme.dep","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true},"trusted_plugins":[{"id":"com.example.tts","min_host_api":"1"},{"id":"com.example.stt"}]}"#;
+    let parsed: WidgetManifest = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed.trusted_plugins.len(), 2);
+    assert_eq!(parsed.trusted_plugins[0].id, "com.example.tts");
+    assert_eq!(parsed.trusted_plugins[0].min_host_api.as_deref(), Some("1"));
+    assert_eq!(parsed.trusted_plugins[1].min_host_api, None);
+    let reserialized = serde_json::to_string(&parsed).unwrap();
+    let restored: WidgetManifest = serde_json::from_str(&reserialized).unwrap();
+    assert_eq!(restored, parsed, "trusted_plugins 往返必须保真");
+    assert!(validate_manifest(&parsed).is_ok(), "合法软依赖应通过安装校验");
+
+    // 安装面 fail-closed：坏 id（路径分隔符）拒绝整包。
+    let bad_id = r#"{"type":"acme.dep","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true},"trusted_plugins":[{"id":"../evil"}]}"#;
+    let bad: WidgetManifest = serde_json::from_str(bad_id).unwrap();
+    assert_eq!(validate_manifest(&bad).unwrap_err().code, "invalid_manifest");
+
+    // 非法 min_host_api（伪 semver）拒绝整包。
+    let bad_min = r#"{"type":"acme.dep","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true},"trusted_plugins":[{"id":"com.example.tts","min_host_api":"1.x"}]}"#;
+    let bad: WidgetManifest = serde_json::from_str(bad_min).unwrap();
+    assert_eq!(validate_manifest(&bad).unwrap_err().code, "invalid_manifest");
+
+    // 跨 major 的 min_host_api 只做格式校验，不钉 major（软依赖声明
+    // 不是安装合同——engine 不强制匹配，由 webui 决定提示）。
+    let future = r#"{"type":"acme.dep","version":"1.0.0","entry":{"kind":"esm","source":"/x.js","sandbox":true},"trusted_plugins":[{"id":"com.example.tts","min_host_api":"9"}]}"#;
+    let future_parsed: WidgetManifest = serde_json::from_str(future).unwrap();
+    assert!(validate_manifest(&future_parsed).is_ok());
 }
 
 /// 文档锁：KNOWN_CAPABILITIES 与 docs/WIDGET-DEVELOPMENT.md §5 的枚举行

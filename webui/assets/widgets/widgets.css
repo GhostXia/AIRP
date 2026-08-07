@@ -112,6 +112,34 @@
   color: var(--text-secondary);
 }
 
+/* #498 §7.4：trusted plugin 软依赖降级提示条（非阻塞，widget 仍加载） */
+.widget-plugin-hint {
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--warning-tint);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-input);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.widget-plugin-hint-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.widget-plugin-hint-item {
+  font-family: var(--font-mono);
+  margin-right: var(--space-2);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+}
+
 /* 屏侧 slot 区块包装（各屏 context 栏的 widget 区） */
 .widget-slot-block {
   margin-top: var(--space-4);
