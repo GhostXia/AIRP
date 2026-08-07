@@ -1088,8 +1088,7 @@ async fn cp3_intent_allowed_when_capability_granted() {
     let state_path = crate::data_dir::char_state_dir(&state.data_root, "alice").join("live.json");
     std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
     std::fs::write(&state_path, r#"{"hp": 42}"#).unwrap();
-    let mut envelope =
-        intent_envelope("data.read", "acme.allowed", "inst-1", Some("read:state"));
+    let mut envelope = intent_envelope("data.read", "acme.allowed", "inst-1", Some("read:state"));
     envelope["params"] = serde_json::json!({ "character_id": "alice" });
     let resp = router
         .clone()
@@ -1207,6 +1206,12 @@ async fn cp4_1_read_intent_executors_return_data() {
         body["result"]["char_count"],
         memory_text.chars().count() as u64
     );
+    // 合同字段 drift 防护（CodeRabbit #505）：capacity 来自默认配置，
+    // 必须断言以防实现与 protocol/widget-intents.json 漂移。
+    assert_eq!(
+        body["result"]["capacity"],
+        crate::memory::ResidentMemoryConfig::default().capacity_chars
+    );
 
     // read:worldbook → 200 + lorebook 条目。
     let mut envelope =
@@ -1219,7 +1224,10 @@ async fn cp4_1_read_intent_executors_return_data() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
-    assert_eq!(body["result"]["entries"][0]["content"], "A blue door in the forest");
+    assert_eq!(
+        body["result"]["entries"][0]["content"],
+        "A blue door in the forest"
+    );
 
     // 缺 character_id → 400 intent_bad_params。
     let resp = router
@@ -1234,8 +1242,59 @@ async fn cp4_1_read_intent_executors_return_data() {
     assert_eq!(body_json(resp).await["error"]["code"], "intent_bad_params");
 
     // 非法 character_id（路径遍历字符）→ 400 intent_bad_params。
-    let mut envelope = intent_envelope("data.read", "acme.reader", "inst-1", Some("read:state"));
-    envelope["params"] = serde_json::json!({ "character_id": "../evil" });
+    // 三条 read capability 走不同文件系统路径，逐一遍历防单路径缺口
+    // （CodeRabbit #505）。
+    for capability in ["read:state", "read:memory", "read:worldbook"] {
+        let mut envelope = intent_envelope("data.read", "acme.reader", "inst-1", Some(capability));
+        envelope["params"] = serde_json::json!({ "character_id": "../evil" });
+        let resp = router
+            .clone()
+            .oneshot(post_json("/v1/widget-intents", &envelope))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "{capability} traversal must be rejected"
+        );
+        assert_eq!(body_json(resp).await["error"]["code"], "intent_bad_params");
+    }
+
+    // 目标不存在 → 404 intent_target_missing（read:state / read:worldbook
+    // 均有 NotFound 语义；read:memory 语义见下）。
+    for capability in ["read:state", "read:worldbook"] {
+        let mut envelope = intent_envelope("data.read", "acme.reader", "inst-1", Some(capability));
+        envelope["params"] = serde_json::json!({ "character_id": "bob" });
+        let resp = router
+            .clone()
+            .oneshot(post_json("/v1/widget-intents", &envelope))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "{capability} unknown character must 404"
+        );
+        assert_eq!(
+            body_json(resp).await["error"]["code"],
+            "intent_target_missing"
+        );
+    }
+
+    // read:memory 无记忆文件 → 200 空 content（无 404 语义）。
+    let mut envelope = intent_envelope("data.read", "acme.reader", "inst-1", Some("read:memory"));
+    envelope["params"] = serde_json::json!({ "character_id": "bob" });
+    let resp = router
+        .clone()
+        .oneshot(post_json("/v1/widget-intents", &envelope))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["result"]["content"], "");
+
+    // session_id 提供但非字符串 → 400 intent_bad_params（不静默忽略）。
+    let mut envelope = intent_envelope("data.read", "acme.reader", "inst-1", Some("read:memory"));
+    envelope["params"] = serde_json::json!({ "character_id": "alice", "session_id": 42 });
     let resp = router
         .clone()
         .oneshot(post_json("/v1/widget-intents", &envelope))
@@ -1244,16 +1303,22 @@ async fn cp4_1_read_intent_executors_return_data() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_json(resp).await["error"]["code"], "intent_bad_params");
 
-    // 目标不存在 → 404 intent_target_missing。
+    // 执行器内部错误（live.json 损坏）→ 500 intent_executor_error，
+    // 且响应体不携带内部细节（脱敏合同，error.rs public_message）。
+    let state_path = crate::data_dir::char_state_dir(&root, "carol").join("live.json");
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(&state_path, r#"{"hp": "#).unwrap();
     let mut envelope = intent_envelope("data.read", "acme.reader", "inst-1", Some("read:state"));
-    envelope["params"] = serde_json::json!({ "character_id": "bob" });
+    envelope["params"] = serde_json::json!({ "character_id": "carol" });
     let resp = router
         .clone()
         .oneshot(post_json("/v1/widget-intents", &envelope))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_json(resp).await["error"]["code"], "intent_target_missing");
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "intent_executor_error");
+    assert_eq!(body["error"]["message"], "internal error");
 }
 
 #[tokio::test]

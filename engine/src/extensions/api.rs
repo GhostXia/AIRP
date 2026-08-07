@@ -522,6 +522,16 @@ pub async fn widget_intent(
     // capability（write:*/call:tool）保持 C-P3 echo 语义（C-P4.2，YAGNI）。
     match capability {
         "read:memory" | "read:state" | "read:worldbook" => {
+            // 审计日志：executor 路径提前 return，必须在此留痕（与 allow/deny
+            // 分支同字段集），否则授权数据读取无审计记录。
+            tracing::info!(
+                intent = %envelope.name,
+                widget_type = %envelope.widget_type,
+                instance_id = %envelope.instance_id,
+                capability = %capability,
+                extension_id = %record.id,
+                "widget intent dispatched to read executor"
+            );
             return exec_intent_read(&state, capability, &envelope).await;
         }
         _ => {}
@@ -552,9 +562,10 @@ pub async fn widget_intent(
 /// C-P4.1 执行器（read 三件套）：从 envelope.params 取参，在 `spawn_blocking`
 /// 中执行同步文件 IO（#433：不占用 tokio worker），结果映射回 intent 合同。
 ///
-/// 语义与既有 handler 一致：`read:memory` ≈ GET /v1/memory/resident、
-/// `read:state` ≈ GET /v1/characters/:id/state、`read:worldbook` ≈
-/// GET /v1/characters/:id/lorebook（目标不存在 → 404 `intent_target_missing`）。
+/// 语义与既有 handler 一致：`read:state` ≈ GET /v1/characters/:id/state、
+/// `read:worldbook` ≈ GET /v1/characters/:id/lorebook（目标不存在 → 404
+/// `intent_target_missing`）；`read:memory` ≈ GET /v1/memory/resident
+/// （会话无记忆文件时返回空 content 的 200，不产生 404）。
 async fn exec_intent_read(
     state: &DaemonState,
     capability: &str,
@@ -571,11 +582,18 @@ async fn exec_intent_read(
             "params.character_id (string) is required for read capabilities",
         );
     };
-    let sid_str = envelope
-        .params
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    // session_id 可选；提供时必须是字符串（非字符串 → 400，与 character_id
+    // 的严格校验一致，不静默忽略类型错误）。
+    let sid_str = match envelope.params.get("session_id") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => {
+            return error_body(
+                "intent_bad_params",
+                "params.session_id (string) is optional for read capabilities",
+            );
+        }
+        None => None,
+    };
     let data_root = state.data_root.clone();
     let cid_owned = cid_str.to_string();
     let capability_owned = capability.to_string();
@@ -584,11 +602,8 @@ async fn exec_intent_read(
         match capability_owned.as_str() {
             "read:memory" => {
                 let sid = sid_str.as_deref().map(SessionId::parse).transpose()?;
-                let session_dir = crate::data_dir::resolve_session_dir(
-                    &data_root,
-                    cid.as_str(),
-                    sid.as_ref(),
-                )?;
+                let session_dir =
+                    crate::data_dir::resolve_session_dir(&data_root, cid.as_str(), sid.as_ref())?;
                 let content = crate::memory::read_resident_memory(&session_dir)?;
                 Ok(json!({
                     "content": content,
@@ -597,15 +612,13 @@ async fn exec_intent_read(
                 }))
             }
             "read:state" => {
-                let live = crate::data_dir::char_state_dir(&data_root, cid.as_str())
-                    .join("live.json");
+                let live =
+                    crate::data_dir::char_state_dir(&data_root, cid.as_str()).join("live.json");
                 match std::fs::read_to_string(&live) {
                     Ok(text) => serde_json::from_str(&text).map_err(AirpError::from),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        Err(AirpError::NotFound(format!(
-                            "state for character {cid} not found"
-                        )))
-                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(AirpError::NotFound(
+                        format!("state for character {cid} not found"),
+                    )),
                     Err(e) => Err(AirpError::from(e)),
                 }
             }
@@ -653,11 +666,13 @@ fn intent_read_error(error: AirpError) -> Response {
             .into_response(),
         AirpError::BadRequest(msg) => error_body("intent_bad_params", msg),
         other => {
+            // 脱敏合同（error.rs public_message）：500 细节只进 tracing，
+            // 响应体不携带内部/IO 路径细节。
             tracing::error!(%other, "widget intent executor failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
-                    "error": { "code": "intent_executor_error", "message": other.to_string() }
+                    "error": { "code": "intent_executor_error", "message": "internal error" }
                 })),
             )
                 .into_response()
