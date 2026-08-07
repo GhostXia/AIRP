@@ -107,9 +107,13 @@ pub struct DaemonState {
     pub plugins: std::sync::RwLock<Vec<crate::plugins::TrustedPluginManifest>>,
     /// #498 §6.3：trusted plugin 子进程句柄（spawn 成功才入表；
     /// daemon 退出时 `crate::plugins::spawn::terminate_all` 统一终止）。
-    pub plugin_children: tokio::sync::Mutex<
-        std::collections::HashMap<String, tokio::process::Child>,
+    /// Arc 包裹供崩溃监控任务共享（审计 W4）。
+    pub plugin_children: std::sync::Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, tokio::process::Child>>,
     >,
+    /// #498 §6.4：shutdown 广播（graceful shutdown 时置 true）。SSE 流式
+    /// 反代监听此通道提前断开，防止在飞长连接阻塞 daemon 退出（审计 W1）。
+    pub shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl DaemonState {
@@ -801,10 +805,7 @@ pub fn create_router_with_conversation_policy_registry(
         )
         // #498 §7.3：已安装 trusted plugin 列表（webui 加载 widget 时对照
         // manifest.trusted_plugins 软依赖做降级提示）。
-        .route(
-            "/v1/plugins",
-            get(crate::plugins::proxy::list_plugins),
-        )
+        .route("/v1/plugins", get(crate::plugins::proxy::list_plugins))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

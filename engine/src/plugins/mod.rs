@@ -51,13 +51,34 @@ pub fn validate_manifest(m: &TrustedPluginManifest) -> Result<(), String> {
         ));
     }
     if m.version.is_empty() || m.version.len() > 64 {
-        return Err(format!("plugin version must be 1..=64 chars: {:?}", m.version));
+        return Err(format!(
+            "plugin version must be 1..=64 chars: {:?}",
+            m.version
+        ));
     }
     if m.command.is_empty() {
         return Err(format!("plugin {} command must not be empty", m.id));
     }
     if m.port == 0 {
         return Err(format!("plugin {} port must be 1..=65535", m.id));
+    }
+    // Windows 设备保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）不能作为目录名，
+    // 跨平台一律拒绝（审计 S4：manifest 声明期拦截，避免 Windows 上
+    // spawn 阶段才暴露）。id 取首段（`ns.name` 形态的 `ns` 段）。
+    if let Some(stem) = m.id.split('.').next() {
+        let upper = stem.to_ascii_uppercase();
+        let com_lpt = ["COM", "LPT"].iter().any(|p| {
+            upper.starts_with(p)
+                && upper[p.len()..]
+                    .parse::<u8>()
+                    .is_ok_and(|n| (1..=9).contains(&n))
+        });
+        if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") || com_lpt {
+            return Err(format!(
+                "plugin id uses a reserved Windows device name: {:?}",
+                m.id
+            ));
+        }
     }
     // host_api major 钉死（前向兼容铁律，与 widget 安装面同一校验）。
     let declared = crate::extensions::parse_host_api_major(Some(&m.host_api))
@@ -121,8 +142,9 @@ pub fn resolve_args(m: &TrustedPluginManifest) -> Vec<String> {
 
 /// 扫描 `data/plugins/manifests/*.json` 加载全部合法 manifest。
 ///
-/// 单个文件坏 JSON / 校验失败 / id 重复 → warn 并跳过，不阻塞其余插件
-/// （与 §6.5「端口冲突在 spawn 时暴露」同哲学：一个坏声明不拖垮整层）。
+/// 单个文件坏 JSON / 校验失败 → warn 并跳过，不阻塞其余插件；id 重复或
+/// 端口重复时保 id 排序靠前者（与 §6.5「端口冲突在 spawn 时暴露」同哲学：
+/// 一个坏声明不拖垮整层）。返回按 id 排序的稳定列表。
 pub fn load_manifests(data_root: &Path) -> Vec<TrustedPluginManifest> {
     let manifests_dir = data_root.join("plugins").join("manifests");
     let entries = match std::fs::read_dir(&manifests_dir) {
@@ -153,16 +175,24 @@ pub fn load_manifests(data_root: &Path) -> Vec<TrustedPluginManifest> {
             tracing::warn!(path = %path.display(), %e, "trusted plugin manifest rejected");
             continue;
         }
-        if out.iter().any(|m| m.id == manifest.id) {
+        out.push(manifest);
+    }
+    // 去重确定性（审计 S6/W6）：read_dir 顺序不定，先按 id 排序再统一去重
+    // （id 与端口均保序靠前者），保证相同输入产生相同加载结果。
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut unique: Vec<TrustedPluginManifest> = Vec::new();
+    for m in out {
+        if unique.iter().any(|u| u.id == m.id || u.port == m.port) {
             tracing::warn!(
-                id = %manifest.id,
-                "duplicate trusted plugin id, keeping first manifest"
+                id = %m.id,
+                port = m.port,
+                "duplicate trusted plugin id or port, keeping first manifest"
             );
             continue;
         }
-        out.push(manifest);
+        unique.push(m);
     }
-    out
+    unique
 }
 
 #[cfg(test)]
@@ -179,16 +209,15 @@ mod tests {
 
     fn sample(id: &str) -> String {
         format!(
-            r#"{{"id": "{id}", "version": "1.0.0", "command": "./server", "args": ["--port", "${{AIRP_PLUGIN_PORT}}"], "port": 8765, "host_api": "1"}}"#
+            r#"{{"id": "{id}", "version": "1.0.0", "command": "./server", "args": ["--port", "${{AIRP_PLUGIN_PORT}}"], "port": 8899, "host_api": "1"}}"#
         )
     }
 
     #[test]
     fn parse_manifest_ok() {
-        let m: TrustedPluginManifest =
-            serde_json::from_str(&sample("com.example.tts")).unwrap();
+        let m: TrustedPluginManifest = serde_json::from_str(&sample("com.example.tts")).unwrap();
         assert_eq!(m.id, "com.example.tts");
-        assert_eq!(m.port, 8765);
+        assert_eq!(m.port, 8899);
         assert_eq!(m.args, vec!["--port", "${AIRP_PLUGIN_PORT}"]);
     }
 
@@ -234,8 +263,7 @@ mod tests {
         let data_root = tmp.path();
         let plugin_dir = data_root.join("plugins").join("com.example.tts");
         std::fs::create_dir_all(&plugin_dir).unwrap();
-        let m: TrustedPluginManifest =
-            serde_json::from_str(&sample("com.example.tts")).unwrap();
+        let m: TrustedPluginManifest = serde_json::from_str(&sample("com.example.tts")).unwrap();
 
         // 未建目录 → 拒绝
         let missing = TrustedPluginManifest {
@@ -247,11 +275,19 @@ mod tests {
         // 目录内文件 → 通过（canonicalize 后比较，Windows 下有 \\?\ 前缀）
         let exe = plugin_dir.join("server");
         std::fs::write(&exe, "#!/bin/sh\n").unwrap();
-        assert_eq!(resolve_command(data_root, &m).unwrap(), exe.canonicalize().unwrap());
+        assert_eq!(
+            resolve_command(data_root, &m).unwrap(),
+            exe.canonicalize().unwrap()
+        );
 
         // 绝对路径 escape → 拒绝
         let abs = TrustedPluginManifest {
-            command: plugin_dir.join("..").join("..").join("evil.sh").to_string_lossy().into_owned(),
+            command: plugin_dir
+                .join("..")
+                .join("..")
+                .join("evil.sh")
+                .to_string_lossy()
+                .into_owned(),
             ..m.clone()
         };
         assert!(resolve_command(data_root, &abs).is_err());
@@ -259,11 +295,10 @@ mod tests {
 
     #[test]
     fn resolve_args_replaces_port_placeholder() {
-        let m: TrustedPluginManifest =
-            serde_json::from_str(&sample("com.example.tts")).unwrap();
+        let m: TrustedPluginManifest = serde_json::from_str(&sample("com.example.tts")).unwrap();
         assert_eq!(
             resolve_args(&m),
-            vec!["--port".to_string(), "8765".to_string()]
+            vec!["--port".to_string(), "8899".to_string()]
         );
         // 无占位符保持原样
         let plain = TrustedPluginManifest {
@@ -283,10 +318,61 @@ mod tests {
         write_manifest(data_root, "good", &sample("com.example.good"));
         write_manifest(data_root, "bad", "{ not json");
         write_manifest(data_root, "dup1", &sample("com.example.good"));
-        write_manifest(data_root, "cross-major", r#"{"id": "com.example.x", "version": "1", "command": "./x", "port": 1, "host_api": "9"}"#);
+        write_manifest(
+            data_root,
+            "cross-major",
+            r#"{"id": "com.example.x", "version": "1", "command": "./x", "port": 1, "host_api": "9"}"#,
+        );
+        write_manifest(
+            data_root,
+            "port-dup",
+            r#"{"id": "com.example.portdup", "version": "1", "command": "./x", "port": 8899, "host_api": "1"}"#,
+        );
 
         let loaded = load_manifests(data_root);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, "com.example.good");
+    }
+
+    #[test]
+    fn load_manifests_sorts_by_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_root = tmp.path();
+        // 端口必须互不相同（端口唯一去重后只保留排序靠前者）。
+        write_manifest(
+            data_root,
+            "b",
+            &sample("com.example.b").replace("\"port\": 8899", "\"port\": 8902"),
+        );
+        write_manifest(data_root, "a", &sample("com.example.a"));
+        write_manifest(
+            data_root,
+            "c",
+            &sample("com.example.c").replace("\"port\": 8899", "\"port\": 8903"),
+        );
+
+        let loaded = load_manifests(data_root);
+        let ids: Vec<_> = loaded.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["com.example.a", "com.example.b", "com.example.c"]);
+    }
+
+    #[test]
+    fn validate_rejects_windows_reserved_names() {
+        for reserved in ["CON", "NUL", "COM1", "LPT9", "con.foo"] {
+            let m: TrustedPluginManifest = serde_json::from_str(&format!(
+                r#"{{"id": "{reserved}", "version": "1", "command": "./x", "port": 1, "host_api": "1"}}"#
+            ))
+            .unwrap();
+            assert!(
+                validate_manifest(&m).is_err(),
+                "{reserved} must be rejected"
+            );
+        }
+        // 普通名字不误伤
+        let ok: TrustedPluginManifest = serde_json::from_str(
+            r#"{"id": "com.example.ok", "version": "1", "command": "./x", "port": 1, "host_api": "1"}"#,
+        )
+        .unwrap();
+        assert!(validate_manifest(&ok).is_ok());
     }
 }

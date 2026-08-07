@@ -29,7 +29,7 @@ data/plugins/
   "version": "1.0.0",
   "command": "./tts-server",
   "args": ["--port", "${AIRP_PLUGIN_PORT}"],
-  "port": 8765,
+  "port": 8899,
   "host_api": "1"
 }
 ```
@@ -43,17 +43,24 @@ data/plugins/
 | `port` | ✅ | 插件**自己监听**的 loopback 端口，engine 不分配 |
 | `host_api` | ✅ | 纯 semver，major 钉死（与 widget 同一校验；engine 当前 major = 1） |
 
+> 示例端口 8899：8765 是 engine 默认 `daemon_port`，manifest 声明与其冲突
+> 会在启动时被过滤（见 §3 端口冲突）。
+
 ## 3. 生命周期
 
 - **启动**：daemon 启动时逐个 spawn。env 注入 `AIRP_PLUGIN_PORT` /
-  `AIRP_DATA_ROOT` / `AIRP_PLUGIN_ID`；**不 env_clear**（trusted plugin
-  允许读自己的环境，区别于 plugin_tool 的零信任脚本）。stdout/stderr
-  继承 daemon 终端（日志直接可见）。**子进程 cwd = 插件目录**，args 里的
-  相对路径（如 `server.js`）以插件目录为基准。
-- **端口冲突**：两个插件声明同一 `port` → 第二个 spawn 时子进程启动失败 →
-  daemon 记 warn 日志。engine 不做事前端口注册表（冲突在 spawn 时暴露）。
-- **崩溃**：子进程退出 → daemon 记录日志，**不自动重启**。
-- **退出**：Ctrl+C / SIGTERM → daemon 先终止全部插件（Unix：SIGTERM →
+  `AIRP_DATA_ROOT` / `AIRP_PLUGIN_ID`；子进程环境 **env_clear + 白名单**
+  （`PATH`；Windows 额外保留 `SYSTEMROOT` / `TEMP` / `TMP`），宿主其它
+  环境变量不泄漏（审计 A4）——`AIRP_*` 由 engine 统一注入，插件不读宿主
+  配置。stdout/stderr 继承 daemon 终端（日志直接可见）。**子进程 cwd =
+  插件目录**，args 里的相对路径（如 `server.js`）以插件目录为基准。
+- **端口冲突**：加载时统一校验——manifest 间 `port` 重复（保留排序靠前
+  者，其余 warn 跳过）、与 engine `daemon_port` 冲突（spawn 前过滤）都
+  在启动时显式暴露（审计 W6），不再等到子进程 bind 失败后排查。
+- **崩溃**：崩溃监控（审计 W4）每 500ms 轮询子进程状态，退出即从
+  `/v1/plugins` 状态表移除并 warn 留痕，**不自动重启**。
+- **退出**：Ctrl+C / SIGTERM → 先广播 shutdown（在飞 SSE 长连接立即断开，
+  防止阻塞优雅退出；审计 W1）→ **并发终止**全部插件（Unix：SIGTERM →
   等 5s → SIGKILL；Windows 直接强杀）再退出。
 
 ## 4. HTTP 面
@@ -65,10 +72,23 @@ data/plugins/
 
 - **挂在鉴权层外**：widget iframe 沙箱没有 daemon token；且不限制 caller——
   loopback 上任何进程都能调（trusted plugin 之间也能互调）。
+- **loopback-only**（审计 W7）：反代校验 peer 地址，非 loopback 请求直接
+  `403 plugin_remote_forbidden`——`--host 0.0.0.0` 部署时远程请求不能直达
+  插件。
+- **编码保留**（审计 W5）：从原始 URI path 切出 wildcard 段（axum 的
+  `RawPathParams` 与 `Path` 都会 percent-decode，`%2F` 解码后不可逆），
+  已有 `%XX` 转义与 RFC 3986 字符原样透传，仅补码裸空格 / `#` / 非 ASCII
+  字节，保证浏览器与裸 curl 语义一致。
+- **SSE 流式透传**（审计 W1/W2）：`text/event-stream` 响应分块转发、不
+  整体缓冲（心跳周期可超过 30s 超时）；daemon 退出时 shutdown 广播让在飞
+  SSE 立即 EOF，不阻塞优雅退出。
+- **响应体上限**（CodeRabbit）：非流式响应累计 2MB，`Content-Length` 预检
+  超限直接拒绝（`502 plugin_response_too_large`）；SSE 流式不在此限。
 - **不透传** daemon 的 `Authorization` / `Cookie` / `Origin` 头（daemon 凭据
-  不泄漏给插件）。
+  不泄漏给插件）；日志与错误响应脱敏，不记录目标 URL / query / 传输细节。
 - 错误映射：未知 id → `404 plugin_not_found`；请求体读取失败 → `400
-  plugin_bad_request`；插件未起/已崩/超时 → `502 plugin_unreachable`。
+  plugin_bad_request`；插件未起/已崩/超时 → `502 plugin_unreachable`；
+  响应超限 → `502 plugin_response_too_large`。
 - 请求体受 axum 默认 2MB 上限约束。
 
 ### 4.2 列表：`GET /v1/plugins`（鉴权层内，webui 查询用）
@@ -85,9 +105,13 @@ data/plugins/
 ## 5. 安全边界
 
 - **目录限定**：`command` 必须解析到 `data/plugins/<id>/` 内（canonical
-  校验 + 必须是文件）。
+  校验 + 必须是文件）；id 拒绝路径分隔符与 Windows 保留名（`CON` / `PRN` /
+  `AUX` / `NUL` / `COM1-9` / `LPT1-9`）。
 - **loopback 拓扑**：插件端口与 daemon 同机；engine 只转发到
-  `127.0.0.1:<port>`。
+  `127.0.0.1:<port>`，且反代强制校验 peer 为 loopback（`--host 0.0.0.0`
+  时远程请求 403）。
+- **环境隔离**：子进程 `env_clear` + 白名单（`PATH`，Windows 另含
+  `SYSTEMROOT` / `TEMP` / `TMP`），宿主环境不泄漏；`AIRP_*` 由 engine 注入。
 - **信任模型**：engine **不**替 trusted plugin 做安全策略——插件应自行校验
   请求来源（Origin）、要求 auth token、校验 body schema。
 - **不做**（见 #498 §8）：自动重启、plugin 间通信保证（顺序/依赖图/健康检查）、
