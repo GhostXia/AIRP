@@ -18,13 +18,14 @@
 //! import 属 CORS 请求，需要 ACAO:*，由 local_webui_security_headers 统一附）。
 //! 服务时按记录中的文件摘要复检内容（防篡改），摘要不符即 500 拒绝投放。
 //!
-//! intent 执行面（C-P3 逐调用强制）：
+//! intent 执行面（C-P3 逐调用强制 + C-P4.1 read 执行器）：
 //! - 合同形状见 `protocol/widget-intents.json`（机器可读唯一事实源）；
 //! - envelope `capability` 字段缺省 → 视为无需授权的 intent，放行 200；
 //! - envelope `capability` 存在 → engine 逐调用强制：
 //!   1. 按 `widget_type` 找已启用扩展记录（未安装/停用 → 403 `intent_denied`）；
 //!   2. 校验 `capability ∈ record.granted_capabilities`（未授权 → 403 `intent_denied`）；
-//!   3. 授权通过 → 200 echo（C-P3 无执行器，授权通过即视为 intent 被接受并留痕）。
+//!   3. 授权通过 → C-P4.1 read 三件套（read:memory/read:state/read:worldbook）派发真实
+//!      执行器；其余 capability 保持 200 echo（C-P3 兼容，执行器 C-P4.2 再补）。
 //! - 授权决策（grant/revoke/intent allow/deny）全部 tracing::info! 留痕（审计日志）。
 
 use std::sync::Arc;
@@ -38,6 +39,9 @@ use serde_json::{json, Value};
 
 use super::{sha256_hex, ExtensionStore, DEFAULT_SLOT_IDS, HOST_API_MAJOR, KNOWN_CAPABILITIES};
 use crate::daemon::DaemonState;
+use crate::domain::LorebookService;
+use crate::error::AirpError;
+use crate::types::{CharacterId, SessionId};
 
 /// 内置默认 catalog（webui 无 engine / engine 无安装扩展时的权威默认计划，
 /// 与 webui/assets/widgets/slots.json 内容一致，source 用绝对路径形态）。
@@ -432,7 +436,8 @@ pub struct WidgetIntentEnvelope {
 /// 3. `capability` 存在 → 按 `widget_type` 找已启用扩展记录：
 ///    - 未安装/停用 → 403 `intent_denied`；
 ///    - `capability ∉ granted_capabilities` → 403 `intent_denied`（越权/未授权）；
-///    - 授权通过 → 200 echo（C-P3 无执行器，授权通过即视为 intent 被接受并留痕）。
+///    - 授权通过 → C-P4.1 read 三件套派发真实执行器；其余 capability 保持
+///      200 echo（C-P3 兼容，执行器 C-P4.2 再补，YAGNI）。
 ///
 /// 审计日志：每次决策（allow/deny）均 tracing::info! 留痕（intent/widget_type/
 /// instance_id/capability/extension_id），供运维与未来授权审计面消费。
@@ -513,15 +518,23 @@ pub async fn widget_intent(
             .into_response();
     }
 
-    // 授权通过：C-P3 无执行器，授权通过即视为 intent 被接受并留痕。
-    // C-P4 接入真实执行器时，此分支改为派发到 executor 并返回执行结果。
+    // 授权通过 → C-P4.1 派发真实执行器（read 三件套）。未实现执行器的
+    // capability（write:*/call:tool）保持 C-P3 echo 语义（C-P4.2，YAGNI）。
+    match capability {
+        "read:memory" | "read:state" | "read:worldbook" => {
+            return exec_intent_read(&state, capability, &envelope).await;
+        }
+        _ => {}
+    }
+
+    // C-P3 兼容：授权通过即视为 intent 被接受并留痕。
     tracing::info!(
         intent = %envelope.name,
         widget_type = %envelope.widget_type,
         instance_id = %envelope.instance_id,
         capability = %capability,
         extension_id = %record.id,
-        "widget intent allowed (capability granted; C-P3 has no executor)"
+        "widget intent allowed (capability granted; executor not implemented for this capability)"
     );
     (
         StatusCode::OK,
@@ -534,6 +547,122 @@ pub async fn widget_intent(
         })),
     )
         .into_response()
+}
+
+/// C-P4.1 执行器（read 三件套）：从 envelope.params 取参，在 `spawn_blocking`
+/// 中执行同步文件 IO（#433：不占用 tokio worker），结果映射回 intent 合同。
+///
+/// 语义与既有 handler 一致：`read:memory` ≈ GET /v1/memory/resident、
+/// `read:state` ≈ GET /v1/characters/:id/state、`read:worldbook` ≈
+/// GET /v1/characters/:id/lorebook（目标不存在 → 404 `intent_target_missing`）。
+async fn exec_intent_read(
+    state: &DaemonState,
+    capability: &str,
+    envelope: &WidgetIntentEnvelope,
+) -> Response {
+    let Some(cid_str) = envelope
+        .params
+        .get("character_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    else {
+        return error_body(
+            "intent_bad_params",
+            "params.character_id (string) is required for read capabilities",
+        );
+    };
+    let sid_str = envelope
+        .params
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let data_root = state.data_root.clone();
+    let cid_owned = cid_str.to_string();
+    let capability_owned = capability.to_string();
+    let loaded = tokio::task::spawn_blocking(move || -> Result<Value, AirpError> {
+        let cid = CharacterId::new(&cid_owned)?;
+        match capability_owned.as_str() {
+            "read:memory" => {
+                let sid = sid_str.as_deref().map(SessionId::parse).transpose()?;
+                let session_dir = crate::data_dir::resolve_session_dir(
+                    &data_root,
+                    cid.as_str(),
+                    sid.as_ref(),
+                )?;
+                let content = crate::memory::read_resident_memory(&session_dir)?;
+                Ok(json!({
+                    "content": content,
+                    "char_count": content.chars().count(),
+                    "capacity": crate::memory::ResidentMemoryConfig::default().capacity_chars,
+                }))
+            }
+            "read:state" => {
+                let live = crate::data_dir::char_state_dir(&data_root, cid.as_str())
+                    .join("live.json");
+                match std::fs::read_to_string(&live) {
+                    Ok(text) => serde_json::from_str(&text).map_err(AirpError::from),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        Err(AirpError::NotFound(format!(
+                            "state for character {cid} not found"
+                        )))
+                    }
+                    Err(e) => Err(AirpError::from(e)),
+                }
+            }
+            "read:worldbook" => LorebookService::new(&data_root)
+                .read(&cid)
+                .and_then(|l| serde_json::to_value(l).map_err(AirpError::from)),
+            // 调用面已按 capability 白名单过滤，此处仅防御。
+            other => Err(AirpError::BadRequest(format!(
+                "capability {other} has no read executor"
+            ))),
+        }
+    })
+    .await;
+
+    match loaded {
+        Ok(Ok(result)) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "name": envelope.name,
+                "widget_type": envelope.widget_type,
+                "instance_id": envelope.instance_id,
+                "capability": capability,
+                "result": result,
+            })),
+        )
+            .into_response(),
+        Ok(Err(error)) => intent_read_error(error),
+        Err(error) => {
+            tracing::error!(%error, "widget intent read executor join failed");
+            intent_read_error(AirpError::Internal(format!(
+                "intent read task join failed: {error}"
+            )))
+        }
+    }
+}
+
+/// 执行器错误 → intent 合同错误码（404 目标缺失 / 400 参数非法 / 500 其余）。
+fn intent_read_error(error: AirpError) -> Response {
+    match error {
+        AirpError::NotFound(msg) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": { "code": "intent_target_missing", "message": msg } })),
+        )
+            .into_response(),
+        AirpError::BadRequest(msg) => error_body("intent_bad_params", msg),
+        other => {
+            tracing::error!(%other, "widget intent executor failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": { "code": "intent_executor_error", "message": other.to_string() }
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// `GET /extensions/:digest/*file`：digest-pinned 静态包服务（鉴权层外）。
