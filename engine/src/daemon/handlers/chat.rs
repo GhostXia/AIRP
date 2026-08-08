@@ -249,7 +249,6 @@ pub(in crate::daemon) async fn continue_chat(
         let cfg = state.read_config();
         cfg.quota.clone()
     };
-    crate::quota::check_and_increment(&effective_root, &quota_config)?;
 
     let payload = ChatCompletionRequest {
         character_id: Some(req.character_id),
