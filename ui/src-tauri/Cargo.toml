@@ -1,6 +1,7 @@
 [package]
 name = "airp-ui"
 version.workspace = true
+rust-version = "1.89"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

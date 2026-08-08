@@ -464,23 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_lock_serializes_concurrent_claims() {
-        let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(LOCK_FILE_NAME);
-
-        let first = acquire_lock(&path).unwrap();
-        let second = acquire_lock(&path).expect_err("a second shell must not claim the lock");
-        assert_eq!(second.kind(), io::ErrorKind::WouldBlock);
-
-        drop(first);
-        let reclaimed = acquire_lock(&path).expect("lock is reclaimable after owner exits");
-        drop(reclaimed);
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn lock_blocks_real_child_process() {
+    fn startup_lock_serializes_concurrent_process_claims() {
         let path = std::env::var_os("AIRP_LIFECYCLE_CHILD_LOCK_PATH").map(std::path::PathBuf::from);
         if let Some(path) = path {
             let ready = std::env::var_os("AIRP_LIFECYCLE_CHILD_READY")
@@ -505,7 +489,7 @@ mod tests {
         let path = dir.join(LOCK_FILE_NAME);
         let ready = dir.join("child.ready");
         let release = dir.join("child.release");
-        let test_name = "lifecycle::tests::lock_blocks_real_child_process";
+        let test_name = "lifecycle::tests::startup_lock_serializes_concurrent_process_claims";
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test_name, "--nocapture"])
             .env("AIRP_LIFECYCLE_CHILD_LOCK_PATH", &path)

@@ -60,7 +60,6 @@ function Assert-LiveLockOwner {
             $enginePid = [int64]$record.engine_pid
             $port = [int64]$record.port
             $instanceId = [string]$record.instance_id
-            $null = [Guid]::Parse($instanceId)
             if ($shellPid -ne [int64]$ExpectedShellPid) {
                 throw "engine instance lock shell_pid $shellPid does not match UI PID $ExpectedShellPid"
             }
@@ -73,6 +72,7 @@ function Assert-LiveLockOwner {
             if ([string]::IsNullOrWhiteSpace($instanceId)) {
                 throw 'engine instance lock instance_id is empty'
             }
+            $null = [Guid]::Parse($instanceId)
             return
         }
         catch {
