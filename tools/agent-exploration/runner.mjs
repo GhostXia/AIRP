@@ -213,11 +213,15 @@ async function runTask(browser, mod, name) {
       // sseCall: 消费 SSE 流并返回 { content }。
       // 注意：引擎 SSE 流只发 content chunks 和 done 事件，**不发 message_id**。
       // 如需 message_id，调 sseCall 后再查 /v1/chat/history 取最后一条 assistant 消息的 message_id。
+      // #522 修复：data 帧合同见 protocol/sse-events.json——message data 为
+      // {type: "body_chunk"|"think_chunk"|..., text}，正文 = body_chunk 的 text 拼接。
+      // 与 sse-parse.mjs 的 parseSseContent 同一语义（evaluate 内无法 import 模块，
+      // 内联实现保持同步，修改任一处须同步另一处）。
       sseCall: (path, body) => page.evaluate(
         async ([origin, p, b]) => {
           const res = await fetch(origin + p, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
             body: JSON.stringify(b),
           });
           if (!res.ok) throw new Error(`SSE ${p} returned ${res.status}: ${await res.text()}`);
@@ -237,7 +241,9 @@ async function runTask(browser, mod, name) {
                 if (!data) continue;
                 try {
                   const parsed = JSON.parse(data);
-                  if (parsed.role === 'assistant') lastContent += parsed.content || '';
+                  if (parsed && parsed.type === 'body_chunk' && typeof parsed.text === 'string') {
+                    lastContent += parsed.text;
+                  }
                 } catch {}
               }
             }
