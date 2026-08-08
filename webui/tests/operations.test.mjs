@@ -164,6 +164,7 @@ test('widget boot degrades instead of failing hard (W4/W6)', () => {
 test('widget intent handler returns an observable promise via api-client (W5)', () => {
   assert.match(bootScript, /client\.request\('POST', '\/v1\/widget-intents', envelope\)/);
   assert.match(bootScript, /return traceIntent\(/);
+  assert.match(bootScript, /return resp\.json\(\)\.catch\(\(\) => null\)/, 'fallback must preserve optional engine result fields');
   assert.match(bootScript, /typeof AIRPDesktopSession === 'undefined'/);
   assert.match(bootScript, /renewDesktopSession\(\{ base: engineBase\(\) \}\)/);
   assert.match(bootScript, /notifyAuthFailure\(\{ source: 'widget-intent' \}\)/);
