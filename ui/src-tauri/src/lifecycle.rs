@@ -207,6 +207,9 @@ pub fn remove_lock(path: &Path) {
 /// this closes the read→remove race.  The inode is retained so a POSIX peer
 /// cannot unlink-and-recreate the path while the guard is held.
 pub fn remove_lock_if_owned(path: &Path, instance_id: &str) {
+    if !path.exists() {
+        return;
+    }
     let mut guard = match acquire_lock(path) {
         Ok(guard) => guard,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return,
@@ -508,6 +511,18 @@ mod tests {
         guard.clear().unwrap();
         assert!(guard.read_lock().is_none());
         drop(guard);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn removing_owned_lock_for_missing_path_is_a_noop() {
+        let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LOCK_FILE_NAME);
+
+        remove_lock_if_owned(&path, "missing");
+        assert!(!path.exists());
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
