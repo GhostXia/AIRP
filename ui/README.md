@@ -57,7 +57,7 @@ cargo test -p airp-ui
 
 ## Runtime Notes
 
-- Engine URL defaults to `http://127.0.0.1:8000`.
+- Engine URL defaults to `http://127.0.0.1:8765`.
 - Override with `AIRP_ENGINE_URL`.
 - Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested.
 - Character import is path-first: the UI sends only `card_path`; it must not put base64 card blobs into Vue state or widget props.
