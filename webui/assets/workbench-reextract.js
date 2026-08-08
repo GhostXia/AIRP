@@ -18,7 +18,7 @@
   }
 
   async function reextractCharacterResources(options) {
-    const confirmed = options.confirm(
+    const confirmed = await options.confirm(
       '将根据当前角色卡重新生成问候语和世界书附属文件，并覆盖现有提取结果。继续吗？'
     );
     if (!confirmed) {

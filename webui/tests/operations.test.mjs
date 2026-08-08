@@ -42,8 +42,8 @@ test('chat space offers a confirmed recovery action for recovering sessions', ()
   assert.match(chatScript, /coordinatorPhase !== 'recovering'/);
   assert.match(chatScript, /id = 'session-recover'|id: 'session-recover'|\.id = 'session-recover'/);
   assert.match(chatScript, /尝试恢复会话/);
-  // Confirmation before the mutating call, then the new endpoint.
-  assert.match(chatScript, /window\.confirm\(/);
+  // Shared confirmation UI before the mutating call, then the new endpoint.
+  assert.match(chatScript, /await AIRPConfirm\.confirm\(/);
   assert.match(chatScript, /client\.request\('POST', '\/v1\/chat\/session-recover'/);
   assert.match(chatScript, /character_id: characterId, session_id: sessionId/);
   // Success refreshes the coordinator state; failure stays actionable.
@@ -68,7 +68,7 @@ test('chat space styles the recovery button with design tokens only', () => {
 test('role list wires DELETE /v1/characters/:id with confirmation', () => {
   assert.match(roleScript, /deleteCharacter/);
   assert.match(roleScript, /client\.request\('DELETE', '\/v1\/characters\/' \+ encodeURIComponent\(id\)\)/);
-  assert.match(roleScript, /window\.confirm\(/);
+  assert.match(roleScript, /await AIRPConfirm\.confirm\(/);
   assert.match(roleScript, /此操作不可撤销/);
 });
 
@@ -85,6 +85,7 @@ test('chat space wires DELETE /v1/sessions/:char/:session with confirmation', ()
   assert.match(chatScript, /deleteSession/);
   assert.match(chatScript, /client\.request\('DELETE', '\/v1\/sessions\/' \+ encodeURIComponent\(characterId\) \+ '\/' \+ encodeURIComponent\(id\)\)/);
   assert.match(chatScript, /全部消息将不可恢复/);
+  assert.match(chatScript, /await AIRPConfirm\.confirm\(/);
 });
 
 test('chat space renders a per-session delete button', () => {
