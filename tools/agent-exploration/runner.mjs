@@ -20,6 +20,7 @@ import { buildLaunchArgs } from './tls-args.mjs';
 import { lintScript } from './script-lint.mjs';
 import { validateScript } from './script-validation.mjs';
 import { sanitizeDomSnapshot } from './dom-privacy.mjs';
+import { parseSseContent } from './sse-parse.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const ORIGIN = args.origin || process.env.AIRP_SMOKE_ORIGIN || 'http://127.0.0.1:8765';
@@ -213,45 +214,24 @@ async function runTask(browser, mod, name) {
       // sseCall: 消费 SSE 流并返回 { content }。
       // 注意：引擎 SSE 流只发 content chunks 和 done 事件，**不发 message_id**。
       // 如需 message_id，调 sseCall 后再查 /v1/chat/history 取最后一条 assistant 消息的 message_id。
-      // #522 修复：data 帧合同见 protocol/sse-events.json——message data 为
-      // {type: "body_chunk"|"think_chunk"|..., text}，正文 = body_chunk 的 text 拼接。
-      // 与 sse-parse.mjs 的 parseSseContent 同一语义（evaluate 内无法 import 模块，
-      // 内联实现保持同步，修改任一处须同步另一处）。
-      sseCall: (path, body) => page.evaluate(
-        async ([origin, p, b]) => {
-          const res = await fetch(origin + p, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-            body: JSON.stringify(b),
-          });
-          if (!res.ok) throw new Error(`SSE ${p} returned ${res.status}: ${await res.text()}`);
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-          let lastContent = '';
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            for (const line of lines) {
-              if (line.startsWith('data:')) {
-                const data = line.slice(5).trim();
-                if (!data) continue;
-                try {
-                  const parsed = JSON.parse(data);
-                  if (parsed && parsed.type === 'body_chunk' && typeof parsed.text === 'string') {
-                    lastContent += parsed.text;
-                  }
-                } catch {}
-              }
-            }
-          }
-          return { content: lastContent };
-        },
-        [ORIGIN, path, body]
-      ),
+      // #522/#532：data 帧合同见 protocol/sse-events.json。浏览器上下文只负责
+      // 取得原始 SSE 文本；合同解析、typed error fail-closed 与 EOF 残余处理统一
+      // 由 sse-parse.mjs 的 parseSseContent 实现。
+      sseCall: async (path, body) => {
+        const sseText = await page.evaluate(
+          async ([origin, p, b]) => {
+            const res = await fetch(origin + p, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+              body: JSON.stringify(b),
+            });
+            if (!res.ok) throw new Error(`SSE ${p} returned ${res.status}: ${await res.text()}`);
+            return await res.text();
+          },
+          [ORIGIN, path, body],
+        );
+        return { content: parseSseContent(sseText) };
+      },
     };
     const scriptPath = await generateAndRunScript(mod, ctx, taskDir);
     result.evidence.script = scriptPath;
