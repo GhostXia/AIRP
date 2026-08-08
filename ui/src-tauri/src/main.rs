@@ -23,6 +23,7 @@ mod lifecycle;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use tauri::async_runtime::JoinHandle;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -40,14 +41,125 @@ struct SidecarSettings {
     daemon_port: Option<u16>,
 }
 
-/// 壳自启 sidecar 的句柄、本实例标识与数据根目录。
-/// instance_id 用于退出清理时只删除归属本实例的锁文件；
-/// data_root 供 RunEvent::Exit 复用 setup 期解析结果（便携包体模式下
-/// 不等于 %APPDATA%，退出清理必须使用同一路径才能删对锁）。
+/// 一对一的已发布 sidecar 句柄与归属标识。
+///
+/// 发布和接管必须成对发生，避免 child 与 instance_id 暴露半发布状态。
+struct PublishedSidecar<C> {
+    child: Option<C>,
+    instance_id: Option<String>,
+}
+
+impl<C> Default for PublishedSidecar<C> {
+    fn default() -> Self {
+        Self {
+            child: None,
+            instance_id: None,
+        }
+    }
+}
+
+impl<C> PublishedSidecar<C> {
+    fn publish(&mut self, child: C, instance_id: String) {
+        self.child = Some(child);
+        self.instance_id = Some(instance_id);
+    }
+
+    fn take(&mut self) -> (Option<C>, Option<String>) {
+        (self.child.take(), self.instance_id.take())
+    }
+}
+
+/// 壳自启 sidecar 的生命周期状态。
+///
+/// `published`、shutdown flags 和启动任务必须由同一把锁协调：退出请求
+/// 要么先把启动任务标为停止并等待它完成，要么在它完成发布后再接管句柄；
+/// 不能让两个独立 Mutex 暴露出半发布状态。
+struct SidecarState<C> {
+    shutting_down: bool,
+    shutdown_complete: bool,
+    published: PublishedSidecar<C>,
+    startup: Option<JoinHandle<()>>,
+}
+
+impl<C> Default for SidecarState<C> {
+    fn default() -> Self {
+        Self {
+            shutting_down: false,
+            shutdown_complete: false,
+            published: PublishedSidecar::default(),
+            startup: None,
+        }
+    }
+}
+
+impl<C> SidecarState<C> {
+    fn can_spawn(&self) -> bool {
+        !self.shutting_down && !self.shutdown_complete
+    }
+
+    fn request_shutdown(&mut self) -> ExitRequest {
+        if self.shutdown_complete {
+            ExitRequest::Allow
+        } else if self.shutting_down {
+            ExitRequest::Prevent
+        } else {
+            self.shutting_down = true;
+            ExitRequest::Start(self.startup.take())
+        }
+    }
+
+    fn publish(&mut self, child: C, instance_id: String) {
+        self.published.publish(child, instance_id);
+    }
+
+    fn take_published(&mut self) -> (Option<C>, Option<String>) {
+        self.published.take()
+    }
+}
+
+enum SpawnTransaction<T, E> {
+    Rejected,
+    Published(T),
+    Failed(E),
+}
+
+/// Execute the sidecar spawn/publish transaction under one state lock.
+///
+/// The action owns all work between the can-spawn check and publication.  A
+/// caller cannot observe a successful child before its owner id is published,
+/// nor can an exit request acquire the state lock between those operations.
+fn run_spawn_transaction<C, T, E, F>(
+    state: &Mutex<SidecarState<C>>,
+    action: F,
+) -> SpawnTransaction<T, E>
+where
+    F: FnOnce() -> Result<(C, String, T), E>,
+{
+    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+    if !state.can_spawn() {
+        return SpawnTransaction::Rejected;
+    }
+    match action() {
+        Ok((child, instance_id, value)) => {
+            state.publish(child, instance_id);
+            SpawnTransaction::Published(value)
+        }
+        Err(error) => SpawnTransaction::Failed(error),
+    }
+}
+
+enum ExitRequest {
+    Allow,
+    Prevent,
+    Start(Option<JoinHandle<()>>),
+}
+
+/// 壳自启 sidecar 的状态与数据根目录。
+/// data_root 供退出清理复用 setup 期解析结果（便携包体模式下不等于
+/// %APPDATA%，退出清理必须使用同一路径才能清对 owner 记录）。
 #[derive(Default)]
 struct EngineSidecar {
-    child: Mutex<Option<CommandChild>>,
-    instance_id: Mutex<Option<String>>,
+    state: Mutex<SidecarState<CommandChild>>,
     data_root: Mutex<Option<PathBuf>>,
 }
 
@@ -122,46 +234,36 @@ fn main() {
                 webui_dir,
             };
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
+            let startup = tauri::async_runtime::spawn(async move {
                 run_startup_sequence(handle, context).await;
             });
+            app.state::<EngineSidecar>()
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .startup = Some(startup);
 
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building AIRP UI")
         .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
-                let sidecar = app.state::<EngineSidecar>();
-                let child = sidecar
-                    .child
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                let request = app
+                    .state::<EngineSidecar>()
+                    .state
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
-                    .take();
-                if let Some(child) = child {
-                    let pid = child.pid();
-                    match child.kill() {
-                        Ok(()) => tracing::info!(pid, "engine sidecar stopped with UI"),
-                        Err(error) => tracing::warn!(pid, %error, "failed to stop engine sidecar"),
-                    }
-                }
-                // 退出清理：只删除归属本实例的锁（防误删并发实例的锁）。
-                let instance_id = sidecar
-                    .instance_id
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .clone();
-                if let Some(instance_id) = instance_id {
-                    let data_root = sidecar
-                        .data_root
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .clone();
-                    if let Some(data_root) = data_root {
-                        lifecycle::remove_lock_if_owned(
-                            &data_root.join(lifecycle::LOCK_FILE_NAME),
-                            &instance_id,
-                        );
+                    .request_shutdown();
+                match request {
+                    ExitRequest::Allow => {}
+                    ExitRequest::Prevent => api.prevent_exit(),
+                    ExitRequest::Start(startup) => {
+                        api.prevent_exit();
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            finish_shutdown(app, startup, code.unwrap_or(0)).await;
+                        });
                     }
                 }
             }
@@ -301,24 +403,150 @@ fn resolve_webui_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
 
+fn is_shutting_down(app: &tauri::AppHandle) -> bool {
+    app.state::<EngineSidecar>()
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .shutting_down
+}
+
+fn clear_owner_after_successful_stop(
+    lock_path: &Path,
+    instance_id: Option<String>,
+    kill_succeeded: bool,
+) {
+    if !kill_succeeded {
+        return;
+    }
+    if let Some(instance_id) = instance_id {
+        lifecycle::remove_lock_if_owned(lock_path, &instance_id);
+    }
+}
+
+/// 等待脱离 setup 的启动任务完成，再接管已发布的 child/id。
+///
+/// 退出请求先阻止事件循环；startup 任务在返回前会释放生命周期锁，
+/// 因此这里随后获取锁时不会遇到「启动任务仍持锁」的假失败。
+async fn finish_shutdown(app: tauri::AppHandle, startup: Option<JoinHandle<()>>, exit_code: i32) {
+    if let Some(startup) = startup {
+        if let Err(error) = startup.await {
+            tracing::warn!(%error, "engine startup task failed while shutting down");
+        }
+    }
+
+    let (child, instance_id) = {
+        let sidecar = app.state::<EngineSidecar>();
+        let mut state = sidecar
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.take_published()
+    };
+    let data_root = app
+        .state::<EngineSidecar>()
+        .data_root
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+
+    let killed = match child {
+        Some(child) => {
+            let pid = child.pid();
+            match child.kill() {
+                Ok(()) => {
+                    tracing::info!(pid, "engine sidecar stopped with UI");
+                    true
+                }
+                Err(error) => {
+                    // Keep the durable owner record.  A later startup can still
+                    // identify and retry this owned process instead of losing
+                    // the only recovery handle.
+                    tracing::warn!(pid, %error, "failed to stop engine sidecar; preserving owner record");
+                    false
+                }
+            }
+        }
+        None => true,
+    };
+
+    if let Some(data_root) = data_root {
+        clear_owner_after_successful_stop(
+            &data_root.join(lifecycle::LOCK_FILE_NAME),
+            instance_id,
+            killed,
+        );
+    }
+
+    app.state::<EngineSidecar>()
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .shutdown_complete = true;
+    app.exit(exit_code);
+}
+
 /// 捆绑 sidecar 启动序列：防进程残留三分支探测 → 按决策执行。
 ///
 /// 决策矩阵见 `lifecycle::decide_startup`；本函数负责 I/O 执行面：
-/// - `SpawnFresh`：清理陈旧锁 → 拉起 sidecar → 写新锁；
+/// - `SpawnFresh`：持有原子启动锁 → 拉起 sidecar → 写新锁；
 /// - `KillOwnedEngineThenSpawn`：杀自启残留 → 等端口释放 → 拉起 → 写锁；
 /// - `ReuseExternalHosting`：端口被外部承载 webui 的 engine 占用 →
 ///   不 spawn、不写锁，直接连接（无 access key，token 交换降级为无 bearer）；
 /// - `ConflictExternalPort`：端口被占用且不承载 webui → 可操作提示；
 /// - `AnotherShellRunning`：防双开 → 提示后退出。
 async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
+    if is_shutting_down(&app) {
+        return;
+    }
     let lock_path = context.data_root.join(lifecycle::LOCK_FILE_NAME);
-    let lock = lifecycle::read_lock(&lock_path);
+    // The OS lock must be acquired before *any* lifecycle probe.  Otherwise
+    // two shells can both observe a stale/absent record and spawn sidecars
+    // before either one writes its owner record (last-writer-wins).
+    let mut lock_guard = match lifecycle::acquire_lock(&lock_path) {
+        Ok(guard) => guard,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            let shell_pid = lifecycle::read_lock(&lock_path).map(|lock| lock.shell_pid);
+            let message = match shell_pid {
+                Some(shell_pid) => format!(
+                    "AIRP UI is already running or starting (shell PID {shell_pid}). \
+                     This second instance will now exit.\n\
+                     已有 AIRP UI 实例正在运行或启动（壳进程 {shell_pid}），\
+                     本窗口即将退出。"
+                ),
+                None => "AIRP UI is already starting in another process. This second instance \
+                         will now exit.\n另一个进程正在启动 AIRP UI，本窗口即将退出。"
+                    .to_string(),
+            };
+            show_engine_error_then_exit(&app, &message);
+            return;
+        }
+        Err(error) => {
+            show_engine_error(
+                &app,
+                &format!(
+                    "AIRP UI could not acquire its startup lock: {error}\n\
+                     AIRP UI 无法取得启动锁，请检查数据目录权限后重试。"
+                ),
+            );
+            return;
+        }
+    };
+    if is_shutting_down(&app) {
+        drop(lock_guard);
+        return;
+    }
+    let lock = lock_guard.read_lock();
     let port_occupied = lifecycle::is_port_occupied(context.port);
     let external_hosts_webui = if port_occupied {
         probe_hosts_webui(&context.engine_url).await
     } else {
         false
     };
+    if is_shutting_down(&app) {
+        drop(lock_guard);
+        return;
+    }
     let plan = lifecycle::decide_startup(
         lock.as_ref(),
         std::process::id(),
@@ -342,16 +570,25 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
             let message = format!(
                 "AIRP UI is already running (shell PID {shell_pid}). \
                  This second instance will now exit. \
-                 If no AIRP UI window is actually open, delete the stale \
-                 instance lock (engine-instance.lock) under the app data \
+                 If no AIRP UI window is actually open, clear the stale owner \
+                 record (or delete engine-instance.lock) under the app data \
                  directory and retry.\n\
                  已有 AIRP UI 实例在运行（壳进程 {shell_pid}），本窗口即将退出。\
                  若实际没有 AIRP UI 窗口，请删除数据目录下的残留锁文件 \
                  engine-instance.lock 后重试。"
             );
+            if is_shutting_down(&app) {
+                drop(lock_guard);
+                return;
+            }
+            drop(lock_guard);
             show_engine_error_then_exit(&app, &message);
         }
         lifecycle::StartupPlan::KillOwnedEngineThenSpawn { engine_pid } => {
+            if is_shutting_down(&app) {
+                drop(lock_guard);
+                return;
+            }
             tracing::info!(engine_pid, "killing leftover owned engine before respawn");
             if !lifecycle::kill_pid(engine_pid) {
                 tracing::warn!(
@@ -362,18 +599,32 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
             // 等端口真正释放（最多 3 秒），否则落回冲突提示而不是硬撞。
             let mut freed = false;
             for _ in 0..30 {
+                if is_shutting_down(&app) {
+                    drop(lock_guard);
+                    return;
+                }
                 if !lifecycle::is_port_occupied(context.port) {
                     freed = true;
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if is_shutting_down(&app) {
+                    drop(lock_guard);
+                    return;
+                }
             }
             if freed {
-                // 仅在端口确认释放后才删锁：kill 失败（归属信息已丢则下次
-                // 无法再走分支 a 自愈）时保留锁，保持自愈链路完整。
-                lifecycle::remove_lock(&lock_path);
-                spawn_sidecar(&app, &context, &lock_path).await;
+                // Keep the same locked inode while replacing the owner record;
+                // unlinking here would let a POSIX peer bypass flock.
+                spawn_sidecar(&app, &context, lock_guard).await;
             } else {
+                // Preserve the old owner record for the next startup's
+                // self-healing retry when the engine did not release the port.
+                if is_shutting_down(&app) {
+                    drop(lock_guard);
+                    return;
+                }
+                drop(lock_guard);
                 show_port_conflict_error(&app, context.port);
             }
         }
@@ -384,15 +635,29 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
                 port = context.port,
                 "port occupied by an external engine hosting the WebUI; reusing it"
             );
-            lifecycle::remove_lock(&lock_path);
+            if is_shutting_down(&app) {
+                drop(lock_guard);
+                return;
+            }
+            if let Err(error) = lock_guard.clear() {
+                tracing::warn!(%error, "failed to clear stale engine instance lock");
+            }
+            drop(lock_guard);
             spawn_readiness_and_navigate(app, context.engine_url, None);
         }
         lifecycle::StartupPlan::ConflictExternalPort => {
+            if is_shutting_down(&app) {
+                drop(lock_guard);
+                return;
+            }
+            if let Err(error) = lock_guard.clear() {
+                tracing::warn!(%error, "failed to clear stale engine instance lock");
+            }
+            drop(lock_guard);
             show_port_conflict_error(&app, context.port);
         }
         lifecycle::StartupPlan::SpawnFresh => {
-            lifecycle::remove_lock(&lock_path);
-            spawn_sidecar(&app, &context, &lock_path).await;
+            spawn_sidecar(&app, &context, lock_guard).await;
         }
     }
 }
@@ -420,104 +685,140 @@ async fn probe_hosts_webui(engine_url: &str) -> bool {
 /// AIRP_DATA_DIR 让打包构建使用 per-user data root；
 /// AIRP_DESKTOP_WEBUI_DIR（C-P0）让 daemon 以 desktop router 同源承载
 /// webui（允许 access key 鉴权，与 CLI --webui-dir 互斥约束无关）。
-async fn spawn_sidecar(app: &tauri::AppHandle, context: &StartupContext, lock_path: &Path) {
+async fn spawn_sidecar(
+    app: &tauri::AppHandle,
+    context: &StartupContext,
+    lock_guard: lifecycle::LockGuard,
+) {
     let port = context.port;
     let port_arg = port.to_string();
-    match app.shell().sidecar("airp-core") {
-        Ok(mut cmd) => {
-            cmd = cmd
-                .args(["daemon", "--port", port_arg.as_str()])
-                .current_dir(&context.data_root)
-                .env("AIRP_DATA_DIR", &context.data_root)
-                .env("AIRP_ALLOW_LOCAL_PATH", "1");
-            if let Some(ref access_key) = context.access_key {
-                cmd = cmd.env("AIRP_ACCESS_KEY", access_key);
-            }
-            if let Some(ref webui_dir) = context.webui_dir {
-                cmd = cmd.env("AIRP_DESKTOP_WEBUI_DIR", webui_dir);
-            }
-            match cmd.spawn() {
-                Ok((mut rx, child)) => {
-                    let pid = child.pid();
-                    let instance_id = uuid::Uuid::new_v4().to_string();
-                    *app.state::<EngineSidecar>()
-                        .child
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = Some(child);
-                    *app.state::<EngineSidecar>()
-                        .instance_id
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = Some(instance_id.clone());
-                    // 归属锁：记录 shell/engine pid + 端口 + 实例标识，
-                    // 供下次启动三分支探测与防双开使用。
-                    let lock = lifecycle::InstanceLock {
-                        shell_pid: std::process::id(),
-                        engine_pid: pid,
-                        port,
-                        instance_id,
-                    };
-                    if let Err(error) = lifecycle::write_lock(lock_path, &lock) {
-                        tracing::warn!(%error, "failed to write engine instance lock");
-                    }
-                    // Single receiver yields all CommandEvent variants
-                    // (Stdout/Stderr/Terminated/...). Log each for
-                    // debuggability (透明取向: 引擎状态可观察).
-                    tauri::async_runtime::spawn(async move {
-                        while let Some(ev) = rx.recv().await {
-                            match ev {
-                                CommandEvent::Stdout(b) => tracing::info!(
-                                    target: "airp-core",
-                                    "engine: {}", String::from_utf8_lossy(&b).trim_end()),
-                                CommandEvent::Stderr(b) => tracing::warn!(
-                                    target: "airp-core",
-                                    "engine err: {}", String::from_utf8_lossy(&b).trim_end()),
-                                CommandEvent::Terminated(p) => tracing::warn!(
-                                    target: "airp-core",
-                                    "engine sidecar terminated: {:?}", p),
-                                _ => {}
-                            }
-                        }
-                    });
-                    tracing::info!(
-                        port = port,
-                        pid,
-                        data_root = %context.data_root.display(),
-                        "engine sidecar spawned"
-                    );
-                    spawn_readiness_and_navigate(
-                        app.clone(),
-                        context.engine_url.clone(),
-                        context.access_key.clone(),
-                    );
+    let sidecar = app.state::<EngineSidecar>();
+    let mut lock_guard = Some(lock_guard);
+    let transaction = run_spawn_transaction(&sidecar.state, || {
+        let mut lock_guard = lock_guard
+            .take()
+            .expect("spawn transaction must own its lifecycle lock");
+        let mut cmd = match app.shell().sidecar("airp-core") {
+            Ok(cmd) => cmd,
+            Err(error) => {
+                tracing::error!(err = %error,
+                    "sidecar 'airp-core' not configured/found — packaging must build \
+                     binaries/airp-core-$TARGET_TRIPLE first");
+                if let Err(clear_error) = lock_guard.clear() {
+                    tracing::warn!(%clear_error, "failed to clear engine instance lock after spawn failure");
                 }
-                Err(e) => {
-                    tracing::error!(err = %e, "failed to spawn engine sidecar");
-                    show_engine_error(
-                        app,
-                        &format!(
-                            "Engine failed to start. Run \
-                             `cargo run -p airp-core -- daemon --port {port}` manually or \
-                             rebuild the sidecar: {e}\n\
-                             引擎启动失败。可手动运行上述命令，或重建 sidecar。"
-                        ),
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!(err = %e,
-                "sidecar 'airp-core' not configured/found — packaging must build \
-                 binaries/airp-core-$TARGET_TRIPLE first");
-            show_engine_error(
-                app,
-                &format!(
+                drop(lock_guard);
+                return Err(format!(
                     "Engine sidecar is missing. Run `ui/build-engine-sidecar.ps1` or start \
-                     `cargo run -p airp-core -- daemon --port {port}` manually: {e}\n\
+                     `cargo run -p airp-core -- daemon --port {port}` manually: {error}\n\
                      未找到引擎 sidecar。请先运行 ui/build-engine-sidecar.ps1，\
                      或手动启动引擎。"
-                ),
-            );
+                ));
+            }
+        };
+        cmd = cmd
+            .args(["daemon", "--port", port_arg.as_str()])
+            .current_dir(&context.data_root)
+            .env("AIRP_DATA_DIR", &context.data_root)
+            .env("AIRP_ALLOW_LOCAL_PATH", "1");
+        if let Some(ref access_key) = context.access_key {
+            cmd = cmd.env("AIRP_ACCESS_KEY", access_key);
         }
+        if let Some(ref webui_dir) = context.webui_dir {
+            cmd = cmd.env("AIRP_DESKTOP_WEBUI_DIR", webui_dir);
+        }
+
+        let (rx, child) = match cmd.spawn() {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(err = %error, "failed to spawn engine sidecar");
+                if let Err(clear_error) = lock_guard.clear() {
+                    tracing::warn!(%clear_error, "failed to clear engine instance lock after spawn failure");
+                }
+                drop(lock_guard);
+                return Err(format!(
+                    "Engine failed to start. Run \
+                     `cargo run -p airp-core -- daemon --port {port}` manually or \
+                     rebuild the sidecar: {error}\n\
+                     引擎启动失败。可手动运行上述命令，或重建 sidecar。"
+                ));
+            }
+        };
+        let pid = child.pid();
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        // 归属锁：记录 shell/engine pid + 端口 + 实例标识，供下次启动三分支探测。
+        let lock = lifecycle::InstanceLock {
+            shell_pid: std::process::id(),
+            engine_pid: pid,
+            port,
+            instance_id,
+        };
+        if let Err(error) = lock_guard.write_lock(&lock) {
+            tracing::error!(%error, "failed to write engine instance lock");
+            if let Err(kill_error) = child.kill() {
+                tracing::warn!(%kill_error, "failed to stop engine after lock write failure");
+            }
+            if let Err(clear_error) = lock_guard.clear() {
+                tracing::warn!(%clear_error, "failed to clear engine instance lock after spawn failure");
+            }
+            drop(lock_guard);
+            return Err(format!(
+                "Engine started but AIRP UI could not persist its instance lock: {error}\n\
+                 引擎已启动，但 AIRP UI 无法写入实例锁，已停止该引擎。"
+            ));
+        }
+
+        // Release the OS lock before returning; run_spawn_transaction then
+        // publishes child/id while its state mutex is still held.
+        let instance_id = lock.instance_id.clone();
+        drop(lock_guard);
+        Ok((child, instance_id, (rx, pid)))
+    });
+    if let Some(lock_guard) = lock_guard {
+        // Rejected transactions never invoke the action; release the
+        // lifecycle lock after the state mutex has been released.
+        drop(lock_guard);
+    }
+
+    let (mut rx, pid) = match transaction {
+        SpawnTransaction::Rejected => return,
+        SpawnTransaction::Failed(message) => {
+            show_engine_error(app, &message);
+            return;
+        }
+        SpawnTransaction::Published((rx, pid)) => (rx, pid),
+    };
+
+    // Single receiver yields all CommandEvent variants (Stdout/Stderr/
+    // Terminated/...). Log each for debuggability.
+    tauri::async_runtime::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                CommandEvent::Stdout(b) => tracing::info!(
+                    target: "airp-core",
+                    "engine: {}", String::from_utf8_lossy(&b).trim_end()),
+                CommandEvent::Stderr(b) => tracing::warn!(
+                    target: "airp-core",
+                    "engine err: {}", String::from_utf8_lossy(&b).trim_end()),
+                CommandEvent::Terminated(p) => tracing::warn!(
+                    target: "airp-core",
+                    "engine sidecar terminated: {:?}", p),
+                _ => {}
+            }
+        }
+    });
+    tracing::info!(
+        port = port,
+        pid,
+        data_root = %context.data_root.display(),
+        "engine sidecar spawned"
+    );
+    if !is_shutting_down(app) {
+        spawn_readiness_and_navigate(
+            app.clone(),
+            context.engine_url.clone(),
+            context.access_key.clone(),
+        );
     }
 }
 
@@ -535,6 +836,9 @@ fn spawn_readiness_and_navigate(
     access_key: Option<String>,
 ) {
     tauri::async_runtime::spawn(async move {
+        if is_shutting_down(&app) {
+            return;
+        }
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_millis(500))
             .timeout(std::time::Duration::from_secs(2))
@@ -544,6 +848,9 @@ fn spawn_readiness_and_navigate(
         // 1. 就绪探针（50 × 100ms = 5s）。
         let mut ready = false;
         for _ in 0..50 {
+            if is_shutting_down(&app) {
+                return;
+            }
             if client
                 .get(format!("{engine_url}/version"))
                 .send()
@@ -555,6 +862,9 @@ fn spawn_readiness_and_navigate(
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if is_shutting_down(&app) {
+                return;
+            }
         }
         if !ready {
             tracing::error!(engine_url = %engine_url, "engine did not become ready");
@@ -569,6 +879,9 @@ fn spawn_readiness_and_navigate(
             return;
         }
         tracing::info!(engine_url = %engine_url, "engine ready");
+        if is_shutting_down(&app) {
+            return;
+        }
 
         // 2. 承载探测：engine 必须同源承载 webui（local/desktop router 都提供
         //    /runtime-config.js；纯 API router 返回 404）。
@@ -578,6 +891,9 @@ fn spawn_readiness_and_navigate(
             .await
             .map(|resp| resp.status().is_success())
             .unwrap_or(false);
+        if is_shutting_down(&app) {
+            return;
+        }
         if !hosted {
             show_engine_error(
                 &app,
@@ -602,6 +918,9 @@ fn spawn_readiness_and_navigate(
         // 3. bearer 注入通道：进程互信（access key）换短时效 UI token。
         let exchanged =
             exchange_desktop_token(&client, &engine_url, access_key.as_deref(), true).await;
+        if is_shutting_down(&app) {
+            return;
+        }
         let token = exchanged.as_ref().map(|(token, _)| token.clone());
 
         // 4. 导航首屏。fragment 不发送到服务端；entry.js 承接写入 sessionStorage。
@@ -683,6 +1002,9 @@ fn spawn_token_renewal_loop(
         let retry_wait =
             |failures: u32| -> u64 { (60u64 << failures.saturating_sub(1).min(4)).min(900) };
         loop {
+            if is_shutting_down(&app) {
+                return;
+            }
             // TTL 过半即续期；下限 5s 防短 TTL 冒烟时热循环，上限 4h 防
             // engine 返回异常大值时续期完全停摆；失败后按连续次数指数退避。
             let wait_secs = if failed_fast {
@@ -691,6 +1013,9 @@ fn spawn_token_renewal_loop(
                 (expires_in / 2).clamp(5, 4 * 3600)
             };
             tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+            if is_shutting_down(&app) {
+                return;
+            }
             match exchange_desktop_token(
                 &client,
                 &engine_url,
@@ -700,6 +1025,9 @@ fn spawn_token_renewal_loop(
             .await
             {
                 Some((new_token, new_expires_in)) => {
+                    if is_shutting_down(&app) {
+                        return;
+                    }
                     failed_fast = false;
                     consecutive_failures = 0;
                     if let Some(window) = app.get_webview_window("main") {
@@ -869,6 +1197,113 @@ fn show_engine_error_then_exit(app: &tauri::AppHandle, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_mutex_serializes_publish_before_shutdown() {
+        use std::sync::{Arc, Barrier, Condvar, Mutex, TryLockError};
+
+        let state = Arc::new(Mutex::new(SidecarState::<u32>::default()));
+        let entered_publish = Arc::new(Barrier::new(2));
+        let release_gate = Arc::new((Mutex::new(false), Condvar::new()));
+
+        let startup_state = Arc::clone(&state);
+        let startup_barrier = Arc::clone(&entered_publish);
+        let startup_gate = Arc::clone(&release_gate);
+        let startup = std::thread::spawn(move || {
+            let transaction = run_spawn_transaction(&startup_state, || {
+                startup_barrier.wait();
+                let (gate, wake) = &*startup_gate;
+                let mut released = gate.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+                Ok::<_, ()>((7, "instance-7".to_string(), ()))
+            });
+            assert!(matches!(transaction, SpawnTransaction::Published(())));
+        });
+
+        entered_publish.wait();
+        assert!(matches!(state.try_lock(), Err(TryLockError::WouldBlock)));
+
+        let exit_state = Arc::clone(&state);
+        let exit = std::thread::spawn(move || {
+            let mut state = exit_state.lock().unwrap();
+            let first = state.request_shutdown();
+            let taken = state.take_published();
+            let second = state.request_shutdown();
+            (first, taken, second, state.can_spawn())
+        });
+
+        let (gate, wake) = &*release_gate;
+        *gate.lock().unwrap() = true;
+        wake.notify_one();
+        startup.join().unwrap();
+
+        let (first, (child, instance_id), second, can_spawn) = exit.join().unwrap();
+        assert!(matches!(first, ExitRequest::Start(None)));
+        assert_eq!(child, Some(7));
+        assert_eq!(instance_id.as_deref(), Some("instance-7"));
+        assert!(matches!(second, ExitRequest::Prevent));
+        assert!(!can_spawn);
+    }
+
+    #[test]
+    fn exit_first_rejects_later_spawn_on_same_state_mutex() {
+        use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Barrier, Mutex};
+
+        let state = Arc::new(Mutex::new(SidecarState::<u32>::default()));
+        let ready = Arc::new(Barrier::new(2));
+        let exit_state = Arc::clone(&state);
+        let exit_ready = Arc::clone(&ready);
+        let exit = std::thread::spawn(move || {
+            let mut state = exit_state.lock().unwrap();
+            assert!(state.can_spawn());
+            exit_ready.wait();
+            assert!(matches!(state.request_shutdown(), ExitRequest::Start(None)));
+            assert!(!state.can_spawn());
+        });
+        ready.wait();
+        exit.join().unwrap();
+
+        let spawn_state = Arc::clone(&state);
+        let spawn = std::thread::spawn(move || {
+            let state = spawn_state.lock().unwrap();
+            state.can_spawn()
+        });
+        assert!(!spawn.join().unwrap());
+
+        let closure_executed = Arc::new(AtomicBool::new(false));
+        let closure_flag = Arc::clone(&closure_executed);
+        let transaction = run_spawn_transaction(&state, move || {
+            closure_flag.store(true, Ordering::SeqCst);
+            Ok::<_, ()>((1, "must-not-publish".to_string(), ()))
+        });
+        assert!(matches!(transaction, SpawnTransaction::Rejected));
+        assert!(!closure_executed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn owner_cleanup_only_clears_after_successful_stop() {
+        let root = temp_data_root("owner-cleanup");
+        let path = root.join(lifecycle::LOCK_FILE_NAME);
+        let owner = lifecycle::InstanceLock {
+            shell_pid: 100,
+            engine_pid: 200,
+            port: 8000,
+            instance_id: "instance-1".to_string(),
+        };
+        let mut guard = lifecycle::acquire_lock(&path).unwrap();
+        guard.write_lock(&owner).unwrap();
+        drop(guard);
+
+        clear_owner_after_successful_stop(&path, Some(owner.instance_id.clone()), false);
+        assert_eq!(lifecycle::read_lock(&path), Some(owner.clone()));
+
+        clear_owner_after_successful_stop(&path, Some(owner.instance_id.clone()), true);
+        assert!(lifecycle::read_lock(&path).is_none());
+        assert!(path.exists(), "owner cleanup must retain the lock inode");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn temp_data_root(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("airp-ui-{name}-{}", uuid::Uuid::new_v4()));
