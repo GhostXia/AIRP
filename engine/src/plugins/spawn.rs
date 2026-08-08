@@ -69,22 +69,19 @@ async fn spawn_one(manifest: &TrustedPluginManifest, data_root: &Path) -> Result
         .map_err(|e| format!("spawn `{program}` failed: {e}"))
 }
 
-/// 构建子进程 Command：env_clear + 最小白名单（审计 A4）。
+/// 环境面配置（审计 A4）：env_clear + 最小白名单。
 ///
 /// daemon 凭据（如 AIRP_ACCESS_KEY）不得继承给插件子进程。trusted plugin
 /// 虽为用户显式安装，但环境继承面仍应最小化（#498 §6.3 原文「允许读自己
 /// 的环境」修订为白名单语义，见 docs/TRUSTED-PLUGINS.md）。PATH：插件可能
 /// 派生工具；TEMP/TMP/SYSTEMROOT：Windows 惯例；AIRP_* 为 engine 注入的
-/// 受控环境（env_clear 后不受宿主影响）。独立函数便于测试用 `get_envs()`
-/// 断言环境面契约（见本文件测试模块）。
-fn build_command(
+/// 受控环境（env_clear 后不受宿主影响）。独立函数便于测试同时用
+/// `get_envs()` 契约断言和真实 spawn 探测（见本文件测试模块）。
+fn configure_env(
+    cmd: &mut std::process::Command,
     manifest: &TrustedPluginManifest,
     data_root: &Path,
-) -> Result<std::process::Command, String> {
-    let command = resolve_command(data_root, manifest)?;
-    let args = resolve_args(manifest);
-    let plugin_dir = data_root.join("plugins").join(&manifest.id);
-    let mut cmd = std::process::Command::new(&command);
+) {
     cmd.env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default());
     #[cfg(windows)]
@@ -96,13 +93,25 @@ fn build_command(
         .env("TEMP", std::env::var_os("TEMP").unwrap_or_default())
         .env("TMP", std::env::var_os("TMP").unwrap_or_default());
     }
+    cmd.env("AIRP_PLUGIN_PORT", manifest.port.to_string())
+        .env("AIRP_DATA_ROOT", data_root)
+        .env("AIRP_PLUGIN_ID", &manifest.id);
+}
+
+/// 构建子进程 Command：configure_env + args + cwd。
+fn build_command(
+    manifest: &TrustedPluginManifest,
+    data_root: &Path,
+) -> Result<std::process::Command, String> {
+    let command = resolve_command(data_root, manifest)?;
+    let args = resolve_args(manifest);
+    let plugin_dir = data_root.join("plugins").join(&manifest.id);
+    let mut cmd = std::process::Command::new(&command);
+    configure_env(&mut cmd, manifest, data_root);
     cmd.args(&args)
         // 子进程 cwd = 插件目录：args 里的相对路径（如 "server.js"）
         // 以插件目录为基准，而不是 daemon 的 cwd。
-        .current_dir(&plugin_dir)
-        .env("AIRP_PLUGIN_PORT", manifest.port.to_string())
-        .env("AIRP_DATA_ROOT", data_root)
-        .env("AIRP_PLUGIN_ID", &manifest.id);
+        .current_dir(&plugin_dir);
     Ok(cmd)
 }
 
@@ -287,5 +296,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 测试结束恢复注入的模拟凭据，避免污染并行测试进程环境。
+    struct CredentialGuard(Option<std::ffi::OsString>);
+    impl Drop for CredentialGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("AIRP_ACCESS_KEY", v),
+                None => std::env::remove_var("AIRP_ACCESS_KEY"),
+            }
+        }
+    }
+
+    /// CodeRabbit #525 补强：`get_envs()` 只反映显式条目，无法发现
+    /// `.env_clear()` 被意外移除的回归（此时继承的 daemon 凭据会泄漏给
+    /// 插件子进程，但 get_envs 断言仍绿）。本测试真实 spawn 一个环境枚举
+    /// 子进程（Windows `cmd /c set` / Unix `env`），注入模拟凭据后断言
+    /// 子进程观察不到它——锁定「凭据不跨进程边界」的运行时行为。
+    #[test]
+    fn spawned_probe_sees_no_inherited_credentials() {
+        // 模拟 daemon 环境携带凭据；Guard 在测试结束（含 panic）恢复。
+        let previous = std::env::var_os("AIRP_ACCESS_KEY");
+        std::env::set_var("AIRP_ACCESS_KEY", "synthetic-secret");
+        let _guard = CredentialGuard(previous);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let data_root = tmp.path();
+        let m = sample(data_root);
+
+        #[cfg(windows)]
+        let mut probe = {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "set"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut probe = std::process::Command::new("env");
+
+        configure_env(&mut probe, &m, data_root);
+        let out = probe.output().unwrap();
+        assert!(out.status.success(), "env probe failed: {out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !stdout.contains("AIRP_ACCESS_KEY"),
+            "spawned probe must not observe inherited credential; env_clear 缺失或白名单被破坏"
+        );
+        // env_clear 未误伤白名单变量：probe 能看到注入的 AIRP_* 与 PATH。
+        for expected in [
+            "AIRP_PLUGIN_PORT=8899",
+            "AIRP_PLUGIN_ID=com.example.envprobe",
+        ] {
+            assert!(
+                stdout.contains(expected),
+                "probe missing whitelist entry {expected}"
+            );
+        }
+        assert!(stdout.contains("PATH="), "probe missing PATH");
     }
 }
