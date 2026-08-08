@@ -89,7 +89,8 @@ character_lock.read()  →  state_lock.lock()
 character_lock.read()  →  session_lock.lock()  →  [StateService::mutate_locked 内]  state_lock.lock()
 ```
 
-- 同步 std 锁；async fn 体内不 `.await`（同步 I/O 阻塞 tokio worker——已知 debt，见 §6.2）。
+- 同步 std 锁与文件 I/O 仍保持在同一临界区，但 agent tool 的同步临界区由
+  `tokio::task::spawn_blocking` 执行；std guard 不跨 `.await`，不会占用 tokio worker。
 - **这是 session_lock 与 state_lock 同时持有的唯一已核验路径**，方向固定为 session → state。
 - 由 Bug F 修复（PR #335）后，无反向路径与之成环。
 - **R1 已闭合（#437 fix path 4）**：`StateService::mutate` 拆为 `mutate_locked`（不 acquire `character_lock.read()`，要求调用方已持有）+ `mutate`（兼容包装，内部 acquire 后调 `mutate_locked`）。`advance_plot` 改用 `mutate_locked`，外层先 acquire `character_lock.read()`，再 acquire `session_lock`，最后调 `mutate_locked` 进入 `state_lock` 临界区。这消除了旧版「`StateService::mutate` 内部 acquire `character_lock.read()` 构成递归 read」的风险，使外层 `character_lock.read()` 成为合法 R1 门控，防止 `delete_character`（持 `character.write()`）在 `advance_plot` 临界区期间删除 character 顶层目录（含 `live.json`）。
@@ -105,6 +106,8 @@ character_lock.read()  →  阶段一: state_lock.lock()           → 释放
 ```
 
 - 同一调用任意时刻只持一把内层锁（state 或 session），`character_lock.read()` 共享读不阻塞其他 reader。
+- 两段临界区及其中的同步文件 I/O 在 `spawn_blocking` 中执行；async tool future
+  只等待 blocking task，不在 tokio worker 上持有 std guard。
 - Bug F（PR #335）就是消除旧版 state→session 与 `advance_plot` session→state 的锁序倒置死锁。
 - R1 收敛（本 PR）：新增外层 `character_lock.read()`，防止 `delete_character` 在事件标记 / append 期间删除 character 目录（TOCTOU）。早期 return（事件已 triggered）时 guard 由 Drop 自动释放。
 
@@ -118,6 +121,8 @@ character_lock.read()  →  阶段一: state_lock.lock()           → 释放
 ```
 
 - `advance_and_check_triggers` 在阶段一内完成 clock 推进 + 事件标记 + `save_world_events`。
+- 两段临界区及其中的同步文件 I/O 在 `spawn_blocking` 中执行；async tool future
+  只等待 blocking task，不在 tokio worker 上持有 std guard。
 - Bug B（PR #338）修复了旧版阶段二无 `session_lock` 导致的 `current.md` 并发交错。
 - R1 收敛（本 PR）：新增外层 `character_lock.read()`，与 `trigger_world_event` 同模式，防止 `delete_character` 在时钟推进 / 事件 append 期间删除 character 目录。
 
@@ -128,6 +133,7 @@ character_lock.read()  →  session_lock.lock()
 ```
 
 - 单内层锁，不与 state_lock 嵌套。
+- 锁获取与 `append_to_current` 在 `spawn_blocking` 中执行，避免同步 I/O 阻塞 tokio worker。
 - R1 收敛（本 PR）：新增外层 `character_lock.read()`，与 `with_session` 同模式，防止 `delete_character` 在 append 期间删除 session 目录（TOCTOU）。
 
 ### 2.7 `volume_manager::run_seal_flow`（`volume_manager.rs`，#283 方案 J + R1 收敛）
@@ -220,15 +226,21 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 
 ### A1：std `Mutex`/`RwLock` guard 不得跨 `.await`
 
-所有 `std::sync::Mutex` / `RwLock` guard 必须在同一同步作用域内释放。`agent::tools::*` 的 async fn 体内使用 std 锁时，临界区必须是纯同步代码（含同步 `fs` I/O），不得 `.await`。
+所有 `std::sync::Mutex` / `RwLock` guard 必须在同一同步作用域内释放。`agent::tools::*`
+的 async fn 若需要同步锁或同步 `fs` I/O，必须把完整临界区放入
+`tokio::task::spawn_blocking`；guard 不得跨 `.await` 或离开 blocking task。
 
 ### A2：`tokio::sync::Mutex` 可跨 `.await`，但不得跨 `spawn_blocking`
 
 `conversation_lock`、`conversation_io_lock`、`INDEX_LOCK`、`DaemonState.*_update` 可跨 `.await` 持有。`spawn_blocking` 闭包内不得持有任何 `tokio::sync::Mutex` guard（Send 边界 + 阻塞语义不兼容）。
 
-### A3：锁内同步 I/O 是已知 debt，不是合同违反
+### A3：同步 I/O 必须离开 tokio worker
 
-`agent::tools::plot::advance_plot`、`npc_action`、`trigger_world_event`、`advance_clock` 在 std 锁内做同步 `fs` I/O，阻塞 tokio worker。这是 CURRENT-BASELINE §2.1.4 记录的结构性 debt（#284/#381 E-P0-4/5），由方案 O 收敛，本合同不要求立即消除，但禁止新增此类路径。
+PR #469 将 `advance_plot`、`npc_action`、`update_relationship`、
+`trigger_world_event`、`advance_clock` 及其只读配套路径的同步锁/文件 I/O
+移入 `tokio::task::spawn_blocking`；锁序与临界区原子性不变。`StateService`、
+`WorldEventService` 等 domain API 仍保持同步实现，其他 async caller 若新增同步
+调用必须遵守 A1 并显式使用 `spawn_blocking`，不得把本次修复误解为全仓库 I/O 审计完成。
 
 ## 5. Poison 恢复策略
 
@@ -275,9 +287,13 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 - release build（`--release`）下 `track_*` 返回 ZST `Guard`，零开销（§7）。
 - **未覆盖**：R3（conversation 双锁）、R6（coordinator 反向获取）尚未有运行时强制。guard 不跨 `.await`（§4 A1），thread-local 栈仅在同步作用域内有效。
 
-### 6.2 std 锁内同步 I/O（结构性 debt）
+### 6.2 std 锁内同步 I/O（agent tool 路径已收敛，#469）
 
-`agent::tools::*` 在 std 锁内做 `fs` I/O 阻塞 tokio worker，由 #284 方案 O 收敛。本合同禁止新增此类路径，但不动既有 5 处（`advance_plot`、`npc_action`、`trigger_world_event`、`advance_clock`、`StateService::*`）。
+`advance_plot`、`npc_action`、`update_relationship`、`trigger_world_event`、
+`advance_clock` 及其只读配套路径已在 `spawn_blocking` 中执行同步锁/文件 I/O，
+因此不再阻塞 tokio worker。`StateService::*`、`WorldEventService::*` 仍是同步
+domain API；不在本次 agent tool 热点调用链中的同步 caller，以及其他未审计的
+helper I/O，仍需按 A1/A3 规则在后续收敛，不得据此宣称全仓库 debt 已清零。
 
 ### 6.3 config RwLock poison 策略不一致（已交付）
 
