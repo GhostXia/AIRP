@@ -123,6 +123,7 @@ RP 角色平面只包含角色卡、世界书、Preset、Persona、state、记�
 - provider key 和 engine bearer 不持久化到普通 settings、前端、日志或诊断；
 - 浏览器只访问同源 gateway，不接收 engine 私有 URL/bearer；
 - `webui/start.bat`、`serve.js` 和 `cargo run` 都是开发路径，不是生产部署；
+- `--webui-dir` 可换 UI，但替换的 UI 必须遵守同一托管契约（C3）：遵守 Engine 下发的硬 CSP（`script-src 'self'` 等，禁内联脚本/样式/事件处理器）、同源访问 `/runtime-config.js` 注入的 `window.AIRP_WEBUI_CONFIG`、不依赖未声明的外部资源——参见 `webui/README.md` 的约束；
 - 当前 artifact 验收使用 `.github/workflows/webui-windows-build.yml`，Linux 包使用手动 workflow；Tauri manual build 是长期维护线，Docker/WSL 不是 Windows 便携包依赖；
 - P0 topology 全绿不等于正式发布，P1–P3 见 [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)。
 

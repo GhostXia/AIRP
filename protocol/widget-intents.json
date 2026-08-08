@@ -33,7 +33,7 @@
         "widget_type": "string",
         "instance_id": "string",
         "capability": "string（仅当 envelope 携带 capability 时返回）",
-        "result": "object（可选，仅执行器派发时返回）：read:memory → {content, char_count, capacity}；read:state → live.json 的 JSON 值；read:worldbook → lorebook JSON"
+        "result": "object（可选，仅执行器派发时返回）：read:memory → {content, char_count, capacity}；read:state → live.json 的 JSON 值；read:worldbook → lorebook JSON。char_count 语义 = Unicode 标量值数（Rust chars().count()），非 UTF-8 字节数、非 grapheme cluster（用户感知字符）"
       }
     },
     "400": {
