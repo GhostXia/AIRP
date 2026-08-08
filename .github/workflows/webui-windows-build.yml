@@ -30,7 +30,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          # Release runs must build the published tag; PR/manual runs keep their
+          # event ref (the same ref actions/checkout would select by default).
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
           persist-credentials: false
+
+      - name: Assert published release checkout
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $releaseTag = $env:RELEASE_TAG
+          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            throw "release event did not provide github.event.release.tag_name"
+          }
+          $headCommit = ((git rev-parse --verify HEAD 2>$null) -join '').Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($headCommit)) {
+            throw "unable to resolve the checked-out commit"
+          }
+          $tagRef = "refs/tags/$releaseTag"
+          $tagCommit = ((git rev-parse --verify "$tagRef^{commit}" 2>$null) -join '').Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tagCommit)) {
+            throw "release tag '$releaseTag' is not present in the checkout"
+          }
+          Write-Host "release_tag=$releaseTag"
+          Write-Host "release_tag_commit=$tagCommit"
+          Write-Host "release_checkout_commit=$headCommit"
+          Write-Host "release_source_ref=$releaseTag@$headCommit"
+          if ($headCommit -ne $tagCommit) {
+            throw "checkout commit $headCommit does not match release tag '$releaseTag' ($tagCommit)"
+          }
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
