@@ -9,11 +9,16 @@
 <link rel="stylesheet" href="assets/components.css">
 </head>
 <body>
-<main class="empty-state">
+<main class="empty-state" id="entry-state">
   <span class="logo-block">A</span>
-  <h1 class="empty-title">正在打开 AIRP 控制台</h1>
-  <p class="empty-desc">如果页面没有自动跳转，请打开角色列表。</p>
-  <a class="btn btn-primary" href="screens/01-role-list.html">打开角色列表</a>
+  <h1 class="empty-title" id="entry-title">正在打开 AIRP 控制台</h1>
+  <p class="empty-desc" id="entry-description">正在读取 Engine 首次启动状态…</p>
+  <div class="empty-actions" id="entry-actions" hidden>
+    <a class="btn btn-primary" id="entry-start-wizard" href="screens/16-onboarding.html">开始向导</a>
+    <button class="btn btn-secondary" id="entry-enter-main" type="button">直接进入主界面</button>
+  </div>
+  <p class="empty-desc" id="entry-status" role="status"></p>
+  <a class="btn btn-secondary" id="entry-fallback" href="screens/01-role-list.html">打开角色列表</a>
 </main>
 <script src="assets/entry.js"></script>
 </body>

@@ -192,6 +192,7 @@ const dynamicCalls = new Map([
 
 const dynamicFetchCalls = new Map([
   ["entry.js|'health'", ['GET /health']],
+  ["entry.js|'/v1/onboarding/complete'", ['POST /v1/onboarding/complete']],
   ['card-diff.js|url', ['GET /v1/characters/:param/revisions/diff']],
   ['timeline-export.js|url', ['GET /v1/sessions/:param/:param/timeline/export']],
 ]);

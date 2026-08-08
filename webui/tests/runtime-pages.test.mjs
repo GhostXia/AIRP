@@ -26,11 +26,30 @@ const engineRouter = await readFile(new URL('../../engine/src/daemon/mod.rs', im
 test('runtime entry redirects through an external CSP-compatible script', () => {
   assert.match(entryPage, /assets\/entry\.js/);
   assert.doesNotMatch(entryPage, /<script(?![^>]*src=)[^>]*>/i);
+  assert.doesNotMatch(entryPage, /\sstyle\s*=/i);
+  assert.doesNotMatch(entryPage, /<style(?:\s|>)/i);
   assert.match(entryScript, /airp_onboarded/);
   assert.match(entryScript, /16-onboarding\.html/);
   // #303: Engine data_root 为权威源，localStorage 仅作离线后备
   assert.match(entryScript, /fetch\('health'\)/);
   assert.match(entryScript, /h\.onboarded/);
+});
+
+test('first-run entry offers an explicit wizard/main choice and persists an engine skip', () => {
+  assert.match(entryPage, /id="entry-actions"[^>]*hidden/);
+  assert.match(entryPage, /id="entry-start-wizard"[^>]*>开始向导/);
+  assert.match(entryPage, /id="entry-enter-main"[^>]*>直接进入主界面/);
+  assert.match(entryScript, /function showFirstRunChoice/);
+  assert.match(entryScript, /provider_configured === false/);
+  assert.match(entryScript, /Provider 尚未配置[\s\S]*不影响进入主界面/);
+  assert.match(entryScript, /fetch\('\/v1\/onboarding\/complete',[\s\S]*method: 'POST'/);
+  assert.match(entryScript, /localStorage\.setItem\('airp_onboarded', 'true'\)/);
+  assert.match(entryScript, /redirect\(true\)/);
+  assert.match(entryScript, /无法保存首次启动状态/);
+  assert.match(entryScript, /Do not leave the entry page until the Engine has acknowledged its marker/);
+  // The wizard keeps its own skip action and engine marker path.
+  assert.match(onboardingPage, /id="skip-onboarding"/);
+  assert.match(onboardingScript, /client\.request\('POST', '\/v1\/onboarding\/complete'\)/);
 });
 
 test('first-run onboarding uses a dedicated real-backend runtime', () => {
