@@ -19,7 +19,8 @@
 //! （壳须 airp-ui、engine 须 airp-core），Windows PID 回绕复用不会导致
 //! 误杀无关进程或双开误判进入不可启动状态；身份不符视为锁陈旧。
 
-use std::io;
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,67 @@ pub struct InstanceLock {
     pub port: u16,
     /// 壳实例随机标识（退出清理时比对，避免误删他人锁）。
     pub instance_id: String,
+}
+
+/// Process-wide startup lock held for the lifetime of a shell instance.
+///
+/// The lock is an OS-level exclusive lock on `engine-instance.lock` (flock on
+/// POSIX and LockFileEx on Windows, via `std::fs::File::try_lock`).  The file
+/// itself remains in place while the guard is held; unlinking a locked path is
+/// not portable (on POSIX an unlink would otherwise let a second process create
+/// a new inode and bypass the lock).
+#[derive(Debug)]
+pub struct LockGuard {
+    file: File,
+}
+
+impl LockGuard {
+    /// Read the current owner record while the exclusive lock is held.
+    pub fn read_lock(&mut self) -> Option<InstanceLock> {
+        read_lock_from_file(&mut self.file)
+    }
+
+    /// Replace the owner record in-place and flush it before releasing the
+    /// guard.  Keeping the same inode is required for cross-platform locking.
+    pub fn write_lock(&mut self, lock: &InstanceLock) -> io::Result<()> {
+        let raw = serde_json::to_vec(lock).map_err(io::Error::other)?;
+        self.file.set_len(0)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(&raw)?;
+        self.file.sync_data()
+    }
+
+    /// Clear the owner record while retaining the lock file inode.
+    pub fn clear(&mut self) -> io::Result<()> {
+        self.file.set_len(0)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.sync_data()
+    }
+}
+
+/// Acquire the per-data-root startup lock.
+///
+/// `ErrorKind::WouldBlock` means another shell currently owns the lock.  The
+/// caller must keep the returned guard alive through the read → probe → spawn
+/// → write sequence; after a successful spawn the durable owner record and PID
+/// identity probe continue to reject concurrent launches.
+pub fn acquire_lock(path: &Path) -> io::Result<LockGuard> {
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "engine instance lock is already held",
+            ));
+        }
+        Err(TryLockError::Error(error)) => return Err(error),
+    }
+    Ok(LockGuard { file })
 }
 
 /// 启动探测的决策结果。
@@ -114,10 +176,20 @@ pub fn read_lock(path: &Path) -> Option<InstanceLock> {
         .and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
-/// 写入锁文件（原子性要求不高：单写者，且读取侧容忍损坏）。
+fn read_lock_from_file(file: &mut File) -> Option<InstanceLock> {
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut raw = String::new();
+    file.read_to_string(&mut raw).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// 写入锁文件（通过短生命周期的独占锁 guard）。
+///
+/// Startup code should keep one [`LockGuard`] for the complete probe/spawn
+/// sequence instead of calling this helper between separate probes.
 pub fn write_lock(path: &Path, lock: &InstanceLock) -> io::Result<()> {
-    let raw = serde_json::to_string(lock).map_err(io::Error::other)?;
-    std::fs::write(path, raw)
+    let mut guard = acquire_lock(path)?;
+    guard.write_lock(lock)
 }
 
 /// Best-effort 删除锁文件（不存在不算错误）。
@@ -129,13 +201,29 @@ pub fn remove_lock(path: &Path) {
     }
 }
 
-/// 仅当锁文件归属给定 instance_id 时删除（退出清理防误删他人锁）。
+/// 仅当锁文件归属给定 instance_id 时清空（退出清理防误删他人锁）。
+///
+/// The same OS lock used during startup is acquired before checking ownership;
+/// this closes the read→remove race.  The inode is retained so a POSIX peer
+/// cannot unlink-and-recreate the path while the guard is held.
 pub fn remove_lock_if_owned(path: &Path, instance_id: &str) {
-    let owned = read_lock(path)
+    let mut guard = match acquire_lock(path) {
+        Ok(guard) => guard,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return,
+        Err(error) => {
+            tracing::warn!(%error, "failed to acquire engine instance lock for cleanup");
+            return;
+        }
+    };
+    let owned = guard
+        .read_lock()
         .map(|lock| lock.instance_id == instance_id)
         .unwrap_or(false);
     if owned {
-        remove_lock(path);
+        if let Err(error) = guard.clear() {
+            tracing::warn!(%error, "failed to clear engine instance lock");
+        }
     }
 }
 
@@ -385,6 +473,41 @@ mod tests {
         // 重复删除不报错。
         remove_lock(&path);
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn startup_lock_serializes_concurrent_claims() {
+        let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LOCK_FILE_NAME);
+
+        let first = acquire_lock(&path).unwrap();
+        let second = acquire_lock(&path).expect_err("a second shell must not claim the lock");
+        assert_eq!(second.kind(), io::ErrorKind::WouldBlock);
+
+        drop(first);
+        let reclaimed = acquire_lock(&path).expect("lock is reclaimable after owner exits");
+        drop(reclaimed);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lock_guard_keeps_owner_record_on_same_inode() {
+        let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LOCK_FILE_NAME);
+        let mut guard = acquire_lock(&path).unwrap();
+        let owner = lock(100, 200, 8000);
+        guard.write_lock(&owner).unwrap();
+
+        assert_eq!(guard.read_lock(), Some(owner.clone()));
+        let second = acquire_lock(&path).expect_err("owner record must remain locked");
+        assert_eq!(second.kind(), io::ErrorKind::WouldBlock);
+
+        guard.clear().unwrap();
+        assert!(guard.read_lock().is_none());
+        drop(guard);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
