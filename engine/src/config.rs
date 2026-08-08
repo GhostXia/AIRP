@@ -637,38 +637,57 @@ mod tests {
     // 本节验证前 4 层 + 优先级链。
     //
     // 注：`override_with_env` 读全局环境变量，跨测试存在串扰风险，所以下方所有
-    // 涉及 env 的测试用一个进程内 Mutex 串行化，保证 set_var / remove_var 可见性。
-
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // 涉及 env 的测试共享 crate 级锁，保证 set_var / remove_var 可见性。
 
     /// 在 lock 持有期间清空 / 设置全部 AIRP_* env 并执行 closure。
-    fn with_env_vars<F: FnOnce()>(vars: &[(&str, Option<&str>)], f: F) {
-        let _g = ENV_LOCK.lock().unwrap();
-        // 先全清相关键，再按 vars 设置
-        const KEYS: &[&str] = &[
-            "AIRP_PROVIDER",
-            "AIRP_ENDPOINT",
-            "AIRP_API_KEY",
-            "AIRP_MODEL",
-            "AIRP_DAEMON_PORT",
-            "AIRP_ACCESS_KEY",
-            "AIRP_DEPLOYMENT_MODE",
-            "AIRP_PUBLIC_ORIGIN",
-            "AIRP_ALLOW_LOCAL_PATH",
-        ];
-        for k in KEYS {
-            std::env::remove_var(k);
+    struct EnvVarsGuard {
+        original: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvVarsGuard {
+        fn new(vars: &[(&str, Option<&str>)]) -> Self {
+            const KEYS: &[&str] = &[
+                "AIRP_PROVIDER",
+                "AIRP_ENDPOINT",
+                "AIRP_API_KEY",
+                "AIRP_MODEL",
+                "AIRP_DAEMON_PORT",
+                "AIRP_ACCESS_KEY",
+                "AIRP_DEPLOYMENT_MODE",
+                "AIRP_PUBLIC_ORIGIN",
+                "AIRP_ALLOW_LOCAL_PATH",
+            ];
+            let original = KEYS
+                .iter()
+                .map(|&key| (key, std::env::var_os(key)))
+                .collect();
+            for key in KEYS {
+                std::env::remove_var(key);
+            }
+            for (key, value) in vars {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                }
+            }
+            Self { original }
         }
-        for (k, v) in vars {
-            if let Some(val) = v {
-                std::env::set_var(k, val);
+    }
+
+    impl Drop for EnvVarsGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.original {
+                match value {
+                    Some(value) => std::env::set_var(*key, value),
+                    None => std::env::remove_var(*key),
+                }
             }
         }
+    }
+
+    fn with_env_vars<F: FnOnce()>(vars: &[(&str, Option<&str>)], f: F) {
+        let _lock = crate::TEST_ENV_LOCK.blocking_lock();
+        let _env = EnvVarsGuard::new(vars);
         f();
-        for k in KEYS {
-            std::env::remove_var(k);
-        }
     }
 
     #[test]

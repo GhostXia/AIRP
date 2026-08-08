@@ -78,3 +78,8 @@ pub(crate) mod revision;
 pub(crate) mod volume_manager;
 pub(crate) mod volume_store;
 pub(crate) mod xml_unpacker;
+
+/// Process-wide serialization for tests that temporarily mutate environment
+/// variables inherited by child processes.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

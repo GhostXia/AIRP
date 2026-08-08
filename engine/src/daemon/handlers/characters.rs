@@ -652,7 +652,6 @@ mod tests {
     use super::*;
     use crate::daemon::tests::make_state_no_key as make_state_for_http_test;
     use crate::types::CharacterId;
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// PNG CRC-32（polynomial 0xEDB88320，初始 0xFFFFFFFF，XOR out 0xFFFFFFFF）。
     /// 用于构造 standards-valid PNG fixture。
@@ -749,7 +748,7 @@ mod tests {
     }
 
     fn with_local_path_env<F: FnOnce()>(enabled: bool, f: F) {
-        let _lock = ENV_LOCK.blocking_lock();
+        let _lock = crate::TEST_ENV_LOCK.blocking_lock();
         let _env = EnvVarGuard::set("AIRP_ALLOW_LOCAL_PATH", enabled.then_some("1"));
         f();
     }
@@ -836,13 +835,13 @@ mod tests {
     //
     // 守 RR-001：Web/browser 永远不能用 card_path 让 engine 读任意本地路径，
     // 即使持 bearer token、即使请求 body 形式合法。env 门控不可伪造
-    // （进程启动时定，非请求头）。复用 ENV_LOCK 与 unit test 串行，避免 env race。
+    // （进程启动时定，非请求头）。复用 TEST_ENV_LOCK 与 unit test 串行，避免 env race。
     #[tokio::test]
     async fn m3_import_card_path_rejected_at_http_level() {
         use axum::body::Body;
         use tower::util::ServiceExt;
 
-        let _lock = ENV_LOCK.lock().await;
+        let _lock = crate::TEST_ENV_LOCK.lock().await;
         let _env = EnvVarGuard::set("AIRP_ALLOW_LOCAL_PATH", None);
 
         let (state, _tmp) = make_state_for_http_test();
@@ -879,7 +878,7 @@ mod tests {
         use axum::body::Body;
         use tower::util::ServiceExt;
 
-        let _lock = ENV_LOCK.lock().await;
+        let _lock = crate::TEST_ENV_LOCK.lock().await;
         let _env = EnvVarGuard::set("AIRP_ALLOW_LOCAL_PATH", None);
 
         let (state, _tmp) = make_state_for_http_test();
