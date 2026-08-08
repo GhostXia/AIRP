@@ -233,6 +233,13 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.app > .blueprint {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .topbar {
   display: flex;

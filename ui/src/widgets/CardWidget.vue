@@ -30,7 +30,8 @@ const hand = computed(() => cards.value.filter((c) => (c.zone ?? "hand") === "ha
 
 <style scoped>
 .w-card {
-  padding: 8px;
+  min-height: 0;
+  padding: clamp(6px, 1.2dvh, 8px);
 }
 .hand {
   display: flex;
@@ -39,7 +40,8 @@ const hand = computed(() => cards.value.filter((c) => (c.zone ?? "hand") === "ha
 }
 .card {
   min-width: 60px;
-  min-height: 84px;
+  min-height: clamp(68px, 10dvh, 84px);
+  aspect-ratio: 3 / 4;
   border-radius: 6px;
   display: flex;
   align-items: center;
