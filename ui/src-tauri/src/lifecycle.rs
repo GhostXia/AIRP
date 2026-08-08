@@ -50,7 +50,7 @@ pub struct InstanceLock {
     pub instance_id: String,
 }
 
-/// Process-wide startup lock held for the lifetime of a shell instance.
+/// Exclusive startup lock held for one launch sequence.
 ///
 /// The lock is an OS-level exclusive lock on `engine-instance.lock` (flock on
 /// POSIX and LockFileEx on Windows, via `std::fs::File::try_lock`).  The file
