@@ -17,11 +17,26 @@
   let confirmButton = null;
   let cancelButton = null;
 
+  function fallbackKeydown(event) {
+    if (!active || !active.fallback) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      finish(false);
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    // The fallback is a regular element rather than a modal dialog, so keep
+    // keyboard focus inside its two actions while it is active.
+    event.preventDefault();
+    const target = document.activeElement === confirmButton ? cancelButton : confirmButton;
+    target.focus();
+  }
+
   function buildDialog() {
     if (dialog) return dialog;
     dialog = document.createElement('dialog');
     dialog.id = 'airp-confirm-dialog';
-    dialog.className = 'airp-confirm-dialog modal';
+    dialog.className = 'airp-confirm-dialog';
     dialog.setAttribute('role', 'alertdialog');
     dialog.setAttribute('aria-modal', 'true');
     title = document.createElement('h2');
@@ -44,13 +59,20 @@
     confirmButton.className = 'btn btn-danger-solid';
     confirmButton.addEventListener('click', () => finish(true));
     actions.append(cancelButton, confirmButton);
-    dialog.append(title, description, actions);
+    const panel = document.createElement('div');
+    panel.className = 'modal';
+    panel.append(title, description, actions);
+    dialog.append(panel);
+    dialog.addEventListener('click', event => {
+      if (active && active.fallback && event.target === dialog) finish(false);
+    });
     dialog.addEventListener('cancel', event => {
       // Treat Escape exactly like the explicit cancel action, while keeping
       // the dialog open long enough for the promise to settle consistently.
       event.preventDefault();
       finish(false);
     });
+    document.addEventListener('keydown', fallbackKeydown);
     document.body.appendChild(dialog);
     return dialog;
   }
@@ -77,13 +99,14 @@
     active = queue.shift();
     const options = active.options || {};
     const modal = buildDialog();
+    active.fallback = typeof modal.showModal !== 'function';
     title.textContent = options.title || '请确认操作';
     description.textContent = String(active.message == null ? '' : active.message);
     confirmButton.textContent = options.confirmLabel || '继续';
     cancelButton.textContent = options.cancelLabel || '取消';
     confirmButton.className = 'btn ' + (options.danger === false ? 'btn-primary' : 'btn-danger-solid');
     active.focus = document.activeElement;
-    if (typeof modal.showModal === 'function') {
+    if (!active.fallback) {
       modal.showModal();
     } else {
       // A minimal fallback for embedded WebViews without HTMLDialogElement.
@@ -91,7 +114,7 @@
       modal.hidden = false;
       modal.setAttribute('open', '');
     }
-    confirmButton.focus();
+    (options.danger === false ? confirmButton : cancelButton).focus();
   }
 
   function confirm(message, options) {

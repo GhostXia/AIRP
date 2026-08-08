@@ -454,14 +454,24 @@
   width: min(420px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   margin: auto;
+  padding: 0;
   border: 1px solid var(--border-default);
+  background: transparent;
   color: var(--text-primary);
 }
 .airp-confirm-dialog::backdrop { background: var(--overlay-modal); }
-.airp-confirm-dialog .m-desc { white-space: pre-wrap; overflow-wrap: anywhere; }
+.airp-confirm-dialog .modal { width: 100%; }
+.airp-confirm-dialog .m-title { margin: 0; }
+.airp-confirm-dialog .m-desc { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .airp-confirm-dialog.is-fallback {
-  position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%);
-  z-index: 1000;
+  position: fixed; inset: 0; width: 100vw; max-width: none; height: 100vh;
+  margin: 0; transform: none; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-modal);
+}
+.airp-confirm-dialog.is-fallback .modal {
+  width: min(420px, calc(100vw - 32px));
+  max-width: 100%;
 }
 
 /* ============ 18. 工具调用卡（07 Agent） ============ */

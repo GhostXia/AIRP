@@ -38,7 +38,12 @@ test('shared confirmation resolves cancel/approve and exposes alertdialog semant
       this.tagName = tagName.toUpperCase();
       this.children = [];
       this.listeners = new Map();
-      this.classList = { add() {}, remove() {} };
+      const classes = new Set();
+      this.classList = {
+        add: (...names) => names.forEach(name => classes.add(name)),
+        remove: (...names) => names.forEach(name => classes.delete(name)),
+        contains: name => classes.has(name),
+      };
       this.open = false;
       this.hidden = false;
       this.textContent = '';
@@ -54,7 +59,11 @@ test('shared confirmation resolves cancel/approve and exposes alertdialog semant
     dispatch(type, event = {}) {
       for (const listener of this.listeners.get(type) || []) listener(event);
     }
-    setAttribute(name, value) { this[name] = String(value); }
+    setAttribute(name, value) {
+      if (name === 'open') this.open = true;
+      else this[name] = String(value);
+    }
+    removeAttribute(name) { delete this[name]; }
     focus() { this.ownerDocument.activeElement = this; }
     showModal() { this.open = true; }
     close() { this.open = false; }
@@ -66,6 +75,7 @@ test('shared confirmation resolves cancel/approve and exposes alertdialog semant
       element.ownerDocument = document;
       return element;
     },
+    addEventListener() {},
     body: null,
   };
   document.body = document.createElement('body');
@@ -79,13 +89,92 @@ test('shared confirmation resolves cancel/approve and exposes alertdialog semant
   assert.equal(modal.role, 'alertdialog');
   assert.equal(modal['aria-modal'], 'true');
   assert.equal(modal.open, true);
+  const modalActions = modal.children[0].children[2];
+  assert.equal(document.activeElement, modalActions.children[0], 'danger actions start on Cancel');
   modal.dispatch('cancel', { preventDefault() {} });
   assert.equal(await cancelled, false);
 
-  const approved = context.AIRPConfirm.confirm('approve me');
+  const approved = context.AIRPConfirm.confirm('approve me', { danger: false });
   await new Promise(resolve => setImmediate(resolve));
-  const actions = modal.children[2];
+  const actions = modal.children[0].children[2];
+  assert.equal(document.activeElement, actions.children[1], 'non-danger actions start on Confirm');
   actions.children[1].dispatch('click');
   assert.equal(await approved, true);
   assert.equal(modal.open, false);
+});
+
+test('fallback confirmation traps focus, cancels on Escape/outside click, and pumps queued requests', async () => {
+  class Element {
+    constructor(tagName) {
+      this.tagName = tagName.toUpperCase();
+      this.children = [];
+      this.listeners = new Map();
+      const classes = new Set();
+      this.classList = {
+        add: (...names) => names.forEach(name => classes.add(name)),
+        remove: (...names) => names.forEach(name => classes.delete(name)),
+        contains: name => classes.has(name),
+      };
+      this.open = false;
+      this.hidden = false;
+      this.textContent = '';
+      this.id = '';
+    }
+    append(...children) { this.children.push(...children); }
+    appendChild(child) { this.children.push(child); return child; }
+    addEventListener(type, listener) {
+      const list = this.listeners.get(type) || [];
+      list.push(listener);
+      this.listeners.set(type, list);
+    }
+    dispatch(type, event = {}) {
+      for (const listener of this.listeners.get(type) || []) listener({ target: this, ...event });
+    }
+    setAttribute(name, value) {
+      if (name === 'open') this.open = true;
+      else this[name] = String(value);
+    }
+    removeAttribute(name) { delete this[name]; }
+    focus() { this.ownerDocument.activeElement = this; }
+    close() { this.open = false; }
+  }
+  const document = {
+    activeElement: null,
+    listeners: new Map(),
+    createElement(tagName) {
+      const element = new Element(tagName);
+      element.ownerDocument = document;
+      return element;
+    },
+    addEventListener(type, listener) {
+      const list = this.listeners.get(type) || [];
+      list.push(listener);
+      this.listeners.set(type, list);
+    },
+    dispatch(type, event = {}) {
+      for (const listener of this.listeners.get(type) || []) listener(event);
+    },
+    body: null,
+  };
+  document.body = document.createElement('body');
+  const context = { document, console, globalThis: null };
+  context.globalThis = context;
+  vm.runInNewContext(helper, context);
+
+  const trigger = document.createElement('button');
+  document.body.appendChild(trigger);
+  trigger.focus();
+  const first = context.AIRPConfirm.confirm('first');
+  const second = context.AIRPConfirm.confirm('second');
+  await new Promise(resolve => setImmediate(resolve));
+  const modal = document.body.children[1];
+  assert.equal(modal.classList.contains('is-fallback'), true);
+  assert.equal(document.activeElement, modal.children[0].children[2].children[0], 'fallback danger action starts on Cancel');
+  document.dispatch('keydown', { key: 'Escape', preventDefault() {} });
+  assert.equal(await first, false);
+  assert.equal(modal.open, true, 'queued confirmation opens after cancellation');
+  modal.dispatch('click', { target: modal });
+  assert.equal(await second, false, 'outside click cancels the queued fallback');
+  assert.equal(modal.open, false);
+  assert.equal(document.activeElement, trigger, 'fallback cancellation restores the triggering focus');
 });
