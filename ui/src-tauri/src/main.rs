@@ -600,7 +600,8 @@ fn spawn_readiness_and_navigate(
         }
 
         // 3. bearer 注入通道：进程互信（access key）换短时效 UI token。
-        let exchanged = exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await;
+        let exchanged =
+            exchange_desktop_token(&client, &engine_url, access_key.as_deref(), true).await;
         let token = exchanged.as_ref().map(|(token, _)| token.clone());
 
         // 4. 导航首屏。fragment 不发送到服务端；entry.js 承接写入 sessionStorage。
@@ -690,7 +691,14 @@ fn spawn_token_renewal_loop(
                 (expires_in / 2).clamp(5, 4 * 3600)
             };
             tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-            match exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await {
+            match exchange_desktop_token(
+                &client,
+                &engine_url,
+                access_key.as_deref(),
+                consecutive_failures == 0,
+            )
+            .await
+            {
                 Some((new_token, new_expires_in)) => {
                     failed_fast = false;
                     consecutive_failures = 0;
@@ -764,10 +772,13 @@ fn show_port_conflict_error(app: &tauri::AppHandle, port: u16) {
 /// 返回 `(token, expires_in_secs)`；失败（无 key / engine 不支持 / 网络）
 /// 时返回 None：导航降级为无 bearer，webui 连接卡可手动输入（不阻断桌面
 /// 可用性）。expires_in 缺失时保守按 60s（宁可多续一次，不长期裸奔）。
+/// `log_failure_at_warn`：续期循环按连续失败次数降级日志（首次失败 warn、
+/// 后续 debug），避免 engine 长时间宕机时每次重试刷多条 warn（审计 #518）。
 async fn exchange_desktop_token(
     client: &reqwest::Client,
     engine_url: &str,
     access_key: Option<&str>,
+    log_failure_at_warn: bool,
 ) -> Option<(String, u64)> {
     let key = access_key?;
     let response = client
@@ -793,22 +804,38 @@ async fn exchange_desktop_token(
                         Some((token, expires_in))
                     }
                     None => {
-                        tracing::warn!("desktop-session response missing token field");
+                        if log_failure_at_warn {
+                            tracing::warn!("desktop-session response missing token field");
+                        } else {
+                            tracing::debug!("desktop-session response missing token field");
+                        }
                         None
                     }
                 }
             }
             Err(error) => {
-                tracing::warn!(%error, "failed to parse desktop-session response");
+                if log_failure_at_warn {
+                    tracing::warn!(%error, "failed to parse desktop-session response");
+                } else {
+                    tracing::debug!(%error, "failed to parse desktop-session response");
+                }
                 None
             }
         },
         Ok(resp) => {
-            tracing::warn!(status = %resp.status(), "desktop-session exchange rejected");
+            if log_failure_at_warn {
+                tracing::warn!(status = %resp.status(), "desktop-session exchange rejected");
+            } else {
+                tracing::debug!(status = %resp.status(), "desktop-session exchange rejected");
+            }
             None
         }
         Err(error) => {
-            tracing::warn!(%error, "desktop-session exchange failed");
+            if log_failure_at_warn {
+                tracing::warn!(%error, "desktop-session exchange failed");
+            } else {
+                tracing::debug!(%error, "desktop-session exchange failed");
+            }
             None
         }
     }

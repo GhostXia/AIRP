@@ -91,11 +91,13 @@ function defaultIntentHandler(name, params, instance) {
   const api = globalThis.AIRPApi;
   if (!api) {
     // api-client.js 未加载的页面（理论不应发生——四屏均先加载）回退裸 fetch：
-    // 行为同 C-P3，仍返回 promise，widget 可观测语义不丢失。
+    // 行为同 C-P3，仍返回 promise，widget 可观测语义不丢失；30s 超时对齐
+    // api-client 路径（审计 #518），engine 挂起时 intent promise 不悬挂。
     const fallback = fetch(engineUrl('/v1/widget-intents'), {
       method: 'POST',
       headers: authedHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(envelope),
+      signal: AbortSignal.timeout(30000),
     }).then(async (resp) => {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       return resp.json().catch(() => null);
