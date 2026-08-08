@@ -298,7 +298,7 @@
       AIRPWorkbench.reextractCharacterResources({
         characterId: state.characterId,
         button: reextractButton,
-        confirm: text => window.confirm(text),
+        confirm: text => AIRPConfirm.confirm(text, { title: '确认重新提取附属资源' }),
         request: (...args) => client.request(...args),
         setStatus,
         errorMessage: message,
@@ -451,7 +451,7 @@
         const delBtn = node('span', 'op-link del', '删除');
         delBtn.style.cursor = 'pointer';
         delBtn.addEventListener('click', async () => {
-          if (!window.confirm('删除条目“' + keys + '”？')) return;
+          if (!await AIRPConfirm.confirm('删除条目“' + keys + '”？', { title: '确认删除世界书条目' })) return;
           entries.splice(idx, 1); await saveBook(entries);
         });
         ops.append(editBtn, sw, delBtn);
@@ -539,7 +539,7 @@
     }));
     bar.append(button('删除 Persona', async () => {
       if (active === 'default') { setStatus('不能删除 default Persona', true); return; }
-      if (!window.confirm('确定删除 Persona「' + active + '」？此操作不可撤销。')) return;
+      if (!await AIRPConfirm.confirm('确定删除 Persona「' + active + '」？此操作不可撤销。', { title: '确认删除 Persona' })) return;
       await task('删除 Persona', () => client.request('DELETE', '/v1/users/' + encodeURIComponent(state.userId) + '/personas/' + encodeURIComponent(active)));
       renderPersona();
     }));
@@ -787,7 +787,7 @@
     await readSessionState();
     const recoverBtn = button('尝试恢复会话', async () => {
       if (!state.characterId) { setStatus('请先选择角色', true); return; }
-      if (!window.confirm('恢复会隔离未完成的提交标记（不会删除任何消息数据），然后允许继续对话。继续吗？')) return;
+      if (!await AIRPConfirm.confirm('恢复会隔离未完成的提交标记（不会删除任何消息数据），然后允许继续对话。继续吗？', { title: '确认恢复会话' })) return;
       try {
         const resp = await task('会话恢复', () => client.request('POST', '/v1/chat/session-recover', { character_id: state.characterId, session_id: state.sessionId || null }));
         phaseLine.textContent = '已恢复；标记已归档到：' + (resp && resp.quarantined_marker || 'quarantine 目录');
@@ -823,7 +823,7 @@
       const currentRev = driftEditor.control.dataset.revision;
       if (!currentRev || Number(currentRev) <= 1) { setStatus('没有可回滚的历史版本', true); return; }
       const targetRev = Number(currentRev) - 1;
-      if (!window.confirm('确定回滚到 revision ' + targetRev + '？当前内容将被替换。')) return;
+      if (!await AIRPConfirm.confirm('确定回滚到 revision ' + targetRev + '？当前内容将被替换。', { title: '确认回滚 Soul-Drift' })) return;
       await task('回滚 Soul-Drift', () => client.request('POST', '/v1/characters/' + encodeURIComponent(state.characterId) + '/drift/rollback', { revision: targetRev }));
       setStatus('Soul-Drift 已回滚到 revision ' + targetRev);
       loadDrift();
@@ -970,7 +970,7 @@
         if (!cid || !sid) { setStatus('请填写角色 ID 与会话 ID', true); return; }
         scopeBody = { kind: 'session', character_id: cid, session_id: sid };
       }
-      if (!window.confirm('即将创建备份。secrets.json 与 settings.json 会被排除。备份期间请暂停写入。继续？')) return;
+      if (!await AIRPConfirm.confirm('即将创建备份。secrets.json 与 settings.json 会被排除。备份期间请暂停写入。继续？', { title: '确认创建备份', danger: false })) return;
       try {
         await task('创建备份', () => client.request('POST', '/v1/backups', { source: 'manual', scope: scopeBody }));
         setStatus('备份已创建');
@@ -1034,14 +1034,15 @@
         } catch (error) { /* task 已 setStatus */ }
       }));
       actionBox.appendChild(button('恢复', async () => {
-        const ok = window.confirm(
+        const ok = await AIRPConfirm.confirm(
           '确定从备份 ' + shortId + ' 恢复？\n\n' +
           '此操作会：\n' +
           '1. 自动创建一个回滚备份（保护当前 data_root 状态）\n' +
           '2. 用备份内容覆盖 data_root 下所有非 backup 文件\n' +
           '3. secrets.json / settings.json 不会被恢复，需手动重新配置 provider key 与 access key\n' +
           '4. 建议恢复后重启 daemon，避免运行中状态与新数据不一致\n\n' +
-          '继续？'
+          '继续？',
+          { title: '确认恢复备份' }
         );
         if (!ok) return;
         try {
@@ -1051,7 +1052,7 @@
         } catch (error) { /* task 已 setStatus */ }
       }));
       actionBox.appendChild(button('删除', async () => {
-        if (!window.confirm('确定删除备份 ' + shortId + '？此操作不可恢复。')) return;
+        if (!await AIRPConfirm.confirm('确定删除备份 ' + shortId + '？此操作不可恢复。', { title: '确认删除备份' })) return;
         try {
           await task('删除备份', () => client.request('DELETE', '/v1/backups/' + encodeURIComponent(item.backup_id)));
           setStatus('备份已删除');
@@ -1225,7 +1226,7 @@
       }));
 
       actionBox.appendChild(button('删除', async () => {
-        if (!window.confirm('确定删除扩展 ' + widgetType + '？此操作不可恢复，相关文件目录会被清理。')) return;
+        if (!await AIRPConfirm.confirm('确定删除扩展 ' + widgetType + '？此操作不可恢复，相关文件目录会被清理。', { title: '确认删除扩展' })) return;
         try {
           await task('删除扩展', () => client.request('DELETE', '/v1/extensions/' + encodeURIComponent(item.id)));
           reload();
@@ -1262,10 +1263,11 @@
       panel.appendChild(grantActions);
       grantActions.appendChild(button('保存授权', async () => {
         const selected = checkboxes.filter(c => c.cb.checked).map(c => c.cap);
-        const ok = window.confirm(
+        const ok = await AIRPConfirm.confirm(
           '即将为 ' + ((item.manifest && item.manifest.type) || item.id) + ' 签发授权：\n' +
           (selected.length ? selected.join('\n') : '（清空，撤销全部授权）') + '\n\n' +
-          '授权后 widget 即可发起对应 capability 的 intent。继续？'
+          '授权后 widget 即可发起对应 capability 的 intent。继续？',
+          { title: '确认更新扩展授权', danger: false }
         );
         if (!ok) return;
         try {
@@ -1327,7 +1329,7 @@
         setStatus('Files 必须是 JSON 数组（每个元素含 path/content_base64/sha256）', true);
         return;
       }
-      if (!window.confirm('即将安装扩展 ' + (manifest.type || '?') + '。继续？')) return;
+      if (!await AIRPConfirm.confirm('即将安装扩展 ' + (manifest.type || '?') + '。继续？', { title: '确认安装扩展', danger: false })) return;
       try {
         const body = { manifest: manifest, files: files, slot: slotInput.control.value };
         const resp = await task('安装扩展', () => client.request('POST', '/v1/extensions/install', body));

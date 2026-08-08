@@ -56,7 +56,7 @@
   }
 
   async function deleteCharacter(id, name, btn) {
-    if (!window.confirm('确定删除角色「' + name + '」？\n此操作不可撤销，角色卡、世界书、会话历史将全部移除。')) return;
+    if (!await AIRPConfirm.confirm('确定删除角色「' + name + '」？\n此操作不可撤销，角色卡、世界书、会话历史将全部移除。', { title: '确认删除角色' })) return;
     if (btn) btn.disabled = true;
     setPageStatus('正在删除 ' + name + '…');
     try {
