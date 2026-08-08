@@ -418,55 +418,58 @@ test('widget-host: builtin module widget mounts in-process with host-enforced co
 });
 
 test('widget intent consumer preserves the optional engine result through slot mounting', async () => {
-  slots.clearSlots();
-  consent.clearGrants();
-  const doc = createFakeDom();
-  const container = doc.createElement('div');
-  container.setAttribute('data-slot', 'chat.sidebar');
-  doc.body.append(container);
+  let handles = [];
+  try {
+    slots.clearSlots();
+    consent.clearGrants();
+    const doc = createFakeDom();
+    const container = doc.createElement('div');
+    container.setAttribute('data-slot', 'chat.sidebar');
+    doc.body.append(container);
 
-  const seen = {};
-  const engineResponse = {
-    ok: true,
-    name: 'state.read',
-    widget_type: 't.intent-result',
-    instance_id: 'intent-1',
-    result: { hp: 100 },
-  };
+    const seen = {};
+    const engineResponse = {
+      ok: true,
+      name: 'state.read',
+      widget_type: 't.intent-result',
+      instance_id: 'intent-1',
+      result: { hp: 100 },
+    };
 
-  registry.registerModuleWidget('t.intent-result', () => ({
-    mount(_el, ctx) {
-      // A module widget is allowed to await ctx.emit(); this is the same
-      // promise returned by boot.js' POST /v1/widget-intents consumer.
-      seen.pending = ctx.emit('state.read', { character_id: 'alice' });
-    },
-  }));
-  slots.registerSlot({
-    id: 'chat.sidebar',
-    widgets: [{
+    registry.registerModuleWidget('t.intent-result', () => ({
+      mount(_el, ctx) {
+        // A module widget is allowed to await ctx.emit(); this is the same
+        // promise returned by boot.js' POST /v1/widget-intents consumer.
+        seen.pending = ctx.emit('state.read', { character_id: 'alice' });
+      },
+    }));
+    slots.registerSlot({
+      id: 'chat.sidebar',
+      widgets: [{
+        instance: { id: 'intent-1', type: 't.intent-result', capability: 'read:state' },
+        state: {},
+      }],
+    });
+
+    handles = slots.mountSlots(doc, {
+      onIntent(name, params, instance) {
+        seen.envelope = { name, params, instance };
+        return Promise.resolve(engineResponse);
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(seen.envelope, {
+      name: 'state.read',
+      params: { character_id: 'alice' },
       instance: { id: 'intent-1', type: 't.intent-result', capability: 'read:state' },
-      state: {},
-    }],
-  });
-
-  const handles = slots.mountSlots(doc, {
-    onIntent(name, params, instance) {
-      seen.envelope = { name, params, instance };
-      return Promise.resolve(engineResponse);
-    },
-  });
-  await new Promise(resolve => setTimeout(resolve, 0));
-
-  assert.deepEqual(seen.envelope, {
-    name: 'state.read',
-    params: { character_id: 'alice' },
-    instance: { id: 'intent-1', type: 't.intent-result', capability: 'read:state' },
-  });
-  assert.deepEqual(await seen.pending, engineResponse, 'optional result must remain observable to the widget');
-
-  for (const handle of handles) handle.destroy();
-  registry.unregisterWidget('t.intent-result');
-  slots.clearSlots();
+    });
+    assert.deepEqual(await seen.pending, engineResponse, 'optional result must remain observable to the widget');
+  } finally {
+    for (const handle of handles) handle.destroy();
+    registry.unregisterWidget('t.intent-result');
+    slots.clearSlots();
+  }
 });
 
 test('widget-host: module widget mount failure surfaces the failed state', async () => {
