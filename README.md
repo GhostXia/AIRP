@@ -54,7 +54,7 @@ AIRP-Core/AIRPCLI、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 是作�
 cargo run -p airp-core -- daemon --open-browser --webui-dir webui
 ```
 
-默认打开 `http://127.0.0.1:8000/`（引擎默认 `daemon_port=8000`）。首次运行进入 onboarding。开发模式只绑定 loopback；不要把 Engine 端口暴露给不可信网络或浏览器 origin。便携包/部署脚本会显式传入自己的端口（如 `deploy/` 下的 8765），以脚本参数为准。
+默认打开 `http://127.0.0.1:8765/`（引擎默认 `daemon_port=8765`）。首次运行进入 onboarding。开发模式只绑定 loopback；不要把 Engine 端口暴露给不可信网络或浏览器 origin。便携包/部署脚本会显式传入自己的端口（如 `deploy/` 下的 8765），以脚本参数为准。
 
 ### Windows 便携包
 

@@ -54,7 +54,7 @@ Rust, Node.js, and npm are required:
 cargo run -p airp-core -- daemon --open-browser --webui-dir webui
 ```
 
-The default URL is `http://127.0.0.1:8000/` (the engine default `daemon_port=8000`); first use opens onboarding. Development mode is loopback-only. Do not expose the Engine port to an untrusted network or browser origin. Portable packages and deploy scripts pass their own port explicitly (for example 8765 under `deploy/`); follow the script argument there.
+The default URL is `http://127.0.0.1:8765/` (the engine default `daemon_port=8765`); first use opens onboarding. Development mode is loopback-only. Do not expose the Engine port to an untrusted network or browser origin. Portable packages and deploy scripts pass their own port explicitly (for example 8765 under `deploy/`); follow the script argument there.
 
 ### Windows portable package
 

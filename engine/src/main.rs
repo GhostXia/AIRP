@@ -34,7 +34,7 @@ struct Cli {
 enum Commands {
     /// 启动守护进程 (Daemon SSE 网关)
     Daemon {
-        /// 监听端口，若不指定则使用配置文件中的 daemon_port 端口 (默认 8000)
+        /// 监听端口，若不指定则使用配置文件中的 daemon_port 端口 (默认 8765)
         #[arg(short, long)]
         port: Option<u16>,
 
