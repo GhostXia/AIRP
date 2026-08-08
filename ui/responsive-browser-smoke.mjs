@@ -106,13 +106,33 @@ try {
   }));
   assert.ok(scrollability.scrollHeight > scrollability.clientHeight, `chat log must have a bounded scroll owner: ${JSON.stringify(scrollability)}`);
 
-  const lastMessage = page.locator('.w-chat-log .msg').last();
-  await lastMessage.scrollIntoViewIfNeeded();
-  const lastRect = await lastMessage.evaluate(node => {
-    const rect = node.getBoundingClientRect();
-    return { top: rect.top, bottom: rect.bottom, viewportHeight: window.innerHeight };
+  // Drive the actual scroll owner to its logical end. Virtualized rows are
+  // recycled, so a DOM `.last()` assertion alone could only prove that the
+  // currently rendered slice has an end—not that message 23 is reachable.
+  const chatLog = page.locator('.w-chat-log');
+  await chatLog.evaluate(log => {
+    log.scrollTop = log.scrollHeight;
+    log.dispatchEvent(new Event('scroll', { bubbles: true }));
   });
-  assert.ok(lastRect.top >= 0 && lastRect.bottom <= lastRect.viewportHeight, `last message is not reachable: ${JSON.stringify(lastRect)}`);
+  await page.waitForFunction(() => [...document.querySelectorAll('.w-chat-log .msg')]
+    .some(node => node.textContent?.includes('responsive viewport message 23')), null, { timeout: 15_000 });
+  const tailMessage = page.locator('.w-chat-log .msg').filter({ hasText: 'responsive viewport message 23' }).first();
+  const tailRect = await chatLog.evaluate((log, targetText) => {
+    const target = [...log.querySelectorAll('.msg')].find(node => node.textContent?.includes(targetText));
+    const rect = target?.getBoundingClientRect();
+    const bounds = log.getBoundingClientRect();
+    return {
+      scrollTop: log.scrollTop,
+      targetTop: rect?.top ?? null,
+      targetBottom: rect?.bottom ?? null,
+      logTop: bounds.top,
+      logBottom: bounds.bottom,
+    };
+  }, 'responsive viewport message 23');
+  assert.equal(await tailMessage.count(), 1, 'logical tail message must be rendered after scrolling to scrollHeight');
+  assert.ok(tailRect.scrollTop > 0, `chat log did not scroll: ${JSON.stringify(tailRect)}`);
+  assert.ok(tailRect.targetTop >= tailRect.logTop && tailRect.targetBottom <= tailRect.logBottom,
+    `logical tail message is outside chat-log bounds: ${JSON.stringify(tailRect)}`);
   console.log(`Responsive short-viewport browser regression passed at ${origin}`);
 } finally {
   await browser.close();
