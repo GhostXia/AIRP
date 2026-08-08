@@ -1,15 +1,16 @@
 //! 运行时锁序追踪（LOCK-ORDER-CONTRACT §6.1）。
 //!
-//! 在 debug build 下用 thread-local 栈记录当前线程持有的 `character_lock` /
+//! 在 debug build 或启用 `lock-order-runtime` feature 时用 thread-local 栈记录当前线程持有的 `character_lock` /
 //! `session_lock` / `state_lock`，检测：
 //! - **R1**：获取 `session_lock` / `state_lock` 前必须先持 `character_lock`
-//!   （read 或 write）。违反触发 `debug_assert!`。
+//!   （read 或 write）。违反触发断言。
 //! - **R2**：持 `state_lock` 时获取 `session_lock` 禁止（`state → session`），
 //!   Bug F 类死锁回归。`session → state`（仅 `advance_plot` 经
 //!   `StateService::mutate_locked`）是 R2 唯一合法嵌套方向，不触发。
 //!
-//! release build (`--release`) 下 `track_*` 返回零成本 no-op `Guard`，满足
-//! LOCK-ORDER-CONTRACT §7「release build 零开销」。
+//! release build (`--release`) 默认下 `track_*` 返回零成本 no-op `Guard`，满足
+//! LOCK-ORDER-CONTRACT §7「release build 零开销」。CI 可启用
+//! `lock-order-runtime` feature，在优化构建中执行同一套 tracker 与违反路径测试。
 //!
 //! 约束：std `Mutex` guard 不得跨 `.await`（§4 A1），因此 thread-local 栈只在一
 //! 个同步作用域内有效；async fn 临界区是纯同步代码，guard 在作用域末尾 Drop。
@@ -17,10 +18,10 @@
 //! 合同：docs/LOCK-ORDER-CONTRACT.md §6.1 / §3 R1 / §3 R2 / §4 A1 / §7。
 
 // ── debug build ─────────────────────────────────────────────────────────────
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 use std::cell::RefCell;
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     CharacterRead,
@@ -29,17 +30,17 @@ enum Kind {
     State,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 thread_local! {
     static HELD: RefCell<Vec<Kind>> = const { RefCell::new(Vec::new()) };
 }
 
-/// RAII guard：构造时 push，Drop 时 pop。debug-only。
-#[cfg(debug_assertions)]
+/// RAII guard：构造时 push，Drop 时 pop。
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 #[must_use = "Guard tracks a held lock until dropped; bind it to a named variable for the whole critical section"]
 pub(crate) struct Guard(Option<Kind>);
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 impl Drop for Guard {
     fn drop(&mut self) {
         if let Some(kind) = self.0.take() {
@@ -55,29 +56,28 @@ impl Drop for Guard {
 }
 
 /// 栈中是否持有任意 `character_lock`（read 或 write）。R1 外层门控判定用。
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 fn character_held(held: &[Kind]) -> bool {
     held.contains(&Kind::CharacterRead) || held.contains(&Kind::CharacterWrite)
 }
 
 /// 记录已持有 `character_lock.read()`。R1 外层门控标记，无 violation 检查。
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 pub(crate) fn track_character_read() -> Guard {
     HELD.with(|held| held.borrow_mut().push(Kind::CharacterRead));
     Guard(Some(Kind::CharacterRead))
 }
 
 /// 记录已持有 `character_lock.write()`。R1 外层门控标记，无 violation 检查。
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 pub(crate) fn track_character_write() -> Guard {
     HELD.with(|held| held.borrow_mut().push(Kind::CharacterWrite));
     Guard(Some(Kind::CharacterWrite))
 }
 
 /// 记录已持有 `session_lock`。R1：必须先持 `character_lock`；R2：持
-/// `state_lock` 时获取 `session_lock` 禁止（`state → session`），均触发
-/// `debug_assert!`。
-#[cfg(debug_assertions)]
+/// `state_lock` 时获取 `session_lock` 禁止（`state → session`），均触发断言。
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 pub(crate) fn track_session() -> Guard {
     let (r1_violation, r2_violation) = HELD.with(|held| {
         let held = held.borrow();
@@ -85,12 +85,12 @@ pub(crate) fn track_session() -> Guard {
         let r2 = held.contains(&Kind::State);
         (r1, r2)
     });
-    debug_assert!(
+    assert!(
         !r2_violation,
         "LOCK-ORDER R2 violation: acquiring session_lock while state_lock held \
          (state→session forbidden; see docs/LOCK-ORDER-CONTRACT.md §3 R2)"
     );
-    debug_assert!(
+    assert!(
         !r1_violation,
         "LOCK-ORDER R1 violation: acquiring session_lock without character_lock held \
          (character is outer gate; see docs/LOCK-ORDER-CONTRACT.md §3 R1)"
@@ -101,13 +101,13 @@ pub(crate) fn track_session() -> Guard {
 
 /// 记录已持有 `state_lock`。R1：必须先持 `character_lock`；R2：`session →
 /// state` 合法（`advance_plot`），无 R2 violation。
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "lock-order-runtime"))]
 pub(crate) fn track_state() -> Guard {
     let r1_violation = HELD.with(|held| {
         let held = held.borrow();
         !character_held(&held)
     });
-    debug_assert!(
+    assert!(
         !r1_violation,
         "LOCK-ORDER R1 violation: acquiring state_lock without character_lock held \
          (character is outer gate; see docs/LOCK-ORDER-CONTRACT.md §3 R1)"
@@ -116,32 +116,32 @@ pub(crate) fn track_state() -> Guard {
     Guard(Some(Kind::State))
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(all(test, any(debug_assertions, feature = "lock-order-runtime")))]
 fn holds_character_read() -> bool {
     HELD.with(|held| held.borrow().contains(&Kind::CharacterRead))
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(all(test, any(debug_assertions, feature = "lock-order-runtime")))]
 fn holds_character_write() -> bool {
     HELD.with(|held| held.borrow().contains(&Kind::CharacterWrite))
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(all(test, any(debug_assertions, feature = "lock-order-runtime")))]
 fn holds_session() -> bool {
     HELD.with(|held| held.borrow().contains(&Kind::Session))
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(all(test, any(debug_assertions, feature = "lock-order-runtime")))]
 fn holds_state() -> bool {
     HELD.with(|held| held.borrow().contains(&Kind::State))
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(all(test, any(debug_assertions, feature = "lock-order-runtime")))]
 fn reset() {
     HELD.with(|held| held.borrow_mut().clear());
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(all(test, any(debug_assertions, feature = "lock-order-runtime")))]
 mod tests {
     use super::*;
 
@@ -279,7 +279,7 @@ mod tests {
     }
 
     /// R2：state → session 禁止（Bug F 类锁序倒置死锁）。
-    /// `track_session` 在持 state_lock 时必须 `debug_assert!` panic。
+    /// `track_session` 在持 state_lock 时必须触发 panic。
     #[test]
     fn state_then_session_panics() {
         reset();
@@ -325,31 +325,32 @@ mod tests {
     }
 }
 
-// ── release build（零成本 no-op）─────────────────────────────────────────────
-/// release build 零成本 no-op。`track_*` 不做任何检查，Guard 为 ZST。
-#[cfg(not(debug_assertions))]
+// ── release build（默认零成本 no-op）────────────────────────────────────────
+/// release build 默认零成本 no-op。启用 `lock-order-runtime` 时复用上面的
+/// tracker，在优化构建中保留锁序检查。
+#[cfg(not(any(debug_assertions, feature = "lock-order-runtime")))]
 #[must_use = "Guard tracks a held lock until dropped; bind it to a named variable for the whole critical section"]
 pub(crate) struct Guard;
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(debug_assertions, feature = "lock-order-runtime")))]
 #[inline]
 pub(crate) fn track_character_read() -> Guard {
     Guard
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(debug_assertions, feature = "lock-order-runtime")))]
 #[inline]
 pub(crate) fn track_character_write() -> Guard {
     Guard
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(debug_assertions, feature = "lock-order-runtime")))]
 #[inline]
 pub(crate) fn track_session() -> Guard {
     Guard
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(debug_assertions, feature = "lock-order-runtime")))]
 #[inline]
 pub(crate) fn track_state() -> Guard {
     Guard

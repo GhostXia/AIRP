@@ -13,6 +13,11 @@ readme = "README.md"
 name = "airp_core"
 path = "src/lib.rs"
 
+[features]
+# Keep production release artifacts zero-cost by default while allowing the
+# release-profile CI gate to execute the lock-order tracker in optimized code.
+lock-order-runtime = []
+
 [[bin]]
 name = "airp-core"
 path = "src/main.rs"
