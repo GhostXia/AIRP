@@ -316,6 +316,7 @@ mod tests {
     /// 子进程观察不到它——锁定「凭据不跨进程边界」的运行时行为。
     #[test]
     fn spawned_probe_sees_no_inherited_credentials() {
+        let _lock = crate::TEST_ENV_LOCK.blocking_lock();
         // 模拟 daemon 环境携带凭据；Guard 在测试结束（含 panic）恢复。
         let previous = std::env::var_os("AIRP_ACCESS_KEY");
         std::env::set_var("AIRP_ACCESS_KEY", "synthetic-secret");
