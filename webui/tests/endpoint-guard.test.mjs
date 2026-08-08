@@ -22,6 +22,10 @@ const assetsUrl = new URL('../assets/', import.meta.url);
 const golden = JSON.parse(
   await readFile(new URL('./fixtures/v1-endpoints.json', import.meta.url), 'utf8'),
 );
+const routerSource = await readFile(
+  new URL('../../engine/src/daemon/mod.rs', import.meta.url),
+  'utf8',
+);
 
 // ── 解析辅助（与 route-contract.test.mjs 同源） ──────────────────────────
 
@@ -116,6 +120,29 @@ function staticPath(expression) {
     }
   }
   return path.startsWith('/') ? canonicalPath(path) : null;
+}
+
+function engineRoutes(source) {
+  const routes = new Set();
+  for (const call of callArguments(source, '.route(')) {
+    const args = splitTopLevel(call);
+    const path = stringLiteral(args[0] || '');
+    if (!path || !args[1]) continue;
+    for (const match of args[1].matchAll(/\b(get|post|put|delete|patch)\s*\(/g)) {
+      routes.add(`${match[1].toUpperCase()} ${canonicalPath(path)}`);
+    }
+  }
+  return routes;
+}
+
+function retainedRouteKey(entry) {
+  return `${entry.method} ${canonicalPath(entry.path)}`;
+}
+
+function unregisteredRetainedRoutes(entries, registered) {
+  return entries
+    .filter(entry => !registered.has(retainedRouteKey(entry)))
+    .map(retainedRouteKey);
 }
 
 function routesAreCompatible(clientRoute, engineRoute) {
@@ -284,11 +311,117 @@ test('golden fixture is well-formed', () => {
         typeof entry.reason === 'string' && entry.reason.length > 0,
         `${key}: ui:false 必须给出引擎独有理由（reason）`,
       );
+      const hasRetentionMetadata = (
+        typeof entry.owner === 'string'
+        && entry.owner.length > 0
+        && entry.provenance
+        && typeof entry.provenance === 'object'
+        && typeof entry.provenance.source === 'string'
+        && typeof entry.provenance.ref === 'string'
+        && /^\d{4}-\d{2}-\d{2}$/.test(entry.reviewAfter || '')
+      );
+      const hasExternalContract = (
+        entry.externalContract
+        && typeof entry.externalContract === 'object'
+        && typeof entry.externalContract.source === 'string'
+        && entry.externalContract.source.length > 0
+      );
+      assert.ok(
+        hasRetentionMetadata || hasExternalContract,
+        `${key}: ui:false 必须给出 provenance/owner/reviewAfter 或 externalContract`,
+      );
     }
     if (entry.bodyLimit !== undefined) {
       assert.match(entry.bodyLimit, /^\d+(B|KB|MB)$/, `${key}: bodyLimit 格式非法`);
     }
   }
+});
+
+test('ui:false retention metadata stays synchronized with the external compatibility contract', async () => {
+  const retained = golden.endpoints.filter(entry => !entry.ui);
+  const contractSources = new Map();
+  for (const entry of retained) {
+    const source = entry.externalContract?.source;
+    assert.ok(source, `${entry.method} ${entry.path}: 缺少 externalContract.source`);
+    assert.match(source, /^(docs|engine)\/[A-Za-z0-9._/-]+\.md$/, `${entry.method} ${entry.path}: externalContract.source 必须是仓库内 Markdown 文件`);
+    if (!contractSources.has(source)) {
+      contractSources.set(source, await readFile(new URL(`../../${source}`, import.meta.url), 'utf8'));
+    }
+  }
+
+  const contractRows = new Map();
+  for (const [source, text] of contractSources) {
+    const rows = text.matchAll(/^\|\s*(GET|POST|PUT|DELETE|PATCH)\s*\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*(\d{4}-\d{2}-\d{2})\s*\|/gm);
+    for (const [, method, path, owner, reviewAfter] of rows) {
+      const route = `${method} ${canonicalPath(path)}`;
+      assert.equal(contractRows.has(route), false, `compatibility contract 重复条目: ${route}`);
+      contractRows.set(route, { source, owner: owner.trim(), reviewAfter });
+    }
+  }
+
+  const retainedRoutes = new Set(retained.map(entry => `${entry.method} ${canonicalPath(entry.path)}`));
+  assert.deepEqual(
+    [...contractRows.keys()].sort(),
+    [...retainedRoutes].sort(),
+    'compatibility contract 路由集合必须与 fixture 的全部 ui:false 条目一致（不得漏掉 /v1/conversations*）',
+  );
+
+  const provenanceSources = new Map();
+  for (const entry of retained) {
+    const route = `${entry.method} ${canonicalPath(entry.path)}`;
+    const contract = contractRows.get(route);
+    assert.ok(contract, `${route}: externalContract 未在合同表中登记`);
+    assert.equal(entry.owner, contract.owner, `${route}: fixture owner 与合同 owner 不同步`);
+    assert.equal(entry.reviewAfter, contract.reviewAfter, `${route}: fixture reviewAfter 与合同 review-after 不同步`);
+
+    const sourceText = contractSources.get(contract.source);
+    assert.ok(
+      sourceText.includes(`| ${entry.method} | \`${entry.path}\` |`),
+      `${route}: externalContract source 未包含精确方法/路径行`,
+    );
+
+    const provenance = entry.provenance;
+    assert.ok(provenance, `${route}: 缺少 provenance`);
+    assert.equal(provenance.source, golden.generatedFrom.file, `${route}: provenance.source 必须与 generatedFrom.file 同步`);
+    assert.equal(provenance.ref, golden.generatedFrom.ref, `${route}: provenance.ref 必须与 generatedFrom.ref 同步`);
+    if (!provenanceSources.has(provenance.source)) {
+      provenanceSources.set(
+        provenance.source,
+        await readFile(new URL(`../../${provenance.source}`, import.meta.url), 'utf8'),
+      );
+    }
+    assert.ok(
+      provenanceSources.get(provenance.source).includes(`"${entry.path}"`),
+      `${route}: provenance source 未包含路由声明`,
+    );
+  }
+});
+
+test('ui:false retention routes stay synchronized with Engine method and path declarations', () => {
+  const registered = engineRoutes(routerSource);
+  const retained = golden.endpoints.filter(entry => !entry.ui);
+  assert.deepEqual(
+    unregisteredRetainedRoutes(retained, registered),
+    [],
+    'ui:false fixture routes must match the current Engine HTTP method and path declarations',
+  );
+});
+
+test('retention parity rejects a GET-to-POST drift', () => {
+  const registered = engineRoutes(routerSource);
+  const sourceEntry = golden.endpoints.find(entry => (
+    entry.method === 'GET' && entry.path === '/v1/backups/:backup_id' && !entry.ui
+  ));
+  assert.ok(sourceEntry, 'GET /v1/backups/:backup_id fixture entry must remain retained');
+  assert.ok(registered.has('GET /v1/backups/:param'));
+  assert.equal(registered.has('POST /v1/backups/:param'), false);
+
+  const driftedEntry = { ...sourceEntry, method: 'POST' };
+  assert.deepEqual(
+    unregisteredRetainedRoutes([driftedEntry], registered),
+    ['POST /v1/backups/:param'],
+    'changing a retained GET route to POST must fail exact method/path parity',
+  );
 });
 
 test('every /v1 endpoint called by WebUI exists in the golden inventory', async () => {
