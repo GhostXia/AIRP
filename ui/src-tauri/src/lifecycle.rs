@@ -97,6 +97,7 @@ pub fn acquire_lock(path: &Path) -> io::Result<LockGuard> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(path)?;
     match file.try_lock() {
         Ok(()) => {}
@@ -181,24 +182,6 @@ fn read_lock_from_file(file: &mut File) -> Option<InstanceLock> {
     let mut raw = String::new();
     file.read_to_string(&mut raw).ok()?;
     serde_json::from_str(&raw).ok()
-}
-
-/// 写入锁文件（通过短生命周期的独占锁 guard）。
-///
-/// Startup code should keep one [`LockGuard`] for the complete probe/spawn
-/// sequence instead of calling this helper between separate probes.
-pub fn write_lock(path: &Path, lock: &InstanceLock) -> io::Result<()> {
-    let mut guard = acquire_lock(path)?;
-    guard.write_lock(lock)
-}
-
-/// Best-effort 删除锁文件（不存在不算错误）。
-pub fn remove_lock(path: &Path) {
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!(%error, "failed to remove engine instance lock"),
-    }
 }
 
 /// 仅当锁文件归属给定 instance_id 时清空（退出清理防误删他人锁）。
@@ -464,7 +447,10 @@ mod tests {
         let lock = lock(100, 200, 8000);
 
         assert!(read_lock(&path).is_none());
-        write_lock(&path, &lock).unwrap();
+        let mut guard = acquire_lock(&path).unwrap();
+        guard.write_lock(&lock).unwrap();
+        assert_eq!(guard.read_lock(), Some(lock.clone()));
+        drop(guard);
         assert_eq!(read_lock(&path), Some(lock.clone()));
 
         // 非归属实例不删除。
@@ -473,8 +459,6 @@ mod tests {
         // 归属实例删除。
         remove_lock_if_owned(&path, &lock.instance_id);
         assert!(read_lock(&path).is_none());
-        // 重复删除不报错。
-        remove_lock(&path);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
