@@ -3,10 +3,11 @@
 > Implements #192 (dependency discovery + audit routing) and #190 (third-party
 > notices + SBOM generation).
 >
-> Status: dev/CI artifact. The output in `docs/sbom/` is regenerated on demand
-> and committed alongside dependency changes; it is NOT a formal release SBOM
-> until `--fail-on-unknown` passes clean and a human has signed off on every
-> `audit-required` record.
+> Status: dev/CI artifact plus a formal release gate. Pull requests keep the
+> committed snapshot in `docs/sbom/`; the Windows release workflow regenerates
+> an exact-tag bundle and blocks on classified `block` records or unknown
+> third-party licenses. `audit-required` records still require human sign-off
+> before publishing a release.
 
 ## What this directory contains
 
@@ -58,6 +59,13 @@ Regenerate `docs/sbom/` whenever:
    upstream license/provenance metadata updates in `cargo metadata` output.
 
 Do NOT regenerate on every CI run — the output is committed, not ephemeral.
+
+On a published GitHub release, `.github/workflows/webui-windows-build.yml`
+regenerates the inventory from that tag, runs `--fail-on-block` and
+`--fail-on-unknown`, then attaches the SPDX, CycloneDX, inventory, and
+third-party notice files to the release. This keeps the checked-in snapshot
+useful for review while making the release artifact reflect the exact lockfiles
+being packaged.
 
 ## Permissions and token boundaries
 

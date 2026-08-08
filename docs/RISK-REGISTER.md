@@ -61,11 +61,11 @@
 
 ## RR-008 · Automatic PR quality gate
 
-- **Status**: Mitigated in PR #111; `pr-gate.yml` runs Rust and UI quality gates without persisted checkout credentials. PR #218 upgraded GitHub Actions to `actions/checkout@v7` / `setup-node@v6` / `upload-artifact@v7` (the v6/v7 action wrappers themselves run on Node 24; workflow step `node-version` stays at 20.19.0 and is what UI/Vitest/WebUI tests execute under), and delivered `tools/dep-governance/` (dependency discovery + audit routing + SPDX-2.3 / CycloneDX 1.5 SBOM generation) as an offline manual toolchain; SBOM snapshot lives in `docs/sbom/`.
+- **Status**: Mitigated in PR #111; `pr-gate.yml` runs Rust and UI quality gates without persisted checkout credentials. PR #218 upgraded GitHub Actions to `actions/checkout@v7` / `setup-node@v6` / `upload-artifact@v7` (the v6/v7 action wrappers themselves run on Node 24; workflow step `node-version` stays at 20.19.0 and is what UI/Vitest/WebUI tests execute under), and delivered `tools/dep-governance/` (dependency discovery + audit routing + SPDX-2.3 / CycloneDX 1.5 SBOM generation). The Windows release workflow now regenerates and validates an exact-tag SBOM bundle before attaching it to a published release.
 - **Surface**: `pr-gate.yml` runs formatting, strict Clippy, workspace tests, sacred prompt-boundary invariants, UI tests/typecheck, WebUI syntax checks and production topology smoke.
-- **Risk**: Packaged installer/runtime behavior, provider-backed remote smoke, automatic upstream version detection, and SBOM-as-release-gate are intentionally outside routine PR CI; dep-governance tooling is manually run, not enforced.
-- **Current control**: Required PR checks plus local/human review; checkout credentials are not persisted; dep-governance routing policy documents auto-pass / audit-required / block classes for known licenses.
-- **Required direction**: Keep release artifact smoke as a separate release gate; wire dep-governance SBOM into release pipeline as a mandatory gate; add automatic upstream-version detection with de-duplicated issues (#192 follow-up slice); expand CI only when deterministic fixtures exist.
+- **Risk**: Packaged installer/runtime behavior, provider-backed remote smoke, and automatic upstream version detection remain outside routine PR CI; `audit-required` SBOM records still need human sign-off.
+- **Current control**: Required PR checks plus local/human review; checkout credentials are not persisted; release packaging regenerates the exact-tag SBOM and fails on `block` records or unknown third-party licenses; dep-governance routing policy documents auto-pass / audit-required / block classes for known licenses.
+- **Required direction**: Keep release artifact smoke and the SBOM validation as separate release gates; add automatic upstream-version detection with de-duplicated issues (#192 follow-up slice); expand CI only when deterministic fixtures exist.
 
 ## RR-009 · Production gateway/engine authority confusion
 
