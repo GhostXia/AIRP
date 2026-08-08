@@ -21,6 +21,68 @@ if (-not (Test-Path -LiteralPath (Join-Path $webui 'index.html') -PathType Leaf)
     throw 'Portable webui/index.html is missing.'
 }
 
+function Assert-LockHasNoOwner {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "engine instance lock file is missing: $Path"
+    }
+    $raw = Get-Content -LiteralPath $Path -Raw
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return
+    }
+    throw "engine instance lock still contains non-empty content: $Path"
+}
+
+function Assert-LiveLockOwner {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][int]$ExpectedShellPid,
+        [Parameter(Mandatory = $true)][int]$ExpectedPort,
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$ExpectedShellProcess
+    )
+
+    $lastError = 'owner record was not available'
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if ($ExpectedShellProcess.HasExited) {
+            throw "AIRP UI shell PID $ExpectedShellPid exited before owner record was verified"
+        }
+        try {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+                throw "engine instance lock missing under $Path"
+            }
+            $raw = Get-Content -LiteralPath $Path -Raw
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+                throw "engine instance lock is empty while shell PID $ExpectedShellPid is running"
+            }
+            $record = $raw | ConvertFrom-Json
+            $shellPid = [int64]$record.shell_pid
+            $enginePid = [int64]$record.engine_pid
+            $port = [int64]$record.port
+            $instanceId = [string]$record.instance_id
+            $null = [Guid]::Parse($instanceId)
+            if ($shellPid -ne [int64]$ExpectedShellPid) {
+                throw "engine instance lock shell_pid $shellPid does not match UI PID $ExpectedShellPid"
+            }
+            if ($enginePid -le 0) {
+                throw "engine instance lock engine_pid is invalid: $enginePid"
+            }
+            if ($port -ne [int64]$ExpectedPort) {
+                throw "engine instance lock port $port does not match smoke port $ExpectedPort"
+            }
+            if ([string]::IsNullOrWhiteSpace($instanceId)) {
+                throw 'engine instance lock instance_id is empty'
+            }
+            return
+        }
+        catch {
+            $lastError = $_.Exception.Message
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    throw "engine instance lock owner verification timed out: $lastError"
+}
+
 # 便携包体数据共用前提：包内 data/ 不预建。壳在便携模式（包体标记
 # airp-core.exe + webui/index.html 齐备）下以 exe 同目录 data/ 为数据根，
 # setup 会 create_dir_all 补齐；保持全新解压包状态可顺带回归断言
@@ -56,6 +118,7 @@ Remove-Item Env:AIRP_WEBUI_DIR -ErrorAction SilentlyContinue
 $env:AIRP_DAEMON_PORT = "$Port"
 
 $uiProcess = $null
+$secondUiProcess = $null
 try {
     $uiProcess = Start-Process -FilePath $ui -WorkingDirectory $package -PassThru -WindowStyle Hidden
 
@@ -91,9 +154,7 @@ try {
 
     # 4. 数据共用：壳与 webui 便携包共用包内 data/（锁文件落在包内证明
     #    便携数据根生效，而非 %APPDATA%）。
-    if (-not (Test-Path -LiteralPath $lock -PathType Leaf)) {
-        throw "engine instance lock not found under $lock; desktop shell did not use the package data\ folder"
-    }
+    Assert-LiveLockOwner -Path $lock -ExpectedShellPid $uiProcess.Id -ExpectedPort $Port -ExpectedShellProcess $uiProcess
     Write-Host "Desktop shell uses the shared package data folder: $data"
 
     # 5. 优雅退出：关窗口 → 壳退出 → sidecar 停止 → 归属锁清理。
@@ -110,21 +171,61 @@ try {
         Start-Sleep -Milliseconds 250
     }
     if (-not $stopped) { throw 'engine sidecar remained alive after UI exit' }
-    if (Test-Path -LiteralPath $lock -PathType Leaf) {
-        throw 'engine instance lock was not cleaned up after UI exit'
+    Assert-LockHasNoOwner -Path $lock
+
+    # 6. Reopen after graceful shutdown.  The lock inode is intentionally
+    # retained; a second launch must acquire it, publish a fresh owner, and
+    # clean it again on exit.
+    $secondUiProcess = Start-Process -FilePath $ui -WorkingDirectory $package -PassThru -WindowStyle Hidden
+    try {
+        $secondReady = $false
+        for ($attempt = 0; $attempt -lt 60; $attempt++) {
+            if ($secondUiProcess.HasExited) {
+                throw "AIRP UI second launch exited early with code $($secondUiProcess.ExitCode)"
+            }
+            try {
+                $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/version" -TimeoutSec 1
+                if ($response.name -eq 'airp-core') { $secondReady = $true; break }
+            }
+            catch { Start-Sleep -Milliseconds 250 }
+        }
+        if (-not $secondReady) { throw "bundled engine did not become ready on second launch on port $Port" }
+        Assert-LiveLockOwner -Path $lock -ExpectedShellPid $secondUiProcess.Id -ExpectedPort $Port -ExpectedShellProcess $secondUiProcess
+        if (-not $secondUiProcess.CloseMainWindow()) {
+            throw 'could not request graceful shutdown for second UI launch'
+        }
+        if (-not $secondUiProcess.WaitForExit(10000)) {
+            throw 'AIRP UI second launch did not exit after window close'
+        }
+        $secondStopped = $false
+        for ($attempt = 0; $attempt -lt 40; $attempt++) {
+            try { Invoke-RestMethod -Uri "http://127.0.0.1:$Port/version" -TimeoutSec 1 | Out-Null }
+            catch { $secondStopped = $true; break }
+            Start-Sleep -Milliseconds 250
+        }
+        if (-not $secondStopped) { throw 'engine sidecar remained alive after second UI exit' }
+        Assert-LockHasNoOwner -Path $lock
     }
-    Write-Host 'Desktop UI smoke passed: readiness, same-origin hosting, shared data folder, graceful exit, and lock cleanup.'
+    finally {
+        if ($secondUiProcess -and -not $secondUiProcess.HasExited) {
+            Stop-Process -Id $secondUiProcess.Id -Force
+        }
+    }
+    Write-Host 'Desktop UI smoke passed: readiness, same-origin hosting, shared data folder, graceful exit, lock reuse, and cleanup.'
 }
 finally {
     # 失败路径清理：壳被强杀时 sidecar 可能存活（锁文件还在），先按归属
     # 锁的 engine_pid 清理残留 engine，再强杀壳，避免占端口/挡下次 smoke。
     if (Test-Path -LiteralPath $lock -PathType Leaf) {
         try {
-            $lockJson = Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
-            if ($lockJson.engine_pid) {
-                if (Get-Process -Id $lockJson.engine_pid -ErrorAction SilentlyContinue) {
-                    Stop-Process -Id $lockJson.engine_pid -Force
-                    Write-Host "Cleaned up leftover engine process $($lockJson.engine_pid)"
+            $lockRaw = Get-Content -LiteralPath $lock -Raw
+            if (-not [string]::IsNullOrWhiteSpace($lockRaw)) {
+                $lockJson = $lockRaw | ConvertFrom-Json
+                if ($lockJson.engine_pid) {
+                    if (Get-Process -Id $lockJson.engine_pid -ErrorAction SilentlyContinue) {
+                        Stop-Process -Id $lockJson.engine_pid -Force
+                        Write-Host "Cleaned up leftover engine process $($lockJson.engine_pid)"
+                    }
                 }
             }
         }

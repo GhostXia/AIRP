@@ -13,7 +13,7 @@
 //! - c) 端口被外部进程占用 → 承载 webui 则复用；否则给可操作提示。
 //!
 //! 防双开：锁中 shell_pid 活着（且不是本进程）→ 第二实例提示后退出。
-//! 退出清理：壳退出时 kill sidecar 并删除归属本实例的锁文件。
+//! 退出清理：壳退出时 kill sidecar 并清空归属本实例的锁记录；锁 inode 保留。
 //!
 //! PID 判定一律走身份探测（[`is_process_running`]）：存活 + 映像名匹配
 //! （壳须 airp-ui、engine 须 airp-core），Windows PID 回绕复用不会导致
@@ -132,8 +132,8 @@ pub enum StartupPlan {
 /// `process_running` 是身份探测而非存活探测：实现方须同时校验 PID 存活
 /// 与映像名匹配（见 [`is_process_running`]），不匹配视为不存在。
 ///
-/// 注意：返回 `SpawnFresh` 时，调用方仍需 best-effort 删除陈旧锁文件
-/// （分支 b 与无锁情形共用该出口）。
+/// 注意：返回 `SpawnFresh` 时，调用方仍需 best-effort 清空陈旧锁记录
+/// （分支 b 与无锁情形共用该出口；锁 inode 不应被删除）。
 pub fn decide_startup(
     lock: Option<&InstanceLock>,
     current_shell_pid: u32,
@@ -480,6 +480,78 @@ mod tests {
     }
 
     #[test]
+    fn lock_blocks_real_child_process() {
+        let path = std::env::var_os("AIRP_LIFECYCLE_CHILD_LOCK_PATH").map(std::path::PathBuf::from);
+        if let Some(path) = path {
+            let ready = std::env::var_os("AIRP_LIFECYCLE_CHILD_READY")
+                .map(std::path::PathBuf::from)
+                .expect("child ready path");
+            let release = std::env::var_os("AIRP_LIFECYCLE_CHILD_RELEASE")
+                .map(std::path::PathBuf::from)
+                .expect("child release path");
+            let _guard = acquire_lock(&path).expect("child must acquire lifecycle lock");
+            std::fs::write(ready, b"ready").unwrap();
+            for _ in 0..250 {
+                if release.exists() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("parent did not release child lifecycle lock within timeout");
+        }
+
+        let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LOCK_FILE_NAME);
+        let ready = dir.join("child.ready");
+        let release = dir.join("child.release");
+        let test_name = "lifecycle::tests::lock_blocks_real_child_process";
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env("AIRP_LIFECYCLE_CHILD_LOCK_PATH", &path)
+            .env("AIRP_LIFECYCLE_CHILD_READY", &ready)
+            .env("AIRP_LIFECYCLE_CHILD_RELEASE", &release)
+            .spawn()
+            .unwrap();
+
+        let mut ready_seen = false;
+        for _ in 0..250 {
+            if ready.exists() {
+                ready_seen = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !ready_seen {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child did not publish lock-held readiness within timeout");
+        }
+        let blocked_kind = match acquire_lock(&path) {
+            Err(error) => error.kind(),
+            Ok(guard) => {
+                drop(guard);
+                io::ErrorKind::Other
+            }
+        };
+        if blocked_kind != io::ErrorKind::WouldBlock {
+            let _ = std::fs::write(&release, b"release");
+            let _ = child.wait();
+            panic!("parent was not blocked by child lifecycle lock: {blocked_kind:?}");
+        }
+        std::fs::write(&release, b"release").unwrap();
+        let child_status = child.wait().unwrap();
+        assert!(
+            child_status.success(),
+            "child failed while holding lifecycle lock"
+        );
+
+        let reclaimed = acquire_lock(&path).expect("parent reclaims lock after child exits");
+        drop(reclaimed);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn lock_guard_keeps_owner_record_on_same_inode() {
         let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -495,6 +567,38 @@ mod tests {
         guard.clear().unwrap();
         assert!(guard.read_lock().is_none());
         drop(guard);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn owned_cleanup_retains_lock_inode_for_reuse() {
+        let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LOCK_FILE_NAME);
+        let identity_link = dir.join("engine-instance.identity-link");
+        let owner = lock(100, 200, 8000);
+
+        let mut guard = acquire_lock(&path).unwrap();
+        guard.write_lock(&owner).unwrap();
+        drop(guard);
+        // A hard link observes the original inode.  If cleanup unlinked and
+        // recreated the path, subsequent writes would diverge from this link.
+        std::fs::hard_link(&path, &identity_link).unwrap();
+
+        remove_lock_if_owned(&path, &owner.instance_id);
+        assert!(path.exists(), "cleanup must retain the durable lock inode");
+        assert!(read_lock(&path).is_none());
+
+        let replacement = lock(300, 400, 8001);
+        let mut guard = acquire_lock(&path).unwrap();
+        guard.write_lock(&replacement).unwrap();
+        drop(guard);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            std::fs::read_to_string(&identity_link).unwrap(),
+            "writes through the path must remain visible through the original inode"
+        );
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
