@@ -26,6 +26,34 @@ use airp_core::config::VolumeConfig;
 use airp_core::daemon::{create_router, DaemonState, MutableConfig};
 use airp_core::quota::QuotaConfig;
 
+const MODELS_PROXY_TIMEOUT_ENV: &str = "AIRP_MODELS_PROXY_TIMEOUT_MS";
+
+/// Serialize tests that exercise `/v1/models`, whose handler reads the process
+/// environment for its timeout configuration.
+static MODELS_PROXY_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.as_deref() {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 /// Minimal Tavern V2 character card JSON.
 fn inline_card() -> &'static str {
     r#"{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"TestChar","description":"A test character","personality":"","scenario":"","first_mes":"Hello!","mes_example":"","creator_notes":"","system_prompt":"","post_history_instructions":"","tags":[],"creator":"","character_version":"","alternate_greetings":[],"extensions":{}}}"#
@@ -202,6 +230,7 @@ async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::T
 
 #[tokio::test]
 async fn test_models_proxy_success_passthrough() {
+    let _env_lock = MODELS_PROXY_ENV_LOCK.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/models"))
@@ -227,6 +256,7 @@ async fn test_models_proxy_success_passthrough() {
 
 #[tokio::test]
 async fn test_models_proxy_upstream_status_returns_typed_error() {
+    let _env_lock = MODELS_PROXY_ENV_LOCK.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/models"))
@@ -260,6 +290,7 @@ async fn test_models_proxy_upstream_status_returns_typed_error() {
 
 #[tokio::test]
 async fn test_models_proxy_invalid_endpoint_returns_typed_error() {
+    let _env_lock = MODELS_PROXY_ENV_LOCK.lock().await;
     let (state, _tmp) = setup_with_endpoint("not-a-url".to_string()).await;
     let router = create_router(state);
     let resp = router
@@ -276,6 +307,7 @@ async fn test_models_proxy_invalid_endpoint_returns_typed_error() {
 
 #[tokio::test]
 async fn test_models_proxy_invalid_endpoint_redacts_query_detail() {
+    let _env_lock = MODELS_PROXY_ENV_LOCK.lock().await;
     let (state, _tmp) = setup_with_endpoint("not-a-url?api_key=secret".to_string()).await;
     let router = create_router(state);
     let resp = router
@@ -295,6 +327,7 @@ async fn test_models_proxy_invalid_endpoint_redacts_query_detail() {
 /// 畸形 URL，必须走 invalid_endpoint 类型化错误。
 #[tokio::test]
 async fn test_models_proxy_no_path_endpoint_returns_invalid_endpoint() {
+    let _env_lock = MODELS_PROXY_ENV_LOCK.lock().await;
     let (state, _tmp) = setup_with_endpoint("http://example.com".to_string()).await;
     let router = create_router(state);
     let resp = router
@@ -312,6 +345,7 @@ async fn test_models_proxy_no_path_endpoint_returns_invalid_endpoint() {
 /// 通过 `AIRP_MODELS_PROXY_TIMEOUT_MS` 走快速超时路径，避免测试等满默认 5s。
 #[tokio::test]
 async fn test_models_proxy_upstream_timeout_returns_504() {
+    let _env_lock = MODELS_PROXY_ENV_LOCK.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/models"))
@@ -323,19 +357,22 @@ async fn test_models_proxy_upstream_timeout_returns_504() {
         .mount(&server)
         .await;
 
-    std::env::set_var("AIRP_MODELS_PROXY_TIMEOUT_MS", "200");
-    let (state, _tmp) = setup(&server.uri()).await;
-    let router = create_router(state);
-    let resp = router
-        .oneshot(build_get_request("/v1/models"))
-        .await
-        .unwrap();
-    std::env::remove_var("AIRP_MODELS_PROXY_TIMEOUT_MS");
+    let previous_timeout = std::env::var_os(MODELS_PROXY_TIMEOUT_ENV);
+    {
+        let _timeout_env = EnvVarGuard::set(MODELS_PROXY_TIMEOUT_ENV, "200");
+        let (state, _tmp) = setup(&server.uri()).await;
+        let router = create_router(state);
+        let resp = router
+            .oneshot(build_get_request("/v1/models"))
+            .await
+            .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
-    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"]["code"], "upstream_timeout");
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "upstream_timeout");
+    }
+    assert_eq!(std::env::var_os(MODELS_PROXY_TIMEOUT_ENV), previous_timeout);
 }
 
 #[tokio::test]
