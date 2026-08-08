@@ -33,7 +33,8 @@ fn manifest_with_port(id: &str, port: u16) -> TrustedPluginManifest {
 }
 
 /// 起一个假的 trusted plugin（echo server）在随机 loopback 端口，
-/// 返回 (端口, join handle)。
+/// 返回 (端口, join handle)。回显 method / path / query / body 与收到的
+/// header 名（不回显值——测试仅断言脱敏，值可能含凭据）。
 async fn spawn_fake_plugin() -> (u16, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -43,6 +44,11 @@ async fn spawn_fake_plugin() -> (u16, tokio::task::JoinHandle<()>) {
             let method = req.method().to_string();
             let path = req.uri().path().to_string();
             let query = req.uri().query().unwrap_or("").to_string();
+            let headers: Vec<String> = req
+                .headers()
+                .iter()
+                .map(|(name, _)| name.as_str().to_ascii_lowercase())
+                .collect();
             let body = String::from_utf8_lossy(
                 &axum::body::to_bytes(req.into_body(), usize::MAX)
                     .await
@@ -52,8 +58,14 @@ async fn spawn_fake_plugin() -> (u16, tokio::task::JoinHandle<()>) {
             (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "application/json")],
-                serde_json::json!({ "method": method, "path": path, "query": query, "body": body })
-                    .to_string(),
+                serde_json::json!({
+                    "method": method,
+                    "path": path,
+                    "query": query,
+                    "body": body,
+                    "headers": headers,
+                })
+                .to_string(),
             )
         }),
     );
@@ -120,6 +132,53 @@ async fn proxy_forwards_post_with_body() {
     assert_eq!(body["method"], "POST");
     assert_eq!(body["path"], "/speak");
     assert_eq!(body["body"], r#"{"text":"hi"}"#);
+}
+
+/// 审计 #506 N7：反代只透传 Content-Type，不透传 daemon 的
+/// Authorization / Cookie / Origin 等头（凭据不泄漏给插件；插件应自行
+/// 校验请求，见 #498 §7.2）。
+#[tokio::test]
+async fn proxy_strips_sensitive_headers() {
+    let (port, _plugin) = spawn_fake_plugin().await;
+    let (state, _tmp) = make_state_no_key();
+    state
+        .plugins
+        .write()
+        .unwrap()
+        .push(manifest_with_port("com.example.echo", port));
+    let router = create_router(state);
+
+    let resp = router
+        .oneshot(
+            Request::get("/api/plugins/com.example.echo/ping")
+                .extension(ConnectInfo(loopback_addr()))
+                .header(header::AUTHORIZATION, "Bearer daemon-secret")
+                .header(header::COOKIE, "session=abc")
+                .header(header::ORIGIN, "https://evil.example")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let names: Vec<&str> = body["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h.as_str().unwrap())
+        .collect();
+    for sensitive in ["authorization", "cookie", "origin"] {
+        assert!(
+            !names.contains(&sensitive),
+            "proxy must not forward {sensitive} header (got: {names:?})"
+        );
+    }
+    assert!(
+        names.contains(&"content-type"),
+        "content-type must be forwarded (got: {names:?})"
+    );
 }
 
 /// 未知 plugin id → 404 plugin_not_found。

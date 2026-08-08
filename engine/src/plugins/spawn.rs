@@ -45,16 +45,47 @@ pub async fn spawn_all(
 }
 
 async fn spawn_one(manifest: &TrustedPluginManifest, data_root: &Path) -> Result<Child, String> {
+    let command = build_command(manifest, data_root)?;
+    let program = command.get_program().to_string_lossy().into_owned();
+    // tokio Command 零成本包装 std Command（unix process_group 等配置
+    // 在 From 转换中完整保留）。
+    let mut cmd = tokio::process::Command::from(command);
+    // 长跑服务：stdout/stderr 直接进 daemon 终端（piped 会因缓冲满
+    // 阻塞子进程写日志）。
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        // 审计 B3：kill_on_drop 保证 Child drop 时（含 panic / SIGKILL /
+        // runtime 异常退出）直接子进程被 kill，不留孤儿进程。
+        .kill_on_drop(true);
+    // 审计 B2（Unix）：process_group(0) 让子进程成为新进程组组长
+    //（PGID = PID），terminate_graceful 用 killpg 终止整个组（含孙进程）。
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd.spawn()
+        .map_err(|e| format!("spawn `{program}` failed: {e}"))
+}
+
+/// 构建子进程 Command：env_clear + 最小白名单（审计 A4）。
+///
+/// daemon 凭据（如 AIRP_ACCESS_KEY）不得继承给插件子进程。trusted plugin
+/// 虽为用户显式安装，但环境继承面仍应最小化（#498 §6.3 原文「允许读自己
+/// 的环境」修订为白名单语义，见 docs/TRUSTED-PLUGINS.md）。PATH：插件可能
+/// 派生工具；TEMP/TMP/SYSTEMROOT：Windows 惯例；AIRP_* 为 engine 注入的
+/// 受控环境（env_clear 后不受宿主影响）。独立函数便于测试用 `get_envs()`
+/// 断言环境面契约（见本文件测试模块）。
+fn build_command(
+    manifest: &TrustedPluginManifest,
+    data_root: &Path,
+) -> Result<std::process::Command, String> {
     let command = resolve_command(data_root, manifest)?;
     let args = resolve_args(manifest);
     let plugin_dir = data_root.join("plugins").join(&manifest.id);
-    let mut cmd = tokio::process::Command::new(&command);
+    let mut cmd = std::process::Command::new(&command);
     cmd.env_clear()
-        // 审计 A4 修复：env_clear + 最小白名单——daemon 凭据（如
-        // AIRP_ACCESS_KEY）不得继承给插件子进程。trusted plugin 虽为
-        // 用户显式安装，但环境继承面仍应最小化（#498 §6.3 原文「允许读
-        // 自己的环境」修订为白名单语义，见 docs/TRUSTED-PLUGINS.md）。
-        // PATH：插件可能派生工具；TEMP/TMP/SYSTEMROOT：Windows 惯例。
         .env("PATH", std::env::var_os("PATH").unwrap_or_default());
     #[cfg(windows)]
     {
@@ -69,27 +100,10 @@ async fn spawn_one(manifest: &TrustedPluginManifest, data_root: &Path) -> Result
         // 子进程 cwd = 插件目录：args 里的相对路径（如 "server.js"）
         // 以插件目录为基准，而不是 daemon 的 cwd。
         .current_dir(&plugin_dir)
-        // AIRP_* 为 engine 注入的受控环境（env_clear 后不受宿主影响）。
         .env("AIRP_PLUGIN_PORT", manifest.port.to_string())
         .env("AIRP_DATA_ROOT", data_root)
-        .env("AIRP_PLUGIN_ID", &manifest.id)
-        // 长跑服务：stdout/stderr 直接进 daemon 终端（piped 会因缓冲满
-        // 阻塞子进程写日志）。
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        // 审计 B3：kill_on_drop 保证 Child drop 时（含 panic / SIGKILL /
-        // runtime 异常退出）直接子进程被 kill，不留孤儿进程。
-        .kill_on_drop(true);
-    // 审计 B2（Unix）：process_group(0) 让子进程成为新进程组组长
-    //（PGID = PID），terminate_graceful 用 killpg 终止整个组（含孙进程）。
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    cmd.spawn()
-        .map_err(|e| format!("spawn `{}` failed: {e}", command.display()))
+        .env("AIRP_PLUGIN_ID", &manifest.id);
+    Ok(cmd)
 }
 
 /// daemon 退出时终止全部子进程（并发：全部先发 SIGTERM，5s 宽限后
@@ -178,4 +192,100 @@ pub fn monitor_children(children: Arc<tokio::sync::Mutex<HashMap<String, Child>>
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 造一个最小合法 manifest + 插件目录（含占位可执行文件，满足
+    /// resolve_command 的 canonicalize + is_file 校验）。
+    fn sample(data_root: &Path) -> TrustedPluginManifest {
+        let id = "com.example.envprobe";
+        let plugin_dir = data_root.join("plugins").join(id);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("server"), "#!/bin/sh\n").unwrap();
+        TrustedPluginManifest {
+            id: id.to_string(),
+            version: "1.0.0".to_string(),
+            command: "./server".to_string(),
+            args: vec!["--port".to_string(), "${AIRP_PLUGIN_PORT}".to_string()],
+            port: 8899,
+            host_api: "1".to_string(),
+        }
+    }
+
+    /// 审计 A4 契约锁定：env_clear + 白名单的环境面 = PATH（+ Windows
+    /// SYSTEMROOT/TEMP/TMP）+ AIRP_* 注入，恰好、无多余；任何凭据形态
+    /// 变量不得出现。`Command::get_envs()` 反映 env_clear 后的完整显式
+    /// 环境面，无需真正 spawn 子进程（stdout inherit 无法捕获输出，且
+    /// Windows CI 无目录内可执行文件可跑）。
+    #[test]
+    fn env_whitelist_excludes_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_root = tmp.path();
+        let m = sample(data_root);
+        let cmd = build_command(&m, data_root).unwrap();
+
+        let mut envs: Vec<(String, String)> = cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        envs.sort();
+
+        let mut expected = vec![
+            "AIRP_DATA_ROOT".to_string(),
+            "AIRP_PLUGIN_ID".to_string(),
+            "AIRP_PLUGIN_PORT".to_string(),
+            "PATH".to_string(),
+        ];
+        #[cfg(windows)]
+        expected.extend([
+            "SYSTEMROOT".to_string(),
+            "TEMP".to_string(),
+            "TMP".to_string(),
+        ]);
+        expected.sort();
+
+        let keys: Vec<String> = envs.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(
+            keys, expected,
+            "env_clear 白名单必须恰好是预期集合（新增变量需显式修订本测试）"
+        );
+
+        // 注入值正确（端口号 / 数据根路径 / 占位符替换后的 args）。
+        assert_eq!(
+            envs.iter()
+                .find(|(k, _)| k == "AIRP_PLUGIN_PORT")
+                .unwrap()
+                .1,
+            "8899"
+        );
+        assert_eq!(
+            envs.iter().find(|(k, _)| k == "AIRP_DATA_ROOT").unwrap().1,
+            data_root.to_string_lossy()
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["--port", "8899"]);
+
+        // 凭据形态变量不得出现（防未来把凭据加回白名单）。
+        for (k, _) in &envs {
+            let upper = k.to_ascii_uppercase();
+            for marker in ["KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"] {
+                assert!(
+                    !upper.contains(marker),
+                    "whitelist must not carry credential variable: {k}"
+                );
+            }
+        }
+    }
 }
