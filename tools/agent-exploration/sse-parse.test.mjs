@@ -70,11 +70,44 @@ test('error payload without event:error fails closed as a schema mismatch', () =
   );
 });
 
+test('event:error without a data payload fails closed as malformed_error', () => {
+  assert.throws(
+    () => parseSseContent('event: error\n\n'),
+    error => error instanceof SseProtocolError && error.code === 'malformed_error',
+  );
+});
+
 test('EOF residual done frame is dispatched instead of being dropped', () => {
   const sse =
     'data: {"type":"body_chunk","text":"tail"}\n\n' +
     'event: message\ndata: {"type":"done"}';
   assert.equal(parseSseContent(sse), 'tail');
+});
+
+test('non-empty frames after done fail closed instead of being discarded', () => {
+  const sse =
+    'data: {"type":"done"}\n\n' +
+    'data: {"type":"body_chunk","text":"late"}\n\n';
+  assert.throws(
+    () => parseSseContent(sse),
+    error => {
+      assert.ok(error instanceof SseProtocolError);
+      assert.equal(error.code, 'post_terminal');
+      assert.equal(error.details.terminal, 'done');
+      assert.match(error.details.frame, /late/);
+      return true;
+    },
+  );
+});
+
+test('EOF residual after done also fails closed', () => {
+  const parser = createSseContentParser();
+  parser.push('data: {"type":"done"}\n\n');
+  parser.push('data: {"type":"body_chunk","text":"late"}');
+  assert.throws(
+    () => parser.finish(),
+    error => error instanceof SseProtocolError && error.code === 'post_terminal',
+  );
 });
 
 test('EOF residual body is retained in structured early-EOF error', () => {

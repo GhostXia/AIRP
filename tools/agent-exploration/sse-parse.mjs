@@ -50,18 +50,39 @@ export function createSseContentParser() {
       if (field === 'event') event = value || 'message';
       else if (field === 'data') data.push(value);
     }
-    if (!data.length) return;
+    if (!data.length) {
+      if (event === 'error') {
+        throw protocolError(
+          'malformed_error',
+          'SSE error event has no data payload',
+          { event },
+          content,
+        );
+      }
+      return;
+    }
 
     const payloadText = data.join('\n');
     // Some upstream-compatible providers still send OpenAI's [DONE] sentinel.
     // It has no Engine body semantics, so retain the existing compatibility rule.
-    if (payloadText === '[DONE]') return;
+    if (!payloadText.trim()) {
+      if (event === 'error') {
+        throw protocolError(
+          'malformed_error',
+          'SSE error event has an empty data payload',
+          { event, payloadText },
+          content,
+        );
+      }
+      return;
+    }
+    if (event !== 'error' && payloadText === '[DONE]') return;
     let payload;
     try {
       payload = JSON.parse(payloadText);
     } catch (error) {
       throw protocolError(
-        'malformed',
+        event === 'error' ? 'malformed_error' : 'malformed',
         `SSE ${event} frame JSON parse failed: ${error?.message || String(error)}`,
         { event, payloadText },
         content,
@@ -129,12 +150,22 @@ export function createSseContentParser() {
 
   const parser = {
     push(chunk) {
-      if (terminal) return;
       buffer += String(chunk);
       let separator;
-      while (!terminal && (separator = buffer.match(/\r?\n\r?\n/))) {
+      while ((separator = buffer.match(/\r?\n\r?\n/))) {
         const frame = buffer.slice(0, separator.index);
         buffer = buffer.slice(separator.index + separator[0].length);
+        if (terminal) {
+          if (frame.trim()) {
+            throw protocolError(
+              'post_terminal',
+              'SSE frame received after a terminal frame',
+              { terminal, frame },
+              content,
+            );
+          }
+          continue;
+        }
         dispatch(frame);
       }
     },
@@ -142,9 +173,17 @@ export function createSseContentParser() {
     finish() {
       // SSE dispatch normally requires an empty line. At EOF, process the
       // residual frame once so a body chunk (or done frame) is not silently lost.
-      if (!terminal && buffer.trim()) {
+      if (buffer.trim()) {
         const residual = buffer;
         buffer = '';
+        if (terminal) {
+          throw protocolError(
+            'post_terminal',
+            'SSE frame received after a terminal frame',
+            { terminal, frame: residual },
+            content,
+          );
+        }
         dispatch(residual);
       }
       if (terminal === 'done') return { content };
