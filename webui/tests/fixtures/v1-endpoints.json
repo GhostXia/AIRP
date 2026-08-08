@@ -1,10 +1,10 @@
 {
   "$schemaVersion": 1,
-  "description": "engine /v1 端点契约 golden 清单。由 webui/tests/extract-v1-endpoints.mjs 从 engine/src/daemon/mod.rs 抽取后人工补充 ui 标注。更新方式见 DEV-GUIDE「端点契约守卫」。",
+  "description": "engine /v1 端点契约 golden 清单。由 webui/tests/extract-v1-endpoints.mjs 从 engine/src/daemon/mod.rs 抽取后人工补充 ui 标注；ui:false 保留合同见 docs/V1-ENDPOINT-COMPATIBILITY.md。更新方式见 DEV-GUIDE「端点契约守卫」。",
   "generatedFrom": {
     "file": "engine/src/daemon/mod.rs",
-    "ref": "desktop/c-p3-capability-auth@bd22c52",
-    "date": "2026-08-05"
+    "ref": "main@c9efb38",
+    "date": "2026-08-08"
   },
   "endpoints": [
     {
@@ -36,6 +36,15 @@
       "method": "GET",
       "path": "/v1/backups/:backup_id",
       "ui": false,
+      "owner": "backup-service",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "WebUI 备份面板仅用列表/创建/校验/恢复/删除（console-runtime.js 备份调用契约注释），单项详情留给 API 客户端"
     },
     {
@@ -85,6 +94,15 @@
       "method": "GET",
       "path": "/v1/characters/:character_id/avatar",
       "ui": false,
+      "owner": "character-service",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "WebUI 聊天界面使用首字母占位头像，当前零消费不代表可删除；端点服务 card.png，保留给桌面 UI 与外部集成"
     },
     {
@@ -301,18 +319,45 @@
       "method": "GET",
       "path": "/v1/conversation-capabilities",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
       "method": "GET",
       "path": "/v1/conversation-migrations/:migration_id/export",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 迁移工具链专用，WebUI 不消费"
     },
     {
       "method": "POST",
       "path": "/v1/conversation-migrations/:migration_id/rollback",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 迁移工具链专用，WebUI 不消费"
     },
     {
@@ -320,6 +365,15 @@
       "path": "/v1/conversation-migrations/plan",
       "bodyLimit": "2MB",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 迁移工具链专用，WebUI 不消费"
     },
     {
@@ -327,18 +381,45 @@
       "path": "/v1/conversation-migrations",
       "bodyLimit": "2MB",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 迁移工具链专用，WebUI 不消费"
     },
     {
       "method": "GET",
       "path": "/v1/conversation-policies",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 策略由引擎中间件（axum Extension）注入，无 WebUI 消费面"
     },
     {
       "method": "GET",
       "path": "/v1/conversations/:conversation_id/events",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
@@ -346,24 +427,60 @@
       "path": "/v1/conversations/:conversation_id/events",
       "bodyLimit": "2MB",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
       "method": "POST",
       "path": "/v1/conversations/:conversation_id/turns/:turn_id/cancel",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
       "method": "GET",
       "path": "/v1/conversations/:conversation_id/turns/:turn_id/observability",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
       "method": "GET",
       "path": "/v1/conversations/:conversation_id/turns/:turn_id",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
@@ -371,18 +488,45 @@
       "path": "/v1/conversations/:conversation_id/turns",
       "bodyLimit": "2MB",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
       "method": "GET",
       "path": "/v1/conversations/:conversation_id",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
       "method": "GET",
       "path": "/v1/conversations",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
@@ -390,12 +534,30 @@
       "path": "/v1/conversations",
       "bodyLimit": "2MB",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "Conversation 聚合双轨（引擎侧新轨），WebUI 仍走 /v1/sessions 轨，不消费此端点"
     },
     {
       "method": "POST",
       "path": "/v1/desktop-session",
       "ui": false,
+      "owner": "desktop-shell",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "C-P0 桌面壳（Tauri）专属：壳持进程级 access key 经此端点换短时效 UI token（bearer 注入通道），WebUI JS 不直接调用——token 由壳以 URL fragment 传入首屏写 sessionStorage"
     },
     {
@@ -449,6 +611,15 @@
       "method": "GET",
       "path": "/v1/extensions/:extension_id/grants",
       "ui": false,
+      "owner": "extension-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "C-P3 grant 查询由 GET /v1/extensions/grants 批量拉取（consent.js 初始化），单扩展查询留给 API 客户端"
     },
     {
@@ -528,6 +699,15 @@
       "path": "/v1/presets/:preset_id/decompose",
       "bodyLimit": "1MB",
       "ui": false,
+      "owner": "preset-service",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "WebUI 仅暴露角色卡拆解入口（/v1/characters/:character_id/decompose），预设拆解留给 API 客户端"
     },
     {
@@ -556,6 +736,15 @@
       "method": "GET",
       "path": "/v1/provider-routing",
       "ui": false,
+      "owner": "provider-routing",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "WebUI 路由管理仅写入配置（PUT），读取经由 /v1/providers/resolve"
     },
     {
@@ -590,6 +779,15 @@
       "path": "/v1/scenes/:scene_id/conversations",
       "bodyLimit": "2MB",
       "ui": false,
+      "owner": "conversation-runtime",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "场景会话属 Conversation 聚合双轨；WebUI 当前场景页走 sessions 轨，但该端点仍是 scene snapshot/active_conversation_id 的 Engine 合同，保留给 API 客户端"
     },
     {
@@ -667,18 +865,45 @@
       "method": "GET",
       "path": "/v1/users/:user_id/persona/effective",
       "ui": false,
+      "owner": "persona-service",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "WebUI 当前改用多 Persona 列表/绑定 API，故此只读 effective 端点暂无消费；Engine chat pipeline 与此端点共用 binding→default resolver，保留为兼容与能力发现 API"
     },
     {
       "method": "GET",
       "path": "/v1/users/:user_id/persona",
       "ui": false,
+      "owner": "persona-service",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
     },
     {
       "method": "PUT",
       "path": "/v1/users/:user_id/persona",
       "ui": false,
+      "owner": "persona-service",
+      "provenance": {
+        "source": "engine/src/daemon/mod.rs",
+        "ref": "main@c9efb38"
+      },
+      "reviewAfter": "2026-11-08",
+      "externalContract": {
+        "source": "docs/V1-ENDPOINT-COMPATIBILITY.md"
+      },
       "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
     },
     {
