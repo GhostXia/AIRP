@@ -68,7 +68,7 @@ data/plugins/
 ### 4.1 反代：`GET/POST /api/plugins/:id/*path`
 
 转发到 `127.0.0.1:<port>/*path`（method / path / query / body / Content-Type
-透传；超时 30s）。
+透传；非流式响应超时 30s）。
 
 - **挂在鉴权层外**：widget iframe 沙箱没有 daemon token；且不限制 caller——
   loopback 上任何进程都能调（trusted plugin 之间也能互调）。
@@ -119,8 +119,11 @@ data/plugins/
 
 ## 6. 与 widget 的关系
 
-- widget → trusted plugin 走**普通 HTTP fetch**（`/api/plugins/...`），
+- widget → trusted plugin **必须经 engine 反代** `/api/plugins/:id/*`（§4.1），
   **不走 widget_intent**（widget_intent = widget → engine 的 capability 通道）。
+  设计 A1：widget iframe 沙箱（opaque origin）**不能**对插件端口直接
+  same-origin fetch——所有插件流量一律经 engine 反代，插件只与 loopback
+  端口上的 engine 交互。
 - 混合架构包是两个独立安装体，engine 不做绑定。
 
 ### 6.1 widget manifest 的软依赖声明（#498 §7.1，已实现）
