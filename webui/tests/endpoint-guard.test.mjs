@@ -22,6 +22,10 @@ const assetsUrl = new URL('../assets/', import.meta.url);
 const golden = JSON.parse(
   await readFile(new URL('./fixtures/v1-endpoints.json', import.meta.url), 'utf8'),
 );
+const routerSource = await readFile(
+  new URL('../../engine/src/daemon/mod.rs', import.meta.url),
+  'utf8',
+);
 
 // ── 解析辅助（与 route-contract.test.mjs 同源） ──────────────────────────
 
@@ -116,6 +120,29 @@ function staticPath(expression) {
     }
   }
   return path.startsWith('/') ? canonicalPath(path) : null;
+}
+
+function engineRoutes(source) {
+  const routes = new Set();
+  for (const call of callArguments(source, '.route(')) {
+    const args = splitTopLevel(call);
+    const path = stringLiteral(args[0] || '');
+    if (!path || !args[1]) continue;
+    for (const match of args[1].matchAll(/\b(get|post|put|delete|patch)\s*\(/g)) {
+      routes.add(`${match[1].toUpperCase()} ${canonicalPath(path)}`);
+    }
+  }
+  return routes;
+}
+
+function retainedRouteKey(entry) {
+  return `${entry.method} ${canonicalPath(entry.path)}`;
+}
+
+function unregisteredRetainedRoutes(entries, registered) {
+  return entries
+    .filter(entry => !registered.has(retainedRouteKey(entry)))
+    .map(retainedRouteKey);
 }
 
 function routesAreCompatible(clientRoute, engineRoute) {
@@ -368,6 +395,33 @@ test('ui:false retention metadata stays synchronized with the external compatibi
       `${route}: provenance source 未包含路由声明`,
     );
   }
+});
+
+test('ui:false retention routes stay synchronized with Engine method and path declarations', () => {
+  const registered = engineRoutes(routerSource);
+  const retained = golden.endpoints.filter(entry => !entry.ui);
+  assert.deepEqual(
+    unregisteredRetainedRoutes(retained, registered),
+    [],
+    'ui:false fixture routes must match the current Engine HTTP method and path declarations',
+  );
+});
+
+test('retention parity rejects a GET-to-POST drift', () => {
+  const registered = engineRoutes(routerSource);
+  const sourceEntry = golden.endpoints.find(entry => (
+    entry.method === 'GET' && entry.path === '/v1/backups/:backup_id' && !entry.ui
+  ));
+  assert.ok(sourceEntry, 'GET /v1/backups/:backup_id fixture entry must remain retained');
+  assert.ok(registered.has('GET /v1/backups/:param'));
+  assert.equal(registered.has('POST /v1/backups/:param'), false);
+
+  const driftedEntry = { ...sourceEntry, method: 'POST' };
+  assert.deepEqual(
+    unregisteredRetainedRoutes([driftedEntry], registered),
+    ['POST /v1/backups/:param'],
+    'changing a retained GET route to POST must fail exact method/path parity',
+  );
 });
 
 test('every /v1 endpoint called by WebUI exists in the golden inventory', async () => {
