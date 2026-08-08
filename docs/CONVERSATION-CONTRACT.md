@@ -310,6 +310,12 @@ observability: journal_events=50003, 50 reads=11 ms, mean=0.236 ms
 拒绝自动导入历史；需要新 conversation 时继续使用
 `POST /v1/scenes/{scene_id}/conversations` 创建 scene snapshot。
 
+当前 WebUI 对该 scene snapshot adapter 零消费是有意的 Chat/Conversation 双轨边界，
+不是删除信号；端点仍是 Engine 客户端创建 scene snapshot、写入
+`active_conversation_id` 的兼容入口。#472 的死路由复核仅覆盖该端点、角色 avatar
+和 Persona effective 三个 WebUI 零消费候选；`/v1/conversations*` 家族仍按 E-P0-2
+保留为既有双轨合同，不在本次清理范围内。
+
 ## 11. 后续实现门
 
 1. Policy registry 后续：若需要跨进程、WASM 或动态库 policy，必须另行设计签名/provenance、进程隔离、取消与资源回收合同；当前只允许宿主显式注入受信任的进程内 Rust 实现，不宣称存在任意插件沙箱。

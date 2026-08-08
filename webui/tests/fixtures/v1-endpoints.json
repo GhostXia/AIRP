@@ -85,7 +85,7 @@
       "method": "GET",
       "path": "/v1/characters/:character_id/avatar",
       "ui": false,
-      "reason": "WebUI 聊天界面使用首字母占位头像，未请求此端点；保留给桌面 UI 与外部集成"
+      "reason": "WebUI 聊天界面使用首字母占位头像，当前零消费不代表可删除；端点服务 card.png，保留给桌面 UI 与外部集成"
     },
     {
       "method": "POST",
@@ -590,7 +590,7 @@
       "path": "/v1/scenes/:scene_id/conversations",
       "bodyLimit": "2MB",
       "ui": false,
-      "reason": "场景会话属 Conversation 聚合双轨，WebUI 场景走 sessions 轨"
+      "reason": "场景会话属 Conversation 聚合双轨；WebUI 当前场景页走 sessions 轨，但该端点仍是 scene snapshot/active_conversation_id 的 Engine 合同，保留给 API 客户端"
     },
     {
       "method": "GET",
@@ -667,7 +667,7 @@
       "method": "GET",
       "path": "/v1/users/:user_id/persona/effective",
       "ui": false,
-      "reason": "旧版单 persona 接口，WebUI 已全量改用多 persona API（/v1/users/:user_id/personas）"
+      "reason": "WebUI 当前改用多 Persona 列表/绑定 API，故此只读 effective 端点暂无消费；Engine chat pipeline 与此端点共用 binding→default resolver，保留为兼容与能力发现 API"
     },
     {
       "method": "GET",
