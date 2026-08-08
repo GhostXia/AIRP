@@ -39,6 +39,7 @@ test('first-run entry offers an explicit wizard/main choice and persists an engi
   assert.match(entryPage, /id="entry-actions"[^>]*hidden/);
   assert.match(entryPage, /id="entry-start-wizard"[^>]*>开始向导/);
   assert.match(entryPage, /id="entry-enter-main"[^>]*>直接进入主界面/);
+  assert.match(entryPage, /id="entry-fallback"[^>]*hidden/);
   assert.match(entryScript, /function showFirstRunChoice/);
   assert.match(entryScript, /provider_configured === false/);
   assert.match(entryScript, /Provider 尚未配置[\s\S]*不影响进入主界面/);
@@ -50,6 +51,71 @@ test('first-run entry offers an explicit wizard/main choice and persists an engi
   // The wizard keeps its own skip action and engine marker path.
   assert.match(onboardingPage, /id="skip-onboarding"/);
   assert.match(onboardingScript, /client\.request\('POST', '\/v1\/onboarding\/complete'\)/);
+});
+
+test('entry keeps the legacy fallback inert until delayed health resolves', async () => {
+  const selectors = ['#entry-title', '#entry-description', '#entry-status', '#entry-actions', '#entry-start-wizard', '#entry-enter-main', '#entry-fallback'];
+  const elements = Object.fromEntries(selectors.map(selector => [selector, {
+    hidden: selector === '#entry-actions' || selector === '#entry-fallback',
+    disabled: false,
+    href: '',
+    textContent: '',
+    listeners: {},
+    attributes: {},
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+  }]));
+  let resolveHealth;
+  const health = new Promise(resolve => { resolveHealth = resolve; });
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const requests = [];
+  const replacements = [];
+  const local = new Map();
+  const session = new Map();
+  const context = {
+    URL,
+    Promise,
+    location: {
+      href: 'https://example.test/index.html?engine=test',
+      hash: '',
+      pathname: '/index.html',
+      search: '?engine=test',
+      replace(value) { replacements.push(value); },
+    },
+    history: { replaceState() {} },
+    sessionStorage: {
+      getItem(key) { return session.get(key) || null; },
+      setItem(key, value) { session.set(key, value); },
+    },
+    localStorage: {
+      getItem(key) { return local.get(key) || null; },
+      setItem(key, value) { local.set(key, value); },
+    },
+    document: { querySelector(selector) { return elements[selector] || null; } },
+    fetch(url, options) {
+      requests.push({ url, options });
+      return url === 'health' ? health : Promise.resolve({ ok: true });
+    },
+  };
+
+  vm.runInNewContext(entryScript, context);
+  assert.equal(elements['#entry-fallback'].hidden, true);
+  assert.equal(replacements.length, 0);
+  assert.equal(requests.length, 1);
+
+  resolveHealth({ ok: true, json: () => Promise.resolve({ onboarded: false, provider_configured: false }) });
+  await flush();
+  assert.equal(elements['#entry-actions'].hidden, false);
+  assert.equal(elements['#entry-fallback'].hidden, true);
+  assert.equal(replacements.length, 0);
+
+  elements['#entry-enter-main'].listeners.click();
+  await flush();
+  assert.equal(requests[1].url, '/v1/onboarding/complete');
+  assert.equal(requests[1].options.method, 'POST');
+  assert.equal(local.get('airp_onboarded'), 'true');
+  assert.equal(replacements.at(-1), 'https://example.test/screens/01-role-list.html?engine=test');
 });
 
 test('first-run onboarding uses a dedicated real-backend runtime', () => {

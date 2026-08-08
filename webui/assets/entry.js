@@ -47,7 +47,10 @@
 
   function completeAndEnterMain(button, status) {
     if (button && button.disabled) return;
-    if (button) button.disabled = true;
+    if (button) {
+      button.disabled = true;
+      if (button.setAttribute) button.setAttribute('aria-disabled', 'true');
+    }
     if (status) status.textContent = '正在进入主界面…';
     let request;
     try {
@@ -68,9 +71,21 @@
     }).catch(function () {
       // Do not leave the entry page until the Engine has acknowledged its marker.
       if (status) status.textContent = '无法保存首次启动状态；请检查 Engine 后重试。';
-      if (button) button.disabled = false;
+      if (button) {
+        button.disabled = false;
+        if (button.removeAttribute) button.removeAttribute('aria-disabled');
+      }
     });
   }
+
+  // Keep the legacy fallback safe even if another layer makes it visible while
+  // health is still pending: entering the main UI always records the Engine marker.
+  const fallbackLink = document.querySelector('#entry-fallback');
+  const entryStatus = document.querySelector('#entry-status');
+  if (fallbackLink) fallbackLink.addEventListener('click', function (event) {
+    event.preventDefault();
+    completeAndEnterMain(fallbackLink, entryStatus);
+  });
 
   function showFirstRunChoice(health) {
     const title = document.querySelector('#entry-title');
