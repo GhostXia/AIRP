@@ -8,6 +8,7 @@ const consoleScript = await readFile(new URL('../assets/console-runtime.js', imp
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
 const chatPage = await readFile(new URL('../screens/02-chat-space.html', import.meta.url), 'utf8');
 const chatStyle = await readFile(new URL('../assets/chat-space.css', import.meta.url), 'utf8');
+const bootScript = await readFile(new URL('../assets/widgets/boot.js', import.meta.url), 'utf8');
 
 // ── #394 O1: observable Session Coordinator ───────────────────────────────
 
@@ -148,4 +149,22 @@ test('field helper does not set type on select elements (console-runtime)', () =
 test('field helper does not set type on select elements (onboarding)', () => {
   assert.match(onboardingScript, /options\.type && !options\.select/);
   assert.doesNotMatch(onboardingScript, /if \(options && options\.type\) control\.type/);
+});
+
+// ── #485 W4/W5/W6: widget boot hardening ───────────────────────────────────
+
+test('widget boot degrades instead of failing hard (W4/W6)', () => {
+  // W6：catalog 拉取带 5s 超时，engine 挂起时 boot 不悬挂。
+  assert.match(bootScript, /AbortSignal\.timeout\(5000\)/);
+  // W4：applySlotPlan 异常不阻断 mountSlots（slot 保持空占位）。
+  assert.match(bootScript, /applySlotPlan\(plan, 'replace'\)[\s\S]*catch/);
+  assert.match(bootScript, /slot 计划应用失败，继续以空计划挂载/);
+});
+
+test('widget intent handler returns an observable promise via api-client (W5)', () => {
+  assert.match(bootScript, /client\.request\('POST', '\/v1\/widget-intents', envelope\)/);
+  assert.match(bootScript, /return traceIntent\(/);
+  assert.match(bootScript, /typeof AIRPDesktopSession === 'undefined'/);
+  assert.match(bootScript, /renewDesktopSession\(\{ base: engineBase\(\) \}\)/);
+  assert.match(bootScript, /notifyAuthFailure\(\{ source: 'widget-intent' \}\)/);
 });

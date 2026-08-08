@@ -600,7 +600,8 @@ fn spawn_readiness_and_navigate(
         }
 
         // 3. bearer 注入通道：进程互信（access key）换短时效 UI token。
-        let exchanged = exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await;
+        let exchanged =
+            exchange_desktop_token(&client, &engine_url, access_key.as_deref(), true).await;
         let token = exchanged.as_ref().map(|(token, _)| token.clone());
 
         // 4. 导航首屏。fragment 不发送到服务端；entry.js 承接写入 sessionStorage。
@@ -618,12 +619,11 @@ fn spawn_readiness_and_navigate(
                     } else {
                         // C-P2：导航成功后启动 token 续期循环，避免 8h TTL
                         // 边界会话锁死（C-P1 交接项 / issue #479）。
-                        if let Some((token, expires_in)) = exchanged {
+                        if let Some((_token, expires_in)) = exchanged {
                             spawn_token_renewal_loop(
                                 app.clone(),
                                 engine_url.clone(),
                                 access_key.clone(),
-                                token,
                                 expires_in,
                             );
                         }
@@ -658,11 +658,13 @@ fn spawn_readiness_and_navigate(
 /// （而非先睡 60s 再回循环顶等半个 TTL——恰在循环该发挥作用的重试
 /// 时刻失灵）；成功后恢复 expires_in/2 节奏。webui 侧撞 401 另有
 /// `POST /v1/desktop-session/renew` 兜底（rotation），双保险。
+/// 失败退避（T1）：连续失败按 60s 起指数退避（60s · 2^(n-1)，封顶 15min）；
+/// 日志降级——仅首次失败 warn，连续失败期间 debug，防止 engine 长时间
+/// 宕机时每轮一条 warn 刷满日志。
 fn spawn_token_renewal_loop(
     app: tauri::AppHandle,
     engine_url: String,
     access_key: Option<String>,
-    _initial_token: String,
     mut expires_in: u64,
 ) {
     if access_key.is_none() {
@@ -675,18 +677,31 @@ fn spawn_token_renewal_loop(
             .unwrap_or_else(|_| reqwest::Client::new());
         // W2：failed_fast —— 上一轮交换失败时下轮只等 60s 短间隔。
         let mut failed_fast = false;
+        // T1（#485）：连续失败计数 —— 退避 60s * 2^(n-1) 封顶 15min；日志仅
+        // 首次失败 warn，连续失败期间降级 debug（engine 宕机时不刷 warn）。
+        let mut consecutive_failures: u32 = 0;
+        let retry_wait =
+            |failures: u32| -> u64 { (60u64 << failures.saturating_sub(1).min(4)).min(900) };
         loop {
             // TTL 过半即续期；下限 5s 防短 TTL 冒烟时热循环，上限 4h 防
-            // engine 返回异常大值时续期完全停摆；失败后切 60s 短间隔重试。
+            // engine 返回异常大值时续期完全停摆；失败后按连续次数指数退避。
             let wait_secs = if failed_fast {
-                60
+                retry_wait(consecutive_failures)
             } else {
                 (expires_in / 2).clamp(5, 4 * 3600)
             };
             tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-            match exchange_desktop_token(&client, &engine_url, access_key.as_deref()).await {
+            match exchange_desktop_token(
+                &client,
+                &engine_url,
+                access_key.as_deref(),
+                consecutive_failures == 0,
+            )
+            .await
+            {
                 Some((new_token, new_expires_in)) => {
                     failed_fast = false;
+                    consecutive_failures = 0;
                     if let Some(window) = app.get_webview_window("main") {
                         // JSON.stringify 转义 token（uuid hex 本无特殊字符，
                         // 防御性处理）；eval 失败（窗口已销毁/导航中）仅留痕。
@@ -711,13 +726,24 @@ fn spawn_token_renewal_loop(
                     expires_in = new_expires_in;
                 }
                 None => {
-                    // 交换失败（engine 重启/网络抖动）：置标志，下轮等待
-                    // 切 60s 短间隔重试；webui 侧 401 另有 renew 端点兜底。
+                    // 交换失败（engine 重启/网络抖动）：置标志，下轮按连续失败
+                    // 次数指数退避（60s 起，封顶 15min）；webui 侧 401 另有
+                    // renew 端点兜底。日志降级：仅首次失败 warn，连续期间 debug。
                     failed_fast = true;
-                    tracing::warn!(
-                        retry_in_secs = 60,
-                        "desktop session renewal exchange failed; will retry"
-                    );
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    let next_wait = retry_wait(consecutive_failures);
+                    if consecutive_failures == 1 {
+                        tracing::warn!(
+                            retry_in_secs = next_wait,
+                            "desktop session renewal exchange failed; will retry"
+                        );
+                    } else {
+                        tracing::debug!(
+                            retries = consecutive_failures,
+                            retry_in_secs = next_wait,
+                            "desktop session renewal exchange still failing"
+                        );
+                    }
                 }
             }
         }
@@ -746,10 +772,13 @@ fn show_port_conflict_error(app: &tauri::AppHandle, port: u16) {
 /// 返回 `(token, expires_in_secs)`；失败（无 key / engine 不支持 / 网络）
 /// 时返回 None：导航降级为无 bearer，webui 连接卡可手动输入（不阻断桌面
 /// 可用性）。expires_in 缺失时保守按 60s（宁可多续一次，不长期裸奔）。
+/// `log_failure_at_warn`：续期循环按连续失败次数降级日志（首次失败 warn、
+/// 后续 debug），避免 engine 长时间宕机时每次重试刷多条 warn（审计 #518）。
 async fn exchange_desktop_token(
     client: &reqwest::Client,
     engine_url: &str,
     access_key: Option<&str>,
+    log_failure_at_warn: bool,
 ) -> Option<(String, u64)> {
     let key = access_key?;
     let response = client
@@ -775,22 +804,38 @@ async fn exchange_desktop_token(
                         Some((token, expires_in))
                     }
                     None => {
-                        tracing::warn!("desktop-session response missing token field");
+                        if log_failure_at_warn {
+                            tracing::warn!("desktop-session response missing token field");
+                        } else {
+                            tracing::debug!("desktop-session response missing token field");
+                        }
                         None
                     }
                 }
             }
             Err(error) => {
-                tracing::warn!(%error, "failed to parse desktop-session response");
+                if log_failure_at_warn {
+                    tracing::warn!(%error, "failed to parse desktop-session response");
+                } else {
+                    tracing::debug!(%error, "failed to parse desktop-session response");
+                }
                 None
             }
         },
         Ok(resp) => {
-            tracing::warn!(status = %resp.status(), "desktop-session exchange rejected");
+            if log_failure_at_warn {
+                tracing::warn!(status = %resp.status(), "desktop-session exchange rejected");
+            } else {
+                tracing::debug!(status = %resp.status(), "desktop-session exchange rejected");
+            }
             None
         }
         Err(error) => {
-            tracing::warn!(%error, "desktop-session exchange failed");
+            if log_failure_at_warn {
+                tracing::warn!(%error, "desktop-session exchange failed");
+            } else {
+                tracing::debug!(%error, "desktop-session exchange failed");
+            }
             None
         }
     }
