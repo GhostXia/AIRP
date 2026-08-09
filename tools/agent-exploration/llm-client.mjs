@@ -51,6 +51,7 @@ const BUILTIN_SMOKE_SCRIPT = `// B9 fallback: built-in minimal smoke script (no 
 // NOT that the WebUI has a bug.
 
 export async function run(ctx) {
+  const expectedOrigin = new URL(ctx.origin).origin;
   const screens = [
     '01-role-list.html',
     '16-onboarding.html',
@@ -59,9 +60,13 @@ export async function run(ctx) {
   ];
   for (const s of screens) {
     await ctx.harness.navigate(s);
+    const actualOrigin = new URL(ctx.page.url()).origin;
+    if (actualOrigin !== expectedOrigin) {
+      throw new Error('INFRASTRUCTURE_SMOKE: navigation left topology origin (' + actualOrigin + ')');
+    }
     // 等 harness 在新 screen 上重新安装（screen reload 后 __AIRP_AGENT_TEST__ 重新挂载）
     await ctx.harness.waitFor('no-pending-request', 3000).catch(() => false);
-    const snap = ctx.harness.getDomSnapshot();
+    const snap = await ctx.harness.getDomSnapshot();
     if (!Array.isArray(snap) || snap.length === 0) {
       throw new Error('ASSERT: harness returned empty DOM snapshot at ' + s);
     }

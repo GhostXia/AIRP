@@ -3,6 +3,7 @@
 // 用法:
 //   node runner.mjs --origin http://127.0.0.1:8765 --task onboarding-firstchat-refresh
 //   node runner.mjs --pr 295 --report-dir artifacts/agent-exploration
+//   node runner.mjs --pr 295 --mode infrastructure-smoke --diff-file pr.patch
 //
 // 环境变量:
 //   OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL  — LLM
@@ -16,7 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { chatCompletion, getModel, FALLBACK_MODE, getBuiltinSmokeScript } from './llm-client.mjs';
 import { HarnessClient } from './harness-client.mjs';
 import { writeReport } from './reporter.mjs';
-import { classifyPrDiff, DIFF_TASK_MAP } from './classifier.mjs';
+import { classifyPrDiff, DIFF_TASK_MAP, isInfrastructureSmokeDiff } from './classifier.mjs';
 import { buildLaunchArgs } from './tls-args.mjs';
 import { lintScript } from './script-lint.mjs';
 import { validateScript } from './script-validation.mjs';
@@ -31,6 +32,7 @@ const REPORT_DIR = args['report-dir'] || 'artifacts/agent-exploration';
 const MAX_STEPS = Number(args['max-steps'] || 30);
 const MAX_TOKENS = Number(args['max-tokens'] || 8000);
 const MAX_REVISIONS = Number(args['max-revisions'] || 2);
+const MODE = args.mode || '';
 
 // TLS 修复说明见 ./tls-args.mjs。buildLaunchArgs 在该模块中实现，便于单元测试。
 
@@ -39,6 +41,14 @@ const TASK_MODULES = {
   'regen-swipe-refresh': './tasks/regen-swipe-refresh.mjs',
   'edit-branch-switch-refresh': './tasks/edit-branch-switch-refresh.mjs',
   'memory-roundtrip': './tasks/memory-roundtrip.mjs',
+};
+
+const INFRASTRUCTURE_SMOKE_MODULE = {
+  DESCRIPTION: 'Infrastructure smoke: topology origin, Chrome/harness navigation, DOM snapshot, and report generation.',
+  EXPECTED: 'The fixed builtin smoke completes without invoking an LLM or a business task.',
+  async check() {
+    return { ok: true };
+  },
 };
 
 export function classifyPrTasks(diff, prNumber) {
@@ -51,30 +61,46 @@ export function classifyPrTasks(diff, prNumber) {
   };
 }
 
+export function canRunInfrastructureSmoke(diff, taskNames, prNumber) {
+  return Boolean(prNumber && Array.isArray(taskNames) && taskNames.length === 0 && isInfrastructureSmokeDiff(diff));
+}
+
+export function hasFailedTasks(tasks) {
+  return Array.isArray(tasks) && tasks.some(task => task.result === 'Failed');
+}
+
+async function writeFailureReport(run, diagnostic) {
+  run.status = 'Failed';
+  run.diagnostic = diagnostic;
+  run.endedAt = new Date().toISOString();
+  const { mdPath } = await writeReport(resolve(REPORT_DIR), run);
+  console.error('[runner] ' + diagnostic);
+  console.log('[runner] report: ' + mdPath);
+  process.exitCode = 1;
+}
+
 async function main() {
   // 任务集选择
   let taskNames;
+  let diff = null;
+  let infrastructureSmokeEligible = false;
   let classificationDiagnostic = null;
   if (args.task) {
     taskNames = [args.task];
   } else if (args.pr) {
     // 优先从 --diff-file 读 (workflow 用单独 step 取 diff, runner 不持有 GITHUB_TOKEN)
-    let diff;
     if (args['diff-file']) {
       diff = await readFile(args['diff-file'], 'utf8');
     } else {
       diff = await fetchPrDiff(args.pr);
     }
     ({ taskNames, diagnostic: classificationDiagnostic } = classifyPrTasks(diff, args.pr));
+    infrastructureSmokeEligible = canRunInfrastructureSmoke(diff, taskNames, args.pr);
   } else {
     // 默认跑全部 4 个任务集
     taskNames = Object.keys(DIFF_TASK_MAP);
     taskNames = [...new Set(taskNames)];
   }
-
-  console.log('[runner] origin=' + ORIGIN);
-  console.log('[runner] tasks=' + JSON.stringify(taskNames));
-  console.log('[runner] llm=' + getModel());
 
   const run = {
     runId: 'run-' + Date.now(),
@@ -85,14 +111,36 @@ async function main() {
     tasks: [],
   };
 
+  if (MODE && MODE !== 'infrastructure-smoke') {
+    await writeFailureReport(run, 'Unsupported runner mode: ' + MODE);
+    return;
+  }
+
+  const infrastructureSmokeRequested = MODE === 'infrastructure-smoke';
+  if (infrastructureSmokeRequested) {
+    run.mode = 'infrastructure-smoke';
+    run.llmModel = 'builtin-smoke (no LLM)';
+    const modeDiagnostic = !args.pr
+      ? 'Infrastructure-smoke mode requires --pr with a classified PR diff.'
+      : taskNames.length > 0
+        ? 'Infrastructure-smoke mode requires zero classified business tasks.'
+        : !infrastructureSmokeEligible
+          ? 'Infrastructure-smoke mode requires all changed paths to match the infrastructure allowlist.'
+          : null;
+    if (modeDiagnostic) {
+      await writeFailureReport(run, modeDiagnostic);
+      return;
+    }
+    classificationDiagnostic = null;
+  }
+
+  console.log('[runner] origin=' + ORIGIN);
+  console.log('[runner] tasks=' + JSON.stringify(taskNames));
+  console.log('[runner] mode=' + (run.mode || 'default'));
+  console.log('[runner] llm=' + run.llmModel);
+
   if (classificationDiagnostic) {
-    run.status = 'Failed';
-    run.diagnostic = classificationDiagnostic;
-    run.endedAt = new Date().toISOString();
-    const { mdPath } = await writeReport(resolve(REPORT_DIR), run);
-    console.error('[runner] ' + classificationDiagnostic);
-    console.log('[runner] report: ' + mdPath);
-    process.exitCode = 1;
+    await writeFailureReport(run, classificationDiagnostic);
     return;
   }
 
@@ -103,7 +151,9 @@ async function main() {
 
   const browser = await chromium.launch({ headless: true, executablePath: CHROME, args: buildLaunchArgs(CHROME_SPKI) });
   try {
-    run.tasks = await runTasks(browser, taskNames, TASK_MODULES);
+    run.tasks = infrastructureSmokeRequested
+      ? await runInfrastructureSmoke(browser, { origin: ORIGIN, reportDir: REPORT_DIR })
+      : await runTasks(browser, taskNames, TASK_MODULES);
   } finally {
     await browser.close();
   }
@@ -116,7 +166,7 @@ async function main() {
   // workflow job 级 continue-on-error: true 仍然 non-blocking（不会阻塞 PR 合并），
   // 但 exit 1 让 CI 红 + 触发 workflow 中的 failure 步骤，确保失败信号不会因
   // PR 评论 step 自身失败（report 未生成 / gh 不可用）而完全消失。
-  if (run.tasks.some(t => t.result === 'Failed')) {
+  if (hasFailedTasks(run.tasks)) {
     const failed = run.tasks.filter(t => t.result === 'Failed');
     console.log('[runner] ' + failed.length + ' task(s) failed: ' + failed.map(t => t.name).join(', '));
     console.log('[runner] report: ' + mdPath);
@@ -135,7 +185,14 @@ export async function runTasks(browser, taskNames, taskModules = TASK_MODULES, t
   return tasks;
 }
 
-export async function runTask(browser, mod, name, { origin = ORIGIN, reportDir = REPORT_DIR } = {}) {
+export async function runInfrastructureSmoke(browser, taskOptions) {
+  return [await runTask(browser, INFRASTRUCTURE_SMOKE_MODULE, 'infrastructure-smoke', {
+    ...taskOptions,
+    forceBuiltinSmoke: true,
+  })];
+}
+
+export async function runTask(browser, mod, name, { origin = ORIGIN, reportDir = REPORT_DIR, forceBuiltinSmoke = false } = {}) {
   // F11：先创建当前 task 的结果，再执行任何可能失败的 Playwright/文件系统初始化。
   const result = {
     name,
@@ -266,7 +323,7 @@ export async function runTask(browser, mod, name, { origin = ORIGIN, reportDir =
         return { content: parseSseContent(sseText) };
       },
     };
-    const scriptPath = await generateAndRunScript(mod, ctx, taskDir);
+    const scriptPath = await generateAndRunScript(mod, ctx, taskDir, { forceBuiltinSmoke });
     result.evidence.script = scriptPath;
 
     // 收集 harness 状态
@@ -326,12 +383,13 @@ export async function runTask(browser, mod, name, { origin = ORIGIN, reportDir =
   return result;
 }
 
-async function generateAndRunScript(mod, ctx, taskDir) {
+async function generateAndRunScript(mod, ctx, taskDir, { forceBuiltinSmoke = false } = {}) {
   // B9 方案 3：fallback 模式下（OPENAI_API_KEY 未配），不调 LLM、不重试，
   // 直接用 llm-client 内置的 minimal smoke 脚本。该脚本只 navigate + snapshot，
   // 不做业务断言，目的是验证 topology + harness + runner + reporter 全链路可达。
   // fallback 模式下所有任务集跑同一份脚本（任务差异由 reporter 的 task.name 体现）。
-  if (FALLBACK_MODE) {
+  // infrastructure-smoke mode 也强制走这条路径，即使配置了 LLM key。
+  if (forceBuiltinSmoke || FALLBACK_MODE) {
     const scriptContent = getBuiltinSmokeScript();
     const scriptPath = join(taskDir, 'agent-script.mjs');
     await writeFile(scriptPath, scriptContent);

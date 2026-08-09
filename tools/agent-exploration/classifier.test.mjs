@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyPrDiff, DIFF_TASK_MAP } from './classifier.mjs';
+import { classifyPrDiff, DIFF_TASK_MAP, isInfrastructureSmokeDiff } from './classifier.mjs';
 
 test('Edit message PR maps to edit-branch task', () => {
   const diff = 'diff --git a/engine/src/daemon/handlers/chat.rs b/engine/src/daemon/handlers/chat.rs\n+pub async fn edit_message';
@@ -66,4 +66,24 @@ test('Any single path change without keywords returns empty', () => {
     const tasks = classifyPrDiff(diff);
     assert.deepEqual(tasks, [], 'path-only should not trigger for diff: ' + diff + '; got ' + JSON.stringify(tasks));
   }
+});
+
+test('Infrastructure-only diff is eligible for the explicit smoke mode', () => {
+  const diff = [
+    'diff --git a/.github/workflows/agent-browser-exploration.yml b/.github/workflows/agent-browser-exploration.yml',
+    '+      - npm test',
+    'diff --git a/tools/agent-exploration/runner.mjs b/tools/agent-exploration/runner.mjs',
+    '+const mode = \'infrastructure-smoke\';',
+    'diff --git a/deploy/production/bootstrap-topology.sh b/deploy/production/bootstrap-topology.sh',
+    '+echo topology',
+  ].join('\n');
+  assert.deepEqual(classifyPrDiff(diff), []);
+  assert.equal(isInfrastructureSmokeDiff(diff), true);
+});
+
+test('Mixed business or unknown diff is not eligible for infrastructure smoke', () => {
+  const businessDiff = 'diff --git a/engine/src/daemon/handlers/chat.rs b/engine/src/daemon/handlers/chat.rs\n+pub fn unrelated_change() {}';
+  const unknownDiff = 'diff --git a/README.md b/README.md\n+documentation change';
+  assert.equal(isInfrastructureSmokeDiff(businessDiff), false);
+  assert.equal(isInfrastructureSmokeDiff(unknownDiff), false);
 });

@@ -50,3 +50,31 @@ test('reporter indicates the total when console errors are truncated', async () 
     await rm(reportDir, { recursive: true, force: true });
   }
 });
+
+test('reporter labels infrastructure smoke separately from business tasks', async () => {
+  const reportDir = await mkdtemp(join(tmpdir(), 'airp-agent-exploration-reporter-infra-'));
+  try {
+    const run = {
+      runId: 'reporter-infra-test',
+      trigger: 'pr-322',
+      prNumber: 322,
+      mode: 'infrastructure-smoke',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      endedAt: '2026-01-01T00:00:01.000Z',
+      llmModel: 'builtin-smoke (no LLM)',
+      tasks: [{
+        name: 'infrastructure-smoke',
+        result: 'Passed',
+        description: 'Topology smoke',
+        expected: 'Smoke completes',
+      }],
+    };
+    const { mdPath } = await writeReport(reportDir, run);
+    const markdown = await readFile(mdPath, 'utf8');
+    assert.match(markdown, /- Mode: infrastructure-smoke/);
+    assert.match(markdown, /## Task: infrastructure-smoke/);
+    assert.doesNotMatch(markdown, /regen-swipe-refresh|memory-roundtrip/);
+  } finally {
+    await rm(reportDir, { recursive: true, force: true });
+  }
+});

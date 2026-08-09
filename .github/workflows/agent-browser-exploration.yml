@@ -92,6 +92,26 @@ jobs:
             -H "Accept: application/vnd.github.v3.diff" \
             > artifacts/agent-exploration/pr-diff.patch
 
+      - name: Select infrastructure smoke mode
+        working-directory: tools/agent-exploration
+        run: |
+          # Empty classification is normally a failure. The only exception is
+          # a workflow/runner/bootstrap-only PR, which gets the fixed builtin
+          # topology smoke (never an LLM-generated or business task).
+          node --input-type=module - <<'NODE'
+          import { appendFile, readFile } from 'node:fs/promises';
+          import { classifyPrDiff, isInfrastructureSmokeDiff } from './classifier.mjs';
+
+          const diff = await readFile('../../artifacts/agent-exploration/pr-diff.patch', 'utf8');
+          const tasks = classifyPrDiff(diff);
+          if (tasks.length === 0 && isInfrastructureSmokeDiff(diff)) {
+            await appendFile(process.env.GITHUB_ENV, 'AIRP_INFRASTRUCTURE_SMOKE=1\n');
+            console.log('infrastructure-smoke enabled for allowlisted empty classification');
+          } else {
+            console.log('infrastructure-smoke disabled; runner will enforce normal classification semantics');
+          }
+          NODE
+
       - name: Run agent exploration
         env:
           AIRP_SMOKE_ORIGIN: https://localhost:9443
@@ -125,12 +145,17 @@ jobs:
           # `export async function run(ctx)` 合同和已知反模式。
           node --test script-lint.test.mjs script-validation.test.mjs
           # 再跑 runner 本身
-          node runner.mjs \
+          runner_args=( \
             --origin $AIRP_SMOKE_ORIGIN \
             --pr ${{ github.event.pull_request.number }} \
             --diff-file ../../artifacts/agent-exploration/pr-diff.patch \
             --report-dir ../../artifacts/agent-exploration \
-            --chrome-path $AIRP_CHROME_PATH
+            --chrome-path $AIRP_CHROME_PATH \
+          )
+          if [ "${AIRP_INFRASTRUCTURE_SMOKE:-}" = "1" ]; then
+            runner_args+=(--mode infrastructure-smoke)
+          fi
+          node runner.mjs "${runner_args[@]}"
 
       - name: Teardown topology
         if: always()

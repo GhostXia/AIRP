@@ -30,6 +30,7 @@ function renderMarkdown(run) {
   lines.push('**LLM:** ' + run.llmModel);
   lines.push('');
   lines.push('## Summary');
+  if (run.mode) lines.push('- Mode: ' + run.mode);
   if (run.status) lines.push('- Status: ' + run.status);
   lines.push('- Total tasks: ' + run.tasks.length);
   lines.push('- Passed: ' + run.tasks.filter(t => t.result === 'Passed').length);
