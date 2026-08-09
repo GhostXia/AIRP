@@ -601,6 +601,77 @@ async fn npc_action_appends_to_current_md() {
     assert!(current.contains("结果: the merchant shouts"));
 }
 
+/// D2 回归：同步锁被外部持有时，agent tool 的 blocking 临界区不能阻塞
+/// current-thread tokio runtime 的 timer。若 `StateService::mutate` 直接在
+/// async future 内获取 std 锁，本测试在释放锁前不会收到 `timer` 信号。
+#[test]
+fn update_relationship_sync_io_does_not_block_current_thread_runtime() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, "d2_nonblocking");
+
+    let character_lock = crate::domain::character_lock("d2_nonblocking");
+    let character_guard = character_lock.write().unwrap();
+    let (signal_tx, signal_rx) = std::sync::mpsc::channel();
+    let worker_state = state.clone();
+
+    let worker = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build D2 regression runtime");
+        runtime.block_on(async move {
+            let registry = default_registry(worker_state);
+            let tool = registry.get("update_relationship").unwrap();
+            signal_tx.send("started").unwrap();
+            let call = tool.call(
+                serde_json::json!({
+                    "character_id": "d2_nonblocking",
+                    "from": "d2_nonblocking",
+                    "to": "npc",
+                    "relation_type": "ally",
+                    "intensity": 0.5
+                }),
+                true,
+            );
+            tokio::pin!(call);
+            let result = tokio::select! {
+                result = &mut call => {
+                    signal_tx.send("no_timer").unwrap();
+                    result
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                    signal_tx.send("timer").unwrap();
+                    call.await
+                }
+            };
+            signal_tx.send("done").unwrap();
+            result
+        })
+    });
+
+    assert_eq!(
+        signal_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap(),
+        "started"
+    );
+    let timer_seen = signal_rx
+        .recv_timeout(std::time::Duration::from_millis(250))
+        .map(|signal| signal == "timer")
+        .unwrap_or(false);
+    drop(character_guard);
+    let worker_result = worker.join().unwrap();
+    assert_eq!(signal_rx.recv().unwrap(), "done");
+
+    assert!(
+        timer_seen,
+        "sync StateService work blocked the current-thread runtime"
+    );
+    assert!(worker_result.is_ok());
+}
+
 /// 审计修复关键测试：`update_relationship` 与 `advance_plot` 并发执行时，
 /// 两者都写入 live.json（relationships + plot_history 字段），state_lock
 /// 必须串行化它们的 read-modify-write，任何一方的更新不能被另一方覆盖。
@@ -611,24 +682,9 @@ async fn npc_action_appends_to_current_md() {
 ///
 /// 实现说明（CodeRabbit 跟进）：用 `std::thread::scope` + 共享
 /// `std::sync::Barrier` + 每个 worker 内部独立 `tokio::runtime::Runtime`
-/// 替代原 `join_all` 单 task 并发 poll。
-///
-/// 为何不用 `tokio::task::spawn` + multi_thread runtime：
-/// `update_relationship` / `advance_plot` 的 future 内部全是同步代码
-/// （`StateService::mutate` 同步持有 `state_lock` 不 yield）。在
-/// multi_thread runtime 下，N 个 task 同时执行同步 future 会占满
-/// runtime worker pool，导致其他并行 `#[tokio::test]` 拿不到 worker
-/// 而死锁。
-///
-/// 为何不用 `tokio::task::spawn_blocking` + `Handle::current().block_on`：
-/// `spawn_blocking` 的 JoinHandle 需要 _parent_ runtime worker 来 poll，
-/// current_thread runtime 主 task `await` 时无法 poll，会死锁；
-/// `Handle::block_on` 在 blocking thread 上调用会递归驱动 parent runtime，
-/// 与 parent runtime 的 worker 冲突，也可能死锁。
-///
-/// `std::thread::scope` + 每个 worker 内部 `Runtime::new_current_thread()`
-/// 完全隔离：worker OS thread 不占用任何 tokio runtime worker pool，
-/// 独立 runtime 不与 parent runtime 共享，无死锁可能。
+/// 替代原 `join_all` 单 task 并发 poll。工具自身的同步锁/文件 I/O 已在
+/// `spawn_blocking` 中执行；测试仍把 barrier 放在独立 OS thread，避免同步
+/// barrier 等待占用测试 runtime worker。
 ///
 /// `'static` 解法：`std::thread::scope` 的 scoped thread 接受非 'static
 /// 借用，因此每个 worker 可以直接用 `&reg`（parent 拥有）。但为简化，
@@ -649,19 +705,9 @@ async fn concurrent_update_relationship_and_advance_plot_do_not_lose_updates() {
     const N: usize = 10;
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(N));
 
-    // 用 std::thread::scope 启动独立 OS worker thread，避免占用 tokio
-    // runtime worker pool。每个 worker 内部建独立 single-thread runtime
-    // 来 poll tool.call(...) 的 future。
-    //
-    // 不用 `Handle::current().block_on`：在 blocking thread 上调用它会
-    // 递归驱动 parent runtime，与 parent runtime 的 worker 冲突，可能
-    // 死锁（特别是 parent 是 multi_thread runtime 时）。
-    //
-    // 不用 `tokio::task::spawn_blocking`：其 JoinHandle 需要_parent_
-    // runtime worker 来 poll，current_thread runtime 主 task await 时
-    // 无法 poll，会死锁。
-    //
-    // std::thread::scope + 独立 Runtime 完全隔离，无 runtime 共享冲突。
+    // 用 std::thread::scope 启动独立 OS worker thread，避免 barrier 等待占用
+    // 测试 runtime worker；每个 worker 内部建独立 single-thread runtime 来
+    // poll tool.call(...) 的 future，工具的同步工作则由其 spawn_blocking 任务执行。
     let results: Vec<Result<ToolResult, AirpError>> = std::thread::scope(|s| {
         let mut handles = Vec::new();
         for i in 0..N {

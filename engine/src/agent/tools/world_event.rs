@@ -18,7 +18,8 @@
 //! - 事件注入到 current.md 走 `volume_store::append_to_current`，调用前
 //!   显式持有 `session_lock(character_id, session_id)`，与 `npc_action` /
 //!   `advance_plot` / `seal_volume` 共享同一把 per-session 锁，防止并发
-//!   追加在 current.md 中交错混合叙事内容。
+//!   追加在 current.md 中交错混合叙事内容。同步锁与文件操作在
+//!   `spawn_blocking` 中执行，避免占用 tokio worker。
 //!
 //! 注：world_events.json 已接入 #115 Phase 2e revision 合同（#280）。
 //! asset_dir = `characters/{id}/world_events/`，批准文件 = `world_events.json`。
@@ -62,97 +63,73 @@ impl Tool for TriggerWorldEventTool {
             let event_id = params
                 .get("event_id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| AirpError::BadRequest("event_id is required".to_string()))?;
+                .ok_or_else(|| AirpError::BadRequest("event_id is required".to_string()))?
+                .to_string();
             let sid = optional_session_id(&params)?;
 
-            // session_dir 解析（无锁，仅路径计算 + 目录确保），与 advance_clock 同模式
-            // 在两段临界区外完成，避免在锁内做无关 I/O。
-            let session_dir =
-                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
+            let data_root = state.data_root.clone();
+            tokio::task::spawn_blocking(move || -> Result<ToolResult, AirpError> {
+                let session_dir =
+                    crate::data_dir::resolve_session_dir(&data_root, cid.as_str(), sid.as_ref())?;
 
-            // character_lock.read() 跨两段临界区持有（R1 外层门控），防止
-            // delete_character 在事件标记 / append 期间删除 character 目录。
-            // RwLock read 共享，不阻塞其他 reader / 不与 advance_plot 的
-            // session→character.read 形成反向环（character.read 是共享读）。
-            // 早期 return（事件已 triggered）时 guard 由 Drop 自动释放。
-            //
-            // LOCK-ORDER: character.read → [阶段一 state] → [阶段二 session]（§2.4 / R1 / R2）。
-            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.4 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
-            let character = character_lock(cid.as_str());
-            let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
-            let _character_track = lock_order::track_character_read();
+                // character_lock.read() 跨两段临界区持有（R1）作为目录生命周期门控。
+                // 整个同步流程在 blocking pool 中执行，std guards 不跨 await。
+                let character = character_lock(cid.as_str());
+                let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+                let _character_track = lock_order::track_character_read();
 
-            // 阶段一：state_lock 临界区——load + check + mark + save。
-            // 返回 (event, content_buf) 给阶段二使用。若事件已 triggered，
-            // 直接返回 success:false（无需 append）。
-            //
-            // 审计 Bug F（死锁）修复：旧实现在此函数内同时持有 state_lock 与
-            // session_lock（state → session 顺序），与 `advance_plot` 的
-            // session → state 顺序（plot.rs 持 session_lock 后经
-            // StateService::mutate 持 state_lock）形成锁序倒置死锁：
-            //   线程 A (advance_plot):    hold session_lock → wait state_lock
-            //   线程 B (trigger_world_event): hold state_lock → wait session_lock
-            // 两者并发时永久阻塞。修复方式与 advance_and_check_triggers 一致：
-            // 拆分为两段独立临界区，state_lock 在阶段一末尾释放，阶段二才获取
-            // session_lock，同一调用任意时刻只持有一把锁。
-            //
-            // LOCK-ORDER: 两段临界区（§2.4 / R2）。阶段一持 state_lock，阶段二持 session_lock，
-            // 绝不嵌套。与 advance_plot 的 session→state 单向嵌套不形成环。
-            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.4 / §3 R2 / §4 A1 / §4 A3。
-            let (event, content_buf) = {
-                let state_boundary = state_lock(cid.as_str());
-                let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
-                let _state_track = lock_order::track_state();
+                // 阶段一：state_lock 内 load + check + mark + save；结束后才获取
+                // session_lock，避免 state→session 与其他路径的 session→state 形成环。
+                let (event, content_buf) = {
+                    let state_boundary = state_lock(cid.as_str());
+                    let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                    let _state_track = lock_order::track_state();
 
-                let svc = WorldEventService::new(&state.data_root);
-                let mut events = svc.load_events(cid.as_str())?;
-                let event_idx = events
-                    .iter()
-                    .position(|e| e.id == event_id)
-                    .ok_or_else(|| AirpError::NotFound(format!("event {} not found", event_id)))?;
+                    let svc = WorldEventService::new(&data_root);
+                    let mut events = svc.load_events(cid.as_str())?;
+                    let event_idx =
+                        events
+                            .iter()
+                            .position(|e| e.id == event_id)
+                            .ok_or_else(|| {
+                                AirpError::NotFound(format!("event {} not found", event_id))
+                            })?;
 
-                if events[event_idx].triggered {
-                    return Ok(ToolResult {
-                        output: serde_json::json!({
-                            "success": false,
-                            "message": "event already triggered"
-                        }),
-                        dry_run: false,
-                    });
-                }
+                    if events[event_idx].triggered {
+                        return Ok(ToolResult {
+                            output: serde_json::json!({
+                                "success": false,
+                                "message": "event already triggered"
+                            }),
+                            dry_run: false,
+                        });
+                    }
 
-                let event = events[event_idx].clone();
+                    let event = events[event_idx].clone();
+                    events[event_idx].triggered = true;
+                    svc.save_events(cid.as_str(), &events)?;
+                    let content_buf = format!("\n[世界事件: {}]\n{}\n", event.name, event.content);
+                    (event, content_buf)
+                };
 
-                // 先标记 triggered 并持久化（在 state_lock 内），再构造 content_buf
-                // 交给阶段二的 session_lock 临界区 append。
-                // 顺序权衡（save → append）：若 append 失败，事件已标记 triggered
-                // （不会重触发），内容未注入——失败对调用方可见（Err），不会静默累积
-                // 重复内容。内容丢失比静默重复更可控：用户可见错误，可手动重置 triggered。
-                events[event_idx].triggered = true;
-                svc.save_events(cid.as_str(), &events)?;
-
-                let content_buf = format!("\n[世界事件: {}]\n{}\n", event.name, event.content);
-                (event, content_buf)
-            };
-            // state_lock 在此处释放，避免与 session_lock 形成锁序倒置死锁。
-
-            // 阶段二：session_lock 临界区——append 内容到 current.md。
-            // 与 npc_action / advance_plot / seal_volume 共享同一把 per-session 锁，
-            // 防止并发追加在 current.md 中交错混合叙事内容。
-            {
+                // 阶段二：session_lock 内追加到 current.md。
                 let session_boundary = session_lock(cid.as_str(), sid.as_ref());
                 let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
                 let _session_track = lock_order::track_session();
                 crate::volume_store::append_to_current(&session_dir, &content_buf)?;
-            }
 
-            Ok(ToolResult {
-                output: serde_json::json!({
-                    "success": true,
-                    "event": event
-                }),
-                dry_run: false,
+                Ok(ToolResult {
+                    output: serde_json::json!({
+                        "success": true,
+                        "event": event
+                    }),
+                    dry_run: false,
+                })
             })
+            .await
+            .map_err(|e| {
+                AirpError::Internal(format!("trigger_world_event blocking task failed: {e}"))
+            })?
         })
     }
 }
@@ -179,22 +156,29 @@ impl Tool for ListWorldEventsTool {
         let state = self.state.clone();
         Box::pin(async move {
             let cid = required_character_id(&params)?;
-            let events = WorldEventService::new(&state.data_root).load_events(cid.as_str())?;
-            let out: Vec<Value> = events
-                .iter()
-                .map(|e| {
-                    serde_json::json!({
-                        "id": e.id,
-                        "name": e.name,
-                        "description": e.description,
-                        "triggered": e.triggered
+            let data_root = state.data_root.clone();
+            tokio::task::spawn_blocking(move || -> Result<ToolResult, AirpError> {
+                let events = WorldEventService::new(&data_root).load_events(cid.as_str())?;
+                let out: Vec<Value> = events
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "id": e.id,
+                            "name": e.name,
+                            "description": e.description,
+                            "triggered": e.triggered
+                        })
                     })
+                    .collect();
+                Ok(ToolResult {
+                    output: Value::Array(out),
+                    dry_run: false,
                 })
-                .collect();
-            Ok(ToolResult {
-                output: Value::Array(out),
-                dry_run: false,
             })
+            .await
+            .map_err(|e| {
+                AirpError::Internal(format!("list_world_events blocking task failed: {e}"))
+            })?
         })
     }
 }
@@ -247,59 +231,44 @@ impl Tool for AdvanceClockTool {
             let sid = optional_session_id(&params)?;
             let advance_by = params.get("advance_by").and_then(Value::as_u64);
 
-            let session_dir =
-                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
+            let data_root = state.data_root.clone();
+            tokio::task::spawn_blocking(move || -> Result<ToolResult, AirpError> {
+                let session_dir =
+                    crate::data_dir::resolve_session_dir(&data_root, cid.as_str(), sid.as_ref())?;
 
-            // character_lock.read() 跨两段临界区持有（R1 外层门控），与
-            // trigger_world_event 同模式。防止 delete_character 在时钟推进 /
-            // 事件 append 期间删除 character 目录。
-            //
-            // LOCK-ORDER: character.read → [阶段一 state] → [阶段二 session]（§2.5 / R1 / R2）。
-            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.5 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
-            let character = character_lock(cid.as_str());
-            let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
-            let _character_track = lock_order::track_character_read();
+                // character_lock.read() 跨两段临界区持有（R1）；同步锁与文件 I/O
+                // 均在 blocking pool 中执行，锁序为 character.read → [state] → [session]。
+                let character = character_lock(cid.as_str());
+                let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+                let _character_track = lock_order::track_character_read();
 
-            // 阶段一：推进时钟 + 收集/标记到期事件（state_lock 临界区）。
-            // 持有 state_lock 直到 save_world_events 完成，与
-            // update_relationship / advance_plot / trigger_world_event 共享
-            // 同一把锁，杜绝 world_clock.json / world_events.json 的
-            // read-modify-write 丢更新。
-            //
-            // LOCK-ORDER: 两段临界区（§2.5 / R2），与 trigger_world_event 同模式。
-            // 阶段一持 state_lock，阶段二持 session_lock，绝不嵌套。
-            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.5 / §3 R2 / §4 A1 / §4 A3。
-            let (clock, triggered, content_buf) = {
-                let state_boundary = state_lock(cid.as_str());
-                let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
-                let _state_track = lock_order::track_state();
-                WorldEventService::new(&state.data_root)
-                    .advance_and_check_triggers(cid.as_str(), advance_by)?
-            };
-            // state_lock 在此处释放，避免与 session_lock 形成锁序倒置死锁。
+                let (clock, triggered, content_buf) = {
+                    let state_boundary = state_lock(cid.as_str());
+                    let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                    let _state_track = lock_order::track_state();
+                    WorldEventService::new(&data_root)
+                        .advance_and_check_triggers(cid.as_str(), advance_by)?
+                };
 
-            // 阶段二：将到期事件内容追加到 current.md（session_lock 临界区）。
-            // 与 npc_action / advance_plot / trigger_world_event 共享同一把
-            // per-session 锁，防止并发追加在 current.md 中交错混合叙事内容。
-            // 审计 Bug B 修复：旧实现未持有 session_lock 就调用
-            // append_to_current，允许并发 npc_action / advance_plot 的 append
-            // 与此处的 append 在 current.md 中交错。
-            if !content_buf.is_empty() {
-                let session_boundary = session_lock(cid.as_str(), sid.as_ref());
-                let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
-                let _session_track = lock_order::track_session();
-                crate::volume_store::append_to_current(&session_dir, &content_buf)?;
-            }
+                if !content_buf.is_empty() {
+                    let session_boundary = session_lock(cid.as_str(), sid.as_ref());
+                    let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                    let _session_track = lock_order::track_session();
+                    crate::volume_store::append_to_current(&session_dir, &content_buf)?;
+                }
 
-            Ok(ToolResult {
-                output: serde_json::json!({
-                    "current_time": clock.current_time,
-                    "display": clock.display(),
-                    "time_unit": clock.time_unit,
-                    "triggered_events": triggered.iter().map(|e| &e.name).collect::<Vec<_>>(),
-                }),
-                dry_run: false,
+                Ok(ToolResult {
+                    output: serde_json::json!({
+                        "current_time": clock.current_time,
+                        "display": clock.display(),
+                        "time_unit": clock.time_unit,
+                        "triggered_events": triggered.iter().map(|e| &e.name).collect::<Vec<_>>(),
+                    }),
+                    dry_run: false,
+                })
             })
+            .await
+            .map_err(|e| AirpError::Internal(format!("advance_clock blocking task failed: {e}")))?
         })
     }
 }
@@ -326,16 +295,21 @@ impl Tool for GetClockTool {
         let state = self.state.clone();
         Box::pin(async move {
             let cid = required_character_id(&params)?;
-            let clock = WorldEventService::new(&state.data_root).load_clock(cid.as_str())?;
-            Ok(ToolResult {
-                output: serde_json::json!({
-                    "current_time": clock.current_time,
-                    "display": clock.display(),
-                    "time_unit": clock.time_unit,
-                    "advance_per_turn": clock.advance_per_turn,
-                }),
-                dry_run: false,
+            let data_root = state.data_root.clone();
+            tokio::task::spawn_blocking(move || -> Result<ToolResult, AirpError> {
+                let clock = WorldEventService::new(&data_root).load_clock(cid.as_str())?;
+                Ok(ToolResult {
+                    output: serde_json::json!({
+                        "current_time": clock.current_time,
+                        "display": clock.display(),
+                        "time_unit": clock.time_unit,
+                        "advance_per_turn": clock.advance_per_turn,
+                    }),
+                    dry_run: false,
+                })
             })
+            .await
+            .map_err(|e| AirpError::Internal(format!("get_clock blocking task failed: {e}")))?
         })
     }
 }

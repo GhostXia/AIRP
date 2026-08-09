@@ -15,7 +15,8 @@
 //! - current.md 仍走 `volume_store::append_to_current`，但调用前显式持有
 //!   `session_lock(character_id, session_id)`，与 `npc_action` /
 //!   `trigger_world_event` / `seal_volume` 共享同一把 per-session 锁，
-//!   防止并发追加在 current.md 中交错混合叙事内容。
+//!   防止并发追加在 current.md 中交错混合叙事内容。整个同步临界区在
+//!   `spawn_blocking` 中执行，避免同步锁/文件 I/O 占用 tokio worker。
 //! - `get_plot_status` 对 live.json 读取走 [`StateService::read`]，与写入
 //!   共享同一把 `state_lock`，避免读到半写状态。
 
@@ -54,11 +55,13 @@ impl Tool for AdvancePlotTool {
             let development = params
                 .get("development")
                 .and_then(Value::as_str)
-                .ok_or_else(|| AirpError::BadRequest("development is required".to_string()))?;
+                .ok_or_else(|| AirpError::BadRequest("development is required".to_string()))?
+                .to_string();
             let plot_type = params
                 .get("type")
                 .and_then(Value::as_str)
-                .unwrap_or("progression");
+                .unwrap_or("progression")
+                .to_string();
             let sid = optional_session_id(&params)?;
 
             // #281: dry-run 模式——未确认时返回预览，不落盘
@@ -74,81 +77,59 @@ impl Tool for AdvancePlotTool {
                 });
             }
 
-            // 注入剧情推进到 session 的 current.md
-            let session_dir =
-                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
+            // 所有同步路径解析、锁获取、文件 I/O 与 revision 提交都放入
+            // blocking pool；std guard 不跨 await，锁序仍为
+            // character.read → session → state（§2.3 / R1 / R2）。
+            let data_root = state.data_root.clone();
+            tokio::task::spawn_blocking(move || -> Result<ToolResult, AirpError> {
+                let session_dir =
+                    crate::data_dir::resolve_session_dir(&data_root, cid.as_str(), sid.as_ref())?;
 
-            // #437 fix path 4：外层先持有 character_lock.read() 作为 per-character
-            // 外层门控（R1），防止 delete_character 在 advance_plot 临界区期间删除
-            // character 目录（TOCTOU）。PR #436 因 StateService::mutate 内部也
-            // acquire character_lock.read() 构成 re-entrant read（std RwLock 递归
-            // read 在 Windows SRWLOCK 破坏排他性语义、在部分 pthread 实现可能
-            // deadlock），未能闭合本路径。#437 拆 StateService::mutate 为
-            // mutate_locked（不 acquire character_lock）+ mutate（兼容包装），
-            // advance_plot 改用 mutate_locked，外层 character_lock.read() 由
-            // 调用方持有，消除 re-entrancy。
-            //
-            // 持有 session_lock 直到 append_to_current + memory revision commit
-            // 完成，与 npc_action / trigger_world_event / seal_volume 共享
-            // 同一把 per-session 锁，防止并发追加在 current.md 中交错。
-            //
-            // LOCK-ORDER: character.read → session → state（§2.3 / R1 / R2）。
-            // session→state 唯一合法嵌套方向（R2），反向由 trigger_world_event /
-            // advance_clock 两段临界区避免。StateService::mutate_locked 只 acquire
-            // state_lock，不 acquire character_lock，无 re-entrancy。
-            // 合同：docs/LOCK-ORDER-CONTRACT.md §2.3 / §3 R1 / §3 R2 / §4 A1 / §4 A3。
-            let character = character_lock(cid.as_str());
-            let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
-            let _character_track = lock_order::track_character_read();
-            let session_boundary = session_lock(cid.as_str(), sid.as_ref());
-            let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
-            let _session_track = lock_order::track_session();
+                // #437 fix path 4：外层先持有 character_lock.read() 作为 per-character
+                // 门控，StateService::mutate_locked 不再重复获取该锁。
+                let character = character_lock(cid.as_str());
+                let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+                let _character_track = lock_order::track_character_read();
+                let session_boundary = session_lock(cid.as_str(), sid.as_ref());
+                let _session_guard = session_boundary.lock().unwrap_or_else(|p| p.into_inner());
+                let _session_track = lock_order::track_session();
 
-            let entry = format!("\n[剧情推进: {}] {}\n", plot_type, development);
+                let entry = format!("\n[剧情推进: {}] {}\n", plot_type, development);
+                crate::volume_store::append_to_current(&session_dir, &entry)?;
 
-            crate::volume_store::append_to_current(&session_dir, &entry)?;
-
-            // 通过 StateService::mutate_locked 串行化 plot_history 写入：
-            // 1) 与 update_relationship / update_character_state 共享 state_lock(character_id)；
-            // 2) parse 失败返回 AirpError::Internal，而非静默吞错；
-            // 3) 复用 #115 Phase 2e revision 合同。
-            // 4) #437：使用 mutate_locked 而非 mutate，因为本调用方已在外层持有
-            //    character_lock.read()，mutate 会构成 re-entrant read（见上方注释）。
-            //
-            // 防御性类型检查（Gemini #1 跟进）：旧版若 `live` 非 Object 会 panic
-            // （`live["plot_history"]` indexing 在非 Object 上 panic）；若
-            // `plot_history` 字段已存在但非 Array，`as_array_mut()` 返回 None
-            // 时 push 被静默跳过，导致更新丢失却仍返回 Ok。改为显式
-            // `as_object_mut` + `entry` + `as_array_mut` + `ok_or_else(Internal)`，
-            // 任何类型错乱都上抛错误而非 panic 或静默丢更新。
-            let snapshot = StateService::new(&state.data_root).mutate_locked(&cid, |live| {
-                let live_obj = live.as_object_mut().ok_or_else(|| {
-                    AirpError::Internal("live state is not a JSON object".to_string())
-                })?;
-                let history = live_obj
-                    .entry("plot_history")
-                    .or_insert_with(|| Value::Array(Vec::new()))
-                    .as_array_mut()
-                    .ok_or_else(|| {
-                        AirpError::Internal("plot_history field is not a JSON array".to_string())
+                let snapshot = StateService::new(&data_root).mutate_locked(&cid, |live| {
+                    let live_obj = live.as_object_mut().ok_or_else(|| {
+                        AirpError::Internal("live state is not a JSON object".to_string())
                     })?;
-                history.push(serde_json::json!({
-                    "type": plot_type,
-                    "development": development,
-                    "timestamp": chrono::Utc::now().to_rfc3339()
-                }));
-                Ok(())
-            })?;
+                    let history = live_obj
+                        .entry("plot_history")
+                        .or_insert_with(|| Value::Array(Vec::new()))
+                        .as_array_mut()
+                        .ok_or_else(|| {
+                            AirpError::Internal(
+                                "plot_history field is not a JSON array".to_string(),
+                            )
+                        })?;
+                    history.push(serde_json::json!({
+                        "type": plot_type,
+                        "development": development,
+                        "timestamp": chrono::Utc::now().to_rfc3339()
+                    }));
+                    Ok(())
+                })?;
 
-            Ok(ToolResult {
-                output: serde_json::json!({
-                    "success": true,
-                    "type": plot_type,
-                    "development": development,
-                    "revision": snapshot.revision
-                }),
-                dry_run: false,
+                Ok(ToolResult {
+                    output: serde_json::json!({
+                        "success": true,
+                        "type": plot_type,
+                        "development": development,
+                        "revision": snapshot.revision
+                    }),
+                    dry_run: false,
+                })
             })
+            .await
+            .map_err(|e| AirpError::Internal(format!("advance_plot blocking task failed: {e}")))?
         })
     }
 }
@@ -176,33 +157,33 @@ impl Tool for GetPlotStatusTool {
         Box::pin(async move {
             let cid = required_character_id(&params)?;
 
-            // 通过 StateService::read 读取 live.json：
-            // 1) 与写入共享 state_lock(character_id)，避免读到半写状态；
-            // 2) parse 失败返回 AirpError::Internal，而非旧版 unwrap_or(empty) 静默吞错；
-            // 3) 文件不存在时返回空对象，行为与原版一致。
-            let live_state = StateService::new(&state.data_root).read(&cid)?;
-
-            let plot_history = live_state
-                .get("plot_history")
-                .cloned()
-                .unwrap_or(Value::Array(Vec::new()));
-
-            // 读取 index.md 中的悬挂线索
             let sid = optional_session_id(&params)?;
-            let session_dir =
-                crate::data_dir::resolve_session_dir(&state.data_root, cid.as_str(), sid.as_ref())?;
-            let index_content = crate::volume_store::read_index(&session_dir).unwrap_or_default();
+            let data_root = state.data_root.clone();
+            tokio::task::spawn_blocking(move || -> Result<ToolResult, AirpError> {
+                // StateService/read_index 均为同步 I/O；将读取整体移出 tokio worker。
+                let live_state = StateService::new(&data_root).read(&cid)?;
+                let plot_history = live_state
+                    .get("plot_history")
+                    .cloned()
+                    .unwrap_or(Value::Array(Vec::new()));
+                let session_dir =
+                    crate::data_dir::resolve_session_dir(&data_root, cid.as_str(), sid.as_ref())?;
+                let index_content =
+                    crate::volume_store::read_index(&session_dir).unwrap_or_default();
+                let pending_clues = extract_section(&index_content, "悬挂线索");
 
-            // 提取悬挂线索段
-            let pending_clues = extract_section(&index_content, "悬挂线索");
-
-            Ok(ToolResult {
-                output: serde_json::json!({
-                    "plot_history": plot_history,
-                    "pending_clues": pending_clues
-                }),
-                dry_run: false,
+                Ok(ToolResult {
+                    output: serde_json::json!({
+                        "plot_history": plot_history,
+                        "pending_clues": pending_clues
+                    }),
+                    dry_run: false,
+                })
             })
+            .await
+            .map_err(|e| {
+                AirpError::Internal(format!("get_plot_status blocking task failed: {e}"))
+            })?
         })
     }
 }
