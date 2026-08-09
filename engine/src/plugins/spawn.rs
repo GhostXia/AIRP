@@ -13,13 +13,25 @@
 //!   孙进程在 panic 路径仍可能变孤儿（已知限制，MVP 可接受，跟踪 issue）。
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Child;
 
 use super::{resolve_args, resolve_command, TrustedPluginManifest};
+
+struct PluginLogPrefix<'a>(&'a str);
+
+const PLUGIN_OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
+
+impl fmt::Display for PluginLogPrefix<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "[plugin:{}]", self.0)
+    }
+}
 
 /// 逐个 spawn 全部 manifest；单个失败（目录缺失 / 命令越界 / 端口冲突等）
 /// warn 并跳过，不阻塞其余插件（§6.5 端口冲突在 spawn 时暴露）。
@@ -50,11 +62,11 @@ async fn spawn_one(manifest: &TrustedPluginManifest, data_root: &Path) -> Result
     // tokio Command 零成本包装 std Command（unix process_group 等配置
     // 在 From 转换中完整保留）。
     let mut cmd = tokio::process::Command::from(command);
-    // 长跑服务：stdout/stderr 直接进 daemon 终端（piped 会因缓冲满
-    // 阻塞子进程写日志）。
+    // 长跑服务：stdout/stderr 必须由 engine 持续异步排空；若把管道交给
+    // 子进程却不读取，OS pipe buffer 填满后会反向阻塞插件。
     cmd.stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         // 审计 B3：kill_on_drop 保证 Child drop 时（含 panic / SIGKILL /
         // runtime 异常退出）直接子进程被 kill，不留孤儿进程。
         .kill_on_drop(true);
@@ -65,8 +77,107 @@ async fn spawn_one(manifest: &TrustedPluginManifest, data_root: &Path) -> Result
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    cmd.spawn()
-        .map_err(|e| format!("spawn `{program}` failed: {e}"))
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn `{program}` failed: {e}"))?;
+    // 读取任务与 Child 解耦：任务拥有 stdout/stderr，Child 仍只负责
+    // 生命周期 / wait，退出时管道 EOF 会让读取任务自然结束。
+    let _drainers = attach_output_drainers(&mut child, &manifest.id)?;
+    Ok(child)
+}
+
+/// 从 plugin stdout/stderr 持续读取并转发到 engine tracing 日志。
+///
+/// 固定大小 chunk 读取避免无换行输出让行缓冲无界增长。插件输出的任意
+/// 字节都会以 lossy 文本记录，因而即使插件写入二进制或非法 UTF-8，读取
+/// 任务也不会提前退出而重新让 pipe 填满。每个 chunk 中的行片段均带
+/// `[plugin:<id>]` 前缀；stdout 以 info、stderr 以 warn 记录，并用 `stream`
+/// 字段保留来源。
+fn spawn_output_drainer<R>(
+    plugin_id: String,
+    stream: &'static str,
+    reader: R,
+) -> tokio::task::JoinHandle<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut reader = reader;
+        let mut chunk = [0_u8; PLUGIN_OUTPUT_CHUNK_BYTES];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(read) => emit_plugin_output(&plugin_id, stream, &chunk[..read]),
+                Err(error) => {
+                    let prefix = PluginLogPrefix(&plugin_id);
+                    tracing::warn!(
+                        target: "airp_core::plugins",
+                        stream,
+                        "{} failed to read {}: {}",
+                        prefix,
+                        stream,
+                        error
+                    );
+                    break;
+                }
+            }
+        }
+    })
+}
+
+/// Emit one bounded read chunk. Splitting only inside the fixed chunk keeps
+/// every visible line prefixed while never retaining an unbounded partial line.
+fn emit_plugin_output(plugin_id: &str, stream: &'static str, chunk: &[u8]) {
+    for segment in chunk.split_inclusive(|byte| *byte == b'\n') {
+        let mut segment = segment;
+        if segment.last() == Some(&b'\n') {
+            segment = &segment[..segment.len() - 1];
+        }
+        if segment.last() == Some(&b'\r') {
+            segment = &segment[..segment.len() - 1];
+        }
+        let text = String::from_utf8_lossy(segment);
+        let prefix = PluginLogPrefix(plugin_id);
+        if stream == "stderr" {
+            tracing::warn!(
+                target: "airp_core::plugins",
+                stream,
+                "{} {}",
+                prefix,
+                text
+            );
+        } else {
+            tracing::info!(
+                target: "airp_core::plugins",
+                stream,
+                "{} {}",
+                prefix,
+                text
+            );
+        }
+    }
+}
+
+/// 从已 spawn 的 child 取出 stdout/stderr 并启动两个独立读取任务。
+///
+/// 返回的句柄可由测试等待到 EOF；生产调用方有意丢弃句柄，让任务在
+/// runtime 中脱离 spawn 函数持续运行。
+fn attach_output_drainers(
+    child: &mut Child,
+    plugin_id: &str,
+) -> Result<[tokio::task::JoinHandle<()>; 2], String> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "trusted plugin stdout pipe missing after spawn".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "trusted plugin stderr pipe missing after spawn".to_string())?;
+    Ok([
+        spawn_output_drainer(plugin_id.to_string(), "stdout", stdout),
+        spawn_output_drainer(plugin_id.to_string(), "stderr", stderr),
+    ])
 }
 
 /// 环境面配置（审计 A4）：env_clear + 最小白名单。
@@ -354,5 +465,102 @@ mod tests {
             );
         }
         assert!(stdout.contains("PATH="), "probe missing PATH");
+    }
+
+    #[test]
+    fn plugin_log_lines_include_source_prefix() {
+        let id = "com.example.logs";
+        assert_eq!(
+            format!("{} ready", PluginLogPrefix(id)),
+            "[plugin:com.example.logs] ready"
+        );
+    }
+
+    /// 回归：没有换行符的持续输出也必须被固定大小 chunk 读取，不能让
+    /// partial line 缓冲随插件输出无限增长；两条 stream 都要保持可写。
+    #[tokio::test]
+    async fn plugin_output_drainer_handles_no_newline_flood() {
+        use tokio::io::AsyncWriteExt;
+
+        let (stdout_writer, stdout_reader) = tokio::io::duplex(PLUGIN_OUTPUT_CHUNK_BYTES);
+        let (stderr_writer, stderr_reader) = tokio::io::duplex(PLUGIN_OUTPUT_CHUNK_BYTES);
+        let stdout_drainer =
+            spawn_output_drainer("com.example.flood".to_string(), "stdout", stdout_reader);
+        let stderr_drainer =
+            spawn_output_drainer("com.example.flood".to_string(), "stderr", stderr_reader);
+
+        let stdout_writer = tokio::spawn(async move {
+            let mut writer = stdout_writer;
+            let chunk = vec![b'x'; PLUGIN_OUTPUT_CHUNK_BYTES];
+            for _ in 0..1024 {
+                writer.write_all(&chunk).await.unwrap();
+            }
+        });
+        let stderr_writer = tokio::spawn(async move {
+            let mut writer = stderr_writer;
+            let chunk = vec![b'y'; PLUGIN_OUTPUT_CHUNK_BYTES];
+            for _ in 0..1024 {
+                writer.write_all(&chunk).await.unwrap();
+            }
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), stdout_writer)
+            .await
+            .expect("stdout no-newline flood writer blocked")
+            .expect("stdout no-newline flood writer panicked");
+        tokio::time::timeout(std::time::Duration::from_secs(5), stderr_writer)
+            .await
+            .expect("stderr no-newline flood writer blocked")
+            .expect("stderr no-newline flood writer panicked");
+        tokio::time::timeout(std::time::Duration::from_secs(5), stdout_drainer)
+            .await
+            .expect("stdout no-newline drainer did not reach EOF")
+            .expect("stdout no-newline drainer panicked");
+        tokio::time::timeout(std::time::Duration::from_secs(5), stderr_drainer)
+            .await
+            .expect("stderr no-newline drainer did not reach EOF")
+            .expect("stderr no-newline drainer panicked");
+    }
+
+    /// 回归：同时写满 stdout/stderr 的插件必须在有限时间内退出；若任一
+    /// pipe 没有被独立任务持续读取，子进程会在 OS pipe buffer 满时卡住，
+    /// 该 wait 超时即可暴露回归。
+    #[tokio::test]
+    async fn plugin_output_drainers_prevent_pipe_backpressure() {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = tokio::process::Command::new("cmd");
+            command.args([
+                "/C",
+                "(for /L %i in (1,1,8192) do @echo x) & (for /L %i in (1,1,8192) do @echo x 1>&2)",
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = tokio::process::Command::new("sh");
+            command.args([
+                "-c",
+                "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2",
+            ]);
+            command
+        };
+
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().expect("spawn pipe-fill fixture");
+        let drainers = attach_output_drainers(&mut child, "com.example.flood")
+            .expect("pipe handles must be available");
+
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+            .await
+            .expect("plugin must not block on a full stdout/stderr pipe")
+            .expect("pipe-fill fixture wait failed");
+        assert!(status.success(), "pipe-fill fixture failed: {status}");
+        for drainer in drainers {
+            drainer.await.expect("plugin output drainer task panicked");
+        }
     }
 }
