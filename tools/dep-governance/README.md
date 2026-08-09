@@ -1,7 +1,8 @@
 # AIRP Dependency Governance Tooling
 
-> Implements #192 (dependency discovery + audit routing) and #190 (third-party
-> notices + SBOM generation).
+> Implements #192 (dependency discovery + audit routing) and delivers the
+> Rust/npm notices + SBOM portion of #190. Issue #190 remains open for its
+> container-input and shipped-artifact applicability acceptance.
 >
 > Status: dev/CI artifact plus an explicitly dispatched release gate. Pull
 > requests and ordinary manual runs keep the committed snapshot in `docs/sbom/`;

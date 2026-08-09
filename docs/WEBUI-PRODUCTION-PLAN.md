@@ -191,7 +191,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 ## 6. 下一批可执行工作
 
-> 2026-08-09 v0.0.5-rc.2 校准：候选 run `31309894372` 的包装与 SBOM 证据已闭合；先闭合 #130 的真实 provider/browser/Compose P1 证据并配置 hosted required reviewer，再处理 P2/P3 release gates。
+> 2026-08-09 v0.0.5-rc.2 校准：候选 run `31309894372` 的 Windows exact-tag 包装与 SBOM artifact proof 已闭合（仅对应已交付的 Windows 候选 artifact，不代表 #190 的 container-input/shipped-artifact applicability 验收完成）；先闭合 #130 的真实 provider/browser/Compose P1 证据并配置 hosted required reviewer，再处理 P2/P3 release gates。
 
 1. **跑通首聊黄金路径（第一优先）**：用真实 provider + 真实浏览器贯通 onboarding → 首聊 → 刷新恢复 → 重启恢复，完成 #130 的 maintainer-run Compose 记录。过程中实际触发的 bug 立即修；审计 #248 中未触发的理论风险不阻塞本步；
 2. **交付真实用户试用**：Windows 便携包交给 1-3 个目标 RP 用户，收集体验痛点。用户反馈优先级高于审计遗留项和基础设施加固；
