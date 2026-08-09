@@ -24,6 +24,24 @@ export const DIFF_TASK_MAP = {
   },
 };
 
+// Infrastructure-only changes may run the fixed topology smoke without a
+// business task. The runner re-checks this allowlist before honoring the mode.
+export const INFRASTRUCTURE_SMOKE_PATHS = [
+  /^\.github\/workflows\/agent-browser-exploration\.yml$/,
+  /^tools\/agent-exploration(?:\/.*)?$/,
+  /^deploy\/production\/bootstrap-topology\.sh$/,
+];
+
+export function isInfrastructureSmokeDiff(diff) {
+  if (!diff || typeof diff !== 'string') return false;
+  const pathMatches = diff.match(/^diff --git a\/(\S+) b\/(\S+)\r?$/gm) || [];
+  const paths = pathMatches.flatMap(line => {
+    const match = line.match(/^diff --git a\/(\S+) b\/(\S+)\r?$/);
+    return match ? [match[1], match[2]] : [];
+  }).filter(path => path !== '/dev/null');
+  return paths.length > 0 && paths.every(path => INFRASTRUCTURE_SMOKE_PATHS.some(pattern => pattern.test(path)));
+}
+
 export function classifyPrDiff(diff) {
   if (!diff || typeof diff !== 'string') return [];
   // 提取 diff 中变更的文件路径

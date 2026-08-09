@@ -30,11 +30,18 @@ function renderMarkdown(run) {
   lines.push('**LLM:** ' + run.llmModel);
   lines.push('');
   lines.push('## Summary');
+  if (run.mode) lines.push('- Mode: ' + run.mode);
+  if (run.status) lines.push('- Status: ' + run.status);
   lines.push('- Total tasks: ' + run.tasks.length);
   lines.push('- Passed: ' + run.tasks.filter(t => t.result === 'Passed').length);
   lines.push('- Failed: ' + run.tasks.filter(t => t.result === 'Failed').length);
   lines.push('- Flaky: ' + run.tasks.filter(t => t.result === 'Flaky').length);
   lines.push('');
+  if (run.diagnostic) {
+    lines.push('## Diagnostic');
+    lines.push(run.diagnostic);
+    lines.push('');
+  }
   for (const task of run.tasks) {
     lines.push('## Task: ' + task.name);
     lines.push('');
