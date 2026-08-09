@@ -15,6 +15,7 @@
   let activeCharacters = [];
   let sessionId = '';
   let streaming = false;
+  let sceneSelectionGeneration = 0;
 
   const flow = $('#group-flow');
   const input = $('#group-input');
@@ -66,8 +67,12 @@
   }
 
   async function selectScene(sceneId) {
+    const selectionGeneration = ++sceneSelectionGeneration;
+    const isCurrentSelection = () => selectionGeneration === sceneSelectionGeneration;
     try {
-      activeScene = await client.request('GET', '/v1/scenes/' + encodeURIComponent(sceneId));
+      const loadedScene = await client.request('GET', '/v1/scenes/' + encodeURIComponent(sceneId));
+      if (!isCurrentSelection()) return;
+      activeScene = loadedScene;
       activeCharacters = (activeScene.characters || []).map(c => typeof c === 'string' ? c : c.character_id);
       renderScenes();
       renderCharTags();
@@ -76,15 +81,18 @@
         const firstChar = activeCharacters[0];
         if (firstChar) {
           try {
-            sessionId = await client.request('POST', '/v1/sessions/' + encodeURIComponent(firstChar));
-            sessionId = String(sessionId);
+            const createdSession = await client.request('POST', '/v1/sessions/' + encodeURIComponent(firstChar));
+            if (!isCurrentSelection()) return;
+            sessionId = String(createdSession);
           } catch {
+            if (!isCurrentSelection()) return;
             sessionId = '';
             $('#group-status').textContent = '会话创建失败，请重试';
             return;
           }
         }
       }
+      if (!isCurrentSelection()) return;
       $('#group-status').textContent = '场景: ' + sceneId + ' · ' + activeCharacters.length + ' 个角色';
       flow.replaceChildren();
       const welcome = document.createElement('div');
@@ -94,6 +102,7 @@
       welcome.textContent = '— 场景「' + (activeScene.description || sceneId) + '」已就绪 · ' + activeCharacters.join(', ') + ' —';
       flow.appendChild(welcome);
     } catch (error) {
+      if (!isCurrentSelection()) return;
       $('#group-status').textContent = '加载场景失败: ' + AIRPApi.errorMessage(error.data, error.message);
     }
   }
