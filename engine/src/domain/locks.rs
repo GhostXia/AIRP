@@ -140,14 +140,18 @@ pub(crate) fn take_test_character_lock_events(character_id: &str) -> Vec<TestCha
 #[cfg(test)]
 struct TestCharacterLockGateControl {
     read_acquired: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    read_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    // The read-side gate may be held by code running inside a current-thread
+    // Tokio runtime (for example `run_seal_flow`). Use a synchronous channel
+    // for the blocking release so the test hook does not call Tokio's
+    // `blocking_recv` from within async execution.
+    read_release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     write_attempted: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 #[cfg(test)]
 pub(crate) struct TestCharacterLockGate {
     character_id: String,
-    release: Option<tokio::sync::oneshot::Sender<()>>,
+    release: Option<std::sync::mpsc::Sender<()>>,
 }
 
 #[cfg(test)]
@@ -164,7 +168,7 @@ pub(crate) fn install_test_character_lock_gate(
     TestCharacterLockGate,
 ) {
     let (read_acquired_tx, read_acquired_rx) = tokio::sync::oneshot::channel();
-    let (read_release_tx, read_release_rx) = tokio::sync::oneshot::channel();
+    let (read_release_tx, read_release_rx) = std::sync::mpsc::channel();
     let (write_attempted_tx, write_attempted_rx) = tokio::sync::oneshot::channel();
     let control = Arc::new(TestCharacterLockGateControl {
         read_acquired: Mutex::new(Some(read_acquired_tx)),
@@ -239,7 +243,7 @@ pub(crate) fn test_character_read_guard<'a>(
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
         {
-            let _ = receiver.blocking_recv();
+            let _ = receiver.recv();
         }
     }
     TestCharacterReadGuard {
