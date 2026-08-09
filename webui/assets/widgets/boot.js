@@ -16,12 +16,12 @@
 // intent 执行面接 `POST /v1/widget-intents`（C-P3 逐调用强制，合同见
 // protocol/widget-intents.json）。
 //
-// C-P3 base 统一 + consent 异步初始化：
+// C-P3/#474 base 统一 + consent 异步初始化：
 // - catalog / grants / intent 远程调用统一用 engineBase()（airp_engine_url
 //   优先，缺省 location.origin），跨源联调时不再因相对路径失败；
 // - boot() 先 fetchEngineGrants() 注入 consent.js（engine 权威 grant 缓存），
-//   再拉 catalog 与挂载；engine 不可达时降级到 consent.js 的 localStorage
-//   UX 层缓存（C-P1 行为保留）。
+//   再拉 catalog 与挂载；engine 不可达时 consent.js fail-closed，绝不以
+//   localStorage 或其他客户端状态放行第三方 widget。
 import { createClockWidget } from './clock.module.js';
 
 const registry = globalThis.AIRPWidgetRegistry;
@@ -73,6 +73,24 @@ function authedHeaders(extra) {
   const bearer = bearerToken();
   if (bearer) headers.Authorization = 'Bearer ' + bearer;
   return headers;
+}
+
+/** C-P3/#474：engine 权威 grant mutation，成功响应才更新 consent 镜像。 */
+async function updateEngineGrant(id, action, capabilities) {
+  const body = { action };
+  if (Array.isArray(capabilities)) body.capabilities = capabilities;
+  const resp = await fetch(engineUrl('/v1/extensions/' + encodeURIComponent(id) + '/grants'), {
+    method: 'POST',
+    headers: authedHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(5000),
+  });
+  const payload = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const code = payload && payload.error && payload.error.code;
+    throw new Error(code || 'HTTP ' + resp.status);
+  }
+  return payload;
 }
 
 function defaultIntentHandler(name, params, instance) {
@@ -148,20 +166,22 @@ async function fetchEngineCatalog() {
 }
 
 /**
- * C-P3：拉取 engine 权威 grant 状态并注入 consent.js。
- * 失败（engine 不可达 / 非 2xx）时静默降级——consent.js 仍用 localStorage
- * UX 层缓存（initGrants 已在 boot() 开头调用），canMount 行为同 C-P1。
+ * C-P3/#474：拉取 engine 权威 grant 状态并注入 consent.js。
+ * 成功空数组也是有效快照；失败或响应畸形则进入 fail-closed，不能回退
+ * 到 localStorage（跨浏览器/桌面壳必须共享 engine 真值）。
  */
 async function fetchEngineGrants() {
   try {
     const resp = await fetch(engineUrl('/v1/extensions/grants'), {
       headers: authedHeaders({ Accept: 'application/json' }),
+      signal: AbortSignal.timeout(5000),
     });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const grants = await resp.json();
-    consent.initGrantsFromEngine(grants);
+    if (!consent.initGrantsFromEngine(grants)) throw new Error('invalid engine grants response');
   } catch (error) {
-    console.warn('[widget-boot] engine grants 不可用，降级 consent localStorage 缓存：', error.message || error);
+    consent.markEngineUnavailable();
+    console.warn('[widget-boot] engine grants 不可用，第三方 widget fail-closed：', error.message || error);
   }
 }
 
@@ -192,13 +212,13 @@ async function fetchEnginePlugins() {
 async function boot() {
   if (booted) return handles;
   booted = true;
-  consent.initGrants();
+  consent.configureEngineAuthority({ updateGrant: updateEngineGrant });
 
   // builtin 首方 widget 注册（module kind，进程内、无 consent）。
   registry.registerModuleWidget('airp.clock', () => createClockWidget());
 
-  // C-P3：先拉 engine 权威 grant 状态注入 consent（异步），再拉 catalog。
-  // 两者都失败时降级为本地 slots.json + localStorage consent（C-P1 行为）。
+  // C-P3/#474：先拉 engine 权威 grant 状态注入 consent（异步），再拉 catalog。
+  // grants 失败时仍可用静态 catalog 占位，但第三方 widget 保持 fail-closed。
   await fetchEngineGrants();
 
   // #498 §7.4：拉 trusted plugin 状态（降级提示的数据源；失败不阻塞）。

@@ -243,12 +243,17 @@ pub struct GrantRequest {
     pub capabilities: Option<Vec<String>>,
 }
 
-/// grant 视图：仅暴露授权相关字段（不含 manifest/files 等安装细节）。
-/// consent.js 用此形状初始化 grant 缓存（type → granted_capabilities）。
+/// grant 视图：暴露授权与稳定 widget 身份字段，不含 manifest/files 等安装细节。
+/// consent.js 用此形状初始化权威 grant 缓存，并以 version/source/digest 校验 manifest
+/// 身份，避免同 type 的旧/伪造 manifest 继承授权。
 fn grant_view(record: &super::ExtensionRecord) -> Value {
     json!({
         "id": record.id,
         "type": record.widget_type,
+        "version": record.manifest.version,
+        "source": record.manifest.entry.source,
+        "digest": record.digest,
+        "enabled": record.enabled,
         "granted_capabilities": record.granted_capabilities,
         "granted_at": record.granted_at,
     })
@@ -303,7 +308,8 @@ pub async fn get_extension_grants(
 /// `GET /v1/extensions/grants`：列出全部 grant（webui consent.js 初始化用）。
 ///
 /// 返回所有已安装扩展的 grant 状态（含未 grant 的，granted_capabilities 为空）。
-/// consent.js 据此建立 type → grant 映射，与本地 catalog 交叉判定 canMount。
+/// consent.js 据此建立 type → grant 列表，与本地 catalog 交叉判定 canMount；
+/// engine 不可达或快照为空时，消费端必须 fail-closed，不得回退本地授权。
 pub async fn list_all_grants(State(state): State<Arc<DaemonState>>) -> Json<Value> {
     let store = store(&state);
     let grants: Vec<Value> = store.list().iter().map(grant_view).collect();

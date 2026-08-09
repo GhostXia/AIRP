@@ -262,6 +262,91 @@ test('consent: corrupted storage never throws and starts fresh', () => {
   consent.clearGrants();
 });
 
+function engineGrant(overrides = {}) {
+  return {
+    id: 'ext-474',
+    kind: 'widget',
+    type: ENGINE_MANIFEST.type,
+    version: ENGINE_MANIFEST.version,
+    source: ENGINE_MANIFEST.entry.source,
+    digest: 'a'.repeat(64),
+    enabled: true,
+    granted_capabilities: ['read:state'],
+    granted_at: 1,
+    ...overrides,
+  };
+}
+
+const ENGINE_MANIFEST = {
+  ...ESM_MANIFEST,
+  entry: { ...ESM_MANIFEST.entry, source: `/extensions/${'a'.repeat(64)}/index.js` },
+};
+
+test('consent: successful empty engine snapshot is authoritative over localStorage', async () => {
+  consent.clearGrants();
+  const storage = mockStorage();
+  consent.initGrants(storage);
+  await consent.grant(ESM_MANIFEST);
+  assert.equal(consent.canMount(ESM_MANIFEST), true);
+  assert.equal(consent.initGrantsFromEngine({ grants: [] }), true);
+  assert.equal(consent.hasEngineGrants(), true, 'empty successful snapshot still marks engine ready');
+  assert.equal(consent.canMount(ESM_MANIFEST), false, 'localStorage must not authorize in engine mode');
+  consent.clearGrants();
+});
+
+test('consent: engine snapshot fails closed on malformed identity', () => {
+  consent.clearGrants();
+  assert.equal(consent.initGrantsFromEngine({ grants: [{ id: 'ext-474', type: ESM_MANIFEST.type }] }), false);
+  assert.equal(consent.engineAuthorityState(), 'unavailable');
+  assert.equal(consent.canMount(ESM_MANIFEST), false);
+  consent.clearGrants();
+});
+
+test('consent: engine grants require exact identity and enabled record', () => {
+  consent.clearGrants();
+  const oldManifest = {
+    ...ENGINE_MANIFEST,
+    version: '0.9.0',
+    entry: { ...ENGINE_MANIFEST.entry, source: `/extensions/${'b'.repeat(64)}/index.js` },
+  };
+  assert.equal(consent.initGrantsFromEngine({ grants: [
+    engineGrant(),
+    engineGrant({ id: 'ext-old', version: oldManifest.version, source: oldManifest.entry.source, digest: 'b'.repeat(64) }),
+  ] }), true);
+  assert.equal(consent.canMount(ENGINE_MANIFEST), true);
+  assert.equal(consent.canMount(oldManifest), true, 'same type with another version must not be overwritten');
+  assert.deepEqual(consent.effectiveCapabilities({ ...ENGINE_MANIFEST, capabilities: ['read:state', 'call:tool'] }), ['read:state']);
+  assert.equal(consent.canMount({ ...ENGINE_MANIFEST, version: '1.0.1' }), false);
+  assert.equal(consent.canMount({ ...ENGINE_MANIFEST, entry: { ...ENGINE_MANIFEST.entry, source: `/extensions/${'c'.repeat(64)}/index.js` } }), false);
+  assert.equal(consent.canMount({ ...ENGINE_MANIFEST, entry: { ...ENGINE_MANIFEST.entry, source: 'https://evil.test/w.js' } }), false);
+  consent.initGrantsFromEngine({ grants: [engineGrant({ enabled: false })] });
+  assert.equal(consent.canMount(ENGINE_MANIFEST), false);
+  consent.clearGrants();
+});
+
+test('consent: grant/revoke update engine mirror only after mutation succeeds', async () => {
+  consent.clearGrants();
+  const calls = [];
+  consent.configureEngineAuthority({
+    updateGrant: async (id, action, capabilities) => {
+      calls.push([id, action, capabilities]);
+      return engineGrant({
+        granted_capabilities: action === 'grant' ? ['read:state'] : [],
+        granted_at: action === 'grant' ? 2 : null,
+      });
+    },
+  });
+  consent.initGrantsFromEngine({ grants: [engineGrant({ granted_capabilities: [], granted_at: null })] });
+  assert.equal(consent.canMount(ENGINE_MANIFEST), false);
+  await consent.grant({ ...ENGINE_MANIFEST, capabilities: ['read:state', 'call:tool'] });
+  assert.deepEqual(calls[0], ['ext-474', 'grant', ['read:state', 'call:tool']]);
+  assert.equal(consent.canMount(ENGINE_MANIFEST), true);
+  await consent.revoke(ENGINE_MANIFEST);
+  assert.deepEqual(calls[1], ['ext-474', 'revoke', undefined]);
+  assert.equal(consent.canMount(ESM_MANIFEST), false);
+  consent.clearGrants();
+});
+
 // ══ 4. sandbox-bridge ════════════════════════════════════════════════════
 const INSTANCE = { id: 'w1', type: 't.esm-widget' };
 

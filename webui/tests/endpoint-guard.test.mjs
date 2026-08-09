@@ -191,6 +191,7 @@ const dynamicFetchCalls = new Map([
   // 标记机制：新增子目录 fetch 若未登记会直接报 unresolved，不再静默漏扫。
   ["widgets/boot.js|engineUrl('/v1/extensions/catalog')", ['GET /v1/extensions/catalog']],
   ["widgets/boot.js|engineUrl('/v1/extensions/grants')", ['GET /v1/extensions/grants']],
+  ["widgets/boot.js|engineUrl('/v1/extensions/' + encodeURIComponent(id) + '/grants')", ['POST /v1/extensions/:param/grants']],
   ["widgets/boot.js|engineUrl('/v1/plugins')", ['GET /v1/plugins']],
   ["widgets/boot.js|engineUrl('/v1/widget-intents')", ['POST /v1/widget-intents']],
   // 降级读静态 slots.json：非 /v1 端点，不产生路由消费（空数组 = 已解析）。
