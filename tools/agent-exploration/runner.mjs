@@ -12,6 +12,7 @@
 import { chromium } from 'playwright-core';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chatCompletion, getModel, FALLBACK_MODE, getBuiltinSmokeScript } from './llm-client.mjs';
 import { HarnessClient } from './harness-client.mjs';
 import { writeReport } from './reporter.mjs';
@@ -31,94 +32,89 @@ const MAX_STEPS = Number(args['max-steps'] || 30);
 const MAX_TOKENS = Number(args['max-tokens'] || 8000);
 const MAX_REVISIONS = Number(args['max-revisions'] || 2);
 
-if (!CHROME) {
-  console.error('AIRP_CHROME_PATH or --chrome-path is required');
-  process.exit(2);
-}
-
 // TLS 修复说明见 ./tls-args.mjs。buildLaunchArgs 在该模块中实现，便于单元测试。
 
-// 任务集选择
-let taskNames;
-if (args.task) {
-  taskNames = [args.task];
-} else if (args.pr) {
-  // 优先从 --diff-file 读 (workflow 用单独 step 取 diff, runner 不持有 GITHUB_TOKEN)
-  let diff;
-  if (args['diff-file']) {
-    diff = await readFile(args['diff-file'], 'utf8');
-  } else {
-    diff = await fetchPrDiff(args.pr);
-  }
-  taskNames = classifyPrDiff(diff);
-} else {
-  // 默认跑全部 4 个任务集
-  taskNames = Object.keys(DIFF_TASK_MAP);
-  taskNames = [...new Set(taskNames)];
-}
-
-console.log('[runner] origin=' + ORIGIN);
-console.log('[runner] tasks=' + JSON.stringify(taskNames));
-console.log('[runner] llm=' + getModel());
-
-const taskModules = {
+const TASK_MODULES = {
   'onboarding-firstchat-refresh': './tasks/onboarding-firstchat-refresh.mjs',
   'regen-swipe-refresh': './tasks/regen-swipe-refresh.mjs',
   'edit-branch-switch-refresh': './tasks/edit-branch-switch-refresh.mjs',
   'memory-roundtrip': './tasks/memory-roundtrip.mjs',
 };
 
-const run = {
-  runId: 'run-' + Date.now(),
-  trigger: args.pr ? 'pr-' + args.pr : 'manual',
-  prNumber: args.pr || null,
-  startedAt: new Date().toISOString(),
-  llmModel: getModel(),
-  tasks: [],
-};
-
-const browser = await chromium.launch({ headless: true, executablePath: CHROME, args: buildLaunchArgs(CHROME_SPKI) });
-try {
-  for (const name of taskNames) {
-    const mod = await import(taskModules[name]);
-    const taskResult = await runTask(browser, mod, name);
-    run.tasks.push(taskResult);
+async function main() {
+  if (!CHROME) {
+    console.error('AIRP_CHROME_PATH or --chrome-path is required');
+    process.exit(2);
   }
-} finally {
-  await browser.close();
-}
 
-run.endedAt = new Date().toISOString();
-const { jsonPath, mdPath } = await writeReport(resolve(REPORT_DIR), run);
-console.log('[runner] report: ' + mdPath);
+  // 任务集选择
+  let taskNames;
+  if (args.task) {
+    taskNames = [args.task];
+  } else if (args.pr) {
+    // 优先从 --diff-file 读 (workflow 用单独 step 取 diff, runner 不持有 GITHUB_TOKEN)
+    let diff;
+    if (args['diff-file']) {
+      diff = await readFile(args['diff-file'], 'utf8');
+    } else {
+      diff = await fetchPrDiff(args.pr);
+    }
+    taskNames = classifyPrDiff(diff);
+  } else {
+    // 默认跑全部 4 个任务集
+    taskNames = Object.keys(DIFF_TASK_MAP);
+    taskNames = [...new Set(taskNames)];
+  }
 
-// 阶段 2: 任何 task Failed 即 exit 1（让 workflow step 失败，触发 if: failure() 占位评论步骤）。
-// workflow job 级 continue-on-error: true 仍然 non-blocking（不会阻塞 PR 合并），
-// 但 exit 1 让 CI 红 + 触发 workflow 中的 failure 步骤，确保失败信号不会因
-// PR 评论 step 自身失败（report 未生成 / gh 不可用）而完全消失。
-if (run.tasks.some(t => t.result === 'Failed')) {
-  const failed = run.tasks.filter(t => t.result === 'Failed');
-  console.log('[runner] ' + failed.length + ' task(s) failed: ' + failed.map(t => t.name).join(', '));
+  console.log('[runner] origin=' + ORIGIN);
+  console.log('[runner] tasks=' + JSON.stringify(taskNames));
+  console.log('[runner] llm=' + getModel());
+
+  const run = {
+    runId: 'run-' + Date.now(),
+    trigger: args.pr ? 'pr-' + args.pr : 'manual',
+    prNumber: args.pr || null,
+    startedAt: new Date().toISOString(),
+    llmModel: getModel(),
+    tasks: [],
+  };
+
+  const browser = await chromium.launch({ headless: true, executablePath: CHROME, args: buildLaunchArgs(CHROME_SPKI) });
+  try {
+    run.tasks = await runTasks(browser, taskNames, TASK_MODULES);
+  } finally {
+    await browser.close();
+  }
+
+  run.endedAt = new Date().toISOString();
+  const { mdPath } = await writeReport(resolve(REPORT_DIR), run);
   console.log('[runner] report: ' + mdPath);
-  process.exit(1);
+
+  // 阶段 2: 任何 task Failed 即 exit 1（让 workflow step 失败，触发 if: failure() 占位评论步骤）。
+  // workflow job 级 continue-on-error: true 仍然 non-blocking（不会阻塞 PR 合并），
+  // 但 exit 1 让 CI 红 + 触发 workflow 中的 failure 步骤，确保失败信号不会因
+  // PR 评论 step 自身失败（report 未生成 / gh 不可用）而完全消失。
+  if (run.tasks.some(t => t.result === 'Failed')) {
+    const failed = run.tasks.filter(t => t.result === 'Failed');
+    console.log('[runner] ' + failed.length + ' task(s) failed: ' + failed.map(t => t.name).join(', '));
+    console.log('[runner] report: ' + mdPath);
+    process.exit(1);
+  }
 }
 
-async function runTask(browser, mod, name) {
-  // TLS 修复：显式 ignoreHTTPSErrors: false。
-  // 前面 chromium.launch 已通过 --ignore-certificate-errors-spki-list 精确信任 gateway SPKI，
-  // 这里不需要也不应该再无脑忽略所有 HTTPS 错误。显式 false 防止未来 Playwright 默认行为变化
-  // 导致安全降级。对齐 production-browser-smoke.mjs:36 的写法。
-  const context = await browser.newContext({
-    httpCredentials: process.env.AIRP_AUTH_USER ? { username: process.env.AIRP_AUTH_USER, password: process.env.AIRP_AUTH_PASSWORD } : undefined,
-    ignoreHTTPSErrors: false,
-  });
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+export async function runTasks(browser, taskNames, taskModules = TASK_MODULES, taskOptions) {
+  const tasks = [];
+  for (const name of taskNames) {
+    const mod = typeof taskModules[name] === 'string'
+      ? await import(taskModules[name])
+      : taskModules[name];
+    tasks.push(await runTask(browser, mod, name, taskOptions));
+  }
+  return tasks;
+}
 
-  const taskDir = join(resolve(REPORT_DIR), name);
-  await mkdir(taskDir, { recursive: true });
-
-  // B3 修复：result 提前初始化，保证 page.goto/waitForReady 失败时 catch/finally
-  // 仍能访问 result，避免异常冒泡出 runTask 导致外层 for 循环整批跳过。
+export async function runTask(browser, mod, name, { origin = ORIGIN, reportDir = REPORT_DIR } = {}) {
+  // F11：先创建当前 task 的结果，再执行任何可能失败的 Playwright/文件系统初始化。
   const result = {
     name,
     description: mod.DESCRIPTION,
@@ -133,20 +129,35 @@ async function runTask(browser, mod, name) {
     reproducibility: null,
   };
 
+  const taskDir = join(resolve(reportDir), name);
+  let context = null;
   let tracingStopped = false;
+  let tracingStarted = false;
   let page = null;
   let harness = null;
   try {
+    // TLS 修复：显式 ignoreHTTPSErrors: false。
+    // 前面 chromium.launch 已通过 --ignore-certificate-errors-spki-list 精确信任 gateway SPKI，
+    // 这里不需要也不应该再无脑忽略所有 HTTPS 错误。显式 false 防止未来 Playwright 默认行为变化
+    // 导致安全降级。对齐 production-browser-smoke.mjs:36 的写法。
+    context = await browser.newContext({
+      httpCredentials: process.env.AIRP_AUTH_USER ? { username: process.env.AIRP_AUTH_USER, password: process.env.AIRP_AUTH_PASSWORD } : undefined,
+      ignoreHTTPSErrors: false,
+    });
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    tracingStarted = true;
+    await mkdir(taskDir, { recursive: true });
+
     page = await context.newPage();
     // 传 origin 给 HarnessClient，让 navigate() 用 page.goto() 而不是 in-page href
-    harness = new HarnessClient(page, ORIGIN);
+    harness = new HarnessClient(page, origin);
     // 关键：page 创建后停留在 about:blank, harness 未安装。必须先 goto 一个会加载
     // harness 的 screen 并等待 async <script> 把 window.__AIRP_AGENT_TEST__ 装好,
     // 否则 generateAndRunScript() 里第一次 harness.getDomSnapshot() 会 evaluate 到 undefined。
     // 用 role-list 作为初始 screen (它是 home 页, 所有任务都可以从这里导航)。
     // B3: page.goto + waitForReady 移入 try 块——origin 不可达 / harness 未装好等
     // 失败不应冒泡到外层 for 循环导致剩余任务整批跳过。
-    await page.goto(ORIGIN + '/screens/01-role-list.html?airp_agent_test=1', { waitUntil: 'load' });
+    await page.goto(origin + '/screens/01-role-list.html?airp_agent_test=1', { waitUntil: 'load' });
     await harness.waitForReady();
 
     // 让 Agent 生成临时 Playwright 脚本（方案 A）
@@ -155,7 +166,7 @@ async function runTask(browser, mod, name) {
     // - apiCall: 通过 page.evaluate 走浏览器 TLS 信任（Node fetch 不信任自签证书）
     // - sseCall: 同上，但消费 SSE 流并返回最终 content + message_id
     const ctx = {
-      page, harness, context, origin: ORIGIN, fixtures: mod.FIXTURES || {},
+      page, harness, context, origin, fixtures: mod.FIXTURES || {},
       // uuid: generate a UUID v4 string (for character_id, session_id, message_id fields).
       // Engine requires UUID format for session_id — do NOT use "session-<timestamp>" or other prefixes.
       uuid: () => crypto.randomUUID(),
@@ -174,7 +185,7 @@ async function runTask(browser, mod, name) {
             if (!res.ok) throw new Error(`POST /v1/sessions/${cid} returned ${res.status}: ${text}`);
             try { return JSON.parse(text); } catch { return text; }
           },
-          [ORIGIN, characterId]
+          [origin, characterId]
         );
         // 引擎返回 Json<SessionId>，serde 序列化为带引号的 UUID 字符串。
         // JSON.parse 后 sid 即为 UUID 字符串本身。
@@ -193,7 +204,7 @@ async function runTask(browser, mod, name) {
             if (!res.ok) throw new Error(`GET /v1/characters returned ${res.status}: ${text}`);
             try { return JSON.parse(text); } catch { return text; }
           },
-          [ORIGIN]
+          [origin]
         );
         // /v1/characters 返回 Vec<String>（["id1","id2",...]），不是 { characters: [...] }。
         return Array.isArray(chars) && chars.includes(characterId);
@@ -209,7 +220,7 @@ async function runTask(browser, mod, name) {
           if (!res.ok) throw new Error(`API ${m} ${p} returned ${res.status}: ${text}`);
           try { return JSON.parse(text); } catch { return text; }
         },
-        [ORIGIN, path, method, body]
+        [origin, path, method, body]
       ),
       // sseCall: 消费 SSE 流并返回 { content }。
       // 注意：引擎 SSE 流只发 content chunks 和 done 事件，**不发 message_id**。
@@ -228,7 +239,7 @@ async function runTask(browser, mod, name) {
             if (!res.ok) throw new Error(`SSE ${p} returned ${res.status}: ${await res.text()}`);
             return await res.text();
           },
-          [ORIGIN, path, body],
+          [origin, path, body],
         );
         return { content: parseSseContent(sseText) };
       },
@@ -250,6 +261,7 @@ async function runTask(browser, mod, name) {
     await context.tracing.stop({ path: tracePath });
     result.evidence.trace = tracePath;
     tracingStopped = true;
+    tracingStarted = false;
 
     // 任务模块自检
     const checkResult = await mod.check(harness, result);
@@ -266,23 +278,27 @@ async function runTask(browser, mod, name) {
       try { result.consoleErrors = await harness.getConsoleErrors(); } catch {}
       try { result.failedRequests = await harness.getFailedRequests(); } catch {}
     }
-    if (!tracingStopped) {
+    if (context?.tracing && tracingStarted && !tracingStopped) {
       try {
         const tracePath = join(taskDir, 'trace.zip');
         await context.tracing.stop({ path: tracePath });
         result.evidence.trace = tracePath;
         tracingStopped = true;
+        tracingStarted = false;
       } catch {}
     }
   } finally {
-    // B3 修复：tracing 未停或停失败时，先强制 stop 再关 context，避免
-    // context.close() 因 tracing 仍活跃而抛错跳过 finally 后续逻辑。
-    // try/catch 包裹 stop 保证即使第二次 stop 也安全（Playwright 对已停的 tracing
-    // 调 stop 会抛错，try/catch 吞掉即可）。
-    if (!tracingStopped) {
+    // F11：context/newPage/tracing 可能只完成部分初始化；每个清理动作独立兜底，
+    // 避免某个阶段失败或清理抛错掩盖当前 task 的 Failed result。
+    if (context?.tracing && tracingStarted && !tracingStopped) {
       try { await context.tracing.stop(); } catch {}
     }
-    try { await context.close(); } catch {}
+    if (page) {
+      try { await page.close(); } catch {}
+    }
+    if (context) {
+      try { await context.close(); } catch {}
+    }
   }
 
   return result;
@@ -549,4 +565,8 @@ async function fetchPrDiff(prNumber) {
   });
   if (!res.ok) throw new Error('fetchPrDiff ' + res.status + ': ' + await res.text());
   return await res.text();
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  await main();
 }
