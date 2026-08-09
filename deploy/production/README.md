@@ -1,12 +1,16 @@
 # AIRP production deployment
 
-> Baseline checked: 2026-07-26 at `main@200fed9`; the accepted P0 topology is unchanged.
+> Baseline checked: 2026-08-09 at `main@affa315` (`v0.0.5-rc.2` prerelease candidate); the accepted P0 topology is unchanged.
 
 This directory is the first-party single-instance, self-hosted WebUI bundle. It runs two
 application services: a Caddy HTTPS gateway and a private AIRP engine. Only Caddy publishes
 host ports. The browser uses the same origin and never receives the engine bearer.
 
-This is an implemented P0 preview topology, not a formal release. Current product status and
+This is an implemented P0 preview topology, not a formal release. The candidate run
+`31309894372` completed 3 jobs successfully and uploaded 5 prerelease assets, but that
+does not close the real-provider/browser/Compose acceptance in [#130](https://github.com/GhostXia/AIRP/issues/130)
+or the missing required-reviewer policy on the hosted `release` environment
+(`protection_rules=[]`, `can_admins_bypass=true`). Current product status and
 remaining P1-P3 gates are authoritative in
 [`docs/CURRENT-BASELINE.md`](../../docs/CURRENT-BASELINE.md) and
 [`docs/WEBUI-PRODUCTION-PLAN.md`](../../docs/WEBUI-PRODUCTION-PLAN.md).
@@ -131,6 +135,6 @@ system-Chrome injection/stream-cancel/prompt-preview
 behavior and absence of synthetic secrets/private runner paths in logs, image metadata and WebUI
 assets. Cleanup deletes only the uniquely named smoke volumes.
 
-Passing this P0 topology gate does not make the bundle a formal release. P1 trial validation, P2
+Passing this P0 topology gate or the `v0.0.5-rc.2` candidate package smoke does not make the bundle a formal release. P1 trial validation, P2
 automated backup/restore and migration rollback, and P3 provenance/compatibility/release-candidate gates remain
 required by `docs/WEBUI-PRODUCTION-PLAN.md`.

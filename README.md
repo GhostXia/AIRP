@@ -2,7 +2,7 @@
 
 AIRP 是专精 Role Play 的 AI Agent 客户端。项目采用“无头 Engine + 可换 UI”结构，把角色、Persona、Preset、Worldbook、会话、记忆、Agent 执行和安全边界集中在一个可审计的本地数据面。
 
-> 当前基线：2026-07-30，`main@4f3f792`。
+> 当前基线：2026-08-09，`main@affa315`；当前候选：`v0.0.5-rc.2`（prerelease）。
 > 本页只提供产品入口；准确能力、缺口和验证边界见 [当前开发基线](docs/CURRENT-BASELINE.md)。
 
 ## 仓库结构
@@ -11,7 +11,7 @@ AIRP 是专精 Role Play 的 AI Agent 客户端。项目采用“无头 Engine +
 - `webui/`：当前正式产品交付主面；
 - `airp-engine-console/`：WebUI 视觉与交互样板；
 - `protocol/`：共享线协议；
-- `ui/`：保留的 Tauri + Vue 桌面客户端，近期发布暂停；
+- `ui/`：保留的 Tauri + Vue 桌面客户端，C-P0 起由壳同源承载 `webui/`；GUI 真机与真实 provider 验收仍开放；
 - `deploy/windows-webui/`、`deploy/linux-webui/`：便携 WebUI artifacts；
 - `deploy/production/`：单实例自托管 HTTPS preview；
 - `data/`：运行时数据根规范与仓库安全样例；
@@ -32,7 +32,7 @@ AIRP-Core/AIRPCLI、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 是作�
 - 44 个无构建 WebUI 屏、首次启动向导、聊天主面、资产管理与创作工具页面；
 - Windows/Linux 便携 WebUI、production preview、SBOM 与 Agent 浏览器探索测试层。
 
-这仍是 **P1 有限试用代码候选**，不是正式发布。功能存在不等于真实用户工作流、崩溃恢复、长会话、升级/回滚或市场验证已经通过。当前优先级是修复并发/持久化/失败边界，验证真实 provider 的 onboarding → 首聊 → 刷新 → 服务重启恢复，再扩大功能面。
+这仍是 **P1 有限试用代码候选**，不是正式发布。`v0.0.5-rc.2` 是 2026-08-09 在 `main@affa315` 上发布的 prerelease 候选；GitHub Actions run `31309894372` 的 3 个 job 均成功并发布 5 个资产，但正式 `v0.0.5` 仍被 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收，以及 `release` environment required reviewer 配置阻塞。功能存在不等于真实用户工作流、崩溃恢复、长会话、升级/回滚或市场验证已经通过。当前优先级是修复并发/持久化/失败边界，验证真实 provider 的 onboarding → 首聊 → 刷新 → 服务重启恢复，再扩大功能面。
 
 ## 核心原则
 

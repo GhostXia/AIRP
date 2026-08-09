@@ -2,7 +2,7 @@
 
 > 读者：冷启动、没有聊天上下文的实现或审计 Agent
 >
-> 最后校准：2026-08-02，`main@830426e`
+> 最后校准：2026-08-09，`main@affa315`；当前候选：`v0.0.5-rc.2`（prerelease）
 >
 > 真理顺序：源码/manifest/测试/可重复证据 > [CURRENT-BASELINE.md](CURRENT-BASELINE.md) > 专题合同 > 长期计划 > 历史归档/聊天。
 
@@ -20,9 +20,9 @@
 engine shared service → HTTP/SSE → WebUI → production/browser tests
 ```
 
-桌面 Tauri/Vue 代码保留，但开发、打包和性能计划暂停。恢复前先重新校准基线。
+桌面 Tauri/Vue 代码保留；C-P0 起由 Tauri 壳同源承载 `webui/`，run `31309894372` 已提供包内自动 desktop smoke；仍缺 GUI 真机与真实 provider 验收，正式发布门也未闭合。桌面相关工作先按 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §2.3 校准，不把历史暂停结论当作当前事实。
 
-截至 `main@830426e`，v0.0.3 的已交付收敛切片是：#398 的 generation-scoped
+截至历史 `main@830426e`，v0.0.3 的已交付收敛切片是：#398 的 generation-scoped
 `session-state`/`cancel`；#399/#403 的 durable `TurnCommit` marker 与
 `Recovering`/fail-closed mutation；#409 的 terminal marker recovery、Coordinator
 admission/owner 锁序和 all-false marker fail-closed；#410/#411 的 production mock
@@ -30,6 +30,8 @@ admission/owner 锁序和 all-false marker fail-closed；#410/#411 的 productio
 npm 安全修复与 SBOM 生成证据。它们不等于自动 replay/repair、Agent/tool 单 owner、
 backup/restore、性能 SLO 或真实 provider + browser + Compose 验收；后者仍由
 [#130](https://github.com/GhostXia/AIRP/issues/130) 作为当前 P1 外部硬门追踪。
+
+当前候选发布证据：2026-08-09 的 `main@affa315` / `v0.0.5-rc.2` prerelease 对应 Actions run `31309894372`，3 个 job 全部成功、5 个资产已上传。该证据只证明候选发布链路，不解除 #130 或 `release` environment required reviewer 配置门。
 
 ## 2. 仓库地图
 
@@ -264,7 +266,7 @@ Remove-Item Env:RUSTDOCFLAGS
 - `0.x` 依赖的次版本按主版本风险处理。即使只是补丁版本，只要涉及数据格式、网络/权限边界、密码学、构建/发布链或已知行为变化，也升级为 issue + 专项审计。
 - “发现有新版本”不是升级理由；升级 PR 要说明用户价值、风险、验证证据和不升级的后果。安全修复可提高优先级，但不得跳过兼容性验证。
 
-仓库已落地 `tools/dep-governance/`（PR #218；#413 刷新 lock/SBOM 证据）：`discover-deps.mjs` 扫描 Cargo workspace 与 npm package-lock.json v3 并按 BFS 划分 runtime/build/dev 作用域，`audit-routing.mjs` 提供纯函数审计路由（`classifyInventory` auto-pass/audit-required/block + `classifyUpgrade` 五类升级路由 + patch-sensitive 覆盖），`generate-sbom.mjs` 输出 SPDX-2.3 / CycloneDX 1.5 SBOM 与人类可读第三方声明。当前快照生成命令报告 **693 third-party / unknown license 0 / blocked 0**；inventory 总记录 **697**（first-party 4、audit-required 17、auto-pass 680），不要把 audit-required 误写成 block。#413 的 `brace-expansion`、`postcss`、`nanoid` 是 lock-only transitive 更新，`ui` 依赖仍属于构建/测试图，production gateway 只复制静态 WebUI。#527 补上 Windows workflow 的 `workflow_dispatch` exact-tag validation/publish code gate、`docs/sbom/audit-signoffs.json` 17 条精确 sign-off 与四文件 SBOM 上传清单；`release` environment hosted required-reviewer 配置和成功发布 proof 尚未核验，不能把发布 assurance 写成已完成。自动化版本检测与去重 issue 仍是 #192 后续切片。
+仓库已落地 `tools/dep-governance/`（PR #218；#413 刷新 lock/SBOM 证据）：`discover-deps.mjs` 扫描 Cargo workspace 与 npm package-lock.json v3 并按 BFS 划分 runtime/build/dev 作用域，`audit-routing.mjs` 提供纯函数审计路由（`classifyInventory` auto-pass/audit-required/block + `classifyUpgrade` 五类升级路由 + patch-sensitive 覆盖），`generate-sbom.mjs` 输出 SPDX-2.3 / CycloneDX 1.5 SBOM 与人类可读第三方声明。当前快照生成命令报告 **693 third-party / unknown license 0 / blocked 0**；inventory 总记录 **697**（first-party 4、audit-required 17、auto-pass 680），不要把 audit-required 误写成 block。#413 的 `brace-expansion`、`postcss`、`nanoid` 是 lock-only transitive 更新，`ui` 依赖仍属于构建/测试图，production gateway 只复制静态 WebUI。#527 补上 Windows workflow 的 `workflow_dispatch` exact-tag validation/publish code gate、`docs/sbom/audit-signoffs.json` 17 条精确 sign-off 与四文件 SBOM 上传清单；run `31309894372` 已在 `main@affa315` 上完成候选 exact-tag publish proof（3 个 job 成功、5 个 prerelease 资产），但 `release` environment required-reviewer 配置仍缺失（API `protection_rules=[]`、`can_admins_bypass=true`），所以正式 `v0.0.5` assurance 仍未完成。自动化版本检测与去重 issue 仍是 #192 后续切片。
 
 ## 8. 文档维护
 
@@ -278,7 +280,7 @@ Remove-Item Env:RUSTDOCFLAGS
 
 ## 9. 当前接手点
 
-1. `main@830426e` 已包含 PR #314/#316/#317/#323/#328 的 Phase 1–5.3 功能、PR #333/#334/#335/#338 的 finalize/world-event 并发修复，以及 #398–#413 的 v0.0.3 收敛切片；
+1. 历史 `main@830426e` 已包含 PR #314/#316/#317/#323/#328 的 Phase 1–5.3 功能、PR #333/#334/#335/#338 的 finalize/world-event 并发修复，以及 #398–#413 的 v0.0.3 收敛切片；当前候选锚点是 `main@affa315`（`v0.0.5-rc.2` prerelease）；
 2. 优先完成 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose maintainer-run；不要用 CI mock/system Chrome 替代；
 3. 用真实 provider + 真实浏览器闭合 onboarding → 首聊 → 多轮 → 页面刷新 → 服务重启；分别记录传输失败、commit state、恢复动作和资产一致性；
 4. screen 34–44 已存在，需逐页校准 runtime contract、空/错/慢状态、视觉样板一致性和 browser smoke；

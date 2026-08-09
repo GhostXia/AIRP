@@ -1,11 +1,13 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-08-06
-> 代码基线：`main@e28ea02`（合并 PR #492 `[审计遗留] webui 侧遗留收束：#489 W1/W2/W3/D2 + #485 W1/W2/W3（两半齐）`）
+> 基线日期：2026-08-09
+> 代码基线：`main@affa315`（`v0.0.5-rc.2` prerelease 候选）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
 本文只记录当前代码树能够支持的结论。GitHub issues 是未完成工作的实时追踪面；PR、审计报告和历史测试数字只证明对应代码树，不自动证明当前 `HEAD`。
+
+本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。GitHub Actions run `31309894372` 的 3 个 job 全部成功，并发布 5 个资产（`airp-webui-windows-x64.zip`、`inventory.json`、`airp.spdx.json`、`airp.cdx.json`、`THIRD-PARTY-NOTICES.txt`）。只凭这条候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
 本次校准（2026-08-02 v0.0.3 docs-pass）做了三件事：
 
@@ -27,7 +29,7 @@ AIRP 是面向 Role Play 的 AI Agent 客户端，采用“无头 Engine + 可�
 | `webui/` | 无构建、多页面、同源 WebUI（当前 44 屏；`assets/widgets/` 为 widget 运行时与 SDK 资产面） | **正式产品交付主面** |
 | `airp-engine-console/` | WebUI 视觉与交互样板 | 设计基线，不是第二套运行时 |
 | `protocol/` | `airp-state-protocol`：共享线协议类型 | Rust workspace 成员 |
-| `ui/`、`ui/src-tauri/` | Tauri 桌面壳：同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；Vue 主面已归档 | **桌面线重启**，v0.0.4 交付面，边界与限制见 §2.3 |
+| `ui/`、`ui/src-tauri/` | Tauri 桌面壳：同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；Vue 主面已归档 | **桌面线重启**，v0.0.4 交付面；run `31309894372` 含包内 desktop smoke，仍缺 GUI 真机与真实 provider 验收，边界与限制见 §2.3 |
 | `deploy/windows-webui/` | Windows 便携 WebUI 包 | 当前优先 artifact |
 | `deploy/linux-webui/` | Linux musl 便携包 | 手动构建 artifact |
 | `deploy/production/` | 单实例自托管 HTTPS preview | P0 拓扑，不是正式发布 |
@@ -60,11 +62,11 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 2. **单资源原子写 ≠ 跨资源事务**：`finalize` 可对 message → state → volume 逐步 fail-closed，崩溃后跨资源一致性仍是 best-effort（RR-004 / #286）。  
 3. **Domain 写路径未完全闭合**：shared service 是目标边界；Agent tools 等路径仍可能直接 `replace_file` / `fs` 写（#381 E-P1-3 / #160）。  
 4. **锁模型分裂**：character/session/state/persona/conversation/decay/FTS/quota 等多套锁；async 路径上存在 std 锁 + 锁内磁盘 I/O；poison 策略不一致（#284/#220/#381）。  
-5. **桌面线暂停** ⚠️ superseded（2026-08-06）：C-P0（PR #480）起桌面线转为「Tauri 壳同源承载 webui + bearer 注入通道」，Vue 主面归档；当前事实与限制见 §2.3。原结论中「画布接力等草案在 archive、不进入当前执行队列」仍然成立。
+5. **桌面线暂停** ⚠️ superseded（历史结论，2026-08-06）：C-P0（PR #480）起桌面线转为「Tauri 壳同源承载 webui + bearer 注入通道」，Vue 主面归档；当前事实与限制见 §2.3。原结论中「画布接力等草案在 archive、不进入当前执行队列」仍然成立。
 
 ### 2.2 v0.0.3 收敛切片的已交付边界
 
-以下记录的是当前 `main@830426e` 能由源码、测试或生产 harness 支持的边界，不把 release 计划写成能力：
+以下记录的是 v0.0.3 收敛切片在历史 `main@830426e` 上由源码、测试或生产 harness 支持的边界；当前候选新增事实见本节末与 §6，不把 release 计划写成能力：
 
 | 切片 | 已实现 / 已验证 | 明确未包含 |
 |---|---|---|
@@ -72,11 +74,11 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | #399/#403 | durable `TurnCommit` marker 覆盖 message、live state 与 current volume 阶段；中断后公开 `Recovering` 并拒绝新 mutation，marker schema/阶段状态 fail-closed。 | 不包含自动 replay/repair、volume sealing recovery、backup/restore。 |
 | #409 | 仅在所有 expected 阶段已 durable 时清理 terminal marker；恢复清理与 session owner/admission registry 锁序串行化；non-terminal、unreadable、unsupported 与 all-false marker 保留为 recovery-required。 | 不包含 payload-aware 自动 replay/journal 或完整灾难恢复。 |
 | #410/#411 | production mock smoke 覆盖 generation poll、stale/current cancel、严格 typed SSE terminal、取消后 history、临时 session cleanup；harness 对 cleanup、SSE、cancel poll、response body 与 deadline 使用绝对预算并 fail-closed，合法空响应体可结束；备份入口保持明确不可用，renderer 不发起 backup/restore API 调用。 | 这是 mock/CI 证据，不替代真实 provider、真实 browser 和维护者 Compose 验收；不改变 Engine/API 语义。 |
-| #413/#527 | lock-only 更新 `brace-expansion` 2.1.1→2.1.4、`postcss` 8.5.16→8.5.25、`nanoid` 3.3.15→3.3.16；`npm audit --json` 与 `--omit=dev` 均为 0。当前 SBOM 生成报告 693 third-party、unknown license 0、blocked 0；inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。Windows workflow 已有 `workflow_dispatch` exact-tag validation/publish code gate、`docs/sbom/audit-signoffs.json` 17 条精确 sign-off 和四文件 SBOM 上传清单。 | GitHub `release` environment required-reviewer 配置与成功 hosted publish proof 尚未核验；`ui` 依赖用于构建/测试，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime。 |
+| #413/#527 (plus #554) | lock-only 更新 `brace-expansion` 2.1.1→2.1.4、`postcss` 8.5.16→8.5.25、`nanoid` 3.3.15→3.3.16；`npm audit --json` 与 `--omit=dev` 均为 0。当前 SBOM 生成报告 693 third-party、unknown license 0、blocked 0；inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。Windows workflow 已有 `workflow_dispatch` exact-tag validation/publish code gate、#554 隔离的 `contents: write` release-context job、`docs/sbom/audit-signoffs.json` 17 条精确 sign-off 和四文件 SBOM 上传清单；run `31309894372` 在 `main@affa315` 上 3 个 job 全部成功并上传 5 个 prerelease 资产。 | `release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失；正式 `v0.0.5` 仍需 #130 真实 provider/browser/Compose 验收。`ui` 依赖用于构建/测试，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime。 |
 | #436/#439/#441/#470（R1 锁序收敛 + 运行时强制） | `advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` / `run_seal_flow` 五个 agent-tool 路径补齐外层 `character_lock.read()`（R1）；`StateService::mutate` 拆为 `mutate_locked` + `mutate` 消除 re-entrancy；`lock_order` 模块提供 R1+R2 运行时强制（thread-local 栈 + RAII Guard，默认 debug；release-profile CI 以 `lock-order-runtime` feature 验证）；4 条并发回归测试（各路径与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + TOCTOU）；lock-map cleanup race 修复（`remove_deleted_*_lock` 移到 write guard drop 之后）。 | 正式 release 默认不启用 tracker 以保持零开销；PR gate 有 `--release --features lock-order-runtime` 专项门；`advance_plot` 仍持 std 锁做同步 I/O（A3 debt）；W-01~W-04 follow-up 见 #442/#443/#444。 |
 | #342（PR #445，backup/restore 最小闭环） | 手动 backup（Full / Character / Session scope）+ manifest schema v1（per-file SHA-256 + tree SHA-256）+ `verify_against_disk` 完整性校验 + restore（Full + scoped `swap_scoped_subtree`）+ `PreRestoreRollback` 回滚备份 + post-restore 校验 + `PreDelete` 自动备份（`delete_character` / `delete_session`，`force=true` 可跳过）+ secret 排除（`secrets.json` / `settings.json`）+ `BACKUP_LOCK` 串行化 + WebUI backup 管理界面。82 条 backup 测试通过（PR #445）。 | v1 限制：无自动定时备份；restore swap 阶段不持 `character_lock`（W-02，#447，v1 缓解为维护窗口执行）；Windows `sync_dir` no-op（W-03，#448）；跨资源一致性 backup 未交付；完整 migration / 导出未交付（#346）。审计遗留 W-01~W-06 见 #446/#447/#448/#449/#450/#451。 |
 
-### 2.3 v0.0.4 收敛切片：桌面线与扩展合同（`main@e28ea02`）
+### 2.3 v0.0.4 收敛切片：桌面线与扩展合同（历史 `main@e28ea02`；当前候选 `main@affa315`）
 
 以下记录 v0.0.3 → `main@e28ea02` 桌面线与扩展合同的已交付边界与已知限制，不把合同闭环外推为成熟生态：
 
@@ -110,17 +112,17 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 - 不能把 Worldbook/Preset **advisory** 字段写成已执行语义；以 [WORLDBOOK-SEMANTICS.md](WORLDBOOK-SEMANTICS.md) 为准。  
 - 不能把「已开 GitHub issue / 已写审计 umbrella」写成「风险已关闭」。
 - 不能把 #398–#411 的取消、marker、Recovering 或 harness 证据外推为自动 replay/repair、Agent/tool 单 owner、性能 SLO、backup/restore 或真实 provider/browser/Compose 验收。
-- 不能把 Tauri 桌面壳的 webui 承载与 token 续期循环外推为 GUI 真机验证、打包安装器证据或发布级 smoke 已完成；壳续期循环的 GUI 真机确认仍是开放项。
+- 不能把 Tauri 桌面壳的 webui 承载、token 续期循环与包内自动 desktop smoke 外推为 GUI 真机、打包安装器、真实 provider 或正式发布验收已完成；壳续期循环的 GUI 真机确认仍是开放项。
 - 不能把 widget 扩展体系的契约测试与 compat harness 外推为成熟扩展生态：无签名、无市场、无吊销、无多 major 兼容；intent 面当前无真实执行器（C-P3 授权通过即接受）；capability 封闭集仅 6 项。
-- #346 完整导出/migration、跨资源一致性 backup、自动定时备份/恢复、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的 hosted release proof、签名、browser matrix、soak 仍未交付；#527 的 Windows SBOM/sign-off code gate 已落地，但 hosted `release` environment 配置与成功发布证据仍是正式 release gate 前置，不把代码门写成已完成能力。#342 backup/restore **最小闭环已交付**（PR #445，v1 限制见 §2.2），但不得外推为完整灾难恢复或自动定时备份。
+#346 完整导出/migration、跨资源一致性 backup、自动定时备份/恢复、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的签名、browser matrix、soak 仍未交付；#527 的 Windows SBOM/sign-off code gate 与 run `31309894372` 的 prerelease 候选 proof 已落地，但 `release` environment 当前 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失，且 #130 真实 provider/browser/Compose 验收未完成。不要把候选发布或代码门写成正式 release assurance。#342 backup/restore **最小闭环已交付**（PR #445，v1 限制见 §2.2），但不得外推为完整灾难恢复或自动定时备份。
 
 ## 5. 当前优先级
 
-当前主线不是扩大功能面，而是把已合入能力收敛成可验证、可恢复的 **P1 有限试用**（**v0.0.3 后端门禁窗口**）：
+当前主线不是扩大功能面，而是把已合入能力收敛成可验证、可恢复的 **P1 有限试用**（当前候选 `v0.0.5-rc.2`，正式 `v0.0.5` 仍未就绪）：
 
-**v0.0.4 准备（2026-08-06）**：桌面线与扩展合同切片（C-P0~C-P4，PR #480–#487/#491/#492）已全部合入；本窗口 docs-pass（审计遗留 #485 D1）将基线/安全/风险文档对齐到 `main@e28ea02`。剩余 #485 项 W4/W5/W6/T1 随 [#493](https://github.com/GhostXia/AIRP/issues/493) 跟进；壳续期循环的 GUI 真机确认与打包 artifact 证据仍属发布级门禁。
+**v0.0.4（历史，2026-08-06）**：桌面线与扩展合同切片（C-P0~C-P4，PR #480–#487/#491/#492）已全部合入；该轮 docs-pass 对齐到 `main@e28ea02`。剩余 #485 项 W4/W5/W6/T1 随 [#493](https://github.com/GhostXia/AIRP/issues/493) 跟进；壳续期循环的 GUI 真机确认与打包 artifact 证据仍属发布级门禁。
 
-**v0.0.3 P1 门状态（2026-08-02）**：代码与 mock/CI 证据已覆盖 #398–#413 的上述收敛切片；对 P1 有限试用，唯一尚未完成的外部硬阻塞是 [#130](https://github.com/GhostXia/AIRP/issues/130) 的维护者验收：真实 provider + 真实 browser + production Compose。CI mock、system Chrome 或本地单元测试不能替代该验收。
+**当前 v0.0.5-rc.2 P1 门状态（2026-08-09）**：代码与 mock/CI/候选发布证据已覆盖上述收敛切片；正式 `v0.0.5` 尚未完成的外部硬阻塞仍是 [#130](https://github.com/GhostXia/AIRP/issues/130) 的维护者验收：真实 provider + 真实 browser + production Compose，以及 `release` environment required reviewer 配置。CI mock、system Chrome、run `31309894372` 或本地单元测试不能替代该验收。
 
 ### 5.0 v0.0.3 已拍板决策
 
@@ -169,9 +171,10 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | R1 锁序运行时强制（PR #441） | `cargo test -p airp-core --lib` | 4 条并发回归测试（`advance_plot`/`trigger_world_event`/`advance_clock`/`npc_action` 各与 `delete_character` 经 `Barrier` 并发）+ 9 条 R1 单测通过（PR #441）。 |
 | npm dependency audit | `npm audit --json`；`npm audit --omit=dev --json`（`ui/`） | 两个命令均 exit 0，vulnerabilities total **0**；#413 后的 lock-only 版本见 §2.2。 |
 | dependency governance / SBOM | `discover-deps.mjs --fail-on-block`；`generate-sbom.mjs --fail-on-unknown` | 均 exit 0；**693 third-party / unknown 0 / blocked 0**。inventory 总记录 697（first-party 4、audit-required 17、auto-pass 680）。 |
+| v0.0.5-rc.2 candidate release | GitHub Actions run `31309894372` on `main@affa315` | **3 jobs passed, 5 assets uploaded** (`airp-webui-windows-x64.zip`, `inventory.json`, `airp.spdx.json`, `airp.cdx.json`, `THIRD-PARTY-NOTICES.txt`); prerelease candidate only. `release` environment API returned `protection_rules=[]`, `can_admins_bypass=true`; required reviewer configuration is not present. |
 | production topology / 真实 provider·browser | CI mock/system-Chrome 与本地检查 | 不能替代 #130 维护者真实 provider + 真实 browser + Compose 验收；当前不宣称通过。 |
 
-未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact、网络故障、进程崩溃、真实 provider 长会话，以及 Tauri 壳续期循环的 GUI 真机确认，不得由本表推断为通过。本 docs-pass（2026-08-06）未重跑 full-workspace 测试；除 #342/R1 与 C-P0~C-P4 的 PR 级证据外，其余行仍为 `main@830426e` 证据。
+未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact（除 run `31309894372` 的 Windows candidate package smoke）、网络故障、进程崩溃、真实 provider 长会话，以及 Tauri 壳续期循环的 GUI 真机确认，不得由本表推断为通过。本 docs-pass（2026-08-09）未重跑 full-workspace 测试；历史行仍保留其原始 commit 证据，不能外推到当前 `main@affa315`。
 
 ## 7. 文档职责（校准后）
 
@@ -197,7 +200,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | 归档 | `docs/archive/2026-07-persona-http-api-plan.md`（原 `docs/PERSONA-HTTP-API-PLAN.md`） | 实施计划已交付；接口事实以源码+基线为准 |
 | 归档 | `docs/archive/2026-07-29-desktop-ui-canvas-relay-plan.md`（原未跟踪活路径草案） | 桌面发布暂停；草案不占活文档位 |
 | 保留 | `docs/audits/2026-07-28-desktop-ui-relay-plan-audit.md` | 计划级审计原始记录 |
-| 刷新 | 本文、DEV-GUIDE、WEBUI-PRODUCTION-PLAN 及直接相关事实入口 | 对齐 `830426e`、#398–#413 与 #130 未解除状态 |
-| 刷新（2026-08-06） | 本文、SECURITY、RISK-REGISTER、UI-PROTOCOL-DECISION | 对齐 `main@e28ea02` 的 C-P0~C-P4 交付事实（审计遗留 #485 D1） |
+| 刷新 | 本文、DEV-GUIDE、WEBUI-PRODUCTION-PLAN 及直接相关事实入口 | 对齐 `main@affa315`、v0.0.5-rc.2 run `31309894372`、#130 未解除状态与 release environment API 实况 |
+| 刷新（2026-08-06，历史） | 本文、SECURITY、RISK-REGISTER、UI-PROTOCOL-DECISION | 对齐 `main@e28ea02` 的 C-P0~C-P4 交付事实（审计遗留 #485 D1） |
 
 完整阅读路径与维护规则见 [README.md](README.md)。

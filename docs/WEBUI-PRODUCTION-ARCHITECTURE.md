@@ -4,7 +4,7 @@
 >
 > Decision date: 2026-07-13
 >
-> Last baseline check: 2026-07-30 (`main@4f3f792`; later product features, provider routing, plugin tools, and finalize/world-event fixes do not change this accepted P0 topology boundary)
+> Last baseline check: 2026-08-09 (`main@affa315`, `v0.0.5-rc.2` prerelease candidate; later product features do not change this accepted P0 topology boundary)
 >
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)
@@ -269,9 +269,15 @@ This is a P0 topology smoke, not yet the P2 backup/restore or P3 release-candida
 3. Production topology smoke covering the evidence table above. **Implemented by the `Production topology` PR gate with disposable data/Caddy volumes, a synthetic HTTPS provider and a real system-Chrome pass.**
 4. P1 RP management surface, followed by P2 recovery/operations and P3 release gates.
 
-P0 topology proof does not make the product a formal release. P1 RP management, P2
+P0 topology proof and the `v0.0.5-rc.2` candidate run (`31309894372`, 3 successful jobs,
+5 uploaded assets) do not make the product a formal release. P1 RP management, P2
 backup/restore and migration, and P3 compatibility/provenance/release-candidate gates remain
 required by [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md).
+
+The hosted `release` environment currently reports `protection_rules=[]` and
+`can_admins_bypass=true`; a required reviewer is therefore not configured. Formal
+`v0.0.5` also remains blocked by [#130](https://github.com/GhostXia/AIRP/issues/130)
+real-provider, real-browser and production-Compose acceptance.
 
 ## 10. Upstream verification basis
 

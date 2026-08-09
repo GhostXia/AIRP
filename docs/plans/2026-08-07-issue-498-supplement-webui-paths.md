@@ -1,5 +1,7 @@
 # Issue #498 补充：webui 侧扩展路径与 UI 可替换性
 
+> ⚠️ **Superseded for current status**：本文保留 issue #498 设计补充；当前 widget/扩展合同以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 与源码为准。
+
 - **类型**: 设计补充 / 澄清
 - **日期**: 2026-08-07
 - **性质**: 只做加法不做减法——不修改原设计，不修改审计报告 A1-A5，只补充 webui 侧设计与新增扩展路径

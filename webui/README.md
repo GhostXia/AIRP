@@ -1,6 +1,8 @@
 # AIRP WebUI
 
-`webui/` 是 AIRP Engine 随包发布的无构建 Web 客户端。1–33 屏的视觉与页面信息架构以仓库内样板 `airp-engine-console/` 为准；34–44 屏是后续产品扩展，仍需按同一 styleguide 和视觉审查门校准。运行时代码在本目录独立维护。本页最后在 2026-07-26 的 `main@200fed9` 复核。
+`webui/` 是 AIRP Engine 随包发布的无构建 Web 客户端。1–33 屏的视觉与页面信息架构以仓库内样板 `airp-engine-console/` 为准；34–44 屏是后续产品扩展，仍需按同一 styleguide 和视觉审查门校准。运行时代码在本目录独立维护。本页最后在 2026-08-09 的 `main@affa315`（`v0.0.5-rc.2` prerelease candidate）复核。
+
+当前产品事实与发布边界：`v0.0.5-rc.2` 对应 Actions run `31309894372`，3 个 job 成功、5 个候选资产上传；这只证明候选包链路。正式 `v0.0.5` 仍被 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收，以及 `release` environment required reviewer 配置阻塞。
 
 ## 运行
 

@@ -1,5 +1,7 @@
 # AIRP 资产规格策略（角色卡/世界书/预设的自有开放规格）
 
+> ⚠️ **Superseded for current status**：本文保留规格策略讨论；当前数据结构、兼容性和发布门以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 与源码为准。
+
 > **策略草案，尚未形成正式版本化规格**：当前 engine 有事实上的 Rust 数据结构和 sidecar 布局，但尚无独立 schema 包、兼容性矩阵、迁移工具或版本发布流程。不得把本文的“规格”措辞理解为已发布标准。见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)。
 
 > 用户 2026-07-02 提问：导入的预设/卡/世界书有很多参数对我们无用，应内部自动剔除；要不要建一个"开源的、未来可增删参数的、我们自己的规格标准"？

@@ -1,5 +1,7 @@
 # Widget 与 Trusted Plugin 双层扩展架构设计
 
+> ⚠️ **Superseded for current status**：本文保留设计/审计轨迹；当前扩展能力、授权和安全边界以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 与源码为准。
+
 **类型**: 设计文档 / 架构备份
 **状态**: 已设计，待实现
 **日期**: 2026-08-07

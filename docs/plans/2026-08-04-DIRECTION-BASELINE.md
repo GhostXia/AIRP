@@ -1,5 +1,7 @@
 # 方向共识基线决策文档
 
+> ⚠️ **Superseded for current status**：本文保留 2026-08-04 方向决策的可追溯记录；当前版本、发布门和优先级以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md)（`main@affa315`）为准。
+
 > **已审定（2026-08-07 用户批准转正入库）**；并入 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 的增量校准留待 v0.0.5 docs-pass。
 > 日期：2026-08-04
 > 基线：`main@1b14a7c`（v0.0.3 已于 2026-08-03 发布）；本文 §0/§7 中引用的 PR 状态以 2026-08-07 为准：#424–#426/#455–#460/#462–#465 均已合并，v0.0.4 已发布。

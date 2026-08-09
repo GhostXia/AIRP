@@ -82,5 +82,5 @@ git checkout 3caafa1 -- airp-engine-console/
 直接在浏览器中打开 `index.html` 即可浏览全部 33 屏样板。
 每屏 HTML 也可独立打开（`screens/NN-*.html`），无需服务器。
 
-> 2026-07-26 状态：WebUI 34–44 屏尚未纳入本样板目录；不得把“页面已实现”写成
+> 2026-08-09 状态（`main@affa315` / `v0.0.5-rc.2` prerelease candidate）：WebUI 34–44 屏尚未纳入本样板目录；不得把“页面已实现”写成
 > “已通过样板一致性审查”。开放审查项以 GitHub issues 为准。

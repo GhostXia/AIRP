@@ -1,7 +1,9 @@
 # AIRP 文档地图
 
-> 校准：2026-07-30，`main@4f3f792`  
+> 校准：2026-08-09，`main@affa315`；当前候选：`v0.0.5-rc.2`（prerelease）
 > 能力事实只以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准；本页只负责分层与阅读路径。
+
+> 发布事实（2026-08-09）：GitHub Actions run `31309894372` 在 `main@affa315` 上 3 个 job 全部成功，`v0.0.5-rc.2` prerelease 已有 5 个资产。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider/browser/Compose 验收和 `release` environment required reviewer 配置阻塞；不要把候选发布写成正式发布。
 
 文档按「事实、合同、治理、参考、历史」分层。新 session 不需要通读全部文档；先读事实入口，再按任务选一个直接相关合同，实时待办查 GitHub issues。
 
@@ -46,12 +48,12 @@
 | `docs/archive/` | 已完成设计、已交付实施计划、暂停路线草案、月度历史索引 |
 | `docs/sbom/` | 生成的 SPDX / CycloneDX / notices 快照 |
 
-### 2026-07-30 归档迁入
+### 2026-07-30 归档迁入（历史）
 
 | 原活路径 | 现位置 | 原因 |
 |---|---|---|
 | `docs/PERSONA-HTTP-API-PLAN.md` | [archive/2026-07-persona-http-api-plan.md](archive/2026-07-persona-http-api-plan.md) | A1/A2 已交付；非 route inventory |
-| `docs/DESKTOP-UI-CANVAS-RELAY-PLAN.md` | [archive/2026-07-29-desktop-ui-canvas-relay-plan.md](archive/2026-07-29-desktop-ui-canvas-relay-plan.md) | 桌面发布暂停；草案待战略重启再读 |
+| `docs/DESKTOP-UI-CANVAS-RELAY-PLAN.md` | [archive/2026-07-29-desktop-ui-canvas-relay-plan.md](archive/2026-07-29-desktop-ui-canvas-relay-plan.md) | 历史迁入时桌面发布暂停；当前桌面事实以基线 §2.3 为准 |
 
 历史索引（非基线）：[archive/PR-AUDITS-2026-07.md](archive/PR-AUDITS-2026-07.md)、[archive/PROJECT-HISTORY-2026-07.md](archive/PROJECT-HISTORY-2026-07.md)、[archive/WEBUI-HISTORY-2026-07.md](archive/WEBUI-HISTORY-2026-07.md)。
 
@@ -66,4 +68,4 @@
 5. GitHub issues 管理实时待办；文档只保存稳定依赖、阶段门和长期理由。  
 6. 完成的计划：吸收仍有效合同 → 删除或归档；审计记录保留。  
 7. docs-only 变更最低校验：相对链接、状态标签、日期、commit、「已交付/未交付」措辞、与 #381 等开放风险是否一致。  
-8. 桌面/暂停路线的新计划默认进 `docs/archive/` 或 issue，不占活文档位，除非用户显式恢复该产品线。
+8. 新的桌面/暂停路线计划默认进 `docs/archive/` 或 issue，不占活文档位；当前桌面壳已由 C-P0 恢复为同源承载线，边界和剩余门以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §2.3 为准。

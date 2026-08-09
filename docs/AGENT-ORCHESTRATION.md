@@ -1,5 +1,7 @@
 # Agent 编排与升级策略
 
+> ⚠️ **Superseded for current status**：本文保留产品原则与草案；当前 Agent 能力和未交付项以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 与源码为准。
+
 > 状态：产品原则与待实现规范草案。当前 engine 已有固定边界的 Director/Council 能力，但尚未交付本文描述的用户可配置多 Agent runtime。
 >
 > 决策日期：2026-07-12；实现边界复核：2026-07-30，`main@4f3f792`
