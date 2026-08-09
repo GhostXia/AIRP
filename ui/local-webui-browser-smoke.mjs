@@ -22,12 +22,38 @@ try {
   assert.equal(headers['x-frame-options'], 'DENY');
   assert.equal(headers['x-content-type-options'], 'nosniff');
   assert.equal(headers['cache-control'], 'no-store');
-  await page.waitForURL('**/screens/16-onboarding.html');
-  await page.waitForFunction(() => document.querySelector('#onboarding-card')?.textContent?.includes('检查 AIRP Engine'));
-  assert.equal(await page.locator('#onboarding-steps .step').count(), 6);
-  assert.equal(await page.locator('#engine-status').evaluate(node => node.classList.contains('danger')), false);
-  await page.locator('#skip-onboarding').click();
-  await page.waitForURL('**/screens/01-role-list.html');
+
+  // The entry page now exposes an explicit first-run choice. Older bundles
+  // still redirect directly to the wizard, while already-onboarded bundles
+  // can land on the main UI. Wait for either final route or the new choice
+  // state before deciding which path this smoke should exercise.
+  await page.waitForFunction(() => {
+    const pathname = window.location.pathname;
+    if (pathname.endsWith('/screens/16-onboarding.html') || pathname.endsWith('/screens/01-role-list.html')) {
+      return true;
+    }
+    const actions = document.querySelector('#entry-actions');
+    return (pathname.endsWith('/') || pathname.endsWith('/index.html')) && actions && !actions.hidden;
+  });
+
+  const entryPath = new URL(page.url()).pathname;
+  if (entryPath.endsWith('/') || entryPath.endsWith('/index.html')) {
+    const wizardLink = page.locator('#entry-start-wizard');
+    assert.equal(await wizardLink.count(), 1);
+    assert.match(await wizardLink.getAttribute('href') || '', /screens\/16-onboarding\.html/);
+    await wizardLink.click();
+    await page.waitForURL('**/screens/16-onboarding.html');
+  }
+
+  if (new URL(page.url()).pathname.endsWith('/screens/16-onboarding.html')) {
+    await page.waitForFunction(() => document.querySelector('#onboarding-card')?.textContent?.includes('检查 AIRP Engine'));
+    assert.equal(await page.locator('#onboarding-steps .step').count(), 6);
+    assert.equal(await page.locator('#engine-status').evaluate(node => node.classList.contains('danger')), false);
+    await page.locator('#skip-onboarding').click();
+    await page.waitForURL('**/screens/01-role-list.html');
+  }
+
+  assert.match(new URL(page.url()).pathname, /\/screens\/01-role-list\.html$/);
   await page.waitForFunction(() => document.querySelector('#engine-status')?.textContent?.includes('连接'));
   assert.equal(await page.locator('#character-grid').count(), 1);
 

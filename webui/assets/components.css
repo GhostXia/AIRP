@@ -447,6 +447,33 @@
 .modal .m-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
 .modal .m-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
+/* Shared confirmation surface used by destructive WebUI actions.  The
+ * dialog follows the 15-confirm-modal design tokens while using the native
+ * dialog focus/escape semantics for accessibility. */
+.airp-confirm-dialog {
+  width: min(420px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-primary);
+}
+.airp-confirm-dialog::backdrop { background: var(--overlay-modal); }
+.airp-confirm-dialog .modal { width: 100%; }
+.airp-confirm-dialog .m-title { margin: 0; }
+.airp-confirm-dialog .m-desc { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.airp-confirm-dialog.is-fallback {
+  position: fixed; inset: 0; width: 100vw; max-width: none; height: 100vh;
+  margin: 0; transform: none; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-modal);
+}
+.airp-confirm-dialog.is-fallback .modal {
+  width: min(420px, calc(100vw - 32px));
+  max-width: 100%;
+}
+
 /* ============ 18. 工具调用卡（07 Agent） ============ */
 .tool-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 .tool-card.pending { border-color: var(--warning); background: var(--warning-tint); }
