@@ -24,6 +24,25 @@ test("workflow exposes explicit manual release inputs and no published pre-gate"
   assert.doesNotMatch(workflow, /github\.event\.release/);
 });
 
+test("release validation can inspect drafts without widening ordinary packaging", () => {
+  const releaseContextStart = workflow.indexOf("  release-context:");
+  const validatePackageStart = workflow.indexOf("  validate-package:");
+  const publishReleaseStart = workflow.indexOf("  publish-release:");
+  assert.ok(releaseContextStart >= 0 && validatePackageStart > releaseContextStart && publishReleaseStart > validatePackageStart);
+  const releaseContext = workflow.slice(releaseContextStart, validatePackageStart);
+  const validatePackage = workflow.slice(validatePackageStart, publishReleaseStart);
+  const publishRelease = workflow.slice(publishReleaseStart);
+
+  assert.match(releaseContext, /if:\s+github\.event_name == 'workflow_dispatch' && inputs\.publish_release == true/);
+  assert.match(releaseContext, /permissions:\s*\r?\n\s+contents: write/);
+  assert.doesNotMatch(validatePackage, /contents:\s+write/);
+  assert.doesNotMatch(validatePackage, /permissions:/);
+  assert.match(validatePackage, /needs:\s+release-context/);
+  assert.match(validatePackage, /always\(\)[\s\S]*needs\.release-context\.result == 'success'/);
+  assert.match(publishRelease, /environment:\s+release/);
+  assert.match(publishRelease, /permissions:\s*[\s\S]*contents: write/);
+});
+
 test("workflow validates exact tag and existing draft before package", () => {
   assert.match(workflow, /inputs\.release_tag/);
   assert.match(workflow, /fetch-depth:\s+0/);
