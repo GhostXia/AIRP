@@ -124,7 +124,7 @@ test('deterministic assertion failure becomes Failed task result', async () => {
   }
 });
 
-test('ordinary task keeps generated-script branch by runner static contract', async () => {
+test('ordinary task keeps generated-script route by runner static contract', async () => {
   const runnerSource = await readFile(new URL('./runner.mjs', import.meta.url), 'utf8');
   assert.match(
     runnerSource,
@@ -134,6 +134,6 @@ test('ordinary task keeps generated-script branch by runner static contract', as
   assert.match(
     runnerSource,
     /else \{[\s\S]*?generateAndRunScript\(mod, ctx, taskDir/,
-    'ordinary modules must retain generateAndRunScript branch',
+    'ordinary modules must retain generateAndRunScript route',
   );
 });
