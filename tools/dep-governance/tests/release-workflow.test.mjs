@@ -66,12 +66,20 @@ test("release validation keeps package/smoke gates without audit generation", ()
 
 test("publish job rechecks draft/tag, rejects duplicates, and never clobbers", () => {
   assert.match(workflow, /Recheck tag commit and draft release/);
-  assert.match(workflow, /Reject duplicate release assets/);
+  assert.match(workflow, /Reject pre-existing release assets/);
   assert.match(workflow, /gh release upload/);
   assert.doesNotMatch(workflow, /--clobber/);
   assert.match(workflow, /gh release edit \"\$RELEASE_TAG\" --draft=false/);
   assert.match(workflow, /gh release upload \"\$RELEASE_TAG\"[\s\\]+release\/package\/airp-webui-windows-x64\.zip/);
   assert.doesNotMatch(workflow, /inventory\.json|airp\.spdx\.json|airp\.cdx\.json|THIRD-PARTY-NOTICES\.txt/);
+  const duplicateGuardStart = workflow.indexOf("      - name: Reject pre-existing release assets");
+  const uploadStart = workflow.indexOf("      - name: Upload release assets without overwrite");
+  assert.ok(duplicateGuardStart >= 0 && uploadStart > duplicateGuardStart);
+  const duplicateGuard = workflow.slice(duplicateGuardStart, uploadStart);
+  assert.match(duplicateGuard, /existing_asset_count=\"\$\(jq '\.assets \| length'/);
+  assert.match(duplicateGuard, /if \[ \"\$existing_asset_count\" -ne 0 \]/);
+  assert.match(duplicateGuard, /must not contain pre-existing assets/);
+  assert.doesNotMatch(duplicateGuard, /for asset in/);
 });
 
 test("docs describe workflow and retain hosted-environment residual", () => {

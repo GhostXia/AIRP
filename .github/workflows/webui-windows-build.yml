@@ -230,7 +230,7 @@ jobs:
           echo "release_tag=$RELEASE_TAG"
           echo "release_commit=$tag_commit"
 
-      - name: Reject duplicate release assets
+      - name: Reject pre-existing release assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -239,14 +239,12 @@ jobs:
         run: |
           set -euo pipefail
           release_json="$(gh release view "$RELEASE_TAG" --json assets)"
-          existing_assets="$(jq -r '.assets[].name' <<<"$release_json")"
-          for asset in \
-            airp-webui-windows-x64.zip; do
-            if grep -Fxq "$asset" <<<"$existing_assets"; then
-              echo "release asset already exists: $asset" >&2
-              exit 1
-            fi
-          done
+          existing_asset_count="$(jq '.assets | length' <<<"$release_json")"
+          if [ "$existing_asset_count" -ne 0 ]; then
+            echo "release draft must not contain pre-existing assets" >&2
+            jq -r '.assets[].name' <<<"$release_json" >&2
+            exit 1
+          fi
 
       - name: Upload release assets without overwrite
         shell: bash
