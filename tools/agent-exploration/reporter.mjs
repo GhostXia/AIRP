@@ -57,7 +57,12 @@ function renderMarkdown(run) {
     }
     if (task.consoleErrors && task.consoleErrors.length) {
       lines.push('### Console Errors');
-      for (const e of task.consoleErrors.slice(0, 10)) lines.push('- ' + JSON.stringify(e));
+      const totalConsoleErrors = task.consoleErrors.length;
+      const visibleConsoleErrors = task.consoleErrors.slice(0, 10);
+      for (const e of visibleConsoleErrors) lines.push('- ' + JSON.stringify(e));
+      if (totalConsoleErrors > visibleConsoleErrors.length) {
+        lines.push('_(共 ' + totalConsoleErrors + ' 条，仅显示前 ' + visibleConsoleErrors.length + ')_');
+      }
       lines.push('');
     }
     if (task.failedRequests && task.failedRequests.length) {
