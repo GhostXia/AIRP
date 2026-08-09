@@ -52,7 +52,8 @@ data/plugins/
   `AIRP_DATA_ROOT` / `AIRP_PLUGIN_ID`；子进程环境 **env_clear + 白名单**
   （`PATH`；Windows 额外保留 `SYSTEMROOT` / `TEMP` / `TMP`），宿主其它
   环境变量不泄漏（审计 A4）——`AIRP_*` 由 engine 统一注入，插件不读宿主
-  配置。stdout/stderr 继承 daemon 终端（日志直接可见）。**子进程 cwd =
+  配置。stdout/stderr 由 engine 异步持续排空并写入 daemon 日志，每行带
+  `[plugin:<id>]` 前缀（stderr 同时按 warn 级别记录）。**子进程 cwd =
   插件目录**，args 里的相对路径（如 `server.js`）以插件目录为基准。
 - **端口冲突**：加载时统一校验——manifest 间 `port` 重复（保留排序靠前
   者，其余 warn 跳过）、与 engine `daemon_port` 冲突（spawn 前过滤）都
