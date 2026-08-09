@@ -608,4 +608,31 @@ async fn run_seal_flow_and_delete_character_serialized_by_character_lock() {
              (R1 character_lock serialization failed — see #442 / #438)"
         ),
     }
+
+    let events = crate::domain::take_test_character_lock_events(character_id);
+    assert_eq!(
+        events.len(),
+        4,
+        "unexpected R1 lock event timeline: {events:?}"
+    );
+    assert_eq!(events[0].kind, crate::domain::TestCharacterLockKind::Read);
+    assert_eq!(
+        events[0].phase,
+        crate::domain::TestCharacterLockPhase::Acquired
+    );
+    assert_eq!(events[1].kind, crate::domain::TestCharacterLockKind::Read);
+    assert_eq!(
+        events[1].phase,
+        crate::domain::TestCharacterLockPhase::Released
+    );
+    assert_eq!(events[2].kind, crate::domain::TestCharacterLockKind::Write);
+    assert_eq!(
+        events[2].phase,
+        crate::domain::TestCharacterLockPhase::Acquired
+    );
+    assert_eq!(events[3].kind, crate::domain::TestCharacterLockKind::Write);
+    assert_eq!(
+        events[3].phase,
+        crate::domain::TestCharacterLockPhase::Released
+    );
 }
