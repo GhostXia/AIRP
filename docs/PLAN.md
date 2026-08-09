@@ -4,7 +4,7 @@
 > 校准：2026-08-09，`main@affa315`；当前候选：`v0.0.5-rc.2`（prerelease）
 > 当前能力与开放缺口以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 和 GitHub issues 为准。
 
-> 当前发布事实（2026-08-09）：run `31309894372` 在 `main@affa315` 上 3 个 job 全部成功，`v0.0.5-rc.2` prerelease 含 5 个资产。正式 `v0.0.5` 仍未就绪：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收，以及 `release` environment required reviewer 配置仍是阻塞门。
+> 当前发布事实（2026-08-09）：Windows release workflow 的候选链路完成 exact-tag 校验、包构建和 browser/desktop smoke，公开发布交付物为 Windows 便携包；依赖审计信息仍随 tagged git tree 保存在 `docs/sbom/`，不作为 release 附件或 CI sign-off 门禁。正式 `v0.0.5` 仍未就绪：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收，以及 `release` environment required reviewer 配置仍是阻塞门。
 
 ## 1. 产品目标
 

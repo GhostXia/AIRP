@@ -6,7 +6,7 @@
 >
 > 产品目标：在 Phase 1–5.3 功能扩张后，暂停用页面/功能数量替代发布证据；先把真实首聊、刷新/重启恢复、失败关闭、视觉一致性和用户资产安全收敛为可重复验收的 P1 有限试用版，再推进可升级、可恢复的正式 Web 产品。
 
-> 当前发布事实（2026-08-09）：Actions run `31309894372` 在 `main@affa315` 上 3 个 job 全部成功，`v0.0.5-rc.2` prerelease 上传 5 个资产。正式 `v0.0.5` 仍被 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收和 `release` environment required reviewer 配置阻塞；该环境 API 为 `protection_rules=[]`、`can_admins_bypass=true`。
+> 当前发布事实（2026-08-09）：Windows release workflow 的候选链路完成 exact-tag 校验、包构建和 browser/desktop smoke，公开发布交付物为 Windows 便携包；依赖清单、SBOM、第三方声明和 sign-off 信息仍随 tagged git tree 保存在 `docs/sbom/`，不作为 release 附件或 CI sign-off 门禁。正式 `v0.0.5` 仍被 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收和 `release` environment required reviewer 配置阻塞；该环境 API 为 `protection_rules=[]`、`can_admins_bypass=true`。
 
 P0 的已接受实现合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。首方 OCI/Compose + Caddy 同源入口、生产配置、鉴权、远端导入边界与 production topology smoke 已实现；P1-P3 仍是正式上线前置，不能把 P0 全绿写成正式发布。
 
@@ -78,7 +78,7 @@ Browser
 - 支持当前稳定 Chrome/Edge；移动端可完成核心聊天，不要求首发拥有完整桌面工作台布局。
 - 自动化覆盖 engine contract、WebUI DOM、真实浏览器主路径、认证/安全负向路径、升级/恢复和生产部署 smoke。
 - 候选版本在生产拓扑下完成全新安装、旧数据升级、备份恢复和长会话 soak；证据写入版本化文档。
-- CI 对正式部署产物执行构建、secret scan、依赖/许可证清单和 smoke；只有全部 release gates 通过才打正式 tag。
+- CI 对正式部署产物执行构建、secret scan 和 smoke；依赖/许可证快照由维护者在 tagged git tree 中更新并审阅，只有全部 release gates 通过才打正式 tag。
 - **干净提示词 + Agent loop 价值验证**（#207 目标 4，分两层）：
   - **L0 自动化发布门禁**（CI 强制，每次 PR 须产出证据；门禁状态以 CI artifact 为准，不以文档断言为准）：
     1. `subagent_context_has_no_orchestrator_noise` 不变式门禁——Agent 编排脚手架不进入角色 prompt（详见 [PLAN.md §2.1](PLAN.md)）；通过条件 = CI `Rust workspace` job 中该项测试 green；
@@ -108,7 +108,7 @@ Browser
 - #399/#403 已将 durable `TurnCommit` marker 延伸到 message、live-state 和 current-volume 阶段，并在中断后公开 `Recovering`、阻止新的 session mutation；不包含自动 replay/repair、volume sealing recovery 或 backup/restore。
 - #409 已交付 terminal marker recovery、Coordinator owner/admission registry 锁序保护与 all-false marker fail-closed；non-terminal、unreadable、unsupported marker 仍保留为 recovery-required，不宣称自动 journal/replay。
 - #410/#411 已把这些合同写入 production mock smoke：generation poll、stale/current cancellation、严格 typed SSE terminal、取消后 history、临时 session cleanup，以及 cleanup/SSE/cancel poll/response body 的 bounded deadline 生命周期；备份入口保持明确不可用，renderer 不发起 backup/restore API 调用；它们是 mock/CI 证据，不替代真实 provider、真实 browser 和维护者 Compose 验收。
-- #413 已完成 lock-only npm 安全修复：full/omit-dev audit 均为 0；当前 SBOM 报告 693 third-party、unknown license 0、blocked 0，inventory 总记录 697（4 first-party、17 audit-required、680 auto-pass）。`ui` 依赖属于构建/测试图，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime；#527/#554 已将 exact-tag SBOM、17 条精确 sign-off、四文件上传清单和隔离的 release-context 写入权限接入 Windows release workflow 的手动发布路径；run `31309894372` 证明 3 个 job 成功并上传 5 个 prerelease 资产，但 required reviewer 仍未由 hosted environment 配置提供。
+- #413 已完成 lock-only npm 安全修复：full/omit-dev audit 均为 0；当前 SBOM 报告 693 third-party、unknown license 0、blocked 0，inventory 总记录 697（4 first-party、17 audit-required、680 auto-pass）。`ui` 依赖属于构建/测试图，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime；#527/#554 已将 exact-tag package validation、包/browser/desktop smoke 和隔离的 release-context 写入权限接入 Windows release workflow 的手动发布路径；当前公开发布只上传 Windows 便携包，`docs/sbom/` 与工具脚本中的依赖审计信息仍可从 tagged git tree 直接查阅，不再作为 release CI 附件或 sign-off 门禁；required reviewer 仍未由 hosted environment 配置提供。
 
 ### 尚缺的上线能力
 
@@ -171,7 +171,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 1. 浏览器兼容、响应式、键盘与基础可访问性收口；
 2. 真实 provider 脱敏 smoke、长会话与断网/重连 soak；
-3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #413 已刷新 SPDX-2.3 / CycloneDX 1.5 与 notices，当前 inventory 仍有 17 条 audit-required；#527/#554 已嵌入 Windows release workflow code gate，run `31309894372` 通过候选打包，仍需 required reviewer 配置、#130 真实验收与正式发布签名）；
+3. 在 tagged git tree 中维护 SBOM/许可证清单、版本信息、发布说明和校验值（PR #413 已刷新 SPDX-2.3 / CycloneDX 1.5 与 notices，当前 inventory 仍有 17 条 audit-required）；Windows release workflow 只负责 exact-tag package validation、smoke 和 package upload，仍需 required reviewer 配置、#130 真实验收与正式发布签名；
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
@@ -180,7 +180,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 ## 5. 非首发阻塞项
 
 - Persona/Preset 高级生命周期、完整 revision/provenance/collision 审计、自动 backup/restore、migration registry 与 soft-delete；它们进入 P2，不阻塞 P1 有限试用。
-- 新增 asset revision 类型/chip、dependency-governance 自动升级与 GitHub 写入自动化、SBOM release gate 和发布签名；#413 的 audit 0 只证明当前 lock graph，不等于 release gate 已接入；它们不得抢占 P1 黄金路径。
+- 新增 asset revision 类型/chip、dependency-governance 自动升级与 GitHub 写入自动化、发布签名；#413 的 audit 0 只证明当前 lock graph，不等于正式发布 assurance；它们不得抢占 P1 黄金路径。
 - #220 中不直接造成 secret 泄露、虚假成功或用户资产损坏的性能、锁 poison 一致性、代码组织与默认值展示改进。
 - #117 ChangeInbox、#87 Agent-first 工作台、#116 Style Review；它们在核心 WebUI 正式版之后继续推进。
 - MCP upstream、skills/plugin marketplace、可配置多 Agent 编排。
@@ -191,7 +191,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 ## 6. 下一批可执行工作
 
-> 2026-08-09 v0.0.5-rc.2 校准：候选 run `31309894372` 的 Windows exact-tag 包装与 SBOM artifact proof 已闭合（仅对应已交付的 Windows 候选 artifact，不代表 #190 的 container-input/shipped-artifact applicability 验收完成）；先闭合 #130 的真实 provider/browser/Compose P1 证据并配置 hosted required reviewer，再处理 P2/P3 release gates。
+> 2026-08-09 v0.0.5-rc.2 校准：Windows exact-tag 包装、package/browser/desktop smoke 与 package delivery path 已闭合；依赖审计快照仍随 tagged git tree 交付，不再生成或上传 release SBOM artifact（不代表 #190 的 container-input/shipped-artifact applicability 验收完成）；先闭合 #130 的真实 provider/browser/Compose P1 证据并配置 hosted required reviewer，再处理 P2/P3 release gates。
 
 1. **跑通首聊黄金路径（第一优先）**：用真实 provider + 真实浏览器贯通 onboarding → 首聊 → 刷新恢复 → 重启恢复，完成 #130 的 maintainer-run Compose 记录。过程中实际触发的 bug 立即修；审计 #248 中未触发的理论风险不阻塞本步；
 2. **交付真实用户试用**：Windows 便携包交给 1-3 个目标 RP 用户，收集体验痛点。用户反馈优先级高于审计遗留项和基础设施加固；

@@ -32,7 +32,7 @@ AIRP-Core/AIRPCLI、AIRP-MCP-Server、AIRP-Gateway、AIRP-State-Protocol 是作�
 - 44 个无构建 WebUI 屏、首次启动向导、聊天主面、资产管理与创作工具页面；
 - Windows/Linux 便携 WebUI、production preview、SBOM 与 Agent 浏览器探索测试层。
 
-这仍是 **P1 有限试用代码候选**，不是正式发布。`v0.0.5-rc.2` 是 2026-08-09 在 `main@affa315` 上发布的 prerelease 候选；GitHub Actions run `31309894372` 的 3 个 job 均成功并发布 5 个资产，但正式 `v0.0.5` 仍被 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收，以及 `release` environment required reviewer 配置阻塞。功能存在不等于真实用户工作流、崩溃恢复、长会话、升级/回滚或市场验证已经通过。当前优先级是修复并发/持久化/失败边界，验证真实 provider 的 onboarding → 首聊 → 刷新 → 服务重启恢复，再扩大功能面。
+这仍是 **P1 有限试用代码候选**，不是正式发布。`v0.0.5-rc.2` 是 2026-08-09 在 `main@affa315` 上发布的 prerelease 候选；候选工作流完成 exact-tag 校验、包构建和 browser/desktop smoke，当前发布流程只上传 Windows 便携包。依赖清单、SBOM、第三方声明和审计 sign-off 仍随 tagged git tree 保存在 `docs/sbom/`，供开发用户直接查阅，不作为 CI/release 附件或 sign-off 门禁；既有 rc.2 资产不在本次变更范围内。正式 `v0.0.5` 仍被 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收，以及 `release` environment required reviewer 配置阻塞。功能存在不等于真实用户工作流、崩溃恢复、长会话、升级/回滚或市场验证已经通过。当前优先级是修复并发/持久化/失败边界，验证真实 provider 的 onboarding → 首聊 → 刷新 → 服务重启恢复，再扩大功能面。
 
 ## 核心原则
 

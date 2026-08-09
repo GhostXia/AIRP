@@ -3,7 +3,7 @@
 > 校准：2026-08-09，`main@affa315`；当前候选：`v0.0.5-rc.2`（prerelease）
 > 能力事实只以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准；本页只负责分层与阅读路径。
 
-> 发布事实（2026-08-09）：GitHub Actions run `31309894372` 在 `main@affa315` 上 3 个 job 全部成功，`v0.0.5-rc.2` prerelease 已有 5 个资产。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider/browser/Compose 验收和 `release` environment required reviewer 配置阻塞；不要把候选发布写成正式发布。
+> 发布事实（2026-08-09）：Windows release workflow 的候选链路完成 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 Windows 便携包。依赖清单、SBOM、第三方声明和 sign-off 数据仍可从 tagged git tree 的 `docs/sbom/` 查看；既有 rc.2 资产不在本次变更范围内。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider/browser/Compose 验收和 `release` environment required reviewer 配置阻塞；不要把候选发布写成正式发布。
 
 文档按「事实、合同、治理、参考、历史」分层。新 session 不需要通读全部文档；先读事实入口，再按任务选一个直接相关合同，实时待办查 GitHub issues。
 
