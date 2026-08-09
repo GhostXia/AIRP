@@ -324,8 +324,18 @@ export async function runTask(browser, mod, name, { origin = ORIGIN, reportDir =
         return { content: parseSseContent(sseText) };
       },
     };
-    const scriptPath = await generateAndRunScript(mod, ctx, taskDir, { forceBuiltinSmoke });
-    result.evidence.script = scriptPath;
+    // Deterministic task modules opt in explicitly (currently only preview-chat-assembly).
+    // Ordinary business tasks keep the LLM-generated script path unchanged.
+    if (mod.DETERMINISTIC === true) {
+      if (typeof mod.run !== 'function') {
+        throw new Error('deterministic task module must export async function run(ctx)');
+      }
+      await mod.run(ctx);
+      result.evidence.execution = 'deterministic task module';
+    } else {
+      const scriptPath = await generateAndRunScript(mod, ctx, taskDir, { forceBuiltinSmoke });
+      result.evidence.script = scriptPath;
+    }
 
     // 收集 harness 状态
     result.consoleErrors = await harness.getConsoleErrors();

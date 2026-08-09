@@ -1,6 +1,10 @@
 // 任务集：chat/preview 装配预览 API smoke
 // #433 residual：验证 preview 只读、脱敏、顺序和边界，不触发 provider。
 
+// Runner executes this task module directly; deterministic checks must not be
+// replaced by the generic LLM-generated script path.
+export const DETERMINISTIC = true;
+
 export const DESCRIPTION = `通过 API 验证 /v1/chat/preview 的 bounded prompt assembly trace。
 
 步骤提示：
