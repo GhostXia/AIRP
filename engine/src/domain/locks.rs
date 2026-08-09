@@ -32,6 +32,255 @@ pub(crate) fn character_lock(character_id: &str) -> Arc<RwLock<()>> {
         .clone()
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TestCharacterLockKind {
+    Read,
+    Write,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TestCharacterLockPhase {
+    Acquired,
+    Released,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TestCharacterLockEvent {
+    pub(crate) character_id: String,
+    pub(crate) kind: TestCharacterLockKind,
+    pub(crate) phase: TestCharacterLockPhase,
+}
+
+#[cfg(test)]
+struct TestCharacterLockProbe {
+    character_id: String,
+    kind: TestCharacterLockKind,
+}
+
+#[cfg(test)]
+impl Drop for TestCharacterLockProbe {
+    fn drop(&mut self) {
+        record_test_character_lock_event(
+            &self.character_id,
+            self.kind,
+            TestCharacterLockPhase::Released,
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct TestCharacterReadGuard<'a> {
+    guard: Option<std::sync::RwLockReadGuard<'a, ()>>,
+    probe: Option<TestCharacterLockProbe>,
+}
+
+#[cfg(test)]
+impl Drop for TestCharacterReadGuard<'_> {
+    fn drop(&mut self) {
+        // Record release while the real guard is still held. A writer can only
+        // report acquisition after this event, because the underlying RwLock
+        // remains held until the next statement.
+        drop(self.probe.take());
+        drop(self.guard.take());
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct TestCharacterWriteGuard<'a> {
+    guard: Option<std::sync::RwLockWriteGuard<'a, ()>>,
+    probe: Option<TestCharacterLockProbe>,
+}
+
+#[cfg(test)]
+impl Drop for TestCharacterWriteGuard<'_> {
+    fn drop(&mut self) {
+        drop(self.probe.take());
+        drop(self.guard.take());
+    }
+}
+
+#[cfg(test)]
+static TEST_CHARACTER_LOCK_EVENTS: OnceLock<Mutex<Vec<TestCharacterLockEvent>>> = OnceLock::new();
+
+#[cfg(test)]
+fn record_test_character_lock_event(
+    character_id: &str,
+    kind: TestCharacterLockKind,
+    phase: TestCharacterLockPhase,
+) {
+    TEST_CHARACTER_LOCK_EVENTS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(TestCharacterLockEvent {
+            character_id: character_id.to_string(),
+            kind,
+            phase,
+        });
+}
+
+#[cfg(test)]
+pub(crate) fn take_test_character_lock_events(character_id: &str) -> Vec<TestCharacterLockEvent> {
+    let mut events = TEST_CHARACTER_LOCK_EVENTS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let selected = events
+        .iter()
+        .filter(|event| event.character_id == character_id)
+        .cloned()
+        .collect();
+    events.retain(|event| event.character_id != character_id);
+    selected
+}
+
+#[cfg(test)]
+struct TestCharacterLockGateControl {
+    read_acquired: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    read_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    write_attempted: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+#[cfg(test)]
+pub(crate) struct TestCharacterLockGate {
+    character_id: String,
+    release: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+#[cfg(test)]
+static TEST_CHARACTER_LOCK_GATES: OnceLock<
+    Mutex<HashMap<String, Arc<TestCharacterLockGateControl>>>,
+> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn install_test_character_lock_gate(
+    character_id: &str,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Receiver<()>,
+    TestCharacterLockGate,
+) {
+    let (read_acquired_tx, read_acquired_rx) = tokio::sync::oneshot::channel();
+    let (read_release_tx, read_release_rx) = tokio::sync::oneshot::channel();
+    let (write_attempted_tx, write_attempted_rx) = tokio::sync::oneshot::channel();
+    let control = Arc::new(TestCharacterLockGateControl {
+        read_acquired: Mutex::new(Some(read_acquired_tx)),
+        read_release: Mutex::new(Some(read_release_rx)),
+        write_attempted: Mutex::new(Some(write_attempted_tx)),
+    });
+    TEST_CHARACTER_LOCK_GATES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(character_id.to_string(), control);
+    (
+        read_acquired_rx,
+        write_attempted_rx,
+        TestCharacterLockGate {
+            character_id: character_id.to_string(),
+            release: Some(read_release_tx),
+        },
+    )
+}
+
+#[cfg(test)]
+impl Drop for TestCharacterLockGate {
+    fn drop(&mut self) {
+        // Always unblock a read helper if the test unwinds before its normal
+        // release point. The control entry is removed after the sender is
+        // dropped so no later test can accidentally reuse this gate.
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+        if let Some(gates) = TEST_CHARACTER_LOCK_GATES.get() {
+            gates
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&self.character_id);
+        }
+    }
+}
+
+#[cfg(test)]
+fn test_character_lock_gate_for(character_id: &str) -> Option<Arc<TestCharacterLockGateControl>> {
+    TEST_CHARACTER_LOCK_GATES.get().and_then(|gates| {
+        gates
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(character_id)
+            .cloned()
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_character_read_guard<'a>(
+    character_id: &str,
+    lock: &'a Arc<RwLock<()>>,
+) -> TestCharacterReadGuard<'a> {
+    let guard = lock.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+    record_test_character_lock_event(
+        character_id,
+        TestCharacterLockKind::Read,
+        TestCharacterLockPhase::Acquired,
+    );
+    if let Some(control) = test_character_lock_gate_for(character_id) {
+        let _ = control
+            .read_acquired
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .and_then(|sender| sender.send(()).ok());
+        if let Some(receiver) = control
+            .read_release
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            let _ = receiver.blocking_recv();
+        }
+    }
+    TestCharacterReadGuard {
+        guard: Some(guard),
+        probe: Some(TestCharacterLockProbe {
+            character_id: character_id.to_string(),
+            kind: TestCharacterLockKind::Read,
+        }),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_character_write_guard<'a>(
+    character_id: &str,
+    lock: &'a Arc<RwLock<()>>,
+) -> TestCharacterWriteGuard<'a> {
+    if let Some(control) = test_character_lock_gate_for(character_id) {
+        let _ = control
+            .write_attempted
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .and_then(|sender| sender.send(()).ok());
+    }
+    let guard = lock
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    record_test_character_lock_event(
+        character_id,
+        TestCharacterLockKind::Write,
+        TestCharacterLockPhase::Acquired,
+    );
+    TestCharacterWriteGuard {
+        guard: Some(guard),
+        probe: Some(TestCharacterLockProbe {
+            character_id: character_id.to_string(),
+            kind: TestCharacterLockKind::Write,
+        }),
+    }
+}
+
 /// Per-session state lock. Keyed on `character_id` (when `session_id` is
 /// `None`) or `character_id/session_id`, used to serialize all mutations to
 /// `session/current.md` and other per-session state files.

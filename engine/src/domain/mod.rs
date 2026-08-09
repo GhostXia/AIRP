@@ -18,6 +18,11 @@ pub use analysis::AnalysisService;
 pub(crate) use chat::RegenSnapshot;
 pub use chat::{ChatService, HistoryWindow, SwipeResponse, SWIPE_CANDIDATES_CAP};
 pub(crate) use locks::{character_lock, session_lock, state_lock};
+#[cfg(test)]
+pub(crate) use locks::{
+    install_test_character_lock_gate, take_test_character_lock_events, test_character_read_guard,
+    TestCharacterLockKind, TestCharacterLockPhase,
+};
 pub use lorebook::LorebookService;
 pub use persona::{
     EffectivePersonaResolution, EffectivePersonaSource, Persona, PersonaBinding,

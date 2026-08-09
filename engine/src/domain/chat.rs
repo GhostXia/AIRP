@@ -882,6 +882,9 @@ impl ChatService {
         force: bool,
     ) -> Result<Option<String>, AirpError> {
         let character = character_lock(character_id.as_str());
+        #[cfg(test)]
+        let _guard = super::locks::test_character_write_guard(character_id.as_str(), &character);
+        #[cfg(not(test))]
         let _guard = character.write().unwrap_or_else(|p| p.into_inner());
         let _character_track = lock_order::track_character_write();
 
