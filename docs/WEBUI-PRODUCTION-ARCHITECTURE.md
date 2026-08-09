@@ -5,7 +5,6 @@
 > Decision date: 2026-07-13
 >
 > Last baseline check: 2026-08-09 (`main@affa315`, `v0.0.5-rc.2` prerelease candidate; later product features do not change this accepted P0 topology boundary)
->
 > Scope: the first supported single-instance, self-hosted, single-user WebUI topology in
 > [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md)
 
@@ -267,11 +266,11 @@ This is a P0 topology smoke, not yet the P2 backup/restore or P3 release-candida
 2. First-party engine/WebUI images, pinned Compose/Caddy configuration and operator secret
    bootstrap. **Implemented in `deploy/production/`; CI image/config validation is required on every PR.**
 3. Production topology smoke covering the evidence table above. **Implemented by the `Production topology` PR gate with disposable data/Caddy volumes, a synthetic HTTPS provider and a real system-Chrome pass.**
-4. P1 RP management surface, followed by P2 recovery/operations and P3 release gates.
+4. P1 limited-trial acceptance (including #130 real-provider/browser/Compose evidence), followed by P2 data reliability and recovery (including backup/restore and migration) and P3 release-candidate gates.
 
 P0 topology proof and the `v0.0.5-rc.2` candidate run (`31309894372`, 3 successful jobs,
-5 uploaded assets) do not make the product a formal release. P1 RP management, P2
-backup/restore and migration, and P3 compatibility/provenance/release-candidate gates remain
+5 uploaded assets) do not make the product a formal release. P1 limited-trial/#130 acceptance,
+P2 backup/restore and migration, and P3 compatibility/provenance/release-candidate gates remain
 required by [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md).
 
 The hosted `release` environment currently reports `protection_rules=[]` and

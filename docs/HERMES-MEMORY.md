@@ -1,7 +1,7 @@
 # Hermes Agent 记忆机制学习 → 用到我们 RP 客户端
 
 > ⚠️ **Superseded for current status**：本文保留第三方研究记录；当前记忆能力与未交付边界以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准。
-
+>
 > **研究与未来方向**：本文描述候选机制，不代表 AIRP 已实现自动记忆、skills 或 soul。AIRP 已有 resident memory、遗忘曲线和 session FTS5 搜索，但不等同于本文的自进化闭环。落地顺序以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准。
 > 研究对象：Hermes Agent（Nous Research 开源自进化 agent）。"随使用时长能力提升"的核心=持久记忆+技能自建+用户建模的自我进化闭环。
 > 来源：hermes-agent.nousresearch.com/docs、mindstudio 5-支柱解析、glukhov 记忆系统技术贴（2026-07 实读）。

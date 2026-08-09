@@ -114,7 +114,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 - 不能把 #398–#411 的取消、marker、Recovering 或 harness 证据外推为自动 replay/repair、Agent/tool 单 owner、性能 SLO、backup/restore 或真实 provider/browser/Compose 验收。
 - 不能把 Tauri 桌面壳的 webui 承载、token 续期循环与包内自动 desktop smoke 外推为 GUI 真机、打包安装器、真实 provider 或正式发布验收已完成；壳续期循环的 GUI 真机确认仍是开放项。
 - 不能把 widget 扩展体系的契约测试与 compat harness 外推为成熟扩展生态：无签名、无市场、无吊销、无多 major 兼容；intent 面当前无真实执行器（C-P3 授权通过即接受）；capability 封闭集仅 6 项。
-#346 完整导出/migration、跨资源一致性 backup、自动定时备份/恢复、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的签名、browser matrix、soak 仍未交付；#527 的 Windows SBOM/sign-off code gate 与 run `31309894372` 的 prerelease 候选 proof 已落地，但 `release` environment 当前 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失，且 #130 真实 provider/browser/Compose 验收未完成。不要把候选发布或代码门写成正式 release assurance。#342 backup/restore **最小闭环已交付**（PR #445，v1 限制见 §2.2），但不得外推为完整灾难恢复或自动定时备份。
+- #346 完整导出/migration、跨资源一致性 backup、自动定时备份/恢复、#286/#394 O3 replay/repair、#394 O2 Agent/tool ownership、#394 O4/#400 性能与兼容性基准，以及 P2/P3 的签名、browser matrix、soak 仍未交付；#527 的 Windows SBOM/sign-off code gate 与 run `31309894372` 的 prerelease 候选 proof 已落地，但 `release` environment 当前 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失，且 #130 真实 provider/browser/Compose 验收未完成。不要把候选发布或代码门写成正式 release assurance。#342 backup/restore **最小闭环已交付**（PR #445，v1 限制见 §2.2），但不得外推为完整灾难恢复或自动定时备份。
 
 ## 5. 当前优先级
 

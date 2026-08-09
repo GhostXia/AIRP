@@ -76,7 +76,7 @@ the tag ref and checked-out `HEAD`, requires the exact-tag SBOM flags
 and writes `release-audit.json`/`release-audit.md` plus a full audit-required
 sign-off list/count/tag/commit/run URL to the run summary and `airp-release-sbom`
 artifact. The final job declares `environment: release`, rechecks the same
-draft release and uploads only the four allowlisted SBOM assets
+draft release and uploads the package plus the four allowlisted SBOM assets
 (`inventory.json`, `airp.spdx.json`, `airp.cdx.json`,
 `THIRD-PARTY-NOTICES.txt`) without overwrite, then marks the draft published.
 Run `31309894372` is the hosted candidate proof. It does not prove required

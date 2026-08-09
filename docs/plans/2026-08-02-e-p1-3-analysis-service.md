@@ -1,7 +1,7 @@
 # E-P1-3 P0: AnalysisService 提取计划
 
 > ⚠️ **Superseded for current status**：本计划保留实施/审计轨迹；当前实现边界与未完成项以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 为准。
-
+>
 > 本 PR 目前含本计划文档。审计已完成（见下文"审计结论"），实施按修订后方案在同一个 PR 内提交。
 
 ## 现状（为什么是 P0 最危险）
