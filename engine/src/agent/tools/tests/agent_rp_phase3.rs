@@ -1804,3 +1804,131 @@ async fn npc_action_and_delete_character_serialized_by_character_lock() {
     )
     .await;
 }
+
+/// #444：确定性 R1 证明。先让 `npc_action` 取得真实的
+/// `character_lock.read()`，再让 `delete_character` 发起
+/// `character_lock.write()` 竞争；写锁只能在读临界区结束后取得。
+#[tokio::test(flavor = "current_thread")]
+async fn npc_action_write_acquire_waits_for_character_read_release() {
+    let character_id = "npc_act_r1_deterministic";
+    let _ = crate::domain::take_test_character_lock_events(character_id);
+    let (read_acquired, write_attempted, gate) =
+        crate::domain::install_test_character_lock_gate(character_id);
+    let (start_delete_tx, start_delete_rx) = tokio::sync::oneshot::channel();
+
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    seed_character(&state.data_root, character_id);
+
+    let worker_state = state.clone();
+    let join_handle = tokio::task::spawn_blocking(move || {
+        std::thread::scope(|scope| {
+            let handle_a = {
+                let state = worker_state.clone();
+                scope.spawn(move || -> Result<(), String> {
+                    let registry = default_registry(state);
+                    let tool = registry.get("npc_action").unwrap();
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .map_err(|error| format!("runtime build: {error}"))?;
+                    let result = runtime.block_on(tool.call(
+                        serde_json::json!({
+                            "character_id": character_id,
+                            "npc_name": "Goblin",
+                            "action": "steals an apple",
+                            "result": "the merchant shouts"
+                        }),
+                        true,
+                    ));
+                    match result {
+                        Ok(_) => Ok(()),
+                        Err(crate::error::AirpError::NotFound(_)) => Ok(()),
+                        Err(crate::error::AirpError::Io(error))
+                            if error.kind() == std::io::ErrorKind::NotFound
+                                || (cfg!(windows)
+                                    && error.kind() == std::io::ErrorKind::PermissionDenied) =>
+                        {
+                            Ok(())
+                        }
+                        Err(error) => Err(format!(
+                            "npc_action failed with non-serialized error: {error:?}"
+                        )),
+                    }
+                })
+            };
+
+            let handle_b = {
+                let state = worker_state.clone();
+                scope.spawn(move || -> Result<(), String> {
+                    start_delete_rx
+                        .blocking_recv()
+                        .map_err(|error| format!("start delete: {error}"))?;
+                    let chat = crate::domain::ChatService::new(&state.data_root);
+                    let cid = crate::types::CharacterId::new(character_id)
+                        .map_err(|error| format!("character id: {error}"))?;
+                    chat.delete_character(&cid, true)
+                        .map(|_| ())
+                        .map_err(|error| format!("delete_character: {error:?}"))
+                })
+            };
+
+            handle_a
+                .join()
+                .map_err(|error| format!("npc worker join: {error:?}"))??;
+            handle_b
+                .join()
+                .map_err(|error| format!("delete worker join: {error:?}"))??;
+            Ok::<(), String>(())
+        })
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), read_acquired)
+        .await
+        .expect("npc_action did not acquire character read lock")
+        .expect("npc_action read-acquired notification dropped");
+    start_delete_tx
+        .send(())
+        .expect("delete worker start notification dropped");
+    tokio::time::timeout(std::time::Duration::from_secs(30), write_attempted)
+        .await
+        .expect("delete_character did not attempt character write lock")
+        .expect("delete_character write-attempt notification dropped");
+
+    // Keep the read gate alive until the writer has definitely attempted its
+    // acquire. Dropping it now lets both operations finish in a known order.
+    drop(gate);
+    match tokio::time::timeout(std::time::Duration::from_secs(30), join_handle).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(error))) => panic!("R1 worker error: {error}"),
+        Ok(Err(error)) => panic!("R1 spawn_blocking join error: {error:?}"),
+        Err(_) => panic!("npc_action + delete_character exceeded 30 seconds"),
+    }
+
+    let events = crate::domain::take_test_character_lock_events(character_id);
+    assert_eq!(
+        events.len(),
+        4,
+        "unexpected R1 lock event timeline: {events:?}"
+    );
+    assert_eq!(events[0].kind, crate::domain::TestCharacterLockKind::Read);
+    assert_eq!(
+        events[0].phase,
+        crate::domain::TestCharacterLockPhase::Acquired
+    );
+    assert_eq!(events[1].kind, crate::domain::TestCharacterLockKind::Read);
+    assert_eq!(
+        events[1].phase,
+        crate::domain::TestCharacterLockPhase::Released
+    );
+    assert_eq!(events[2].kind, crate::domain::TestCharacterLockKind::Write);
+    assert_eq!(
+        events[2].phase,
+        crate::domain::TestCharacterLockPhase::Acquired
+    );
+    assert_eq!(events[3].kind, crate::domain::TestCharacterLockKind::Write);
+    assert_eq!(
+        events[3].phase,
+        crate::domain::TestCharacterLockPhase::Released
+    );
+}

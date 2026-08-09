@@ -75,6 +75,10 @@ impl Tool for NpcActionTool {
                 // 并在同一个 blocking 任务内持有 session_lock 直到 append 完成。
                 // LOCK-ORDER: character.read → session（§2.6 / R1）。
                 let character = character_lock(cid.as_str());
+                #[cfg(test)]
+                let _character_guard =
+                    crate::domain::test_character_read_guard(cid.as_str(), &character);
+                #[cfg(not(test))]
                 let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
                 let _character_track = lock_order::track_character_read();
                 let session_boundary = session_lock(cid.as_str(), sid.as_ref());
