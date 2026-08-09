@@ -450,11 +450,16 @@ pub(in crate::daemon) async fn chat_completion(
 }
 
 /// POST /v1/chat/preview — assemble the exact bounded trace without provider calls or writes.
+///
+/// #433: `preview_pipeline` performs synchronous file IO; run it on the blocking pool.
 pub(in crate::daemon) async fn preview_chat_assembly(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     Json(payload): Json<ChatCompletionRequest>,
 ) -> Result<Json<crate::orchestrator::trace::PromptAssemblyTrace>, AirpError> {
-    let pipeline = chat_pipeline::preview_pipeline(&payload, &state)?;
+    let pipeline =
+        tokio::task::spawn_blocking(move || chat_pipeline::preview_pipeline(&payload, &state))
+            .await
+            .map_err(|e| AirpError::Internal(format!("preview pipeline join failed: {e}")))??;
     Ok(Json(pipeline.prompt_trace))
 }
 

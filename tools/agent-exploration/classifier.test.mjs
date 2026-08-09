@@ -14,6 +14,27 @@ test('Swipe PR maps to regen-swipe task', () => {
   assert.deepEqual(tasks, ['regen-swipe-refresh']);
 });
 
+test('Preview chat assembly exact fixture maps only dedicated task', () => {
+  const diff = [
+    'diff --git a/engine/src/daemon/handlers/chat.rs b/engine/src/daemon/handlers/chat.rs',
+    '+pub async fn preview_chat_assembly() { preview_pipeline(); /* POST /v1/chat/preview */ }',
+  ].join('\n');
+  const tasks = classifyPrDiff(diff);
+  assert.deepEqual(tasks, ['preview-chat-assembly']);
+});
+
+test('Preview path-only diff without matching keywords returns empty', () => {
+  const diff = 'diff --git a/engine/src/daemon/handlers/chat.rs b/engine/src/daemon/handlers/chat.rs\n+pub fn unrelated_preview_refactor() {}';
+  const tasks = classifyPrDiff(diff);
+  assert.deepEqual(tasks, []);
+});
+
+test('Preview keyword-only diff without matching path returns empty', () => {
+  const diff = 'diff --git a/README.md b/README.md\n+Documentation about preview_pipeline and /v1/chat/preview';
+  const tasks = classifyPrDiff(diff);
+  assert.deepEqual(tasks, []);
+});
+
 test('Memory PR maps to memory-roundtrip task', () => {
   const diff = 'diff --git a/engine/src/daemon/handlers/memory.rs b/engine/src/daemon/handlers/memory.rs\n+pub async fn update_resident_memory';
   const tasks = classifyPrDiff(diff);

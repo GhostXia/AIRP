@@ -11,6 +11,10 @@ export const DIFF_TASK_MAP = {
     paths: [/engine\/src\/daemon\/handlers\/chat\.rs/, /webui\/assets\/chat-space\.js/, /webui\/screens\/14-message-swipe\.html/],
     keywords: [/regen/i, /swipe/i, /smooth.?stream/i, /candidate/i],
   },
+  'preview-chat-assembly': {
+    paths: [/^engine\/src\/daemon\/handlers\/chat\.rs$/],
+    keywords: [/(?:preview_chat_assembly|preview_pipeline|\/v1\/chat\/preview)/i],
+  },
   'edit-branch-switch-refresh': {
     paths: [/engine\/src\/chat_store\.rs/, /engine\/src\/daemon\/handlers\/chat\.rs/, /webui\/screens\/19-branch-tree\.html/],
     // 注意：原 /\bedit\b.*message/i 的尾部 \b 不会匹配 "edit_message"（_ 是 word char，无边界），
