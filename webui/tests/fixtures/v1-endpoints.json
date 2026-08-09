@@ -626,7 +626,7 @@
       "method": "GET",
       "path": "/v1/extensions/grants",
       "ui": true,
-      "note": "C-P3 consent.js boot 时批量拉取权威 grant 状态（type → granted_capabilities）"
+      "note": "#474：consent.js boot 时批量拉取 engine 权威 grant 状态（identity + type → granted_capabilities）"
     },
     {
       "method": "GET",

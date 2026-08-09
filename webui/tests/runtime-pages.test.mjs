@@ -434,6 +434,10 @@ test('plugins page calls extensions API and renders list with security warnings'
   assert.match(pluginsRenderer, /POST.*\/v1\/extensions\/.*\/disable/, 'must disable via POST /v1/extensions/:id/disable');
   assert.match(pluginsRenderer, /DELETE.*\/v1\/extensions\//, 'must delete via DELETE /v1/extensions/:id');
   assert.match(pluginsRenderer, /POST.*\/v1\/extensions\/.*\/grants/, 'must grant/revoke via POST /v1/extensions/:id/grants');
+  assert.match(pluginsRenderer, /\/v1\/grants[\s\S]*AbortSignal\.timeout\(5000\)/,
+    'grant overview must use a 5s deadline');
+  assert.match(pluginsRenderer, /\/v1\/extensions\/[\s\S]*\/grants[\s\S]*AbortSignal\.timeout\(5000\)/,
+    'grant mutation must use a 5s deadline');
   // 安全提示：安装即信任
   assert.match(pluginsRenderer, /安装即信任/, 'must warn install = trust');
   // digest-pinned 摘要锚定提示

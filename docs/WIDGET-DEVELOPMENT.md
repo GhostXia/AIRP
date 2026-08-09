@@ -186,6 +186,14 @@ read:memory | write:memory | read:worldbook | read:state | write:state | call:to
 3. **grant**：engine `POST /v1/extensions/:id/grants` 签发 grant，持久化到 `extensions.json` 的 `granted_capabilities` 字段。
 4. **逐调用强制**：widget 发 intent 时，engine 校验 `envelope.capability ∈ granted_capabilities`（C-P3 逐调用强制）。
 
+宿主启动时先从 `GET /v1/extensions/grants` 读取 engine 快照（合同见
+[protocol/widget-grants.json](../protocol/widget-grants.json)），并校验 `type`、
+`version`、`source`、`digest` 与 `enabled`。成功空快照表示当前没有授权；请求失败、
+快照畸形或身份不匹配都必须 fail-closed，不能用浏览器 `localStorage` 放行。批准/撤销
+也只有在对应 POST mutation 成功后才更新 UI 内存镜像。快照内 `type` 必须唯一；重复
+`type` 整批拒绝，不尝试在客户端选择版本。查询与 mutation 均有 5 秒 deadline；deadline
+到期后宿主继续启动/挂载首方 widget，第三方 widget 仍保持 gated。
+
 重装（同 type 不同 digest）清空 grant——consent 不跨身份延续。
 
 ### `ctx.capabilities`

@@ -162,6 +162,12 @@ test('widget boot degrades instead of failing hard (W4/W6)', () => {
   assert.match(bootScript, /slot 计划应用失败，继续以空计划挂载/);
 });
 
+test('widget consent authority uses 5s deadlines and fails closed on timeout', () => {
+  assert.match(bootScript, /async function updateEngineGrant[\s\S]*?AbortSignal\.timeout\(5000\)/);
+  assert.match(bootScript, /async function fetchEngineGrants[\s\S]*?AbortSignal\.timeout\(5000\)/);
+  assert.match(bootScript, /consent\.markEngineUnavailable\(\)[\s\S]*第三方 widget fail-closed/);
+});
+
 test('widget intent handler returns an observable promise via api-client (W5)', () => {
   assert.match(bootScript, /client\.request\('POST', '\/v1\/widget-intents', envelope\)/);
   assert.match(bootScript, /return traceIntent\(/);

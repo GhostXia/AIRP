@@ -56,4 +56,10 @@ export {
   revoke,
   isGranted,
   clearGrants,
+  initEngineGrants,
+  initGrantsFromEngine,
+  markEngineUnavailable,
+  configureEngineAuthority,
+  engineAuthorityState,
+  hasEngineGrants,
 } from "./consent";

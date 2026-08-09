@@ -1,7 +1,7 @@
 import { createApp } from "vue";
 import App from "./App.vue";
 import { setDefaultEsmImporter } from "./registry";
-import { initGrants } from "./registry/consent";
+import { initEngineGrants } from "./registry/consent";
 import statusPill from "./widgets/status.module";
 
 // Map the demo's local esm source specifiers to in-repo modules so the third-
@@ -15,9 +15,9 @@ setDefaultEsmImporter((source) => {
   return loader ? loader() : import(/* @vite-ignore */ source);
 });
 
-// Restore previously saved widget consent grants from localStorage so the user
-// does not have to re-approve every reload. Subsequent grant/revoke/clear calls
-// auto-persist. No-op if storage is unavailable.
-initGrants();
-
-createApp(App).mount("#app");
+// #474：先向 engine 获取权威 grant 快照（5s deadline），再挂载 UI。超时/失败
+// 仍启动宿主界面，但 consent 模块保持 fail-closed；localStorage 不得在桌面/
+// standalone 间漂移，第三方 widget 继续 gated。
+void initEngineGrants().then(() => {
+  createApp(App).mount("#app");
+});

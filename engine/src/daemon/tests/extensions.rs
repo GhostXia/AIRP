@@ -885,6 +885,10 @@ async fn cp3_get_extension_grants_and_list_all_grants() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
     assert_eq!(body["id"], id_a);
+    assert_eq!(body["type"], "acme.list-a");
+    assert_eq!(body["version"], "1.0.0");
+    let source = body["source"].as_str().unwrap();
+    assert!(source.starts_with("/extensions/") && source.ends_with("/index.js"));
     assert_eq!(body["granted_capabilities"].as_array().unwrap().len(), 1);
 
     // GET 未知 extension → 404。
@@ -917,6 +921,9 @@ async fn cp3_get_extension_grants_and_list_all_grants() {
         .iter()
         .map(|g| (g["type"].as_str().unwrap(), g))
         .collect();
+    assert_eq!(by_type["acme.list-a"]["digest"].as_str().unwrap().len(), 64);
+    assert_eq!(by_type["acme.list-a"]["enabled"], true);
+    assert_eq!(by_type["acme.list-b"]["version"], "1.0.0");
     assert_eq!(
         by_type["acme.list-a"]["granted_capabilities"]
             .as_array()

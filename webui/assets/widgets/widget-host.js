@@ -76,6 +76,8 @@
     let bridge = null;
     let mounted = false;
     let destroyed = false;
+    let approvalPending = false;
+    let approvalError = null;
 
     const reg = d.registry.resolveWidget(instance.type);
     const manifest = d.manifests.getManifest(instance.type);
@@ -148,10 +150,18 @@
     }
 
     function approve() {
-      if (manifest) {
-        d.consent.grant(manifest);
-        render(); // 授权后重挂载（等价 Vue 基准的 watch(el) immediate 语义）
-      }
+      if (!manifest || approvalPending) return;
+      approvalPending = true;
+      approvalError = null;
+      // #474：engine mutation 成功前不得乐观放行/加载 widget。
+      Promise.resolve(d.consent.grant(manifest)).then(() => {
+        approvalPending = false;
+        render(); // 成功后重挂载（等价 Vue 基准的 watch(el) immediate 语义）
+      }).catch((error) => {
+        approvalPending = false;
+        approvalError = errMsg(error);
+        render();
+      });
     }
 
     function render() {
@@ -171,7 +181,7 @@
         return;
       }
 
-      const gated = Boolean(manifest && d.consent.needsConsent(manifest) && !d.consent.isGranted(manifest));
+      const gated = Boolean(manifest && d.consent.needsConsent(manifest) && !d.consent.canMount(manifest));
       if (gated) {
         const box = el(doc, 'div', 'widget-consent');
         box.appendChild(el(doc, 'div', 'w-title', '第三方 widget：' + instance.type));
@@ -184,8 +194,12 @@
         box.appendChild(capsBox);
         const btn = el(doc, 'button', 'btn btn-secondary widget-consent-approve', '授权并加载');
         btn.type = 'button';
+        btn.disabled = approvalPending;
         btn.addEventListener('click', approve);
         box.appendChild(btn);
+        if (approvalError) {
+          box.appendChild(el(doc, 'div', 'widget-consent-error', '授权失败：' + approvalError));
+        }
         box.appendChild(el(doc, 'div', 'widget-consent-note', '未授权前不会加载、不获得任何权限。我们不审核其代码，风险自担。'));
         container.appendChild(box);
         return;

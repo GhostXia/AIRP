@@ -13,7 +13,7 @@ import type { WidgetInstance, Json } from "../protocol/types";
 import type { WidgetModule, WidgetContext } from "../registry/widget-module";
 import { resolveWidget } from "../registry/registry";
 import { getManifest } from "../registry/manifests";
-import { needsConsent, isGranted, grant, effectiveCapabilities } from "../registry/consent";
+import { needsConsent, canMount, grant, effectiveCapabilities } from "../registry/consent";
 import { SandboxBridge, createIframeTransport } from "../registry/sandbox-bridge";
 
 const props = defineProps<{ instance: WidgetInstance; state: unknown }>();
@@ -22,9 +22,11 @@ const emit = defineEmits<{ (e: "intent", name: string, params?: Json): void }>()
 const reg = resolveWidget(props.instance.type);
 const manifest = getManifest(props.instance.type);
 const failed = ref<string | null>(null);
+const approvalPending = ref(false);
+const approvalError = ref<string | null>(null);
 
 // esm (third-party) widget that the user hasn't approved yet → gate it.
-const gated = computed(() => !!manifest && needsConsent(manifest) && !isGranted(manifest));
+const gated = computed(() => !!manifest && needsConsent(manifest) && !canMount(manifest));
 
 // A sandboxed esm widget runs inside an opaque-origin iframe (no
 // allow-same-origin); the WidgetContext is bridged over postMessage so it
@@ -41,8 +43,18 @@ function errMsg(e: unknown): string {
 function onIntent(name: string, params?: Json): void {
   emit("intent", name, params);
 }
-function approve(): void {
-  if (manifest) grant(manifest);
+async function approve(): Promise<void> {
+  if (!manifest || approvalPending.value) return;
+  approvalPending.value = true;
+  approvalError.value = null;
+  try {
+    // #474：engine mutation 成功前不更新 gate；失败保持拒载。
+    await grant(manifest);
+  } catch (error) {
+    approvalError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    approvalPending.value = false;
+  }
 }
 
 // --- kind: vue (native component) ---
@@ -179,7 +191,8 @@ onErrorCaptured((e) => {
         <span v-if="(manifest?.capabilities ?? []).length === 0">无</span>
         <code v-for="c in manifest?.capabilities ?? []" :key="c">{{ c }}</code>
       </div>
-      <button type="button" @click="approve">授权并加载</button>
+      <button type="button" :disabled="approvalPending" @click="approve">授权并加载</button>
+      <div v-if="approvalError" class="widget-consent-error">授权失败：{{ approvalError }}</div>
       <div class="note">未授权前不会加载、不获得任何权限。我们不审核其代码，风险自担。</div>
     </div>
 

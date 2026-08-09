@@ -1,0 +1,67 @@
+{
+  "$schema_note": "Widget capability grant 合同的机器可读事实源（权威持久化与执行端：engine/src/extensions；WebUI 消费端：webui/assets/widgets/consent.js；桌面/standalone UI 消费端：ui/src/registry/consent.ts）。",
+  "version": 1,
+  "description": "Widget consent 只是一项用户操作；授权真值由 engine 持久化在 extensions.json。所有 UI 必须以 engine 快照与逐调用 engine 校验为准，engine 不可达、快照无效或身份不匹配时 fail-closed。",
+  "compatibility": "additive-only",
+  "extensionRules": [
+    "grant view 既有字段不得删除、改名或改类型；消费端必须忽略未知字段。",
+    "type、version、source、digest、enabled 是 widget 身份/可用性校验字段；缺失或不匹配不得继承授权。",
+    "id 与 type 在快照内都必须唯一；重复 type/id 使整批快照无效并触发 fail-closed。当前 engine 同一 type 只保留一个已安装身份。",
+    "granted_capabilities 必须是数组；其值由 engine 校验为 manifest.capabilities 的子集。",
+    "空 grants 快照是有效的‘当前没有已安装扩展’结果，不得回退到 localStorage 或其他客户端本地状态。"
+  ],
+  "query": {
+    "method": "GET",
+    "path": "/v1/extensions/grants",
+    "unifiedPath": "/v1/grants",
+    "deadline_ms": 5000,
+    "auth": "bearer（由 v1 路由层统一强制）",
+    "response": {
+      "grants": [
+        {
+          "id": "string",
+          "type": "string",
+          "version": "string",
+          "source": "string|null",
+          "digest": "64 lowercase hex string",
+          "enabled": "boolean",
+          "granted_capabilities": "string[]",
+          "granted_at": "integer|null"
+        }
+      ]
+    },
+    "unifiedResponse": {
+      "grants": [
+        {
+          "kind": "widget",
+          "id": "string",
+          "type": "string",
+          "version": "string",
+          "source": "string|null",
+          "digest": "64 lowercase hex string",
+          "enabled": "boolean",
+          "granted_capabilities": "string[]",
+          "granted_at": "integer|null"
+        }
+      ]
+    }
+  },
+  "mutation": {
+    "method": "POST",
+    "path": "/v1/extensions/:extension_id/grants",
+    "deadline_ms": 5000,
+    "auth": "bearer（由 v1 路由层统一强制）",
+    "request": {
+      "action": "grant|revoke",
+      "capabilities": "string[]（可选；省略表示全部）"
+    },
+    "response": "grant view object (same fields as query.grants entries)",
+    "errors": ["invalid_action", "capability_not_declared", "storage_error"]
+  },
+  "consumerContract": [
+    "UI 启动必须先取得 query 快照；成功返回空数组也要进入 engine-authoritative 模式。",
+    "engine 请求失败或响应形状无效时，第三方 widget 必须保持 gated/拒载；不得使用 localStorage 放行。",
+    "批准/撤销必须调用 mutation 并仅在 engine 成功响应后更新内存镜像；失败不得乐观放行。",
+    "grant 匹配至少校验 type、version、source、enabled 与 granted_capabilities；engine intent 端点仍逐调用复核。"
+  ]
+}
