@@ -10,6 +10,7 @@ const workflow = fs.readFileSync(
   "utf8",
 );
 const readme = fs.readFileSync(path.join(ROOT, "tools", "dep-governance", "README.md"), "utf8");
+const projectReadme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 const security = fs.readFileSync(path.join(ROOT, "docs", "SECURITY.md"), "utf8");
 const risk = fs.readFileSync(path.join(ROOT, "docs", "RISK-REGISTER.md"), "utf8");
 const devGuide = fs.readFileSync(path.join(ROOT, "docs", "DEV-GUIDE.md"), "utf8");
@@ -53,13 +54,14 @@ test("workflow validates exact tag and existing draft before package", () => {
   assert.match(workflow, /not a draft/);
 });
 
-test("publish job waits for validation and uses hosted approval", () => {
+test("release validation keeps package/smoke gates without audit generation", () => {
   assert.match(workflow, /publish-release:[\s\S]*?needs:\s+validate-package/);
   assert.match(workflow, /publish-release:[\s\S]*?environment:\s+release/);
-  assert.match(workflow, /docs\/sbom\/audit-signoffs\.json/);
-  assert.match(workflow, /validate-release-signoffs\.mjs/);
-  assert.match(workflow, /--fail-on-block/);
-  assert.match(workflow, /--fail-on-unknown/);
+  assert.match(workflow, /Smoke packaged engine and real Chrome[\s\S]*?-BrowserSmoke/);
+  assert.match(workflow, /Smoke desktop UI inside the package/);
+  assert.doesNotMatch(workflow, /discover-deps\.mjs|generate-sbom\.mjs|validate-release-signoffs\.mjs/);
+  assert.doesNotMatch(workflow, /airp-release-sbom|release\/sbom|docs\/sbom\/audit-signoffs\.json/);
+  assert.doesNotMatch(workflow, /--fail-on-block|--fail-on-unknown/);
 });
 
 test("publish job rechecks draft/tag, rejects duplicates, and never clobbers", () => {
@@ -68,23 +70,23 @@ test("publish job rechecks draft/tag, rejects duplicates, and never clobbers", (
   assert.match(workflow, /gh release upload/);
   assert.doesNotMatch(workflow, /--clobber/);
   assert.match(workflow, /gh release edit \"\$RELEASE_TAG\" --draft=false/);
-  assert.match(workflow, /release\/sbom\/inventory\.json/);
-  assert.match(workflow, /release\/sbom\/airp\.spdx\.json/);
-  assert.match(workflow, /release\/sbom\/airp\.cdx\.json/);
-  assert.match(workflow, /release\/sbom\/THIRD-PARTY-NOTICES\.txt/);
-  assert.doesNotMatch(workflow, /release\/sbom\/inventory\.txt/);
+  assert.match(workflow, /gh release upload \"\$RELEASE_TAG\"[\s\\]+release\/package\/airp-webui-windows-x64\.zip/);
+  assert.doesNotMatch(workflow, /inventory\.json|airp\.spdx\.json|airp\.cdx\.json|THIRD-PARTY-NOTICES\.txt/);
 });
 
 test("docs describe workflow and retain hosted-environment residual", () => {
   assert.match(readme, /publish_release=true/);
-  assert.match(readme, /17 audit-required/);
-  assert.match(readme, /four allowlisted SBOM\s+assets/);
+  assert.match(readme, /do not generate or upload/);
+  assert.match(readme, /not release\s+attachments or CI approval gates/);
+  assert.match(projectReadme, /只上传 Windows 便携包/);
   assert.match(security, /There is no `release: published` pre-publish gate/);
   assert.match(security, /Hosted environment configuration and a successful publish proof are not present/);
   assert.match(risk, /do not mark RR-008 fully mitigated until that evidence exists/);
-  assert.match(risk, /environment's required-reviewer policy and hosted evidence are not verified/);
+  assert.match(risk, /Keep package\/browser\/desktop smoke and dependency snapshot review explicit/);
   assert.match(devGuide, /#527.*workflow.*exact-tag validation\/publish code gate/);
   assert.match(baseline, /#413\/\#527.*workflow.*exact-tag validation\/publish code gate/);
-  assert.match(productionPlan, /#527.*exact-tag SBOM.*手动发布路径/);
+  assert.match(productionPlan, /#527.*exact-tag package validation/);
   assert.match(productionPlan, /hosted environment approval 配置/);
+  const activeDocs = [readme, projectReadme, security, risk, devGuide, baseline, productionPlan].join("\n");
+  assert.doesNotMatch(activeDocs, /four allowlisted SBOM\s+assets|5 assets|5 个资产/);
 });

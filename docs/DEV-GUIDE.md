@@ -31,7 +31,7 @@ npm 安全修复与 SBOM 生成证据。它们不等于自动 replay/repair、Ag
 backup/restore、性能 SLO 或真实 provider + browser + Compose 验收；后者仍由
 [#130](https://github.com/GhostXia/AIRP/issues/130) 作为当前 P1 外部硬门追踪。
 
-当前候选发布证据：2026-08-09 的 `main@affa315` / `v0.0.5-rc.2` prerelease 对应 Actions run `31309894372`，3 个 job 全部成功、5 个资产已上传。该证据只证明候选发布链路，不解除 #130 或 `release` environment required reviewer 配置门。
+当前候选发布证据：2026-08-09 的 `main@affa315` / `v0.0.5-rc.2` prerelease 对应 Windows release workflow，exact-tag 校验、包构建和 browser/desktop smoke 已覆盖；当前发布路径只上传 Windows 便携包。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍可从 tagged git tree 的 `docs/sbom/` 查看，不是 CI/release 附件或 sign-off 门禁；既有 rc.2 资产不在本次变更范围内。该证据只证明候选发布链路，不解除 #130 或 `release` environment required reviewer 配置门。
 
 ## 2. 仓库地图
 
@@ -266,7 +266,7 @@ Remove-Item Env:RUSTDOCFLAGS
 - `0.x` 依赖的次版本按主版本风险处理。即使只是补丁版本，只要涉及数据格式、网络/权限边界、密码学、构建/发布链或已知行为变化，也升级为 issue + 专项审计。
 - “发现有新版本”不是升级理由；升级 PR 要说明用户价值、风险、验证证据和不升级的后果。安全修复可提高优先级，但不得跳过兼容性验证。
 
-仓库已落地 `tools/dep-governance/`（PR #218；#413 刷新 lock/SBOM 证据）：`discover-deps.mjs` 扫描 Cargo workspace 与 npm package-lock.json v3 并按 BFS 划分 runtime/build/dev 作用域，`audit-routing.mjs` 提供纯函数审计路由（`classifyInventory` auto-pass/audit-required/block + `classifyUpgrade` 五类升级路由 + patch-sensitive 覆盖），`generate-sbom.mjs` 输出 SPDX-2.3 / CycloneDX 1.5 SBOM 与人类可读第三方声明。当前快照生成命令报告 **693 third-party / unknown license 0 / blocked 0**；inventory 总记录 **697**（first-party 4、audit-required 17、auto-pass 680），不要把 audit-required 误写成 block。#413 的 `brace-expansion`、`postcss`、`nanoid` 是 lock-only transitive 更新，`ui` 依赖仍属于构建/测试图，production gateway 只复制静态 WebUI。#527 补上 Windows workflow 的 `workflow_dispatch` exact-tag validation/publish code gate、`docs/sbom/audit-signoffs.json` 17 条精确 sign-off 与四文件 SBOM 上传清单；run `31309894372` 已在 `main@affa315` 上完成候选 exact-tag publish proof（3 个 job 成功、5 个 prerelease 资产），但 `release` environment required-reviewer 配置仍缺失（API `protection_rules=[]`、`can_admins_bypass=true`），所以正式 `v0.0.5` assurance 仍未完成。自动化版本检测与去重 issue 仍是 #192 后续切片。
+仓库已落地 `tools/dep-governance/`（PR #218；#413 刷新 lock/SBOM 证据）：`discover-deps.mjs` 扫描 Cargo workspace 与 npm package-lock.json v3 并按 BFS 划分 runtime/build/dev 作用域，`audit-routing.mjs` 提供纯函数审计路由（`classifyInventory` auto-pass/audit-required/block + `classifyUpgrade` 五类升级路由 + patch-sensitive 覆盖），`generate-sbom.mjs` 输出 SPDX-2.3 / CycloneDX 1.5 SBOM 与人类可读第三方声明。当前快照生成命令报告 **693 third-party / unknown license 0 / blocked 0**；inventory 总记录 **697**（first-party 4、audit-required 17、auto-pass 680），不要把 audit-required 误写成 block。#413 的 `brace-expansion`、`postcss`、`nanoid` 是 lock-only transitive 更新，`ui` 依赖仍属于构建/测试图，production gateway 只复制静态 WebUI。#527/#554 的 Windows workflow 负责 `workflow_dispatch` exact-tag validation/publish code gate、隔离的 `contents: write` release-context，以及包/browser/desktop smoke；当前公开发布只上传 Windows 便携包。`docs/sbom/` 与工具脚本仍保留完整依赖审计信息，开发用户可从 tagged git tree 直接查阅；它们不再作为 CI/release 附件或 sign-off 门禁。`release` environment required-reviewer 配置仍缺失（API `protection_rules=[]`、`can_admins_bypass=true`），所以正式 `v0.0.5` assurance 仍未完成。自动化版本检测与去重 issue 仍是 #192 后续切片。
 
 ## 8. 文档维护
 

@@ -269,7 +269,8 @@ This is a P0 topology smoke, not yet the P2 backup/restore or P3 release-candida
 4. P1 limited-trial acceptance (including #130 real-provider/browser/Compose evidence), followed by P2 data reliability and recovery (including backup/restore and migration) and P3 release-candidate gates.
 
 P0 topology proof and the `v0.0.5-rc.2` candidate run (`31309894372`, 3 successful jobs,
-5 uploaded assets) do not make the product a formal release. P1 limited-trial/#130 acceptance,
+with the Windows package delivery path) do not make the product a formal release. Dependency
+audit snapshots remain in the tagged git tree rather than as release attachments. P1 limited-trial/#130 acceptance,
 P2 backup/restore and migration, and P3 compatibility/provenance/release-candidate gates remain
 required by [WEBUI-PRODUCTION-PLAN.md](WEBUI-PRODUCTION-PLAN.md).
 

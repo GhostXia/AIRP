@@ -4,17 +4,13 @@
 > Rust/npm notices + SBOM portion of #190. Issue #190 remains open for its
 > container-input and shipped-artifact applicability acceptance.
 >
-> Status: dev/CI artifact plus an explicitly dispatched release gate. Pull
-> requests and ordinary manual runs keep the committed snapshot in `docs/sbom/`;
-> a manual run with `publish_release=true` and an existing draft `release_tag`
-> regenerates an exact-tag bundle, blocks on classified `block` records or
-> unknown third-party licenses, and validates exact, current sign-offs for all
-> 17 audit-required records in `docs/sbom/audit-signoffs.json`. Run
-> `31309894372` (2026-08-09, `main@affa315`) completed 3 jobs successfully and
-> uploaded 5 assets for the `v0.0.5-rc.2` prerelease candidate. The hosted
-> `release` environment API currently reports `protection_rules=[]` and
-> `can_admins_bypass=true`; no required reviewer is configured, so this is not
-> formal release assurance.
+> Status: repository-maintained dependency governance snapshots and offline
+> review tooling. Pull requests and release runs do not generate or upload
+> inventory, SBOM, notices, or sign-off files. Development users can inspect
+> the committed `docs/sbom/` snapshot and the governance tools directly from
+> the tagged git tree; regenerate them in the same commit when dependency
+> inputs change. The Windows release workflow validates the exact tag and
+> package/smoke evidence, then publishes only the portable package.
 
 ## What this directory contains
 
@@ -61,8 +57,8 @@ Regenerate `docs/sbom/` whenever:
    commit, so reviewers can see the license/provenance delta.
 2. **`audit-routing.config.json` changes** — re-classification may move records
    between auto-pass / audit-required / block.
-3. **A new formal release tag is cut** — the SBOM attached to a release must
-   reflect the exact lockfile at that tag.
+3. **A new formal release tag is cut** — refresh the committed snapshot when
+   the release tag is intended to document a changed dependency graph.
 4. **Periodically (e.g. monthly)** even without lockfile changes, to catch
    upstream license/provenance metadata updates in `cargo metadata` output.
 
@@ -71,18 +67,14 @@ Do NOT regenerate on every CI run — the output is committed, not ephemeral.
 The Windows workflow has no `release: published` pre-publish trigger. To
 publish a candidate, dispatch `.github/workflows/webui-windows-build.yml` with
 `publish_release=true` and an existing draft `release_tag`. Validation checks
-the tag ref and checked-out `HEAD`, requires the exact-tag SBOM flags
-`--fail-on-block` and `--fail-on-unknown`, runs package/browser/desktop smoke,
-and writes `release-audit.json`/`release-audit.md` plus a full audit-required
-sign-off list/count/tag/commit/run URL to the run summary and `airp-release-sbom`
-artifact. The final job declares `environment: release`, rechecks the same
-draft release and uploads the package plus the four allowlisted SBOM assets
-(`inventory.json`, `airp.spdx.json`, `airp.cdx.json`,
-`THIRD-PARTY-NOTICES.txt`) without overwrite, then marks the draft published.
-Run `31309894372` is the hosted candidate proof. It does not prove required
-reviewer approval because the environment API is currently
-`protection_rules=[]`, `can_admins_bypass=true`; configure that policy before
-formal `v0.0.5` release.
+the tag ref and checked-out `HEAD`, runs package/browser/desktop smoke, and the
+final job declares `environment: release`, rechecks the same draft release,
+rejects duplicate package assets, and uploads only
+`airp-webui-windows-x64.zip` without overwrite before marking the draft
+published. Dependency inventory, SBOM, notices, and sign-off metadata remain
+available from the tagged git tree under `docs/sbom/`; they are not release
+attachments or CI approval gates. The existing `v0.0.5-rc.2` assets are
+historical and are not changed by this workflow update.
 
 ## Permissions and token boundaries
 
@@ -234,9 +226,9 @@ are deferred to keep this slice reviewable:
    dedup by `{ecosystem}:{name}@{target_version}`.
 
 4. **No OS-level package SBOM.** The Debian base image packages
-   (`deploy/production/Dockerfile.engine`) are not enumerated here. The final
-   release SBOM must include OS packages (see `docs/ACKNOWLEDGEMENTS.md` §3
-   "Debian Docker Official Image" row).
+   (`deploy/production/Dockerfile.engine`) are not enumerated here. A future
+   deployment audit that needs OS-package coverage must add it separately (see
+   `docs/ACKNOWLEDGEMENTS.md` §3 "Debian Docker Official Image" row).
 
 ## Testing
 
