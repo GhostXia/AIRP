@@ -39,6 +39,7 @@ const MODE = args.mode || '';
 const TASK_MODULES = {
   'onboarding-firstchat-refresh': './tasks/onboarding-firstchat-refresh.mjs',
   'regen-swipe-refresh': './tasks/regen-swipe-refresh.mjs',
+  'preview-chat-assembly': './tasks/preview-chat-assembly.mjs',
   'edit-branch-switch-refresh': './tasks/edit-branch-switch-refresh.mjs',
   'memory-roundtrip': './tasks/memory-roundtrip.mjs',
 };
