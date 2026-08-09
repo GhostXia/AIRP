@@ -41,14 +41,20 @@ const TASK_MODULES = {
   'memory-roundtrip': './tasks/memory-roundtrip.mjs',
 };
 
-async function main() {
-  if (!CHROME) {
-    console.error('AIRP_CHROME_PATH or --chrome-path is required');
-    process.exit(2);
-  }
+export function classifyPrTasks(diff, prNumber) {
+  const taskNames = classifyPrDiff(diff);
+  if (taskNames.length > 0) return { taskNames, diagnostic: null };
 
+  return {
+    taskNames,
+    diagnostic: `Triggered workflow but no task classified for PR #${prNumber} from the supplied diff.`,
+  };
+}
+
+async function main() {
   // 任务集选择
   let taskNames;
+  let classificationDiagnostic = null;
   if (args.task) {
     taskNames = [args.task];
   } else if (args.pr) {
@@ -59,7 +65,7 @@ async function main() {
     } else {
       diff = await fetchPrDiff(args.pr);
     }
-    taskNames = classifyPrDiff(diff);
+    ({ taskNames, diagnostic: classificationDiagnostic } = classifyPrTasks(diff, args.pr));
   } else {
     // 默认跑全部 4 个任务集
     taskNames = Object.keys(DIFF_TASK_MAP);
@@ -78,6 +84,22 @@ async function main() {
     llmModel: getModel(),
     tasks: [],
   };
+
+  if (classificationDiagnostic) {
+    run.status = 'Failed';
+    run.diagnostic = classificationDiagnostic;
+    run.endedAt = new Date().toISOString();
+    const { mdPath } = await writeReport(resolve(REPORT_DIR), run);
+    console.error('[runner] ' + classificationDiagnostic);
+    console.log('[runner] report: ' + mdPath);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!CHROME) {
+    console.error('AIRP_CHROME_PATH or --chrome-path is required');
+    process.exit(2);
+  }
 
   const browser = await chromium.launch({ headless: true, executablePath: CHROME, args: buildLaunchArgs(CHROME_SPKI) });
   try {

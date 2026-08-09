@@ -116,6 +116,7 @@ jobs:
           # 避免生成的临时脚本 exfiltrate repo write token。PR 评论用单独 step 的 GH_TOKEN。
         working-directory: tools/agent-exploration
         run: |
+          npm test
           # 防回归：先跑 TLS 契约测试，确认 runner.mjs/tls-args.mjs/workflow/bootstrap
           # 四处的 SPKI 处理逻辑都存在且互相一致。这一步独立于 runner 本身，
           # 即使 runner 因 LLM/网络失败，TLS 契约仍能验证修复未退化。
