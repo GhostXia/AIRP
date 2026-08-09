@@ -2,7 +2,7 @@
 
 AIRP is an AI Agent client specialized for role play. It uses a headless Engine with replaceable UIs and keeps characters, personas, presets, worldbooks, sessions, memory, Agent execution, and security boundaries in one auditable local data plane.
 
-> Current baseline: 2026-07-30, `main@4f3f792`.
+> Current baseline: 2026-08-09, `main@affa315`; current candidate: `v0.0.5-rc.2` (prerelease).
 > This page is an entry point. See the [current development baseline](docs/CURRENT-BASELINE.md) for exact capabilities, gaps, and evidence boundaries.
 
 ## Repository layout
@@ -11,7 +11,7 @@ AIRP is an AI Agent client specialized for role play. It uses a headless Engine 
 - `webui/`: the current primary product surface;
 - `airp-engine-console/`: the visual and interaction reference for the WebUI;
 - `protocol/`: shared wire protocol;
-- `ui/`: retained Tauri + Vue desktop client; near-term releases are paused;
+- `ui/`: retained Tauri + Vue desktop client; the shell now hosts same-origin `webui/`, while GUI-real-device and real-provider acceptance remain open;
 - `deploy/windows-webui/`, `deploy/linux-webui/`: portable WebUI artifacts;
 - `deploy/production/`: single-instance self-hosted HTTPS preview;
 - `data/`: runtime data-root contract and safe repository examples;
@@ -32,7 +32,7 @@ The current tree includes:
 - 44 build-free WebUI screens covering onboarding, chat, asset management, and creation workflows;
 - Windows/Linux portable WebUI artifacts, a production preview, SBOM generation, and an Agent browser-exploration layer.
 
-This is still a **P1 limited-trial code candidate**, not a production release. Feature presence does not prove real-user workflows, crash recovery, long-session behavior, upgrades/rollback, or market validation. The current priority is to close concurrency, persistence, and failure boundaries and then validate onboarding → first chat → refresh → service-restart recovery with real providers.
+This is still a **P1 limited-trial code candidate**, not a production release. `v0.0.5-rc.2` is the 2026-08-09 prerelease candidate at `main@affa315`; GitHub Actions run `31309894372` completed all 3 jobs successfully and published 5 assets, but formal `v0.0.5` remains blocked by [#130](https://github.com/GhostXia/AIRP/issues/130) (real provider + real browser + production Compose acceptance) and the missing required-reviewer configuration on the `release` environment. Feature presence does not prove real-user workflows, crash recovery, long-session behavior, upgrades/rollback, or market validation. The current priority is to close concurrency, persistence, and failure boundaries and then validate onboarding → first chat → refresh → service-restart recovery with real providers.
 
 ## Core principles
 

@@ -2,9 +2,11 @@
 
 > 状态：发布门与验收计划；近期优先级总览以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准
 >
-> 基线日期：2026-08-02，`main@830426e`
+> 基线日期：2026-08-09，`main@affa315`；当前候选：`v0.0.5-rc.2`（prerelease）
 >
 > 产品目标：在 Phase 1–5.3 功能扩张后，暂停用页面/功能数量替代发布证据；先把真实首聊、刷新/重启恢复、失败关闭、视觉一致性和用户资产安全收敛为可重复验收的 P1 有限试用版，再推进可升级、可恢复的正式 Web 产品。
+
+> 当前发布事实（2026-08-09）：Actions run `31309894372` 在 `main@affa315` 上 3 个 job 全部成功，`v0.0.5-rc.2` prerelease 上传 5 个资产。正式 `v0.0.5` 仍被 [#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收和 `release` environment required reviewer 配置阻塞；该环境 API 为 `protection_rules=[]`、`can_admins_bypass=true`。
 
 P0 的已接受实现合同见 [WEBUI-PRODUCTION-ARCHITECTURE.md](WEBUI-PRODUCTION-ARCHITECTURE.md)。首方 OCI/Compose + Caddy 同源入口、生产配置、鉴权、远端导入边界与 production topology smoke 已实现；P1-P3 仍是正式上线前置，不能把 P0 全绿写成正式发布。
 
@@ -106,11 +108,11 @@ Browser
 - #399/#403 已将 durable `TurnCommit` marker 延伸到 message、live-state 和 current-volume 阶段，并在中断后公开 `Recovering`、阻止新的 session mutation；不包含自动 replay/repair、volume sealing recovery 或 backup/restore。
 - #409 已交付 terminal marker recovery、Coordinator owner/admission registry 锁序保护与 all-false marker fail-closed；non-terminal、unreadable、unsupported marker 仍保留为 recovery-required，不宣称自动 journal/replay。
 - #410/#411 已把这些合同写入 production mock smoke：generation poll、stale/current cancellation、严格 typed SSE terminal、取消后 history、临时 session cleanup，以及 cleanup/SSE/cancel poll/response body 的 bounded deadline 生命周期；备份入口保持明确不可用，renderer 不发起 backup/restore API 调用；它们是 mock/CI 证据，不替代真实 provider、真实 browser 和维护者 Compose 验收。
-- #413 已完成 lock-only npm 安全修复：full/omit-dev audit 均为 0；当前 SBOM 报告 693 third-party、unknown license 0、blocked 0，inventory 总记录 697（4 first-party、17 audit-required、680 auto-pass）。`ui` 依赖属于构建/测试图，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime；#527 已将 exact-tag SBOM、`docs/sbom/audit-signoffs.json` 17 条精确 sign-off 和四文件上传清单接入 Windows release workflow 的手动发布路径，GitHub `release` environment hosted 配置与成功 publish proof 仍开放。
+- #413 已完成 lock-only npm 安全修复：full/omit-dev audit 均为 0；当前 SBOM 报告 693 third-party、unknown license 0、blocked 0，inventory 总记录 697（4 first-party、17 audit-required、680 auto-pass）。`ui` 依赖属于构建/测试图，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime；#527/#554 已将 exact-tag SBOM、17 条精确 sign-off、四文件上传清单和隔离的 release-context 写入权限接入 Windows release workflow 的手动发布路径；run `31309894372` 证明 3 个 job 成功并上传 5 个 prerelease 资产，但 required reviewer 仍未由 hosted environment 配置提供。
 
 ### 尚缺的上线能力
 
-- P0 首方部署 artifact 与 mock/CI topology smoke 已落地，P1 代码候选已形成但真实黄金路径与可重复维护者验收仍需继续；正式升级/自动回滚流程、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。#413 已刷新 `docs/sbom/` 快照并清理当前 npm audit findings，#527 release workflow code gate 已落地；hosted environment approval 配置、成功 publish proof 与完整签名仍是正式发布前置。
+- P0 首方部署 artifact 与 mock/CI topology smoke 已落地，P1 代码候选已形成但真实黄金路径与可重复维护者验收仍需继续；正式升级/自动回滚流程、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。#413 已刷新 `docs/sbom/` 快照并清理当前 npm audit findings，#527/#554 release workflow code gate 与候选 publish proof 已落地；`release` environment API 仍为 `protection_rules=[]`、`can_admins_bypass=true`，hosted environment approval 配置（required reviewer）和正式发布前的 #130 证据仍开放。
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
 - Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#115 Phase 2 6 类 revision 合同与 trace 收口已落地，#114 统一有效配置摘要已交付（PR #217），#114 Persona/Preset 高级生命周期（base lock/drift/rollback/dry-run/provenance 审计）后移到 P2；#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
@@ -169,7 +171,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 1. 浏览器兼容、响应式、键盘与基础可访问性收口；
 2. 真实 provider 脱敏 smoke、长会话与断网/重连 soak；
-3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #413 已刷新 SPDX-2.3 / CycloneDX 1.5 与 notices，当前 inventory 仍有 17 条 audit-required；#527 已嵌入 Windows release workflow code gate，仍需 hosted environment proof 与发布签名）；
+3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #413 已刷新 SPDX-2.3 / CycloneDX 1.5 与 notices，当前 inventory 仍有 17 条 audit-required；#527/#554 已嵌入 Windows release workflow code gate，run `31309894372` 通过候选打包，仍需 required reviewer 配置、#130 真实验收与正式发布签名）；
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
@@ -189,7 +191,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 ## 6. 下一批可执行工作
 
-> 2026-08-02 PR #413 合并后校准：先闭合 #130 的真实 provider/browser/Compose P1 证据，再处理 P2/P3 release gates。
+> 2026-08-09 v0.0.5-rc.2 校准：候选 run `31309894372` 的 Windows exact-tag 包装与 SBOM artifact proof 已闭合（仅对应已交付的 Windows 候选 artifact，不代表 #190 的 container-input/shipped-artifact applicability 验收完成）；先闭合 #130 的真实 provider/browser/Compose P1 证据并配置 hosted required reviewer，再处理 P2/P3 release gates。
 
 1. **跑通首聊黄金路径（第一优先）**：用真实 provider + 真实浏览器贯通 onboarding → 首聊 → 刷新恢复 → 重启恢复，完成 #130 的 maintainer-run Compose 记录。过程中实际触发的 bug 立即修；审计 #248 中未触发的理论风险不阻塞本步；
 2. **交付真实用户试用**：Windows 便携包交给 1-3 个目标 RP 用户，收集体验痛点。用户反馈优先级高于审计遗留项和基础设施加固；

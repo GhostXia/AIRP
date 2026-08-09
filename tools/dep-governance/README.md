@@ -1,15 +1,20 @@
 # AIRP Dependency Governance Tooling
 
-> Implements #192 (dependency discovery + audit routing) and #190 (third-party
-> notices + SBOM generation).
+> Implements #192 (dependency discovery + audit routing) and delivers the
+> Rust/npm notices + SBOM portion of #190. Issue #190 remains open for its
+> container-input and shipped-artifact applicability acceptance.
 >
 > Status: dev/CI artifact plus an explicitly dispatched release gate. Pull
 > requests and ordinary manual runs keep the committed snapshot in `docs/sbom/`;
 > a manual run with `publish_release=true` and an existing draft `release_tag`
 > regenerates an exact-tag bundle, blocks on classified `block` records or
 > unknown third-party licenses, and validates exact, current sign-offs for all
-> 17 audit-required records in `docs/sbom/audit-signoffs.json`. A required reviewer on the GitHub `release`
-> environment is the human sign-off before the draft is published.
+> 17 audit-required records in `docs/sbom/audit-signoffs.json`. Run
+> `31309894372` (2026-08-09, `main@affa315`) completed 3 jobs successfully and
+> uploaded 5 assets for the `v0.0.5-rc.2` prerelease candidate. The hosted
+> `release` environment API currently reports `protection_rules=[]` and
+> `can_admins_bypass=true`; no required reviewer is configured, so this is not
+> formal release assurance.
 
 ## What this directory contains
 
@@ -64,21 +69,20 @@ Regenerate `docs/sbom/` whenever:
 Do NOT regenerate on every CI run — the output is committed, not ephemeral.
 
 The Windows workflow has no `release: published` pre-publish trigger. To
-publish, dispatch `.github/workflows/webui-windows-build.yml` with
+publish a candidate, dispatch `.github/workflows/webui-windows-build.yml` with
 `publish_release=true` and an existing draft `release_tag`. Validation checks
 the tag ref and checked-out `HEAD`, requires the exact-tag SBOM flags
 `--fail-on-block` and `--fail-on-unknown`, runs package/browser/desktop smoke,
 and writes `release-audit.json`/`release-audit.md` plus a full audit-required
 sign-off list/count/tag/commit/run URL to the run summary and `airp-release-sbom`
-artifact. The `release` environment approval is required before the final job
-rechecks the same draft release and uploads only the four allowlisted SBOM
-assets (`inventory.json`, `airp.spdx.json`, `airp.cdx.json`,
+artifact. The final job declares `environment: release`, rechecks the same
+draft release and uploads the package plus the four allowlisted SBOM assets
+(`inventory.json`, `airp.spdx.json`, `airp.cdx.json`,
 `THIRD-PARTY-NOTICES.txt`) without overwrite, then marks the draft published.
-
-The repository does not contain hosted environment configuration or a
-successful publish proof. Until reviewers verify the `release` environment's
-required-reviewer policy and archive a hosted dry run, treat the approval gate
-as an unverified deployment control rather than a completed release assurance.
+Run `31309894372` is the hosted candidate proof. It does not prove required
+reviewer approval because the environment API is currently
+`protection_rules=[]`, `can_admins_bypass=true`; configure that policy before
+formal `v0.0.5` release.
 
 ## Permissions and token boundaries
 

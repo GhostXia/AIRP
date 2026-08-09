@@ -1,5 +1,10 @@
-AIRP Linux WebUI preview
-========================
+AIRP Linux WebUI preview (`main@affa315`, 2026-08-09)
+======================================================
+
+This README documents the manual Linux preview path. The v0.0.5-rc.2
+candidate run (31309894372) proved the Windows package path only; it is not
+Linux artifact or formal v0.0.5 acceptance. Real provider/browser/Compose
+validation remains tracked by #130.
 
 1. Run ./start-airp.sh in a terminal. It does not need root, install anything,
    or modify your system.

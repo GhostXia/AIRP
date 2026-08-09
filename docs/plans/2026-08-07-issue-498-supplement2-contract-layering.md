@@ -1,5 +1,7 @@
 # Issue #498 补充 2：engine 契约 vs 官方 webui 实现层的边界
 
+> ⚠️ **Superseded for current status**：本文保留设计澄清历史；当前 engine/webui 分层合同以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 与源码为准。
+
 - **类型**: 设计澄清 / 契约分层
 - **日期**: 2026-08-07
 - **性质**: 只做加法不做减法——不修改原设计、不修改审计 A1-A5、不修改补充 1

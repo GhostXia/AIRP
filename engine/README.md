@@ -2,7 +2,7 @@
 
 AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书/会话/状态/场景/卷数据、上下文装配、上游 LLM 流式调用、Agent loop 骨架和 HTTP/SSE API。它与 `ui/` 和 `protocol/` 一起构成当前 AIRP workspace；AIRP-MCP-Server、AIRP-Gateway 和 AIRP-State-Protocol 原仓库只是资产来源，不是本 crate 的运行时依赖或产品边界。
 
-当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-07-30 的 `main@4f3f792` 复核。
+当前状态、缺口与下一步以 [当前基线](../docs/CURRENT-BASELINE.md) 为准；本页最后在 2026-08-09 的 `main@affa315`（`v0.0.5-rc.2` prerelease candidate）复核。
 
 ## 当前能力
 
@@ -61,7 +61,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 
 ### Production P0 已实现，正式发布仍未完成
 
-默认 daemon 绑定 loopback；只有隔离容器网络中的首方部署才显式传 `daemon --host 0.0.0.0`，且 Compose 不发布 engine 端口。development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用；`deploy/production/` 已提供 OCI/Compose + Caddy artifact，并由真实 HTTPS topology CI 验证。P1 代码候选已形成，当前继续开发并补齐可重复验收证据；P2/P3 与正式发布门禁仍未完成。无论何种部署都不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
+默认 daemon 绑定 loopback；只有隔离容器网络中的首方部署才显式传 `daemon --host 0.0.0.0`，且 Compose 不发布 engine 端口。development CORS 使用 WebUI/Tauri 内置精确来源并允许 `AIRP_CORS_ORIGINS` 追加可信来源；`AIRP_ACCESS_KEY` 可启用 Bearer 保护。`AIRP_DEPLOYMENT_MODE=production` 已实现监听前 fail-closed 配置/数据目录校验、单一 HTTPS origin CORS、local-path import 禁用和 bearer 热更禁用；`deploy/production/` 已提供 OCI/Compose + Caddy artifact，并由真实 HTTPS topology CI 验证。`v0.0.5-rc.2` 候选对应 run `31309894372`（3 个 job 成功、5 个资产），但正式 `v0.0.5` 仍需 #130 真实 provider/browser/Compose 验收和 `release` environment required reviewer 配置；P2/P3 与正式发布门禁仍未完成。无论何种部署都不能把 engine 直接暴露给局域网、互联网或不可信浏览器 origin。
 
 ## 快速开始
 
@@ -177,7 +177,7 @@ cargo doc --workspace --no-deps --locked
 Remove-Item Env:RUSTDOCFLAGS
 ```
 
-本页命令是本地验证入口，不自动代表当前 `HEAD` 已全绿。2026-07-30 文档校准 pass（PR #382）**未**在 `main@4f3f792` 完成干净的 `cargo test --workspace --locked` 复跑；不得把历史测试数字写成该 commit 的证据。最新验证边界与缺口见 [当前基线](../docs/CURRENT-BASELINE.md)。
+本页命令是本地验证入口，不自动代表当前 `HEAD` 已全绿。历史 docs-pass（PR #382）未在 `main@4f3f792` 完成干净的 `cargo test --workspace --locked` 复跑；不得把历史测试数字写成当前 `main@affa315` 的证据。最新验证边界与缺口见 [当前基线](../docs/CURRENT-BASELINE.md)。
 
 ## License
 

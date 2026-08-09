@@ -1,8 +1,10 @@
 # AIRP 产品与架构计划
 
 > 状态：活路线原则
-> 校准：2026-07-30，`main@4f3f792`
+> 校准：2026-08-09，`main@affa315`；当前候选：`v0.0.5-rc.2`（prerelease）
 > 当前能力与开放缺口以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 和 GitHub issues 为准。
+
+> 当前发布事实（2026-08-09）：run `31309894372` 在 `main@affa315` 上 3 个 job 全部成功，`v0.0.5-rc.2` prerelease 含 5 个资产。正式 `v0.0.5` 仍未就绪：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收，以及 `release` environment required reviewer 配置仍是阻塞门。
 
 ## 1. 产品目标
 
@@ -18,7 +20,7 @@ AIRP 要成为可本地拥有、可审计、可恢复的 Role Play Agent 客户�
 
 Phase 1–5.3 的大量功能已在 2026-07-25 至 2026-07-26 合入；此后 Conversation 合同与多批修复继续进入 `main`（当前锚点见 [CURRENT-BASELINE.md](CURRENT-BASELINE.md)）。约束已从“缺功能”转为“功能面超过验证面”。在 P1 证据闭合前，默认冻结无直接用户证据的新子系统扩张。
 
-### 2.1 Engine 收敛门（2026-07-30）
+### 2.1 Engine 收敛门（2026-08-09；原则延续）
 
 在继续 5.4+ 功能扩张前，必须先处理 [issue #381](https://github.com/GhostXia/AIRP/issues/381) 指出的一致性问题：
 

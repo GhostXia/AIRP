@@ -1,5 +1,7 @@
 # 用户自定义流程（User-Defined Flow）设计抉择
 
+> ⚠️ **Superseded for current status**：本文是历史设计留痕，不是当前交付承诺；当前边界以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 为准。
+>
 > 关联代码：[`engine/src/agent/mod.rs`](../../engine/src/agent/mod.rs) · [`engine/src/agent/director.rs`](../../engine/src/agent/director.rs) · [`engine/src/plugin_tool.rs`](../../engine/src/plugin_tool.rs)
 > 基线：`main@1b14a7c`（PR #454 合并后）
 > 范围定位：**仅设计留痕**，不进入 0.0.3 路线。实现归入 0.0.4+ epic。

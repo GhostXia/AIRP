@@ -1,6 +1,8 @@
 # AIRP UI
 
-`ui/` 是 AIRP 保留的 Tauri + Vue 桌面客户端资产。它是 engine 的客户端，不再假设独立 Gateway 或 MockBus 作为默认后端。桌面开发、打包验收和性能计划当前暂停；正式产品交付主面是 `webui/`。恢复桌面路线前必须重新校准 [当前基线](../docs/CURRENT-BASELINE.md)，不能直接沿用本文的历史待办。本页最后在 2026-07-30 的 `main@4f3f792` 复核。
+`ui/` 是 AIRP 保留的 Tauri + Vue 桌面客户端资产。它是 engine 的客户端，不再假设独立 Gateway 或 MockBus 作为默认后端。C-P0 起 Tauri 壳同源承载 `webui/`，正式产品交付主面仍是 `webui/`；GUI 真机、完整 provider 工作流和发布级桌面验收仍开放。本页最后在 2026-08-09 的 `main@affa315`（`v0.0.5-rc.2` prerelease candidate）复核。
+
+候选发布事实：Actions run `31309894372` 的包内 desktop smoke 成功，但该自动 smoke 不替代 GUI 真机与真实 provider 验收；正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 和 `release` environment required reviewer 配置阻塞。
 
 当前全仓状态与发布门槛见 [`../docs/CURRENT-BASELINE.md`](../docs/CURRENT-BASELINE.md)。
 
@@ -62,7 +64,7 @@ cargo test -p airp-ui
 - Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested.
 - Character import is path-first: the UI sends only `card_path`; it must not put base64 card blobs into Vue state or widget props.
 - Chat state is id-keyed as `{ messages, order }`. `BusRelay` no longer uses `chat_lock`; each `chat.send` opens the user and assistant rows with one patch envelope, then streams into `/messages/{assistant_id}/text`.
-- WebUI is currently the primary backend-incubation, contract-validation, and basic RP development surface. This Tauri/Vue client remains the long-term product delivery surface and should consume stable client-neutral contracts after they mature.
+- WebUI is currently the primary backend-incubation, contract-validation, and basic RP development surface. This Tauri/Vue client is the long-term product delivery surface through the same-origin shell, but package smoke is not GUI-real-device or real-provider acceptance.
 - Agent UI Test Harness is dev/test-only. Enable with `?airp_agent_test=1`, `localStorage.AIRP_AGENT_TEST=1`, or `VITE_AIRP_AGENT_TEST=1`; then use `window.__AIRP_AGENT_TEST__` from Codex browser control or Playwright.
 - Users who do not want any agent-control surface can delete `src/agent-test.ts` before building. `App.vue` loads the harness only when the module exists, and the related test does not block the build when the module is absent.
 

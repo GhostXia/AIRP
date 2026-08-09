@@ -1,5 +1,10 @@
-AIRP Windows WebUI preview
-==========================
+AIRP Windows WebUI preview (`v0.0.5-rc.2`, `main@affa315`)
+============================================================
+
+Candidate evidence (2026-08-09): GitHub Actions run 31309894372 completed its
+3 jobs successfully, including the Windows package/browser/desktop smoke steps,
+and uploaded the prerelease assets. This is a prerelease candidate, not formal
+v0.0.5; real-provider/browser/Compose acceptance (#130) remains open.
 
 1. Double-click Start-AIRP.cmd. It runs directly and does not use PowerShell,
    request administrator access, or install anything.

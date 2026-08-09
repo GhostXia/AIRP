@@ -1,5 +1,7 @@
 # E-P2-1: #342 备份恢复闭环最小实施计划
 
+> ⚠️ **Superseded for current status**：本计划保留实施轨迹；#342 已交付的 v1 边界和当前缺口以 [CURRENT-BASELINE.md](../CURRENT-BASELINE.md) 为准。
+>
 > 关联 issue：[#342](https://github.com/GhostXia/AIRP/issues/342)（data: 交付备份恢复、可恢复删除与核心资产导出闭环）
 > 基线：`main@098ba76`（PR #441 合并后）
 > 范围定位：v0.0.3 P2 release gate 的最小闭环切片。**不**做云同步、多租户、无限历史、自动定时备份；**只**交付手动 create / list / verify / restore / delete + 删除前自动备份 + WebUI 入口。

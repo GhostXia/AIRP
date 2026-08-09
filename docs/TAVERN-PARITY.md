@@ -1,5 +1,7 @@
 # 酒馆（SillyTavern）功能对标 + 扩展接口需求
 
+> ⚠️ **Superseded for current status**：本文是历史需求/互操作研究，不是实时差距表；当前实现边界以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 为准。
+>
 > **历史需求对标，不是兼容性声明或实时差距表**：表内 ✅/🔧 描述研究时的来源/候选状态，不证明当前 AIRP 已交付。Worldbook、Persona、插件工具等实现已经继续演进；所有“AIRP 落点/缺口”必须以当前源码和 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) 复核。
 > 目的：(1) 列全酒馆功能，标出候选能力；(2) 落实硬需求——**充分暴露接口，无门槛无缝支持第三方扩展**。来源：docs.sillytavern.app（2026-07 实读）。图例：✅ 源项目已有 ｜ 🔧 源项目部分有需补 ｜ 🆕 源项目皆无，需新加 ｜ ➖ 暂不做/低优先。
 > 研究校准：2026-07-16；状态分类复核：2026-07-30，`main@4f3f792`
