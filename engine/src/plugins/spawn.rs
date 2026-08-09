@@ -18,12 +18,14 @@ use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Child;
 
 use super::{resolve_args, resolve_command, TrustedPluginManifest};
 
 struct PluginLogPrefix<'a>(&'a str);
+
+const PLUGIN_OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
 
 impl fmt::Display for PluginLogPrefix<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -86,10 +88,11 @@ async fn spawn_one(manifest: &TrustedPluginManifest, data_root: &Path) -> Result
 
 /// 从 plugin stdout/stderr 持续读取并转发到 engine tracing 日志。
 ///
-/// `read_until` 不要求 UTF-8：插件输出的任意字节都会以 lossy 文本记录，
-/// 因而即使插件写入二进制或非法 UTF-8，读取任务也不会提前退出而重新
-/// 让 pipe 填满。每一行均带 `[plugin:<id>]` 前缀；stdout 以 info、stderr
-/// 以 warn 记录，并用 `stream` 字段保留来源。
+/// 固定大小 chunk 读取避免无换行输出让行缓冲无界增长。插件输出的任意
+/// 字节都会以 lossy 文本记录，因而即使插件写入二进制或非法 UTF-8，读取
+/// 任务也不会提前退出而重新让 pipe 填满。每个 chunk 中的行片段均带
+/// `[plugin:<id>]` 前缀；stdout 以 info、stderr 以 warn 记录，并用 `stream`
+/// 字段保留来源。
 fn spawn_output_drainer<R>(
     plugin_id: String,
     stream: &'static str,
@@ -99,40 +102,12 @@ where
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let mut reader = BufReader::new(reader);
-        let mut line = Vec::new();
+        let mut reader = reader;
+        let mut chunk = [0_u8; PLUGIN_OUTPUT_CHUNK_BYTES];
         loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line).await {
+            match reader.read(&mut chunk).await {
                 Ok(0) => break,
-                Ok(_) => {
-                    let lossy = String::from_utf8_lossy(&line);
-                    let mut text = lossy.as_ref();
-                    if let Some(stripped) = text.strip_suffix('\n') {
-                        text = stripped;
-                    }
-                    if let Some(stripped) = text.strip_suffix('\r') {
-                        text = stripped;
-                    }
-                    let prefix = PluginLogPrefix(&plugin_id);
-                    if stream == "stderr" {
-                        tracing::warn!(
-                            target: "airp_core::plugins",
-                            stream,
-                            "{} {}",
-                            prefix,
-                            text
-                        );
-                    } else {
-                        tracing::info!(
-                            target: "airp_core::plugins",
-                            stream,
-                            "{} {}",
-                            prefix,
-                            text
-                        );
-                    }
-                }
+                Ok(read) => emit_plugin_output(&plugin_id, stream, &chunk[..read]),
                 Err(error) => {
                     let prefix = PluginLogPrefix(&plugin_id);
                     tracing::warn!(
@@ -148,6 +123,39 @@ where
             }
         }
     })
+}
+
+/// Emit one bounded read chunk. Splitting only inside the fixed chunk keeps
+/// every visible line prefixed while never retaining an unbounded partial line.
+fn emit_plugin_output(plugin_id: &str, stream: &'static str, chunk: &[u8]) {
+    for segment in chunk.split_inclusive(|byte| *byte == b'\n') {
+        let mut segment = segment;
+        if segment.last() == Some(&b'\n') {
+            segment = &segment[..segment.len() - 1];
+        }
+        if segment.last() == Some(&b'\r') {
+            segment = &segment[..segment.len() - 1];
+        }
+        let text = String::from_utf8_lossy(segment);
+        let prefix = PluginLogPrefix(plugin_id);
+        if stream == "stderr" {
+            tracing::warn!(
+                target: "airp_core::plugins",
+                stream,
+                "{} {}",
+                prefix,
+                text
+            );
+        } else {
+            tracing::info!(
+                target: "airp_core::plugins",
+                stream,
+                "{} {}",
+                prefix,
+                text
+            );
+        }
+    }
 }
 
 /// 从已 spawn 的 child 取出 stdout/stderr 并启动两个独立读取任务。
@@ -466,6 +474,52 @@ mod tests {
             format!("{} ready", PluginLogPrefix(id)),
             "[plugin:com.example.logs] ready"
         );
+    }
+
+    /// 回归：没有换行符的持续输出也必须被固定大小 chunk 读取，不能让
+    /// partial line 缓冲随插件输出无限增长；两条 stream 都要保持可写。
+    #[tokio::test]
+    async fn plugin_output_drainer_handles_no_newline_flood() {
+        use tokio::io::AsyncWriteExt;
+
+        let (stdout_writer, stdout_reader) = tokio::io::duplex(PLUGIN_OUTPUT_CHUNK_BYTES);
+        let (stderr_writer, stderr_reader) = tokio::io::duplex(PLUGIN_OUTPUT_CHUNK_BYTES);
+        let stdout_drainer =
+            spawn_output_drainer("com.example.flood".to_string(), "stdout", stdout_reader);
+        let stderr_drainer =
+            spawn_output_drainer("com.example.flood".to_string(), "stderr", stderr_reader);
+
+        let stdout_writer = tokio::spawn(async move {
+            let mut writer = stdout_writer;
+            let chunk = vec![b'x'; PLUGIN_OUTPUT_CHUNK_BYTES];
+            for _ in 0..1024 {
+                writer.write_all(&chunk).await.unwrap();
+            }
+        });
+        let stderr_writer = tokio::spawn(async move {
+            let mut writer = stderr_writer;
+            let chunk = vec![b'y'; PLUGIN_OUTPUT_CHUNK_BYTES];
+            for _ in 0..1024 {
+                writer.write_all(&chunk).await.unwrap();
+            }
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), stdout_writer)
+            .await
+            .expect("stdout no-newline flood writer blocked")
+            .expect("stdout no-newline flood writer panicked");
+        tokio::time::timeout(std::time::Duration::from_secs(5), stderr_writer)
+            .await
+            .expect("stderr no-newline flood writer blocked")
+            .expect("stderr no-newline flood writer panicked");
+        tokio::time::timeout(std::time::Duration::from_secs(5), stdout_drainer)
+            .await
+            .expect("stdout no-newline drainer did not reach EOF")
+            .expect("stdout no-newline drainer panicked");
+        tokio::time::timeout(std::time::Duration::from_secs(5), stderr_drainer)
+            .await
+            .expect("stderr no-newline drainer did not reach EOF")
+            .expect("stderr no-newline drainer panicked");
     }
 
     /// 回归：同时写满 stdout/stderr 的插件必须在有限时间内退出；若任一
