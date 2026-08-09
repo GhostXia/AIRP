@@ -26,37 +26,28 @@ permissions:
   contents: read
 
 jobs:
-  validate-package:
-    name: Validate portable Windows WebUI
+  release-context:
+    name: Validate exact-tag release request
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
     runs-on: windows-latest
-    # Draft releases are not visible to a read-only GITHUB_TOKEN. Keep the
-    # workflow default read-only for PR/manual packaging, while allowing the
-    # release-dispatch validation to inspect the existing draft before the
-    # protected publish job runs.
+    # GitHub does not expose draft releases to a read-only GITHUB_TOKEN. This
+    # elevated token is isolated to the release-only context check; ordinary
+    # PR/manual packaging keeps the workflow-level read-only permissions.
     permissions:
       contents: write
-      actions: read
     outputs:
       release_tag: ${{ steps.release-context.outputs.release_tag }}
       release_commit: ${{ steps.release-context.outputs.release_commit }}
-    env:
-      RUSTUP_HOME: ${{ github.workspace }}\.ci\.rustup
-      CARGO_HOME: ${{ github.workspace }}\.ci\.cargo
-      npm_config_prefix: ${{ github.workspace }}\.ci\npm-global
-      npm_config_cache: ${{ github.workspace }}\.ci\npm-cache
     steps:
-      - name: Checkout
+      - name: Checkout exact release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          # Release validation is explicitly dispatched with a tag. PR/manual
-          # packaging keeps the event ref selected by actions/checkout.
-          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.release_tag) || github.ref }}
+          ref: ${{ inputs.release_tag }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Validate exact-tag release request
         id: release-context
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -114,6 +105,49 @@ jobs:
           Write-Output "release_run_url=$($env:RUN_URL)"
           "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "release_commit=$tagCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  validate-package:
+    name: Validate portable Windows WebUI
+    runs-on: windows-latest
+    needs: release-context
+    if: >-
+      always() &&
+      (github.event_name != 'workflow_dispatch' ||
+      inputs.publish_release != true ||
+      needs.release-context.result == 'success')
+    outputs:
+      release_tag: ${{ needs.release-context.outputs.release_tag }}
+      release_commit: ${{ needs.release-context.outputs.release_commit }}
+    env:
+      RUSTUP_HOME: ${{ github.workspace }}\.ci\.rustup
+      CARGO_HOME: ${{ github.workspace }}\.ci\.cargo
+      npm_config_prefix: ${{ github.workspace }}\.ci\npm-global
+      npm_config_cache: ${{ github.workspace }}\.ci\npm-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # Release validation is explicitly dispatched with a tag. PR/manual
+          # packaging keeps the event ref selected by actions/checkout.
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.release_tag) || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm exact-tag package checkout
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          VALIDATED_COMMIT: ${{ needs.release-context.outputs.release_commit }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseTag = $env:RELEASE_TAG
+          $tagCommit = ((git rev-parse --verify "refs/tags/$releaseTag^{commit}" 2>$null) -join '').Trim()
+          $headCommit = ((git rev-parse --verify HEAD 2>$null) -join '').Trim()
+          $headRef = ((git rev-parse --symbolic-full-name --verify HEAD 2>$null) -join '').Trim()
+          if ($headRef -ne "HEAD" -or $headCommit -ne $tagCommit -or $tagCommit -ne $env:VALIDATED_COMMIT) {
+            throw "package checkout does not match validated release tag '$releaseTag'"
+          }
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
