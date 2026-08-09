@@ -428,7 +428,7 @@
   async function deleteTool(index) {
     const t = serverTools[index];
     if (!t) return;
-    if (!confirm(`确认删除插件工具 "${t.name}"？此操作不可撤销。`)) return;
+    if (!await AIRPConfirm.confirm(`确认删除插件工具 "${t.name}"？此操作不可撤销。`, { title: '确认删除插件工具' })) return;
     setStatus(`删除 ${t.name} 中...`, false);
     try {
       await client.request('DELETE', '/v1/plugin-tools/' + encodeURIComponent(t.name));

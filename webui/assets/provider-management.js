@@ -290,9 +290,9 @@
     setStatus('Provider 列表已修改，点击下方 “保存” 提交到服务端。', false);
   }
 
-  function deleteEntry(index) {
+  async function deleteEntry(index) {
     const e = draftEntries[index];
-    if (!confirm(`确认删除 Provider "${e.name}"？相关路由规则也会一并失效。`)) return;
+    if (!await AIRPConfirm.confirm(`确认删除 Provider "${e.name}"？相关路由规则也会一并失效。`, { title: '确认删除 Provider' })) return;
     const removedName = e.name;
     draftEntries.splice(index, 1);
     // 清理引用该 name 的路由规则
@@ -332,7 +332,7 @@
   // ── 持久化：保存全部 providers + routing ────────────────────────────────
   async function saveAllProviders() {
     if (draftEntries.length === 0) {
-      if (!confirm('provider 数组将为空，将禁用多 provider 路由并回退到 legacy 单 provider。继续？')) return;
+      if (!await AIRPConfirm.confirm('provider 数组将为空，将禁用多 provider 路由并回退到 legacy 单 provider。继续？', { title: '确认清空 Provider 路由' })) return;
     }
     // 校验：至少一个 is_default
     if (draftEntries.length > 0 && !draftEntries.some(e => e.is_default)) {

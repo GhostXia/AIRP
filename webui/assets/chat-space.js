@@ -115,7 +115,7 @@
 
   async function recoverSession() {
     if (!characterId || !sessionId || streamController) return;
-    if (!window.confirm('该会话因上次写入中断被保护性锁定。\n恢复会隔离未完成的提交标记（不会删除任何消息数据），然后允许继续对话。继续吗？')) return;
+    if (!await AIRPConfirm.confirm('该会话因上次写入中断被保护性锁定。\n恢复会隔离未完成的提交标记（不会删除任何消息数据），然后允许继续对话。继续吗？', { title: '确认恢复会话' })) return;
     const button = $('#session-recover');
     if (button) { button.disabled = true; button.textContent = '正在恢复…'; }
     try {
@@ -505,7 +505,7 @@
   }
 
   async function rollbackTo(messageId) {
-    if (!sessionId || sessionMutationBlocked() || !window.confirm('回滚会丢弃这条消息之后的全部内容。继续吗？')) return;
+    if (!sessionId || sessionMutationBlocked() || !await AIRPConfirm.confirm('回滚会丢弃这条消息之后的全部内容。继续吗？', { title: '确认回滚消息' })) return;
     try {
       await client.request('POST', '/v1/chat/rollback', { character_id: characterId, session_id: sessionId, message_id: messageId });
       log('chat.rollback', messageId); await loadSessions(); await loadHistory();
@@ -513,7 +513,7 @@
   }
 
   async function deleteMessage(messageId) {
-    if (!sessionId || sessionMutationBlocked() || !window.confirm('确定删除这条消息？')) return;
+    if (!sessionId || sessionMutationBlocked() || !await AIRPConfirm.confirm('确定删除这条消息？', { title: '确认删除消息' })) return;
     try {
       await client.request('POST', '/v1/chat/delete', { character_id: characterId, session_id: sessionId, message_id: messageId });
       log('chat.delete', messageId); await loadSessions(); await loadHistory();
@@ -555,7 +555,7 @@
   }
 
   async function deleteSession(id, btn) {
-    if (streamController || !window.confirm('确定删除会话 ' + id.slice(0, 8) + '？\n全部消息将不可恢复。')) return;
+    if (streamController || !await AIRPConfirm.confirm('确定删除会话 ' + id.slice(0, 8) + '？\n全部消息将不可恢复。', { title: '确认删除会话' })) return;
     if (btn) btn.disabled = true;
     try {
       await client.request('DELETE', '/v1/sessions/' + encodeURIComponent(characterId) + '/' + encodeURIComponent(id));
