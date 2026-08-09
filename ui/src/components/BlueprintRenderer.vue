@@ -48,26 +48,58 @@ function onIntent(name: string, params?: Json): void {
 <style scoped>
 .blueprint {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   height: 100%;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   padding: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .area {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .area-main {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
 }
 .area-sidebar {
-  width: 320px;
+  width: min(320px, 100%);
+  flex: 0 1 320px;
 }
 .area-tools {
-  width: 260px;
+  width: min(260px, 100%);
+  flex: 0 1 260px;
+}
+@media (max-width: 900px) {
+  .blueprint {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .area-main,
+  .area-sidebar,
+  .area-tools {
+    width: 100%;
+    max-width: 100%;
+  }
+  .area-main {
+    flex: 0 0 clamp(220px, 62dvh, 560px);
+  }
+  .area-sidebar,
+  .area-tools {
+    flex: 0 0 clamp(140px, 28dvh, 240px);
+  }
 }
 </style>

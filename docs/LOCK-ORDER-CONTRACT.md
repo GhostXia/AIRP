@@ -272,19 +272,23 @@ PR #469 将 `advance_plot`、`npc_action`、`update_relationship`、
 
 ### 6.1 运行时锁序强制：已交付（R1 + R2，全路径）
 
-`domain.rs` 新增 `lock_order` 模块（`#[cfg(debug_assertions)]` thread-local 栈 + RAII `Guard`；`#[cfg(not(debug_assertions))]` 零成本 no-op），覆盖 R1（character 外层门控）与 R2（session↔state 嵌套方向）的运行时检测：
+`domain.rs` 新增 `lock_order` 模块（默认 `#[cfg(debug_assertions)]`，或启用
+`lock-order-runtime` feature 时使用 thread-local 栈 + RAII `Guard`；未启用时
+零成本 no-op），覆盖 R1（character 外层门控）与 R2（session↔state 嵌套方向）的运行时检测：
 
 - **R1 强制**（#438 W-04，2026-08-03 交付）：
   - `track_character_read()` / `track_character_write()` 记录 `character_lock` 持有状态，无 violation 检查（character 是最外层门控，无前置要求）。
-  - `track_session()` / `track_state()` 在调用时检查 HELD 栈是否含 `CharacterRead` 或 `CharacterWrite`；不含则 `debug_assert!` panic（R1 违反：session/state 必须由 character 外层门控）。
+  - `track_session()` / `track_state()` 在调用时检查 HELD 栈是否含 `CharacterRead` 或 `CharacterWrite`；不含则断言 panic（R1 违反：session/state 必须由 character 外层门控）。
   - 覆盖所有 4 条 agent tool 路径（`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action`）+ `volume_manager::run_seal_flow` + `StateService::read`/`mutate`/`write` + `LorebookService::read`/`write` + `ChatService::with_session`/`delete_session`/`delete_character`。
 - **R2 强制**（既有）：
-  - `track_session()` 在持 `state_lock` 时获取 `session_lock` 触发 `debug_assert!`（state→session 禁止，Bug F 类死锁回归）。
+  - `track_session()` 在持 `state_lock` 时获取 `session_lock` 触发断言（state→session 禁止，Bug F 类死锁回归）。
   - `track_state()` 无 R2 检查（session→state 是 R2 唯一合法嵌套方向）。
 - **R1 回归测试**（#438 W-04，2026-08-03 交付）：
   - 4 条并发测试：`advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` 各与 `delete_character` 经 `Barrier` 同时放行，30s 超时检测死锁。关键不变式：tool 不应返回 `Internal` error（那表示读到半删 live.json / world_events.json / world_clock.json，R1 TOCTOU 防护失效）。
   - 15 条 `lock_order` 单测覆盖 R1/R2 合法路径、违反路径、Drop 语义、两段临界区模式。
-- release build（`--release`）下 `track_*` 返回 ZST `Guard`，零开销（§7）。
+- 默认 release build（`--release`）下 `track_*` 返回 ZST `Guard`，零开销（§7）；
+  PR gate 另以 `--release --features lock-order-runtime` 编译并运行锁序违反
+  测试，确保优化 profile 仍可执行 R1/R2 强制而不改变正式产物默认成本。
 - **未覆盖**：R3（conversation 双锁）、R6（coordinator 反向获取）尚未有运行时强制。guard 不跨 `.await`（§4 A1），thread-local 栈仅在同步作用域内有效。
 
 ### 6.2 std 锁内同步 I/O（agent tool 路径已收敛，#469）
@@ -383,10 +387,14 @@ if result.is_ok() {
 引入代码改动时（如 §6.1 的 thread-local tracker）：
 
 - 必须新增测试覆盖每个 `debug_assert!` 触发点；
-- 必须在 release build (`--release`) 下零开销；
+- 正式 release build (`--release`) 默认必须零开销；同时必须有优化 profile 的
+  lock-order 专项验证（`--release --features lock-order-runtime`），避免只在
+  debug 编译路径验证锁序。
 - 必须在本合同 §6.1 更新状态为「已交付（部分路径）」或「已交付（全路径）」。
 
-§6.1 验收记录（2026-08-02）：6 个单测覆盖唯一 `debug_assert!` 触发点（`track_session` 持 state 时）+ 合法方向 + Drop 释放 + 两段临界区；`cargo check --release` 通过（no-op ZST `Guard`）；§6.1 状态已更新为「已交付（部分路径）」（仅 R2 session↔state，不含 R1/R3/R6）。本地 `cargo test --workspace` 1301 passed / 0 failed，WebUI 76 passed / 0 failed，神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。
+§6.1 验收记录（2026-08-02）：6 个单测覆盖唯一锁序触发点（`track_session` 持 state 时）+ 合法方向 + Drop 释放 + 两段临界区；`cargo check --release` 通过（默认 no-op ZST `Guard`）；§6.1 状态已更新为「已交付（部分路径）」（仅 R2 session↔state，不含 R1/R3/R6）。本地 `cargo test --workspace` 1301 passed / 0 failed，WebUI 76 passed / 0 failed，神圣不变式 `subagent_context_has_no_orchestrator_noise` 通过。
+
+Release-profile 锁序验收（#470，2026-08-09）：`cargo test -p airp-core --release --features lock-order-runtime --lib lock_order:: --locked -- --nocapture` 运行 R1/R2 合法与违反路径测试；正式 release 未启用该 feature 时仍使用 ZST no-op `Guard`。PR gate 的 `Release lock-order enforcement` step 固定执行该专项门。
 
 R1 收敛验收记录（PR #436，2026-08-03）：§2.4 `trigger_world_event` / §2.5 `advance_clock` / §2.6 `npc_action` / §2.7 `run_seal_flow` 四个路径已补齐外层 `character_lock.read()`；§2.3 `advance_plot` 因 `StateService::mutate` re-entrancy 风险未闭合，残留风险与修复路径记录于 §6.7。本次为静态锁序收敛，**不**改变 §6.1 运行时强制状态（R1 仍无运行时强制，仅 R2 session↔state 有 `debug_assert!`）。`cargo test --workspace --exclude airp-ui --locked` 通过（数字见 PR 描述）。
 
