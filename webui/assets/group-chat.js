@@ -75,8 +75,14 @@
       if (!sessionId) {
         const firstChar = activeCharacters[0];
         if (firstChar) {
-          sessionId = await client.request('POST', '/v1/sessions/' + encodeURIComponent(firstChar));
-          sessionId = String(sessionId);
+          try {
+            sessionId = await client.request('POST', '/v1/sessions/' + encodeURIComponent(firstChar));
+            sessionId = String(sessionId);
+          } catch {
+            sessionId = '';
+            $('#group-status').textContent = '会话创建失败，请重试';
+            return;
+          }
         }
       }
       $('#group-status').textContent = '场景: ' + sceneId + ' · ' + activeCharacters.length + ' 个角色';
@@ -109,6 +115,10 @@
     if (!message || streaming) return;
     if (!activeScene || !activeCharacters.length) {
       $('#group-status').textContent = '请先选择一个场景';
+      return;
+    }
+    if (!sessionId) {
+      $('#group-status').textContent = '会话创建失败，请重试';
       return;
     }
     input.value = '';
