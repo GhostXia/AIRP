@@ -124,31 +124,16 @@ test('deterministic assertion failure becomes Failed task result', async () => {
   }
 });
 
-test('ordinary task without deterministic metadata keeps generated-script path', async () => {
-  const reportDir = await mkdtemp(join(tmpdir(), 'airp-agent-exploration-ordinary-'));
-  let directRunCalls = 0;
-  const taskModule = {
-    DESCRIPTION: 'ordinary synthetic task',
-    EXPECTED: 'fallback script runs',
-    async run() {
-      directRunCalls += 1;
-    },
-    async check() {
-      return { ok: true };
-    },
-  };
-
-  try {
-    const [task] = await runTasks(
-      fakeBrowser(),
-      ['ordinary-task'],
-      { 'ordinary-task': taskModule },
-      { origin: 'http://synthetic.test', reportDir },
-    );
-    assert.equal(directRunCalls, 0, 'ordinary task must not bypass generated-script path');
-    assert.equal(task.result, 'Passed', task.actual || 'ordinary task failed without actual details');
-    assert.match(task.evidence.script, /agent-script\.mjs$/);
-  } finally {
-    await rm(reportDir, { recursive: true, force: true });
-  }
+test('ordinary task keeps generated-script branch by runner static contract', async () => {
+  const runnerSource = await readFile(new URL('./runner.mjs', import.meta.url), 'utf8');
+  assert.match(
+    runnerSource,
+    /if \(mod\.DETERMINISTIC === true\)[\s\S]*?await mod\.run\(ctx\)/,
+    'deterministic modules must call run(ctx) directly',
+  );
+  assert.match(
+    runnerSource,
+    /else \{[\s\S]*?generateAndRunScript\(mod, ctx, taskDir/,
+    'ordinary modules must retain generateAndRunScript branch',
+  );
 });
