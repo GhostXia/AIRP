@@ -24,6 +24,14 @@ test("workflow exposes explicit manual release inputs and no published pre-gate"
   assert.doesNotMatch(workflow, /github\.event\.release/);
 });
 
+test("release validation can inspect drafts without widening ordinary packaging", () => {
+  assert.match(
+    workflow,
+    /permissions:\s*\r?\n\s+contents: read\s*\r?\n\s*\r?\n\s*jobs:\s*\r?\n\s+validate-package:\s*\r?\n(?:.|\r?\n)*?permissions:\s*\r?\n\s+contents: write\s*\r?\n\s+actions: read/,
+  );
+  assert.match(workflow, /publish-release:[\s\S]*?permissions:\s*[\s\S]*?contents: write/);
+});
+
 test("workflow validates exact tag and existing draft before package", () => {
   assert.match(workflow, /inputs\.release_tag/);
   assert.match(workflow, /fetch-depth:\s+0/);

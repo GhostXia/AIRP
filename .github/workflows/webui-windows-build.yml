@@ -29,6 +29,13 @@ jobs:
   validate-package:
     name: Validate portable Windows WebUI
     runs-on: windows-latest
+    # Draft releases are not visible to a read-only GITHUB_TOKEN. Keep the
+    # workflow default read-only for PR/manual packaging, while allowing the
+    # release-dispatch validation to inspect the existing draft before the
+    # protected publish job runs.
+    permissions:
+      contents: write
+      actions: read
     outputs:
       release_tag: ${{ steps.release-context.outputs.release_tag }}
       release_commit: ${{ steps.release-context.outputs.release_commit }}
