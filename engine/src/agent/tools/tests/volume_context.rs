@@ -446,3 +446,193 @@ async fn seal_volume_returns_conflict_on_concurrent_index_modification() {
         "no volume should be written on Conflict"
     );
 }
+
+/// #442 / #438 W-04：`run_seal_flow` 持 `character_lock.read()` 期间，
+/// `delete_character`（需 `character_lock.write()`）必须串行化，不得读到
+/// character 目录的半删状态。
+///
+/// 测试策略与其他 R1 回归一致：两个独立 OS worker 经 `Barrier` 同时放行，
+/// worker A 运行真实 `run_seal_flow`（wiremock 提供 OpenAI-compatible SSE），
+/// worker B 调用 `delete_character`，外层用 30s timeout 检测残留死锁。R1 只保证
+/// 串行化而不保证顺序，因此 `Ok` / `NotFound` / `Io(NotFound)` 都是合法结果；
+/// Windows 在删除后访问 pending-deletion 路径时可能返回 `Io(PermissionDenied)`，
+/// 这是已知 OS quirk。`Internal` 表示读到了半删状态，必须升级为测试失败。
+#[tokio::test(flavor = "current_thread")]
+async fn run_seal_flow_and_delete_character_serialized_by_character_lock() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let archive = "<卷索引>\n- 卷标题: Test\n</卷索引>\n<卷内容>\nArchived scene\n</卷内容>\n<全局index更新>\n</全局index更新>";
+    let event = serde_json::json!({"choices": [{"delta": {"content": archive}}]});
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("data: {event}\n\ndata: [DONE]\n\n")),
+        )
+        .mount(&server)
+        .await;
+
+    let character_id = "seal_r1_delete";
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+    let card_dir = state
+        .data_root
+        .join("characters")
+        .join(character_id)
+        .join("card");
+    std::fs::create_dir_all(&card_dir).unwrap();
+    std::fs::write(card_dir.join("card.json"), r#"{"name":"Seal R1"}"#).unwrap();
+    let memory =
+        crate::data_dir::resolve_session_dir(&state.data_root, character_id, None).unwrap();
+    crate::volume_store::append_to_current(&memory, "A scene to archive").unwrap();
+
+    let provider = Arc::new(crate::adapter::ProviderConfig {
+        provider: crate::adapter::Provider::OpenAI,
+        endpoint: format!("{}/v1/chat/completions", server.uri()),
+        api_key: Some("test-key".to_string()),
+    });
+    let params = crate::adapter::GenerationParams {
+        model: "test-model".to_string(),
+        temperature: Some(0.7),
+        max_tokens: None,
+    };
+    let _ = crate::domain::take_test_character_lock_events(character_id);
+    let (read_acquired, write_attempted, gate) =
+        crate::domain::install_test_character_lock_gate(character_id);
+    let (start_delete_tx, start_delete_rx) = tokio::sync::oneshot::channel();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let worker_state = state.clone();
+    let memory_for_seal = memory.clone();
+
+    let join_handle = tokio::task::spawn_blocking(move || {
+        std::thread::scope(|scope| {
+            // Worker A: run_seal_flow（写盘段持 character_lock.read()）。
+            let handle_a = {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                let memory = memory_for_seal.clone();
+                let provider = provider.clone();
+                scope.spawn(move || -> Result<(), String> {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|error| format!("runtime build: {error}"))?;
+                    barrier.wait();
+                    let result = runtime.block_on(crate::volume_manager::run_seal_flow(
+                        &state.http_client,
+                        &memory,
+                        Some(character_id),
+                        None,
+                        provider,
+                        params,
+                    ));
+
+                    // 合法串行化结果：
+                    // - Ok：run_seal_flow 先完成写盘，delete_character 随后删除目录；
+                    // - NotFound / Io(NotFound)：delete_character 先完成，seal 看到已删目录；
+                    // - Windows Io(PermissionDenied)：pending-deletion 文件句柄的 OS quirk。
+                    // Internal 则表示读到半删数据（R1 TOCTOU 防护失效）。
+                    match result {
+                        Ok(_) => Ok(()),
+                        Err(crate::error::AirpError::NotFound(_)) => Ok(()),
+                        Err(crate::error::AirpError::Io(error))
+                            if error.kind() == std::io::ErrorKind::NotFound
+                                || (cfg!(windows)
+                                    && error.kind() == std::io::ErrorKind::PermissionDenied) =>
+                        {
+                            Ok(())
+                        }
+                        Err(error) => Err(format!(
+                            "run_seal_flow failed with non-serialized error \
+                             (R1 TOCTOU protection may have failed): {error:?}"
+                        )),
+                    }
+                })
+            };
+
+            // Worker B: delete_character（需 character_lock.write()）。
+            let handle_b = {
+                let state = worker_state.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || -> Result<bool, String> {
+                    let chat = crate::domain::ChatService::new(&state.data_root);
+                    let cid = crate::types::CharacterId::new(character_id)
+                        .map_err(|error| format!("character id: {error}"))?;
+                    barrier.wait();
+                    start_delete_rx
+                        .blocking_recv()
+                        .map_err(|error| format!("start delete: {error}"))?;
+                    let result = chat.delete_character(&cid, true);
+                    Ok(result.is_ok())
+                })
+            };
+
+            handle_a
+                .join()
+                .map_err(|error| format!("run_seal_flow worker join: {error:?}"))??;
+            let _delete_succeeded = handle_b
+                .join()
+                .map_err(|error| format!("delete_character worker join: {error:?}"))??;
+            Ok::<(), String>(())
+        })
+    });
+
+    tokio::time::timeout(Duration::from_secs(30), read_acquired)
+        .await
+        .expect("run_seal_flow did not acquire character read lock")
+        .expect("run_seal_flow read-acquired notification dropped");
+    start_delete_tx
+        .send(())
+        .expect("delete worker start notification dropped");
+    tokio::time::timeout(Duration::from_secs(30), write_attempted)
+        .await
+        .expect("delete_character did not attempt character write lock")
+        .expect("delete_character write-attempt notification dropped");
+    // Keep the read gate alive until the writer has definitely attempted its
+    // acquire. Dropping it now releases both operations in a known order.
+    drop(gate);
+
+    match tokio::time::timeout_at(deadline, join_handle).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(error))) => panic!("R1 worker error: {error}"),
+        Ok(Err(error)) => panic!("R1 spawn_blocking join error: {error:?}"),
+        Err(_) => panic!(
+            "run_seal_flow + delete_character deadlocked: workers exceeded 30 seconds \
+             (R1 character_lock serialization failed — see #442 / #438)"
+        ),
+    }
+
+    let events = crate::domain::take_test_character_lock_events(character_id);
+    assert_eq!(
+        events.len(),
+        4,
+        "unexpected R1 lock event timeline: {events:?}"
+    );
+    assert_eq!(events[0].kind, crate::domain::TestCharacterLockKind::Read);
+    assert_eq!(
+        events[0].phase,
+        crate::domain::TestCharacterLockPhase::Acquired
+    );
+    assert_eq!(events[1].kind, crate::domain::TestCharacterLockKind::Read);
+    assert_eq!(
+        events[1].phase,
+        crate::domain::TestCharacterLockPhase::Released
+    );
+    assert_eq!(events[2].kind, crate::domain::TestCharacterLockKind::Write);
+    assert_eq!(
+        events[2].phase,
+        crate::domain::TestCharacterLockPhase::Acquired
+    );
+    assert_eq!(events[3].kind, crate::domain::TestCharacterLockKind::Write);
+    assert_eq!(
+        events[3].phase,
+        crate::domain::TestCharacterLockPhase::Released
+    );
+}

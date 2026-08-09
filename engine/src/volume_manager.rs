@@ -305,6 +305,9 @@ pub async fn run_seal_flow(
     let new_index = index_parser::apply_diff(&index, &diff);
     if let Some(cid) = character_id {
         let character = crate::domain::character_lock(cid);
+        #[cfg(test)]
+        let _character_guard = crate::domain::test_character_read_guard(cid, &character);
+        #[cfg(not(test))]
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let _character_track = crate::domain::lock_order::track_character_read();
         let lock = crate::domain::session_lock(cid, session_id);
