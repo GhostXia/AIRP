@@ -9,6 +9,7 @@ import {
   isGranted,
   clearGrants,
   initGrants,
+  initEngineGrants,
   initGrantsFromEngine,
   markEngineUnavailable,
   configureEngineAuthority,
@@ -202,7 +203,41 @@ describe("engine-authoritative consent", () => {
     expect(canMount(esm)).toBe(false);
   });
 
-  it("matches exact identity and enabled engine records", () => {
+  it("keeps builtin host startup available after an authority timeout/failure", async () => {
+    const result = await initEngineGrants({
+      listGrants: async () => { throw new Error("timeout"); },
+      updateGrant: async () => record(),
+    });
+    expect(result).toBe(false);
+    expect(engineAuthorityState()).toBe("unavailable");
+    expect(canMount(builtin)).toBe(true);
+    expect(canMount(esm)).toBe(false);
+  });
+
+  it("applies the 5s deadline to default authority query and mutation", async () => {
+    const previousFetch = globalThis.fetch;
+    const previousTimeout = AbortSignal.timeout;
+    const deadlines: number[] = [];
+    const responses = [
+      { ok: true, json: async () => ({ grants: [record()] }) },
+      { ok: true, json: async () => record() },
+    ];
+    globalThis.fetch = (async (_input, _init) => responses.shift()!) as typeof fetch;
+    AbortSignal.timeout = ((milliseconds: number) => {
+      deadlines.push(milliseconds);
+      return new AbortController().signal;
+    }) as typeof AbortSignal.timeout;
+    try {
+      expect(await initEngineGrants()).toBe(true);
+      await grant(engineEsm);
+      expect(deadlines).toEqual([5000, 5000]);
+    } finally {
+      globalThis.fetch = previousFetch;
+      AbortSignal.timeout = previousTimeout;
+    }
+  });
+
+  it("fails closed when a snapshot repeats a widget type", () => {
     const otherDigest = "b".repeat(64);
     const otherVersion = {
       ...engineEsm,
@@ -213,9 +248,15 @@ describe("engine-authoritative consent", () => {
       record(),
       record({ id: "ext-old", version: otherVersion.version, source: otherVersion.entry.source, digest: otherDigest }),
     ] });
+    expect(engineAuthorityState()).toBe("unavailable");
+    expect(canMount(engineEsm)).toBe(false);
+    expect(canMount(otherVersion)).toBe(false);
+  });
+
+  it("matches exact identity and enabled engine records", () => {
+    initGrantsFromEngine({ grants: [record()] });
     expect(canMount(engineEsm)).toBe(true);
     expect(effectiveCapabilities(engineEsm)).toEqual(["read:state"]);
-    expect(canMount(otherVersion)).toBe(true);
     expect(canMount({ ...engineEsm, version: "1.1.0" })).toBe(false);
     expect(canMount({ ...engineEsm, entry: { kind: "esm", source: `/extensions/${"c".repeat(64)}/index.js` } })).toBe(false);
     expect(canMount({ ...engineEsm, entry: { kind: "esm", source: "https://evil.example/x.mjs" } })).toBe(false);

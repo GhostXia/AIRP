@@ -15,8 +15,9 @@ setDefaultEsmImporter((source) => {
   return loader ? loader() : import(/* @vite-ignore */ source);
 });
 
-// #474：先向 engine 获取权威 grant 快照，再挂载 UI。失败仍启动界面，但
-// consent 模块保持 fail-closed；localStorage 不得在桌面/standalone 间漂移。
+// #474：先向 engine 获取权威 grant 快照（5s deadline），再挂载 UI。超时/失败
+// 仍启动宿主界面，但 consent 模块保持 fail-closed；localStorage 不得在桌面/
+// standalone 间漂移，第三方 widget 继续 gated。
 void initEngineGrants().then(() => {
   createApp(App).mount("#app");
 });

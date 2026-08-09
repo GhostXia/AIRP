@@ -9,7 +9,7 @@
  * The engine is the only authority and persists grants in extensions.json.
  * This module keeps a reactive, disposable mirror. A successful engine grant
  * snapshot (including an empty array) enables authoritative mode; engine
- * failure, malformed data, or identity mismatch is fail-closed. localStorage
+ * failure, malformed data, duplicate type, or identity mismatch is fail-closed. localStorage
  * is retained only for old unit-test/migration construction and is never read
  * by the production startup path.
  */
@@ -49,8 +49,8 @@ export interface ConsentStorage {
 
 const STORAGE_KEY = "airp:consent-grants";
 const granted = reactive(new Set<string>());
-/** type -> engine grant views; multiple installed versions may share a type. */
-const engineGrants = reactive(new Map<string, ConsentGrant[]>());
+/** type -> the one current engine grant view; duplicate types are invalid. */
+const engineGrants = reactive(new Map<string, ConsentGrant>());
 type EngineState = "uninitialized" | "ready" | "unavailable";
 let engineState: EngineState = "uninitialized";
 let engineAuthority: ConsentAuthority | null = null;
@@ -153,16 +153,18 @@ export function initGrantsFromEngine(payload: unknown): boolean {
     parsed.push(record);
   }
   const ids = new Set<string>();
-  engineGrants.clear();
+  const types = new Set<string>();
   for (const record of parsed) {
-    if (ids.has(record.id)) {
+    if (ids.has(record.id) || types.has(record.type)) {
       markEngineUnavailable();
       return false;
     }
     ids.add(record.id);
-    const records = engineGrants.get(record.type) ?? [];
-    records.push(record);
-    engineGrants.set(record.type, records);
+    types.add(record.type);
+  }
+  engineGrants.clear();
+  for (const record of parsed) {
+    engineGrants.set(record.type, record);
   }
   granted.clear();
   engineState = "ready";
@@ -218,6 +220,7 @@ function createFetchAuthority(): ConsentAuthority {
     async listGrants(): Promise<unknown> {
       const response = await fetch(url("/v1/extensions/grants"), {
         headers: headers({ Accept: "application/json" }),
+        signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.json();
@@ -229,6 +232,7 @@ function createFetchAuthority(): ConsentAuthority {
         method: "POST",
         headers: headers({ "Content-Type": "application/json", Accept: "application/json" }),
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000),
       });
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
@@ -258,11 +262,11 @@ function engineGrantFor(manifest: ManifestId): ConsentGrant | null {
   if (engineState !== "ready") return null;
   const digest = digestOf(manifest);
   if (!digest) return null;
-  const records = engineGrants.get(manifest.type) ?? [];
-  return records.find((record) => record.enabled
-    && record.version === manifest.version
-    && (record.source ?? "") === sourceOf(manifest)
-    && record.digest === digest) ?? null;
+  const record = engineGrants.get(manifest.type);
+  if (!record || !record.enabled) return null;
+  if (record.version !== manifest.version || (record.source ?? "") !== sourceOf(manifest)
+    || record.digest !== digest) return null;
+  return record;
 }
 
 export function isGranted(manifest: ManifestId): boolean {
@@ -292,11 +296,7 @@ export function grant(manifest: ManifestCaps): Promise<ConsentGrant | null> {
           || updated.digest !== digestOf(manifest)) {
           throw new Error("engine returned an invalid grant record");
         }
-        const records = engineGrants.get(updated.type) ?? [];
-        const index = records.findIndex((record) => record.id === updated.id);
-        if (index >= 0) records[index] = updated;
-        else records.push(updated);
-        engineGrants.set(updated.type, records);
+        engineGrants.set(updated.type, updated);
         return updated;
       });
   }
@@ -323,11 +323,7 @@ export function revoke(manifest: ManifestId): Promise<ConsentGrant | null> {
           || updated.digest !== digestOf(manifest)) {
           throw new Error("engine returned an invalid grant record");
         }
-        const records = engineGrants.get(updated.type) ?? [];
-        const index = records.findIndex((record) => record.id === updated.id);
-        if (index >= 0) records[index] = updated;
-        else records.push(updated);
-        engineGrants.set(updated.type, records);
+        engineGrants.set(updated.type, updated);
         return updated;
       });
   }

@@ -12,6 +12,7 @@
 // - 成功取得 engine 快照（包括空数组）后进入 engine-authoritative 模式；
 // - engine 请求失败、响应畸形或身份字段缺失时进入 unavailable/fail-closed，
 //   localStorage 不得让第三方 widget 挂载；
+// - 快照内重复 type 直接拒绝，不在客户端猜测“当前”版本；
 // - grant/revoke 只在 engine mutation 成功后更新镜像。
 //
 // `initGrants()` / localStorage 仅保留给旧的离线单测与迁移构型；boot.js 不调用它，
@@ -29,7 +30,7 @@
   /** 未接入 engine 的旧测试构型才使用的内存/存储镜像。 */
   const granted = new Set();
 
-  /** type → engine grant views（同 type 的不同身份不得互相覆盖）。 */
+  /** type → current engine grant view；重复 type 快照直接 fail-closed。 */
   const engineGrants = new Map();
   let engineState = 'uninitialized'; // uninitialized | ready | unavailable
   let engineClient = null;
@@ -127,16 +128,18 @@
       parsed.push(record);
     }
     const ids = new Set();
-    engineGrants.clear();
+    const types = new Set();
     for (const record of parsed) {
-      if (ids.has(record.id)) {
+      if (ids.has(record.id) || types.has(record.type)) {
         markEngineUnavailable();
         return false;
       }
       ids.add(record.id);
-      const records = engineGrants.get(record.type) || [];
-      records.push(record);
-      engineGrants.set(record.type, records);
+      types.add(record.type);
+    }
+    engineGrants.clear();
+    for (const record of parsed) {
+      engineGrants.set(record.type, record);
     }
     granted.clear();
     engineState = 'ready';
@@ -161,13 +164,14 @@
 
   function engineGrantFor(manifest) {
     if (engineState !== 'ready') return null;
-    const records = engineGrants.get(manifest.type) || [];
+    const record = engineGrants.get(manifest.type);
     const digest = digestOf(manifest);
     if (!digest) return null;
-    return records.find(record => record.enabled
-      && record.version === manifest.version
-      && record.source === sourceOf(manifest)
-      && record.digest === digest) || null;
+    if (!record || !record.enabled) return null;
+    if (record.version !== manifest.version
+      || record.source !== sourceOf(manifest)
+      || record.digest !== digest) return null;
+    return record;
   }
 
   /**
@@ -209,11 +213,7 @@
             || record.digest !== digestOf(manifest)) {
             throw new Error('engine returned an invalid grant record');
           }
-          const records = engineGrants.get(record.type) || [];
-          const index = records.findIndex(item => item.id === record.id);
-          if (index >= 0) records[index] = record;
-          else records.push(record);
-          engineGrants.set(record.type, records);
+          engineGrants.set(record.type, record);
           return record;
         });
     }
@@ -241,11 +241,7 @@
             || record.digest !== digestOf(manifest)) {
             throw new Error('engine returned an invalid grant record');
           }
-          const records = engineGrants.get(record.type) || [];
-          const index = records.findIndex(item => item.id === record.id);
-          if (index >= 0) records[index] = record;
-          else records.push(record);
-          engineGrants.set(record.type, records);
+          engineGrants.set(record.type, record);
           return record;
         });
     }

@@ -308,7 +308,7 @@ pub async fn get_extension_grants(
 /// `GET /v1/extensions/grants`：列出全部 grant（webui consent.js 初始化用）。
 ///
 /// 返回所有已安装扩展的 grant 状态（含未 grant 的，granted_capabilities 为空）。
-/// consent.js 据此建立 type → grant 列表，与本地 catalog 交叉判定 canMount；
+/// consent.js 据此建立唯一 type → grant 映射，与本地 catalog 交叉判定 canMount；
 /// engine 不可达或快照为空时，消费端必须 fail-closed，不得回退本地授权。
 pub async fn list_all_grants(State(state): State<Arc<DaemonState>>) -> Json<Value> {
     let store = store(&state);

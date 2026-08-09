@@ -302,7 +302,7 @@ test('consent: engine snapshot fails closed on malformed identity', () => {
   consent.clearGrants();
 });
 
-test('consent: engine grants require exact identity and enabled record', () => {
+test('consent: duplicate widget type in engine snapshot fails closed', () => {
   consent.clearGrants();
   const oldManifest = {
     ...ENGINE_MANIFEST,
@@ -312,9 +312,17 @@ test('consent: engine grants require exact identity and enabled record', () => {
   assert.equal(consent.initGrantsFromEngine({ grants: [
     engineGrant(),
     engineGrant({ id: 'ext-old', version: oldManifest.version, source: oldManifest.entry.source, digest: 'b'.repeat(64) }),
-  ] }), true);
+  ] }), false);
+  assert.equal(consent.engineAuthorityState(), 'unavailable');
+  assert.equal(consent.canMount(ENGINE_MANIFEST), false);
+  assert.equal(consent.canMount(oldManifest), false);
+  consent.clearGrants();
+});
+
+test('consent: engine grants require exact identity and enabled record', () => {
+  consent.clearGrants();
+  assert.equal(consent.initGrantsFromEngine({ grants: [engineGrant()] }), true);
   assert.equal(consent.canMount(ENGINE_MANIFEST), true);
-  assert.equal(consent.canMount(oldManifest), true, 'same type with another version must not be overwritten');
   assert.deepEqual(consent.effectiveCapabilities({ ...ENGINE_MANIFEST, capabilities: ['read:state', 'call:tool'] }), ['read:state']);
   assert.equal(consent.canMount({ ...ENGINE_MANIFEST, version: '1.0.1' }), false);
   assert.equal(consent.canMount({ ...ENGINE_MANIFEST, entry: { ...ENGINE_MANIFEST.entry, source: `/extensions/${'c'.repeat(64)}/index.js` } }), false);
@@ -610,6 +618,29 @@ test('widget-host: unconsented esm renders the consent gate; approving mounts in
   assert.deepEqual(mountMsg.capabilities, [], 'manifest declared no capabilities → none granted');
   handle.destroy();
   assert.equal(transport.destroyed, true);
+  consent.clearGrants();
+  manifests.clearManifests();
+});
+
+test('widget-host: unavailable engine keeps third-party widget gated after approval failure', async () => {
+  consent.clearGrants();
+  consent.markEngineUnavailable();
+  manifests.clearManifests();
+  manifests.registerManifest(ESM_MANIFEST);
+  const doc = createFakeDom();
+  const container = doc.createElement('div');
+  const transport = createFakeTransport();
+  const handle = host.mountWidget(container, { id: 'w1', type: ESM_MANIFEST.type }, null, {
+    doc, transportFactory: () => transport,
+  });
+  await new Promise(r => setTimeout(r, 0));
+  const approveButton = container.children.flatMap(c => c.children || []).find(c => c.tagName === 'BUTTON');
+  assert.ok(approveButton, 'fail-closed gate must still expose an approval action');
+  approveButton.dispatch('click', {});
+  await new Promise(r => setTimeout(r, 0));
+  assert.match(textOf(container), /授权失败/);
+  assert.equal(transport.sent.length, 0, 'failed engine mutation must not mount the widget');
+  handle.destroy();
   consent.clearGrants();
   manifests.clearManifests();
 });

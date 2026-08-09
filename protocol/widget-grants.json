@@ -6,7 +6,7 @@
   "extensionRules": [
     "grant view 既有字段不得删除、改名或改类型；消费端必须忽略未知字段。",
     "type、version、source、digest、enabled 是 widget 身份/可用性校验字段；缺失或不匹配不得继承授权。",
-    "id 在快照内唯一；同一 type 可以同时出现多个 version/source/digest，消费端不得按 type 覆盖记录。",
+    "id 与 type 在快照内都必须唯一；重复 type/id 使整批快照无效并触发 fail-closed。当前 engine 同一 type 只保留一个已安装身份。",
     "granted_capabilities 必须是数组；其值由 engine 校验为 manifest.capabilities 的子集。",
     "空 grants 快照是有效的‘当前没有已安装扩展’结果，不得回退到 localStorage 或其他客户端本地状态。"
   ],
@@ -14,6 +14,7 @@
     "method": "GET",
     "path": "/v1/extensions/grants",
     "unifiedPath": "/v1/grants",
+    "deadline_ms": 5000,
     "auth": "bearer（由 v1 路由层统一强制）",
     "response": {
       "grants": [
@@ -48,6 +49,7 @@
   "mutation": {
     "method": "POST",
     "path": "/v1/extensions/:extension_id/grants",
+    "deadline_ms": 5000,
     "auth": "bearer（由 v1 路由层统一强制）",
     "request": {
       "action": "grant|revoke",
