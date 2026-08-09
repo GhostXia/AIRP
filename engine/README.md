@@ -68,7 +68,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 AIRP 不限制 Windows 工具链的安装盘符。确保 `cargo` 可从当前 shell 的 `PATH` 找到后运行：
 
 ```powershell
-cargo run -p airp-core -- daemon --port 8000
+cargo run -p airp-core -- daemon --port 8765
 ```
 
 维护者本机因 `C:` 盘空间不足使用 `D:` 盘工具链；这是 [AGENTS.md](../AGENTS.md) 记录的本地覆盖，不是项目要求。

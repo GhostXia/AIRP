@@ -2,8 +2,16 @@ name: Windows WebUI package
 
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+    inputs:
+      publish_release:
+        description: "Run exact-tag validation and publish the existing draft release"
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: "Existing draft release tag (required when publish_release is true)"
+        required: false
+        type: string
   pull_request:
     paths:
       - "Cargo.toml"
@@ -18,9 +26,12 @@ permissions:
   contents: read
 
 jobs:
-  package:
-    name: Portable Windows WebUI
+  validate-package:
+    name: Validate portable Windows WebUI
     runs-on: windows-latest
+    outputs:
+      release_tag: ${{ steps.release-context.outputs.release_tag }}
+      release_commit: ${{ steps.release-context.outputs.release_commit }}
     env:
       RUSTUP_HOME: ${{ github.workspace }}\.ci\.rustup
       CARGO_HOME: ${{ github.workspace }}\.ci\.cargo
@@ -30,7 +41,72 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          # Release validation is explicitly dispatched with a tag. PR/manual
+          # packaging keeps the event ref selected by actions/checkout.
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.release_tag) || github.ref }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate exact-tag release request
+        id: release-context
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          WORKFLOW_REF: ${{ github.ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseTag = $env:RELEASE_TAG
+          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            throw "release_tag is required when publish_release is true"
+          }
+          if ($releaseTag.StartsWith("-")) {
+            throw "release_tag must not start with '-'"
+          }
+          git check-ref-format "refs/tags/$releaseTag"
+          if ($LASTEXITCODE -ne 0) {
+            throw "release_tag '$releaseTag' is not a valid tag name"
+          }
+
+          $tagRef = "refs/tags/$releaseTag"
+          $tagCommit = ((git rev-parse --verify "refs/tags/$releaseTag^{commit}" 2>$null) -join '').Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tagCommit)) {
+            throw "release tag '$releaseTag' is not present in the checkout"
+          }
+          $headCommit = ((git rev-parse --verify HEAD 2>$null) -join '').Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($headCommit)) {
+            throw "unable to resolve checked-out HEAD"
+          }
+          $headRef = ((git rev-parse --symbolic-full-name --verify HEAD 2>$null) -join '').Trim()
+          if ($headRef -ne "HEAD") {
+            throw "release checkout must be detached at the requested tag (resolved ref: $headRef)"
+          }
+          if ($headCommit -ne $tagCommit) {
+            throw "checkout HEAD $headCommit does not match tag '$releaseTag' ($tagCommit)"
+          }
+
+          $releaseJson = gh release view $releaseTag --json isDraft,tagName
+          if ($LASTEXITCODE -ne 0) {
+            throw "existing draft release '$releaseTag' was not found"
+          }
+          $release = $releaseJson | ConvertFrom-Json
+          if ($release.tagName -ne $releaseTag) {
+            throw "GitHub release tag '$($release.tagName)' does not match requested '$releaseTag'"
+          }
+          if (-not [bool]$release.isDraft) {
+            throw "release '$releaseTag' is not a draft; refusing to republish"
+          }
+
+          Write-Output "release_tag=$releaseTag"
+          Write-Output "release_tag_commit=$tagCommit"
+          Write-Output "release_checkout_commit=$headCommit"
+          Write-Output "release_workflow_ref=$($env:WORKFLOW_REF)"
+          Write-Output "release_run_url=$($env:RUN_URL)"
+          "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_commit=$tagCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -47,6 +123,97 @@ jobs:
       - name: Install browser smoke dependency
         working-directory: ui
         run: npm ci
+
+      - name: Generate and validate exact-tag SBOM
+        id: release-sbom
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sbomDir = Join-Path $env:RUNNER_TEMP "airp-release-sbom"
+          New-Item -ItemType Directory -Force $sbomDir | Out-Null
+          node tools/dep-governance/discover-deps.mjs `
+            --repo-root . `
+            --out-dir $sbomDir `
+            --config tools/dep-governance/audit-routing.config.json `
+            --fail-on-block
+          if ($LASTEXITCODE -ne 0) { throw "dependency discovery blocked the release" }
+          node tools/dep-governance/generate-sbom.mjs `
+            --inventory (Join-Path $sbomDir "inventory.json") `
+            --out-dir $sbomDir `
+            --config tools/dep-governance/audit-routing.config.json `
+            --fail-on-unknown
+          if ($LASTEXITCODE -ne 0) { throw "SBOM generation blocked the release" }
+
+          $releaseCommit = ((git rev-parse --verify HEAD 2>$null) -join '').Trim()
+          $asOf = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+          node tools/dep-governance/validate-release-signoffs.mjs `
+            --inventory (Join-Path $sbomDir "inventory.json") `
+            --signoffs docs/sbom/audit-signoffs.json `
+            --out (Join-Path $sbomDir "release-audit.json") `
+            --tag $env:RELEASE_TAG `
+            --commit $releaseCommit `
+            --run-url $env:RUN_URL `
+            --as-of $asOf
+          if ($LASTEXITCODE -ne 0) { throw "release audit-required sign-off validation failed" }
+
+          $audit = Get-Content (Join-Path $sbomDir "release-audit.json") -Raw | ConvertFrom-Json
+          $auditCount = [int]$audit.audit_required_count
+
+          $auditMarkdown = @(
+            "# AIRP release dependency audit"
+            ""
+            "- Tag: $($audit.release_tag)"
+            "- Commit: $($audit.release_commit)"
+            "- Run: $($audit.run_url)"
+            "- audit-required count: $auditCount"
+            "- Sign-off environment: $($audit.signoff_environment)"
+            ""
+            "## audit-required records"
+          )
+          if ($auditCount -eq 0) {
+            $auditMarkdown += "- None"
+          } else {
+            foreach ($record in $audit.audit_required) {
+              $auditMarkdown += "- $($record.ecosystem)/$($record.name)@$($record.version) — license=$($record.license); scope=$($record.scope); conclusion=$($record.conclusion); valid_until=$($record.valid_until); obligations=$($record.obligations -join '; ')"
+            }
+          }
+          $auditMarkdown | Set-Content (Join-Path $sbomDir "release-audit.md") -Encoding utf8
+
+          $requiredFiles = @(
+            "inventory.json", "inventory.txt", "airp.spdx.json", "airp.cdx.json",
+            "THIRD-PARTY-NOTICES.txt", "release-audit.json", "release-audit.md"
+          )
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path (Join-Path $sbomDir $file))) {
+              throw "release SBOM output missing: $file"
+            }
+          }
+
+          $summary = @(
+            "## Release validation dependency audit"
+            ""
+            "- Tag: $($audit.release_tag)"
+            "- Commit: $($audit.release_commit)"
+            "- Run: $($audit.run_url)"
+            "- audit-required count: $auditCount"
+            "- Human sign-off: required through the `$($audit.signoff_environment)` environment before publish"
+            ""
+            "### audit-required records"
+          )
+          $summary += $auditMarkdown | Select-Object -Skip 8
+          $summary | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload exact-tag release SBOM and audit
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: airp-release-sbom
+          if-no-files-found: error
+          path: ${{ runner.temp }}/airp-release-sbom
 
       - name: Build portable WebUI package
         shell: pwsh
@@ -68,22 +235,98 @@ jobs:
           path: dist/airp-webui-windows-x64.zip
 
   publish-release:
-    name: Attach portable WebUI to release
-    if: github.event_name == 'release'
-    needs: package
+    name: Publish validated WebUI release
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+    needs: validate-package
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
+      actions: read
     steps:
-      - name: Download verified portable package
+      - name: Checkout exact release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download same-run package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: airp-webui-windows-x64
-          path: release
+          path: release/package
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
 
-      - name: Attach ZIP to GitHub Release
+      - name: Download same-run SBOM and audit
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: airp-release-sbom
+          path: release/sbom
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Recheck tag commit and draft release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" release/airp-webui-windows-x64.zip --clobber
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          VALIDATED_COMMIT: ${{ needs.validate-package.outputs.release_commit }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_TAG"
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          tag_commit="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse --verify HEAD)"
+          test "$tag_commit" = "$head_commit"
+          test "$tag_commit" = "$VALIDATED_COMMIT"
+          release_json="$(gh release view "$RELEASE_TAG" --json isDraft,tagName)"
+          test "$(jq -r '.tagName' <<<"$release_json")" = "$RELEASE_TAG"
+          test "$(jq -r '.isDraft' <<<"$release_json")" = "true"
+          echo "release_tag=$RELEASE_TAG"
+          echo "release_commit=$tag_commit"
+
+      - name: Reject duplicate release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "$RELEASE_TAG" --json assets)"
+          existing_assets="$(jq -r '.assets[].name' <<<"$release_json")"
+          for asset in \
+            airp-webui-windows-x64.zip \
+            inventory.json airp.spdx.json airp.cdx.json \
+            THIRD-PARTY-NOTICES.txt; do
+            if grep -Fxq "$asset" <<<"$existing_assets"; then
+              echo "release asset already exists: $asset" >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload release assets without overwrite
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            release/package/airp-webui-windows-x64.zip \
+            release/sbom/inventory.json \
+            release/sbom/airp.spdx.json \
+            release/sbom/airp.cdx.json \
+            release/sbom/THIRD-PARTY-NOTICES.txt
+
+      - name: Publish draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
