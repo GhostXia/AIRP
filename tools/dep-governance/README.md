@@ -3,11 +3,13 @@
 > Implements #192 (dependency discovery + audit routing) and #190 (third-party
 > notices + SBOM generation).
 >
-> Status: dev/CI artifact plus a formal release gate. Pull requests keep the
-> committed snapshot in `docs/sbom/`; the Windows release workflow regenerates
-> an exact-tag bundle and blocks on classified `block` records or unknown
-> third-party licenses. `audit-required` records still require human sign-off
-> before publishing a release.
+> Status: dev/CI artifact plus an explicitly dispatched release gate. Pull
+> requests and ordinary manual runs keep the committed snapshot in `docs/sbom/`;
+> a manual run with `publish_release=true` and an existing draft `release_tag`
+> regenerates an exact-tag bundle, blocks on classified `block` records or
+> unknown third-party licenses, and validates exact, current sign-offs for all
+> 17 audit-required records in `docs/sbom/audit-signoffs.json`. A required reviewer on the GitHub `release`
+> environment is the human sign-off before the draft is published.
 
 ## What this directory contains
 
@@ -17,9 +19,10 @@
 | `audit-routing.mjs` | Pure-function routing engine. No I/O, no network, no fs. Imports: none (Node built-ins only). |
 | `discover-deps.mjs` | CLI: scans Cargo workspace + npm lockfile, classifies each record, writes `docs/sbom/inventory.{json,txt}`. |
 | `generate-sbom.mjs` | CLI: consumes inventory, writes `docs/sbom/airp.spdx.json` (SPDX-2.3), `docs/sbom/airp.cdx.json` (CycloneDX 1.5), `docs/sbom/THIRD-PARTY-NOTICES.txt`. |
+| `validate-release-signoffs.mjs` | CLI: validates exact inventory identity, conclusion, obligations, reviewer evidence and expiry for every audit-required record, then writes release metadata. |
 | `routing-dry-run.mjs` | CLI: runs `classifyUpgrade` against `fixtures/routing-samples.json` to prove the 5 routing classes + patch-sensitive override are exercised. Use this to validate config changes. |
 | `fixtures/` | Hermetic test fixtures (sample Cargo.lock, package-lock.json, inventory, routing samples). |
-| `tests/` | `node --test` suites: `routing.test.mjs`, `discover.test.mjs`, `sbom.test.mjs`. |
+| `tests/` | `node --test` suites for routing, discovery, SBOM, exact release-audit and workflow contracts. |
 
 ## Quick start
 
@@ -60,12 +63,22 @@ Regenerate `docs/sbom/` whenever:
 
 Do NOT regenerate on every CI run — the output is committed, not ephemeral.
 
-On a published GitHub release, `.github/workflows/webui-windows-build.yml`
-regenerates the inventory from that tag, runs `--fail-on-block` and
-`--fail-on-unknown`, then attaches the SPDX, CycloneDX, inventory, and
-third-party notice files to the release. This keeps the checked-in snapshot
-useful for review while making the release artifact reflect the exact lockfiles
-being packaged.
+The Windows workflow has no `release: published` pre-publish trigger. To
+publish, dispatch `.github/workflows/webui-windows-build.yml` with
+`publish_release=true` and an existing draft `release_tag`. Validation checks
+the tag ref and checked-out `HEAD`, requires the exact-tag SBOM flags
+`--fail-on-block` and `--fail-on-unknown`, runs package/browser/desktop smoke,
+and writes `release-audit.json`/`release-audit.md` plus a full audit-required
+sign-off list/count/tag/commit/run URL to the run summary and `airp-release-sbom`
+artifact. The `release` environment approval is required before the final job
+rechecks the same draft release and uploads only the four allowlisted SBOM
+assets (`inventory.json`, `airp.spdx.json`, `airp.cdx.json`,
+`THIRD-PARTY-NOTICES.txt`) without overwrite, then marks the draft published.
+
+The repository does not contain hosted environment configuration or a
+successful publish proof. Until reviewers verify the `release` environment's
+required-reviewer policy and archive a hosted dry run, treat the approval gate
+as an unverified deployment control rather than a completed release assurance.
 
 ## Permissions and token boundaries
 
@@ -233,6 +246,10 @@ node --test tools/dep-governance/tests/*.test.mjs
   scope BFS, atomic write, inventory text rendering.
 - `sbom.test.mjs`: SPDX/CycloneDX builders, purl, checksum conversion,
   notices text.
+- `release-signoffs.test.mjs`: exact 17-record sign-off identity, obligations,
+  expiry and release metadata validation.
+- `release-workflow.test.mjs`: workflow trigger, exact-tag, environment,
+  no-overwrite and documentation consistency contracts.
 
 All tests are hermetic — they use `fixtures/` and do not touch the real repo's
 inventory or run `cargo`/`npm`.

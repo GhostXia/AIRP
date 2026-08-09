@@ -106,11 +106,11 @@ Browser
 - #399/#403 已将 durable `TurnCommit` marker 延伸到 message、live-state 和 current-volume 阶段，并在中断后公开 `Recovering`、阻止新的 session mutation；不包含自动 replay/repair、volume sealing recovery 或 backup/restore。
 - #409 已交付 terminal marker recovery、Coordinator owner/admission registry 锁序保护与 all-false marker fail-closed；non-terminal、unreadable、unsupported marker 仍保留为 recovery-required，不宣称自动 journal/replay。
 - #410/#411 已把这些合同写入 production mock smoke：generation poll、stale/current cancellation、严格 typed SSE terminal、取消后 history、临时 session cleanup，以及 cleanup/SSE/cancel poll/response body 的 bounded deadline 生命周期；备份入口保持明确不可用，renderer 不发起 backup/restore API 调用；它们是 mock/CI 证据，不替代真实 provider、真实 browser 和维护者 Compose 验收。
-- #413 已完成 lock-only npm 安全修复：full/omit-dev audit 均为 0；当前 SBOM 报告 693 third-party、unknown license 0、blocked 0，inventory 总记录 697（4 first-party、17 audit-required、680 auto-pass）。`ui` 依赖属于构建/测试图，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime；SBOM 仍未接入正式 release pipeline 强制门禁。
+- #413 已完成 lock-only npm 安全修复：full/omit-dev audit 均为 0；当前 SBOM 报告 693 third-party、unknown license 0、blocked 0，inventory 总记录 697（4 first-party、17 audit-required、680 auto-pass）。`ui` 依赖属于构建/测试图，production gateway 只发布静态 WebUI，不把 `ui/node_modules` 当 runtime；#527 已将 exact-tag SBOM、`docs/sbom/audit-signoffs.json` 17 条精确 sign-off 和四文件上传清单接入 Windows release workflow 的手动发布路径，GitHub `release` environment hosted 配置与成功 publish proof 仍开放。
 
 ### 尚缺的上线能力
 
-- P0 首方部署 artifact 与 mock/CI topology smoke 已落地，P1 代码候选已形成但真实黄金路径与可重复维护者验收仍需继续；正式升级/自动回滚流程、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。#413 已刷新 `docs/sbom/` 快照并清理当前 npm audit findings，但 SBOM/notices 尚未嵌入 release pipeline 作为强制度量。
+- P0 首方部署 artifact 与 mock/CI topology smoke 已落地，P1 代码候选已形成但真实黄金路径与可重复维护者验收仍需继续；正式升级/自动回滚流程、发布签名及 P1/P2 产品门禁仍缺，因此尚非正式发布。#413 已刷新 `docs/sbom/` 快照并清理当前 npm audit findings，#527 release workflow code gate 已落地；hosted environment approval 配置、成功 publish proof 与完整签名仍是正式发布前置。
 - `webui/serve.js` 与 `start.bat` 是开发工具；production runtime config 已改为同源且隐藏 engine URL/bearer，开发模式仍保留手填 harness。
 - 认证是“可选 bearer”，不是面向公网的完整登录系统；首发必须由部署层收口为单用户安全入口。
 - Persona/Preset/Worldbook 完整资产生命周期与有效配置合同仍有缺口；#115 Phase 2 6 类 revision 合同与 trace 收口已落地，#114 统一有效配置摘要已交付（PR #217），#114 Persona/Preset 高级生命周期（base lock/drift/rollback/dry-run/provenance 审计）后移到 P2；#126 已交付的 v4 runtime、主面板编辑和端到端回归不得重复实现。
@@ -169,7 +169,7 @@ P1 验收记录至少包含候选版本、provider 类别、浏览器/设备、�
 
 1. 浏览器兼容、响应式、键盘与基础可访问性收口；
 2. 真实 provider 脱敏 smoke、长会话与断网/重连 soak；
-3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #413 已刷新 SPDX-2.3 / CycloneDX 1.5 与 notices，当前 inventory 仍有 17 条 audit-required；需嵌入 release pipeline 并补发布签名）；
+3. 构建 SBOM/许可证清单、版本信息、发布说明和校验值（PR #413 已刷新 SPDX-2.3 / CycloneDX 1.5 与 notices，当前 inventory 仍有 17 条 audit-required；#527 已嵌入 Windows release workflow code gate，仍需 hosted environment proof 与发布签名）；
 4. RC 全新安装、升级、备份恢复、回滚四类演练；
 5. tag 正式版并保留已知限制与回滚路径。
 
