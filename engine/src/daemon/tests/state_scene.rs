@@ -119,6 +119,41 @@ async fn test_mls3_state_bad_json_returns_500_without_leaking_contents_or_path()
 }
 
 #[tokio::test]
+async fn test_mls3_state_read_error_returns_500_without_leaking_path() {
+    let (state, _tmp) = make_state_no_key();
+    let state_dir = state
+        .data_root
+        .join("characters")
+        .join("alice")
+        .join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let live_path = state_dir.join("live.json");
+    std::fs::create_dir(&live_path).unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/alice/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["code"], "io_error");
+    assert_eq!(error["error"]["message"], "internal error");
+    let path = live_path.to_string_lossy();
+    assert!(!body
+        .windows(path.len())
+        .any(|window| window == path.as_bytes()));
+}
+
+#[tokio::test]
 async fn test_mls3_state_bad_char_id_returns_400() {
     let (state, _tmp) = make_state_no_key();
     let app = create_router(state);

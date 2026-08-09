@@ -52,7 +52,10 @@ pub(in crate::daemon) async fn get_character_state(
             Ok(value) => Json(value).into_response(),
             Err(error) => crate::error::AirpError::Json(error).into_response(),
         },
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(error) => crate::error::AirpError::Io(error).into_response(),
     }
 }
 
