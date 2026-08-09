@@ -7,7 +7,12 @@
 .min-weight-input { width: 80px; }
 .graph-stats { font-size: 13px; color: var(--text-secondary); margin: 8px 0; padding: 6px 12px; background: var(--bg-subtle); border-radius: var(--radius-input); }
 .graph-canvas-wrap { position: relative; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); overflow: hidden; }
-#graph-canvas { display: block; width: 100%; height: 600px; cursor: grab; }
+/* Keep the 900×600 drawing surface's 3:2 aspect ratio while the displayed
+ * canvas tracks both the content width and short desktop/mobile viewports.
+ * The intrinsic canvas dimensions remain unchanged for the force layout and
+ * pointer-coordinate mapping in worldbook-graph.js. */
+#graph-canvas { display: block; width: min(100%, 900px); height: auto; aspect-ratio: 3 / 2; margin-inline: auto; cursor: grab; }
+@supports (height: 1dvh) { #graph-canvas { width: min(100%, 900px, 150dvh); } }
 #graph-canvas:active { cursor: grabbing; }
 .graph-empty { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--text-tertiary); font-size: 14px; pointer-events: none; }
 .graph-conflicts { margin: 24px 0; }
