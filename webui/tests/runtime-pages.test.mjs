@@ -13,6 +13,7 @@ const onboardingPage = await readFile(new URL('../screens/16-onboarding.html', i
 const entryPage = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const entryScript = await readFile(new URL('../assets/entry.js', import.meta.url), 'utf8');
 const onboardingScript = await readFile(new URL('../assets/onboarding.js', import.meta.url), 'utf8');
+const localBrowserSmoke = await readFile(new URL('../../ui/local-webui-browser-smoke.mjs', import.meta.url), 'utf8');
 const productionBrowserSmoke = await readFile(new URL('../../ui/production-browser-smoke.mjs', import.meta.url), 'utf8');
 const productionAdvancedPagesSmoke = await readFile(new URL('../../ui/production-browser-advanced-pages-smoke.mjs', import.meta.url), 'utf8');
 const productionSmokeCi = await readFile(new URL('../../deploy/production/smoke-ci.sh', import.meta.url), 'utf8');
@@ -51,6 +52,17 @@ test('first-run entry offers an explicit wizard/main choice and persists an engi
   // The wizard keeps its own skip action and engine marker path.
   assert.match(onboardingPage, /id="skip-onboarding"/);
   assert.match(onboardingScript, /client\.request\('POST', '\/v1\/onboarding\/complete'\)/);
+});
+
+test('local browser smoke accepts the entry choice before asserting onboarding/main routes', () => {
+  assert.match(localBrowserSmoke, /#entry-actions/);
+  assert.match(localBrowserSmoke, /#entry-start-wizard/);
+  assert.match(localBrowserSmoke, /screens\/16-onboarding\.html/);
+  assert.match(localBrowserSmoke, /screens\/01-role-list\.html/);
+  assert.match(localBrowserSmoke, /pathname\.endsWith\('\/screens\/16-onboarding\.html'\)/);
+  assert.match(localBrowserSmoke, /pathname\.endsWith\('\/screens\/01-role-list\.html'\)/);
+  assert.match(localBrowserSmoke, /pathname\.endsWith\('\/index\.html'\)/);
+  assert.doesNotMatch(localBrowserSmoke, /await page\.waitForURL\('\*\*\/screens\/16-onboarding\.html'\);\s*await page\.waitForFunction/);
 });
 
 test('entry keeps the legacy fallback inert until delayed health resolves', async () => {
