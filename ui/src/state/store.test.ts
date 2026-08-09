@@ -81,4 +81,15 @@ describe("state store", () => {
     ).toThrow();
     expect(stateStore.tx).toEqual({ x: 5, y: 1 });
   });
+
+  it("move to descendant path throws instead of silently losing data", () => {
+    setState("md", { a: { b: "val" } });
+    // Moving "/a" to "/a/b" is invalid: after removing "/a", the target
+    // "/a/b" no longer exists. The old code silently dropped the value.
+    expect(() =>
+      patchState("md", [{ op: "move", from: "/a", path: "/a/b" }]),
+    ).toThrow();
+    // State must be unchanged — no data loss.
+    expect(stateStore.md).toEqual({ a: { b: "val" } });
+  });
 });

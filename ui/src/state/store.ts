@@ -118,6 +118,12 @@ function applyOp(root: Json, op: PatchOp): void {
     }
     case "move": {
       const fromToks = pointerTokens(op.from ?? "");
+      // Validate before mutating: if the source path is a prefix of the target,
+      // the source removal would make the target unreachable, causing silent
+      // data loss. RFC 6902 requires this to be rejected.
+      if (fromToks.length <= toks.length && fromToks.every((t, i) => t === toks[i])) {
+        throw new Error(`JSON Patch move target ${op.path} is nested inside source ${op.from ?? ""}`);
+      }
       const value = getAtPointer(root, fromToks);
       const from = resolveParent(root, fromToks);
       if (from) removeAt(from.parent, from.key);

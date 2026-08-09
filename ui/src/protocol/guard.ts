@@ -85,10 +85,10 @@ function checkPatchOp(op: unknown): string | null {
   if (typeof op.op !== "string" || !KNOWN_PATCH_OPS.has(op.op as PatchOpKind))
     return `unknown patch op "${String(op.op)}"`;
   if (typeof op.path !== "string" || op.path.length === 0) return "patch op.path missing";
-  // add/replace/test need `value`; move/copy need `from`.
+  // add/replace/test need `value`; move/copy need `from`; remove needs neither.
   if (op.op === "move" || op.op === "copy") {
     if (typeof op.from !== "string" || op.from.length === 0) return `${op.op} needs from`;
-  } else {
+  } else if (op.op !== "remove") {
     if (!("value" in op)) return `${op.op} needs value`;
     if (!isJson(op.value)) return `${op.op} value not JSON`;
   }

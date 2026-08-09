@@ -193,6 +193,18 @@ describe("validateEnvelope", () => {
     expect(validateEnvelope(env({ kind: "state", scope: "w1", op: "patch", patch: [{ op: "add", path: "/a" }] as unknown as JsonPatch })).ok).toBe(false);
   });
 
+  it("accepts remove without value (RFC 6902: remove needs no value)", () => {
+    expect(validateEnvelope(env({ kind: "state", scope: "w1", op: "patch", patch: [{ op: "remove", path: "/a" }] }))).toEqual({ ok: true });
+  });
+
+  it("accepts remove with value (ignored per RFC 6902 but not invalid)", () => {
+    expect(validateEnvelope(env({ kind: "state", scope: "w1", op: "patch", patch: [{ op: "remove", path: "/a", value: "ignored" }] }))).toEqual({ ok: true });
+  });
+
+  it("accepts blueprint patch with remove op", () => {
+    expect(validateEnvelope(env({ kind: "blueprint", op: "patch", patch: [{ op: "remove", path: "/widgets/0" }] }))).toEqual({ ok: true });
+  });
+
   // --- blueprint widget instance rejections ---
 
   it("rejects widget instance without id", () => {
