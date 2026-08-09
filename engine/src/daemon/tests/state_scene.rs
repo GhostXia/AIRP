@@ -68,12 +68,89 @@ async fn test_mls3_state_returns_live_json() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .unwrap(),
+        "application/json"
+    );
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["hp"], 100);
     assert_eq!(v["location"], "base");
+}
+
+#[tokio::test]
+async fn test_mls3_state_bad_json_returns_500_without_leaking_contents_or_path() {
+    let (state, _tmp) = make_state_no_key();
+    let state_dir = state
+        .data_root
+        .join("characters")
+        .join("alice")
+        .join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let marker = "malformed-state-secret";
+    let live_path = state_dir.join("live.json");
+    std::fs::write(&live_path, marker).unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/alice/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(!body
+        .windows(marker.len())
+        .any(|window| window == marker.as_bytes()));
+    let path = live_path.to_string_lossy();
+    assert!(!body
+        .windows(path.len())
+        .any(|window| window == path.as_bytes()));
+}
+
+#[tokio::test]
+async fn test_mls3_state_read_error_returns_500_without_leaking_path() {
+    let (state, _tmp) = make_state_no_key();
+    let state_dir = state
+        .data_root
+        .join("characters")
+        .join("alice")
+        .join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let live_path = state_dir.join("live.json");
+    std::fs::create_dir(&live_path).unwrap();
+
+    let response = create_router(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/alice/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["code"], "io_error");
+    assert_eq!(error["error"]["message"], "internal error");
+    let path = live_path.to_string_lossy();
+    assert!(!body
+        .windows(path.len())
+        .any(|window| window == path.as_bytes()));
 }
 
 #[tokio::test]

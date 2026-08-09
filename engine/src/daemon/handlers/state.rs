@@ -15,6 +15,7 @@ use crate::types::CharacterId;
 use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
+    Json,
 };
 use std::fs;
 use std::sync::Arc;
@@ -47,8 +48,14 @@ pub(in crate::daemon) async fn get_character_state(
     };
     let live_path = data_dir::char_state_dir(&state.data_root, char_id.as_str()).join("live.json");
     match fs::read_to_string(&live_path) {
-        Ok(json) => ([(header::CONTENT_TYPE, "application/json")], json).into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => crate::error::AirpError::Json(error).into_response(),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(error) => crate::error::AirpError::Io(error).into_response(),
     }
 }
 
