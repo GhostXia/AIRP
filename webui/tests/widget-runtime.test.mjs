@@ -316,6 +316,13 @@ test('consent: duplicate widget type in engine snapshot fails closed', () => {
   assert.equal(consent.engineAuthorityState(), 'unavailable');
   assert.equal(consent.canMount(ENGINE_MANIFEST), false);
   assert.equal(consent.canMount(oldManifest), false);
+
+  consent.clearGrants();
+  assert.equal(consent.initGrantsFromEngine({ grants: [
+    engineGrant(),
+    engineGrant({ type: 'other.widget' }),
+  ] }), false);
+  assert.equal(consent.engineAuthorityState(), 'unavailable');
   consent.clearGrants();
 });
 

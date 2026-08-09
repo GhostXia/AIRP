@@ -1103,7 +1103,9 @@
       grantsInfo.textContent = '加载中…';
       let grants;
       try {
-        const resp = await task('加载授权总览', () => client.request('GET', '/v1/grants'));
+        const resp = await task('加载授权总览', () => client.request('GET', '/v1/grants', undefined, {
+          signal: AbortSignal.timeout(5000),
+        }));
         grants = (resp && resp.grants) || [];
       } catch (error) {
         grantsInfo.textContent = '加载失败：' + message(error);
@@ -1273,7 +1275,9 @@
             ? { action: 'grant', capabilities: selected }
             : { action: 'revoke' };
           await task('保存授权', () => client.request('POST',
-            '/v1/extensions/' + encodeURIComponent(item.id) + '/grants', body));
+            '/v1/extensions/' + encodeURIComponent(item.id) + '/grants', body, {
+              signal: AbortSignal.timeout(5000),
+            }));
           reload();
         } catch (error) { /* task 已 setStatus */ }
       }, 'btn-primary'));

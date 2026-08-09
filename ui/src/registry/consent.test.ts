@@ -251,6 +251,13 @@ describe("engine-authoritative consent", () => {
     expect(engineAuthorityState()).toBe("unavailable");
     expect(canMount(engineEsm)).toBe(false);
     expect(canMount(otherVersion)).toBe(false);
+
+    clearGrants();
+    expect(initGrantsFromEngine({ grants: [
+      record(),
+      record({ type: "other.widget" }),
+    ] })).toBe(false);
+    expect(engineAuthorityState()).toBe("unavailable");
   });
 
   it("matches exact identity and enabled engine records", () => {
