@@ -91,7 +91,7 @@
       <legend>webhook</legend>
       <label class="field"><span class="field-label">url <small>（http 仅允许 loopback；https 任意 host）</small></span><input class="input runtime-input" id="pt-ed-wh-url" autocomplete="off" spellcheck="false" placeholder="https://example.com/hook"></label>
       <label class="field"><span class="field-label">timeout_secs <small>（缺省 30s，上限 30s）</small></span><input class="input runtime-input" id="pt-ed-wh-timeout" type="number" min="1" max="30" placeholder="30"></label>
-      <label class="field"><span class="field-label">headers <small>（每行 <code>Name: Value</code>；密钥单独存储）</small></span><textarea class="textarea runtime-textarea code" id="pt-ed-wh-headers" rows="4" placeholder="Authorization: Bearer ..."></textarea></label>
+      <label class="field"><span class="field-label">headers <small>（每行 <code>Name: Value</code>；编辑时显示已有 header 名，留空保留原值；密钥单独存储）</small></span><textarea class="textarea runtime-textarea code" id="pt-ed-wh-headers" rows="4" placeholder="Authorization: Bearer ..."></textarea></label>
     </fieldset>
 
     <fieldset class="pt-invocation-block" id="pt-inv-script" hidden>
