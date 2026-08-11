@@ -51,9 +51,11 @@
   let draftRouting = { default_provider: null, by_character: {}, by_scene_role: {}, by_task_kind: {} };
   // 编辑器中正在修改的 entry 索引；-1 表示新增
   let editingIndex = -1;
+  // 编辑器中已通过二次确认的显式清空请求；仅在点击“保存”时写入 draft。
+  let clearApiKeyRequested = false;
 
   function cloneDraftFromServer() {
-    draftEntries = serverEntries.map(e => ({...e, api_key: ''}));
+    draftEntries = serverEntries.map(e => ({...e, api_key: '', _api_key_unchanged: true}));
     draftRouting = JSON.parse(JSON.stringify(serverRouting));
   }
 
@@ -176,9 +178,11 @@
   // ── 编辑器：新增 / 编辑 Provider ───────────────────────────────────────
   function openEditor(index) {
     editingIndex = index;
+    clearApiKeyRequested = false;
     const dlg = $('#pm-editor');
     const title = $('#pm-editor-title');
     const hint = $('#pm-editor-hint');
+    const clearApiKeyButton = $('#pm-ed-clear-apikey');
     if (index === -1) {
       title.textContent = '新增 Provider';
       $('#pm-ed-name').value = '';
@@ -187,6 +191,7 @@
       $('#pm-ed-engine').value = 'direct';
       $('#pm-ed-default').checked = draftEntries.length === 0; // 第一个默认勾选
       $('#pm-ed-apikey').value = '';
+      clearApiKeyButton.hidden = true;
       hint.textContent = '';
     } else {
       const e = draftEntries[index];
@@ -197,12 +202,18 @@
       $('#pm-ed-engine').value = e.engine;
       $('#pm-ed-default').checked = e.is_default;
       $('#pm-ed-apikey').value = '';
+      clearApiKeyRequested = Boolean(e._api_key_clear);
       // 提示当前 key 是否已在服务端设置
       const serverEntry = serverEntries.find(s => s.name === e.name);
       if (serverEntry && serverEntry.api_key) {
+        clearApiKeyButton.hidden = false;
         hint.textContent = '已存在 api_key；留空表示保持不变，输入新值会覆盖。';
       } else {
+        clearApiKeyButton.hidden = true;
         hint.textContent = '尚未设置 api_key；输入新值会写入。';
+      }
+      if (clearApiKeyRequested) {
+        hint.textContent = '已选择清空 api_key；点击保存编辑后将发送空字符串。';
       }
     }
     dlg.showModal();
@@ -212,6 +223,22 @@
     const dlg = $('#pm-editor');
     if (dlg.open) dlg.close();
     editingIndex = -1;
+    clearApiKeyRequested = false;
+  }
+
+  async function requestClearApiKey(ev) {
+    ev.preventDefault();
+    if (editingIndex < 0) return;
+    const e = draftEntries[editingIndex];
+    const serverEntry = e && serverEntries.find(s => s.name === e.name);
+    if (!serverEntry || !serverEntry.api_key) return;
+    if (!await AIRPConfirm.confirm(
+      `确认清空 Provider "${e.name}" 的 API Key？清空后需要重新输入才能恢复。`,
+      { title: '确认清空 API Key' },
+    )) return;
+    clearApiKeyRequested = true;
+    $('#pm-ed-apikey').value = '';
+    $('#pm-editor-hint').textContent = '已选择清空 api_key；点击保存编辑后将发送空字符串。';
   }
 
   function applyEditor() {
@@ -240,16 +267,14 @@
     // - 编辑现有 provider 且输入非空 → 更新 api_key
     // - 新增 provider 且输入为空 → api_key = null（不设置）
     // - 新增 provider 且输入非空 → api_key = 输入值
-    // warn-before-clearing: 编辑时输入为空 = preserve（不修改服务端 key）；
-    //   如需清空 key，用户必须显式输入空格再保存——当前简化为不支持"清空"操作，
-    //   避免误操作丢失凭据。如未来需要"清空"按钮，应在 UI 中显式提供并要求二次确认。
+    // - 编辑现有 provider 且已确认清空 → api_key = ""
     let apiKeyPayload;
     if (editingIndex === -1) {
       // 新增：null 表示不设置
       apiKeyPayload = apiKeyTrimmed ? apiKeyTrimmed : null;
     } else {
       // 编辑：输入为空 → undefined（省略字段，preserve）；输入非空 → 更新
-      apiKeyPayload = apiKeyTrimmed ? apiKeyTrimmed : undefined;
+      apiKeyPayload = apiKeyTrimmed ? apiKeyTrimmed : (clearApiKeyRequested ? '' : undefined);
     }
 
     if (editingIndex === -1) {
@@ -268,6 +293,8 @@
       if (apiKeyPayload === undefined) {
         newEntry.api_key = prev.api_key;
         newEntry._api_key_unchanged = true;
+      } else if (apiKeyPayload === '') {
+        newEntry._api_key_clear = true;
       }
       draftEntries[editingIndex] = newEntry;
     }
@@ -490,6 +517,7 @@
     $('#pm-add').addEventListener('click', () => openEditor(-1));
     $('#pm-reload').addEventListener('click', loadAll);
     $('#pm-ed-cancel').addEventListener('click', (ev) => { ev.preventDefault(); closeEditor(); });
+    $('#pm-ed-clear-apikey').addEventListener('click', requestClearApiKey);
     $('#pm-editor-form').addEventListener('submit', (ev) => {
       // form method=dialog 会自动 close；这里先 applyEditor，如果校验失败则阻止
       ev.preventDefault();
