@@ -1,7 +1,7 @@
 //! Phase 5.3: Plugin / Custom Agent Tools HTTP handlers.
 //!
 //! 端点：
-//! - `GET    /v1/plugin-tools` — 列出所有插件工具（headers 字段脱敏为 `headers_set: bool`）
+//! - `GET    /v1/plugin-tools` — 列出所有插件工具（headers 值脱敏，仅返回 `headers_set` 与 `headers_keys`）
 //! - `POST   /v1/plugin-tools` — 注册或更新单个插件工具（upsert 语义，按 `name` 替换）
 //!   body limit 2MB；webhook headers 中的密钥写入 `data/plugin_tool_headers.json`，
 //!   不写入 `data/plugin_tools.json`。
@@ -21,6 +21,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::Path as FsPath;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,7 +34,7 @@ pub struct PluginToolView {
     pub description: String,
     pub side_effect: PluginSideEffect,
     pub enabled: bool,
-    /// 调用方式（webhook 的 headers 字段被剥离，仅保留 `headers_set: bool`）。
+    /// 调用方式（webhook 的 headers 值被剥离，仅保留 `headers_set` 与 `headers_keys`）。
     pub invocation: PluginInvocationView,
 }
 
@@ -45,6 +46,8 @@ pub enum PluginInvocationView {
         url: String,
         /// 是否设置了自定义 headers（不返回 headers 本体）。
         headers_set: bool,
+        /// 已设置的 header 名，按字典序排列（不返回任何 value）。
+        headers_keys: Vec<String>,
         timeout_secs: Option<u32>,
     },
     Script {
@@ -61,11 +64,16 @@ impl PluginToolView {
                 url,
                 headers,
                 timeout_secs,
-            } => PluginInvocationView::Webhook {
-                url: url.clone(),
-                headers_set: !headers.is_empty(),
-                timeout_secs: *timeout_secs,
-            },
+            } => {
+                let mut headers_keys: Vec<String> = headers.keys().cloned().collect();
+                headers_keys.sort();
+                PluginInvocationView::Webhook {
+                    url: url.clone(),
+                    headers_set: !headers.is_empty(),
+                    headers_keys,
+                    timeout_secs: *timeout_secs,
+                }
+            }
             PluginInvocation::Script {
                 relative_path,
                 args,
@@ -98,7 +106,7 @@ pub struct PluginToolsResponse {
 
 /// `POST /v1/plugin-tools` 请求体（upsert 语义）。
 ///
-/// `headers` 字段可选；为空 Map 或缺省时视为未设置。
+/// `headers` 字段可选；更新既有 webhook 时缺省表示保留原值，显式 Map（包括空 Map）按请求替换。
 /// `headers` 不会持久化到 `data/plugin_tools.json`，由
 /// `data/plugin_tool_headers.json` 单独存储。
 #[derive(Debug, Deserialize)]
@@ -116,15 +124,15 @@ fn default_enabled() -> bool {
     true
 }
 
-/// upsert 请求中的 invocation（与 `PluginInvocation` 类似，但 webhook 的
-/// headers 是必填字段——因为这是请求体而非磁盘 schema）。
+/// upsert 请求中的 invocation（与 `PluginInvocation` 类似）。webhook 的
+/// `headers: None` 表示请求体缺省该字段，`Some` 表示显式提供 Map。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PluginInvocationUpsert {
     Webhook {
         url: String,
         #[serde(default)]
-        headers: BTreeMap<String, String>,
+        headers: Option<BTreeMap<String, String>>,
         #[serde(default)]
         timeout_secs: Option<u32>,
     },
@@ -138,37 +146,75 @@ pub enum PluginInvocationUpsert {
 }
 
 impl PluginToolUpsert {
-    /// 转换为 `PluginToolConfig`，并返回提取出的 webhook headers（如有）。
+    /// 转换为 `PluginToolConfig`，并返回 webhook headers 是否由请求显式提供。
     /// 校验由 `PluginToolConfig::validate` 完成（在 `save_plugin_tools` 内）。
-    fn into_config(self) -> PluginToolConfig {
-        let invocation = match self.invocation {
+    fn into_config(self) -> (PluginToolConfig, bool) {
+        let (invocation, headers_provided) = match self.invocation {
             PluginInvocationUpsert::Webhook {
                 url,
                 headers,
                 timeout_secs,
-            } => PluginInvocation::Webhook {
-                url,
-                headers,
-                timeout_secs,
-            },
+            } => {
+                let headers_provided = headers.is_some();
+                (
+                    PluginInvocation::Webhook {
+                        url,
+                        headers: headers.unwrap_or_default(),
+                        timeout_secs,
+                    },
+                    headers_provided,
+                )
+            }
             PluginInvocationUpsert::Script {
                 relative_path,
                 args,
                 timeout_secs,
-            } => PluginInvocation::Script {
-                relative_path,
-                args,
-                timeout_secs,
-            },
+            } => (
+                PluginInvocation::Script {
+                    relative_path,
+                    args,
+                    timeout_secs,
+                },
+                false,
+            ),
         };
-        PluginToolConfig {
-            name: self.name,
-            description: self.description,
-            side_effect: self.side_effect,
-            enabled: self.enabled,
-            invocation,
-        }
+        (
+            PluginToolConfig {
+                name: self.name,
+                description: self.description,
+                side_effect: self.side_effect,
+                enabled: self.enabled,
+                invocation,
+            },
+            headers_provided,
+        )
     }
+}
+
+/// `save_plugin_tools` 保留历史上的空 headers 语义；请求显式提供空 Map 时，
+/// 在该原子保存完成后移除目标工具的独立 headers 记录，使请求语义仍是替换为空。
+fn clear_persisted_plugin_tool_headers(
+    data_root: &FsPath,
+    tool_name: &str,
+) -> Result<(), AirpError> {
+    let mut headers = crate::plugin_tool::load_plugin_tool_headers(data_root)?;
+    if headers.remove(tool_name).is_none() {
+        return Ok(());
+    }
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "version": 1,
+        "headers": headers,
+    }))?;
+    let path = crate::plugin_tool::plugin_tool_headers_file_path(data_root);
+    crate::data_dir::replace_file(&path, &bytes)?;
+    // `replace_file` creates a new inode; retain the credential-file permission hardening.
+    #[cfg(unix)]
+    if let Ok(mut permissions) = std::fs::metadata(&path).map(|metadata| metadata.permissions()) {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o600);
+        let _ = std::fs::set_permissions(&path, permissions);
+    }
+    Ok(())
 }
 
 /// `POST /v1/plugin-tools/:name/test` 请求体。
@@ -226,7 +272,7 @@ pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
     State(state): State<Arc<DaemonState>>,
     Json(upsert): Json<PluginToolUpsert>,
 ) -> Result<(StatusCode, Json<PluginToolView>), AirpError> {
-    let config = upsert.into_config();
+    let (mut config, headers_provided) = upsert.into_config();
     // 校验单条配置（在持久化前）。
     // N2（PR #384 审计）：validate 含同步 DNS 解析与文件 canonicalize，
     // 必须在 spawn_blocking 中执行以免阻塞 tokio 异步运行时。
@@ -255,6 +301,31 @@ pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
             .map_err(|_| AirpError::Internal("plugin_tools lock poisoned".to_string()))?;
         tools.clone()
     };
+    // 前端无法回填密钥；请求缺省 headers 时沿用当前 webhook 的内存值。
+    // 显式空 Map 不进入此分支，表示用户要求替换为空。
+    if !headers_provided {
+        if let Some(existing) = new_tools.iter().find(|tool| tool.name == config.name) {
+            if let (
+                PluginInvocation::Webhook {
+                    headers: existing_headers,
+                    ..
+                },
+                PluginInvocation::Webhook { headers, .. },
+            ) = (&existing.invocation, &mut config.invocation)
+            {
+                *headers = existing_headers.clone();
+            }
+        }
+    }
+    let clear_headers_for = if headers_provided
+        && matches!(
+            &config.invocation,
+            PluginInvocation::Webhook { headers, .. } if headers.is_empty()
+        ) {
+        Some(config.name.clone())
+    } else {
+        None
+    };
     if let Some(existing) = new_tools.iter_mut().find(|t| t.name == config.name) {
         *existing = config.clone();
     } else {
@@ -264,9 +335,15 @@ pub(in crate::daemon) async fn upsert_plugin_tool_endpoint(
     // 持久化（spawn_blocking 避免 tokio I/O 阻塞）。
     let data_root = state.data_root.clone();
     let tools_clone = new_tools.clone();
-    tokio::task::spawn_blocking(move || save_plugin_tools(&data_root, &tools_clone))
-        .await
-        .map_err(|e| AirpError::Internal(format!("plugin_tools 持久化任务失败: {e}")))??;
+    tokio::task::spawn_blocking(move || {
+        save_plugin_tools(&data_root, &tools_clone)?;
+        if let Some(tool_name) = clear_headers_for {
+            clear_persisted_plugin_tool_headers(&data_root, &tool_name)?;
+        }
+        Ok::<(), AirpError>(())
+    })
+    .await
+    .map_err(|e| AirpError::Internal(format!("plugin_tools 持久化任务失败: {e}")))??;
 
     // 提交到内存。
     let mut tools_lock = state
@@ -361,4 +438,307 @@ pub(in crate::daemon) async fn test_plugin_tool_endpoint(
         output: result.output,
         dry_run: result.dry_run,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::tests::make_state_no_key as make_state_for_http_test;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::util::ServiceExt;
+
+    async fn post_plugin_tool(
+        app: axum::Router,
+        body: serde_json::Value,
+    ) -> (StatusCode, String, serde_json::Value) {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/plugin-tools")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let raw = String::from_utf8_lossy(&bytes).into_owned();
+        let value = serde_json::from_slice(&bytes).unwrap_or_default();
+        (status, raw, value)
+    }
+
+    async fn get_plugin_tools(app: axum::Router) -> (StatusCode, String, serde_json::Value) {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/plugin-tools")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let raw = String::from_utf8_lossy(&bytes).into_owned();
+        let value = serde_json::from_slice(&bytes).unwrap_or_default();
+        (status, raw, value)
+    }
+
+    #[test]
+    fn webhook_view_serializes_sorted_header_names_without_values() {
+        let config = PluginToolConfig {
+            name: "header_probe".to_string(),
+            description: "header probe".to_string(),
+            side_effect: PluginSideEffect::Readonly,
+            enabled: true,
+            invocation: PluginInvocation::Webhook {
+                url: "https://example.test/hook".to_string(),
+                headers: BTreeMap::from([
+                    ("z-last".to_string(), "secret-z".to_string()),
+                    ("A-first".to_string(), "secret-a".to_string()),
+                ]),
+                timeout_secs: None,
+            },
+        };
+
+        let serialized = serde_json::to_string(&PluginToolView::from_config(&config)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        let invocation = &value["invocation"];
+        assert_eq!(invocation["headers_set"], serde_json::json!(true));
+        assert_eq!(
+            invocation["headers_keys"],
+            serde_json::json!(["A-first", "z-last"])
+        );
+        assert!(!serialized.contains("secret-a"));
+        assert!(!serialized.contains("secret-z"));
+        assert!(!serialized.contains("\"headers\""));
+    }
+
+    #[tokio::test]
+    async fn post_webhook_preserves_omitted_headers_in_memory_and_persistence() {
+        let (state, _tmp) = make_state_for_http_test();
+        let app = crate::daemon::create_router(state.clone());
+
+        let (status, raw, view) = post_plugin_tool(
+            app.clone(),
+            serde_json::json!({
+                "name": "signed_hook",
+                "description": "signed webhook",
+                "side_effect": "readonly",
+                "enabled": true,
+                "invocation": {
+                    "kind": "webhook",
+                    "url": "https://1.1.1.1/hook",
+                    "headers": {
+                        "Authorization": "previous-auth-token",
+                        "X-Request-ID": "previous-request-id"
+                    }
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            view["invocation"]["headers_keys"],
+            serde_json::json!(["Authorization", "X-Request-ID"])
+        );
+        assert!(view["invocation"].get("headers").is_none());
+        assert!(!raw.contains("previous-auth-token"));
+        assert!(!raw.contains("previous-request-id"));
+
+        let (status, raw, _) = post_plugin_tool(
+            app.clone(),
+            serde_json::json!({
+                "name": "signed_hook",
+                "description": "edited webhook",
+                "side_effect": "readonly",
+                "enabled": true,
+                "invocation": {
+                    "kind": "webhook",
+                    "url": "https://1.1.1.1/hook"
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!raw.contains("previous-auth-token"));
+        assert!(!raw.contains("previous-request-id"));
+
+        let in_memory = state
+            .plugin_tools
+            .read()
+            .unwrap()
+            .iter()
+            .find(|tool| tool.name == "signed_hook")
+            .unwrap()
+            .clone();
+        if let PluginInvocation::Webhook { headers, .. } = &in_memory.invocation {
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("previous-auth-token")
+            );
+            assert_eq!(
+                headers.get("X-Request-ID").map(String::as_str),
+                Some("previous-request-id")
+            );
+        } else {
+            panic!("expected webhook invocation");
+        }
+
+        let restored = crate::plugin_tool::load_plugin_tools(&state.data_root).unwrap();
+        let restored = restored
+            .iter()
+            .find(|tool| tool.name == "signed_hook")
+            .unwrap();
+        if let PluginInvocation::Webhook { headers, .. } = &restored.invocation {
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("previous-auth-token")
+            );
+            assert_eq!(
+                headers.get("X-Request-ID").map(String::as_str),
+                Some("previous-request-id")
+            );
+        } else {
+            panic!("expected restored webhook invocation");
+        }
+
+        let (status, raw, view) = get_plugin_tools(app.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            view["tools"][0]["invocation"]["headers_keys"],
+            serde_json::json!(["Authorization", "X-Request-ID"])
+        );
+        assert!(view["tools"][0]["invocation"].get("headers").is_none());
+        assert!(!raw.contains("previous-auth-token"));
+        assert!(!raw.contains("previous-request-id"));
+
+        let (status, raw, _) = post_plugin_tool(
+            app.clone(),
+            serde_json::json!({
+                "name": "signed_hook",
+                "description": "replaced webhook",
+                "side_effect": "readonly",
+                "enabled": true,
+                "invocation": {
+                    "kind": "webhook",
+                    "url": "https://1.1.1.1/hook",
+                    "headers": {
+                        "Authorization": "replacement-auth-token",
+                        "X-New": "replacement-request-id"
+                    }
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!raw.contains("replacement-auth-token"));
+        assert!(!raw.contains("replacement-request-id"));
+
+        let replaced = state
+            .plugin_tools
+            .read()
+            .unwrap()
+            .iter()
+            .find(|tool| tool.name == "signed_hook")
+            .unwrap()
+            .clone();
+        if let PluginInvocation::Webhook { headers, .. } = &replaced.invocation {
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("replacement-auth-token")
+            );
+            assert_eq!(
+                headers.get("X-New").map(String::as_str),
+                Some("replacement-request-id")
+            );
+            assert!(!headers.contains_key("X-Request-ID"));
+        } else {
+            panic!("expected webhook invocation");
+        }
+
+        let (status, raw, view) = post_plugin_tool(
+            app.clone(),
+            serde_json::json!({
+                "name": "signed_hook",
+                "description": "cleared webhook",
+                "side_effect": "readonly",
+                "enabled": true,
+                "invocation": {
+                    "kind": "webhook",
+                    "url": "https://1.1.1.1/hook",
+                    "headers": {}
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["invocation"]["headers_set"], serde_json::json!(false));
+        assert!(!raw.contains("replacement-auth-token"));
+        assert!(!raw.contains("replacement-request-id"));
+        let live_cleared = state
+            .plugin_tools
+            .read()
+            .unwrap()
+            .iter()
+            .find(|tool| tool.name == "signed_hook")
+            .unwrap()
+            .clone();
+        if let PluginInvocation::Webhook { headers, .. } = live_cleared.invocation {
+            assert!(headers.is_empty());
+        } else {
+            panic!("expected cleared live webhook invocation");
+        }
+        let cleared = crate::plugin_tool::load_plugin_tools(&state.data_root)
+            .unwrap()
+            .into_iter()
+            .find(|tool| tool.name == "signed_hook")
+            .unwrap();
+        if let PluginInvocation::Webhook { headers, .. } = cleared.invocation {
+            assert!(headers.is_empty());
+        } else {
+            panic!("expected cleared webhook invocation");
+        }
+
+        let (status, _, _) = post_plugin_tool(
+            app,
+            serde_json::json!({
+                "name": "empty_hook",
+                "description": "empty webhook",
+                "side_effect": "readonly",
+                "enabled": true,
+                "invocation": {
+                    "kind": "webhook",
+                    "url": "https://1.1.1.1/hook"
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let tools = state.plugin_tools.read().unwrap();
+        let created = tools.iter().find(|tool| tool.name == "empty_hook").unwrap();
+        if let PluginInvocation::Webhook { headers, .. } = &created.invocation {
+            assert!(headers.is_empty());
+        } else {
+            panic!("expected created webhook invocation");
+        }
+        let restored_created = crate::plugin_tool::load_plugin_tools(&state.data_root)
+            .unwrap()
+            .into_iter()
+            .find(|tool| tool.name == "empty_hook")
+            .unwrap();
+        if let PluginInvocation::Webhook { headers, .. } = restored_created.invocation {
+            assert!(headers.is_empty());
+        } else {
+            panic!("expected restored created webhook invocation");
+        }
+    }
 }
