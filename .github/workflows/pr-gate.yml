@@ -132,7 +132,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Release lock-order enforcement
-        run: cargo test -p airp-core --release --features lock-order-runtime --lib lock_order:: --locked -- --nocapture
+        run: 'cargo test -p airp-core --release --features lock-order-runtime --lib lock_order:: --locked -- --nocapture'
 
       - name: Sacred prompt-boundary invariants
         run: cargo test -p airp-core --lib subagent_ --locked -- --nocapture
