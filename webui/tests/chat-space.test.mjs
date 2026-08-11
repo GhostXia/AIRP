@@ -93,7 +93,7 @@ function createHarness() {
 
   const instrumented = chatSpaceScript.replace(
     /\bboot\(\);/,
-    'globalThis.__chatSpaceTest = { speakText, suggestBgm };',
+    'globalThis.__chatSpaceTest = { matchesBgmKeyword, speakText, suggestBgm };',
   );
   assert.notEqual(instrumented, chatSpaceScript, 'chat-space boot call must be instrumented for isolated tests');
   vm.runInNewContext(instrumented, context);
@@ -103,6 +103,10 @@ function createHarness() {
 test('BGM matches only direct semantic field values', () => {
   const harness = createHarness();
   const hud = harness.elements['#bgm-hud'];
+
+  assert.equal(harness.api.matchesBgmKeyword('不战斗', '战斗'), false);
+  assert.equal(harness.api.matchesBgmKeyword('不危险', '危险'), false);
+  assert.equal(harness.api.matchesBgmKeyword('not combat', 'combat'), false);
 
   harness.api.suggestBgm({ combat: true });
   assert.equal(hud.hidden, true, 'a matching key must not trigger BGM');
