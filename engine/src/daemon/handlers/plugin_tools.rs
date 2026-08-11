@@ -1,7 +1,7 @@
 //! Phase 5.3: Plugin / Custom Agent Tools HTTP handlers.
 //!
 //! 端点：
-//! - `GET    /v1/plugin-tools` — 列出所有插件工具（headers 字段脱敏为 `headers_set: bool`）
+//! - `GET    /v1/plugin-tools` — 列出所有插件工具（headers 值脱敏，仅返回 `headers_set` 与 `headers_keys`）
 //! - `POST   /v1/plugin-tools` — 注册或更新单个插件工具（upsert 语义，按 `name` 替换）
 //!   body limit 2MB；webhook headers 中的密钥写入 `data/plugin_tool_headers.json`，
 //!   不写入 `data/plugin_tools.json`。
@@ -33,7 +33,7 @@ pub struct PluginToolView {
     pub description: String,
     pub side_effect: PluginSideEffect,
     pub enabled: bool,
-    /// 调用方式（webhook 的 headers 字段被剥离，仅保留 `headers_set: bool`）。
+    /// 调用方式（webhook 的 headers 值被剥离，仅保留 `headers_set` 与 `headers_keys`）。
     pub invocation: PluginInvocationView,
 }
 
@@ -45,6 +45,8 @@ pub enum PluginInvocationView {
         url: String,
         /// 是否设置了自定义 headers（不返回 headers 本体）。
         headers_set: bool,
+        /// 已设置的 header 名，按字典序排列（不返回任何 value）。
+        headers_keys: Vec<String>,
         timeout_secs: Option<u32>,
     },
     Script {
@@ -61,11 +63,16 @@ impl PluginToolView {
                 url,
                 headers,
                 timeout_secs,
-            } => PluginInvocationView::Webhook {
-                url: url.clone(),
-                headers_set: !headers.is_empty(),
-                timeout_secs: *timeout_secs,
-            },
+            } => {
+                let mut headers_keys: Vec<String> = headers.keys().cloned().collect();
+                headers_keys.sort();
+                PluginInvocationView::Webhook {
+                    url: url.clone(),
+                    headers_set: !headers.is_empty(),
+                    headers_keys,
+                    timeout_secs: *timeout_secs,
+                }
+            }
             PluginInvocation::Script {
                 relative_path,
                 args,
@@ -361,4 +368,39 @@ pub(in crate::daemon) async fn test_plugin_tool_endpoint(
         output: result.output,
         dry_run: result.dry_run,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn webhook_view_serializes_sorted_header_names_without_values() {
+        let config = PluginToolConfig {
+            name: "header_probe".to_string(),
+            description: "header probe".to_string(),
+            side_effect: PluginSideEffect::Readonly,
+            enabled: true,
+            invocation: PluginInvocation::Webhook {
+                url: "https://example.test/hook".to_string(),
+                headers: BTreeMap::from([
+                    ("z-last".to_string(), "secret-z".to_string()),
+                    ("A-first".to_string(), "secret-a".to_string()),
+                ]),
+                timeout_secs: None,
+            },
+        };
+
+        let serialized = serde_json::to_string(&PluginToolView::from_config(&config)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        let invocation = &value["invocation"];
+        assert_eq!(invocation["headers_set"], serde_json::json!(true));
+        assert_eq!(
+            invocation["headers_keys"],
+            serde_json::json!(["A-first", "z-last"])
+        );
+        assert!(!serialized.contains("secret-a"));
+        assert!(!serialized.contains("secret-z"));
+        assert!(!serialized.contains("\"headers\""));
+    }
 }

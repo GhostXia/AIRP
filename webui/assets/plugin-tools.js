@@ -228,11 +228,15 @@
         $('#pt-ed-kind').value = 'webhook';
         $('#pt-ed-wh-url').value = inv.url || '';
         $('#pt-ed-wh-timeout').value = inv.timeout_secs || '';
-        // Critical4, 2026-07-26: headers 不返回本体（仅 headers_set）。
+        // headers 不返回本体（仅 headers_set + headers_keys）。
         // 编辑时清空 textarea，提示用户：留空 = 保留原 headers，输入新内容 = 覆盖。
         $('#pt-ed-wh-headers').value = '';
         if (inv.headers_set) {
-          hint.textContent = '已设置自定义 headers；留空表示保留原值，输入新内容会覆盖。';
+          const headerNames = Array.isArray(inv.headers_keys) ? inv.headers_keys : [];
+          const namesText = headerNames.length
+            ? `已有 header 名：${headerNames.join(', ')}`
+            : '已设置自定义 headers（header 名暂不可见）';
+          hint.textContent = `${namesText}；留空表示保留原值，输入新内容会覆盖。`;
         }
       } else if (inv.kind === 'script') {
         $('#pt-ed-kind').value = 'script';

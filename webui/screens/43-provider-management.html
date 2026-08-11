@@ -123,6 +123,7 @@
     <label class="field"><span class="field-label">engine</span><select class="select runtime-select" id="pm-ed-engine"><option value="direct">direct (OpenAI compat)</option><option value="ollama">ollama (本地 Ollama, OpenAI compat)</option><option value="anthropic_messages">anthropic_messages</option><option value="claude_code_sdk">claude_code_sdk (not implemented)</option></select></label>
     <label class="field checkbox"><input type="checkbox" id="pm-ed-default"><span class="field-label">is_default</span></label>
     <label class="field"><span class="field-label">api_key</span><input class="input" id="pm-ed-apikey" type="password" placeholder="留空表示不修改；输入新值会覆盖" autocomplete="off"></label>
+    <div class="pm-editor-actions pm-editor-key-actions"><button class="btn btn-secondary" id="pm-ed-clear-apikey" type="button" hidden>清空 API Key</button></div>
     <p class="pm-editor-hint" id="pm-editor-hint"></p>
     <div class="pm-editor-actions">
       <button class="btn btn-primary" id="pm-ed-save" type="submit">保存</button>
