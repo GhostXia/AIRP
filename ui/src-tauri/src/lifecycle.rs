@@ -184,22 +184,45 @@ fn read_lock_from_file(file: &mut File) -> Option<InstanceLock> {
     serde_json::from_str(&raw).ok()
 }
 
+// Five retries × 10 ms bounds shutdown contention waits to about 50 ms.
+const CLEANUP_LOCK_MAX_RETRIES: usize = 5;
+const CLEANUP_LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+
 /// 仅当锁文件归属给定 instance_id 时清空（退出清理防误删他人锁）。
 ///
 /// The same OS lock used during startup is acquired before checking ownership;
 /// this closes the read→remove race.  The inode is retained so a POSIX peer
 /// cannot unlink-and-recreate the path while the guard is held.
 pub fn remove_lock_if_owned(path: &Path, instance_id: &str) {
+    remove_lock_if_owned_with_retry(path, instance_id, || {});
+}
+
+fn remove_lock_if_owned_with_retry<F>(path: &Path, instance_id: &str, mut on_would_block: F)
+where
+    F: FnMut(),
+{
     if !path.exists() {
         return;
     }
-    let mut guard = match acquire_lock(path) {
-        Ok(guard) => guard,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return,
-        Err(error) => {
-            tracing::warn!(%error, "failed to acquire engine instance lock for cleanup");
-            return;
+
+    let mut retries = 0;
+    let mut guard = loop {
+        match acquire_lock(path) {
+            Ok(guard) => break guard,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    && retries < CLEANUP_LOCK_MAX_RETRIES =>
+            {
+                retries += 1;
+                on_would_block();
+                std::thread::sleep(CLEANUP_LOCK_RETRY_DELAY);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return,
+            Err(error) => {
+                tracing::warn!(%error, "failed to acquire engine instance lock for cleanup");
+                return;
+            }
         }
     };
     let owned = guard
@@ -532,6 +555,76 @@ mod tests {
 
         let reclaimed = acquire_lock(&path).expect("parent reclaims lock after child exits");
         drop(reclaimed);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn owned_cleanup_retries_after_transient_lock_contention() {
+        let path = std::env::var_os("AIRP_LIFECYCLE_CLEANUP_CHILD_LOCK_PATH")
+            .map(std::path::PathBuf::from);
+        if let Some(path) = path {
+            let ready = std::env::var_os("AIRP_LIFECYCLE_CLEANUP_CHILD_READY")
+                .map(std::path::PathBuf::from)
+                .expect("cleanup child ready path");
+            let release = std::env::var_os("AIRP_LIFECYCLE_CLEANUP_CHILD_RELEASE")
+                .map(std::path::PathBuf::from)
+                .expect("cleanup child release path");
+            let _guard = acquire_lock(&path).expect("cleanup child must acquire lifecycle lock");
+            std::fs::write(ready, b"ready").unwrap();
+            for _ in 0..5_000 {
+                if release.exists() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("parent did not release cleanup child lifecycle lock within timeout");
+        }
+
+        let dir = std::env::temp_dir().join(format!("airp-lifecycle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LOCK_FILE_NAME);
+        let ready = dir.join("cleanup-child.ready");
+        let release = dir.join("cleanup-child.release");
+        let owner = lock(100, 200, 8000);
+        let mut guard = acquire_lock(&path).unwrap();
+        guard.write_lock(&owner).unwrap();
+        drop(guard);
+
+        let test_name = "lifecycle::tests::owned_cleanup_retries_after_transient_lock_contention";
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env("AIRP_LIFECYCLE_CLEANUP_CHILD_LOCK_PATH", &path)
+            .env("AIRP_LIFECYCLE_CLEANUP_CHILD_READY", &ready)
+            .env("AIRP_LIFECYCLE_CLEANUP_CHILD_RELEASE", &release)
+            .spawn()
+            .unwrap();
+
+        let mut ready_seen = false;
+        for _ in 0..250 {
+            if ready.exists() {
+                ready_seen = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !ready_seen {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("cleanup child did not publish lock-held readiness within timeout");
+        }
+
+        let mut saw_contention = false;
+        remove_lock_if_owned_with_retry(&path, &owner.instance_id, || {
+            saw_contention = true;
+            std::fs::write(&release, b"release").unwrap();
+        });
+        assert!(
+            saw_contention,
+            "cleanup must observe the held lock before retrying"
+        );
+        assert!(child.wait().unwrap().success());
+        assert!(read_lock(&path).is_none());
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
