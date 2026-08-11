@@ -821,7 +821,7 @@
     if (!('speechSynthesis' in window) || !text) return;
     speechSynthesis.cancel();
     // 清理 markdown 标记和特殊符号
-    const clean = text.replace(/\[.*?\]/g, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
+    const clean = text.replace(/\[[\s\S]*?\]/g, '').replace(/~~/g, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
     if (!clean) return;
     const utterance = new SpeechSynthesisUtterance(clean);
     if (ttsVoice) utterance.voice = ttsVoice;
@@ -876,24 +876,42 @@
     { keywords: ['史诗', '壮阔', '战争', 'epic', 'war'], mood: '史诗', tracks: ['Two Steps From Hell - Victory', 'Hans Zimmer - Gladiator Suite', 'Lord of the Rings - The Bridge of Khazad Dum'] },
   ];
 
+  // BGM 只从状态对象的直接语义字段取值，避免 key、诊断信息或嵌套数据触发推荐。
+  const BGM_SEMANTIC_FIELDS = new Set([
+    'mood', 'emotion', 'feeling', 'status', 'state', 'scene', 'situation',
+    'activity', 'tone', 'weather', 'current_mood', 'current_emotion',
+    'current_status', 'current_state', 'current_scene',
+  ]);
+
+  function matchesBgmKeyword(value, keyword) {
+    const text = String(value).toLowerCase();
+    const normalizedKeyword = keyword.toLowerCase();
+    const isAscii = /^[a-z0-9\s]+$/i.test(keyword);
+    const escaped = normalizedKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matcher = isAscii
+      ? new RegExp('\\b' + escaped + '\\b', 'gi')
+      : new RegExp(escaped, 'gi');
+    let match;
+    while ((match = matcher.exec(text)) !== null) {
+      const prefix = text.slice(0, match.index);
+      const negated = isAscii
+        ? /(?:\bnot|\bno|\bwithout)[\s-]*$/i.test(prefix)
+        : /(?:不是|并非|非|无|没有)\s*$/i.test(prefix);
+      if (!negated) return true;
+    }
+    return false;
+  }
+
   function suggestBgm(stateData) {
     const hud = $('#bgm-hud');
     const body = $('#bgm-body');
     if (!stateData || typeof stateData !== 'object') { hud.hidden = true; return; }
-    // 从状态中提取关键词
-    const stateText = JSON.stringify(stateData).toLowerCase();
+    const semanticValues = Object.entries(stateData)
+      .filter(([key, value]) => BGM_SEMANTIC_FIELDS.has(String(key).toLowerCase()) && typeof value === 'string')
+      .map(([, value]) => value);
     let matched = null;
     for (const rule of BGM_RULES) {
-      // CodeRabbit #10：ASCII 关键词用 \b 词边界匹配，避免命中 key 名或子串
-      // （如 {"mood":"not combat"} 不该命中 "combat"）。中文无词边界概念，仍用 includes。
-      const hit = rule.keywords.some(kw => {
-        const k = kw.toLowerCase();
-        // 简单 ASCII 判定：含 a-z0-9 视为 ASCII 关键词
-        if (/^[a-z0-9\s]+$/i.test(kw)) {
-          return new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(stateText);
-        }
-        return stateText.includes(k);
-      });
+      const hit = semanticValues.some(value => rule.keywords.some(kw => matchesBgmKeyword(value, kw)));
       if (hit) {
         matched = rule;
         break;
