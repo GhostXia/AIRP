@@ -122,6 +122,13 @@ test('BGM matches only direct semantic field values', () => {
   assert.equal(harness.elements['#bgm-body'].children[0].textContent, '紧张');
 });
 
+test('BGM ignores non-adjacent negation prefixes', () => {
+  const harness = createHarness();
+
+  assert.equal(harness.api.matchesBgmKeyword('not in combat', 'combat'), false);
+  assert.equal(harness.api.matchesBgmKeyword('没有任何战斗', '战斗'), false);
+});
+
 test('TTS removes multiline actions and markdown markers while retaining prose', () => {
   const harness = createHarness();
 

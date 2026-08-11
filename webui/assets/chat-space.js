@@ -895,8 +895,8 @@
     while ((match = matcher.exec(text)) !== null) {
       const prefix = text.slice(0, match.index);
       const negated = isAscii
-        ? /(?:\bnot|\bno|\bwithout)[\s-]*$/i.test(prefix)
-        : /(?:不是|并非|非|不|无|没有)\s*$/i.test(prefix);
+        ? /(?:\bnot|\bno|\bwithout)(?:\s+(?:in|any))?[\s-]*$/i.test(prefix)
+        : /(?:不是|并非|非|不|无|没有)(?:任何)?\s*$/i.test(prefix);
       if (!negated) return true;
     }
     return false;
