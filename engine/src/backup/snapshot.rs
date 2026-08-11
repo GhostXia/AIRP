@@ -908,7 +908,20 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("secrets.json"), r#"{"key":"secret"}"#).unwrap();
         fs::write(dir.path().join("settings.json"), r#"{"api_key":"x"}"#).unwrap();
+        // 多 provider API keys：含多个 LLM provider 的明文密钥
+        fs::write(
+            dir.path().join("provider_keys.json"),
+            r#"{"version":1,"keys":{"openai":"sk-xxx","anthropic":"sk-ant-xxx"}}"#,
+        )
+        .unwrap();
+        // plugin webhook headers：含 Authorization Bearer token 等鉴权信息
+        fs::write(
+            dir.path().join("plugin_tool_headers.json"),
+            r#"{"version":1,"headers":{"my-tool":{"Authorization":"Bearer xxx"}}}"#,
+        )
+        .unwrap();
         fs::write(dir.path().join("providers.json"), "{}").unwrap(); // 非秘密，保留
+        fs::write(dir.path().join("plugin_tools.json"), "[]").unwrap(); // 非秘密，保留
 
         let opts = make_opts(dir.path(), BackupSource::Manual, BackupScope::Full);
         let created = create_backup(&opts).unwrap();
@@ -925,8 +938,20 @@ mod tests {
             "settings.json 必须被排除"
         );
         assert!(
+            !paths.contains(&"provider_keys.json"),
+            "provider_keys.json 含 API key，必须被排除（凭据泄露防护）"
+        );
+        assert!(
+            !paths.contains(&"plugin_tool_headers.json"),
+            "plugin_tool_headers.json 含鉴权 header，必须被排除（凭据泄露防护）"
+        );
+        assert!(
             paths.contains(&"providers.json"),
             "providers.json 非秘密，应保留"
+        );
+        assert!(
+            paths.contains(&"plugin_tools.json"),
+            "plugin_tools.json 非秘密，应保留"
         );
     }
 

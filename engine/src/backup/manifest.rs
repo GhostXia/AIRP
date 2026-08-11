@@ -41,7 +41,15 @@ pub(crate) const DATA_SCHEMA_VERSION: u32 = 1;
 
 /// v1 恒定排除的 secret 文件（相对 data_root 路径，`/` 分隔）。
 /// 这些文件绝不进入 backup `files` 集合。
-pub(crate) const SECRET_EXCLUDE_LIST: &[&str] = &["secrets.json", "settings.json"];
+///
+/// 注意：新增含密钥/鉴权信息的根级文件时**必须**同步更新此列表，
+/// 否则备份会把明文凭据打包输出。
+pub(crate) const SECRET_EXCLUDE_LIST: &[&str] = &[
+    "secrets.json",
+    "settings.json",
+    "provider_keys.json",
+    "plugin_tool_headers.json",
+];
 
 /// backup 来源。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -572,5 +580,9 @@ mod tests {
     fn secret_exclude_list_includes_known_secrets() {
         assert!(SECRET_EXCLUDE_LIST.contains(&"secrets.json"));
         assert!(SECRET_EXCLUDE_LIST.contains(&"settings.json"));
+        // 多 provider 路由 API keys
+        assert!(SECRET_EXCLUDE_LIST.contains(&"provider_keys.json"));
+        // plugin webhook 鉴权 headers（含 Authorization bearer token）
+        assert!(SECRET_EXCLUDE_LIST.contains(&"plugin_tool_headers.json"));
     }
 }
