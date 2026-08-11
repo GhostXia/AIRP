@@ -331,9 +331,10 @@
       invocation = {
         kind: 'webhook',
         url,
-        headers,
         timeout_secs,
       };
+      // 编辑既有 webhook 时，空白表示保留服务端已有 headers；只有输入内容时才发送字段。
+      if (headersText.trim()) invocation.headers = headers;
     } else if (kind === 'script') {
       const relative_path = $('#pt-ed-sc-path').value.trim();
       if (!relative_path) {

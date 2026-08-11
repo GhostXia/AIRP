@@ -423,7 +423,19 @@ test('plugin tool editor shows header names while preserving headers on blank ed
 
   await env.document.querySelector('#pt-editor-form').dispatch('submit');
   const request = env.requests.find(item => item.method === 'POST' && item.path === '/v1/plugin-tools');
-  assert.equal(Object.keys(request.body.invocation.headers).length, 0);
+  assert.equal(Object.hasOwn(request.body.invocation, 'headers'), false);
+});
+
+test('plugin tool editor sends entered headers for replacement', async () => {
+  const env = await startPluginTools();
+  const row = env.document.querySelector('#pt-rows').children[0];
+  await row.querySelector('.pt-edit').dispatch('click');
+  env.document.querySelector('#pt-ed-wh-headers').value = 'Authorization: replacement-token';
+
+  await env.document.querySelector('#pt-editor-form').dispatch('submit');
+  const request = env.requests.find(item => item.method === 'POST' && item.path === '/v1/plugin-tools');
+  assert.deepEqual(Object.keys(request.body.invocation.headers), ['Authorization']);
+  assert.equal(request.body.invocation.headers.Authorization, 'replacement-token');
 });
 
 test('plugin tool contracts expose only sorted header names', () => {
