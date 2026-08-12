@@ -80,7 +80,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | #436/#439/#441/#470（R1 锁序收敛 + 运行时强制） | `advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` / `run_seal_flow` 五个 agent-tool 路径补齐外层 `character_lock.read()`（R1）；`StateService::mutate` 拆为 `mutate_locked` + `mutate` 消除 re-entrancy；`lock_order` 模块提供 R1+R2 运行时强制（thread-local 栈 + RAII Guard，默认 debug；release-profile CI 以 `lock-order-runtime` feature 验证）；4 条并发回归测试（各路径与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + TOCTOU）；lock-map cleanup race 修复（`remove_deleted_*_lock` 移到 write guard drop 之后）。 | 正式 release 默认不启用 tracker 以保持零开销；PR gate 有 `--release --features lock-order-runtime` 专项门；`advance_plot` 仍持 std 锁做同步 I/O（A3 debt）；W-01~W-04 follow-up 见 #442/#443/#444。 |
 | #342（PR #445，backup/restore 最小闭环） | 手动 backup（Full / Character / Session scope）+ manifest schema v1（per-file SHA-256 + tree SHA-256）+ `verify_against_disk` 完整性校验 + restore（Full + scoped `swap_scoped_subtree`）+ `PreRestoreRollback` 回滚备份 + post-restore 校验 + `PreDelete` 自动备份（`delete_character` / `delete_session`，`force=true` 可跳过）+ secret 排除（`secrets.json` / `settings.json`）+ `BACKUP_LOCK` 串行化 + WebUI backup 管理界面。82 条 backup 测试通过（PR #445）。 | v1 限制：无自动定时备份；restore swap 阶段不持 `character_lock`（W-02，#447，v1 缓解为维护窗口执行）；Windows `sync_dir` no-op（W-03，#448）；跨资源一致性 backup 未交付；完整 migration / 导出未交付（#346）。审计遗留 W-01~W-06 见 #446/#447/#448/#449/#450/#451。 |
 
-### 2.3 v0.0.4 收敛切片：桌面线与扩展合同（历史 `main@e28ea02`；当前候选 `main@affa315`）
+### 2.3 v0.0.4 收敛切片：桌面线与扩展合同（历史 `main@e28ea02`；候选发布历史快照 `main@affa315`）
 
 以下记录 v0.0.3 → `main@e28ea02` 桌面线与扩展合同的已交付边界与已知限制，不把合同闭环外推为成熟生态：
 
@@ -176,7 +176,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | v0.0.5-rc.2 candidate release | GitHub Actions run `31309894372` on `main@affa315` | Candidate exact-tag package validation and smoke evidence; the current workflow publishes only `airp-webui-windows-x64.zip`, while dependency/audit information remains in the tagged git tree. Prerelease candidate only. `release` environment API returned `protection_rules=[]`, `can_admins_bypass=true`; required reviewer configuration is not present. Existing rc.2 assets are historical and unchanged. |
 | production topology / 真实 provider·browser | CI mock/system-Chrome 与本地检查 | 不能替代 #130 维护者真实 provider + 真实 browser + Compose 验收；当前不宣称通过。 |
 
-未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact（除 run `31309894372` 的 Windows candidate package smoke）、网络故障、进程崩溃、真实 provider 长会话，以及 Tauri 壳续期循环的 GUI 真机确认，不得由本表推断为通过。本 docs-pass（2026-08-09）未重跑 full-workspace 测试；历史行仍保留其原始 commit 证据，不能外推到当前 `main@affa315`。
+未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact（除 run `31309894372` 的 Windows candidate package smoke）、网络故障、进程崩溃、真实 provider 长会话，以及 Tauri 壳续期循环的 GUI 真机确认，不得由本表推断为通过。2026-08-09 docs-pass 未重跑 full-workspace 测试；对应历史行只证明 `main@affa315`，不能外推到当前 `main@7a90d88`。
 
 ## 7. 文档职责（校准后）
 

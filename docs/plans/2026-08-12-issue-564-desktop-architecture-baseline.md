@@ -127,6 +127,11 @@ Get-ChildItem ui/dist -Recurse -File |
   Measure-Object -Property Length -Sum |
   Select-Object Count, Sum
 
+npm --prefix ui run bundle:webui
+Get-ChildItem ui/src-tauri/webui-bundle -Recurse -File |
+  Measure-Object -Property Length -Sum |
+  Select-Object Count, Sum
+
 Get-ChildItem webui/baseline-screenshots -File -Filter '*.jpg' |
   Measure-Object -Property Length -Sum |
   Select-Object Count, Sum
@@ -134,18 +139,21 @@ Get-ChildItem webui/baseline-screenshots -File -Filter '*.jpg' |
 node --test webui/tests/*.test.mjs
 ```
 
-Observed before this PR changed documentation:
+Observed from the `7a90d88` code/assets baseline; documentation edits do not
+change these generated measurements:
 
 | Evidence | Result |
 |---|---|
 | Vue `ui/dist` after a clean `npm --prefix ui run build` | 6 files, 113,855 bytes; generated output, not release evidence |
-| Engine-staged `ui/src-tauri/webui-bundle` | 147 files, 4,009,670 bytes; generated staging output |
+| Engine-staged `ui/src-tauri/webui-bundle` after `npm --prefix ui run bundle:webui` | 178 files, 4,292,898 bytes; regenerated staging output, not release evidence |
 | Current WebUI source excluding baseline screenshots | 133 files, 966,475 bytes |
 | WebUI visual baseline | 44 JPEG screens in `webui/baseline-screenshots/`; covers primary, advanced, empty, reconnect, error, modal, and extension states |
 
-Generated `ui/dist` and `ui/src-tauri/webui-bundle` sizes can change with local
-build state. The authoritative PR evidence is an `npm --prefix ui run build`
-result plus the sizes captured immediately after that build.
+`npm --prefix ui run bundle:webui` removes and regenerates the staged
+`ui/src-tauri/webui-bundle` from the tracked `webui/` tree. Generated
+`ui/dist` and staged bundle sizes can change with local build state. The
+authoritative PR evidence is a successful Vue build and WebUI staging run plus
+the sizes captured immediately after each command.
 
 ### Runtime evidence still missing
 
@@ -179,6 +187,40 @@ Workspace schema upgrades require dry-run validation, pre-upgrade backup,
 integrity verification, and rollback. Unknown major versions fail closed and
 show a repairable placeholder; they do not overwrite the workspace.
 
+### Observation window before WebUI retirement
+
+The observation window begins only after PR 13 ships the Blueprint desktop as
+the default in a stable release. It lasts at least **30 calendar days and one
+complete stable release**, whichever is longer. Evidence must cover at least
+10 voluntary non-developer users and 100 completed core-workflow attempts; if
+that sample is not reached, the window remains open rather than treating agent
+self-tests or a demonstration as market evidence.
+
+The release maintainer collects the evidence, an independent audit checks it,
+and the repository Owner makes the replacement decision. Retirement requires:
+
+- 100% behavior/security parity for every workflow marked migrated in the RC
+  matrix, with no open P0/P1 regression;
+- core-workflow success of at least 95% and no more than 2 percentage points
+  below the WebUI control measured on the same release and fixtures;
+- at least 99% crash-free desktop launches and at most 0.5% Surface sessions
+  ending in an unrecoverable resync failure;
+- zero confirmed user-asset loss/corruption, credential exposure, capability
+  bypass, or prompt-boundary violation;
+- voluntary feedback records continued-use intent separately from task success.
+
+Any confirmed asset/security/prompt-boundary incident triggers immediate
+fallback to WebUI and suspends the window. The Owner also rolls back the
+default when a P0/P1 desktop regression remains unresolved for 72 hours, core
+success falls below the threshold for 7 consecutive days, crash-free launches
+fall below 99%, or unrecoverable resync exceeds 0.5%.
+
+Retained evidence consists of the release/commit and package digest, anonymized
+metric export without RP content, parity matrix, failure/rollback drill report,
+linked issue log, voluntary feedback summary, and independent audit decision.
+Only the Owner may approve phased WebUI retirement after reviewing that bundle;
+the fallback remains available through the previously defined rollback window.
+
 ## 7. PR 1 completion gate
 
 This PR is complete only when:
@@ -192,7 +234,15 @@ This PR is complete only when:
    later PR gate;
 5. migration preserves the current WebUI and all user assets;
 6. documentation checks and affected UI/WebUI tests pass;
-7. the independent audit bot passes before merge.
+7. the independent audit bot passes before merge;
+8. every blocking finding is resolved and the bot has reviewed the resulting
+   commit;
+9. required human review is recorded before merge.
+
+PR 1 starts as Draft. After local gates pass it may be marked Ready solely to
+trigger a bot that skips Draft PRs; Ready status is not merge authorization.
+It must not merge while the audit is pending, a blocking finding is unresolved,
+or required human review is missing.
 
 Passing PR 1 does not mean Blueprint runtime, Surface API, or the restored
 desktop UI has shipped. The first real closed loop is M1 after PR 1 through PR
