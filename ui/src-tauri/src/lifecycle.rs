@@ -614,15 +614,17 @@ mod tests {
         }
 
         let mut saw_contention = false;
+        let mut child_status = None;
         remove_lock_if_owned_with_retry(&path, &owner.instance_id, || {
             saw_contention = true;
             std::fs::write(&release, b"release").unwrap();
+            child_status = Some(child.wait().unwrap());
         });
         assert!(
             saw_contention,
             "cleanup must observe the held lock before retrying"
         );
-        assert!(child.wait().unwrap().success());
+        assert!(child_status.unwrap().success());
         assert!(read_lock(&path).is_none());
 
         std::fs::remove_dir_all(&dir).unwrap();
