@@ -126,7 +126,14 @@ test('BGM ignores non-adjacent negation prefixes', () => {
   const harness = createHarness();
 
   assert.equal(harness.api.matchesBgmKeyword('not in combat', 'combat'), false);
+  assert.equal(harness.api.matchesBgmKeyword('no longer in combat', 'combat'), false);
+  assert.equal(harness.api.matchesBgmKeyword('not currently in combat', 'combat'), false);
   assert.equal(harness.api.matchesBgmKeyword('没有任何战斗', '战斗'), false);
+  assert.equal(harness.api.matchesBgmKeyword('没有发生战斗', '战斗'), false);
+  assert.equal(harness.api.matchesBgmKeyword('不再战斗', '战斗'), false);
+  assert.equal(harness.api.matchesBgmKeyword('不是很危险', '危险'), false);
+  assert.equal(harness.api.matchesBgmKeyword('not calm but combat', 'combat'), true);
+  assert.equal(harness.api.matchesBgmKeyword('没有休息，但是战斗', '战斗'), true);
 });
 
 test('TTS removes multiline actions and markdown markers while retaining prose', () => {

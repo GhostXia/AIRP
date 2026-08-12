@@ -894,9 +894,14 @@
     let match;
     while ((match = matcher.exec(text)) !== null) {
       const prefix = text.slice(0, match.index);
+      // Negation applies only within the current clause. Contrast words start a
+      // new clause so "not calm but combat" still matches the positive state.
+      const clausePrefix = isAscii
+        ? prefix.split(/[.!?;,:]|\b(?:but|however|yet)\b/i).at(-1)
+        : prefix.split(/[。！？；，、：]|但是|然而|不过|但|却/).at(-1);
       const negated = isAscii
-        ? /(?:\bnot|\bno|\bwithout)(?:\s+(?:in|any))?[\s-]*$/i.test(prefix)
-        : /(?:不是|并非|非|不|无|没有)(?:任何)?\s*$/i.test(prefix);
+        ? /\b(?:not|no|never|without)\b(?:[\s-]+[a-z0-9]+){0,4}[\s-]*$/i.test(clausePrefix)
+        : /(?:不是|并非|不再|未曾|没有|毫无|非|不|无)[\p{Script=Han}\s]{0,6}$/u.test(clausePrefix);
       if (!negated) return true;
     }
     return false;
