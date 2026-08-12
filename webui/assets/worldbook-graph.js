@@ -81,6 +81,7 @@
 
   async function loadGraph() {
     cancelSimulation();
+    clearNodeDetail();
     const requestId = ++graphRequestId;
     const requestedCharacterId = characterId;
     if (!characterId) {
@@ -393,11 +394,20 @@
     drawCanvas();
   }
 
+  function clearNodeDetail() {
+    selectedNode = null;
+    const wrap = $('#graph-detail');
+    const content = $('#graph-detail-content');
+    wrap.hidden = true;
+    content.textContent = '';
+  }
+
   function renderNodeAccess() {
     const list = $('#graph-node-list');
     if (!list) return;
     list.replaceChildren();
     for (const n of simNodes) {
+      const item = node('li', 'graph-node-item');
       const button = node('button', 'btn btn-secondary graph-node-button');
       button.type = 'button';
       button.textContent = n.label + ' (#' + n.id + ')';
@@ -410,7 +420,8 @@
           showNodeDetail(n);
         }
       });
-      list.appendChild(button);
+      item.appendChild(button);
+      list.appendChild(item);
     }
     list.hidden = simNodes.length === 0;
   }
