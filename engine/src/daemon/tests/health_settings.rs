@@ -47,7 +47,7 @@ async fn test_audit_10_version_unauthenticated_with_key_set() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-// WEBUI-BACKEND-PLAN §4.2: /health 就绪探针
+// WEBUI-BACKEND-PLAN §4.2: /health Engine liveness/local-state probe
 #[tokio::test]
 async fn test_health_endpoint_returns_status() {
     let tmp = tempfile::tempdir().unwrap();
@@ -96,6 +96,10 @@ async fn test_health_endpoint_returns_status() {
     assert_eq!(v["engine"], "ok");
     assert_eq!(v["provider_configured"].as_bool(), Some(false)); // api_key=None
     assert_eq!(v["data_root_writable"].as_bool(), Some(true)); // tempdir 可写
+    assert!(
+        v.get("ready").is_none(),
+        "Engine /health must not claim provider/gateway/SSE readiness"
+    );
 }
 
 // /health 不鉴权（与 /version 同级）

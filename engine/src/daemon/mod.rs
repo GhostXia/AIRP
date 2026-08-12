@@ -1050,10 +1050,12 @@ struct VersionInfo {
     version: &'static str,
 }
 
-/// WEBUI-BACKEND-PLAN §4.2：健康就绪探针。
+/// WEBUI-BACKEND-PLAN §4.2：Engine 存活与本地状态探针。
 ///
-/// 返回 engine 状态、provider 是否已配置、data_root 是否可写。
-/// 不鉴权（与 `/version` 同级），因为只暴露就绪状态，不泄露敏感信息。
+/// 返回 engine 状态、provider 是否已配置、data_root 是否可写。这里不声称
+/// provider 可达或 production gateway/SSE 链路 ready：这些组件不归 Engine
+/// 单独所有，必须由部署层通过真实且隔离的端到端请求验证。
+/// 不鉴权（与 `/version` 同级），因为只暴露状态，不泄露敏感信息。
 async fn health_handler(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
 ) -> axum::Json<HealthInfo> {
