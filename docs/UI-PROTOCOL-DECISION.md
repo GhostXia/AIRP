@@ -1,12 +1,14 @@
 # UI 协议与 Widget 决策
 
-> 状态：已接受
-> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）
+> 状态：已接受；2026-08-12 的桌面目标架构由 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 增量取代本文 2026-08-05/06 对 Blueprint 与 Vue 主面的校准结论
+> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）；2026-08-12，`main@7a90d88`（#564 重新启动协议驱动桌面主面）
 > 上位决策：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)
 
 ## 结论
 
 AIRP-State-Protocol 是有价值的 UI 协议与 Widget 资产来源，但不是 AIRP 的产品北极星。
+
+2026-08-12，Owner 在 [#564](https://github.com/GhostXia/AIRP/issues/564) 明确恢复协议驱动的 Vue Blueprint/Widget 桌面主面，同时保留当前 WebUI 设计语言与迁移期产品能力。本文 2026-08-05 将 Blueprint 收缩为 slot plan、2026-08-06 将 Vue 主面标为归档的内容继续作为历史事实保留，但不再是目标架构；新边界、数据权威、资产处置和双入口回退以 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 为准。
 
 AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议服务于这个产品闭环，不能把项目重新拉回"通用 Agent UI 标准"或"协议优先平台"。
 

@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-08-09 at `main@affa315` (`v0.0.5-rc.2` prerelease candidate). Registered RR-015~RR-017 for the widget extension line (C-P0~C-P4); updated RR-003/RR-006/RR-007/RR-008 statuses. Runtime risks are not closed by documentation alone. Formal `v0.0.5` remains blocked by #130 real provider/browser/Compose acceptance and the missing required-reviewer policy on the `release` environment (`protection_rules=[]`, `can_admins_bypass=true`).
+> Last reviewed: 2026-08-12 at `main@7a90d88`. Registered RR-018 for the #564 dual-UI migration. Runtime risks are not closed by documentation alone. Formal `v0.0.5` remains blocked by #130 real provider/browser/Compose acceptance and the missing required-reviewer policy on the `release` environment (`protection_rules=[]`, `can_admins_bypass=true`).
 
 ## RR-001 · `card_path` local arbitrary file read
 
@@ -141,4 +141,12 @@ The blanket local-path import switch remains forbidden in the browser package. A
 - **Risk**: The renewal loop is proven by unit/contract tests only; packaged GUI behavior (window lifecycle, eval injection timing, clock suspend/resume) has no real-device confirmation. The loop deliberately uses exchange (additive) rather than rotation to avoid kicking the webui's in-flight token, so superseded tokens remain valid for their own TTL; a leaked UI token stays usable until expiry. Known hygiene debt: the renewal failure warning repeats every 60s for the whole session and an initial-token parameter is unread (#485 T1).
 - **Current control**: TTL/2 scheduling clamped to 5s–4h, failed-fast 60s retry, webview eval as the only push channel (no Tauri IPC on remote URL), webui-side rotation fallback on 401, access key excluded from renewal.
 - **Required direction**: Obtain GUI real-device confirmation of the full exchange→navigate→renew chain; implement the T1 log-backoff and parameter cleanup next time `ui/src-tauri` is touched.
+
+## RR-018 · Blueprint desktop and WebUI dual-line migration drift
+
+- **Status**: Open (registered 2026-08-12 at `main@7a90d88`, #564 PR 1).
+- **Surface**: The current WebUI at `/`, the planned Vue Blueprint desktop at `/desktop/`, shared Engine domain services, UI Surface projections, Widget hosts, and the Tauri entry switch.
+- **Risk**: Running two product surfaces during migration can create divergent behavior, duplicate business validation, inconsistent extension permissions, or misleading capability claims. A desktop projection or workspace store could become a second source of RP truth. Prematurely switching the default could strand workflows that still exist only in WebUI; deleting WebUI too early would also remove the only tested fallback. Sharing Tauri business relays or client-authored patches would amplify these failure modes.
+- **Current control**: #564 is split into bounded PRs. The current WebUI remains the default and supported fallback; `/desktop/`, Blueprint v2, Surface API, and `HttpEngineBus` are not claimed as delivered. The target architecture keeps domain writes in existing Engine services, makes Surface projection reconstructable, forbids a Tauri business relay, and requires engine-authoritative Widget identity/grants. User assets are not migrated for UI restoration.
+- **Required direction**: Keep a behavior/security parity matrix for every migrated Widget; require real Engine vertical slices rather than mocks; test both entry points in the same package; preserve last-known-good snapshot/resync; add versioned workspace migration, backup, export, and rollback; collect browser and packaged-GUI evidence before changing the default. Retire any WebUI surface only after the #564 observation window, asset verification, rollback window, independent audits, and explicit Owner approval.
 
