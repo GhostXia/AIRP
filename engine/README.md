@@ -11,7 +11,7 @@ AIRP Engine 是 AIRP 产品内的无头 RP 引擎。它负责角色卡/世界书
 - `/v1/agent/run` 有 step/token/wall-clock/cancel 闸和 typed SSE 事件；
 - Tavern Card JSON/PNG 导入、canonical/sidecar 落盘和角色 CRUD；
 - 会话创建/列表、history、append、rollback、regen；
-- rollback 在 service/API 与 `ChatLog` 持久化边界都拒绝非法 index；空日志 `index=0` 保留兼容；
+- rollback 在 service/API 与 `ChatLog` 持久化边界都拒绝非法 index；空日志 `index=0` 保留兼容；目标已是当前活动叶时为纯 no-op，不刷新 `updated_at` / revision，也不写盘；
 - chat pipeline 先持久化 user message 再推进时间线；assistant 的 live state、`ChatLog` 与 `current.md` 任一关键写入失败都会终止回合，SSE `done` 只在 finalization 全部成功后发送；
 - 多 Persona 存储、revision、HTTP CRUD/绑定，以及 chat pipeline 的显式/绑定/default 激活；
 - Persona 删除先验证 ID，revision 清理仅忽略 `NotFound`；路径穿越与其他清理错误 fail-closed 并保留工作副本；

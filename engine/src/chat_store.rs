@@ -914,6 +914,8 @@ impl ChatLog {
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     /// #249：同步截断 `message_candidates` / `message_swipe_index`。
     /// 分支对话树：同步截断 `message_parents`，更新 `active_leaf`。
+    /// 若目标已经是当前活动叶，则成功返回但不刷新 `updated_at`、不递增 revision、
+    /// 不重写持久化文件；加载时补出的兼容字段也不会借 no-op rollback 写回。
     pub fn rollback_to(&mut self, data_root: &Path, index: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if (len == 0 && index != 0) || (len > 0 && index >= len) {
@@ -934,6 +936,12 @@ impl ChatLog {
                      use switch_branch first or specify an index on the active path"
                 ))
             })?;
+
+        // A rollback to the active leaf changes no conversation state. Keep it a
+        // pure no-op so retries do not look like content mutations in metadata.
+        if pos_on_path + 1 == active_indices.len() {
+            return Ok(());
+        }
 
         // New active_leaf = message at `index` (BEFORE removal).
         let new_leaf_id = self.message_ids.get(index).cloned();
@@ -1961,6 +1969,44 @@ mod tests {
         log.rollback_to(root, 0).unwrap();
         let err = log.rollback_to(root, 1).unwrap_err();
         assert!(matches!(err, AirpError::BadRequest(_)));
+    }
+
+    #[test]
+    fn rollback_to_active_leaf_is_a_pure_noop() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "rb_noop_char");
+
+        let mut seed = ChatLog::new("rb_noop_char");
+        seed.save(root).unwrap();
+        let jsonl_path = ChatLog::jsonl_path(root, "rb_noop_char");
+        let meta_path = ChatLog::meta_path(root, "rb_noop_char");
+        // Legacy lines intentionally omit id/ts/parent. Loading derives compatible
+        // in-memory values, but a no-op rollback must not persist that normalization.
+        fs::write(
+            &jsonl_path,
+            concat!(
+                "{\"role\":\"user\",\"content\":\"msg0\"}\n",
+                "{\"role\":\"user\",\"content\":\"msg1\"}\n"
+            ),
+        )
+        .unwrap();
+        let mut log = ChatLog::load_or_create(root, "rb_noop_char").unwrap();
+        let jsonl_before = fs::read(&jsonl_path).unwrap();
+        let meta_before = fs::read(&meta_path).unwrap();
+        let updated_at_before = log.updated_at.clone();
+        let revision_before = log.revision;
+
+        log.rollback_to(root, 1).unwrap();
+
+        assert_eq!(log.updated_at, updated_at_before);
+        assert_eq!(log.revision, revision_before);
+        assert_eq!(fs::read(jsonl_path).unwrap(), jsonl_before);
+        assert_eq!(fs::read(meta_path).unwrap(), meta_before);
+        let reloaded = ChatLog::load_or_create(root, "rb_noop_char").unwrap();
+        assert_eq!(reloaded.updated_at, updated_at_before);
+        assert_eq!(reloaded.revision, revision_before);
+        assert_eq!(reloaded.messages.len(), 2);
     }
 
     // ── #37 durable message-id contract 不变式 ──────────────────────────────
