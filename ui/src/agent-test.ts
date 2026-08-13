@@ -8,6 +8,7 @@ export interface AgentTestHarness {
   selectCharacter(characterId: string): void;
   sendChat(text: string, characterId?: string): void;
   refreshCharacters(): void;
+  setBusError(message: string | null): void;
   getSnapshot(): {
     blueprint: Blueprint | null;
     state: Record<string, Json>;
@@ -25,6 +26,7 @@ export interface AgentTestContext {
   getState: () => Record<string, Json>;
   getSelectedCharacterId: () => string;
   getBusError: () => string | null;
+  setBusError: (message: string | null) => void;
 }
 
 declare global {
@@ -65,6 +67,9 @@ export function installAgentTestHarness(ctx: AgentTestContext): AgentTestHarness
     },
     refreshCharacters() {
       ctx.dispatchIntent("characters.list", {});
+    },
+    setBusError(message) {
+      ctx.setBusError(message);
     },
     getSnapshot() {
       return {

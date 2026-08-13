@@ -23,7 +23,7 @@ type ChatState = { messages?: Record<string, Msg>; order?: string[] };
 
 // Fixed row height for the virtualized window (performance contract: only the
 // viewport slice is rendered, so a 100k-message log stays bounded).
-const ITEM_H = 48;
+const ITEM_H = 72;
 
 const title = computed(() => {
   const p = props.instance.props as unknown as { title?: string } | null;
@@ -128,7 +128,7 @@ function send(): void {
   color: var(--text-tertiary);
   font-size: 12px;
 }
-.msg .text { overflow: hidden; color: var(--text-primary); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.msg .text { overflow: hidden; color: var(--text-primary); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .w-chat-composer {
   display: flex;
   gap: 6px;

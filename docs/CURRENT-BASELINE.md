@@ -11,8 +11,6 @@
 
 本次增量校准（2026-08-13，#564 PR 2）：Blueprint/Surface Protocol v2 的协议层已建立，机器 authority 为 [`protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json)，Rust/TypeScript guard、双向 fixture、显式 v1 migration 与原子 last-known-good/resync store 已有测试。**运行事实仍未切换**：Engine Surface endpoint、`HttpEngineBus`、renderer、`/desktop/` 和真实 Widget 工作流仍属后续 PR，当前正式产品主面和 Tauri 默认入口仍是 `webui/`。
 
-本次增量校准（2026-08-13，#564 PR 3）：Vue 桌面 shell 已按 WebUI canonical tokens 重塑为 Story / World / Director / Debug 工作台，具备 Focus Mode、可折叠 Context Inspector、持久状态条、键盘工作区导航与五档浏览器截图 smoke。它当前只承载明确标注的固定测试 Surface；Blueprint v2 runtime、Engine Surface API、`HttpEngineBus`、`/desktop/` 承载与 Tauri 默认切换仍未交付。
-
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
 本次校准（2026-08-02 v0.0.3 docs-pass）做了三件事：

@@ -9,7 +9,7 @@ const emit = defineEmits<{ (event: "toggle"): void }>();
       <span aria-hidden="true">{{ collapsed ? "‹" : "›" }}</span>
       <span class="sr-only">{{ collapsed ? "展开上下文检查器" : "收起上下文检查器" }}</span>
     </button>
-    <div v-if="!collapsed" id="context-inspector-body" class="inspector__body">
+    <div v-show="!collapsed" id="context-inspector-body" class="inspector__body">
       <header>
         <span class="eyebrow">当前上下文</span>
         <h2>{{ workspaceLabel }}</h2>

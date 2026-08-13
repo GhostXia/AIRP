@@ -1,10 +1,10 @@
 export type WorkspaceId = "story" | "world" | "director" | "debug";
 
 export interface WorkspacePreset {
-  id: WorkspaceId;
-  label: string;
-  shortLabel: string;
-  description: string;
+  readonly id: WorkspaceId;
+  readonly label: string;
+  readonly shortLabel: string;
+  readonly description: string;
 }
 
 export const WORKSPACE_PRESETS: readonly WorkspacePreset[] = [

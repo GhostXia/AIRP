@@ -39,16 +39,12 @@ async function waitForVite(child) {
   throw new Error("Vite did not become ready within 30s");
 }
 
-const vite = spawn(process.execPath, [path.join(uiRoot, "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
-  cwd: uiRoot,
-  stdio: ["ignore", "pipe", "pipe"],
-});
+let vite = null;
+let browser = null;
 let viteOutput = "";
-for (const stream of [vite.stdout, vite.stderr]) stream.on("data", (chunk) => { viteOutput = (viteOutput + chunk).slice(-4000); });
-
-const browser = await chromium.launch({ headless: true, executablePath: chromeExecutable() });
 const failures = [];
 const evidence = [];
+const supplementalEvidence = [];
 const profiles = [
   { name: "1024x768", width: 1024, height: 768, scale: 1 },
   { name: "1440x900", width: 1440, height: 900, scale: 1 },
@@ -58,6 +54,12 @@ const profiles = [
 ];
 
 try {
+  vite = spawn(process.execPath, [path.join(uiRoot, "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+    cwd: uiRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  for (const stream of [vite.stdout, vite.stderr]) stream.on("data", (chunk) => { viteOutput = (viteOutput + chunk).slice(-4000); });
+  browser = await chromium.launch({ headless: true, executablePath: chromeExecutable() });
   await waitForVite(vite);
   mkdirSync(outDir, { recursive: true });
   for (const profile of profiles) {
@@ -69,7 +71,7 @@ try {
     const page = await context.newPage();
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
-    await page.goto(origin, { waitUntil: "networkidle" });
+    await page.goto(`${origin}/?airp_agent_test=1`, { waitUntil: "networkidle" });
     try {
       await page.locator("main.desktop-shell").waitFor({ state: "visible" });
       assert.equal(await page.locator('nav[aria-label="工作区"]').count(), 1);
@@ -98,6 +100,37 @@ try {
       assert.ok(image.byteLength > 15_000, `screenshot pixel evidence too small: ${image.byteLength} bytes`);
       assert.deepEqual(pageErrors, []);
       evidence.push({ ...profile, screenshotBytes: image.byteLength, overflow });
+
+      if (profile.name === "1024x768") {
+        const contextToggle = page.locator('button[aria-label="切换上下文检查器"]');
+        await page.waitForFunction(() => document.querySelector('button[aria-label="切换上下文检查器"]')?.getAttribute("aria-pressed") === "false");
+        await contextToggle.click();
+        await page.locator("#context-inspector-body").waitFor({ state: "visible" });
+        const contextFile = path.join(outDir, "1024x768-context-open.png");
+        const contextImage = await page.screenshot({ path: contextFile });
+        assert.ok(contextImage.byteLength > 15_000, "context-open screenshot is empty");
+        supplementalEvidence.push({ name: "1024x768-context-open", screenshotBytes: contextImage.byteLength });
+        await page.locator(".inspector__toggle").click();
+
+        await page.evaluate(() => window.__AIRP_AGENT_TEST__?.setBusError("Engine 暂时不可用；请检查服务后重试。"));
+        await page.setViewportSize({ width: 1024, height: 600 });
+        const alert = page.locator('[role="alert"]');
+        await alert.waitFor({ state: "visible" });
+        await alert.locator('button[aria-label="重试 Engine 连接"]').waitFor({ state: "visible" });
+        const errorFile = path.join(outDir, "1024x600-error.png");
+        const errorImage = await page.screenshot({ path: errorFile });
+        assert.ok(errorImage.byteLength > 15_000, "short-viewport error screenshot is empty");
+        supplementalEvidence.push({ name: "1024x600-error", screenshotBytes: errorImage.byteLength });
+      }
+
+      if (profile.name === "1440x900") {
+        const contextToggle = page.locator('button[aria-label="切换上下文检查器"]');
+        await contextToggle.focus();
+        const focusFile = path.join(outDir, "1440x900-keyboard-focus.png");
+        const focusImage = await page.screenshot({ path: focusFile });
+        assert.ok(focusImage.byteLength > 15_000, "keyboard-focus screenshot is empty");
+        supplementalEvidence.push({ name: "1440x900-keyboard-focus", screenshotBytes: focusImage.byteLength });
+      }
     } catch (error) {
       failures.push(`${profile.name}: ${error.message}`);
     } finally {
@@ -105,11 +138,11 @@ try {
     }
   }
 } finally {
-  await browser.close();
-  vite.kill();
+  if (browser) await browser.close();
+  if (vite) vite.kill();
 }
 
-writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify({ origin, profiles: evidence, failures }, null, 2));
+writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify({ origin, profiles: evidence, supplemental: supplementalEvidence, failures }, null, 2));
 if (failures.length > 0) {
   console.error(`desktop shell smoke failed:\n${failures.join("\n")}`);
   console.error(viteOutput);

@@ -39,6 +39,15 @@ const blueprint = shallowRef<Blueprint | null>(SHELL_PREVIEW_BLUEPRINT);
 // Surface endpoint/runtime arrives in later #564 slices; browser preview must
 // not imply a successful Engine connection.
 const isTauri = isTauriEnvironment();
+const connectionState = ref<"preview" | "connecting" | "connected" | "failed">(
+  isTauri ? "connecting" : "preview",
+);
+const connectionLabel = computed(() => {
+  if (connectionState.value === "connected") return "Engine 已连接";
+  if (connectionState.value === "connecting") return "Engine 连接中";
+  if (connectionState.value === "failed") return "Engine 未连接";
+  return "固定协议预览";
+});
 const selectedCharacterId = ref<string>("");
 const showSettings = ref(false);
 
@@ -66,6 +75,11 @@ setState("w-characters", { ids: [], loaded: true });
 let bus: AgentBus | null = null;
 let unsubscribe: (() => void) | null = null;
 let disposed = false;
+let compactInspectorMedia: MediaQueryList | null = null;
+
+function collapseForCompactViewport(event: MediaQueryListEvent | MediaQueryList): void {
+  if (event.matches) inspectorCollapsed.value = true;
+}
 
 function onEnvelope(e: Envelope): void {
   const guard = validateEnvelope(e);
@@ -152,7 +166,35 @@ function onIntent(name: string, params?: Json): void {
   });
 }
 
-function refreshCharacters(): void {
+async function initializeBus(): Promise<void> {
+  if (!isTauri || disposed) return;
+  connectionState.value = "connecting";
+  busError.value = null;
+  unsubscribe?.();
+  unsubscribe = null;
+  bus = null;
+  try {
+    const built = await createBus();
+    if (disposed) return;
+    bus = built;
+    unsubscribe = built.subscribe(onEnvelope);
+    connectionState.value = "connected";
+    setState("w-characters", { ids: [], loaded: false });
+    setState("w-settings", { loaded: false });
+    onIntent("characters.list", {});
+  } catch (err) {
+    connectionState.value = "failed";
+    bus = null;
+    console.error("[App] createBus failed:", err);
+    busError.value = String(err ?? "createBus failed");
+  }
+}
+
+async function refreshCharacters(): Promise<void> {
+  if (!bus) {
+    await initializeBus();
+    return;
+  }
   onIntent("characters.list", {});
 }
 
@@ -163,6 +205,7 @@ type AgentTestInstaller = {
     getState: () => typeof stateStore;
     getSelectedCharacterId: () => string;
     getBusError: () => string | null;
+    setBusError: (message: string | null) => void;
   }) => unknown;
 };
 
@@ -178,29 +221,25 @@ async function installOptionalAgentTestHarness(): Promise<void> {
     getState: () => stateStore,
     getSelectedCharacterId: () => selectedCharacterId.value,
     getBusError: () => busError.value,
+    setBusError: (message) => { busError.value = message; },
   });
 }
 
 onMounted(async () => {
+  compactInspectorMedia = window.matchMedia("(max-width: 1180px)");
+  collapseForCompactViewport(compactInspectorMedia);
+  compactInspectorMedia.addEventListener("change", collapseForCompactViewport);
+  if (isTauri) await initializeBus();
   try {
-    if (isTauri) {
-      const built = await createBus();
-      if (disposed) return;
-      bus = built;
-      unsubscribe = bus.subscribe(onEnvelope);
-      setState("w-characters", { ids: [], loaded: false });
-      setState("w-settings", { loaded: false });
-      refreshCharacters();
-    }
     await installOptionalAgentTestHarness();
   } catch (err) {
-    console.error("[App] createBus failed:", err);
-    busError.value = String(err ?? "createBus failed");
+    console.error("[App] agent test harness failed:", err);
   }
 });
 onUnmounted(() => {
   disposed = true;
   unsubscribe?.();
+  compactInspectorMedia?.removeEventListener("change", collapseForCompactViewport);
 });
 </script>
 
@@ -221,11 +260,12 @@ onUnmounted(() => {
           <h1 id="workspace-title">{{ activeWorkspacePreset.label }}</h1>
         </div>
         <div class="workspace__actions">
-          <span class="connection" :class="{ 'connection--live': isTauri }">
-            <span aria-hidden="true"></span>{{ isTauri ? "Engine 已连接" : "固定协议预览" }}
+          <span class="connection" :class="{ 'connection--live': connectionState === 'connected' }">
+            <span aria-hidden="true"></span>{{ connectionLabel }}
           </span>
           <UiButton
             v-if="!focusMode"
+            class="context-toggle"
             label="切换上下文检查器"
             :pressed="!inspectorCollapsed"
             @click="inspectorCollapsed = !inspectorCollapsed"
@@ -237,7 +277,7 @@ onUnmounted(() => {
       <div v-if="busError" class="status-banner status-banner--error" role="alert">
         <strong>Surface 未更新</strong>
         <span>{{ busError }}</span>
-        <UiButton label="重新加载角色" @click="refreshCharacters">重试</UiButton>
+        <UiButton label="重试 Engine 连接" @click="refreshCharacters">重试</UiButton>
       </div>
       <div v-else-if="!isTauri" class="status-banner" role="status">
         <strong>Shell preview</strong>
@@ -316,7 +356,7 @@ h1 { margin: 0; font: 650 21px/1 var(--font-display); }
 .surface-state { display: grid; place-content: center; gap: 8px; height: 100%; text-align: center; }
 .surface-state span { color: var(--text-secondary); font-size: 13px; }
 .workspace__footer { display: flex; align-items: center; gap: 18px; padding: 0 18px; overflow: hidden; border-top: 1px solid var(--border-default); color: var(--text-tertiary); font: 500 9px/1 var(--font-utility); white-space: nowrap; }
-@media (max-width: 1180px) { .desktop-shell { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr) 38px; } .desktop-shell :deep(.rail__wordmark), .desktop-shell :deep(.rail__copy), .desktop-shell :deep(.rail__focus span:last-child) { display: none; } .desktop-shell :deep(.inspector__body) { display: none; } }
-@media (max-width: 760px) { .desktop-shell, .desktop-shell--inspector-collapsed { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell :deep(.inspector) { display: none; } .workspace__chapter, .connection { display: none; } .surface { margin: 8px; } .workspace__footer { gap: 10px; } }
-@media (max-height: 640px) { .status-banner { display: none; } .surface { margin-top: 8px; } }
+@media (max-width: 1180px) { .desktop-shell { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr) 38px; } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector) { position: fixed; top: 0; right: 0; z-index: 10; width: var(--desktop-inspector-w); box-shadow: -12px 0 28px color-mix(in srgb, var(--ink) 14%, transparent); } .desktop-shell :deep(.rail__wordmark), .desktop-shell :deep(.rail__copy), .desktop-shell :deep(.rail__focus span:last-child) { display: none; } }
+@media (max-width: 760px) { .desktop-shell, .desktop-shell--inspector-collapsed { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell :deep(.inspector), .context-toggle { display: none; } .workspace__chapter, .connection { display: none; } .surface { margin: 8px; } .workspace__footer { gap: 10px; } }
+@media (max-height: 640px) { .status-banner { min-height: 34px; padding-block: 4px; } .status-banner > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .surface { margin-top: 8px; } }
 </style>

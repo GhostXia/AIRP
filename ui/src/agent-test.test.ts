@@ -8,6 +8,7 @@ type AgentTestHarness = {
   selectCharacter(characterId: string): void;
   sendChat(text: string, characterId?: string): void;
   refreshCharacters(): void;
+  setBusError(message: string | null): void;
   getSnapshot(): { selectedCharacterId: string };
   getState(scope?: string): Json | Record<string, Json>;
   getText(selector?: string): string;
@@ -22,6 +23,7 @@ type AgentTestModule = {
     getState: () => Record<string, Json>;
     getSelectedCharacterId: () => string;
     getBusError: () => string | null;
+    setBusError: (message: string | null) => void;
   }): AgentTestHarness | null;
 };
 
@@ -86,6 +88,7 @@ describe("agent UI test harness", () => {
 
     const { body } = installDom();
     const calls: Array<[string, Json | undefined]> = [];
+    let busError: string | null = null;
     const state = { "w-chat": { messages: {}, order: [] } } satisfies Record<string, Json>;
     const harness = mod.installAgentTestHarness({
       dispatchIntent(name, params) {
@@ -94,7 +97,8 @@ describe("agent UI test harness", () => {
       getBlueprint: () => ({ version: "bp", layout: { type: "dock", areas: [] }, widgets: [] }),
       getState: () => state,
       getSelectedCharacterId: () => "alice",
-      getBusError: () => null,
+      getBusError: () => busError,
+      setBusError: (message) => { busError = message; },
     });
 
     expect(harness).not.toBeNull();
@@ -103,6 +107,7 @@ describe("agent UI test harness", () => {
     harness!.selectCharacter("bob");
     harness!.sendChat("hello", "bob");
     harness!.refreshCharacters();
+    harness!.setBusError("offline");
 
     expect(calls).toEqual([
       ["characters.select", { character_id: "bob" }],
@@ -111,6 +116,7 @@ describe("agent UI test harness", () => {
       ["characters.list", {}],
     ]);
     expect(harness!.getSnapshot().selectedCharacterId).toBe("alice");
+    expect(busError).toBe("offline");
     expect(harness!.getState("w-chat")).toEqual(state["w-chat"]);
     expect(harness!.getText()).toContain("AIRP ready");
     expect(await harness!.waitForText("AIRP")).toBe(true);
