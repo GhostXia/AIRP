@@ -1,11 +1,13 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-08-09
-> 代码基线：`main@affa315`（`v0.0.5-rc.2` prerelease 候选）
+> 基线日期：2026-08-12
+> 代码基线：`main@7a90d88`
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
 本文只记录当前代码树能够支持的结论。GitHub issues 是未完成工作的实时追踪面；PR、审计报告和历史测试数字只证明对应代码树，不自动证明当前 `HEAD`。
+
+本次增量校准（2026-08-12，#564 PR 1）：Owner 已重新启动协议驱动的 Vue Blueprint/Widget 桌面主面开发，目标架构、资产处置、基线与回退边界见 [`plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。**运行事实尚未改变**：当前正式产品主面仍是 `webui/`，Tauri 仍默认承载该 WebUI，Blueprint v2、`/desktop/`、Surface API 与 `HttpEngineBus` 均未交付，不得因计划获批写成现有能力。
 
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
@@ -29,7 +31,7 @@ AIRP 是面向 Role Play 的 AI Agent 客户端，采用“无头 Engine + 可�
 | `webui/` | 无构建、多页面、同源 WebUI（当前 44 屏；`assets/widgets/` 为 widget 运行时与 SDK 资产面） | **正式产品交付主面** |
 | `airp-engine-console/` | WebUI 视觉与交互样板 | 设计基线，不是第二套运行时 |
 | `protocol/` | `airp-state-protocol`：共享线协议类型 | Rust workspace 成员 |
-| `ui/`、`ui/src-tauri/` | Tauri 桌面壳：同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；Vue 主面已归档 | **桌面线重启**，v0.0.4 交付面；run `31309894372` 含包内 desktop smoke，仍缺 GUI 真机与真实 provider 验收，边界与限制见 §2.3 |
+| `ui/`、`ui/src-tauri/` | 当前运行事实：Tauri 壳同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；目标事实：#564 恢复 Vue Blueprint/Widget 桌面主面 | **#564 开发中**；当前包仍走 WebUI。Blueprint v2、`/desktop/` 与真实 Surface 闭环未交付，见 §2.3 和 #564 PR 1 决策 |
 | `deploy/windows-webui/` | Windows 便携 WebUI 包 | 当前优先 artifact |
 | `deploy/linux-webui/` | Linux musl 便携包 | 手动构建 artifact |
 | `deploy/production/` | 单实例自托管 HTTPS preview | P0 拓扑，不是正式发布 |
@@ -62,7 +64,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 2. **单资源原子写 ≠ 跨资源事务**：`finalize` 可对 message → state → volume 逐步 fail-closed，崩溃后跨资源一致性仍是 best-effort（RR-004 / #286）。  
 3. **Domain 写路径未完全闭合**：shared service 是目标边界；Agent tools 等路径仍可能直接 `replace_file` / `fs` 写（#381 E-P1-3 / #160）。  
 4. **锁模型分裂**：character/session/state/persona/conversation/decay/FTS/quota 等多套锁；async 路径上存在 std 锁 + 锁内磁盘 I/O；poison 策略不一致（#284/#220/#381）。  
-5. **桌面线暂停** ⚠️ superseded（历史结论，2026-08-06）：C-P0（PR #480）起桌面线转为「Tauri 壳同源承载 webui + bearer 注入通道」，Vue 主面归档；当前事实与限制见 §2.3。原结论中「画布接力等草案在 archive、不进入当前执行队列」仍然成立。
+5. **桌面线暂停** ⚠️ superseded twice（历史结论）：2026-08-06 C-P0 将桌面线改为「Tauri 壳同源承载 webui + bearer 注入通道」并归档 Vue 主面；2026-08-12 Owner 通过 #564 重新启动 Vue Blueprint/Widget 桌面主面。当前运行事实仍是 C-P0 WebUI 壳，目标架构见 #564 PR 1 决策；两者不得混写。
 
 ### 2.2 v0.0.3 收敛切片的已交付边界
 
@@ -78,7 +80,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | #436/#439/#441/#470（R1 锁序收敛 + 运行时强制） | `advance_plot` / `trigger_world_event` / `advance_clock` / `npc_action` / `run_seal_flow` 五个 agent-tool 路径补齐外层 `character_lock.read()`（R1）；`StateService::mutate` 拆为 `mutate_locked` + `mutate` 消除 re-entrancy；`lock_order` 模块提供 R1+R2 运行时强制（thread-local 栈 + RAII Guard，默认 debug；release-profile CI 以 `lock-order-runtime` feature 验证）；4 条并发回归测试（各路径与 `delete_character` 经 `Barrier` 并发，30s 超时检测死锁 + TOCTOU）；lock-map cleanup race 修复（`remove_deleted_*_lock` 移到 write guard drop 之后）。 | 正式 release 默认不启用 tracker 以保持零开销；PR gate 有 `--release --features lock-order-runtime` 专项门；`advance_plot` 仍持 std 锁做同步 I/O（A3 debt）；W-01~W-04 follow-up 见 #442/#443/#444。 |
 | #342（PR #445，backup/restore 最小闭环） | 手动 backup（Full / Character / Session scope）+ manifest schema v1（per-file SHA-256 + tree SHA-256）+ `verify_against_disk` 完整性校验 + restore（Full + scoped `swap_scoped_subtree`）+ `PreRestoreRollback` 回滚备份 + post-restore 校验 + `PreDelete` 自动备份（`delete_character` / `delete_session`，`force=true` 可跳过）+ secret 排除（`secrets.json` / `settings.json`）+ `BACKUP_LOCK` 串行化 + WebUI backup 管理界面。82 条 backup 测试通过（PR #445）。 | v1 限制：无自动定时备份；restore swap 阶段不持 `character_lock`（W-02，#447，v1 缓解为维护窗口执行）；Windows `sync_dir` no-op（W-03，#448）；跨资源一致性 backup 未交付；完整 migration / 导出未交付（#346）。审计遗留 W-01~W-06 见 #446/#447/#448/#449/#450/#451。 |
 
-### 2.3 v0.0.4 收敛切片：桌面线与扩展合同（历史 `main@e28ea02`；当前候选 `main@affa315`）
+### 2.3 v0.0.4 收敛切片：桌面线与扩展合同（历史 `main@e28ea02`；候选发布历史快照 `main@affa315`）
 
 以下记录 v0.0.3 → `main@e28ea02` 桌面线与扩展合同的已交付边界与已知限制，不把合同闭环外推为成熟生态：
 
@@ -174,7 +176,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | v0.0.5-rc.2 candidate release | GitHub Actions run `31309894372` on `main@affa315` | Candidate exact-tag package validation and smoke evidence; the current workflow publishes only `airp-webui-windows-x64.zip`, while dependency/audit information remains in the tagged git tree. Prerelease candidate only. `release` environment API returned `protection_rules=[]`, `can_admins_bypass=true`; required reviewer configuration is not present. Existing rc.2 assets are historical and unchanged. |
 | production topology / 真实 provider·browser | CI mock/system-Chrome 与本地检查 | 不能替代 #130 维护者真实 provider + 真实 browser + Compose 验收；当前不宣称通过。 |
 
-未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact（除 run `31309894372` 的 Windows candidate package smoke）、网络故障、进程崩溃、真实 provider 长会话，以及 Tauri 壳续期循环的 GUI 真机确认，不得由本表推断为通过。本 docs-pass（2026-08-09）未重跑 full-workspace 测试；历史行仍保留其原始 commit 证据，不能外推到当前 `main@affa315`。
+未在本次校准中完成的 maintainer-run production Compose、真实 provider/browser、Windows/Linux artifact（除 run `31309894372` 的 Windows candidate package smoke）、网络故障、进程崩溃、真实 provider 长会话，以及 Tauri 壳续期循环的 GUI 真机确认，不得由本表推断为通过。2026-08-09 docs-pass 未重跑 full-workspace 测试；对应历史行只证明 `main@affa315`，不能外推到当前 `main@7a90d88`。
 
 ## 7. 文档职责（校准后）
 

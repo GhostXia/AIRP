@@ -1,20 +1,28 @@
 # AIRP UI
 
-`ui/` 是 AIRP 保留的 Tauri + Vue 桌面客户端资产。它是 engine 的客户端，不再假设独立 Gateway 或 MockBus 作为默认后端。C-P0 起 Tauri 壳同源承载 `webui/`，正式产品交付主面仍是 `webui/`；GUI 真机、完整 provider 工作流和发布级桌面验收仍开放。本页最后在 2026-08-09 的 `main@affa315`（`v0.0.5-rc.2` prerelease candidate）复核。
+`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端目录。当前运行事实仍是 C-P0 的 Tauri 壳同源承载 `webui/`；Owner 已在 [#564](https://github.com/GhostXia/AIRP/issues/564) 决定恢复协议驱动的 Vue Blueprint/Widget 桌面主面，因为该设计具有更好的兼容性与扩展性。目标架构、资产处置和双入口回退见 [`../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。本页最后在 2026-08-12 的 `main@7a90d88` 复核。
 
-候选发布事实：Actions run `31309894372` 的包内 desktop smoke 成功，但该自动 smoke 不替代 GUI 真机与真实 provider 验收；正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 和 `release` environment required reviewer 配置阻塞。
+历史候选发布事实：Actions run `31309894372` 在 commit `affa315a5917109e2ae337382cfcdcb36021073a` 对 artifact `airp-webui-windows-x64` 的包内 desktop smoke 成功；该证据不覆盖当前 `main@7a90d88`，也不替代 GUI 真机与真实 provider 验收。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 和 `release` environment required reviewer 配置阻塞。
 
 当前全仓状态与发布门槛见 [`../docs/CURRENT-BASELINE.md`](../docs/CURRENT-BASELINE.md)。
 
-UI 继承 AIRP-State-Protocol 的 Blueprint、Widget、patch、guard、虚拟滚动和沙箱资产，但不继承其通用协议优先定位。当前目标是 AIRP 专用桌面客户端；Widget 扩展必须先服务 RP 工作流。详见 [`../docs/UI-PROTOCOL-DECISION.md`](../docs/UI-PROTOCOL-DECISION.md)。
+UI 继承 AIRP-State-Protocol 的 Blueprint、Widget、patch、guard、虚拟滚动和沙箱经验，但不继承其通用协议优先定位。当前目标是 AIRP 专用桌面客户端；Widget 扩展必须先服务 RP 工作流。详见 [`../docs/UI-PROTOCOL-DECISION.md`](../docs/UI-PROTOCOL-DECISION.md)。
 
-## 当前职责
+## 当前运行事实
 
-- 渲染 Blueprint/widget UI。
-- 通过 `TauriBus` 调用 Tauri command `airp_dispatch`。
-- Tauri Rust 侧 `BusRelay` 直连 AIRP engine HTTP/SSE API。
-- 将 engine SSE 输出转换为 State Protocol `state` patch，流式更新 `w-chat`。
-- 通过 Tauri dialog 选择本地 PNG/JSON 角色卡路径，并发送 `characters.import` intent。
+- `ui/src-tauri/` 负责 Engine sidecar 生命周期、data root、desktop-session token、原生错误与打包。
+- Tauri 启动后导航到 Engine 同源承载的 WebUI；正式产品主面仍是 `webui/`。
+- `ui/src/` 中的 Vue Blueprint/Widget 代码当前是 scaffold/test 资产，不是正式运行主面。
+- 非 Tauri 环境仍会落到 MockBus；在 #564 PR 6 前不得把该路径写成真实浏览器产品链路。
+- 归档的 Tauri `BusRelay` 不在当前源码中，#564 也不会恢复逐 intent 的 Rust 业务 relay。
+
+## #564 目标职责
+
+- Vue 渲染 Engine 权威下发、通过 guard 的 Blueprint v2 和 Widget projection。
+- 浏览器 `/desktop/` 与 Tauri 共用 REST + SSE `HttpEngineBus`。
+- Tauri 只保留 native shell 职责，不解释聊天、记忆、状态或扩展 intent。
+- 当前 WebUI 在迁移与市场观察期继续可用，且与桌面 UI 读写同一组 Engine domain service。
+- MockBus 只用于显式测试和演示 fixture。
 
 ## 结构
 
@@ -32,11 +40,11 @@ ui/
     ├── Cargo.toml
     ├── capabilities/default.json
     └── src/
-        ├── main.rs        # Tauri shell setup
-        └── bus.rs         # live bridge to engine
+        ├── main.rs        # Tauri shell lifecycle, token, navigation
+        └── lifecycle.rs   # startup ownership and shutdown rules
 ```
 
-The canonical Rust protocol crate lives in `../protocol`. The TypeScript types in `src/protocol/types.ts` intentionally mirror the subset used by the UI.
+The Rust protocol crate lives in `../protocol`. TypeScript types in `src/protocol/types.ts` are currently a manual subset mirror; #564 PR 2 must select a machine-readable authority and add Rust/TypeScript parity evidence before the public Surface contract changes.
 
 ## Local Commands
 
@@ -61,10 +69,9 @@ cargo test -p airp-ui
 
 - Engine URL defaults to `http://127.0.0.1:8765`.
 - Override with `AIRP_ENGINE_URL`.
-- Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested.
-- Character import is path-first: the UI sends only `card_path`; it must not put base64 card blobs into Vue state or widget props.
-- Chat state is id-keyed as `{ messages, order }`. `BusRelay` no longer uses `chat_lock`; each `chat.send` opens the user and assistant rows with one patch envelope, then streams into `/messages/{assistant_id}/text`.
-- WebUI is currently the primary backend-incubation, contract-validation, and basic RP development surface. This Tauri/Vue client is the long-term product delivery surface through the same-origin shell, but package smoke is not GUI-real-device or real-provider acceptance.
+- Historical baseline: the original AIRP-State-Protocol packaged `.exe` was verified to launch and support simple interaction, but it was not deeply tested and is not current release evidence.
+- The current trusted-local WebUI import path is path-first. Future desktop Widget import must use an Engine-authorized/native file-selection boundary and must not put base64 card blobs into Blueprint props or long-lived Vue state.
+- The current WebUI is the supported product surface. The restored Tauri/Vue desktop is a target under #564; it becomes the default only after real Engine vertical slices, package smoke, GUI evidence, the observation window, and Owner approval.
 - Agent UI Test Harness is dev/test-only. Enable with `?airp_agent_test=1`, `localStorage.AIRP_AGENT_TEST=1`, or `VITE_AIRP_AGENT_TEST=1`; then use `window.__AIRP_AGENT_TEST__` from Codex browser control or Playwright.
 - Users who do not want any agent-control surface can delete `src/agent-test.ts` before building. `App.vue` loads the harness only when the module exists, and the related test does not block the build when the module is absent.
 

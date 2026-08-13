@@ -2,7 +2,7 @@
 
 > 状态：**待持续更新的活文档**
 >
-> 最后仓库校准：2026-07-30，`main@4f3f792`；本轮未重新查询全部上游版本，具体版本与许可证的实际核验日期仍以各表为准。`tools/dep-governance/` 提供 Cargo + npm 依赖发现与 SPDX/CycloneDX SBOM 生成器，当前 SBOM 快照存于 `docs/sbom/`；该工具是手动离线运行，不替代引入新依赖时的逐项许可证/provenance 核验。
+> 全表最后仓库校准：2026-07-30，`main@4f3f792`；2026-08-12 的 #564 UI 调研小节在 `main@7a90d88` 单独复核。本轮未重新查询其余上游版本，具体版本与许可证的实际核验日期仍以各表/小节为准。`tools/dep-governance/` 提供 Cargo + npm 依赖发现与 SPDX/CycloneDX SBOM 生成器，当前 SBOM 快照存于 `docs/sbom/`；该工具是手动离线运行，不替代引入新依赖时的逐项许可证/provenance 核验。
 
 本文区分 AIRP 作者自己的前序项目、第三方设计参考，以及未来可能发生的第三方资产复用。新增研究对象、实际采用外部资产或上游许可证变化时，必须同步更新本文。
 
@@ -41,6 +41,20 @@
 | [AI Dungeon](https://play.aidungeon.com/) | Story Cards + Memory Banks 按需调出上下文相关记忆、UGC 场景发现/分享/fork、多人联机冒险、分级订阅模式、定制微调模型提升 RP 体验 | 战略与商业模型参考；未作为当前 capability 事实；AIRP 仅研究其公开产品行为与商业模型，不复制代码、prompt、场景数据或视觉资产 | 2026-08-04 战略分析（基于公开产品页面与文档） | proprietary（Latitude 公司闭源商业产品，无公开源代码仓库） | [CHIMERA-BLUEPRINT.md](CHIMERA-BLUEPRINT.md) |
 | [Friends & Fables](https://www.friendsandfables.com/) | AI Game Master（Franz）叙述/裁决规则/实时响应世界变化、D&D 5e 规则引擎、战术回合制战斗、AI GM + 虚拟桌面集成、UGC 世界浏览、动态故事线与高级记忆 | 战略与商业模型参考；未作为当前 capability 事实；AIRP 仅研究其公开产品行为，不复制代码、规则文本、prompt 或视觉资产 | 2026-08-04 战略分析（基于公开产品页面与文档） | proprietary（闭源商业产品，无公开源代码仓库） | [CHIMERA-BLUEPRINT.md](CHIMERA-BLUEPRINT.md) |
 | [KoboldAI / KoboldCpp](https://github.com/KoboldAI/KoboldAI-Client) | 本地模型极致优化与采样参数精细控制（mirostat/rep penalty/tail-free 等）、可编脚本动作（Lua）介入生成流程、记忆管理、世界信息、社区 RP 微调模型生态（Erebus/Nerys 等） | 战略分析参考；未作为当前 capability 事实；AIRP 按自身 domain model 独立实现等价能力，不复用其代码、Lua 脚本环境或模型权重 | 2026-08-04 战略分析（未固定版本/commit；仓库 `main` 分支 `pushed_at: 2025-01-16T17:01:49Z`） | AGPL-3.0（GitHub 仓库元信息 `spdx_id: AGPL-3.0`，2026-08-06 复核更正；原 PR 标注「pending」为核验遗漏） | [CHIMERA-BLUEPRINT.md](CHIMERA-BLUEPRINT.md) |
+
+### 2026-08-12 #564 UI 调研补充
+
+以下记录只补充 #564 的桌面信息架构与交互输入。AIRP 不复用其源码、schema、prompt、测试、CSS、图标、截图或视觉资产；版本/许可证基线仅说明研究证据边界，不授权复制实现。
+
+| 项目 | 本轮公开行为观察 | 固定版本/日期 | 许可证核验与 AIRP 边界 |
+|---|---|---|---|
+| [NeuroBook](https://github.com/notnotype/neuro-book) | 稳定领域导航、中央写作工作区、上下文 Agent 面板，以及 World/Plot/Trace 分离，支持 AIRP 的“动态 Surface + Context Inspector”方向 | `844abc29ec8fc67c8ae9764e03da083a676dea32` / 2026-08-12 | AGPL-3.0；只参考公开界面行为，AIRP 独立设计布局合同与视觉 |
+| [Talemate](https://github.com/vegu-ai/talemate) | 故事居中，场景、世界摘要及 Agent/模型状态在周边可观察；作为 RP 可观测性参考，不默认暴露内部编排 | `c12a82930e913816fdac21aedada1962ac45c3d7`，release `0.38.0` / 2026-08-12 复核 | AGPL-3.0；延续上表的纯理念参考边界 |
+| [RisuAI](https://github.com/kwaroran/Risuai) | 轻量/高级用户渐进披露、受控调色板和非阻塞 UI 事件支持 #564 的简单 Story 默认面与按需高级面板 | `72ce721878d65b09baf4339638dfd221d1788261`，release `v2026.6.215` / 2026-08-12 | GPL-3.0；不复用代码、主题、UI 资产或事件 API 形状 |
+| [Open WebUI](https://github.com/open-webui/open-webui) | 统一设置、操作归并、键盘/ARIA、持久错误与简单空状态作为交互卫生参考；其通用单聊天画布不作为 AIRP 产品骨架 | `01f4282f1ffe0d6212f58d3afbeae21fffd0c4be`，release `v0.11.0` / 2026-08-12 | GitHub API 未声明 SPDX；按保留所有权利处理，仅研究公开产品行为 |
+| [LobeHub](https://github.com/lobehub/lobehub) | Workspace/Project/Agent/长期任务分离、结构化 composer context 与能力驱动模型控制作为工作区和输入参考 | `ca27228d55bb604f8bcf455a18f5e87d3ba9f9a5`，release `v2.2.13` / 2026-08-12 | GitHub API 未声明 SPDX；按保留所有权利处理，仅研究公开产品行为 |
+| [SillyTavern](https://github.com/SillyTavern/SillyTavern) | Swipe picker、生成取消、Persona 生命周期和扩展信任提示作为成熟 RP 边缘场景清单，不采纳其累积式主界面密度 | `8172dcd0ee672d3cd9a5e5f7af134f91a45cd2b8`，release `1.18.0` / 2026-08-12 | AGPL-3.0；延续上表的公开行为与互操作性参考边界 |
+| [VCPToolBox](https://github.com/lioensky/VCPToolBox) | 独立记忆查看器与 panel pin/pop-out 只作为 M2 后 power-user 候选；默认多浮窗与密集标签墙明确排除 | `351dadc74836ebf78d25fa942619cd34d9c82987` / 2026-08-12 | GitHub API 未声明 SPDX；按保留所有权利处理，不复制任何代码或视觉资产 |
 
 列入本表仅表示 AIRP 曾研究其公开设计、产品行为或互操作格式，不表示原项目维护者认可、参与或支持 AIRP，也不自动表示 AIRP 复用了其代码、规则、数据、测试或视觉资产。
 

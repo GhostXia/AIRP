@@ -1,12 +1,14 @@
 # UI 协议与 Widget 决策
 
-> 状态：已接受
-> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）
+> 状态：已接受；2026-08-12 的桌面目标架构由 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 增量取代本文 2026-08-05/06 对 Blueprint 与 Vue 主面的校准结论
+> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）；2026-08-12，`main@7a90d88`（#564 重新启动协议驱动桌面主面）
 > 上位决策：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)
 
 ## 结论
 
 AIRP-State-Protocol 是有价值的 UI 协议与 Widget 资产来源，但不是 AIRP 的产品北极星。
+
+2026-08-12，Owner 在 [#564](https://github.com/GhostXia/AIRP/issues/564) 明确恢复协议驱动的 Vue Blueprint/Widget 桌面主面，同时保留当前 WebUI 设计语言与迁移期产品能力。本文 2026-08-05 将 Blueprint 收缩为 slot plan、2026-08-06 将 Vue 主面标为归档的内容继续作为历史事实保留，但不再是目标架构；新边界、数据权威、资产处置和双入口回退以 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 为准。
 
 AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议服务于这个产品闭环，不能把项目重新拉回"通用 Agent UI 标准"或"协议优先平台"。
 
@@ -58,10 +60,10 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 
 | 资产 | 决策 |
 |---|---|
-| Blueprint schema/concept | 保留并改造为 AIRP 内部渲染合同 ⚠️ superseded（2026-08-05）：「内部渲染合同」的定位已被文末「修订记录 → 2026-08-05：Blueprint 定位校准」取代——Blueprint 是声明式 slot 组合 / 仪表盘合同层，非运行时渲染技术；保留结论本身不变 |
+| Blueprint schema/concept | **2026-08-12 当前目标**：恢复为 AIRP 内部、版本化、受限布局树的运行时渲染合同；Engine 权威下发 Surface snapshot/projection，Vue 渲染 Blueprint/Widget。2026-08-05 的“仅 slot 组合、非运行时渲染技术”结论已由 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 取代，作为历史保留在修订记录 |
 | Widget Registry / WidgetHost | 保留；首方 RP widget 优先 |
 | RFC6902 store | 保留；`test` 已做 patch 前预校验，失败不半应用 |
-| Tauri + Vue shell | 保留；当前桌面客户端 ⚠️ superseded（2026-08-06）：C-P0（PR #480）后 Tauri 壳转为同源承载 engine webui + bearer 注入通道，Vue 主面归档；见 CURRENT-BASELINE §2.3 |
+| Tauri + Vue shell | **2026-08-12 当前目标**：恢复 Vue Blueprint/Widget 桌面主面；Tauri 保留 sidecar/token/native/package 职责，不恢复业务 relay。当前运行包仍承载 WebUI，迁移期以 `/` + `/desktop/` 双入口和 WebUI 回退共存；数据权威、资产处置与切换门禁见 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) |
 | AgentBus 抽象 | 保留为 UI 侧接缝，但默认实现指向 AIRP engine |
 | MockBus | 仅测试/演示 |
 | Capability declarations | 保留；敏感用途前必须补 engine 侧强制 ✅ 已落地（2026-08-06）：C-P3（PR #486）实现 engine 权威逐调用强制（`/v1/widget-intents` + capability 封闭集 + `GET /v1/grants`）；MCP/plugin 授权主体尚未接入统一面 |
@@ -118,5 +120,5 @@ UI 应该成为强大、可扩展的 AIRP 客户端，而不是一个刚好能�
 5. **工程规则 8/9（SSE 事件合同与 widget intent 合同）**：已在 PR #464/#487 固化为机器可读事实源，与当前事实一致，无需改动。
 6. **未变项**：「必须保留」清单与「必须降级」清单（含第三方 widget 市场后置）结论不变；consent/sandbox 仍定位为纵深防御而非唯一安全边界。
 
-**当前事实入口**：桌面壳与扩展合同的交付边界与已知限制（含 #485 剩余 W4/W5/W6/T1、壳续期循环未经 GUI 真机确认）以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §2.3 为准；安全边界见 [SECURITY.md](SECURITY.md)；新风险见 [RISK-REGISTER.md](RISK-REGISTER.md) RR-015~RR-017。
+**当前事实入口**：桌面壳与扩展合同的已交付边界与已知限制（含 #485 剩余 W4/W5/W6/T1、壳续期循环未经 GUI 真机确认）以 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §2.3 为准；#564 的目标架构以 [PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 为准；安全边界见 [SECURITY.md](SECURITY.md)；历史扩展风险见 [RISK-REGISTER.md](RISK-REGISTER.md) RR-015~RR-017，当前双 UI 迁移风险见 RR-018。
 
