@@ -228,6 +228,7 @@ describe("Surface Protocol v2 guard", () => {
 
   it("binds the runtime limits, error codes, and forbidden fields to the authority", () => {
     expect(SURFACE_LIMITS).toMatchObject(authority.resourceLimits);
+    expect(authority.lengthUnits.widgetType).toBe("utf8-bytes");
     expect(SURFACE_PROTOCOL_COMPONENT_MAX).toBe(authority.$defs.protocolVersion.properties.minor.maximum);
     expect([...SURFACE_ERROR_CODES]).toEqual(authority.errors.map((entry) => entry.code));
     expect([...SURFACE_FORBIDDEN_FIELDS]).toEqual(authority.unknownFields.forbiddenFields);
@@ -268,6 +269,18 @@ describe("Surface Protocol v2 guard", () => {
       ok: false,
       code: "forbidden_executable_field",
     });
+    expect(validateSurfaceSnapshotResult({ ...snapshot, html: "<script>unsafe()</script>" })).toMatchObject({
+      ok: false,
+      code: "forbidden_executable_field",
+    });
+    const multibyteType = {
+      ...snapshot,
+      blueprint: {
+        ...(snapshot.blueprint as Record<string, unknown>),
+        widgets: [{ id: "chat-1", type: "界".repeat(43) }, { id: "tools-1", type: "core.tools" }],
+      },
+    };
+    expect(validateSurfaceSnapshotResult(multibyteType)).toMatchObject({ ok: false, code: "invalid_blueprint" });
   });
 
   it("rejects depth, node, document, and patch resource limit violations", () => {

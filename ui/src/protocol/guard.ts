@@ -446,7 +446,11 @@ function checkSurfaceWidget(
 ): SurfaceGuardResult {
   if (!isObject(widget)) return surfaceFail("invalid_blueprint", "widget instance must be an object", "widgets");
   if (!surfaceIdentifier(widget.id)) return surfaceFail("invalid_blueprint", "widget.id is invalid", "widgets.id");
-  if (typeof widget.type !== "string" || widget.type.length === 0 || widget.type.length > SURFACE_LIMITS.maxIdentifierLength) {
+  if (
+    typeof widget.type !== "string" ||
+    widget.type.length === 0 ||
+    new TextEncoder().encode(widget.type).byteLength > SURFACE_LIMITS.maxIdentifierLength
+  ) {
     return surfaceFail("invalid_blueprint", "widget.type is invalid", "widgets.type");
   }
   if ("props" in widget && !isFiniteJson(widget.props)) {
@@ -582,6 +586,8 @@ export function validateSurfaceSnapshot(value: unknown): value is SurfaceSnapsho
 export function validateSurfaceSnapshotResult(value: unknown): SurfaceGuardResult {
   try {
     if (!isObject(value)) return surfaceFail("invalid_version", "snapshot must be an object");
+    const forbidden = forbiddenSurfaceField(value);
+    if (forbidden !== null) return surfaceFail("forbidden_executable_field", `forbidden executable field ${forbidden}`);
     if (value.kind !== "snapshot") return surfaceFail("invalid_version", "snapshot.kind must be snapshot", "kind");
     const version = surfaceVersion(value.protocol);
     if (!version.ok) return version;

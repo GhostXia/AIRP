@@ -27,6 +27,10 @@
     "maxChildren": 32,
     "maxIdentifierLength": 128
   },
+  "lengthUnits": {
+    "identifier": "ascii-characters",
+    "widgetType": "utf8-bytes"
+  },
   "unknownFields": {
     "policy": "opaque-additive",
     "behavior": "accept-and-ignore-or-preserve",
@@ -131,7 +135,7 @@
       "required": ["id", "type"],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
-        "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Runtime guards additionally enforce this limit in UTF-8 bytes." },
         "props": { "$ref": "#/$defs/json" }
       },
       "additionalProperties": true

@@ -74,6 +74,10 @@ The widget extension line (C-P0~C-P4, originally delivered on `main@e28ea02` and
 
 **Token rotation.** `POST /v1/desktop-session/renew` rotates: it revokes the presented token and issues a new one immediately; stale tokens get 401 and the full access key cannot be renewed (full-authority credentials never participate in rotation).
 
+## Surface Protocol v2 declarative boundary
+
+Surface v2 is a data contract, not an executable UI payload. [`protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) is the machine authority; Rust and TypeScript guards scan the complete snapshot or patch, reject executable-looking fields at any depth, enforce byte/count/depth/revision limits, and reject unknown majors. Patch application is clone-then-validate: immutable metadata and root mutation are blocked, and any failed operation preserves the last-known-good snapshot and requests resynchronization. Unknown additive fields are opaque and must never reach DOM injection, module loading, template compilation, or evaluation. These controls do not authorize Widget actions; Engine capability enforcement remains independently required. No Engine Surface endpoint or desktop renderer is claimed by this protocol-only slice.
+
 ## Plugin/custom tool boundary
 
 Plugin tools are trusted-user extensions, not a security sandbox for untrusted code:

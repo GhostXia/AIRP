@@ -9,6 +9,12 @@
 
 ## Findings resolved
 
+Remote CodeRabbit review added five valid boundary findings after the initial local audit. The
+fix pass aligned Widget type length to UTF-8 bytes, scanned the complete snapshot for forbidden
+fields, blocked root replacement inside the patch executor itself, narrowed resync errors to the
+closed `SurfaceErrorCode` union, and recalibrated baseline, architecture, security, risk and Widget
+guidance documents without claiming the later Engine/runtime slices.
+
 ### A1 — Root patch bypassed immutable metadata
 
 The validators protected `/kind`, `/protocol`, `/surfaceId`, and `/revision`

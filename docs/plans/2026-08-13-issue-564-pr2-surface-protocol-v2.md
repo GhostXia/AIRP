@@ -72,7 +72,8 @@ Rust `migrate_v1_blueprint` 与 TS `migrateV1Blueprint`：它们把 v1 area 中�
 
 authority 固定以下上限：document 1,048,576 bytes、patch 65,536 bytes、patch
 operations 256、Blueprint depth 16、node 512、Widget instances 128、单节点 children 32、ID
-128 字符。Rust 与 TS 在反序列化/guard 边界拒绝超限输入。
+128 个 ASCII 字符；Widget type 上限为 128 UTF-8 bytes。Rust 与 TS 在
+反序列化/guard 边界拒绝超限输入。
 
 稳定错误码为：
 
@@ -109,3 +110,11 @@ v1 migration。Rust fixture tests 覆盖同一 authority、序列化等价、rev
 本 PR 不修改 Engine、WebUI、Tauri relay、SSE/grant/intent 合同，不实现 Surface
 Engine endpoint、HttpEngineBus、renderer、首方 Widget、持久化 workspace 或桌面
 产品 UI。上述内容属于后续 PR 的调用方/交付层，必须在本协议通过独立审计后再接入。
+
+## 7. 配套事实入口校准
+
+本 PR 同步校准 `CURRENT-BASELINE.md`、`UI-PROTOCOL-DECISION.md`、`SECURITY.md`、
+`RISK-REGISTER.md`、`WIDGET-DEVELOPMENT.md` 与 `ui/README.md`。其中旧
+Envelope/Blueprint v1 仍是 demo 与显式
+migration 输入，不再是新 Surface 合同；这些文档只把 v2 authority、guard、fixture
+和原子 store 写成已交付协议层，不把后续 Engine endpoint 或桌面运行链路提前写成事实。

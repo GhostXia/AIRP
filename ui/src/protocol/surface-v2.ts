@@ -4,6 +4,7 @@ import type {
   Json,
   SurfaceLayoutNode,
   SurfaceMessage,
+  SurfaceErrorCode,
   SurfacePatchEvent,
   SurfacePatchOp,
   SurfaceRevision,
@@ -32,7 +33,7 @@ export interface SurfaceAppliedResult {
 export interface SurfaceResyncResult {
   status: "resync";
   error: {
-    code: string;
+    code: SurfaceErrorCode;
     message: string;
   };
   request: SurfaceResyncRequest;
@@ -114,7 +115,7 @@ function readAt(root: Json, pointer: string): Json {
 
 function addAt(root: Json, pointer: string, value: Json): Json {
   const segments = pointerSegments(pointer);
-  if (segments.length === 0) return asJson(value);
+  if (segments.length === 0) throw new Error("replacing the snapshot root is not allowed");
   const { parent, key } = parentOf(root, segments);
   if (Array.isArray(parent)) {
     if (key === "-") {
@@ -130,7 +131,7 @@ function addAt(root: Json, pointer: string, value: Json): Json {
 
 function replaceAt(root: Json, pointer: string, value: Json): Json {
   const segments = pointerSegments(pointer);
-  if (segments.length === 0) return asJson(value);
+  if (segments.length === 0) throw new Error("replacing the snapshot root is not allowed");
   const { parent, key } = parentOf(root, segments);
   if (Array.isArray(parent)) {
     parent[arrayIndex(key, parent.length, false)] = asJson(value);
@@ -220,7 +221,7 @@ function failure(
 }
 
 function syntheticFailure(
-  code: string,
+  code: SurfaceErrorCode,
   message: string,
   current: SurfaceSnapshot | null,
 ): SurfaceResyncResult {
