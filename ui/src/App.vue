@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, shallowRef, ref } from "vue";
+import { computed, onMounted, onUnmounted, shallowRef, ref } from "vue";
 import type { Blueprint, Envelope, Json } from "./protocol/types";
 import type { AgentBus } from "./protocol/bus";
 import { createBus, isTauriEnvironment } from "./protocol/bus-factory";
@@ -8,23 +8,18 @@ import { stateStore, setState, patchState, applyJsonPatch } from "./state/store"
 import { registerBuiltins, applyManifestMessage } from "./registry";
 import BlueprintRenderer from "./components/BlueprintRenderer.vue";
 import SettingsModal from "./widgets/SettingsModal.vue";
+import DesktopRail from "./components/shell/DesktopRail.vue";
+import ContextInspector from "./components/shell/ContextInspector.vue";
+import UiButton from "./components/primitives/UiButton.vue";
+import { WORKSPACE_PRESETS, type WorkspaceId } from "./shell-model";
 
 // Register first-party widgets into the open registry.
 registerBuiltins();
 
-const blueprint = shallowRef<Blueprint | null>(null);
-
-// Phase 0: in the Tauri shell the engine does not push a blueprint, so the UI
-// self-builds a minimal one (chat + a character picker sidebar). Outside Tauri
-// the MockBus still primes its own sample blueprint, which we honor as-is.
-const isTauri = isTauriEnvironment();
-const selectedCharacterId = ref<string>("");
-const showSettings = ref(false);
-
-const MINIMAL_BLUEPRINT: Blueprint = {
-  version: "bp-phase0",
-  profile: "rp:phase0",
-  theme: { name: "phase0", tokens: { accent: "#00e5ff" } },
+const SHELL_PREVIEW_BLUEPRINT: Blueprint = {
+  version: "shell-preview-v1",
+  profile: "rp:story-preview",
+  theme: { name: "airp-light" },
   layout: {
     type: "dock",
     areas: [
@@ -33,14 +28,41 @@ const MINIMAL_BLUEPRINT: Blueprint = {
     ],
   },
   widgets: [
-    { id: "w-chat", type: "core.chat", props: { title: "对话" }, state: "w-chat" },
+    { id: "w-chat", type: "core.chat", props: { title: "故事预览" }, state: "w-chat" },
     { id: "w-characters", type: "core.characters", state: "w-characters", capabilities: ["read:state"] },
   ],
 };
 
-// The bus is picked per environment: Tauri shell → TauriBus over IPC to the
-// Rust core (→ AIRP engine); everywhere else → MockBus (no backend). Built in
-// onMounted because the Tauri transport is async to construct.
+const blueprint = shallowRef<Blueprint | null>(SHELL_PREVIEW_BLUEPRINT);
+
+// PR 3 deliberately renders one fixed, labelled Surface fixture. The real
+// Surface endpoint/runtime arrives in later #564 slices; browser preview must
+// not imply a successful Engine connection.
+const isTauri = isTauriEnvironment();
+const selectedCharacterId = ref<string>("");
+const showSettings = ref(false);
+
+const activeWorkspace = ref<WorkspaceId>("story");
+const focusMode = ref(false);
+const inspectorCollapsed = ref(false);
+const activeWorkspacePreset = computed(
+  () => WORKSPACE_PRESETS.find((workspace) => workspace.id === activeWorkspace.value) ?? WORKSPACE_PRESETS[0],
+);
+
+setState("w-chat", {
+  messages: {
+    preview: {
+      id: "preview",
+      role: "narrator",
+      text: "固定 Surface 预览：这里验证桌面 shell 的布局、状态与可访问性；真实 Engine 链路将在后续纵切接入。",
+    },
+  },
+  order: ["preview"],
+});
+setState("w-characters", { ids: [], loaded: true });
+
+// The legacy Tauri transport remains available only when this Vue bundle is
+// explicitly run inside Tauri. Browser preview does not construct MockBus.
 let bus: AgentBus | null = null;
 let unsubscribe: (() => void) | null = null;
 let disposed = false;
@@ -161,18 +183,11 @@ async function installOptionalAgentTestHarness(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const built = await createBus();
-    if (disposed) return;
-    bus = built;
-    unsubscribe = bus.subscribe(onEnvelope);
-    // In the Tauri shell the engine does not push a blueprint — self-build the
-    // minimal one and ask the engine for the character list. MockBus (non-Tauri)
-    // keeps its own sample blueprint via its subscribe priming.
     if (isTauri) {
-      blueprint.value = MINIMAL_BLUEPRINT;
-      // Prime an empty chat scope so the first patch (add /messages/{id} and
-      // /order/-) applies. messages is id-keyed, order holds render order.
-      setState("w-chat", { messages: {}, order: [] });
+      const built = await createBus();
+      if (disposed) return;
+      bus = built;
+      unsubscribe = bus.subscribe(onEnvelope);
       setState("w-characters", { ids: [], loaded: false });
       setState("w-settings", { loaded: false });
       refreshCharacters();
@@ -190,22 +205,80 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="app">
-    <header class="topbar">
-      <strong>AIRP&nbsp;UI</strong>
-      <small>{{ isTauri ? "phase0 · engine live" : "scaffold · mock" }}</small>
-      <small v-if="isTauri && selectedCharacterId" class="char-badge">角色: {{ selectedCharacterId }}</small>
-      <button v-if="isTauri" class="refresh" @click="refreshCharacters">刷新角色</button>
-      <button v-if="isTauri" class="settings-btn" @click="showSettings = true">设置</button>
-    </header>
-    <div v-if="busError" class="bus-error">bus: {{ busError }}</div>
-    <BlueprintRenderer
-      v-if="blueprint"
-      :blueprint="blueprint"
-      :state="stateStore"
-      @intent="onIntent"
+  <main class="desktop-shell" :class="{ 'desktop-shell--focus': focusMode, 'desktop-shell--inspector-collapsed': inspectorCollapsed }">
+    <DesktopRail
+      :workspaces="WORKSPACE_PRESETS"
+      :active="activeWorkspace"
+      :compact="focusMode"
+      @select="activeWorkspace = $event"
+      @toggle-focus="focusMode = !focusMode"
     />
-    <div v-else class="loading">等待 Blueprint…</div>
+
+    <section class="workspace" aria-labelledby="workspace-title">
+      <header class="workspace__topbar">
+        <div class="workspace__identity">
+          <span class="workspace__chapter">Workspace / {{ activeWorkspacePreset.id }}</span>
+          <h1 id="workspace-title">{{ activeWorkspacePreset.label }}</h1>
+        </div>
+        <div class="workspace__actions">
+          <span class="connection" :class="{ 'connection--live': isTauri }">
+            <span aria-hidden="true"></span>{{ isTauri ? "Engine 已连接" : "固定协议预览" }}
+          </span>
+          <UiButton
+            v-if="!focusMode"
+            label="切换上下文检查器"
+            :pressed="!inspectorCollapsed"
+            @click="inspectorCollapsed = !inspectorCollapsed"
+          >上下文</UiButton>
+          <UiButton v-if="isTauri" label="打开设置" @click="showSettings = true">设置</UiButton>
+        </div>
+      </header>
+
+      <div v-if="busError" class="status-banner status-banner--error" role="alert">
+        <strong>Surface 未更新</strong>
+        <span>{{ busError }}</span>
+        <UiButton label="重新加载角色" @click="refreshCharacters">重试</UiButton>
+      </div>
+      <div v-else-if="!isTauri" class="status-banner" role="status">
+        <strong>Shell preview</strong>
+        <span>此 PR 只验证桌面设计 shell；没有使用 MockBus 制造成功状态。</span>
+      </div>
+
+      <section class="surface" aria-label="动态 Surface 容器">
+        <header class="surface__heading">
+          <div>
+            <span class="surface__kicker">Surface / story.preview</span>
+            <h2>{{ activeWorkspacePreset.description }}</h2>
+          </div>
+          <span class="surface__revision">rev fixture-1</span>
+        </header>
+        <div class="surface__body">
+          <BlueprintRenderer
+            v-if="blueprint"
+            :blueprint="blueprint"
+            :state="stateStore"
+            @intent="onIntent"
+          />
+          <div v-else class="surface-state" role="status">
+            <strong>正在准备工作区</strong>
+            <span>等待一份通过校验的 Surface snapshot。</span>
+          </div>
+        </div>
+      </section>
+
+      <footer class="workspace__footer">
+        <span>Blueprint v2 protocol layer</span>
+        <span v-if="selectedCharacterId">角色 {{ selectedCharacterId }}</span>
+        <span>键盘：方向键切换工作区</span>
+      </footer>
+    </section>
+
+    <ContextInspector
+      v-if="!focusMode"
+      :collapsed="inspectorCollapsed"
+      :workspace-label="activeWorkspacePreset.label"
+      @toggle="inspectorCollapsed = !inspectorCollapsed"
+    />
     <SettingsModal
       v-if="isTauri"
       :state="stateStore['w-settings']"
@@ -216,76 +289,34 @@ onUnmounted(() => {
   </main>
 </template>
 
-<style>
-:root {
-  --accent: #00e5ff;
-}
-* {
-  box-sizing: border-box;
-}
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: #0b0e14;
-  color: #e6e6e6;
-}
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 0;
-  overflow: hidden;
-}
-.app > .blueprint {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.topbar {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.topbar small {
-  opacity: 0.6;
-}
-.topbar .char-badge {
-  color: var(--accent);
-  opacity: 0.9;
-}
-.topbar .refresh {
-  margin-left: auto;
-  font-size: 12px;
-  padding: 4px 8px;
-}
-.topbar .settings-btn {
-  font-size: 12px;
-  padding: 4px 8px;
-}
-.loading {
-  margin: auto;
-  opacity: 0.6;
-}
-.bus-error {
-  margin: 10px 14px;
-  padding: 6px 10px;
-  color: #ffb4b4;
-  background: rgba(255, 80, 80, 0.08);
-  border: 1px solid rgba(255, 80, 80, 0.25);
-  border-radius: 6px;
-  font-size: 13px;
-}
-input,
-button {
-  background: rgba(255, 255, 255, 0.06);
-  color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  padding: 6px 10px;
-}
-button {
-  cursor: pointer;
-}
+<style scoped>
+.desktop-shell { display: grid; grid-template-columns: var(--desktop-rail-w) minmax(0, 1fr) var(--desktop-inspector-w); width: 100%; height: 100dvh; overflow: hidden; background: var(--bg-base); }
+.desktop-shell--focus { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); }
+.desktop-shell--inspector-collapsed { grid-template-columns: var(--desktop-rail-w) minmax(0, 1fr) 38px; }
+.workspace { display: grid; grid-template-rows: var(--desktop-topbar-h) auto minmax(0, 1fr) 28px; min-width: 0; min-height: 0; }
+.workspace__topbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: 0 18px 0 22px; border-bottom: 1px solid var(--border-default); background: color-mix(in srgb, var(--bg-surface) 92%, transparent); }
+.workspace__identity { position: relative; display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.workspace__identity::before { content: ""; position: absolute; left: -22px; top: -17px; width: 4px; height: var(--desktop-topbar-h); background: var(--primary); }
+.workspace__chapter, .surface__kicker, .surface__revision { color: var(--text-tertiary); font: 600 10px/1 var(--font-utility); letter-spacing: .08em; text-transform: uppercase; }
+h1 { margin: 0; font: 650 21px/1 var(--font-display); }
+.workspace__actions { display: flex; align-items: center; gap: 8px; }
+.connection { display: flex; align-items: center; gap: 7px; margin-right: 4px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.connection > span { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px var(--warning-tint); }
+.connection--live > span { background: var(--success); box-shadow: 0 0 0 3px var(--success-tint); }
+.status-banner { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 7px 18px 7px 22px; border-bottom: 1px solid var(--border-default); background: var(--warning-tint); color: var(--text-secondary); font-size: 12px; }
+.status-banner strong { color: var(--text-primary); font: 700 10px/1 var(--font-utility); letter-spacing: .06em; text-transform: uppercase; }
+.status-banner--error { background: var(--danger-tint); color: var(--danger); }
+.status-banner :deep(.ui-button) { min-height: 28px; margin-left: auto; }
+.surface { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; margin: 14px 16px 10px; overflow: hidden; border: 1px solid var(--border-default); border-radius: var(--radius-card); background: var(--bg-surface); box-shadow: 0 1px 0 rgba(0, 0, 0, .03); }
+.surface__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 58px; padding: 10px 16px 10px 18px; border-bottom: 1px solid var(--border-default); }
+.surface__heading > div { display: grid; gap: 5px; }
+.surface__heading h2 { margin: 0; font: 650 16px/1.2 var(--font-display); }
+.surface__body { min-height: 0; overflow: hidden; }
+.surface__body :deep(.blueprint) { padding: 10px; }
+.surface-state { display: grid; place-content: center; gap: 8px; height: 100%; text-align: center; }
+.surface-state span { color: var(--text-secondary); font-size: 13px; }
+.workspace__footer { display: flex; align-items: center; gap: 18px; padding: 0 18px; overflow: hidden; border-top: 1px solid var(--border-default); color: var(--text-tertiary); font: 500 9px/1 var(--font-utility); white-space: nowrap; }
+@media (max-width: 1180px) { .desktop-shell { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr) 38px; } .desktop-shell :deep(.rail__wordmark), .desktop-shell :deep(.rail__copy), .desktop-shell :deep(.rail__focus span:last-child) { display: none; } .desktop-shell :deep(.inspector__body) { display: none; } }
+@media (max-width: 760px) { .desktop-shell, .desktop-shell--inspector-collapsed { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell :deep(.inspector) { display: none; } .workspace__chapter, .connection { display: none; } .surface { margin: 8px; } .workspace__footer { gap: 10px; } }
+@media (max-height: 640px) { .status-banner { display: none; } .surface { margin-top: 8px; } }
 </style>

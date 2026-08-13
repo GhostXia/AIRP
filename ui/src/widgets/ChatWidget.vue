@@ -110,6 +110,7 @@ function send(): void {
   height: 100%;
   min-height: 0;
 }
+.w-title { padding: 12px 14px 9px; border-bottom: 1px solid var(--border-default); color: var(--text-secondary); font: 700 10px/1 var(--font-utility); letter-spacing: .08em; text-transform: uppercase; }
 .w-chat-log {
   flex: 1;
   overflow-y: auto;
@@ -120,16 +121,30 @@ function send(): void {
   align-items: center;
   gap: 6px;
 }
+.msg + .msg { border-top: 1px solid color-mix(in srgb, var(--border-default) 62%, transparent); }
 .msg .role {
-  opacity: 0.6;
+  width: 62px;
+  flex: 0 0 62px;
+  color: var(--text-tertiary);
   font-size: 12px;
 }
+.msg .text { overflow: hidden; color: var(--text-primary); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .w-chat-composer {
   display: flex;
   gap: 6px;
   padding: 8px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-subtle);
 }
 .w-chat-composer input {
   flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-input);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  padding: 8px 10px;
 }
+.w-chat-composer button { border: 1px solid var(--primary-action); border-radius: var(--radius-input); background: var(--primary-action); color: var(--text-inverse); padding: 0 14px; cursor: pointer; font-weight: 650; }
+.w-chat-composer input:focus-visible, .w-chat-composer button:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: 1px; }
 </style>

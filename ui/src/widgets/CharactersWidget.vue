@@ -101,11 +101,11 @@ async function onImport(): Promise<void> {
 }
 .w-title {
   font-size: 13px;
-  opacity: 0.6;
+  color: var(--text-secondary);
 }
 .import-btn {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-default);
   color: inherit;
   padding: 3px 10px;
   border-radius: 4px;
@@ -113,12 +113,12 @@ async function onImport(): Promise<void> {
   font-size: 12px;
 }
 .import-btn:hover:not(:disabled) {
-  border-color: var(--accent, #00e5ff);
-  color: var(--accent, #00e5ff);
+  border-color: var(--primary);
+  color: var(--primary-strong);
 }
 .import-btn:focus-visible {
-  outline: 2px solid var(--accent, #00e5ff);
-  outline-offset: -2px;
+  outline: 3px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  outline-offset: 1px;
 }
 .import-btn:disabled {
   opacity: 0.5;
@@ -131,10 +131,10 @@ async function onImport(): Promise<void> {
 }
 .err {
   font-size: 12px;
-  color: #ffb4b4;
+  color: var(--danger);
   padding: 4px 0;
 }
-.ok { color: #b4ffb4; opacity: 1; }
+.ok { color: var(--success); opacity: 1; }
 .list {
   list-style: none;
   margin: 0;
@@ -156,10 +156,10 @@ async function onImport(): Promise<void> {
   font-size: 13px;
 }
 .item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-subtle);
 }
 .item:focus-visible {
-  outline: 2px solid var(--accent, #00e5ff);
-  outline-offset: -2px;
+  outline: 3px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  outline-offset: 1px;
 }
 </style>

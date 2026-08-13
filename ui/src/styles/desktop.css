@@ -1,0 +1,24 @@
+@import "../../../webui/assets/tokens.css";
+
+:root {
+  --desktop-rail-w: 210px;
+  --desktop-rail-compact-w: 58px;
+  --desktop-inspector-w: 278px;
+  --desktop-topbar-h: 54px;
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Songti SC", serif;
+  --font-utility: var(--font-mono);
+  color: var(--text-primary);
+  background: var(--bg-base);
+  font-family: var(--font-body);
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; height: 100%; margin: 0; }
+body { min-width: 320px; overflow: hidden; background: var(--bg-base); }
+button, input, textarea { font: inherit; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
