@@ -566,8 +566,15 @@ pub(crate) fn restore_backup(
     Ok((backup_id.to_string(), rollback_id))
 }
 
-/// Full scope restore：移除 data_root 下除 `backups/` 与 staging 外的所有顶层条目，
-/// 再 rename staging 内顶层条目 → `data_root/`。
+/// Full scope restore：将 data_root 下除 `backups/` 与 staging 外的所有顶层条目
+/// 先移入临时 trash 目录（**不立即永久删除**），再 rename staging 内顶层条目 → `data_root/`。
+/// 仅当新条目全部就位后，才清理 trash。若 staging rename 中途失败，旧条目仍保留在
+/// trash 中，不会永久丢失；调用方可通过 `rollback_id` 或手动从 trash 恢复。
+///
+/// 修复前旧实现：先 `remove_dir_all` / `remove_file` 永久删除旧条目，再 staging→root
+/// 逐条 rename。若 rename 循环中途失败（第 K 条），旧条目已全部消失而新条目只恢复了
+/// K-1 条，导致严重数据丢失（只剩部分数据的混合态）。新实现的 trash 策略确保
+/// "旧条目始终比新条目活得更久"。
 fn swap_full_data_root(
     data_root: &Path,
     staging_dir: &Path,
@@ -577,6 +584,22 @@ fn swap_full_data_root(
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| AirpError::Internal("staging 目录名含非 UTF-8 字节".to_string()))?;
+
+    // 1. 创建 trash 目录：将旧顶层条目 move 到此处而非永久删除。
+    //    使用 rollback_id 作后缀保持唯一性，避免并发 restore（虽然 BACKUP_LOCK
+    //    已串行化）或上次残留同名 trash 冲突。
+    let trash_dir = data_root.join(format!(".restore-old-{rollback_id}"));
+    if trash_dir.exists() {
+        fs::remove_dir_all(&trash_dir).map_err(|e| {
+            AirpError::Internal(format!(
+                "restore: 清理残留 trash {} 失败: {e}",
+                trash_dir.display()
+            ))
+        })?;
+    }
+    fs::create_dir_all(&trash_dir)?;
+
+    // 2. 将旧顶层条目（除 backups / staging 外）move → trash/<name>/ 或 trash/<name>
     let removed_entries = collect_top_level_entries(data_root);
     for entry in &removed_entries {
         let name = entry.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
@@ -585,19 +608,24 @@ fn swap_full_data_root(
         if name == "backups" || name == staging_name {
             continue;
         }
-        let metadata = std::fs::symlink_metadata(entry)?;
-        if metadata.file_type().is_symlink() {
-            // 删 symlink 本身（不跟随）
-            std::fs::remove_file(entry)?;
-        } else if metadata.is_dir() {
-            fs::remove_dir_all(entry)?;
-        } else {
-            fs::remove_file(entry)?;
+        // trash_name 也跳过 trash 自身（极端情况：同名嵌套不应发生，但防御性跳过）
+        if let Some(trash_os_name) = trash_dir.file_name() {
+            if trash_os_name == name {
+                continue;
+            }
         }
+        let dest_in_trash = trash_dir.join(name);
+        fs::rename(entry, &dest_in_trash).map_err(|e| {
+            AirpError::Internal(format!(
+                "restore: rename 旧条目 {} -> trash/{} 失败: {e}（未改动的旧条目仍在原位，回滚 backup 仍可用: {rollback_id}）",
+                entry.display(),
+                name
+            ))
+        })?;
     }
     sync_dir(data_root)?;
 
-    // rename staging 内顶层条目 → data_root/
+    // 3. rename staging 内顶层条目 → data_root/
     let staging_entries = collect_top_level_entries(staging_dir);
     for entry in &staging_entries {
         let name = entry
@@ -607,12 +635,28 @@ fn swap_full_data_root(
         let dest = data_root.join(name);
         fs::rename(entry, &dest).map_err(|e| {
             AirpError::Internal(format!(
-                "restore: rename staging {} -> data_root/{} 失败: {e}（回滚 backup 仍可用: {rollback_id}）",
+                "restore: rename staging {} -> data_root/{} 失败: {e}（未恢复的旧条目仍在 trash: {}，回滚 backup 仍可用: {rollback_id}）",
                 entry.display(),
-                name
+                name,
+                trash_dir.display(),
             ))
         })?;
     }
+    sync_dir(data_root)?;
+
+    // 4. 新条目全部就位成功 → 清理 trash（此时旧条目才真正"删除"）。
+    //    失败不阻塞成功：trash 是隐藏临时目录，下次 restore 会自行清理，
+    //    且对用户可见的数据已经是正确的恢复状态。
+    if trash_dir.exists() {
+        if let Err(e) = fs::remove_dir_all(&trash_dir) {
+            tracing::warn!(
+                trash = %trash_dir.display(),
+                error = %e,
+                "restore 成功，但清理旧条目 trash 目录失败（可手动删除）"
+            );
+        }
+    }
+
     // 清理空 staging 目录
     let _ = fs::remove_dir(staging_dir);
     Ok(())
@@ -1551,5 +1595,188 @@ mod tests {
             !alice_dir.exists(),
             "alice subtree should not exist (restore did not complete)"
         );
+    }
+
+    /// 回归测试：swap_full_data_root 的 trash 失败安全保证。
+    ///
+    /// 修复前旧行为（BUG）：先永久 remove_dir_all/remove_file 删除旧条目，再逐条
+    /// staging→root rename。如果 rename 循环在第 K 条失败，旧条目已全部消失而新条目
+    /// 只恢复了 K-1 条 —— 严重数据丢失。
+    ///
+    /// 修复后新行为：旧条目先 move 到 trash/.restore-old-{id}/ 中，不立即永久删除；
+    /// 仅当 staging rename 全部成功后才清理 trash。若中途失败，旧条目仍完整留于
+    /// trash，用户可从 trash 或 rollback backup 恢复。
+    ///
+    /// 本测试构造稳定的"staging rename 中途失败"场景：利用 `swap_full_data_root`
+    /// 会**跳过**名为 `backups` 的顶层条目（不 move→trash）这一事实——在旧 data_root
+    /// 下保留 `backups/` 为**目录**，但在 staging 中放置同名的 `backups` **文件**。
+    /// 当 swap 循环到 staging/backups(文件) → data_root/backups(目录) 时，
+    /// rename(file→dir) 必失败（Linux: EISDIR / NotADirectory 等），从而精确模拟
+    /// "rename 循环中途中断、之前的条目已 staging→root、后续条目还未处理"的半完成态。
+    #[test]
+    fn swap_full_data_root_mid_failure_preserves_old_entries_in_trash() {
+        let dir = tempdir().unwrap();
+        let data_root = dir.path();
+        let rollback_id = "test-rb-001";
+
+        // --- 1. 准备 data_root 旧条目 ---
+        let old_names = vec!["characters", "personas", "presets", "settings.json"];
+        for n in &old_names {
+            let path = data_root.join(n);
+            if *n == "settings.json" {
+                fs::write(&path, "old-settings").unwrap();
+            } else {
+                fs::create_dir_all(&path).unwrap();
+                fs::write(path.join("marker.txt"), format!("old-{n}")).unwrap();
+            }
+        }
+        // backups/ 目录（swap 会跳过，不移到 trash）
+        let backups_dir = data_root.join("backups");
+        fs::create_dir_all(&backups_dir).unwrap();
+        fs::write(backups_dir.join("keep-me"), "keep").unwrap();
+
+        // 记录旧内容快照
+        let old_settings = fs::read_to_string(data_root.join("settings.json")).unwrap();
+        let old_chars = fs::read_to_string(data_root.join("characters").join("marker.txt")).unwrap();
+        let old_personas =
+            fs::read_to_string(data_root.join("personas").join("marker.txt")).unwrap();
+        let old_presets = fs::read_to_string(data_root.join("presets").join("marker.txt")).unwrap();
+
+        // --- 2. 准备 staging 目录 ---
+        let staging_dir = data_root.join(".restore-staging-stub");
+        fs::create_dir_all(&staging_dir).unwrap();
+
+        // staging 中前几个条目（正常，均为目录/文件）—— 这些 rename 会先完成
+        let s_chars = staging_dir.join("characters");
+        fs::create_dir_all(&s_chars).unwrap();
+        fs::write(s_chars.join("marker.txt"), "new-characters").unwrap();
+
+        let s_personas = staging_dir.join("personas");
+        fs::create_dir_all(&s_personas).unwrap();
+        fs::write(s_personas.join("marker.txt"), "new-personas").unwrap();
+
+        let s_presets = staging_dir.join("presets");
+        fs::create_dir_all(&s_presets).unwrap();
+        fs::write(s_presets.join("marker.txt"), "new-presets").unwrap();
+
+        fs::write(staging_dir.join("settings.json"), "new-settings").unwrap();
+
+        // 关键破坏：在 staging 中创建 backups（作为 FILE，不是目录）。
+        // data_root/backups 仍然是 DIR 且不会被 move（swap 跳过 backups）。
+        // 当 rename 循环走到 backups 条目：rename(staging/backups 文件 → data_root/backups 目录)
+        // 会因目标已是目录而非普通文件失败，从而触发"中途失败"状态。
+        fs::write(staging_dir.join("backups"), "STUB-BACKUPS-FILE-TO-FORCE-FAILURE").unwrap();
+
+        // --- 3. 调用 swap_full_data_root，预期返回 Err ---
+        let result = swap_full_data_root(data_root, &staging_dir, rollback_id);
+        assert!(
+            result.is_err(),
+            "rename(staging/backups 作为 FILE -> data_root/backups 作为 DIR) 必须失败以模拟 rename 循环中途中断"
+        );
+
+        // --- 4. 核心断言：旧条目完整保留于 trash，未被永久删除 ---
+        let trash_dir = data_root.join(format!(".restore-old-{rollback_id}"));
+        assert!(
+            trash_dir.is_dir(),
+            "失败时 trash 目录必须存在: {}",
+            trash_dir.display()
+        );
+
+        // 修复前（旧 BUG 实现）会永久 remove_dir_all 删除 characters，此时 trash 中
+        // 也没有该目录，下面断言会 fail；修复后这些断言必须全部 pass。
+        assert_eq!(
+            fs::read_to_string(trash_dir.join("characters").join("marker.txt")).unwrap(),
+            old_chars,
+            "旧 characters 必须完整保留于 trash（修复前是永久 remove_dir_all 删除，此处必 fail）"
+        );
+        assert_eq!(
+            fs::read_to_string(trash_dir.join("personas").join("marker.txt")).unwrap(),
+            old_personas,
+            "旧 personas 必须完整保留于 trash"
+        );
+        assert_eq!(
+            fs::read_to_string(trash_dir.join("presets").join("marker.txt")).unwrap(),
+            old_presets,
+            "旧 presets 必须完整保留于 trash"
+        );
+        assert_eq!(
+            fs::read_to_string(trash_dir.join("settings.json")).unwrap(),
+            old_settings,
+            "旧 settings.json 必须完整保留于 trash"
+        );
+
+        // backups/ 目录（swap 跳过的特殊条目）应保持原位不动
+        assert!(backups_dir.is_dir(), "backups/ 目录必须保留原位（swap 会跳过）");
+        assert!(backups_dir.join("keep-me").exists());
+
+        // --- 5. 侧面验证：staging 中还有残余条目（backups 文件仍在 staging 中，
+        //    因为其 rename 失败未成功 move），这证明失败确实发生在 rename 循环中途。
+        assert!(
+            staging_dir.join("backups").exists() || data_root.join("backups").is_file(),
+            "失败的 staging/backups 条目必须仍在 staging 或未被破坏（证明未越过分界点）"
+        );
+    }
+
+    /// swap_full_data_root 成功路径下：staging 条目正确迁移，旧条目被清理，
+    /// trash 目录也被清理（不会在 data_root 残留隐藏垃圾）。
+    #[test]
+    fn swap_full_data_root_success_cleans_trash_and_staging() {
+        let dir = tempdir().unwrap();
+        let data_root = dir.path();
+        let rollback_id = "test-rb-success";
+
+        // 准备旧顶层条目（包含一个目录与一个文件）
+        let old_chars = data_root.join("characters");
+        fs::create_dir_all(&old_chars).unwrap();
+        fs::write(old_chars.join("card.json"), "old-card").unwrap();
+        fs::write(data_root.join("settings.json"), "old-settings").unwrap();
+
+        // 准备 staging（新内容）
+        let staging_dir = data_root.join(".restore-staging-ok");
+        fs::create_dir_all(&staging_dir).unwrap();
+        let new_chars = staging_dir.join("characters");
+        fs::create_dir_all(&new_chars).unwrap();
+        fs::write(new_chars.join("card.json"), "new-card").unwrap();
+        fs::write(staging_dir.join("settings.json"), "new-settings").unwrap();
+        // 新增顶层条目（backup 中存在但旧 data_root 没有）
+        fs::write(staging_dir.join("extra.txt"), "extra-content").unwrap();
+
+        swap_full_data_root(data_root, &staging_dir, rollback_id).unwrap();
+
+        // 1. 新内容就位
+        assert_eq!(
+            fs::read_to_string(data_root.join("characters").join("card.json")).unwrap(),
+            "new-card"
+        );
+        assert_eq!(
+            fs::read_to_string(data_root.join("settings.json")).unwrap(),
+            "new-settings"
+        );
+        assert_eq!(
+            fs::read_to_string(data_root.join("extra.txt")).unwrap(),
+            "extra-content"
+        );
+
+        // 2. 旧内容已不存在（不是简单叠加覆盖）
+        //    （注意：以上断言读取到的内容已为 "new-*"，隐含说明旧内容已被替换；
+        //      此处再额外断言旧 trash/staging 清理干净）
+
+        // 3. trash 目录被清理（不残留）
+        let trash_dir = data_root.join(format!(".restore-old-{rollback_id}"));
+        assert!(
+            !trash_dir.exists(),
+            "成功路径下 trash 目录必须被清理: {}",
+            trash_dir.display()
+        );
+
+        // 4. staging 根目录被清理
+        assert!(
+            !staging_dir.exists(),
+            "成功路径下 staging 根目录必须被清理: {}",
+            staging_dir.display()
+        );
+
+        // 5. backups/ 目录（未在旧 data_root 中创建，亦未在 staging 中出现）不做断言；
+        //    此处仅验证 swap 内部"成功后垃圾清理"不变量已满足。
     }
 }
