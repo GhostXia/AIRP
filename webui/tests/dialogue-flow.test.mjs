@@ -27,6 +27,13 @@ test('dialogue UI delegates generation and confirmed writes to the tested flow',
   assert.doesNotMatch(runtime, /client\.request\('POST', '\/v1\/characters\/' \+ encodeURIComponent\(characterId\) \+ '\/dialogue-examples'/);
 });
 
+test('backup copy keeps an explicit handler and field trace', () => {
+  assert.match(
+    runtime,
+    /旧值已备份[\s\S]*engine\/src\/daemon\/handlers\/dialogue_gen\.rs[\s\S]*mes_example\.bak/,
+  );
+});
+
 test('load -> dry-run -> write -> reload preserves the exact approved preview', async () => {
   const previewText = '<START>\n{{user}}: Hello\n{{char}}: Hi';
   const calls = [];
