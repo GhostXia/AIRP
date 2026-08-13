@@ -254,8 +254,9 @@ not claim that the provider, Caddy upstream pool, or streaming path is ready.
 Production topology readiness is therefore an external, end-to-end contract owned by the
 deployment probe: authenticated gateway `/health`, a real provider-backed `/v1/models` request,
 and, where streaming readiness matters, a complete Engine SSE exchange ending in the typed
-`done` event. The SSE exchange uses a synthetic session that is force-deleted after every attempt,
-so the probe neither appends to a user conversation nor creates a pre-delete backup. A fixed
+`done` event. The SSE exchange uses a synthetic, client-ID-selected session that can be reconciled
+even if the create response is lost, and is force-deleted after every attempt, so the probe neither
+appends to a user conversation nor creates a pre-delete backup. A fixed
 startup delay alone or the mere existence of an HTTP client is not readiness evidence.
 
 ## 8. Rejected alternatives

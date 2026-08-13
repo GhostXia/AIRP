@@ -80,6 +80,47 @@ async fn create_session_then_list_shows_it() {
     );
 }
 
+/// A caller-selected ID makes creation idempotent when the first response is lost.
+#[tokio::test]
+async fn create_session_with_id_is_idempotent() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let uri = format!("/v1/sessions/alice?session_id={session_id}");
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 256)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::from_slice::<String>(&body).unwrap(), session_id);
+    }
+
+    let list = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/sessions/alice")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(list.into_body(), 1024).await.unwrap();
+    let sessions: Vec<String> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(sessions, vec![session_id]);
+}
+
 /// DELETE /v1/sessions/:character_id/:session_id 删除 → GET list 不再包含。
 #[tokio::test]
 async fn delete_session_removes_it_from_list() {

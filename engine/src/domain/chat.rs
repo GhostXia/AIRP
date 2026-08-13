@@ -868,6 +868,16 @@ impl ChatService {
         data_dir::create_session(&self.data_root, character_id.as_str())
     }
 
+    pub fn create_session_with_id(
+        &self,
+        character_id: &CharacterId,
+        session_id: &SessionId,
+    ) -> Result<(), AirpError> {
+        let character = character_lock(character_id.as_str());
+        let _guard = character.read().unwrap_or_else(|p| p.into_inner());
+        data_dir::create_session_with_id(&self.data_root, character_id.as_str(), session_id)
+    }
+
     /// #342 E-P2-1：删除角色目录。
     ///
     /// 默认在 `fs::remove_dir_all` 前创建 `BackupSource::PreDelete` +

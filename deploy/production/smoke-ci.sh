@@ -90,11 +90,39 @@ wait_for_engine_ready() {
       return 1
     fi
     probe_tmp=$(mktemp)
+    delete_probe_session() {
+      probe_session_deleted=0
+      for _ in $(seq 1 30); do
+        delete_code=$($curl_tls --silent --show-error \
+          --connect-timeout 2 \
+          --max-time 5 \
+          --user "$admin_user:$admin_password" \
+          --request DELETE \
+          --output /dev/null \
+          --write-out '%{http_code}' \
+          "$origin/v1/sessions/$probe_character_id/$probe_session_id?force=true" 2>/dev/null || true)
+        if [ "$delete_code" = "200" ] || [ "$delete_code" = "404" ]; then
+          probe_session_deleted=1
+          break
+        fi
+        sleep 1
+      done
+      if [ "$probe_session_deleted" -ne 1 ]; then
+        echo "wait_for_engine_ready: could not remove SSE probe session $probe_session_id (last http=$delete_code)" >&2
+        return 1
+      fi
+    }
     for attempt in $(seq 1 8); do
-      probe_session_response=$($curl_tls --silent --show-error --fail \
-        --user "$admin_user:$admin_password" \
-        --request POST "$origin/v1/sessions/$probe_character_id" 2>/dev/null || true)
-      probe_session_id=$(printf '%s' "$probe_session_response" | node -e '
+      # Choose the ID client-side so cleanup remains possible even when the
+      # create commits but its response is lost or unparsable.
+      probe_session_id=$(node -p 'require("crypto").randomUUID()')
+      probe_session_created=0
+      for _ in $(seq 1 5); do
+        probe_session_response=$($curl_tls --silent --show-error --fail \
+          --connect-timeout 2 --max-time 5 \
+          --user "$admin_user:$admin_password" \
+          --request POST "$origin/v1/sessions/$probe_character_id?session_id=$probe_session_id" 2>/dev/null || true)
+        returned_session_id=$(printf '%s' "$probe_session_response" | node -e '
 const raw = require("fs").readFileSync(0, "utf8");
 try {
   const value = JSON.parse(raw);
@@ -102,10 +130,23 @@ try {
   if (id) process.stdout.write(String(id));
 } catch {}
 ' )
-      if [ -z "$probe_session_id" ]; then
+        if [ "$returned_session_id" = "$probe_session_id" ]; then
+          probe_session_created=1
+          break
+        fi
+        sleep 1
+      done
+      if [ "$probe_session_created" -ne 1 ]; then
         echo "wait_for_engine_ready: SSE probe attempt $attempt could not create disposable session" >&2
-        sleep 2
-        continue
+        # The request may have committed despite the unusable response. The
+        # known ID makes this reconciliation safe and idempotent. Do not start
+        # another probe after an unconfirmed create; fail readiness closed.
+        if ! delete_probe_session; then
+          rm -f "$probe_tmp"
+          return 1
+        fi
+        rm -f "$probe_tmp"
+        return 1
       fi
       probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
         http_code=$($curl_tls --silent --show-error --no-buffer \
@@ -125,25 +166,8 @@ try {
         # Retry the force-delete so the readiness probe creates neither a
         # durable session nor a pre-delete backup. A 404 means a previous
         # delete completed even if its response was lost.
-        probe_session_deleted=0
-        for _ in $(seq 1 30); do
-          delete_code=$($curl_tls --silent --show-error \
-            --connect-timeout 2 \
-            --max-time 5 \
-            --user "$admin_user:$admin_password" \
-            --request DELETE \
-            --output /dev/null \
-            --write-out '%{http_code}' \
-            "$origin/v1/sessions/$probe_character_id/$probe_session_id?force=true" 2>/dev/null || true)
-          if [ "$delete_code" = "200" ] || [ "$delete_code" = "404" ]; then
-            probe_session_deleted=1
-            break
-          fi
-          sleep 1
-        done
-        if [ "$probe_session_deleted" -ne 1 ]; then
+        if ! delete_probe_session; then
           rm -f "$probe_tmp"
-          echo "wait_for_engine_ready: could not remove SSE probe session $probe_session_id (last http=$delete_code)" >&2
           return 1
         fi
 

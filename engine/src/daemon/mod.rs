@@ -1060,8 +1060,10 @@ async fn health_handler(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
 ) -> axum::Json<HealthInfo> {
     let cfg = state.read_config();
-    let provider_configured =
-        cfg.api_key.as_deref().is_some_and(|s| !s.is_empty()) && !cfg.endpoint.is_empty();
+    // The sole supported provider is OpenAI-compatible, including keyless
+    // local endpoints such as Ollama. Configuration presence therefore means
+    // endpoint + model; an API key is optional and only controls Authorization.
+    let provider_configured = !cfg.endpoint.is_empty() && !cfg.model.is_empty();
     drop(cfg);
 
     // data_root 可写检查：尝试写一个临时文件
