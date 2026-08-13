@@ -50,8 +50,8 @@ pub(crate) use paths::{
 };
 pub use security::{safe_resolve_for_write, safe_resolve_under_data_root, validate_id_segment};
 pub use session::{
-    create_session, delete_session, list_sessions, resolve_session_dir, session_dir,
-    session_was_deleted,
+    create_session, create_session_with_id, delete_session, list_sessions, resolve_session_dir,
+    session_dir, session_was_deleted,
 };
 #[cfg(test)]
 pub(crate) use utils::replace_file_with_backup_cleanup_for_test;

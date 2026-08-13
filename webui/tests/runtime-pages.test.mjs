@@ -171,7 +171,19 @@ test('both production restarts wait for the chat path before browser smoke', () 
     assert.equal(probes.length, 1, 'each restart branch must wait for one chat probe');
   }
   assert.match(productionSmokeCi, /could not create disposable session/);
+  assert.match(productionSmokeCi, /randomUUID\(\)/);
+  assert.match(productionSmokeCi, /\?session_id=\$probe_session_id/);
+  assert.match(productionSmokeCi, /for _ in \$\(seq 1 5\); do[\s\S]*\?session_id=\$probe_session_id[\s\S]*if \[ "\$returned_session_id" = "\$probe_session_id" \]; then/);
+  assert.match(productionSmokeCi, /if \[ "\$probe_session_created" -ne 1 \]; then[\s\S]*if ! delete_probe_session; then[\s\S]*return 1/);
   assert.match(productionSmokeCi, /verify-readiness-sse\.mjs/);
+  assert.match(productionSmokeCi, /\/v1\/sessions\/\$probe_character_id\/\$probe_session_id\?force=true/);
+  assert.match(productionSmokeCi, /\[ "\$delete_code" = "200" \] \|\| \[ "\$delete_code" = "404" \]/);
+  assert.match(productionSmokeCi, /if \[ "\$probe_session_deleted" -ne 1 \]; then[\s\S]*return 1/);
+  assert.ok(
+    productionSmokeCi.indexOf('if [ "$probe_session_deleted" -ne 1 ]')
+      < productionSmokeCi.indexOf('if [ "$stream_ready" -eq 1 ]'),
+    'probe cleanup must be confirmed before readiness can succeed',
+  );
 });
 
 test('production smoke covers every advanced WebUI page and a visible Engine failure', () => {

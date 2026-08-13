@@ -88,8 +88,27 @@ pub fn create_session(
     character_id: &str,
 ) -> Result<crate::types::SessionId, AirpError> {
     let sid = crate::types::SessionId::new();
-    let _ = resolve_session_dir(root, character_id, Some(&sid))?;
+    create_session_with_id(root, character_id, &sid)?;
     Ok(sid)
+}
+
+/// Idempotently create a named session with a caller-selected ID.
+///
+/// This is used by disposable deployment probes: the caller can still clean
+/// up a committed session when the create response is lost. Explicitly
+/// deleted IDs remain tombstoned and cannot be revived.
+pub fn create_session_with_id(
+    root: &Path,
+    character_id: &str,
+    session_id: &crate::types::SessionId,
+) -> Result<(), AirpError> {
+    if session_was_deleted(root, character_id, session_id) {
+        return Err(AirpError::Conflict(format!(
+            "session {session_id} for character {character_id} was deleted"
+        )));
+    }
+    let _ = resolve_session_dir(root, character_id, Some(session_id))?;
+    Ok(())
 }
 
 fn deleted_session_marker(

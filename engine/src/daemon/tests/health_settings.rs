@@ -47,7 +47,7 @@ async fn test_audit_10_version_unauthenticated_with_key_set() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-// WEBUI-BACKEND-PLAN §4.2: /health 就绪探针
+// WEBUI-BACKEND-PLAN §4.2: /health Engine liveness/local-state probe
 #[tokio::test]
 async fn test_health_endpoint_returns_status() {
     let tmp = tempfile::tempdir().unwrap();
@@ -94,8 +94,12 @@ async fn test_health_endpoint_returns_status() {
     let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["engine"], "ok");
-    assert_eq!(v["provider_configured"].as_bool(), Some(false)); // api_key=None
+    assert_eq!(v["provider_configured"].as_bool(), Some(true)); // keyless provider is valid
     assert_eq!(v["data_root_writable"].as_bool(), Some(true)); // tempdir 可写
+    assert!(
+        v.get("ready").is_none(),
+        "Engine /health must not claim provider/gateway/SSE readiness"
+    );
 }
 
 // /health 不鉴权（与 /version 同级）
@@ -115,7 +119,7 @@ async fn test_health_unauthenticated_with_key_set() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-// /health provider_configured=true when api_key + endpoint 都有值
+// /health provider_configured=true when endpoint + model 都有值
 #[tokio::test]
 async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
     let tmp = tempfile::tempdir().unwrap();
@@ -164,6 +168,25 @@ async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
     assert_eq!(v["engine"], "ok");
     assert_eq!(v["provider_configured"], true);
     assert_eq!(v["data_root_writable"], true);
+}
+
+#[tokio::test]
+async fn test_health_provider_not_configured_without_model() {
+    let (state, _tmp) = make_state_with_key(None);
+    state.write_config().model.clear();
+    let app = create_router(state);
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["provider_configured"], false);
 }
 
 // ── A5: SettingsView.access_api_key_set ────────────────────────────────
