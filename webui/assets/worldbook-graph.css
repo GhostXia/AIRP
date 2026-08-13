@@ -18,7 +18,7 @@
 .graph-node-access { margin: 12px 0 24px; padding: 12px 16px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); }
 .graph-node-access .subheading { margin-top: 0; }
 .graph-node-access-help { margin: 0 0 10px; color: var(--text-secondary); font-size: 12px; }
-.graph-node-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.graph-node-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .graph-node-button:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
 .graph-conflicts { margin: 24px 0; }
 .conflicts-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }

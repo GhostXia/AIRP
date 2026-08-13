@@ -18,6 +18,7 @@ test('worldbook graph exposes focusable node buttons beside the canvas', () => {
   assert.match(runtime, /button\.addEventListener\('keydown'/);
   assert.match(runtime, /event\.key === 'Enter'/);
   assert.match(runtime, /showNodeDetail\(n\)/);
+  assert.match(styles, /\.graph-node-list[^}]*list-style:\s*none/);
   assert.match(styles, /\.graph-node-button:focus-visible/);
 });
 
