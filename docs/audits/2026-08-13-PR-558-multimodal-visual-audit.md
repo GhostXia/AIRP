@@ -39,6 +39,6 @@
 ## 自动化证据
 
 - `node --test webui/tests/worldbook-graph.test.mjs webui/tests/dialogue-flow.test.mjs`
-- `node --test webui/tests/*.test.mjs`（203/203 通过）
+- `node --test webui/tests/*.test.mjs`（204/204 通过；含审计后新增的陈旧统计/冲突清理回归）
 
 结论：PR #558 在补入 V1 修正后满足 issue #319 的多模态视觉审查要求，可以进入最终 CI/审计门禁。

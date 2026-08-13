@@ -40,3 +40,9 @@ test('worldbook graph clears stale node detail before every graph load', () => {
   assert.match(runtime, /wrap\.hidden = true;/);
   assert.match(runtime, /content\.textContent = '';/);
 });
+
+test('worldbook graph resets stale statistics and conflicts on clear paths', () => {
+  assert.match(runtime, /function resetGraphPresentation\(\) \{[\s\S]*graph-stats[\s\S]*graph-conflicts[\s\S]*conflicts-list/);
+  assert.match(runtime, /if \(!characterId\) \{\s*resetGraphPresentation\(\);/);
+  assert.match(runtime, /catch \(error\) \{[\s\S]*resetGraphPresentation\(\);[\s\S]*加载失败/);
+});

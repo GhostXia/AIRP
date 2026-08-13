@@ -54,6 +54,17 @@
     el.classList.toggle('error', Boolean(isError));
   }
 
+  function resetGraphPresentation() {
+    graphData = null;
+    simNodes = [];
+    simEdges = [];
+    renderNodeAccess();
+    clearCanvas();
+    $('#graph-stats').textContent = '节点 0 · 边 0 · 冲突 0';
+    $('#graph-conflicts').hidden = true;
+    $('#conflicts-list').replaceChildren();
+  }
+
   function node(tag, className, text) {
     const v = document.createElement(tag);
     if (className) v.className = className;
@@ -85,11 +96,7 @@
     const requestId = ++graphRequestId;
     const requestedCharacterId = characterId;
     if (!characterId) {
-      graphData = null;
-      simNodes = [];
-      simEdges = [];
-      renderNodeAccess();
-      clearCanvas();
+      resetGraphPresentation();
       $('#graph-empty').textContent = '选择角色后加载图谱';
       $('#graph-empty').style.display = 'block';
       setStatus('请先选择角色', true);
@@ -114,11 +121,7 @@
       setStatus('图谱加载完成：' + graph.node_count + ' 节点 · ' + graph.edge_count + ' 边 · ' + graph.conflicts.length + ' 冲突');
     } catch (error) {
       if (requestId !== graphRequestId || requestedCharacterId !== characterId) return;
-      graphData = null;
-      simNodes = [];
-      simEdges = [];
-      renderNodeAccess();
-      clearCanvas();
+      resetGraphPresentation();
       $('#graph-empty').textContent = '加载失败：' + AIRPApi.errorMessage(error.data, error.message);
       $('#graph-empty').style.display = 'block';
       setStatus('加载失败：' + AIRPApi.errorMessage(error.data, error.message), true);
