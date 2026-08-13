@@ -139,6 +139,7 @@
     meta.appendChild(node('span', null, '轮数：' + resp.turns_generated));
     meta.appendChild(node('span', null, resp.written ? '已写入角色卡' : '预览模式（未写入）'));
     if (resp.previous_mes_example !== null && resp.previous_mes_example !== undefined) {
+      // 追溯：此“旧值已备份”文案绑定 engine/src/daemon/handlers/dialogue_gen.rs 的 mes_example.bak 持久化字段。
       meta.appendChild(node('span', null, '旧值已备份（' + resp.previous_mes_example.length + ' 字符）'));
     }
     content.textContent = resp.mes_example || '（无内容）';
