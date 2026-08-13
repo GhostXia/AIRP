@@ -1,4 +1,4 @@
-# Issue #564 PR 2 Surface Protocol v2 causal audit
+# PR #572 / issue #564 PR 2 Surface Protocol v2 causal audit
 
 - Date: 2026-08-13
 - Branch: `codex/564-surface-protocol-v2`
