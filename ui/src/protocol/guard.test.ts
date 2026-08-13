@@ -22,6 +22,7 @@ import {
   SURFACE_ERROR_CODES,
   SURFACE_FORBIDDEN_FIELDS,
   SURFACE_LIMITS,
+  SURFACE_PROTOCOL_COMPONENT_MAX,
   validateBlueprintV2,
   validateSurfacePatchEventResult,
   validateSurfaceSnapshot,
@@ -227,6 +228,7 @@ describe("Surface Protocol v2 guard", () => {
 
   it("binds the runtime limits, error codes, and forbidden fields to the authority", () => {
     expect(SURFACE_LIMITS).toMatchObject(authority.resourceLimits);
+    expect(SURFACE_PROTOCOL_COMPONENT_MAX).toBe(authority.$defs.protocolVersion.properties.minor.maximum);
     expect([...SURFACE_ERROR_CODES]).toEqual(authority.errors.map((entry) => entry.code));
     expect([...SURFACE_FORBIDDEN_FIELDS]).toEqual(authority.unknownFields.forbiddenFields);
   });
@@ -252,12 +254,15 @@ describe("Surface Protocol v2 guard", () => {
     expect(validateSurfaceSnapshot(negativeFixtures.unknownMajor)).toBe(false);
     const newerMinor = { ...snapshot, protocol: { major: 2, minor: 99 }, future: "opaque" };
     expect(validateSurfaceSnapshot(newerMinor)).toBe(true);
+    expect(validateSurfaceSnapshotResult(negativeFixtures.minorOverflow)).toMatchObject({ ok: false, code: "invalid_version" });
+    expect(validateSurfaceSnapshotResult(negativeFixtures.invalidRevision)).toMatchObject({ ok: false, code: "invalid_revision" });
   });
 
-  it("rejects v1 shape, duplicate instance placement, invalid references, and executable fields", () => {
+  it("rejects v1 shape, duplicate/orphan instances, invalid references, and executable fields", () => {
     expect(validateBlueprintV2(VALID_BP)).toMatchObject({ ok: false, code: "invalid_version" });
     expect(validateSurfaceSnapshot(negativeFixtures.duplicateInstance)).toBe(false);
     expect(validateSurfaceSnapshot(negativeFixtures.invalidReference)).toBe(false);
+    expect(validateSurfaceSnapshotResult(negativeFixtures.orphanInstance)).toMatchObject({ ok: false, code: "invalid_reference" });
     expect(validateSurfaceSnapshot(negativeFixtures.forbiddenExecutableField)).toBe(false);
     expect(validateSurfaceSnapshotResult(negativeFixtures.forbiddenExecutableField)).toMatchObject({
       ok: false,
@@ -336,6 +341,9 @@ describe("Surface Protocol v2 guard", () => {
     expect(validateSurfaceSnapshot(maxRevision)).toBe(true);
     expect(validateSurfaceSnapshot({ ...snapshot, revision: "18446744073709551616" })).toBe(false);
     expect(validateSurfacePatchEventResult(negativeFixtures.revisionGap)).toMatchObject({ ok: false, code: "revision_gap" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.revisionOverflow)).toMatchObject({ ok: false, code: "revision_gap" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.invalidPatchRevision)).toMatchObject({ ok: false, code: "invalid_revision" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.rootReplacement)).toMatchObject({ ok: false, code: "invalid_patch" });
     expect(validateSurfacePatchEventResult(negativeFixtures.badPatch)).toMatchObject({ ok: false, code: "invalid_patch" });
     expect(validateSurfacePatchEventResult(negativeFixtures.invalidPointerEscape)).toMatchObject({ ok: false, code: "invalid_patch" });
     expect(validateSurfacePatchEventResult({

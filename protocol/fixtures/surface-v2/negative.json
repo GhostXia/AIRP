@@ -6,6 +6,20 @@
     "revision": "42",
     "blueprint": { "version": 2, "root": { "type": "widget", "id": "w-node", "instanceId": "w-1" }, "widgets": [{ "id": "w-1", "type": "core.chat" }] }
   },
+  "minorOverflow": {
+    "kind": "snapshot",
+    "protocol": { "major": 2, "minor": 65536 },
+    "surfaceId": "story",
+    "revision": "42",
+    "blueprint": { "version": 2, "root": { "type": "widget", "id": "w-node", "instanceId": "w-1" }, "widgets": [{ "id": "w-1", "type": "core.chat" }] }
+  },
+  "invalidRevision": {
+    "kind": "snapshot",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "revision": "18446744073709551616",
+    "blueprint": { "version": 2, "root": { "type": "widget", "id": "w-node", "instanceId": "w-1" }, "widgets": [{ "id": "w-1", "type": "core.chat" }] }
+  },
   "duplicateInstance": {
     "kind": "snapshot",
     "protocol": { "major": 2, "minor": 0 },
@@ -27,6 +41,20 @@
     "revision": "42",
     "blueprint": { "version": 2, "root": { "type": "widget", "id": "w-node", "instanceId": "missing" }, "widgets": [] }
   },
+  "orphanInstance": {
+    "kind": "snapshot",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "revision": "42",
+    "blueprint": {
+      "version": 2,
+      "root": { "type": "widget", "id": "w-node", "instanceId": "w-1" },
+      "widgets": [
+        { "id": "w-1", "type": "core.chat" },
+        { "id": "orphan", "type": "core.memory" }
+      ]
+    }
+  },
   "forbiddenExecutableField": {
     "kind": "snapshot",
     "protocol": { "major": 2, "minor": 0 },
@@ -45,6 +73,30 @@
     "baseRevision": "42",
     "revision": "44",
     "patch": []
+  },
+  "revisionOverflow": {
+    "kind": "patch",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "baseRevision": "18446744073709551615",
+    "revision": "18446744073709551615",
+    "patch": []
+  },
+  "invalidPatchRevision": {
+    "kind": "patch",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "baseRevision": "18446744073709551616",
+    "revision": "18446744073709551616",
+    "patch": []
+  },
+  "rootReplacement": {
+    "kind": "patch",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "baseRevision": "42",
+    "revision": "43",
+    "patch": [{ "op": "replace", "path": "", "value": { "kind": "snapshot" } }]
   },
   "badPatch": {
     "kind": "patch",

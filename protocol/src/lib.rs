@@ -366,6 +366,7 @@ pub enum PatchOpKind {
 
 pub const SURFACE_PROTOCOL_MAJOR: u16 = 2;
 pub const SURFACE_PROTOCOL_MINOR: u16 = 0;
+pub const SURFACE_PROTOCOL_COMPONENT_MAX: u64 = u16::MAX as u64;
 pub const SURFACE_MAX_DOCUMENT_BYTES: usize = 1_048_576;
 pub const SURFACE_MAX_PATCH_BYTES: usize = 65_536;
 pub const SURFACE_MAX_PATCH_OPERATIONS: usize = 256;
@@ -704,6 +705,59 @@ fn validate_surface_version(
     Ok(())
 }
 
+fn validate_surface_version_json(raw: &Value) -> Result<(), SurfaceValidationError> {
+    let Some(protocol) = raw.get("protocol").and_then(Value::as_object) else {
+        return Err(SurfaceValidationError::at(
+            SurfaceErrorCode::InvalidVersion,
+            "protocol",
+            "protocol must be an object",
+        ));
+    };
+    let Some(major) = protocol.get("major").and_then(Value::as_u64) else {
+        return Err(SurfaceValidationError::at(
+            SurfaceErrorCode::InvalidVersion,
+            "protocol.major",
+            "protocol major must be an unsigned integer",
+        ));
+    };
+    if major != u64::from(SURFACE_PROTOCOL_MAJOR) {
+        return Err(SurfaceValidationError::at(
+            SurfaceErrorCode::UnsupportedMajor,
+            "protocol.major",
+            format!("unsupported Surface protocol major {major}"),
+        ));
+    }
+    let Some(minor) = protocol.get("minor").and_then(Value::as_u64) else {
+        return Err(SurfaceValidationError::at(
+            SurfaceErrorCode::InvalidVersion,
+            "protocol.minor",
+            "protocol minor must be an unsigned integer",
+        ));
+    };
+    if minor > SURFACE_PROTOCOL_COMPONENT_MAX {
+        return Err(SurfaceValidationError::at(
+            SurfaceErrorCode::InvalidVersion,
+            "protocol.minor",
+            "protocol minor exceeds the authority limit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_surface_revision_json(raw: &Value, field: &str) -> Result<(), SurfaceValidationError> {
+    let Some(revision) = raw.get(field).and_then(Value::as_str) else {
+        return Err(SurfaceValidationError::at(
+            SurfaceErrorCode::InvalidRevision,
+            field,
+            "revision must be a decimal u64 string",
+        ));
+    };
+    SurfaceRevision::parse(revision).map_err(|message| {
+        SurfaceValidationError::at(SurfaceErrorCode::InvalidRevision, field, message)
+    })?;
+    Ok(())
+}
+
 fn validate_surface_identifier(value: &str, label: &str) -> Result<(), SurfaceValidationError> {
     if !surface_identifier_is_valid(value) {
         return Err(SurfaceValidationError::new(
@@ -754,6 +808,13 @@ fn validate_surface_patch_pointer(
 
 fn validate_surface_patch_op(op: &SurfacePatchOp) -> Result<(), SurfaceValidationError> {
     validate_surface_patch_pointer(&op.path, "patch.path")?;
+    if op.path.is_empty() && op.op != SurfacePatchOperation::Test {
+        return Err(SurfaceValidationError::at(
+            SurfaceErrorCode::InvalidPatch,
+            "patch.path",
+            "patch cannot replace or remove the snapshot root",
+        ));
+    }
     let immutable = ["/kind", "/protocol", "/surfaceId", "/revision"];
     if immutable
         .iter()
@@ -784,6 +845,12 @@ fn validate_surface_patch_op(op: &SurfacePatchOp) -> Result<(), SurfaceValidatio
                 ));
             };
             validate_surface_patch_pointer(from, "patch.from")?;
+            if from.is_empty() {
+                return Err(SurfaceValidationError::new(
+                    SurfaceErrorCode::InvalidPatch,
+                    "patch cannot read the snapshot root",
+                ));
+            }
             if immutable
                 .iter()
                 .any(|root| from == *root || from.starts_with(&format!("{root}/")))
@@ -965,7 +1032,20 @@ fn validate_surface_blueprint(blueprint: &BlueprintV2) -> Result<(), SurfaceVali
         &mut node_ids,
         &mut widget_refs,
         &widget_ids,
-    )
+    )?;
+    if widget_refs.len() != widget_ids.len() {
+        if let Some(orphan) = widget_ids.keys().find(|id| !widget_refs.contains_key(*id)) {
+            return Err(SurfaceValidationError::new(
+                SurfaceErrorCode::InvalidReference,
+                format!("widget instance {orphan:?} is not placed in the layout"),
+            ));
+        }
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::InvalidReference,
+            "layout widget references do not match declared instances",
+        ));
+    }
+    Ok(())
 }
 
 /// Validate a typed v2 snapshot against the authority and its resource limits.
@@ -1016,19 +1096,8 @@ pub fn validate_surface_snapshot_json(
             format!("forbidden executable field {field:?}"),
         ));
     }
-    if let Some(major) = raw
-        .get("protocol")
-        .and_then(Value::as_object)
-        .and_then(|protocol| protocol.get("major"))
-        .and_then(Value::as_u64)
-    {
-        if major != u64::from(SURFACE_PROTOCOL_MAJOR) {
-            return Err(SurfaceValidationError::new(
-                SurfaceErrorCode::UnsupportedMajor,
-                format!("unsupported Surface protocol major {major}"),
-            ));
-        }
-    }
+    validate_surface_version_json(raw)?;
+    validate_surface_revision_json(raw, "revision")?;
     let snapshot: SurfaceSnapshot = serde_json::from_value(raw.clone()).map_err(|error| {
         SurfaceValidationError::new(
             SurfaceErrorCode::InvalidBlueprint,
@@ -1059,7 +1128,7 @@ pub fn validate_surface_patch_event(
             "patch operation count exceeds the authority limit",
         ));
     }
-    if event.revision.value() != event.base_revision.value().saturating_add(1) {
+    if event.base_revision.value().checked_add(1) != Some(event.revision.value()) {
         return Err(SurfaceValidationError::new(
             SurfaceErrorCode::RevisionGap,
             "patch revision must be exactly base revision plus one",
@@ -1105,6 +1174,9 @@ pub fn validate_surface_patch_event_json(
             format!("forbidden executable field {field:?}"),
         ));
     }
+    validate_surface_version_json(raw)?;
+    validate_surface_revision_json(raw, "baseRevision")?;
+    validate_surface_revision_json(raw, "revision")?;
     let event: SurfacePatchEvent = serde_json::from_value(raw.clone()).map_err(|error| {
         SurfaceValidationError::new(
             SurfaceErrorCode::InvalidPatch,
@@ -1453,6 +1525,10 @@ mod tests {
             json!(SURFACE_PROTOCOL_MINOR)
         );
         assert_eq!(
+            authority["$defs"]["protocolVersion"]["properties"]["minor"]["maximum"],
+            json!(SURFACE_PROTOCOL_COMPONENT_MAX)
+        );
+        assert_eq!(
             authority["resourceLimits"]["maxDocumentBytes"],
             json!(SURFACE_MAX_DOCUMENT_BYTES)
         );
@@ -1574,6 +1650,18 @@ mod tests {
             SurfaceErrorCode::UnsupportedMajor
         );
         assert_eq!(
+            validate_surface_snapshot_json(&negative["minorOverflow"])
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::InvalidVersion
+        );
+        assert_eq!(
+            validate_surface_snapshot_json(&negative["invalidRevision"])
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::InvalidRevision
+        );
+        assert_eq!(
             validate_surface_snapshot_json(&negative["duplicateInstance"])
                 .unwrap_err()
                 .code,
@@ -1581,6 +1669,12 @@ mod tests {
         );
         assert_eq!(
             validate_surface_snapshot_json(&negative["invalidReference"])
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::InvalidReference
+        );
+        assert_eq!(
+            validate_surface_snapshot_json(&negative["orphanInstance"])
                 .unwrap_err()
                 .code,
             SurfaceErrorCode::InvalidReference
@@ -1596,6 +1690,24 @@ mod tests {
                 .unwrap_err()
                 .code,
             SurfaceErrorCode::RevisionGap
+        );
+        assert_eq!(
+            validate_surface_patch_event_json(&negative["revisionOverflow"])
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::RevisionGap
+        );
+        assert_eq!(
+            validate_surface_patch_event_json(&negative["invalidPatchRevision"])
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::InvalidRevision
+        );
+        assert_eq!(
+            validate_surface_patch_event_json(&negative["rootReplacement"])
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::InvalidPatch
         );
         assert_eq!(
             validate_surface_patch_event_json(&negative["badPatch"])

@@ -100,6 +100,7 @@
     "operations": ["add", "remove", "replace", "move", "copy", "test"],
     "target": "full-snapshot-document",
     "immutablePaths": ["/kind", "/protocol", "/surfaceId", "/revision"],
+    "rootMutation": "forbidden-except-test",
     "atomic": true,
     "failedOperation": "preserve-last-known-good-and-request-resync"
   },
@@ -109,7 +110,7 @@
       "required": ["major", "minor"],
       "properties": {
         "major": { "const": 2 },
-        "minor": { "type": "integer", "minimum": 0 }
+        "minor": { "type": "integer", "minimum": 0, "maximum": 65535 }
       },
       "additionalProperties": true
     },

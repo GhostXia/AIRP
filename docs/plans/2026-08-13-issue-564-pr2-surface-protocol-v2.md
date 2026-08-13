@@ -48,7 +48,8 @@ Patch event 的固定字段是 `kind: "patch"`、同一 `protocol`/`surfaceId`�
 `baseRevision`、`revision` 和 RFC 6902 子集 `patch`。revision 永远是十进制字符串，
 因此不会经过 JavaScript `number` 舍入；一次 patch 必须满足
 `revision = baseRevision + 1`。`/kind`、`/protocol`、`/surfaceId`、`/revision`
-及其子路径不可被 patch 改写。
+及其子路径不可被 patch 改写；除只读 `test` 外，根路径也不可作为目标或来源，避免
+整份替换绕过不可变元数据。
 
 ## 3. 兼容矩阵
 
@@ -58,6 +59,9 @@ Patch event 的固定字段是 `kind: "patch"`、同一 `protocol`/`surfaceId`�
 | major 2 / 新 minor | major 2 / minor 0 | 接受 additive 字段；未知字段 opaque |
 | major 1 | major 2 | 拒绝；必须走显式 v1 migration |
 | 未知 major（例如 3） | major 2 | fail closed，要求 snapshot resync |
+
+major/minor 均使用 unsigned 16-bit component；minor `0..=65535` 内按 additive 兼容，
+超界值返回 `invalid_version`。
 
 v1 demo 的 `Envelope`、`Blueprint`、`guard.ts` 行为保持不变。唯一的迁移入口是
 Rust `migrate_v1_blueprint` 与 TS `migrateV1Blueprint`：它们把 v1 area 中的 Widget
@@ -91,7 +95,8 @@ last-known-good。
 - `rust-to-ts.json`：Rust v2 snapshot 构造/序列化与 TS guard 消费。
 - `ts-to-rust.json`：TS patch event 与 Rust deserialize/validation。
 - `v1-migration.json`：显式默认布局迁移输入与期望输出。
-- `negative.json`：unknown major、重复 instance、无效引用、可执行字段和 revision gap。
+- `negative.json`：unknown major、重复/孤立 instance、无效引用、可执行字段、根替换、
+  revision gap、wire revision 越界与 u64 revision 递增溢出。
 
 `guard.test.ts` 覆盖 authority parity、双向 fixture、unknown additive/major、v1
 拒绝、重复/引用/安全字段和 depth/node/document/patch 限制；`surface-v2.test.ts`

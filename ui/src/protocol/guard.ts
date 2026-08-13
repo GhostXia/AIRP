@@ -298,6 +298,8 @@ export const SURFACE_LIMITS = {
   maxIdentifierLength: 128,
 } as const;
 
+export const SURFACE_PROTOCOL_COMPONENT_MAX = 65_535;
+
 export const SURFACE_FORBIDDEN_FIELDS = [
   "html",
   "css",
@@ -406,8 +408,8 @@ function surfaceVersion(value: unknown): SurfaceGuardResult {
       "protocol.major",
     );
   }
-  if (typeof value.minor !== "number" || !Number.isInteger(value.minor) || value.minor < 0) {
-    return surfaceFail("invalid_version", "protocol.minor must be a non-negative integer", "protocol.minor");
+  if (typeof value.minor !== "number" || !Number.isInteger(value.minor) || value.minor < 0 || value.minor > SURFACE_PROTOCOL_COMPONENT_MAX) {
+    return surfaceFail("invalid_version", "protocol.minor must be an unsigned 16-bit integer", "protocol.minor");
   }
   return { ok: true };
 }
@@ -552,7 +554,14 @@ function checkSurfaceBlueprint(blueprint: unknown): SurfaceGuardResult {
     if (!result.ok) return result;
   }
   const state: SurfaceNodeState = { nodeIds: new Set(), widgetRefs: new Set(), widgetIds, nodes: 0 };
-  return checkSurfaceNode(blueprint.root, 1, state);
+  const root = checkSurfaceNode(blueprint.root, 1, state);
+  if (!root.ok) return root;
+  for (const id of widgetIds) {
+    if (!state.widgetRefs.has(id)) {
+      return surfaceFail("invalid_reference", `widget instance ${id} is not placed in the layout`, "blueprint.widgets");
+    }
+  }
+  return { ok: true };
 }
 
 /** Validate a v2 Blueprint or a complete Surface snapshot. */
@@ -598,6 +607,9 @@ function checkSurfacePatchOp(op: unknown): SurfaceGuardResult {
   if (typeof op.path !== "string" || surfacePointerSegments(op.path) === null) {
     return surfaceFail("invalid_patch", "patch.path must be an RFC 6901 pointer", "patch.path");
   }
+  if (op.path === "" && op.op !== "test") {
+    return surfaceFail("invalid_patch", "patch cannot replace or remove the snapshot root", "patch.path");
+  }
   if (immutableSurfacePointer(op.path)) {
     return surfaceFail("invalid_patch", "patch cannot mutate immutable snapshot metadata", "patch.path");
   }
@@ -606,6 +618,9 @@ function checkSurfacePatchOp(op: unknown): SurfaceGuardResult {
   }
   if ((op.op === "move" || op.op === "copy") && immutableSurfacePointer(op.from as string)) {
     return surfaceFail("invalid_patch", "patch cannot read immutable snapshot metadata", "patch.from");
+  }
+  if ((op.op === "move" || op.op === "copy") && op.from === "") {
+    return surfaceFail("invalid_patch", "patch cannot read the snapshot root", "patch.from");
   }
   if ((op.op === "add" || op.op === "replace" || op.op === "test") && !("value" in op)) {
     return surfaceFail("invalid_patch", `${op.op} requires value`, "patch.value");

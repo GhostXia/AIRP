@@ -77,6 +77,22 @@ describe("Surface Protocol v2 fixtures and atomic store", () => {
     expect(store.lastKnownGood).toEqual(before);
   });
 
+  it("cannot replace the snapshot root to bypass immutable metadata", () => {
+    const store = new SurfaceStore();
+    store.applySnapshot(rustSnapshot);
+    const before = store.lastKnownGood;
+    const result = store.applyPatch({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story",
+      baseRevision: "42",
+      revision: "43",
+      patch: [{ op: "replace", path: "", value: { ...rustSnapshot, surfaceId: "other" } }],
+    });
+    expect(result).toMatchObject({ status: "resync", error: { code: "invalid_patch" } });
+    expect(store.snapshot).toEqual(before);
+  });
+
   it("treats object key order as irrelevant for a JSON test operation", () => {
     const store = new SurfaceStore();
     store.applySnapshot(rustSnapshot);
