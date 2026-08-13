@@ -16,6 +16,10 @@
   let dragNode = null;
   let hoverNode = null;
   let selectedNode = null;
+  let animationFrameId = null;
+  let simulationRunning = false;
+  let simulationGeneration = 0;
+  let graphRequestId = 0;
 
   const pages = [['03','workbench','角色工作台','03-workbench.html'],['04','worldbook','世界书','04-world-book.html'],['17','memory','记忆与状态','17-memory-state.html'],['18','scenes','多人场景','18-group-chat.html'],['32','style','风格系统','32-style-review.html'],['34','graph','关系图谱','34-relationship-graph.html'],['35','plotarc','剧情弧','35-plot-arc.html'],['36','imagegen','图片生成','36-image-gen.html'],['37','templates','模板库','37-character-templates.html'],['38','stylelearn','风格迁移','38-style-learn.html'],['39','dialoguegen','对话示例','39-dialogue-gen.html'],['40','wbgraph','知识图谱','40-worldbook-graph.html'],['41','timeline','时间线导出','41-timeline-export.html'],['42','carddiff','版本对比','42-card-diff.html'],['43','providers','多 Provider 路由','43-provider-management.html'],['44','plugintools','插件工具','44-plugin-tools.html']];
   function pathWithState(path) {
@@ -50,6 +54,17 @@
     el.classList.toggle('error', Boolean(isError));
   }
 
+  function resetGraphPresentation() {
+    graphData = null;
+    simNodes = [];
+    simEdges = [];
+    renderNodeAccess();
+    clearCanvas();
+    $('#graph-stats').textContent = '节点 0 · 边 0 · 冲突 0';
+    $('#graph-conflicts').hidden = true;
+    $('#conflicts-list').replaceChildren();
+  }
+
   function node(tag, className, text) {
     const v = document.createElement(tag);
     if (className) v.className = className;
@@ -76,7 +91,17 @@
   }
 
   async function loadGraph() {
-    if (!characterId) { setStatus('请先选择角色', true); return; }
+    cancelSimulation();
+    clearNodeDetail();
+    const requestId = ++graphRequestId;
+    const requestedCharacterId = characterId;
+    if (!characterId) {
+      resetGraphPresentation();
+      $('#graph-empty').textContent = '选择角色后加载图谱';
+      $('#graph-empty').style.display = 'block';
+      setStatus('请先选择角色', true);
+      return;
+    }
     const includeKeyOverlap = $('#opt-key-overlap').checked;
     const includeReferences = $('#opt-references').checked;
     const detectConflicts = $('#opt-conflicts').checked;
@@ -90,14 +115,13 @@
     setStatus('正在加载知识图谱…');
     try {
       const graph = await client.request('GET', '/v1/characters/' + encodeURIComponent(characterId) + '/lorebook/graph?' + query);
+      if (requestId !== graphRequestId || requestedCharacterId !== characterId) return;
       graphData = graph;
       renderGraph(graph);
       setStatus('图谱加载完成：' + graph.node_count + ' 节点 · ' + graph.edge_count + ' 边 · ' + graph.conflicts.length + ' 冲突');
     } catch (error) {
-      graphData = null;
-      simNodes = [];
-      simEdges = [];
-      clearCanvas();
+      if (requestId !== graphRequestId || requestedCharacterId !== characterId) return;
+      resetGraphPresentation();
       $('#graph-empty').textContent = '加载失败：' + AIRPApi.errorMessage(error.data, error.message);
       $('#graph-empty').style.display = 'block';
       setStatus('加载失败：' + AIRPApi.errorMessage(error.data, error.message), true);
@@ -105,6 +129,7 @@
   }
 
   function renderGraph(graph) {
+    cancelSimulation();
     $('#graph-stats').textContent = '节点 ' + graph.node_count + ' · 边 ' + graph.edge_count + ' · 冲突 ' + graph.conflicts.length;
     // 重置 graph-empty 文本：之前的失败错误信息在重新加载成功后应清除，
     // 否则即使节点为空也会显示旧的错误信息。
@@ -126,6 +151,7 @@
     }
     // 初始化力导向布局
     initSimulation(graph);
+    renderNodeAccess();
     $('#graph-empty').style.display = graph.nodes.length === 0 ? 'block' : 'none';
     runSimulation();
   }
@@ -174,10 +200,19 @@
   // 浏览器在帧间响应输入/绘制。冷却系数 cool 也按比例分散到每帧。
   // 同时支持 pinned 标记：被用户拖拽过的节点保持位置不参与位移，避免
   // 释放鼠标后立即被 300 次迭代"弹回"原位置（CodeRabbit #11）。
-  let simulationRunning = false;
+  function cancelSimulation() {
+    if (animationFrameId !== null) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+    simulationRunning = false;
+    simulationGeneration += 1;
+  }
+
   function runSimulation() {
     if (simNodes.length === 0) { clearCanvas(); return; }
     if (simulationRunning) return; // 防止重入：上次模拟未结束时忽略新触发
+    const generation = simulationGeneration;
     const totalIterations = 300;
     const batchSize = 10;
     const canvas = $('#graph-canvas');
@@ -190,6 +225,8 @@
     let iter = 0;
     let cool = initialTemp;
     function runBatch() {
+      if (generation !== simulationGeneration) return;
+      animationFrameId = null;
       for (let i = 0; i < batchSize && iter < totalIterations; i++, iter++) {
         // 计算排斥力
         for (const a of simNodes) {
@@ -242,13 +279,14 @@
         cool *= coolFactor;
       }
       drawCanvas();
+      if (generation !== simulationGeneration) return;
       if (iter < totalIterations) {
-        requestAnimationFrame(runBatch);
+        animationFrameId = requestAnimationFrame(runBatch);
       } else {
         simulationRunning = false;
       }
     }
-    requestAnimationFrame(runBatch);
+    animationFrameId = requestAnimationFrame(runBatch);
   }
 
   function clearCanvas() {
@@ -359,6 +397,38 @@
     drawCanvas();
   }
 
+  function clearNodeDetail() {
+    selectedNode = null;
+    const wrap = $('#graph-detail');
+    const content = $('#graph-detail-content');
+    wrap.hidden = true;
+    content.textContent = '';
+  }
+
+  function renderNodeAccess() {
+    const list = $('#graph-node-list');
+    if (!list) return;
+    list.replaceChildren();
+    for (const n of simNodes) {
+      const item = node('li', 'graph-node-item');
+      const button = node('button', 'btn btn-secondary graph-node-button');
+      button.type = 'button';
+      button.textContent = n.label + ' (#' + n.id + ')';
+      button.setAttribute('aria-label', '查看世界书节点：' + n.label + '（ID #' + n.id + '）');
+      button.setAttribute('aria-controls', 'graph-detail');
+      button.addEventListener('click', () => showNodeDetail(n));
+      button.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          showNodeDetail(n);
+        }
+      });
+      item.appendChild(button);
+      list.appendChild(item);
+    }
+    list.hidden = simNodes.length === 0;
+  }
+
   function setupCanvas() {
     const canvas = $('#graph-canvas');
     function getPos(evt) {
@@ -444,7 +514,7 @@
       characterId = $('#graph-character').value;
       sessionStorage.setItem('airp_character_id', characterId);
       $('#scope-character').textContent = characterId || '—';
-      if (characterId) loadGraph();
+      loadGraph();
     });
     $('#graph-refresh').addEventListener('click', loadGraph);
     setupCanvas();
