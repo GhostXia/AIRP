@@ -173,3 +173,124 @@ export interface PatchOp {
 export type PatchOpKind = "add" | "remove" | "replace" | "move" | "copy" | "test";
 
 export type SetOrPatch = "set" | "patch";
+
+// ---------------------------------------------------------------------------
+// Surface Protocol v2
+// ---------------------------------------------------------------------------
+//
+// v2 is intentionally additive to this module.  The existing v1 Envelope and
+// its Blueprint remain available to the demo and are not silently retyped.
+
+export const SURFACE_PROTOCOL_MAJOR = 2 as const;
+export const SURFACE_PROTOCOL_MINOR = 0 as const;
+
+/** Decimal unsigned-64 revision; never convert this value to a JS number. */
+export type SurfaceRevision = string;
+
+export interface SurfaceProtocolVersion {
+  major: number;
+  minor: number;
+}
+
+export type SurfaceLayoutNode =
+  | SurfaceSplitNode
+  | SurfaceTabsNode
+  | SurfaceStackNode
+  | SurfaceWidgetNode;
+
+export interface SurfaceSplitNode {
+  type: "split";
+  id: string;
+  orientation: "horizontal" | "vertical";
+  children: [SurfaceLayoutNode, SurfaceLayoutNode];
+}
+
+export interface SurfaceTabsNode {
+  type: "tabs";
+  id: string;
+  /** Stable id of one direct child in `children`. */
+  active: string;
+  children: SurfaceLayoutNode[];
+}
+
+export interface SurfaceStackNode {
+  type: "stack";
+  id: string;
+  children: SurfaceLayoutNode[];
+}
+
+export interface SurfaceWidgetNode {
+  type: "widget";
+  id: string;
+  /** Stable reference into `BlueprintV2.widgets`. */
+  instanceId: string;
+}
+
+export interface SurfaceWidgetInstance {
+  id: string;
+  type: string;
+  props?: Json;
+}
+
+export interface BlueprintV2 {
+  version: 2;
+  root: SurfaceLayoutNode;
+  widgets: SurfaceWidgetInstance[];
+}
+
+export interface SurfaceSnapshot {
+  kind: "snapshot";
+  protocol: SurfaceProtocolVersion;
+  surfaceId: string;
+  revision: SurfaceRevision;
+  blueprint: BlueprintV2;
+}
+
+export type SurfaceSnapshotV2 = SurfaceSnapshot;
+
+export type SurfacePatchOperation = "add" | "remove" | "replace" | "move" | "copy" | "test";
+
+export interface SurfacePatchOp {
+  op: SurfacePatchOperation;
+  /** RFC 6901 pointer into the full snapshot document. */
+  path: string;
+  value?: Json;
+  from?: string;
+}
+
+export interface SurfacePatchEvent {
+  kind: "patch";
+  protocol: SurfaceProtocolVersion;
+  surfaceId: string;
+  baseRevision: SurfaceRevision;
+  revision: SurfaceRevision;
+  patch: SurfacePatchOp[];
+}
+
+export type SurfacePatchEventV2 = SurfacePatchEvent;
+
+export type SurfaceMessage = SurfaceSnapshot | SurfacePatchEvent;
+
+export type SurfaceErrorCode =
+  | "unsupported_major"
+  | "invalid_version"
+  | "invalid_revision"
+  | "revision_mismatch"
+  | "revision_gap"
+  | "invalid_blueprint"
+  | "duplicate_instance_id"
+  | "invalid_reference"
+  | "invalid_patch"
+  | "resource_limit"
+  | "document_too_large"
+  | "forbidden_executable_field"
+  | "resync_required";
+
+export interface SurfaceError {
+  kind: "error";
+  protocol: SurfaceProtocolVersion;
+  surfaceId?: string;
+  code: SurfaceErrorCode;
+  message: string;
+  resync: true;
+}

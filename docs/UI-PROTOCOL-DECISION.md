@@ -55,6 +55,7 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 7. Widget/Blueprint 变更必须保持可观察、可迁移、可回退：schema 变动有版本，状态 patch 可审计，错误能落到明确边界。
 8. SSE 生成流事件合同以 [`protocol/sse-events.json`](../protocol/sse-events.json) 为机器可读唯一事实源（additive-only；发射端形状由 engine 测试锁定，消费端一致性由 webui/deploy 合同测试守护）。
 9. widget intent 执行面合同以 [`protocol/widget-intents.json`](../protocol/widget-intents.json) 为机器可读唯一事实源（additive-only；C-P2 拒绝默认，capability 字段为 C-P3 逐调用强制预留）。扩展目录（manifests + slot 计划）由 engine `GET /v1/extensions/catalog` 权威下发，webui 静态 slots.json 仅作降级。
+10. Blueprint/Surface v2 以 [`protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) 为机器可读唯一事实源。未知 major 拒绝并 resync；同 major additive minor 可接受；patch 原子提交且失败保留 last-known-good。任何层级的 HTML、CSS、脚本、模板、函数或 component source 字段都 fail closed。历史 Envelope/Blueprint v1 仅保留给 demo 与显式 migration，不再定义新 Surface 合同。
 
 ## 当前采纳表
 
@@ -69,6 +70,8 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 | Capability declarations | 保留；敏感用途前必须补 engine 侧强制 ✅ 已落地（2026-08-06）：C-P3（PR #486）实现 engine 权威逐调用强制（`/v1/widget-intents` + capability 封闭集 + `GET /v1/grants`）；MCP/plugin 授权主体尚未接入统一面 |
 | Consent/sandbox | 保留为 UI 纵深防御 |
 | 通用协议/市场野心 | 仅未来可能性，非当前范围 |
+
+Surface v2 当前只交付协议 authority、Rust/TypeScript binding/guard、共享 fixture 和客户端原子 store；它没有把 Engine endpoint、renderer、`HttpEngineBus` 或桌面入口变成运行事实。旧文档中“Blueprint v2 未交付”的宽泛表述自 PR 2 起仅对运行闭环成立，不再适用于协议层。
 
 ## 实践方向
 

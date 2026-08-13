@@ -9,6 +9,9 @@
 
 import { describe, it, expect } from "vitest";
 import contract from "../../../protocol/wire-discriminants.json";
+import authority from "../../../protocol/surface-protocol-v2.json";
+import rustSnapshot from "../../../protocol/fixtures/surface-v2/rust-to-ts.json";
+import negativeFixtures from "../../../protocol/fixtures/surface-v2/negative.json";
 import {
   BODY_KINDS,
   CAPABILITIES,
@@ -16,6 +19,14 @@ import {
   LAYOUT_KINDS,
   PATCH_OPS,
   SET_OR_PATCH,
+  SURFACE_ERROR_CODES,
+  SURFACE_FORBIDDEN_FIELDS,
+  SURFACE_LIMITS,
+  SURFACE_PROTOCOL_COMPONENT_MAX,
+  validateBlueprintV2,
+  validateSurfacePatchEventResult,
+  validateSurfaceSnapshot,
+  validateSurfaceSnapshotResult,
   validateEnvelope,
 } from "./guard";
 
@@ -209,5 +220,160 @@ describe("validateEnvelope", () => {
 
   it("accepts state op:set with null state", () => {
     expect(validateEnvelope(env({ kind: "state", scope: "w1", op: "set", state: null }))).toEqual({ ok: true });
+  });
+});
+
+describe("Surface Protocol v2 guard", () => {
+  const snapshot = rustSnapshot as unknown as Record<string, unknown>;
+
+  it("binds the runtime limits, error codes, and forbidden fields to the authority", () => {
+    expect(SURFACE_LIMITS).toMatchObject(authority.resourceLimits);
+    expect(authority.lengthUnits.widgetType).toBe("utf8-bytes");
+    expect(SURFACE_PROTOCOL_COMPONENT_MAX).toBe(authority.$defs.protocolVersion.properties.minor.maximum);
+    expect([...SURFACE_ERROR_CODES]).toEqual(authority.errors.map((entry) => entry.code));
+    expect([...SURFACE_FORBIDDEN_FIELDS]).toEqual(authority.unknownFields.forbiddenFields);
+  });
+
+  it("accepts the Rust-to-TS snapshot fixture and opaque additive fields", () => {
+    expect(validateSurfaceSnapshot(snapshot)).toBe(true);
+    const additive = {
+      ...snapshot,
+      additiveMetadata: { provider: "fixture", ignored: true },
+      blueprint: {
+        ...(snapshot.blueprint as Record<string, unknown>),
+        futureBlueprintField: "opaque",
+        root: {
+          ...((snapshot.blueprint as Record<string, unknown>).root as Record<string, unknown>),
+          futureNodeField: { preservedByCaller: true },
+        },
+      },
+    };
+    expect(validateSurfaceSnapshot(additive)).toBe(true);
+  });
+
+  it("rejects unknown major versions but accepts a newer additive minor", () => {
+    expect(validateSurfaceSnapshot(negativeFixtures.unknownMajor)).toBe(false);
+    const newerMinor = { ...snapshot, protocol: { major: 2, minor: 99 }, future: "opaque" };
+    expect(validateSurfaceSnapshot(newerMinor)).toBe(true);
+    expect(validateSurfaceSnapshotResult(negativeFixtures.minorOverflow)).toMatchObject({ ok: false, code: "invalid_version" });
+    expect(validateSurfaceSnapshotResult(negativeFixtures.invalidRevision)).toMatchObject({ ok: false, code: "invalid_revision" });
+  });
+
+  it("rejects v1 shape, duplicate/orphan instances, invalid references, and executable fields", () => {
+    expect(validateBlueprintV2(VALID_BP)).toMatchObject({ ok: false, code: "invalid_version" });
+    expect(validateSurfaceSnapshot(negativeFixtures.duplicateInstance)).toBe(false);
+    expect(validateSurfaceSnapshot(negativeFixtures.invalidReference)).toBe(false);
+    expect(validateSurfaceSnapshotResult(negativeFixtures.orphanInstance)).toMatchObject({ ok: false, code: "invalid_reference" });
+    expect(validateSurfaceSnapshot(negativeFixtures.forbiddenExecutableField)).toBe(false);
+    expect(validateSurfaceSnapshotResult(negativeFixtures.forbiddenExecutableField)).toMatchObject({
+      ok: false,
+      code: "forbidden_executable_field",
+    });
+    expect(validateSurfaceSnapshotResult({ ...snapshot, html: "<script>unsafe()</script>" })).toMatchObject({
+      ok: false,
+      code: "forbidden_executable_field",
+    });
+    const multibyteType = {
+      ...snapshot,
+      blueprint: {
+        ...(snapshot.blueprint as Record<string, unknown>),
+        widgets: [{ id: "chat-1", type: "界".repeat(43) }, { id: "tools-1", type: "core.tools" }],
+      },
+    };
+    expect(validateSurfaceSnapshotResult(multibyteType)).toMatchObject({ ok: false, code: "invalid_blueprint" });
+  });
+
+  it("rejects depth, node, document, and patch resource limit violations", () => {
+    let deepNode: Record<string, unknown> = { type: "widget", id: "leaf", instanceId: "w-1" };
+    for (let depth = 0; depth < SURFACE_LIMITS.maxBlueprintDepth; depth += 1) {
+      deepNode = { type: "stack", id: `deep-${depth}`, children: [deepNode] };
+    }
+    const deep = {
+      ...snapshot,
+      blueprint: { version: 2, root: deepNode, widgets: [{ id: "w-1", type: "core.chat" }] },
+    };
+    expect(validateSurfaceSnapshotResult(deep)).toMatchObject({ ok: false, code: "resource_limit" });
+
+    let nextWidget = 0;
+    const widgets = Array.from({ length: 128 }, () => ({ id: `w-${nextWidget++}`, type: "core.chat" }));
+    let nodeCounter = 0;
+    let leafWidget = 0;
+    const makeGroup = (count: number): Record<string, unknown> => ({
+      type: "stack",
+      id: `group-${nodeCounter++}`,
+      children: Array.from({ length: count }, () => {
+        const widgetIndex = leafWidget++;
+        let chain: Record<string, unknown> = {
+          type: "widget",
+          id: `node-${nodeCounter++}`,
+          instanceId: `w-${widgetIndex}`,
+        };
+        for (let level = 0; level < 8; level += 1) {
+          chain = { type: "stack", id: `chain-${nodeCounter++}`, children: [chain] };
+        }
+        return chain;
+      }),
+    });
+    const tooManyNodes = {
+      ...snapshot,
+      blueprint: {
+        version: 2,
+        root: {
+          type: "stack",
+          id: "node-limit-root",
+          children: [makeGroup(32), makeGroup(32), makeGroup(32), makeGroup(32)],
+        },
+        widgets,
+      },
+    };
+    expect(validateSurfaceSnapshotResult(tooManyNodes)).toMatchObject({ ok: false, code: "resource_limit" });
+
+    const tooLarge = { ...snapshot, opaque: "x".repeat(SURFACE_LIMITS.maxDocumentBytes) };
+    expect(validateSurfaceSnapshotResult(tooLarge)).toMatchObject({ ok: false, code: "document_too_large" });
+
+    const tooManyOps = {
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story",
+      baseRevision: "42",
+      revision: "43",
+      patch: Array.from({ length: SURFACE_LIMITS.maxPatchOperations + 1 }, () => ({
+        op: "test",
+        path: "/surfaceId",
+        value: "story",
+      })),
+    };
+    expect(validateSurfacePatchEventResult(tooManyOps)).toMatchObject({ ok: false, code: "resource_limit" });
+  });
+
+  it("validates the decimal u64 boundary and rejects malformed patch operations", () => {
+    const maxRevision = {
+      ...snapshot,
+      revision: "18446744073709551615",
+    };
+    expect(validateSurfaceSnapshot(maxRevision)).toBe(true);
+    expect(validateSurfaceSnapshot({ ...snapshot, revision: "18446744073709551616" })).toBe(false);
+    expect(validateSurfacePatchEventResult(negativeFixtures.revisionGap)).toMatchObject({ ok: false, code: "revision_gap" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.revisionOverflow)).toMatchObject({ ok: false, code: "revision_gap" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.invalidPatchRevision)).toMatchObject({ ok: false, code: "invalid_revision" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.rootReplacement)).toMatchObject({ ok: false, code: "invalid_patch" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.badPatch)).toMatchObject({ ok: false, code: "invalid_patch" });
+    expect(validateSurfacePatchEventResult(negativeFixtures.invalidPointerEscape)).toMatchObject({ ok: false, code: "invalid_patch" });
+    expect(validateSurfacePatchEventResult({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story",
+      baseRevision: "42",
+      revision: "43",
+      patch: [{ op: "replace", path: "/blueprint/root", value: "not-a-node" }],
+    })).toMatchObject({ ok: true });
+    expect(validateSurfacePatchEventResult({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story",
+      baseRevision: "42",
+      revision: "43",
+      patch: [{ op: "move", path: "/blueprint/root", from: "/revision" }],
+    })).toMatchObject({ ok: false, code: "invalid_patch" });
   });
 });

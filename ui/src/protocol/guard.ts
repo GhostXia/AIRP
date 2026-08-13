@@ -19,7 +19,18 @@
  * cannot positively confirm as well-formed is rejected (fail-closed).
  */
 
-import type { Body, Capability, Json, JsonPatch, PatchOpKind } from "./types";
+import type {
+  Body,
+  Capability,
+  Json,
+  JsonPatch,
+  PatchOpKind,
+  SurfaceMessage,
+  SurfacePatchEvent,
+  SurfaceRevision,
+  SurfaceSnapshot,
+  SurfaceErrorCode,
+} from "./types";
 
 export type GuardResult = { ok: true } | { ok: false; error: string };
 
@@ -270,4 +281,400 @@ export function validateEnvelope(e: unknown): GuardResult {
   const bodyErr = checkBody(e.body);
   if (bodyErr !== null) return fail(bodyErr);
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Surface Protocol v2 guard
+// ---------------------------------------------------------------------------
+
+export const SURFACE_LIMITS = {
+  maxDocumentBytes: 1_048_576,
+  maxPatchBytes: 65_536,
+  maxPatchOperations: 256,
+  maxBlueprintDepth: 16,
+  maxBlueprintNodes: 512,
+  maxWidgetInstances: 128,
+  maxChildren: 32,
+  maxIdentifierLength: 128,
+} as const;
+
+export const SURFACE_PROTOCOL_COMPONENT_MAX = 65_535;
+
+export const SURFACE_FORBIDDEN_FIELDS = [
+  "html",
+  "css",
+  "styleSheet",
+  "javascript",
+  "js",
+  "script",
+  "vue",
+  "template",
+  "eval",
+  "expression",
+  "function",
+  "renderFunction",
+  "render_function",
+  "componentSource",
+  "component_source",
+  "sourceCode",
+  "source_code",
+  "innerHTML",
+  "outerHTML",
+  "dangerouslySetInnerHTML",
+] as const;
+
+export const SURFACE_ERROR_CODES = [
+  "unsupported_major",
+  "invalid_version",
+  "invalid_revision",
+  "revision_mismatch",
+  "revision_gap",
+  "invalid_blueprint",
+  "duplicate_instance_id",
+  "invalid_reference",
+  "invalid_patch",
+  "resource_limit",
+  "document_too_large",
+  "forbidden_executable_field",
+  "resync_required",
+] as const satisfies readonly SurfaceErrorCode[];
+
+export type SurfaceGuardResult =
+  | { ok: true }
+  | { ok: false; code: SurfaceErrorCode; error: string; path?: string };
+
+function surfaceFail(
+  code: SurfaceErrorCode,
+  error: string,
+  path?: string,
+): SurfaceGuardResult {
+  return path === undefined ? { ok: false, code, error } : { ok: false, code, error, path };
+}
+
+function isFiniteJson(value: unknown, seen = new WeakSet<object>()): value is Json {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) return value.every((item) => isFiniteJson(item, seen));
+  return Object.values(value as Record<string, unknown>).every((item) => isFiniteJson(item, seen));
+}
+
+function forbiddenSurfaceField(value: unknown, seen = new WeakSet<object>()): string | null {
+  if (value === null || typeof value !== "object") return null;
+  if (seen.has(value)) return "circular_data";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = forbiddenSurfaceField(child, seen);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if ((SURFACE_FORBIDDEN_FIELDS as readonly string[]).includes(key)) return key;
+    const found = forbiddenSurfaceField(child, seen);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+function surfaceIdentifier(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value) &&
+    value.length <= SURFACE_LIMITS.maxIdentifierLength
+  );
+}
+
+const MAX_SURFACE_REVISION = 18_446_744_073_709_551_615n;
+
+function surfaceRevision(value: unknown): value is SurfaceRevision {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) return false;
+  try {
+    return BigInt(value) <= MAX_SURFACE_REVISION;
+  } catch {
+    return false;
+  }
+}
+
+function surfaceVersion(value: unknown): SurfaceGuardResult {
+  if (!isObject(value)) return surfaceFail("invalid_version", "protocol must be an object", "protocol");
+  if (value.major !== 2) {
+    return surfaceFail(
+      "unsupported_major",
+      `unsupported Surface protocol major ${String(value.major)}`,
+      "protocol.major",
+    );
+  }
+  if (typeof value.minor !== "number" || !Number.isInteger(value.minor) || value.minor < 0 || value.minor > SURFACE_PROTOCOL_COMPONENT_MAX) {
+    return surfaceFail("invalid_version", "protocol.minor must be an unsigned 16-bit integer", "protocol.minor");
+  }
+  return { ok: true };
+}
+
+function surfaceDocumentBytes(value: unknown): number | null {
+  try {
+    const encoded = new TextEncoder().encode(JSON.stringify(value));
+    return encoded.byteLength;
+  } catch {
+    return null;
+  }
+}
+
+function surfacePointerSegments(pointer: string): string[] | null {
+  if (pointer === "") return [];
+  if (!pointer.startsWith("/") || pointer.includes("\0") || /~(?![01])/.test(pointer)) return null;
+  const segments = pointer
+    .slice(1)
+    .split("/")
+    .map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
+  if (segments.some((segment) => ["__proto__", "prototype", "constructor"].includes(segment))) return null;
+  return segments;
+}
+
+function immutableSurfacePointer(pointer: string): boolean {
+  const segments = surfacePointerSegments(pointer);
+  if (segments === null || segments.length === 0) return false;
+  return ["kind", "protocol", "surfaceId", "revision"].includes(segments[0]);
+}
+
+function checkSurfaceWidget(
+  widget: unknown,
+  ids: Set<string>,
+): SurfaceGuardResult {
+  if (!isObject(widget)) return surfaceFail("invalid_blueprint", "widget instance must be an object", "widgets");
+  if (!surfaceIdentifier(widget.id)) return surfaceFail("invalid_blueprint", "widget.id is invalid", "widgets.id");
+  if (
+    typeof widget.type !== "string" ||
+    widget.type.length === 0 ||
+    new TextEncoder().encode(widget.type).byteLength > SURFACE_LIMITS.maxIdentifierLength
+  ) {
+    return surfaceFail("invalid_blueprint", "widget.type is invalid", "widgets.type");
+  }
+  if ("props" in widget && !isFiniteJson(widget.props)) {
+    return surfaceFail("invalid_blueprint", "widget.props must be finite JSON", "widgets.props");
+  }
+  if (ids.has(widget.id)) {
+    return surfaceFail("duplicate_instance_id", `duplicate widget instance id ${widget.id}`, "widgets.id");
+  }
+  ids.add(widget.id);
+  return { ok: true };
+}
+
+interface SurfaceNodeState {
+  nodeIds: Set<string>;
+  widgetRefs: Set<string>;
+  widgetIds: Set<string>;
+  nodes: number;
+}
+
+function checkSurfaceNode(
+  node: unknown,
+  depth: number,
+  state: SurfaceNodeState,
+): SurfaceGuardResult {
+  if (!isObject(node)) return surfaceFail("invalid_blueprint", "layout node must be an object", "root");
+  if (depth > SURFACE_LIMITS.maxBlueprintDepth) {
+    return surfaceFail("resource_limit", "blueprint depth exceeds the authority limit", "root");
+  }
+  state.nodes += 1;
+  if (state.nodes > SURFACE_LIMITS.maxBlueprintNodes) {
+    return surfaceFail("resource_limit", "blueprint node count exceeds the authority limit", "root");
+  }
+  if (!surfaceIdentifier(node.id)) return surfaceFail("invalid_blueprint", "layout node id is invalid", "root.id");
+  if (state.nodeIds.has(node.id)) {
+    return surfaceFail("duplicate_instance_id", `duplicate layout node id ${node.id}`, "root.id");
+  }
+  state.nodeIds.add(node.id);
+
+  switch (node.type) {
+    case "widget": {
+      if (!surfaceIdentifier(node.instanceId)) {
+        return surfaceFail("invalid_reference", "widget node instanceId is invalid", "root.instanceId");
+      }
+      if (!state.widgetIds.has(node.instanceId)) {
+        return surfaceFail("invalid_reference", `missing widget instance ${node.instanceId}`, "root.instanceId");
+      }
+      if (state.widgetRefs.has(node.instanceId)) {
+        return surfaceFail("duplicate_instance_id", `widget instance ${node.instanceId} is placed more than once`, "root.instanceId");
+      }
+      state.widgetRefs.add(node.instanceId);
+      return { ok: true };
+    }
+    case "split": {
+      if (node.orientation !== "horizontal" && node.orientation !== "vertical") {
+        return surfaceFail("invalid_blueprint", "split.orientation is invalid", "root.orientation");
+      }
+      if (!Array.isArray(node.children) || node.children.length !== 2) {
+        return surfaceFail("invalid_blueprint", "split must have exactly two children", "root.children");
+      }
+      for (const child of node.children) {
+        const result = checkSurfaceNode(child, depth + 1, state);
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    }
+    case "tabs": {
+      if (!surfaceIdentifier(node.active)) return surfaceFail("invalid_reference", "tabs.active is invalid", "root.active");
+      if (!Array.isArray(node.children) || node.children.length === 0 || node.children.length > SURFACE_LIMITS.maxChildren) {
+        return surfaceFail("resource_limit", "tabs child count is outside the authority limit", "root.children");
+      }
+      if (!node.children.some((child) => isObject(child) && child.id === node.active)) {
+        return surfaceFail("invalid_reference", `tabs.active ${node.active} does not name a child`, "root.active");
+      }
+      for (const child of node.children) {
+        const result = checkSurfaceNode(child, depth + 1, state);
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    }
+    case "stack": {
+      if (!Array.isArray(node.children) || node.children.length === 0 || node.children.length > SURFACE_LIMITS.maxChildren) {
+        return surfaceFail("resource_limit", "stack child count is outside the authority limit", "root.children");
+      }
+      for (const child of node.children) {
+        const result = checkSurfaceNode(child, depth + 1, state);
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    }
+    default:
+      return surfaceFail("invalid_blueprint", `unknown layout node type ${String(node.type)}`, "root.type");
+  }
+}
+
+function checkSurfaceBlueprint(blueprint: unknown): SurfaceGuardResult {
+  if (!isObject(blueprint)) return surfaceFail("invalid_blueprint", "blueprint must be an object", "blueprint");
+  if (blueprint.version !== 2) return surfaceFail("invalid_version", "blueprint.version must be 2", "blueprint.version");
+  if (!Array.isArray(blueprint.widgets)) return surfaceFail("invalid_blueprint", "blueprint.widgets must be an array", "blueprint.widgets");
+  if (blueprint.widgets.length > SURFACE_LIMITS.maxWidgetInstances) {
+    return surfaceFail("resource_limit", "widget instance count exceeds the authority limit", "blueprint.widgets");
+  }
+  const widgetIds = new Set<string>();
+  for (const widget of blueprint.widgets) {
+    const result = checkSurfaceWidget(widget, widgetIds);
+    if (!result.ok) return result;
+  }
+  const state: SurfaceNodeState = { nodeIds: new Set(), widgetRefs: new Set(), widgetIds, nodes: 0 };
+  const root = checkSurfaceNode(blueprint.root, 1, state);
+  if (!root.ok) return root;
+  for (const id of widgetIds) {
+    if (!state.widgetRefs.has(id)) {
+      return surfaceFail("invalid_reference", `widget instance ${id} is not placed in the layout`, "blueprint.widgets");
+    }
+  }
+  return { ok: true };
+}
+
+/** Validate a v2 Blueprint or a complete Surface snapshot. */
+export function validateBlueprintV2(value: unknown): SurfaceGuardResult {
+  try {
+    const forbidden = forbiddenSurfaceField(value);
+    if (forbidden !== null) return surfaceFail("forbidden_executable_field", `forbidden executable field ${forbidden}`);
+    return checkSurfaceBlueprint(value);
+  } catch (error) {
+    return surfaceFail("invalid_blueprint", `blueprint guard failed: ${String(error)}`);
+  }
+}
+
+export function validateSurfaceSnapshot(value: unknown): value is SurfaceSnapshot {
+  return validateSurfaceSnapshotResult(value).ok;
+}
+
+export function validateSurfaceSnapshotResult(value: unknown): SurfaceGuardResult {
+  try {
+    if (!isObject(value)) return surfaceFail("invalid_version", "snapshot must be an object");
+    const forbidden = forbiddenSurfaceField(value);
+    if (forbidden !== null) return surfaceFail("forbidden_executable_field", `forbidden executable field ${forbidden}`);
+    if (value.kind !== "snapshot") return surfaceFail("invalid_version", "snapshot.kind must be snapshot", "kind");
+    const version = surfaceVersion(value.protocol);
+    if (!version.ok) return version;
+    if (!surfaceIdentifier(value.surfaceId)) return surfaceFail("invalid_blueprint", "surfaceId is invalid", "surfaceId");
+    if (!surfaceRevision(value.revision)) return surfaceFail("invalid_revision", "revision must be a decimal u64 string", "revision");
+    const bytes = surfaceDocumentBytes(value);
+    if (bytes === null || bytes > SURFACE_LIMITS.maxDocumentBytes) {
+      return surfaceFail("document_too_large", "snapshot exceeds the document byte limit");
+    }
+    const blueprint = validateBlueprintV2(value.blueprint);
+    if (!blueprint.ok) return blueprint;
+    return { ok: true };
+  } catch (error) {
+    return surfaceFail("invalid_blueprint", `snapshot guard failed: ${String(error)}`);
+  }
+}
+
+function checkSurfacePatchOp(op: unknown): SurfaceGuardResult {
+  if (!isObject(op)) return surfaceFail("invalid_patch", "patch op must be an object", "patch");
+  if (!["add", "remove", "replace", "move", "copy", "test"].includes(String(op.op))) {
+    return surfaceFail("invalid_patch", `unknown patch operation ${String(op.op)}`, "patch.op");
+  }
+  if (typeof op.path !== "string" || surfacePointerSegments(op.path) === null) {
+    return surfaceFail("invalid_patch", "patch.path must be an RFC 6901 pointer", "patch.path");
+  }
+  if (op.path === "" && op.op !== "test") {
+    return surfaceFail("invalid_patch", "patch cannot replace or remove the snapshot root", "patch.path");
+  }
+  if (immutableSurfacePointer(op.path)) {
+    return surfaceFail("invalid_patch", "patch cannot mutate immutable snapshot metadata", "patch.path");
+  }
+  if ((op.op === "move" || op.op === "copy") && (typeof op.from !== "string" || surfacePointerSegments(op.from) === null)) {
+    return surfaceFail("invalid_patch", `${op.op} requires a safe from pointer`, "patch.from");
+  }
+  if ((op.op === "move" || op.op === "copy") && immutableSurfacePointer(op.from as string)) {
+    return surfaceFail("invalid_patch", "patch cannot read immutable snapshot metadata", "patch.from");
+  }
+  if ((op.op === "move" || op.op === "copy") && op.from === "") {
+    return surfaceFail("invalid_patch", "patch cannot read the snapshot root", "patch.from");
+  }
+  if ((op.op === "add" || op.op === "replace" || op.op === "test") && !("value" in op)) {
+    return surfaceFail("invalid_patch", `${op.op} requires value`, "patch.value");
+  }
+  if ("value" in op && !isFiniteJson(op.value)) return surfaceFail("invalid_patch", "patch.value must be finite JSON", "patch.value");
+  const forbidden = forbiddenSurfaceField(op.value);
+  if (forbidden !== null) return surfaceFail("forbidden_executable_field", `forbidden executable field ${forbidden}`, "patch.value");
+  return { ok: true };
+}
+
+export function validateSurfacePatchEvent(value: unknown): value is SurfacePatchEvent {
+  return validateSurfacePatchEventResult(value).ok;
+}
+
+export function validateSurfacePatchEventResult(value: unknown): SurfaceGuardResult {
+  try {
+    if (!isObject(value)) return surfaceFail("invalid_patch", "patch event must be an object");
+    if (value.kind !== "patch") return surfaceFail("invalid_version", "patch.kind must be patch", "kind");
+    const version = surfaceVersion(value.protocol);
+    if (!version.ok) return version;
+    if (!surfaceIdentifier(value.surfaceId)) return surfaceFail("invalid_blueprint", "surfaceId is invalid", "surfaceId");
+    if (!surfaceRevision(value.baseRevision) || !surfaceRevision(value.revision)) {
+      return surfaceFail("invalid_revision", "patch revisions must be decimal u64 strings");
+    }
+    if (BigInt(value.revision as string) !== BigInt(value.baseRevision as string) + 1n) {
+      return surfaceFail("revision_gap", "patch revision must be exactly baseRevision plus one");
+    }
+    if (!Array.isArray(value.patch)) return surfaceFail("invalid_patch", "patch must be an array", "patch");
+    if (value.patch.length > SURFACE_LIMITS.maxPatchOperations) {
+      return surfaceFail("resource_limit", "patch operation count exceeds the authority limit", "patch");
+    }
+    for (const op of value.patch) {
+      const result = checkSurfacePatchOp(op);
+      if (!result.ok) return result;
+    }
+    const forbidden = forbiddenSurfaceField(value);
+    if (forbidden !== null) return surfaceFail("forbidden_executable_field", `forbidden executable field ${forbidden}`);
+    const bytes = surfaceDocumentBytes(value);
+    if (bytes === null || bytes > SURFACE_LIMITS.maxPatchBytes) {
+      return surfaceFail("document_too_large", "patch exceeds the patch byte limit");
+    }
+    return { ok: true };
+  } catch (error) {
+    return surfaceFail("invalid_patch", `patch guard failed: ${String(error)}`);
+  }
+}
+
+export function validateSurfaceMessage(value: unknown): value is SurfaceMessage {
+  if (!isObject(value)) return false;
+  return value.kind === "snapshot" ? validateSurfaceSnapshot(value) : validateSurfacePatchEvent(value);
 }

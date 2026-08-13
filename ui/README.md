@@ -44,7 +44,7 @@ ui/
         └── lifecycle.rs   # startup ownership and shutdown rules
 ```
 
-The Rust protocol crate lives in `../protocol`. TypeScript types in `src/protocol/types.ts` are currently a manual subset mirror; #564 PR 2 must select a machine-readable authority and add Rust/TypeScript parity evidence before the public Surface contract changes.
+The Rust protocol crate lives in `../protocol`. Surface v2 uses [`../protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) as its machine-readable authority; Rust and TypeScript bindings remain manual mirrors locked by shared positive/negative/migration fixtures and parity tests. The older Envelope/Blueprint v1 types remain for demo compatibility and explicit migration only. This protocol layer does not itself provide an Engine endpoint, renderer, `HttpEngineBus`, or `/desktop/` product entry.
 
 ## Local Commands
 

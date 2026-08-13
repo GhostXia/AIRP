@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://airp.dev/protocol/surface-protocol-v2.json",
+  "title": "AIRP Surface Protocol v2",
+  "description": "The machine-readable authority for declarative Surface snapshots and patches. Unknown additive data is opaque and never executable.",
+  "authorityVersion": "2.0.0",
+  "protocol": {
+    "name": "airp.surface",
+    "major": 2,
+    "minor": 0,
+    "encoding": "major/minor"
+  },
+  "revision": {
+    "encoding": "decimal-u64-string",
+    "pattern": "^(0|[1-9][0-9]*)$",
+    "minimum": "0",
+    "maximum": "18446744073709551615",
+    "jsonType": "string"
+  },
+  "resourceLimits": {
+    "maxDocumentBytes": 1048576,
+    "maxPatchBytes": 65536,
+    "maxPatchOperations": 256,
+    "maxBlueprintDepth": 16,
+    "maxBlueprintNodes": 512,
+    "maxWidgetInstances": 128,
+    "maxChildren": 32,
+    "maxIdentifierLength": 128
+  },
+  "lengthUnits": {
+    "identifier": "ascii-characters",
+    "widgetType": "utf8-bytes"
+  },
+  "unknownFields": {
+    "policy": "opaque-additive",
+    "behavior": "accept-and-ignore-or-preserve",
+    "execution": "never-evaluate",
+    "forbiddenFields": [
+      "html",
+      "css",
+      "styleSheet",
+      "javascript",
+      "js",
+      "script",
+      "vue",
+      "template",
+      "eval",
+      "expression",
+      "function",
+      "renderFunction",
+      "render_function",
+      "componentSource",
+      "component_source",
+      "sourceCode",
+      "source_code",
+      "innerHTML",
+      "outerHTML",
+      "dangerouslySetInnerHTML"
+    ]
+  },
+  "compatibility": {
+    "unknownMajor": "reject-and-resync",
+    "unknownMinor": "accept-if-additive",
+    "matrix": [
+      {
+        "sender": { "major": 2, "minor": 0 },
+        "receiver": { "major": 2, "minor": 0 },
+        "result": "accept"
+      },
+      {
+        "sender": { "major": 2, "minor": 1 },
+        "receiver": { "major": 2, "minor": 0 },
+        "result": "accept-additive"
+      },
+      {
+        "sender": { "major": 1, "minor": 0 },
+        "receiver": { "major": 2, "minor": 0 },
+        "result": "reject-migration-required"
+      },
+      {
+        "sender": { "major": 3, "minor": 0 },
+        "receiver": { "major": 2, "minor": 0 },
+        "result": "reject-major"
+      }
+    ]
+  },
+  "errors": [
+    { "code": "unsupported_major", "resync": true },
+    { "code": "invalid_version", "resync": true },
+    { "code": "invalid_revision", "resync": true },
+    { "code": "revision_mismatch", "resync": true },
+    { "code": "revision_gap", "resync": true },
+    { "code": "invalid_blueprint", "resync": true },
+    { "code": "duplicate_instance_id", "resync": true },
+    { "code": "invalid_reference", "resync": true },
+    { "code": "invalid_patch", "resync": true },
+    { "code": "resource_limit", "resync": true },
+    { "code": "document_too_large", "resync": true },
+    { "code": "forbidden_executable_field", "resync": true },
+    { "code": "resync_required", "resync": true }
+  ],
+  "patchRules": {
+    "format": "RFC-6902-subset",
+    "operations": ["add", "remove", "replace", "move", "copy", "test"],
+    "target": "full-snapshot-document",
+    "immutablePaths": ["/kind", "/protocol", "/surfaceId", "/revision"],
+    "rootMutation": "forbidden-except-test",
+    "atomic": true,
+    "failedOperation": "preserve-last-known-good-and-request-resync"
+  },
+  "$defs": {
+    "protocolVersion": {
+      "type": "object",
+      "required": ["major", "minor"],
+      "properties": {
+        "major": { "const": 2 },
+        "minor": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      },
+      "additionalProperties": true
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "description": "An unsigned 64-bit integer encoded as a decimal JSON string."
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "json": {},
+    "widgetInstance": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Runtime guards additionally enforce this limit in UTF-8 bytes." },
+        "props": { "$ref": "#/$defs/json" }
+      },
+      "additionalProperties": true
+    },
+    "layoutNode": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "orientation", "children"],
+          "properties": {
+            "type": { "const": "split" },
+            "id": { "$ref": "#/$defs/identifier" },
+            "orientation": { "enum": ["horizontal", "vertical"] },
+            "children": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": { "$ref": "#/$defs/layoutNode" }
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["type", "id", "active", "children"],
+          "properties": {
+            "type": { "const": "tabs" },
+            "id": { "$ref": "#/$defs/identifier" },
+            "active": { "$ref": "#/$defs/identifier" },
+            "children": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": { "$ref": "#/$defs/layoutNode" }
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["type", "id", "children"],
+          "properties": {
+            "type": { "const": "stack" },
+            "id": { "$ref": "#/$defs/identifier" },
+            "children": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": { "$ref": "#/$defs/layoutNode" }
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["type", "id", "instanceId"],
+          "properties": {
+            "type": { "const": "widget" },
+            "id": { "$ref": "#/$defs/identifier" },
+            "instanceId": { "$ref": "#/$defs/identifier" }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "blueprint": {
+      "type": "object",
+      "required": ["version", "root", "widgets"],
+      "properties": {
+        "version": { "const": 2 },
+        "root": { "$ref": "#/$defs/layoutNode" },
+        "widgets": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/widgetInstance" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "patchOp": {
+      "type": "object",
+      "required": ["op", "path"],
+      "properties": {
+        "op": { "enum": ["add", "remove", "replace", "move", "copy", "test"] },
+        "path": { "type": "string" },
+        "from": { "type": "string" },
+        "value": { "$ref": "#/$defs/json" }
+      },
+      "additionalProperties": true
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["kind", "protocol", "surfaceId", "revision", "blueprint"],
+      "properties": {
+        "kind": { "const": "snapshot" },
+        "protocol": { "$ref": "#/$defs/protocolVersion" },
+        "surfaceId": { "$ref": "#/$defs/identifier" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "blueprint": { "$ref": "#/$defs/blueprint" }
+      },
+      "additionalProperties": true
+    },
+    "patchEvent": {
+      "type": "object",
+      "required": ["kind", "protocol", "surfaceId", "baseRevision", "revision", "patch"],
+      "properties": {
+        "kind": { "const": "patch" },
+        "protocol": { "$ref": "#/$defs/protocolVersion" },
+        "surfaceId": { "$ref": "#/$defs/identifier" },
+        "baseRevision": { "$ref": "#/$defs/revision" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "patch": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/patchOp" }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "schemas": {
+    "blueprint": { "$ref": "#/$defs/blueprint" },
+    "surfaceSnapshot": { "$ref": "#/$defs/snapshot" },
+    "surfacePatchEvent": { "$ref": "#/$defs/patchEvent" }
+  }
+}

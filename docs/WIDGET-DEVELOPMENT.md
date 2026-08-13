@@ -6,7 +6,7 @@
 >
 > 真理顺序：源码 / manifest / 测试 > 本文档 > widget-contract.js JSDoc > 历史归档。
 
-本文档是 widget 作者的入门与合同参考。widget 系统的安全模型与架构决策见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)；intent 执行面合同以 [protocol/widget-intents.json](../protocol/widget-intents.json) 为机器可读唯一事实源；扩展注册面合同以 `engine/src/extensions/` 源码为准。
+本文档是 widget 作者的入门与合同参考。widget 系统的安全模型与架构决策见 [UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md)；intent 执行面合同以 [protocol/widget-intents.json](../protocol/widget-intents.json) 为机器可读唯一事实源；Surface placement 合同以 [protocol/surface-protocol-v2.json](../protocol/surface-protocol-v2.json) 为机器可读唯一事实源；扩展注册面合同以 `engine/src/extensions/` 源码为准。
 
 ## 1. Widget 模型
 
@@ -264,6 +264,8 @@ cargo test --lib extensions::
 ```
 
 ## 10. 安全边界回顾
+
+- Surface v2 只用 `widget.type` 选择已安装 registry entry，并用稳定 `instanceId` 放置实例；`widget.type` 上限为 128 UTF-8 bytes，每个声明实例必须在布局树中恰好出现一次。Blueprint props 是 opaque JSON，不是 HTML、CSS、脚本、模板或组件源码，也不授予 capability。
 
 - **agent 不得在运行时写 Vue / JavaScript / 任意前端代码**（[UI-PROTOCOL-DECISION.md](UI-PROTOCOL-DECISION.md) 必须保留第 1 条）。widget 是已安装、已审查的模块，不是 agent 生成的代码。
 - **widget 不得持 RP 数据真相源**，引擎拥有真相；widget 只渲染并发出 intent。

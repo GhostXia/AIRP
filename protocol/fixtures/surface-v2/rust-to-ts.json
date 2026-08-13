@@ -1,0 +1,37 @@
+{
+  "kind": "snapshot",
+  "protocol": { "major": 2, "minor": 0 },
+  "surfaceId": "story",
+  "revision": "42",
+  "blueprint": {
+    "version": 2,
+    "root": {
+      "type": "split",
+      "id": "root",
+      "orientation": "horizontal",
+      "children": [
+        {
+          "type": "tabs",
+          "id": "tabs",
+          "active": "chat-node",
+          "children": [
+            { "type": "widget", "id": "chat-node", "instanceId": "chat-1" },
+            { "type": "widget", "id": "tools-node", "instanceId": "tools-1" }
+          ]
+        },
+        {
+          "type": "stack",
+          "id": "stack",
+          "children": [
+            { "type": "widget", "id": "notes-node", "instanceId": "notes-1" }
+          ]
+        }
+      ]
+    },
+    "widgets": [
+      { "id": "chat-1", "type": "core.chat", "props": { "mode": "story" } },
+      { "id": "tools-1", "type": "core.tools" },
+      { "id": "notes-1", "type": "core.notes", "props": { "pinned": true } }
+    ]
+  }
+}
