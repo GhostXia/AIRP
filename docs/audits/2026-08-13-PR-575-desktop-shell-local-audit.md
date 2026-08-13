@@ -1,4 +1,4 @@
-# #564 PR 3 desktop shell local causal audit
+# PR #575 / #564 PR 3 desktop shell local causal audit
 
 - Date: 2026-08-13
 - Branch: `codex/564-desktop-shell`
