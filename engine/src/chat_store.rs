@@ -914,6 +914,9 @@ impl ChatLog {
     /// #73 方案 B / #37：同步截断 `message_timestamps` / `message_ids` 保持等长。
     /// #249：同步截断 `message_candidates` / `message_swipe_index`。
     /// 分支对话树：同步截断 `message_parents`，更新 `active_leaf`。
+    /// 若目标明确匹配持久化的 `active_leaf`，或日志是 `active_leaf=None` 的 legacy
+    /// 线性格式且目标为末条，则成功返回但不刷新 `updated_at`、不递增 revision、
+    /// 不重写持久化文件。损坏的 dangling `active_leaf` 仍通过正常保存路径修复。
     pub fn rollback_to(&mut self, data_root: &Path, index: usize) -> Result<(), AirpError> {
         let len = self.messages.len();
         if (len == 0 && index != 0) || (len > 0 && index >= len) {
@@ -934,6 +937,23 @@ impl ChatLog {
                      use switch_branch first or specify an index on the active path"
                 ))
             })?;
+
+        let target_id = self.message_ids.get(index);
+        let targets_persisted_leaf = self
+            .active_leaf
+            .as_deref()
+            .is_some_and(|leaf| target_id.is_some_and(|target| crate::ulid::matches(target, leaf)));
+        let targets_legacy_linear_tail = self.active_leaf.is_none()
+            && self.message_parents.len() == len
+            && self.message_parents.iter().all(Option::is_none)
+            && index + 1 == len;
+
+        // Only explicit persisted state (or the documented legacy linear shape)
+        // proves this is a no-op. resolve_active_leaf() also falls back for a
+        // dangling persisted leaf; that corrupt state must reach save() for repair.
+        if targets_persisted_leaf || targets_legacy_linear_tail {
+            return Ok(());
+        }
 
         // New active_leaf = message at `index` (BEFORE removal).
         let new_leaf_id = self.message_ids.get(index).cloned();
@@ -1961,6 +1981,115 @@ mod tests {
         log.rollback_to(root, 0).unwrap();
         let err = log.rollback_to(root, 1).unwrap_err();
         assert!(matches!(err, AirpError::BadRequest(_)));
+    }
+
+    #[test]
+    fn rollback_to_legacy_linear_tail_is_a_pure_noop() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "rb_noop_char");
+
+        let mut seed = ChatLog::new("rb_noop_char");
+        seed.save(root).unwrap();
+        let jsonl_path = ChatLog::jsonl_path(root, "rb_noop_char");
+        let meta_path = ChatLog::meta_path(root, "rb_noop_char");
+        // Legacy lines intentionally omit id/ts/parent. Loading derives compatible
+        // in-memory values, but a no-op rollback must not persist that normalization.
+        fs::write(
+            &jsonl_path,
+            concat!(
+                "{\"role\":\"user\",\"content\":\"msg0\"}\n",
+                "{\"role\":\"user\",\"content\":\"msg1\"}\n"
+            ),
+        )
+        .unwrap();
+        let mut log = ChatLog::load_or_create(root, "rb_noop_char").unwrap();
+        let jsonl_before = fs::read(&jsonl_path).unwrap();
+        let meta_before = fs::read(&meta_path).unwrap();
+        let updated_at_before = log.updated_at.clone();
+        let revision_before = log.revision;
+
+        log.rollback_to(root, 1).unwrap();
+
+        assert_eq!(log.updated_at, updated_at_before);
+        assert_eq!(log.revision, revision_before);
+        assert_eq!(fs::read(jsonl_path).unwrap(), jsonl_before);
+        assert_eq!(fs::read(meta_path).unwrap(), meta_before);
+        let reloaded = ChatLog::load_or_create(root, "rb_noop_char").unwrap();
+        assert_eq!(reloaded.updated_at, updated_at_before);
+        assert_eq!(reloaded.revision, revision_before);
+        assert_eq!(reloaded.messages.len(), 2);
+    }
+
+    #[test]
+    fn rollback_to_explicit_active_leaf_is_a_pure_noop() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "rb_explicit_noop_char");
+
+        let mut log = ChatLog::new("rb_explicit_noop_char");
+        for content in ["msg0", "msg1"] {
+            log.append(
+                root,
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: content.into(),
+                },
+            )
+            .unwrap();
+        }
+        let target_id = log.message_ids[1].clone();
+        log.active_leaf = Some(format!("m{}", target_id[1..].to_uppercase()));
+        log.save(root).unwrap();
+        let meta_path = ChatLog::meta_path(root, "rb_explicit_noop_char");
+        let meta_before = fs::read(&meta_path).unwrap();
+        let updated_at_before = log.updated_at.clone();
+        let revision_before = log.revision;
+
+        log.rollback_to(root, 1).unwrap();
+
+        assert_eq!(log.updated_at, updated_at_before);
+        assert_eq!(log.revision, revision_before);
+        assert_eq!(fs::read(meta_path).unwrap(), meta_before);
+    }
+
+    #[test]
+    fn rollback_repairs_dangling_persisted_active_leaf() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        make_char_dir(root, "rb_dangling_leaf_char");
+
+        let mut log = ChatLog::new("rb_dangling_leaf_char");
+        for content in ["msg0", "msg1"] {
+            log.append(
+                root,
+                ChatMessage {
+                    role: crate::adapter::MessageRole::User,
+                    content: content.into(),
+                },
+            )
+            .unwrap();
+        }
+        let target_id = log.message_ids[1].clone();
+        let dangling_id = crate::ulid::derive_legacy_id("missing-message", 99);
+        assert!(!crate::ulid::matches(&target_id, &dangling_id));
+        log.active_leaf = Some(dangling_id);
+        log.updated_at = "2000-01-01T00:00:00+00:00".into();
+        log.save(root).unwrap();
+        let revision_before = log.revision;
+
+        let mut reloaded = ChatLog::load_or_create(root, "rb_dangling_leaf_char").unwrap();
+        // resolve_active_leaf falls back to the physical tail, but rollback must
+        // still persist the repair of the dangling metadata value.
+        assert_eq!(reloaded.resolve_active_leaf(), Some(target_id.as_str()));
+        reloaded.rollback_to(root, 1).unwrap();
+
+        assert_eq!(reloaded.active_leaf.as_deref(), Some(target_id.as_str()));
+        assert_eq!(reloaded.revision, revision_before + 1);
+        assert_ne!(reloaded.updated_at, "2000-01-01T00:00:00+00:00");
+        let persisted = ChatLog::load_or_create(root, "rb_dangling_leaf_char").unwrap();
+        assert_eq!(persisted.active_leaf.as_deref(), Some(target_id.as_str()));
+        assert_eq!(persisted.revision, revision_before + 1);
     }
 
     // ── #37 durable message-id contract 不变式 ──────────────────────────────

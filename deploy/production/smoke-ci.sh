@@ -34,19 +34,23 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Wait for engine + gateway to be truly ready after `compose up` or `compose restart`.
+# Wait for the production request path to be ready after `compose up` or
+# `compose restart`. `/health` is only the engine's liveness/local-storage
+# status; the provider and gateway-owned SSE path require external probes.
 #
 # Three-stage probe:
 #   1. `/health` returns `engine:"ok"` — axum is listening.
 #   2. `GET /v1/models` returns 200 — gateway → engine → provider egress path
 #      can serve a real request, not just the health route.
 #   3. (optional) `POST /v1/chat/completions` completes a full SSE round-trip
-#      ending in `data: [DONE]` — the streaming path itself is stable, which
+#      ending in a typed `{"type":"done"}` event — the streaming path itself
+#      is stable, which
 #      is what the restart-continuity browser smoke actually exercises.
 #
 # Stage 3 only runs when `WAIT_FOR_ENGINE_READY_CHAT_PROBE` is set to a
-# non-empty value. Each attempt creates a fresh disposable session so retries
-# cannot append duplicate readiness turns to a user-visible conversation.
+# non-empty value. Each attempt creates and then force-deletes a fresh probe
+# session, including failed attempts, so no user session or pre-delete backup
+# is polluted.
 # Stages 1–2 close the listener race from PR #243 run 29671033343;
 # stage 3 closes the mid-stream drop race from PR #246 run 29673388808, where
 # `/v1/models` returned 200 but the SSE stream still got reset mid-flight.
@@ -86,11 +90,39 @@ wait_for_engine_ready() {
       return 1
     fi
     probe_tmp=$(mktemp)
+    delete_probe_session() {
+      probe_session_deleted=0
+      for _ in $(seq 1 30); do
+        delete_code=$($curl_tls --silent --show-error \
+          --connect-timeout 2 \
+          --max-time 5 \
+          --user "$admin_user:$admin_password" \
+          --request DELETE \
+          --output /dev/null \
+          --write-out '%{http_code}' \
+          "$origin/v1/sessions/$probe_character_id/$probe_session_id?force=true" 2>/dev/null || true)
+        if [ "$delete_code" = "200" ] || [ "$delete_code" = "404" ]; then
+          probe_session_deleted=1
+          break
+        fi
+        sleep 1
+      done
+      if [ "$probe_session_deleted" -ne 1 ]; then
+        echo "wait_for_engine_ready: could not remove SSE probe session $probe_session_id (last http=$delete_code)" >&2
+        return 1
+      fi
+    }
     for attempt in $(seq 1 8); do
-      probe_session_response=$($curl_tls --silent --show-error --fail \
-        --user "$admin_user:$admin_password" \
-        --request POST "$origin/v1/sessions/$probe_character_id" 2>/dev/null || true)
-      probe_session_id=$(printf '%s' "$probe_session_response" | node -e '
+      # Choose the ID client-side so cleanup remains possible even when the
+      # create commits but its response is lost or unparsable.
+      probe_session_id=$(node -p 'require("crypto").randomUUID()')
+      probe_session_created=0
+      for _ in $(seq 1 5); do
+        probe_session_response=$($curl_tls --silent --show-error --fail \
+          --connect-timeout 2 --max-time 5 \
+          --user "$admin_user:$admin_password" \
+          --request POST "$origin/v1/sessions/$probe_character_id?session_id=$probe_session_id" 2>/dev/null || true)
+        returned_session_id=$(printf '%s' "$probe_session_response" | node -e '
 const raw = require("fs").readFileSync(0, "utf8");
 try {
   const value = JSON.parse(raw);
@@ -98,10 +130,23 @@ try {
   if (id) process.stdout.write(String(id));
 } catch {}
 ' )
-      if [ -z "$probe_session_id" ]; then
+        if [ "$returned_session_id" = "$probe_session_id" ]; then
+          probe_session_created=1
+          break
+        fi
+        sleep 1
+      done
+      if [ "$probe_session_created" -ne 1 ]; then
         echo "wait_for_engine_ready: SSE probe attempt $attempt could not create disposable session" >&2
-        sleep 2
-        continue
+        # The request may have committed despite the unusable response. The
+        # known ID makes this reconciliation safe and idempotent. Do not start
+        # another probe after an unconfirmed create; fail readiness closed.
+        if ! delete_probe_session; then
+          rm -f "$probe_tmp"
+          return 1
+        fi
+        rm -f "$probe_tmp"
+        return 1
       fi
       probe_body=$(printf '{"character_id":"%s","session_id":"%s","user_profile":{"name":"smoke","variables":{}},"message":"readiness probe"}' "$probe_character_id" "$probe_session_id")
         http_code=$($curl_tls --silent --show-error --no-buffer \
@@ -112,7 +157,21 @@ try {
             --output "$probe_tmp" \
             --write-out '%{http_code}' \
             "$origin/v1/chat/completions" 2>&1) && rc=0 || rc=$?
+        stream_ready=0
         if [ "$rc" -eq 0 ] && [ "$http_code" = "200" ] && node "$repo/deploy/production/verify-readiness-sse.mjs" "$probe_tmp"; then
+          stream_ready=1
+        fi
+
+        # A timed-out client may leave provider finalization briefly in flight.
+        # Retry the force-delete so the readiness probe creates neither a
+        # durable session nor a pre-delete backup. A 404 means a previous
+        # delete completed even if its response was lost.
+        if ! delete_probe_session; then
+          rm -f "$probe_tmp"
+          return 1
+        fi
+
+        if [ "$stream_ready" -eq 1 ]; then
           rm -f "$probe_tmp"
           # Grace period: SSE probe 成功不代表 Caddy upstream 连接池已稳定。
           # engine 刚 restart 时第一个真实 chat 流仍可能被 reset（PR #251 重试记录）。
