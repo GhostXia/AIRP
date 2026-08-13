@@ -1,0 +1,65 @@
+{
+  "unknownMajor": {
+    "kind": "snapshot",
+    "protocol": { "major": 3, "minor": 0 },
+    "surfaceId": "story",
+    "revision": "42",
+    "blueprint": { "version": 2, "root": { "type": "widget", "id": "w-node", "instanceId": "w-1" }, "widgets": [{ "id": "w-1", "type": "core.chat" }] }
+  },
+  "duplicateInstance": {
+    "kind": "snapshot",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "revision": "42",
+    "blueprint": {
+      "version": 2,
+      "root": { "type": "stack", "id": "root", "children": [
+        { "type": "widget", "id": "a", "instanceId": "w-1" },
+        { "type": "widget", "id": "b", "instanceId": "w-1" }
+      ] },
+      "widgets": [{ "id": "w-1", "type": "core.chat" }]
+    }
+  },
+  "invalidReference": {
+    "kind": "snapshot",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "revision": "42",
+    "blueprint": { "version": 2, "root": { "type": "widget", "id": "w-node", "instanceId": "missing" }, "widgets": [] }
+  },
+  "forbiddenExecutableField": {
+    "kind": "snapshot",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "revision": "42",
+    "blueprint": {
+      "version": 2,
+      "root": { "type": "widget", "id": "w-node", "instanceId": "w-1", "html": "<script>" },
+      "widgets": [{ "id": "w-1", "type": "core.chat" }]
+    }
+  },
+  "revisionGap": {
+    "kind": "patch",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "baseRevision": "42",
+    "revision": "44",
+    "patch": []
+  },
+  "badPatch": {
+    "kind": "patch",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "baseRevision": "42",
+    "revision": "43",
+    "patch": [{ "op": "replace", "path": "/blueprint/root" }]
+  },
+  "invalidPointerEscape": {
+    "kind": "patch",
+    "protocol": { "major": 2, "minor": 0 },
+    "surfaceId": "story",
+    "baseRevision": "42",
+    "revision": "43",
+    "patch": [{ "op": "test", "path": "/blueprint~x", "value": null }]
+  }
+}

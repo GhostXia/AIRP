@@ -1,0 +1,14 @@
+{
+  "kind": "patch",
+  "protocol": { "major": 2, "minor": 0 },
+  "surfaceId": "story",
+  "baseRevision": "42",
+  "revision": "43",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/blueprint/widgets/0/props",
+      "value": { "tone": "warm" }
+    }
+  ]
+}

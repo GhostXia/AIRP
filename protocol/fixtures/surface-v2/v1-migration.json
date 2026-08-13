@@ -1,0 +1,30 @@
+{
+  "v1": {
+    "version": "legacy-demo",
+    "layout": {
+      "type": "dock",
+      "areas": [
+        { "id": "main", "widgets": ["chat-1", "notes-1"] }
+      ]
+    },
+    "widgets": [
+      { "id": "chat-1", "type": "core.chat" },
+      { "id": "notes-1", "type": "core.notes" }
+    ]
+  },
+  "expectedV2": {
+    "version": 2,
+    "root": {
+      "type": "stack",
+      "id": "legacy-area-0",
+      "children": [
+        { "type": "widget", "id": "legacy-area-0-widget-0", "instanceId": "chat-1" },
+        { "type": "widget", "id": "legacy-area-0-widget-1", "instanceId": "notes-1" }
+      ]
+    },
+    "widgets": [
+      { "id": "chat-1", "type": "core.chat" },
+      { "id": "notes-1", "type": "core.notes" }
+    ]
+  }
+}
