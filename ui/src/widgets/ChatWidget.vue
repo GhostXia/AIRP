@@ -128,7 +128,7 @@ function send(): void {
   color: var(--text-tertiary);
   font-size: 12px;
 }
-.msg .text { overflow: hidden; color: var(--text-primary); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.msg .text { min-width: 0; max-height: 58px; overflow: auto; color: var(--text-primary); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .w-chat-composer {
   display: flex;
   gap: 6px;

@@ -76,6 +76,7 @@ let bus: AgentBus | null = null;
 let unsubscribe: (() => void) | null = null;
 let disposed = false;
 let compactInspectorMedia: MediaQueryList | null = null;
+let busAttempt = 0;
 
 function collapseForCompactViewport(event: MediaQueryListEvent | MediaQueryList): void {
   if (event.matches) inspectorCollapsed.value = true;
@@ -114,8 +115,9 @@ function onEnvelope(e: Envelope): void {
 /** Report a rejected envelope upstream as an `error` body (best-effort). */
 function reportError(rejected: Envelope, reason: string): void {
   if (!bus) return;
+  const activeBus = bus;
   Promise.resolve(
-    bus.dispatch({
+    activeBus.dispatch({
       v: 1,
       id: `err-${Date.now()}`,
       ts: Date.now(),
@@ -124,14 +126,26 @@ function reportError(rejected: Envelope, reason: string): void {
     }),
   ).catch((err: unknown) => {
     console.error("[App] reportError dispatch failed:", err);
+    if (bus === activeBus) invalidateBus(String(err ?? "dispatch failed"));
   });
 }
 
 // Surfaced in the template so a backend failure isn't a silent empty shell.
 const busError = ref<string | null>(null);
 
+function invalidateBus(message: string): void {
+  busAttempt += 1;
+  const stop = unsubscribe;
+  unsubscribe = null;
+  bus = null;
+  stop?.();
+  connectionState.value = "failed";
+  busError.value = message;
+}
+
 function onIntent(name: string, params?: Json): void {
   if (!bus) return;
+  const activeBus = bus;
   // Phase 0: characters.select records the selection locally (the engine is
   // stateless per-call; the chosen id rides on each chat.send). chat.send is
   // tagged with the current selection so the engine knows which card to assemble.
@@ -153,7 +167,7 @@ function onIntent(name: string, params?: Json): void {
     finalParams = { ...obj, character_id: selectedCharacterId.value } as Json;
   }
   Promise.resolve(
-    bus.dispatch({
+    activeBus.dispatch({
       v: 1,
       id: `ui-${Date.now()}`,
       ts: Date.now(),
@@ -162,12 +176,13 @@ function onIntent(name: string, params?: Json): void {
     }),
   ).catch((err: unknown) => {
     console.error("[App] dispatch failed:", err);
-    busError.value = String(err ?? "dispatch failed");
+    if (bus === activeBus) invalidateBus(String(err ?? "dispatch failed"));
   });
 }
 
 async function initializeBus(): Promise<void> {
   if (!isTauri || disposed) return;
+  const attempt = ++busAttempt;
   connectionState.value = "connecting";
   busError.value = null;
   unsubscribe?.();
@@ -175,18 +190,22 @@ async function initializeBus(): Promise<void> {
   bus = null;
   try {
     const built = await createBus();
-    if (disposed) return;
+    if (disposed || attempt !== busAttempt) return;
+    const stop = await built.subscribe(onEnvelope);
+    if (disposed || attempt !== busAttempt) {
+      stop();
+      return;
+    }
+    unsubscribe = stop;
     bus = built;
-    unsubscribe = built.subscribe(onEnvelope);
     connectionState.value = "connected";
     setState("w-characters", { ids: [], loaded: false });
     setState("w-settings", { loaded: false });
     onIntent("characters.list", {});
   } catch (err) {
-    connectionState.value = "failed";
-    bus = null;
+    if (attempt !== busAttempt) return;
     console.error("[App] createBus failed:", err);
-    busError.value = String(err ?? "createBus failed");
+    invalidateBus(String(err ?? "createBus failed"));
   }
 }
 
@@ -238,7 +257,11 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   disposed = true;
-  unsubscribe?.();
+  busAttempt += 1;
+  const stop = unsubscribe;
+  unsubscribe = null;
+  bus = null;
+  stop?.();
   compactInspectorMedia?.removeEventListener("change", collapseForCompactViewport);
 });
 </script>
@@ -356,7 +379,7 @@ h1 { margin: 0; font: 650 21px/1 var(--font-display); }
 .surface-state { display: grid; place-content: center; gap: 8px; height: 100%; text-align: center; }
 .surface-state span { color: var(--text-secondary); font-size: 13px; }
 .workspace__footer { display: flex; align-items: center; gap: 18px; padding: 0 18px; overflow: hidden; border-top: 1px solid var(--border-default); color: var(--text-tertiary); font: 500 9px/1 var(--font-utility); white-space: nowrap; }
-@media (max-width: 1180px) { .desktop-shell { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr) 38px; } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector) { position: fixed; top: 0; right: 0; z-index: 10; width: var(--desktop-inspector-w); box-shadow: -12px 0 28px color-mix(in srgb, var(--ink) 14%, transparent); } .desktop-shell :deep(.rail__wordmark), .desktop-shell :deep(.rail__copy), .desktop-shell :deep(.rail__focus span:last-child) { display: none; } }
+@media (max-width: 1180px) { .desktop-shell { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr) 38px; } .desktop-shell--focus { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector) { position: fixed; top: 0; right: 0; bottom: 0; z-index: 10; width: var(--desktop-inspector-w); overflow: hidden; box-shadow: -12px 0 28px color-mix(in srgb, var(--ink) 14%, transparent); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector__toggle) { left: 12px; } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector__body) { padding-top: 52px; } .desktop-shell :deep(.rail__wordmark), .desktop-shell :deep(.rail__copy), .desktop-shell :deep(.rail__focus span:last-child) { display: none; } }
 @media (max-width: 760px) { .desktop-shell, .desktop-shell--inspector-collapsed { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell :deep(.inspector), .context-toggle { display: none; } .workspace__chapter, .connection { display: none; } .surface { margin: 8px; } .workspace__footer { gap: 10px; } }
 @media (max-height: 640px) { .status-banner { min-height: 34px; padding-block: 4px; } .status-banner > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .surface { margin-top: 8px; } }
 </style>

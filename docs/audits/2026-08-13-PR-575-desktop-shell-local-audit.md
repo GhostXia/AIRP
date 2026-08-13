@@ -41,10 +41,26 @@ Resolution: the status banner compacts below 640px instead of disappearing. The 
 
 Resolution: preview chat rows now allow wrapped text within a larger virtual row. The independent visual re-review confirmed the complete sentence is readable in all five profiles.
 
+### R3 — Compact Focus Mode retained an empty Inspector column
+
+Resolution: the `max-width: 1180px` rule now reasserts the two-column Focus Mode layout. The shell smoke checks the computed grid has exactly two columns at 1024px.
+
+### R4 — Tauri listener readiness and dispatch failure were not connection state
+
+Resolution: `AgentBus.subscribe` may resolve asynchronously, `TauriBus` propagates listener attachment failures, and the shell marks connected only after subscription succeeds. Dispatch failures invalidate the active bus so retry reconstructs the transport. Attempt identities prevent overlapping retries from leaking a stale listener, and teardown is idempotent against late rejections.
+
+### R5 — Compact Inspector overlay did not own the viewport height
+
+Resolution: the overlay is bounded by `top: 0` and `bottom: 0`, contains its close control, and keeps the body scrollable. The 1024 smoke asserts its bounding box spans the viewport.
+
+### R6 — Wrapped chat text could exceed the fixed virtualization row
+
+Resolution: fixed-height virtualization remains the explicit scaffold performance contract, while each row's text owns a bounded scroll area. Arbitrarily long text remains reachable without changing spacer math or overlapping adjacent rows.
+
 ## Verification
 
 - `npm --prefix ui run typecheck`: passed.
-- `npm --prefix ui run test -- --run`: 15 files / 121 tests passed.
+- `npm --prefix ui run test -- --run`: 15 files / 122 tests passed.
 - `npm --prefix ui run build`: passed.
 - `npm --prefix ui run smoke:shell`: 5 profiles passed with non-empty screenshots and no overflow/page errors.
 - In-app browser interaction: workspace selection, Inspector collapse, Focus Mode, `aria-current`, no horizontal overflow, no console warnings/errors passed.
@@ -60,3 +76,6 @@ Resolution: preview chat rows now allow wrapped text within a larger virtual row
 - English protocol/status labels mixed into the Chinese shell remain consistent but can be localized later.
 - The visible focus ring can use stronger contrast.
 - When the Engine is unavailable, the preview composer still looks actionable; a real connected slice should disable, queue, or explain unavailable send behavior.
+- The smoke currently serves the Vite application rather than the just-built `dist`; production bundle consumption remains a later packaging/release gate.
+- Smoke teardown requests Vite termination but does not yet wait for bounded process exit and explicit port release.
+- The optional agent-test module is fail-closed in production but still emitted as a separate production chunk; a later hardening pass can exclude it entirely and assert its absence.

@@ -33,18 +33,15 @@ export class TauriBus implements AgentBus {
     await this.transport.invoke(DISPATCH_CMD, { env });
   }
 
-  subscribe(handler: EnvelopeHandler): () => void {
-    let cancelled = false;
-    const ready = this.transport.listen(ENVELOPE_EVENT, (env) => {
-      if (!cancelled) handler(env);
-    });
-    // If unsubscribed before `listen` resolved, tear down as soon as it does.
-    void ready.then((unlisten) => {
-      if (cancelled) unlisten();
+  async subscribe(handler: EnvelopeHandler): Promise<() => void> {
+    let active = true;
+    const unlisten = await this.transport.listen(ENVELOPE_EVENT, (env) => {
+      if (active) handler(env);
     });
     return () => {
-      cancelled = true;
-      void ready.then((unlisten) => unlisten());
+      if (!active) return;
+      active = false;
+      unlisten();
     };
   }
 }

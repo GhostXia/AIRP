@@ -106,11 +106,25 @@ try {
         await page.waitForFunction(() => document.querySelector('button[aria-label="切换上下文检查器"]')?.getAttribute("aria-pressed") === "false");
         await contextToggle.click();
         await page.locator("#context-inspector-body").waitFor({ state: "visible" });
+        const inspectorBox = await page.locator("aside.inspector").boundingBox();
+        assert.ok(inspectorBox, "context inspector has no layout box");
+        assert.ok(
+          Math.abs(inspectorBox.y) <= 1 && Math.abs(inspectorBox.height - profile.height) <= 1,
+          `context inspector must span the viewport: ${JSON.stringify(inspectorBox)}`,
+        );
         const contextFile = path.join(outDir, "1024x768-context-open.png");
         const contextImage = await page.screenshot({ path: contextFile });
         assert.ok(contextImage.byteLength > 15_000, "context-open screenshot is empty");
         supplementalEvidence.push({ name: "1024x768-context-open", screenshotBytes: contextImage.byteLength });
         await page.locator(".inspector__toggle").click();
+
+        const focusToggle = page.locator(".rail__focus");
+        await focusToggle.click();
+        const focusColumns = await page.locator("main.desktop-shell").evaluate((shell) =>
+          getComputedStyle(shell).gridTemplateColumns.split(/\s+/).filter(Boolean),
+        );
+        assert.equal(focusColumns.length, 2, `compact Focus Mode must have two columns: ${focusColumns.join(" ")}`);
+        await focusToggle.click();
 
         await page.evaluate(() => window.__AIRP_AGENT_TEST__?.setBusError("Engine 暂时不可用；请检查服务后重试。"));
         await page.setViewportSize({ width: 1024, height: 600 });
