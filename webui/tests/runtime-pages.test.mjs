@@ -172,6 +172,14 @@ test('both production restarts wait for the chat path before browser smoke', () 
   }
   assert.match(productionSmokeCi, /could not create disposable session/);
   assert.match(productionSmokeCi, /verify-readiness-sse\.mjs/);
+  assert.match(productionSmokeCi, /\/v1\/sessions\/\$probe_character_id\/\$probe_session_id\?force=true/);
+  assert.match(productionSmokeCi, /\[ "\$delete_code" = "200" \] \|\| \[ "\$delete_code" = "404" \]/);
+  assert.match(productionSmokeCi, /if \[ "\$probe_session_deleted" -ne 1 \]; then[\s\S]*return 1/);
+  assert.ok(
+    productionSmokeCi.indexOf('if [ "$probe_session_deleted" -ne 1 ]')
+      < productionSmokeCi.indexOf('if [ "$stream_ready" -eq 1 ]'),
+    'probe cleanup must be confirmed before readiness can succeed',
+  );
 });
 
 test('production smoke covers every advanced WebUI page and a visible Engine failure', () => {
