@@ -51,7 +51,7 @@ Resolution: `AgentBus.subscribe` may resolve asynchronously, `TauriBus` propagat
 
 ### R5 — Compact Inspector overlay did not own the viewport height
 
-Resolution: the overlay is bounded by `top: 0` and `bottom: 0`, contains its close control, and keeps the body scrollable. The 1024 smoke asserts its bounding box spans the viewport.
+Resolution: the overlay is bounded by `top: 0` and `bottom: 0`, contains its close control, and keeps the body scrollable. The 1024 smoke asserts full viewport height, non-zero width, an on-screen left edge, and right-edge alignment with the viewport.
 
 ### R6 — Wrapped chat text could exceed the fixed virtualization row
 

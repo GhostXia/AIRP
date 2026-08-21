@@ -109,7 +109,11 @@ try {
         const inspectorBox = await page.locator("aside.inspector").boundingBox();
         assert.ok(inspectorBox, "context inspector has no layout box");
         assert.ok(
-          Math.abs(inspectorBox.y) <= 1 && Math.abs(inspectorBox.height - profile.height) <= 1,
+          inspectorBox.width > 0 &&
+            inspectorBox.x >= -1 &&
+            Math.abs(inspectorBox.x + inspectorBox.width - profile.width) <= 1 &&
+            Math.abs(inspectorBox.y) <= 1 &&
+            Math.abs(inspectorBox.height - profile.height) <= 1,
           `context inspector must span the viewport: ${JSON.stringify(inspectorBox)}`,
         );
         const contextFile = path.join(outDir, "1024x768-context-open.png");
