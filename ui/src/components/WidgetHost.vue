@@ -15,8 +15,9 @@ import { resolveWidget } from "../registry/registry";
 import { getManifest } from "../registry/manifests";
 import { needsConsent, canMount, grant, effectiveCapabilities } from "../registry/consent";
 import { SandboxBridge, createIframeTransport } from "../registry/sandbox-bridge";
+import { WidgetLifecycle } from "./widget-lifecycle";
 
-const props = defineProps<{ instance: WidgetInstance; state: unknown }>();
+const props = defineProps<{ instance: WidgetInstance; state: unknown; stateRevision?: number }>();
 const emit = defineEmits<{ (e: "intent", name: string, params?: Json): void }>();
 
 const reg = resolveWidget(props.instance.type);
@@ -40,6 +41,9 @@ const sandboxed = computed(
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+const lifecycle = new WidgetLifecycle((error) => {
+  failed.value = errMsg(error);
+});
 function onIntent(name: string, params?: Json): void {
   emit("intent", name, params);
 }
@@ -51,9 +55,13 @@ async function approve(): Promise<void> {
     // #474：engine mutation 成功前不更新 gate；失败保持拒载。
     await grant(manifest);
   } catch (error) {
-    approvalError.value = error instanceof Error ? error.message : String(error);
+    lifecycle.run(() => {
+      approvalError.value = error instanceof Error ? error.message : String(error);
+    });
   } finally {
-    approvalPending.value = false;
+    lifecycle.run(() => {
+      approvalPending.value = false;
+    });
   }
 }
 
@@ -70,8 +78,6 @@ if (reg?.kind === "vue") {
 
 // --- kind: module (framework-agnostic) ---
 const moduleEl = ref<HTMLElement | null>(null);
-let mod: WidgetModule | null = null;
-let stateCb: ((state: unknown) => void) | null = null;
 let mounted = false;
 
 // --- sandboxed esm: bridged over postMessage to an opaque-origin iframe ---
@@ -80,15 +86,12 @@ let sandboxBridge: SandboxBridge | null = null;
 
 function makeContext(): WidgetContext {
   return {
-    instance: props.instance,
-    getState: () => props.state,
-    onState: (cb) => {
-      stateCb = cb;
-      return () => {
-        if (stateCb === cb) stateCb = null;
-      };
+    get instance() {
+      return props.instance;
     },
-    emit: (name, params) => emit("intent", name, params),
+    getState: () => props.state,
+    onState: (cb) => lifecycle.onState(cb),
+    emit: (name, params) => lifecycle.run(() => emit("intent", name, params)),
     // Only the consented capabilities reach the widget (host-enforced).
     capabilities: manifest ? effectiveCapabilities(manifest) : props.instance.capabilities ?? [],
   };
@@ -99,12 +102,22 @@ async function mountModule(): Promise<void> {
   mounted = true;
   try {
     const loaded = reg.load();
-    mod = loaded instanceof Promise ? await loaded : loaded;
-    await mod.mount(moduleEl.value, makeContext());
-    stateCb?.(props.state);
+    const mod: WidgetModule = loaded instanceof Promise ? await loaded : loaded;
+    let mountStarted = false;
+    if (!lifecycle.adopt(() => {
+      if (mountStarted) mod.unmount?.();
+    })) return;
+    const release = lifecycle.hold();
+    try {
+      mountStarted = true;
+      await mod.mount(moduleEl.value, makeContext());
+    } finally {
+      release();
+    }
+    lifecycle.pushState(props.state);
   } catch (e) {
     mounted = false;
-    failed.value = errMsg(e);
+    lifecycle.fail(e);
   }
 }
 
@@ -120,17 +133,20 @@ async function mountSandbox(): Promise<void> {
   }
   try {
     const transport = createIframeTransport(sandboxEl.value, source);
-    sandboxBridge = new SandboxBridge(
+    const bridge = new SandboxBridge(
       transport,
-      (name, params) => emit("intent", name, params),
-      (message) => {
-        failed.value = message;
-      },
+      (name, params) => lifecycle.run(() => emit("intent", name, params)),
+      (message) => lifecycle.fail(message),
     );
-    await sandboxBridge.mount(props.instance, effectiveCapabilities(manifest!));
-    sandboxBridge.pushState(props.state);
+    sandboxBridge = bridge;
+    if (!lifecycle.adopt(() => {
+      bridge.destroy();
+      if (sandboxBridge === bridge) sandboxBridge = null;
+    })) return;
+    await bridge.mount(props.instance, effectiveCapabilities(manifest!));
+    lifecycle.run(() => bridge.pushState(props.state));
   } catch (e) {
-    failed.value = errMsg(e);
+    lifecycle.fail(e);
   }
 }
 
@@ -146,31 +162,19 @@ watch(sandboxEl, (el) => {
 }, { immediate: true });
 
 watch(
-  () => props.state,
-  (s) => {
-    try {
-      // in-process module widget
-      stateCb?.(s);
-      // sandboxed widget: push the new state over the bridge
-      sandboxBridge?.pushState(s);
-    } catch (e) {
-      failed.value = errMsg(e);
-    }
+  [() => props.instance, () => props.state, () => props.stateRevision],
+  ([, state]) => {
+    // in-process module widget
+    // Instance changes also notify modules so they can reread the live
+    // context.instance metadata without conflating props with state.
+    lifecycle.pushState(state);
+    // sandboxed widget: push the new state over the bridge
+    lifecycle.run(() => sandboxBridge?.pushState(state));
   },
 );
 
 onBeforeUnmount(() => {
-  try {
-    mod?.unmount?.();
-  } catch {
-    /* a misbehaving widget must not break teardown */
-  }
-  try {
-    sandboxBridge?.destroy();
-    sandboxBridge = null;
-  } catch {
-    /* same: containment */
-  }
+  lifecycle.dispose();
 });
 
 onErrorCaptured((e) => {

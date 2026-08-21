@@ -1,5 +1,11 @@
 <script setup lang="ts">
-defineProps<{ collapsed: boolean; workspaceLabel: string }>();
+defineProps<{
+  collapsed: boolean;
+  workspaceLabel: string;
+  surfaceId: string | null;
+  revision: string | null;
+  focusedWidgetId: string | null;
+}>();
 const emit = defineEmits<{ (event: "toggle"): void }>();
 </script>
 
@@ -17,8 +23,9 @@ const emit = defineEmits<{ (event: "toggle"): void }>();
       <section aria-labelledby="scene-heading">
         <h3 id="scene-heading">场景</h3>
         <div class="context-card">
-          <strong>协议预览</strong>
-          <span>固定测试 Surface</span>
+          <strong>{{ surfaceId ?? "Surface 不可用" }}</strong>
+          <span>revision {{ revision ?? "—" }}</span>
+          <span>{{ focusedWidgetId ? `Widget ${focusedWidgetId}` : "尚未聚焦 Widget" }}</span>
           <small>真实 Engine 投影将在 PR 5 接入</small>
         </div>
       </section>

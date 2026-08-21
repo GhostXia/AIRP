@@ -200,18 +200,23 @@ jobs:
         working-directory: ui
         run: npm run test -- --run
 
-      - name: Build and smoke desktop shell
+      - name: Build and smoke desktop shell and Blueprint runtime
         working-directory: ui
         run: |
+          npx playwright-core install --with-deps chromium
+          export AIRP_CHROME_PATH="$(node -e "const { chromium } = require('playwright-core'); process.stdout.write(chromium.executablePath())")"
           npm run build
           npm run smoke:shell
+          npm run smoke:runtime
 
       - name: Upload desktop shell screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: desktop-shell-${{ github.event.pull_request.number || github.run_id }}
-          path: ui/dist/shell-smoke/
+          path: |
+            ui/dist/shell-smoke/
+            ui/dist/runtime-smoke/
           retention-days: 30
           if-no-files-found: error
 

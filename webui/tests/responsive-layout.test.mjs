@@ -9,6 +9,7 @@ const graphCss = await readFile(new URL('../assets/worldbook-graph.css', import.
 const consoleCss = await readFile(new URL('../assets/console.css', import.meta.url), 'utf8');
 const appVue = await readFile(new URL('../../ui/src/App.vue', import.meta.url), 'utf8');
 const rendererVue = await readFile(new URL('../../ui/src/components/BlueprintRenderer.vue', import.meta.url), 'utf8');
+const blueprintNodeVue = await readFile(new URL('../../ui/src/components/layout/BlueprintNode.vue', import.meta.url), 'utf8');
 const cardVue = await readFile(new URL('../../ui/src/widgets/CardWidget.vue', import.meta.url), 'utf8');
 
 function cssBlock(source, selector) {
@@ -49,13 +50,16 @@ test('desktop shell and card widget retain usable intrinsic controls across view
   assert.match(cardBlock, /aspect-ratio:\s*3\s*\/\s*4/);
 });
 
-test('blueprint and areas own bounded scrolling without fixed-width overflow', () => {
+test('Blueprint v2 runtime owns bounded scrolling without fixed-width overflow', () => {
   const blueprintBlock = cssBlock(rendererVue, '.blueprint');
-  const areaBlock = cssBlock(rendererVue, '.area');
+  const nodeBlock = cssBlock(blueprintNodeVue, '.layout-node');
+  const widgetBlock = cssBlock(blueprintNodeVue, '.layout-widget');
   assert.match(blueprintBlock, /min-width:\s*0/);
   assert.match(blueprintBlock, /overflow:\s*auto/);
-  assert.match(areaBlock, /min-width:\s*0/);
-  assert.match(areaBlock, /overflow:\s*auto/);
-  assert.match(rendererVue, /@media\s*\(max-width:\s*900px\)/);
-  assert.match(rendererVue, /overflow-x:\s*hidden/);
+  assert.match(nodeBlock, /min-width:\s*0/);
+  assert.match(nodeBlock, /min-height:\s*0/);
+  assert.match(widgetBlock, /overflow:\s*hidden/);
+  assert.match(blueprintNodeVue, /@media\s*\(max-width:\s*760px\)/);
+  assert.match(blueprintNodeVue, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(blueprintNodeVue, /overflow-y:\s*auto/);
 });

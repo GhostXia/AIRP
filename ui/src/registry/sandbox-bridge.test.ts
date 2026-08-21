@@ -75,6 +75,22 @@ describe("SandboxBridge", () => {
     await expect(bridge.mount(instance(), [])).rejects.toThrow(/destroyed/);
   });
 
+  it("destroy cancels a pending mount without retaining its timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = mockTransport();
+      const bridge = new SandboxBridge(t, () => {}, () => {});
+      const mounting = bridge.mount(instance(), [], 5_000);
+
+      bridge.destroy();
+
+      await expect(mounting).rejects.toThrow(/destroyed/);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("pushState forwards state into the iframe", () => {
     const t = mockTransport();
     const bridge = new SandboxBridge(t, () => {}, () => {});

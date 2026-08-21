@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, shallowRef, ref } from "vue";
-import type { Blueprint, Envelope, Json } from "./protocol/types";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import type { BlueprintV2, Envelope, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
+import type { SurfaceApplyResult } from "./protocol/surface-v2";
 import type { AgentBus } from "./protocol/bus";
 import { createBus, isTauriEnvironment } from "./protocol/bus-factory";
 import { validateEnvelope } from "./protocol/guard";
-import { stateStore, setState, patchState, applyJsonPatch } from "./state/store";
+import { stateRevisionStore, stateStore, setState, patchState } from "./state/store";
+import { SurfaceStateStore } from "./state/surface-store";
 import { registerBuiltins, applyManifestMessage } from "./registry";
 import BlueprintRenderer from "./components/BlueprintRenderer.vue";
 import SettingsModal from "./widgets/SettingsModal.vue";
@@ -16,24 +18,48 @@ import { WORKSPACE_PRESETS, type WorkspaceId } from "./shell-model";
 // Register first-party widgets into the open registry.
 registerBuiltins();
 
-const SHELL_PREVIEW_BLUEPRINT: Blueprint = {
-  version: "shell-preview-v1",
-  profile: "rp:story-preview",
-  theme: { name: "airp-light" },
-  layout: {
-    type: "dock",
-    areas: [
-      { id: "main", widgets: ["w-chat"] },
-      { id: "sidebar", widgets: ["w-characters"], props: { side: "right" } },
+const SHELL_PREVIEW_SURFACE: SurfaceSnapshot = {
+  kind: "snapshot",
+  protocol: { major: 2, minor: 0 },
+  surfaceId: "story.preview",
+  revision: "1",
+  blueprint: {
+    version: 2,
+    root: {
+      type: "split",
+      id: "story-root",
+      orientation: "horizontal",
+      children: [
+        {
+          type: "tabs",
+          id: "story-tabs",
+          active: "chat-node",
+          children: [
+            { type: "widget", id: "chat-node", instanceId: "w-chat" },
+            { type: "widget", id: "characters-node", instanceId: "w-characters" },
+          ],
+        },
+        {
+          type: "stack",
+          id: "story-tools",
+          children: [{ type: "widget", id: "clock-node", instanceId: "w-clock" }],
+        },
+      ],
+    },
+    widgets: [
+      { id: "w-chat", type: "core.chat", props: { title: "故事预览" } },
+      { id: "w-characters", type: "core.characters" },
+      { id: "w-clock", type: "core.clock" },
     ],
   },
-  widgets: [
-    { id: "w-chat", type: "core.chat", props: { title: "故事预览" }, state: "w-chat" },
-    { id: "w-characters", type: "core.characters", state: "w-characters", capabilities: ["read:state"] },
-  ],
 };
 
-const blueprint = shallowRef<Blueprint | null>(SHELL_PREVIEW_BLUEPRINT);
+const surface = new SurfaceStateStore();
+const fixtureResult = surface.applySnapshot(SHELL_PREVIEW_SURFACE);
+if (fixtureResult.status !== "applied") {
+  console.warn("[App] preview Surface fixture rejected", fixtureResult);
+}
+const acceptedSurface = computed(() => surface.acceptedSnapshot);
 
 // PR 3 deliberately renders one fixed, labelled Surface fixture. The real
 // Surface endpoint/runtime arrives in later #564 slices; browser preview must
@@ -82,6 +108,14 @@ function collapseForCompactViewport(event: MediaQueryListEvent | MediaQueryList)
   if (event.matches) inspectorCollapsed.value = true;
 }
 
+function activateSurfaceTab(tabsId: string, childId: string): void {
+  surface.activateTab(tabsId, childId);
+}
+
+function focusSurfaceWidget(instanceId: string): void {
+  surface.focusWidget(instanceId);
+}
+
 function onEnvelope(e: Envelope): void {
   const guard = validateEnvelope(e);
   if (!guard.ok) {
@@ -97,13 +131,9 @@ function onEnvelope(e: Envelope): void {
   if (body.kind === "manifest") {
     applyManifestMessage(body.op, body.manifests);
   } else if (body.kind === "blueprint") {
-    if (body.op === "set" && body.blueprint) {
-      blueprint.value = body.blueprint;
-    } else if (body.op === "patch" && body.patch && blueprint.value) {
-      const next = structuredClone(blueprint.value);
-      applyJsonPatch(next as unknown as Json, body.patch);
-      blueprint.value = next;
-    }
+    // Legacy Envelope blueprints remain isolated until PR6 introduces the
+    // Surface v2 HTTP transport. PR4 renders only its labelled v2 fixture.
+    console.info("[App] ignored legacy blueprint envelope during Surface v2 preview", body.op);
   } else if (body.kind === "state") {
     if (body.op === "set") setState(body.scope, body.state ?? null);
     else if (body.op === "patch" && body.patch) patchState(body.scope, body.patch);
@@ -220,7 +250,11 @@ async function refreshCharacters(): Promise<void> {
 type AgentTestInstaller = {
   installAgentTestHarness: (ctx: {
     dispatchIntent: (name: string, params?: Json) => void;
-    getBlueprint: () => Blueprint | null;
+    getBlueprint: () => BlueprintV2 | null;
+    getSurface: () => SurfaceSnapshot | null;
+    applySurface: (message: unknown) => SurfaceApplyResult;
+    setWidgetState: (scope: string, state: Json) => void;
+    patchWidgetState: (scope: string, patch: JsonPatch) => void;
     getState: () => typeof stateStore;
     getSelectedCharacterId: () => string;
     getBusError: () => string | null;
@@ -236,7 +270,11 @@ async function installOptionalAgentTestHarness(): Promise<void> {
   const mod = await load();
   mod.installAgentTestHarness({
     dispatchIntent: onIntent,
-    getBlueprint: () => blueprint.value,
+    getBlueprint: () => acceptedSurface.value?.blueprint ?? null,
+    getSurface: () => acceptedSurface.value,
+    applySurface: (message) => surface.apply(message),
+    setWidgetState: setState,
+    patchWidgetState: patchState,
     getState: () => stateStore,
     getSelectedCharacterId: () => selectedCharacterId.value,
     getBusError: () => busError.value,
@@ -302,24 +340,28 @@ onUnmounted(() => {
         <span>{{ busError }}</span>
         <UiButton label="重试 Engine 连接" @click="refreshCharacters">重试</UiButton>
       </div>
-      <div v-else-if="!isTauri" class="status-banner" role="status">
-        <strong>Shell preview</strong>
-        <span>此 PR 只验证桌面设计 shell；没有使用 MockBus 制造成功状态。</span>
+      <div v-else class="status-banner" role="status">
+        <strong>Blueprint runtime preview</strong>
+        <span>当前 Surface 是本地 v2 fixture；没有使用 MockBus 或 legacy Engine 消息制造真实 Surface 状态。</span>
       </div>
 
       <section class="surface" aria-label="动态 Surface 容器">
         <header class="surface__heading">
           <div>
-            <span class="surface__kicker">Surface / story.preview</span>
+          <span class="surface__kicker">Surface / {{ acceptedSurface?.surfaceId ?? "unavailable" }}</span>
             <h2>{{ activeWorkspacePreset.description }}</h2>
           </div>
-          <span class="surface__revision">rev fixture-1</span>
+          <span class="surface__revision">rev {{ acceptedSurface?.revision ?? "—" }}</span>
         </header>
         <div class="surface__body">
           <BlueprintRenderer
-            v-if="blueprint"
-            :blueprint="blueprint"
+            v-if="acceptedSurface"
+            :blueprint="acceptedSurface.blueprint"
             :state="stateStore"
+            :state-revisions="stateRevisionStore"
+            :active-tabs="surface.activeTabByNodeId"
+            @activate-tab="activateSurfaceTab"
+            @focus-widget="focusSurfaceWidget"
             @intent="onIntent"
           />
           <div v-else class="surface-state" role="status">
@@ -340,6 +382,9 @@ onUnmounted(() => {
       v-if="!focusMode"
       :collapsed="inspectorCollapsed"
       :workspace-label="activeWorkspacePreset.label"
+      :surface-id="acceptedSurface?.surfaceId ?? null"
+      :revision="acceptedSurface?.revision ?? null"
+      :focused-widget-id="surface.focusedWidgetInstanceId"
       @toggle="inspectorCollapsed = !inspectorCollapsed"
     />
     <SettingsModal
