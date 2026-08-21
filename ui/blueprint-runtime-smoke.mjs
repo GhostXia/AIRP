@@ -47,7 +47,10 @@ async function stopChild(child) {
     exited.then(() => true),
     new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
   ]);
-  if (!completed) throw new Error("Vite did not exit within 5s");
+  if (!completed) {
+    console.error("Vite did not exit within 5s; forcing termination");
+    child.kill("SIGKILL");
+  }
 }
 
 let vite = null;
@@ -315,6 +318,14 @@ try {
   if (viteOutput) console.error(viteOutput);
   throw error;
 } finally {
-  await browser?.close();
-  await stopChild(vite);
+  try {
+    await browser?.close();
+  } catch (error) {
+    console.error("failed to close runtime-smoke browser", error);
+  }
+  try {
+    await stopChild(vite);
+  } catch (error) {
+    console.error("failed to stop runtime-smoke Vite process", error);
+  }
 }

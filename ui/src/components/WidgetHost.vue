@@ -103,9 +103,13 @@ async function mountModule(): Promise<void> {
   try {
     const loaded = reg.load();
     const mod: WidgetModule = loaded instanceof Promise ? await loaded : loaded;
-    if (!lifecycle.adopt(() => mod.unmount?.())) return;
+    let mountStarted = false;
+    if (!lifecycle.adopt(() => {
+      if (mountStarted) mod.unmount?.();
+    })) return;
     const release = lifecycle.hold();
     try {
+      mountStarted = true;
       await mod.mount(moduleEl.value, makeContext());
     } finally {
       release();

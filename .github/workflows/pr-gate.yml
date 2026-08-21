@@ -203,6 +203,8 @@ jobs:
       - name: Build and smoke desktop shell and Blueprint runtime
         working-directory: ui
         run: |
+          npx playwright-core install --with-deps chromium
+          export AIRP_CHROME_PATH="$(node -e "const { chromium } = require('playwright-core'); process.stdout.write(chromium.executablePath())")"
           npm run build
           npm run smoke:shell
           npm run smoke:runtime

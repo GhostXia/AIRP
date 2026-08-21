@@ -4,7 +4,7 @@
 - Audited implementation: `61d41d94` (`feat(ui): add Blueprint v2 runtime`)
 - Scope: `ui/` Blueprint v2 renderer, Surface state, Widget lifecycle, runtime smoke, and affected WebUI/CI checks
 - Auditor posture: independent read-only review under the repository Audit Agent Charter
-- Verdict: **PASS**
+- Verdict: **PASS for audited implementation `61d41d94` only**; later PR-head changes require the final-head gate below.
 
 ## Review result
 

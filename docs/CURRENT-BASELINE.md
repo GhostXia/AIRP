@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-08-12
-> 代码基线：`main@7a90d88`
+> 基线日期：2026-08-21
+> 代码基线：PR #584 implementation `61d41d94`（合并前校准）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -10,6 +10,8 @@
 本次增量校准（2026-08-12，#564 PR 1）：Owner 已重新启动协议驱动的 Vue Blueprint/Widget 桌面主面开发，目标架构、资产处置、基线与回退边界见 [`plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。**运行事实尚未改变**：当前正式产品主面仍是 `webui/`，Tauri 仍默认承载该 WebUI，Blueprint v2、`/desktop/`、Surface API 与 `HttpEngineBus` 均未交付，不得因计划获批写成现有能力。
 
 本次增量校准（2026-08-13，#564 PR 2）：Blueprint/Surface Protocol v2 的协议层已建立，机器 authority 为 [`protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json)，Rust/TypeScript guard、双向 fixture、显式 v1 migration 与原子 last-known-good/resync store 已有测试。**运行事实仍未切换**：Engine Surface endpoint、`HttpEngineBus`、renderer、`/desktop/` 和真实 Widget 工作流仍属后续 PR，当前正式产品主面和 Tauri 默认入口仍是 `webui/`。
+
+本次增量校准（2026-08-21，#564 PR 4）：`ui/` 已具备受限但可运行的 Surface v2 客户端运行时，覆盖递归 `split/tabs/stack/widget` 渲染、原子 snapshot/patch 应用、稳定 Widget relocation、生命周期与局部错误隔离、5000 条消息虚拟滚动，以及浏览器 runtime smoke。PR gate 运行 `smoke:runtime` 并保存截图与 `runtime-evidence.json`。**产品入口仍未切换**：Engine Surface endpoint、`HttpEngineBus`、`/desktop/` 和真实 Engine 垂直链路仍属后续 PR，正式产品主面和 Tauri 默认入口仍是 `webui/`。
 
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
@@ -33,7 +35,7 @@ AIRP 是面向 Role Play 的 AI Agent 客户端，采用“无头 Engine + 可�
 | `webui/` | 无构建、多页面、同源 WebUI（当前 44 屏；`assets/widgets/` 为 widget 运行时与 SDK 资产面） | **正式产品交付主面** |
 | `airp-engine-console/` | WebUI 视觉与交互样板 | 设计基线，不是第二套运行时 |
 | `protocol/` | `airp-state-protocol`：共享线协议类型 | Rust workspace 成员 |
-| `ui/`、`ui/src-tauri/` | 当前运行事实：Tauri 壳同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；协议事实：Surface v2 authority、Rust/TS guard/fixture 与原子 store；目标事实：#564 恢复 Vue Blueprint/Widget 桌面主面 | **#564 开发中**；当前包仍走 WebUI。协议层已交付，但 `/desktop/`、Engine endpoint 与真实 Surface 闭环未交付，见 §2.3 和 #564 PR 1/2 决策 |
+| `ui/`、`ui/src-tauri/` | 当前运行事实：Tauri 壳同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；Surface v2 authority、Rust/TS guard/fixture、原子 store 与受限 Blueprint/Widget 客户端运行时已交付；目标事实：#564 恢复 Vue Blueprint/Widget 桌面主面 | **#564 开发中**；当前包仍走 WebUI。Engine endpoint、`HttpEngineBus`、`/desktop/` 与真实 Surface 闭环未交付，见 §2.3 和 #564 PR 1–4 决策 |
 | `deploy/windows-webui/` | Windows 便携 WebUI 包 | 当前优先 artifact |
 | `deploy/linux-webui/` | Linux musl 便携包 | 手动构建 artifact |
 | `deploy/production/` | 单实例自托管 HTTPS preview | P0 拓扑，不是正式发布 |

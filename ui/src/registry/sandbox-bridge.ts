@@ -65,8 +65,8 @@ export class SandboxBridge {
   private destroyed = false;
   private ready = false;
   private readonly off: () => void;
-  /** mount() resolvers parked until the iframe signals `ready`. */
-  private readyWaiters: Array<() => void> = [];
+  /** Pending mount operations parked until the iframe signals `ready`. */
+  private readyWaiters: Array<{ ready: () => void; cancel: () => void }> = [];
 
   constructor(
     private readonly transport: SandboxTransport,
@@ -84,7 +84,7 @@ export class SandboxBridge {
           this.ready = true;
           const waiters = this.readyWaiters;
           this.readyWaiters = [];
-          for (const w of waiters) w();
+          for (const waiter of waiters) waiter.ready();
         }
       } else if (msg.kind === "intent") this.onIntent(msg.name, msg.params);
       else if (msg.kind === "error") this.onError(msg.message);
@@ -115,7 +115,7 @@ export class SandboxBridge {
         if (done) return;
         done = true;
         // Drop our waiter so a late `ready` can't fire a rejected mount.
-        this.readyWaiters = this.readyWaiters.filter((w) => w !== waiter);
+        this.readyWaiters = this.readyWaiters.filter((entry) => entry.ready !== waiter);
         reject(new Error("sandbox iframe did not signal ready in time"));
       }, readyTimeoutMs);
       const waiter = (): void => {
@@ -124,7 +124,13 @@ export class SandboxBridge {
         clearTimeout(timer);
         sendMount();
       };
-      this.readyWaiters.push(waiter);
+      const cancel = (): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        reject(new Error("sandbox destroyed"));
+      };
+      this.readyWaiters.push({ ready: waiter, cancel });
     });
   }
 
@@ -138,6 +144,9 @@ export class SandboxBridge {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    const waiters = this.readyWaiters;
+    this.readyWaiters = [];
+    for (const waiter of waiters) waiter.cancel();
     this.off();
     this.transport.destroy();
   }
