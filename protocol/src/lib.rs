@@ -1548,6 +1548,18 @@ mod tests {
             authority["resourceLimits"]["maxBlueprintNodes"],
             json!(SURFACE_MAX_BLUEPRINT_NODES)
         );
+        assert_eq!(
+            authority["resourceLimits"]["maxWidgetInstances"],
+            json!(SURFACE_MAX_WIDGET_INSTANCES)
+        );
+        assert_eq!(
+            authority["resourceLimits"]["maxChildren"],
+            json!(SURFACE_MAX_CHILDREN)
+        );
+        assert_eq!(
+            authority["resourceLimits"]["maxIdentifierLength"],
+            json!(SURFACE_MAX_IDENTIFIER_LENGTH)
+        );
         let codes = authority["errors"]
             .as_array()
             .unwrap()

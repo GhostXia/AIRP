@@ -43,6 +43,45 @@ describe("Surface Protocol v2 fixtures and atomic store", () => {
     expect(store.lastKnownGood?.revision).toBe("43");
   });
 
+  it("applies copy and move operations with array append atomically", () => {
+    const store = new SurfaceStore();
+    store.applySnapshot(rustSnapshot);
+    const result = store.applyPatch({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story",
+      baseRevision: "42",
+      revision: "43",
+      patch: [
+        {
+          op: "copy",
+          from: "/blueprint/widgets/0/props/mode",
+          path: "/blueprint/widgets/2/props/mode",
+        },
+        {
+          op: "move",
+          from: "/blueprint/root/children/0/children/1",
+          path: "/blueprint/root/children/1/children/-",
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ status: "applied", snapshot: { revision: "43" } });
+    expect(store.snapshot?.blueprint.widgets[2].props).toEqual({ pinned: true, mode: "story" });
+    expect(store.snapshot?.blueprint.root).toMatchObject({
+      children: [
+        { children: [{ type: "widget", id: "chat-node", instanceId: "chat-1" }] },
+        {
+          children: [
+            { type: "widget", id: "notes-node", instanceId: "notes-1" },
+            { type: "widget", id: "tools-node", instanceId: "tools-1" },
+          ],
+        },
+      ],
+    });
+    expect(store.lastKnownGood).toEqual(store.snapshot);
+  });
+
   it("resyncs on revision mismatch without attempting the patch", () => {
     const store = new SurfaceStore();
     store.applySnapshot(rustSnapshot);
@@ -75,6 +114,28 @@ describe("Surface Protocol v2 fixtures and atomic store", () => {
     expect(result).toMatchObject({ status: "resync", error: { code: "invalid_patch" } });
     expect(store.snapshot).toEqual(before);
     expect(store.lastKnownGood).toEqual(before);
+  });
+
+  it.each([
+    ["a __proto__ segment", "/blueprint/__proto__/polluted"],
+    ["a malformed ~2 escape", "/blueprint/widgets/~2"],
+  ])("rejects %s without changing stored snapshots", (_description, path) => {
+    const store = new SurfaceStore();
+    store.applySnapshot(rustSnapshot);
+    const beforeSnapshot = structuredClone(store.snapshot);
+    const beforeLastKnownGood = structuredClone(store.lastKnownGood);
+    const result = store.applyPatch({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story",
+      baseRevision: "42",
+      revision: "43",
+      patch: [{ op: "add", path, value: true }],
+    });
+
+    expect(result).toMatchObject({ status: "resync", error: { code: "invalid_patch" } });
+    expect(store.snapshot).toEqual(beforeSnapshot);
+    expect(store.lastKnownGood).toEqual(beforeLastKnownGood);
   });
 
   it("cannot replace the snapshot root to bypass immutable metadata", () => {
