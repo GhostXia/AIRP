@@ -13,8 +13,8 @@ export type EnvelopeHandler = (env: Envelope) => void;
 export interface AgentBus {
   /** UI -> bus: send one upstream envelope (intent/subscribe/hello/ack). */
   dispatch(env: Envelope): void | Promise<void>;
-  /** bus -> UI: subscribe to downstream envelopes. Returns an unsubscribe fn. */
-  subscribe(handler: EnvelopeHandler): () => void;
+  /** bus -> UI: subscribe to downstream envelopes. Resolves after the listener is attached. */
+  subscribe(handler: EnvelopeHandler): (() => void) | Promise<() => void>;
 }
 
 let seq = 0;

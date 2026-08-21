@@ -37,10 +37,11 @@ test('console runtime containers use flexible bounds instead of fixed minimum he
   assert.match(consoleCss, /max-height:\s*\d+dvh/);
 });
 
-test('desktop app and card widget retain usable intrinsic controls across viewport sizes', () => {
-  const appBlock = cssBlock(appVue, '.app');
+test('desktop shell and card widget retain usable intrinsic controls across viewport sizes', () => {
+  const appBlock = cssBlock(appVue, '.desktop-shell');
   assert.match(appBlock, /height:\s*100dvh/);
-  assert.match(appVue, /\.app\s*>\s*\.blueprint\s*\{[^}]*flex:\s*1/s);
+  assert.match(appVue, /\.surface__body\s*\{[^}]*min-height:\s*0/s);
+  assert.match(appVue, /grid-template-columns:\s*var\(--desktop-rail-w\)\s+minmax\(0,\s*1fr\)/);
 
   const cardBlock = cssBlock(cardVue, '.card');
   assert.match(cardBlock, /min-height:\s*clamp\(/);

@@ -231,7 +231,7 @@ onErrorCaptured((e) => {
 .widget-error {
   padding: 8px;
   font-size: 13px;
-  color: #e0668a;
+  color: var(--danger);
 }
 .widget-consent {
   padding: 10px;
@@ -246,7 +246,7 @@ onErrorCaptured((e) => {
 }
 .widget-consent .caps code {
   margin-right: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-subtle);
   padding: 0 4px;
   border-radius: 4px;
 }

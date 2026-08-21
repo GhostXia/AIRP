@@ -200,6 +200,21 @@ jobs:
         working-directory: ui
         run: npm run test -- --run
 
+      - name: Build and smoke desktop shell
+        working-directory: ui
+        run: |
+          npm run build
+          npm run smoke:shell
+
+      - name: Upload desktop shell screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-shell-${{ github.event.pull_request.number || github.run_id }}
+          path: ui/dist/shell-smoke/
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Check WebUI scripts
         run: |
           for file in webui/assets/*.js; do node --check "$file"; done

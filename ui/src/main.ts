@@ -3,6 +3,7 @@ import App from "./App.vue";
 import { setDefaultEsmImporter } from "./registry";
 import { initEngineGrants } from "./registry/consent";
 import statusPill from "./widgets/status.module";
+import "./styles/desktop.css";
 
 // Map the demo's local esm source specifiers to in-repo modules so the third-
 // party widget loads with no network/CDN. A real host would leave the default

@@ -59,9 +59,9 @@ function onIntent(name: string, params?: Json): void {
   overscroll-behavior: contain;
 }
 .area {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
   min-width: 0;
   min-height: 0;
   display: flex;

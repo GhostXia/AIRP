@@ -13,7 +13,8 @@ UI 继承 AIRP-State-Protocol 的 Blueprint、Widget、patch、guard、虚拟滚
 - `ui/src-tauri/` 负责 Engine sidecar 生命周期、data root、desktop-session token、原生错误与打包。
 - Tauri 启动后导航到 Engine 同源承载的 WebUI；正式产品主面仍是 `webui/`。
 - `ui/src/` 中的 Vue Blueprint/Widget 代码当前是 scaffold/test 资产，不是正式运行主面。
-- 非 Tauri 环境仍会落到 MockBus；在 #564 PR 6 前不得把该路径写成真实浏览器产品链路。
+- `ui/src/` 的 PR 3 桌面 shell 已使用 canonical WebUI tokens，提供四个工作区、Focus Mode、Context Inspector 与固定 Surface preview；该 preview 不使用 MockBus 冒充 Engine 成功，也不是 Blueprint v2 runtime。
+- `createBus()` 的非 Tauri fallback 仍是测试/显式 demo 用 MockBus，但当前 `App.vue` 的浏览器 preview 不调用它；在 #564 PR 6 前不得把任一路径写成真实浏览器产品链路。
 - 归档的 Tauri `BusRelay` 不在当前源码中，#564 也不会恢复逐 intent 的 Rust 业务 relay。
 
 ## #564 目标职责
@@ -55,6 +56,7 @@ npm run dev
 npm run typecheck
 npm run test
 npm run build
+npm run smoke:shell
 npm run build:engine-sidecar
 npm run tauri dev
 ```
