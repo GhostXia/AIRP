@@ -127,7 +127,7 @@ try {
     const stackIndex = root.children.findIndex((node) => node.id === "story-tools");
     const characterIndex = root.children[tabsIndex].children.findIndex((node) => node.id === "characters-node");
     const baseRevision = snapshot.revision;
-    const revision = String(Number(baseRevision) + 1);
+    const revision = (BigInt(baseRevision) + 1n).toString();
     window.__airpBeforeHost = document.querySelector('[data-widget-instance="w-characters"] .widget-host');
     const result = harness.applySurface({
       kind: "patch",
@@ -151,13 +151,18 @@ try {
       same: window.__airpBeforeHost === after,
       outletCount: document.querySelectorAll('[data-widget-instance="w-characters"]').length,
       revision: harness.getSnapshot().surface?.revision,
+      expectedRevision: revision,
     };
   });
-  assert.deepEqual(
-    movePreservedHost,
-    { applied: true, beforeFound: true, afterFound: true, same: true, outletCount: 1, revision: "2" },
-    "moving a Widget remounted its host",
-  );
+  const { revision: moveRevision, expectedRevision: expectedMoveRevision, ...moveEvidence } = movePreservedHost;
+  assert.equal(moveRevision, expectedMoveRevision);
+  assert.deepEqual(moveEvidence, {
+    applied: true,
+    beforeFound: true,
+    afterFound: true,
+    same: true,
+    outletCount: 1,
+  }, "moving a Widget remounted its host");
 
   const removal = await page.evaluate(async () => {
     const harness = window.__AIRP_AGENT_TEST__;
@@ -171,7 +176,7 @@ try {
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
       baseRevision: snapshot.revision,
-      revision: String(Number(snapshot.revision) + 1),
+      revision: (BigInt(snapshot.revision) + 1n).toString(),
       patch: [
         { op: "remove", path: `/blueprint/root/children/${stackIndex}/children/${characterNodeIndex}` },
         { op: "remove", path: `/blueprint/widgets/${characterWidgetIndex}` },
@@ -187,10 +192,10 @@ try {
   const patchPerformance = await page.evaluate(async () => {
     const harness = window.__AIRP_AGENT_TEST__;
     const durations = [];
-    let revision = Number(harness.getSnapshot().surface.revision);
+    let revision = BigInt(harness.getSnapshot().surface.revision);
     const clockIndex = harness.getSnapshot().surface.blueprint.widgets.findIndex((widget) => widget.id === "w-clock");
     for (let index = 0; index < 40; index += 1) {
-      const next = revision + 1;
+      const next = revision + 1n;
       const start = performance.now();
       const result = harness.applySurface({
         kind: "patch",
@@ -216,17 +221,19 @@ try {
   const isolatedFallbacks = await page.evaluate(async () => {
     const harness = window.__AIRP_AGENT_TEST__;
     const snapshot = harness.getSnapshot().surface;
+    const root = snapshot.blueprint.root;
+    const stackIndex = root.children.findIndex((node) => node.id === "story-tools");
     const result = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
       baseRevision: snapshot.revision,
-      revision: String(Number(snapshot.revision) + 1),
+      revision: (BigInt(snapshot.revision) + 1n).toString(),
       patch: [
         { op: "add", path: "/blueprint/widgets/-", value: { id: "unknown-1", type: "agent-test.unknown" } },
         { op: "add", path: "/blueprint/widgets/-", value: { id: "throw-1", type: "agent-test.throw" } },
-        { op: "add", path: "/blueprint/root/children/1/children/-", value: { type: "widget", id: "unknown-node", instanceId: "unknown-1" } },
-        { op: "add", path: "/blueprint/root/children/1/children/-", value: { type: "widget", id: "throw-node", instanceId: "throw-1" } },
+        { op: "add", path: `/blueprint/root/children/${stackIndex}/children/-`, value: { type: "widget", id: "unknown-node", instanceId: "unknown-1" } },
+        { op: "add", path: `/blueprint/root/children/${stackIndex}/children/-`, value: { type: "widget", id: "throw-node", instanceId: "throw-1" } },
       ],
     });
     await new Promise(requestAnimationFrame);
@@ -243,15 +250,16 @@ try {
   const lifecycle = await page.evaluate(async () => {
     const harness = window.__AIRP_AGENT_TEST__;
     let snapshot = harness.getSnapshot().surface;
+    const stackIndex = snapshot.blueprint.root.children.findIndex((node) => node.id === "story-tools");
     const added = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
       baseRevision: snapshot.revision,
-      revision: String(Number(snapshot.revision) + 1),
+      revision: (BigInt(snapshot.revision) + 1n).toString(),
       patch: [
         { op: "add", path: "/blueprint/widgets/-", value: { id: "lifecycle-1", type: "agent-test.lifecycle", props: { version: 1 } } },
-        { op: "add", path: "/blueprint/root/children/1/children/-", value: { type: "widget", id: "lifecycle-node", instanceId: "lifecycle-1" } },
+        { op: "add", path: `/blueprint/root/children/${stackIndex}/children/-`, value: { type: "widget", id: "lifecycle-node", instanceId: "lifecycle-1" } },
       ],
     });
     await new Promise(requestAnimationFrame);
@@ -265,7 +273,7 @@ try {
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
       baseRevision: snapshot.revision,
-      revision: String(Number(snapshot.revision) + 1),
+      revision: (BigInt(snapshot.revision) + 1n).toString(),
       patch: [{ op: "replace", path: `/blueprint/widgets/${lifecycleIndex}/props/version`, value: 2 }],
     });
     await new Promise(requestAnimationFrame);
@@ -294,7 +302,7 @@ try {
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
       baseRevision: snapshot.revision,
-      revision: String(Number(snapshot.revision) + 1),
+      revision: (BigInt(snapshot.revision) + 1n).toString(),
       patch: [{ op: "replace", path: `/blueprint/widgets/${currentLifecycleIndex}/type`, value: "agent-test.unknown" }],
     });
     await new Promise(requestAnimationFrame);
@@ -326,17 +334,18 @@ try {
   const rejected = await page.evaluate(() => {
     const harness = window.__AIRP_AGENT_TEST__;
     const snapshot = harness.getSnapshot().surface;
-    return harness.applySurface({
+    const result = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
       baseRevision: snapshot.revision,
-      revision: String(Number(snapshot.revision) + 1),
+      revision: (BigInt(snapshot.revision) + 1n).toString(),
       patch: [{ op: "replace", path: "/blueprint/root", value: { type: "widget", id: "bad", instanceId: "missing" } }],
     });
+    return { result, beforeRevision: snapshot.revision, afterRevision: harness.getSnapshot().surface.revision };
   });
-  assert.equal(rejected.status, "resync");
-  assert.equal((await page.evaluate(() => window.__AIRP_AGENT_TEST__.getSnapshot().surface.revision)), "47");
+  assert.equal(rejected.result.status, "resync");
+  assert.equal(rejected.afterRevision, rejected.beforeRevision);
   assert.deepEqual(pageErrors, []);
 
   const screenshot = await page.screenshot({ path: path.join(outDir, "runtime-1440x900.png") });
