@@ -1,6 +1,23 @@
-import type { Blueprint, Json } from "./protocol/types";
+import { defineComponent } from "vue";
+import type { BlueprintV2, Json, JsonPatch, SurfaceMessage, SurfaceSnapshot } from "./protocol/types";
+import type { SurfaceApplyResult } from "./protocol/surface-v2";
+import { registerModuleWidget, registerVueWidget, resolveWidget } from "./registry";
 
 type DispatchIntent = (name: string, params?: Json) => void;
+
+interface WidgetLifecycleEvidence {
+  mounts: number;
+  unmounts: number;
+  lastProps: Json | null;
+  lastState: Json | null;
+}
+
+const widgetLifecycleEvidence: WidgetLifecycleEvidence = {
+  mounts: 0,
+  unmounts: 0,
+  lastProps: null,
+  lastState: null,
+};
 
 export interface AgentTestHarness {
   readonly version: 1;
@@ -8,9 +25,14 @@ export interface AgentTestHarness {
   selectCharacter(characterId: string): void;
   sendChat(text: string, characterId?: string): void;
   refreshCharacters(): void;
+  applySurface(message: SurfaceMessage | unknown): SurfaceApplyResult;
+  setWidgetState(scope: string, state: Json): void;
+  patchWidgetState(scope: string, patch: JsonPatch): void;
+  getWidgetLifecycle(): WidgetLifecycleEvidence;
   setBusError(message: string | null): void;
   getSnapshot(): {
-    blueprint: Blueprint | null;
+    blueprint: BlueprintV2 | null;
+    surface: SurfaceSnapshot | null;
     state: Record<string, Json>;
     selectedCharacterId: string;
     busError: string | null;
@@ -22,7 +44,11 @@ export interface AgentTestHarness {
 
 export interface AgentTestContext {
   dispatchIntent: DispatchIntent;
-  getBlueprint: () => Blueprint | null;
+  getBlueprint: () => BlueprintV2 | null;
+  getSurface: () => SurfaceSnapshot | null;
+  applySurface: (message: SurfaceMessage | unknown) => SurfaceApplyResult;
+  setWidgetState: (scope: string, state: Json) => void;
+  patchWidgetState: (scope: string, patch: JsonPatch) => void;
   getState: () => Record<string, Json>;
   getSelectedCharacterId: () => string;
   getBusError: () => string | null;
@@ -53,6 +79,40 @@ export function shouldInstallAgentTestHarness(): boolean {
 export function installAgentTestHarness(ctx: AgentTestContext): AgentTestHarness | null {
   if (!shouldInstallAgentTestHarness()) return null;
 
+  if (!resolveWidget("agent-test.throw")) {
+    registerVueWidget("agent-test.throw", () => defineComponent({
+      name: "AgentTestThrowingWidget",
+      setup() {
+        throw new Error("agent-test throwing widget");
+      },
+    }));
+  }
+  if (!resolveWidget("agent-test.lifecycle")) {
+    registerModuleWidget("agent-test.lifecycle", () => {
+      let unsubscribe: (() => void) | null = null;
+      return {
+        mount(element, widgetContext) {
+          widgetLifecycleEvidence.mounts += 1;
+          widgetLifecycleEvidence.lastProps = clone(widgetContext.instance.props ?? null);
+          element.textContent = "agent-test lifecycle widget";
+          unsubscribe = widgetContext.onState((state) => {
+            widgetLifecycleEvidence.lastState = clone(state as Json);
+            widgetLifecycleEvidence.lastProps = clone(widgetContext.instance.props ?? null);
+          });
+        },
+        unmount() {
+          widgetLifecycleEvidence.unmounts += 1;
+          unsubscribe?.();
+          unsubscribe = null;
+        },
+      };
+    });
+  }
+  widgetLifecycleEvidence.mounts = 0;
+  widgetLifecycleEvidence.unmounts = 0;
+  widgetLifecycleEvidence.lastProps = null;
+  widgetLifecycleEvidence.lastState = null;
+
   const harness: AgentTestHarness = {
     version: 1,
     dispatchIntent(name, params) {
@@ -68,12 +128,25 @@ export function installAgentTestHarness(ctx: AgentTestContext): AgentTestHarness
     refreshCharacters() {
       ctx.dispatchIntent("characters.list", {});
     },
+    applySurface(message) {
+      return ctx.applySurface(message);
+    },
+    setWidgetState(scope, state) {
+      ctx.setWidgetState(scope, state);
+    },
+    patchWidgetState(scope, patch) {
+      ctx.patchWidgetState(scope, patch);
+    },
+    getWidgetLifecycle() {
+      return clone(widgetLifecycleEvidence);
+    },
     setBusError(message) {
       ctx.setBusError(message);
     },
     getSnapshot() {
       return {
         blueprint: clone(ctx.getBlueprint()),
+        surface: clone(ctx.getSurface()),
         state: clone(ctx.getState()),
         selectedCharacterId: ctx.getSelectedCharacterId(),
         busError: ctx.getBusError(),
@@ -103,5 +176,5 @@ export function installAgentTestHarness(ctx: AgentTestContext): AgentTestHarness
 
 function clone<T>(value: T): T {
   if (value == null) return value;
-  return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
 }

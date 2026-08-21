@@ -15,16 +15,28 @@ import { reactive } from "vue";
 import type { Json, JsonPatch, PatchOp } from "../protocol/types";
 
 export const stateStore = reactive<Record<string, Json>>({});
+/** Per-scope change signal for consumers that cannot observe deep proxy writes. */
+export const stateRevisionStore = reactive<Record<string, number>>({});
+
+function bumpRevision(scope: string): void {
+  stateRevisionStore[scope] = (stateRevisionStore[scope] ?? 0) + 1;
+}
 
 export function setState(scope: string, value: Json): void {
   stateStore[scope] = value;
+  bumpRevision(scope);
 }
 
 export function patchState(scope: string, patch: JsonPatch): void {
-  if (stateStore[scope] == null || typeof stateStore[scope] !== "object") {
-    stateStore[scope] = {};
+  const current = stateStore[scope];
+  if (current == null || typeof current !== "object") {
+    const candidate: Json = {};
+    applyJsonPatch(candidate, patch);
+    stateStore[scope] = candidate;
+  } else {
+    applyJsonPatch(current, patch);
   }
-  applyJsonPatch(stateStore[scope], patch);
+  bumpRevision(scope);
 }
 
 /** Apply an RFC 6902 JSON Patch document to `root` in place. */

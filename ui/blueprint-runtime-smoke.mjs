@@ -1,0 +1,320 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright-core";
+
+const uiRoot = path.dirname(fileURLToPath(import.meta.url));
+const outFlag = process.argv.indexOf("--out");
+const outDir = path.resolve(outFlag >= 0 ? process.argv[outFlag + 1] : path.join(uiRoot, "dist", "runtime-smoke"));
+const port = 1422;
+const origin = `http://127.0.0.1:${port}`;
+
+function chromeExecutable() {
+  const candidates = [
+    process.env.AIRP_CHROME_PATH,
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  ].filter(Boolean);
+  const found = candidates.find((candidate) => existsSync(candidate));
+  assert.ok(found, "Chrome/Chromium not found; set AIRP_CHROME_PATH");
+  return found;
+}
+
+async function waitForVite(child) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Vite exited early with ${child.exitCode}`);
+    try {
+      const response = await fetch(origin);
+      if (response.ok) return;
+    } catch { /* retry */ }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error("Vite did not become ready within 30s");
+}
+
+async function stopChild(child) {
+  if (!child || child.exitCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill();
+  const completed = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
+  ]);
+  if (!completed) throw new Error("Vite did not exit within 5s");
+}
+
+let vite = null;
+let browser = null;
+let viteOutput = "";
+
+try {
+  vite = spawn(process.execPath, [path.join(uiRoot, "node_modules", "vite", "bin", "vite.js"), "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+    cwd: uiRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  for (const stream of [vite.stdout, vite.stderr]) stream.on("data", (chunk) => { viteOutput = (viteOutput + chunk).slice(-4000); });
+  browser = await chromium.launch({ headless: true, executablePath: chromeExecutable() });
+  await waitForVite(vite);
+  mkdirSync(outDir, { recursive: true });
+
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto(`${origin}/?airp_agent_test=1`, { waitUntil: "networkidle" });
+  await page.locator('[data-blueprint-version="2"]').waitFor({ state: "visible" });
+
+  for (const kind of ["split", "tabs", "stack", "widget"]) {
+    assert.ok(await page.locator(`.layout-${kind}`).count(), `${kind} layout node did not render`);
+  }
+
+  const tabs = page.locator('[role="tab"]');
+  assert.equal(await tabs.count(), 2);
+  assert.equal(await tabs.nth(0).getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator('[role="tabpanel"]').nth(1).locator(".widget-host").count(), 1, "inactive tab must stay mounted");
+  await tabs.nth(0).focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await tabs.nth(1).getAttribute("aria-selected"), "true");
+  assert.equal(await tabs.nth(1).evaluate((tab) => tab === document.activeElement), true);
+
+  const virtualRows = await page.evaluate(async () => {
+    const harness = window.__AIRP_AGENT_TEST__;
+    const order = Array.from({ length: 5_000 }, (_, index) => `m-${index}`);
+    const messages = Object.fromEntries(order.map((id, index) => [id, { id, role: "narrator", text: `message ${index}` }]));
+    harness.setWidgetState("w-chat", { order, messages });
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    return document.querySelectorAll(".w-chat .msg").length;
+  });
+  assert.ok(virtualRows > 0 && virtualRows < 100, `5,000-message fixture rendered ${virtualRows} rows`);
+  await tabs.nth(1).focus();
+  await page.keyboard.press("ArrowLeft");
+  const virtualScroll = await page.evaluate(async () => {
+    const log = document.querySelector(".w-chat-log");
+    log.scrollTop = 2_500 * 72;
+    log.dispatchEvent(new Event("scroll"));
+    await new Promise(requestAnimationFrame);
+    const middle = [...document.querySelectorAll(".w-chat .msg .text")].map((node) => node.textContent ?? "");
+    log.scrollTop = log.scrollHeight;
+    log.dispatchEvent(new Event("scroll"));
+    await new Promise(requestAnimationFrame);
+    const end = [...document.querySelectorAll(".w-chat .msg .text")].map((node) => node.textContent ?? "");
+    return { middle, end, rows: document.querySelectorAll(".w-chat .msg").length };
+  });
+  assert.ok(virtualScroll.middle.some((text) => /^message 2[0-9]{3}$/.test(text)), "middle scroll did not render the middle window");
+  assert.ok(virtualScroll.end.includes("message 4999"), "end scroll did not render the final message");
+  assert.ok(virtualScroll.rows < 100, `end scroll rendered ${virtualScroll.rows} rows`);
+
+  const movePreservedHost = await page.evaluate(async () => {
+    const harness = window.__AIRP_AGENT_TEST__;
+    window.__airpBeforeHost = document.querySelector('[data-widget-instance="w-characters"] .widget-host');
+    const result = harness.applySurface({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story.preview",
+      baseRevision: "1",
+      revision: "2",
+      patch: [{
+        op: "move",
+        from: "/blueprint/root/children/0/children/1",
+        path: "/blueprint/root/children/1/children/-",
+      }],
+    });
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const after = document.querySelector('[data-widget-instance="w-characters"] .widget-host');
+    return {
+      applied: result.status === "applied",
+      beforeFound: Boolean(window.__airpBeforeHost),
+      afterFound: Boolean(after),
+      same: window.__airpBeforeHost === after,
+      outletCount: document.querySelectorAll('[data-widget-instance="w-characters"]').length,
+      revision: harness.getSnapshot().surface?.revision,
+    };
+  });
+  assert.deepEqual(
+    movePreservedHost,
+    { applied: true, beforeFound: true, afterFound: true, same: true, outletCount: 1, revision: "2" },
+    "moving a Widget remounted its host",
+  );
+
+  const removal = await page.evaluate(async () => {
+    const result = window.__AIRP_AGENT_TEST__.applySurface({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story.preview",
+      baseRevision: "2",
+      revision: "3",
+      patch: [
+        { op: "remove", path: "/blueprint/root/children/1/children/1" },
+        { op: "remove", path: "/blueprint/widgets/1" },
+      ],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    return result.status;
+  });
+  assert.equal(removal, "applied");
+  assert.equal(await page.locator('[data-widget-instance="w-characters"]').count(), 0);
+
+  const performance = await page.evaluate(async () => {
+    const harness = window.__AIRP_AGENT_TEST__;
+    const durations = [];
+    let revision = 3;
+    for (let index = 0; index < 40; index += 1) {
+      const next = revision + 1;
+      const start = performance.now();
+      const result = harness.applySurface({
+        kind: "patch",
+        protocol: { major: 2, minor: 0 },
+        surfaceId: "story.preview",
+        baseRevision: String(revision),
+        revision: String(next),
+        patch: index === 0
+          ? [{ op: "add", path: "/blueprint/widgets/1/props", value: { tick: index } }]
+          : [{ op: "replace", path: "/blueprint/widgets/1/props/tick", value: index }],
+      });
+      if (result.status !== "applied") throw new Error(`performance patch ${index} failed`);
+      await Promise.resolve();
+      await Promise.resolve();
+      durations.push(performance.now() - start);
+      revision = next;
+    }
+    durations.sort((left, right) => left - right);
+    return { samples: durations.length, p95Ms: durations[Math.floor((durations.length - 1) * 0.95)] };
+  });
+  assert.ok(performance.p95Ms < 16, `warm patch + Vue flush p95 ${performance.p95Ms.toFixed(2)}ms exceeds 16ms`);
+
+  const isolatedFallbacks = await page.evaluate(async () => {
+    const result = window.__AIRP_AGENT_TEST__.applySurface({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story.preview",
+      baseRevision: "43",
+      revision: "44",
+      patch: [
+        { op: "add", path: "/blueprint/widgets/-", value: { id: "unknown-1", type: "agent-test.unknown" } },
+        { op: "add", path: "/blueprint/widgets/-", value: { id: "throw-1", type: "agent-test.throw" } },
+        { op: "add", path: "/blueprint/root/children/1/children/-", value: { type: "widget", id: "unknown-node", instanceId: "unknown-1" } },
+        { op: "add", path: "/blueprint/root/children/1/children/-", value: { type: "widget", id: "throw-node", instanceId: "throw-1" } },
+      ],
+    });
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    return {
+      applied: result.status === "applied",
+      unknown: document.querySelectorAll(".widget-missing").length,
+      failed: document.querySelectorAll(".widget-error").length,
+      sibling: document.querySelectorAll('[data-widget-instance="w-clock"] .widget-host').length,
+    };
+  });
+  assert.deepEqual(isolatedFallbacks, { applied: true, unknown: 1, failed: 1, sibling: 1 });
+
+  const lifecycle = await page.evaluate(async () => {
+    const harness = window.__AIRP_AGENT_TEST__;
+    const added = harness.applySurface({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story.preview",
+      baseRevision: "44",
+      revision: "45",
+      patch: [
+        { op: "add", path: "/blueprint/widgets/-", value: { id: "lifecycle-1", type: "agent-test.lifecycle", props: { version: 1 } } },
+        { op: "add", path: "/blueprint/root/children/1/children/-", value: { type: "widget", id: "lifecycle-node", instanceId: "lifecycle-1" } },
+      ],
+    });
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const afterAdd = harness.getWidgetLifecycle();
+
+    const propsChanged = harness.applySurface({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story.preview",
+      baseRevision: "45",
+      revision: "46",
+      patch: [{ op: "replace", path: "/blueprint/widgets/4/props/version", value: 2 }],
+    });
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const afterProps = harness.getWidgetLifecycle();
+
+    harness.setWidgetState("lifecycle-1", { phase: "ready" });
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const afterState = harness.getWidgetLifecycle();
+
+    harness.patchWidgetState("lifecycle-1", [{ op: "replace", path: "/phase", value: "streamed" }]);
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const afterPatch = harness.getWidgetLifecycle();
+
+    harness.setWidgetState("lifecycle-1", null);
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const afterNullState = harness.getWidgetLifecycle();
+
+    const typeChanged = harness.applySurface({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story.preview",
+      baseRevision: "46",
+      revision: "47",
+      patch: [{ op: "replace", path: "/blueprint/widgets/4/type", value: "agent-test.unknown" }],
+    });
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    return {
+      statuses: [added.status, propsChanged.status, typeChanged.status],
+      afterAdd,
+      afterProps,
+      afterState,
+      afterPatch,
+      afterNullState,
+      afterType: harness.getWidgetLifecycle(),
+      missing: document.querySelectorAll(".widget-missing").length,
+      sibling: document.querySelectorAll('[data-widget-instance="w-clock"] .widget-host').length,
+    };
+  });
+  assert.deepEqual(lifecycle, {
+    statuses: ["applied", "applied", "applied"],
+    afterAdd: { mounts: 1, unmounts: 0, lastProps: { version: 1 }, lastState: null },
+    afterProps: { mounts: 1, unmounts: 0, lastProps: { version: 2 }, lastState: null },
+    afterState: { mounts: 1, unmounts: 0, lastProps: { version: 2 }, lastState: { phase: "ready" } },
+    afterPatch: { mounts: 1, unmounts: 0, lastProps: { version: 2 }, lastState: { phase: "streamed" } },
+    afterNullState: { mounts: 1, unmounts: 0, lastProps: { version: 2 }, lastState: null },
+    afterType: { mounts: 1, unmounts: 1, lastProps: { version: 2 }, lastState: null },
+    missing: 2,
+    sibling: 1,
+  });
+
+  const rejected = await page.evaluate(() => window.__AIRP_AGENT_TEST__.applySurface({
+    kind: "patch",
+    protocol: { major: 2, minor: 0 },
+    surfaceId: "story.preview",
+    baseRevision: "47",
+    revision: "48",
+    patch: [{ op: "replace", path: "/blueprint/root", value: { type: "widget", id: "bad", instanceId: "missing" } }],
+  }));
+  assert.equal(rejected.status, "resync");
+  assert.equal((await page.evaluate(() => window.__AIRP_AGENT_TEST__.getSnapshot().surface.revision)), "47");
+  assert.deepEqual(pageErrors, []);
+
+  const screenshot = await page.screenshot({ path: path.join(outDir, "runtime-1440x900.png") });
+  assert.ok(screenshot.byteLength > 15_000, "runtime screenshot is empty");
+  const evidence = { performance, virtualRows, virtualScrollRows: virtualScroll.rows, movePreservedHost, lifecycle, screenshotBytes: screenshot.byteLength };
+  writeFileSync(path.join(outDir, "runtime-evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  console.log(`blueprint runtime smoke passed (${performance.p95Ms.toFixed(2)}ms p95, ${virtualRows} virtual rows)`);
+} catch (error) {
+  if (viteOutput) console.error(viteOutput);
+  throw error;
+} finally {
+  await browser?.close();
+  await stopChild(vite);
+}

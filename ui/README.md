@@ -12,8 +12,8 @@ UI 继承 AIRP-State-Protocol 的 Blueprint、Widget、patch、guard、虚拟滚
 
 - `ui/src-tauri/` 负责 Engine sidecar 生命周期、data root、desktop-session token、原生错误与打包。
 - Tauri 启动后导航到 Engine 同源承载的 WebUI；正式产品主面仍是 `webui/`。
-- `ui/src/` 中的 Vue Blueprint/Widget 代码当前是 scaffold/test 资产，不是正式运行主面。
-- `ui/src/` 的 PR 3 桌面 shell 已使用 canonical WebUI tokens，提供四个工作区、Focus Mode、Context Inspector 与固定 Surface preview；该 preview 不使用 MockBus 冒充 Engine 成功，也不是 Blueprint v2 runtime。
+- `ui/src/` 中的 Vue Blueprint/Widget 代码是可运行的迁移期桌面 preview，但尚不是正式产品主面。
+- Vue preview 使用 canonical WebUI tokens，提供四个工作区、Focus Mode、Context Inspector，以及通过 Surface v2 guard 的固定 fixture。受限 runtime 支持 `split/tabs/stack/widget`、原子 accepted/pending/ephemeral store、稳定 Widget relocation 和局部错误隔离；它不使用 MockBus 冒充 Engine 成功。
 - `createBus()` 的非 Tauri fallback 仍是测试/显式 demo 用 MockBus，但当前 `App.vue` 的浏览器 preview 不调用它；在 #564 PR 6 前不得把任一路径写成真实浏览器产品链路。
 - 归档的 Tauri `BusRelay` 不在当前源码中，#564 也不会恢复逐 intent 的 Rust 业务 relay。
 
@@ -34,7 +34,7 @@ ui/
 │   ├── App.vue
 │   ├── protocol/          # TS-side protocol mirror and TauriBus
 │   ├── registry/          # widget registry, consent, sandbox bridge
-│   ├── state/             # RFC6902 state store
+│   ├── state/             # atomic Surface store + local ephemeral UI state
 │   └── widgets/           # first-party widgets
 ├── widgets/core/          # widget manifests
 └── src-tauri/
@@ -45,7 +45,7 @@ ui/
         └── lifecycle.rs   # startup ownership and shutdown rules
 ```
 
-The Rust protocol crate lives in `../protocol`. Surface v2 uses [`../protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) as its machine-readable authority; Rust and TypeScript bindings remain manual mirrors locked by shared positive/negative/migration fixtures and parity tests. The older Envelope/Blueprint v1 types remain for demo compatibility and explicit migration only. This protocol layer does not itself provide an Engine endpoint, renderer, `HttpEngineBus`, or `/desktop/` product entry.
+The Rust protocol crate lives in `../protocol`. Surface v2 uses [`../protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) as its machine-readable authority; Rust and TypeScript bindings remain manual mirrors locked by shared positive/negative/migration fixtures and parity tests. The older Envelope/Blueprint v1 types remain for demo compatibility and explicit migration only. The Vue preview now includes the bounded v2 renderer and client store, but still does not provide an Engine Surface endpoint, `HttpEngineBus`, or `/desktop/` product entry.
 
 ## Local Commands
 
@@ -57,6 +57,7 @@ npm run typecheck
 npm run test
 npm run build
 npm run smoke:shell
+npm run smoke:runtime
 npm run build:engine-sidecar
 npm run tauri dev
 ```

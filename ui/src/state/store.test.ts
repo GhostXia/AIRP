@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { stateStore, setState, patchState } from "./store";
+import { stateRevisionStore, stateStore, setState, patchState } from "./store";
 
 beforeEach(() => {
   for (const key of Object.keys(stateStore)) delete stateStore[key];
+  for (const key of Object.keys(stateRevisionStore)) delete stateRevisionStore[key];
 });
 
 describe("state store", () => {
@@ -32,6 +33,18 @@ describe("state store", () => {
     const chat = stateStore.chat as { messages: Record<string, { text: string }>; order: string[] };
     expect(chat.messages.a1.text).toBe("partial");
     expect(chat.order).toEqual(["a1"]);
+    expect(stateRevisionStore.chat).toBe(2);
+  });
+
+  it("signals in-place scope changes without advancing on rejected patches", () => {
+    setState("stream", { text: "a" });
+    const root = stateStore.stream;
+    patchState("stream", [{ op: "replace", path: "/text", value: "ab" }]);
+    expect(stateStore.stream).toBe(root);
+    expect(stateRevisionStore.stream).toBe(2);
+
+    expect(() => patchState("stream", [{ op: "test", path: "/text", value: "wrong" }])).toThrow();
+    expect(stateRevisionStore.stream).toBe(2);
   });
 
   it("patch remove deletes a key", () => {
@@ -43,6 +56,18 @@ describe("state store", () => {
   it("patch on a fresh scope initializes an object", () => {
     patchState("new", [{ op: "add", path: "/k", value: 1 }]);
     expect((stateStore.new as { k: number }).k).toBe(1);
+  });
+
+  it("keeps missing and null scopes unchanged when initialization patch fails", () => {
+    expect(() => patchState("missing", [{ op: "test", path: "/ready", value: true }])).toThrow();
+    expect(Object.prototype.hasOwnProperty.call(stateStore, "missing")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(stateRevisionStore, "missing")).toBe(false);
+
+    setState("nullable", null);
+    const revision = stateRevisionStore.nullable;
+    expect(() => patchState("nullable", [{ op: "test", path: "/ready", value: true }])).toThrow();
+    expect(stateStore.nullable).toBeNull();
+    expect(stateRevisionStore.nullable).toBe(revision);
   });
 
   it("patch copy duplicates a value", () => {

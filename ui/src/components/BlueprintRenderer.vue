@@ -1,105 +1,99 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Blueprint, Json, WidgetInstance } from "../protocol/types";
+import type { BlueprintV2, Json } from "../protocol/types";
 import WidgetHost from "./WidgetHost.vue";
+import BlueprintNode from "./layout/BlueprintNode.vue";
 
-const props = defineProps<{ blueprint: Blueprint; state: Record<string, Json> }>();
-const emit = defineEmits<{ (e: "intent", name: string, params?: Json): void }>();
+const props = defineProps<{
+  blueprint: BlueprintV2;
+  state: Record<string, Json>;
+  stateRevisions: Record<string, number>;
+  activeTabs: Record<string, string>;
+}>();
 
-interface ResolvedItem {
-  instance: WidgetInstance;
-  scope: string;
+const emit = defineEmits<{
+  (event: "intent", name: string, params?: Json): void;
+  (event: "activate-tab", tabsId: string, childId: string): void;
+  (event: "focus-widget", instanceId: string): void;
+}>();
+
+function collectPlacedWidgets(node: BlueprintV2["root"], ids: Set<string>): void {
+  if (node.type === "widget") {
+    ids.add(node.instanceId);
+    return;
+  }
+  for (const child of node.children) collectPlacedWidgets(child, ids);
 }
-interface ResolvedArea {
-  id: string;
-  items: ResolvedItem[];
+
+function collectOutletIds(
+  node: BlueprintV2["root"],
+  path: number[],
+  outlets: Record<string, string>,
+): void {
+  if (node.type === "widget") {
+    outlets[node.instanceId] = `surface-widget-outlet-${path.length === 0 ? "root" : path.join("-")}`;
+    return;
+  }
+  node.children.forEach((child, index) => collectOutletIds(child, [...path, index], outlets));
 }
 
-// Flatten layout areas into resolved widget instances + their state scope.
-const areas = computed<ResolvedArea[]>(() =>
-  props.blueprint.layout.areas.map((area) => ({
-    id: area.id,
-    items: area.widgets
-      .map((wid) => props.blueprint.widgets.find((w) => w.id === wid))
-      .filter((w): w is WidgetInstance => Boolean(w))
-      .map((w) => ({ instance: w, scope: w.state ?? w.id })),
-  })),
+const placedWidgetIds = computed(() => {
+  const ids = new Set<string>();
+  collectPlacedWidgets(props.blueprint.root, ids);
+  return ids;
+});
+
+const placedWidgets = computed(() =>
+  props.blueprint.widgets.filter((instance) => placedWidgetIds.value.has(instance.id)),
 );
 
-function onIntent(name: string, params?: Json): void {
-  emit("intent", name, params);
+const outletIds = computed<Record<string, string>>(() => {
+  const outlets: Record<string, string> = {};
+  collectOutletIds(props.blueprint.root, [], outlets);
+  return outlets;
+});
+
+function widgetState(instanceId: string): Json {
+  const value = props.state[instanceId];
+  return value === undefined ? null : value;
 }
 </script>
 
 <template>
-  <div class="blueprint" :data-theme="blueprint.theme?.name" :data-layout="blueprint.layout.type">
-    <section v-for="area in areas" :key="area.id" :class="['area', `area-${area.id}`]">
+  <div class="blueprint" data-blueprint-version="2">
+    <BlueprintNode
+      :node="blueprint.root"
+      :active-tabs="activeTabs"
+      :outlet-ids="outletIds"
+      @activate-tab="(tabsId, childId) => emit('activate-tab', tabsId, childId)"
+      @focus-widget="emit('focus-widget', $event)"
+    />
+
+    <Teleport
+      v-for="instance in placedWidgets"
+      :key="instance.id"
+      defer
+      :to="`#${outletIds[instance.id]}`"
+    >
       <WidgetHost
-        v-for="item in area.items"
-        :key="item.instance.id"
-        :instance="item.instance"
-        :state="state[item.scope] ?? null"
-        @intent="onIntent"
+        :key="instance.type"
+        :instance="instance"
+        :state="widgetState(instance.id)"
+        :state-revision="stateRevisions[instance.id] ?? 0"
+        @intent="(name, params) => emit('intent', name, params)"
       />
-    </section>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
 .blueprint {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  height: 100%;
   width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
-  padding: 12px;
+  padding: var(--space-3);
   overflow: auto;
   overscroll-behavior: contain;
-}
-.area {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-card);
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-.area-main {
-  flex: 1 1 0;
-  min-width: 0;
-}
-.area-sidebar {
-  width: min(320px, 100%);
-  flex: 0 1 320px;
-}
-.area-tools {
-  width: min(260px, 100%);
-  flex: 0 1 260px;
-}
-@media (max-width: 900px) {
-  .blueprint {
-    flex-direction: column;
-    flex-wrap: nowrap;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-  .area-main,
-  .area-sidebar,
-  .area-tools {
-    width: 100%;
-    max-width: 100%;
-  }
-  .area-main {
-    flex: 0 0 clamp(220px, 62dvh, 560px);
-  }
-  .area-sidebar,
-  .area-tools {
-    flex: 0 0 clamp(140px, 28dvh, 240px);
-  }
 }
 </style>
