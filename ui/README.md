@@ -1,8 +1,8 @@
 # AIRP UI
 
-`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端目录。当前运行事实仍是 C-P0 的 Tauri 壳同源承载 `webui/`；Owner 已在 [#564](https://github.com/GhostXia/AIRP/issues/564) 决定恢复协议驱动的 Vue Blueprint/Widget 桌面主面，因为该设计具有更好的兼容性与扩展性。目标架构、资产处置和双入口回退见 [`../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。本页最后在 2026-08-21 的 PR #584 实现提交上复核。
+`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端目录。当前运行事实仍是 C-P0 的 Tauri 壳同源承载 `webui/`；Owner 已在 [#564](https://github.com/GhostXia/AIRP/issues/564) 决定恢复协议驱动的 Vue Blueprint/Widget 桌面主面，因为该设计具有更好的兼容性与扩展性。目标架构、资产处置和双入口回退见 [`../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。本页最后在 2026-08-21 的 PR #584 runtime candidate `c421a6d` 上复核。
 
-历史候选发布事实：Actions run `31309894372` 在 commit `affa315a5917109e2ae337382cfcdcb36021073a` 对 artifact `airp-webui-windows-x64` 的包内 desktop smoke 成功；该证据不覆盖当前 `main@7a90d88`，也不替代 GUI 真机与真实 provider 验收。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 和 `release` environment required reviewer 配置阻塞。
+历史候选发布事实：Actions run `31309894372` 在 commit `affa315a5917109e2ae337382cfcdcb36021073a` 对 artifact `airp-webui-windows-x64` 的包内 desktop smoke 成功；该证据不覆盖 PR #584 candidate `c421a6d`，也不替代 GUI 真机与真实 provider 验收。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 和 `release` environment required reviewer 配置阻塞。
 
 当前全仓状态与发布门槛见 [`../docs/CURRENT-BASELINE.md`](../docs/CURRENT-BASELINE.md)。
 
