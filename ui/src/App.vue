@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import type { BlueprintV2, Envelope, Json, JsonPatch, SurfaceMessage, SurfaceSnapshot } from "./protocol/types";
+import type { BlueprintV2, Envelope, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
 import type { SurfaceApplyResult } from "./protocol/surface-v2";
 import type { AgentBus } from "./protocol/bus";
 import { createBus, isTauriEnvironment } from "./protocol/bus-factory";
@@ -55,7 +55,10 @@ const SHELL_PREVIEW_SURFACE: SurfaceSnapshot = {
 };
 
 const surface = new SurfaceStateStore();
-surface.applySnapshot(SHELL_PREVIEW_SURFACE);
+const fixtureResult = surface.applySnapshot(SHELL_PREVIEW_SURFACE);
+if (fixtureResult.status !== "applied") {
+  console.warn("[App] preview Surface fixture rejected", fixtureResult);
+}
 const acceptedSurface = computed(() => surface.acceptedSnapshot);
 
 // PR 3 deliberately renders one fixed, labelled Surface fixture. The real
@@ -249,7 +252,7 @@ type AgentTestInstaller = {
     dispatchIntent: (name: string, params?: Json) => void;
     getBlueprint: () => BlueprintV2 | null;
     getSurface: () => SurfaceSnapshot | null;
-    applySurface: (message: SurfaceMessage | unknown) => SurfaceApplyResult;
+    applySurface: (message: unknown) => SurfaceApplyResult;
     setWidgetState: (scope: string, state: Json) => void;
     patchWidgetState: (scope: string, patch: JsonPatch) => void;
     getState: () => typeof stateStore;

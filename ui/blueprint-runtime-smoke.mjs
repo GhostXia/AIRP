@@ -100,7 +100,12 @@ try {
   await page.keyboard.press("ArrowLeft");
   const virtualScroll = await page.evaluate(async () => {
     const log = document.querySelector(".w-chat-log");
-    log.scrollTop = 2_500 * 72;
+    const rows = [...document.querySelectorAll(".w-chat .msg")];
+    const rowHeight = rows.length > 1
+      ? rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top
+      : rows[0]?.getBoundingClientRect().height;
+    if (!rowHeight || rowHeight <= 0) throw new Error("could not derive virtual chat row height");
+    log.scrollTop = 2_500 * rowHeight;
     log.dispatchEvent(new Event("scroll"));
     await new Promise(requestAnimationFrame);
     const middle = [...document.querySelectorAll(".w-chat .msg .text")].map((node) => node.textContent ?? "");
@@ -116,17 +121,24 @@ try {
 
   const movePreservedHost = await page.evaluate(async () => {
     const harness = window.__AIRP_AGENT_TEST__;
+    const snapshot = harness.getSnapshot().surface;
+    const root = snapshot.blueprint.root;
+    const tabsIndex = root.children.findIndex((node) => node.id === "story-tabs");
+    const stackIndex = root.children.findIndex((node) => node.id === "story-tools");
+    const characterIndex = root.children[tabsIndex].children.findIndex((node) => node.id === "characters-node");
+    const baseRevision = snapshot.revision;
+    const revision = String(Number(baseRevision) + 1);
     window.__airpBeforeHost = document.querySelector('[data-widget-instance="w-characters"] .widget-host');
     const result = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
-      baseRevision: "1",
-      revision: "2",
+      baseRevision,
+      revision,
       patch: [{
         op: "move",
-        from: "/blueprint/root/children/0/children/1",
-        path: "/blueprint/root/children/1/children/-",
+        from: `/blueprint/root/children/${tabsIndex}/children/${characterIndex}`,
+        path: `/blueprint/root/children/${stackIndex}/children/-`,
       }],
     });
     await new Promise(requestAnimationFrame);
@@ -148,15 +160,21 @@ try {
   );
 
   const removal = await page.evaluate(async () => {
-    const result = window.__AIRP_AGENT_TEST__.applySurface({
+    const harness = window.__AIRP_AGENT_TEST__;
+    const snapshot = harness.getSnapshot().surface;
+    const root = snapshot.blueprint.root;
+    const stackIndex = root.children.findIndex((node) => node.id === "story-tools");
+    const characterNodeIndex = root.children[stackIndex].children.findIndex((node) => node.id === "characters-node");
+    const characterWidgetIndex = snapshot.blueprint.widgets.findIndex((widget) => widget.id === "w-characters");
+    const result = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
-      baseRevision: "2",
-      revision: "3",
+      baseRevision: snapshot.revision,
+      revision: String(Number(snapshot.revision) + 1),
       patch: [
-        { op: "remove", path: "/blueprint/root/children/1/children/1" },
-        { op: "remove", path: "/blueprint/widgets/1" },
+        { op: "remove", path: `/blueprint/root/children/${stackIndex}/children/${characterNodeIndex}` },
+        { op: "remove", path: `/blueprint/widgets/${characterWidgetIndex}` },
       ],
     });
     await Promise.resolve();
@@ -166,10 +184,11 @@ try {
   assert.equal(removal, "applied");
   assert.equal(await page.locator('[data-widget-instance="w-characters"]').count(), 0);
 
-  const performance = await page.evaluate(async () => {
+  const patchPerformance = await page.evaluate(async () => {
     const harness = window.__AIRP_AGENT_TEST__;
     const durations = [];
-    let revision = 3;
+    let revision = Number(harness.getSnapshot().surface.revision);
+    const clockIndex = harness.getSnapshot().surface.blueprint.widgets.findIndex((widget) => widget.id === "w-clock");
     for (let index = 0; index < 40; index += 1) {
       const next = revision + 1;
       const start = performance.now();
@@ -180,8 +199,8 @@ try {
         baseRevision: String(revision),
         revision: String(next),
         patch: index === 0
-          ? [{ op: "add", path: "/blueprint/widgets/1/props", value: { tick: index } }]
-          : [{ op: "replace", path: "/blueprint/widgets/1/props/tick", value: index }],
+          ? [{ op: "add", path: `/blueprint/widgets/${clockIndex}/props`, value: { tick: index } }]
+          : [{ op: "replace", path: `/blueprint/widgets/${clockIndex}/props/tick`, value: index }],
       });
       if (result.status !== "applied") throw new Error(`performance patch ${index} failed`);
       await Promise.resolve();
@@ -192,15 +211,17 @@ try {
     durations.sort((left, right) => left - right);
     return { samples: durations.length, p95Ms: durations[Math.floor((durations.length - 1) * 0.95)] };
   });
-  assert.ok(performance.p95Ms < 16, `warm patch + Vue flush p95 ${performance.p95Ms.toFixed(2)}ms exceeds 16ms`);
+  assert.ok(patchPerformance.p95Ms < 16, `warm patch + Vue flush (excluding layout and paint) p95 ${patchPerformance.p95Ms.toFixed(2)}ms exceeds 16ms`);
 
   const isolatedFallbacks = await page.evaluate(async () => {
-    const result = window.__AIRP_AGENT_TEST__.applySurface({
+    const harness = window.__AIRP_AGENT_TEST__;
+    const snapshot = harness.getSnapshot().surface;
+    const result = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
-      baseRevision: "43",
-      revision: "44",
+      baseRevision: snapshot.revision,
+      revision: String(Number(snapshot.revision) + 1),
       patch: [
         { op: "add", path: "/blueprint/widgets/-", value: { id: "unknown-1", type: "agent-test.unknown" } },
         { op: "add", path: "/blueprint/widgets/-", value: { id: "throw-1", type: "agent-test.throw" } },
@@ -221,12 +242,13 @@ try {
 
   const lifecycle = await page.evaluate(async () => {
     const harness = window.__AIRP_AGENT_TEST__;
+    let snapshot = harness.getSnapshot().surface;
     const added = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
-      baseRevision: "44",
-      revision: "45",
+      baseRevision: snapshot.revision,
+      revision: String(Number(snapshot.revision) + 1),
       patch: [
         { op: "add", path: "/blueprint/widgets/-", value: { id: "lifecycle-1", type: "agent-test.lifecycle", props: { version: 1 } } },
         { op: "add", path: "/blueprint/root/children/1/children/-", value: { type: "widget", id: "lifecycle-node", instanceId: "lifecycle-1" } },
@@ -236,13 +258,15 @@ try {
     await new Promise(requestAnimationFrame);
     const afterAdd = harness.getWidgetLifecycle();
 
+    snapshot = harness.getSnapshot().surface;
+    const lifecycleIndex = snapshot.blueprint.widgets.findIndex((widget) => widget.id === "lifecycle-1");
     const propsChanged = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
-      baseRevision: "45",
-      revision: "46",
-      patch: [{ op: "replace", path: "/blueprint/widgets/4/props/version", value: 2 }],
+      baseRevision: snapshot.revision,
+      revision: String(Number(snapshot.revision) + 1),
+      patch: [{ op: "replace", path: `/blueprint/widgets/${lifecycleIndex}/props/version`, value: 2 }],
     });
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
@@ -263,13 +287,15 @@ try {
     await new Promise(requestAnimationFrame);
     const afterNullState = harness.getWidgetLifecycle();
 
+    snapshot = harness.getSnapshot().surface;
+    const currentLifecycleIndex = snapshot.blueprint.widgets.findIndex((widget) => widget.id === "lifecycle-1");
     const typeChanged = harness.applySurface({
       kind: "patch",
       protocol: { major: 2, minor: 0 },
       surfaceId: "story.preview",
-      baseRevision: "46",
-      revision: "47",
-      patch: [{ op: "replace", path: "/blueprint/widgets/4/type", value: "agent-test.unknown" }],
+      baseRevision: snapshot.revision,
+      revision: String(Number(snapshot.revision) + 1),
+      patch: [{ op: "replace", path: `/blueprint/widgets/${currentLifecycleIndex}/type`, value: "agent-test.unknown" }],
     });
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
@@ -297,23 +323,27 @@ try {
     sibling: 1,
   });
 
-  const rejected = await page.evaluate(() => window.__AIRP_AGENT_TEST__.applySurface({
-    kind: "patch",
-    protocol: { major: 2, minor: 0 },
-    surfaceId: "story.preview",
-    baseRevision: "47",
-    revision: "48",
-    patch: [{ op: "replace", path: "/blueprint/root", value: { type: "widget", id: "bad", instanceId: "missing" } }],
-  }));
+  const rejected = await page.evaluate(() => {
+    const harness = window.__AIRP_AGENT_TEST__;
+    const snapshot = harness.getSnapshot().surface;
+    return harness.applySurface({
+      kind: "patch",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "story.preview",
+      baseRevision: snapshot.revision,
+      revision: String(Number(snapshot.revision) + 1),
+      patch: [{ op: "replace", path: "/blueprint/root", value: { type: "widget", id: "bad", instanceId: "missing" } }],
+    });
+  });
   assert.equal(rejected.status, "resync");
   assert.equal((await page.evaluate(() => window.__AIRP_AGENT_TEST__.getSnapshot().surface.revision)), "47");
   assert.deepEqual(pageErrors, []);
 
   const screenshot = await page.screenshot({ path: path.join(outDir, "runtime-1440x900.png") });
   assert.ok(screenshot.byteLength > 15_000, "runtime screenshot is empty");
-  const evidence = { performance, virtualRows, virtualScrollRows: virtualScroll.rows, movePreservedHost, lifecycle, screenshotBytes: screenshot.byteLength };
+  const evidence = { performance: patchPerformance, virtualRows, virtualScrollRows: virtualScroll.rows, movePreservedHost, lifecycle, screenshotBytes: screenshot.byteLength };
   writeFileSync(path.join(outDir, "runtime-evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-  console.log(`blueprint runtime smoke passed (${performance.p95Ms.toFixed(2)}ms p95, ${virtualRows} virtual rows)`);
+  console.log(`blueprint runtime smoke passed (${patchPerformance.p95Ms.toFixed(2)}ms p95, ${virtualRows} virtual rows)`);
 } catch (error) {
   if (viteOutput) console.error(viteOutput);
   throw error;

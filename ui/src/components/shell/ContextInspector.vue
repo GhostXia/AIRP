@@ -23,7 +23,7 @@ const emit = defineEmits<{ (event: "toggle"): void }>();
       <section aria-labelledby="scene-heading">
         <h3 id="scene-heading">场景</h3>
         <div class="context-card">
-          <strong>{{ surfaceId ?? "Surface unavailable" }}</strong>
+          <strong>{{ surfaceId ?? "Surface 不可用" }}</strong>
           <span>revision {{ revision ?? "—" }}</span>
           <span>{{ focusedWidgetId ? `Widget ${focusedWidgetId}` : "尚未聚焦 Widget" }}</span>
           <small>真实 Engine 投影将在 PR 5 接入</small>

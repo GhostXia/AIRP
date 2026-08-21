@@ -1,38 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { BlueprintV2, Json, JsonPatch, SurfaceMessage, SurfaceSnapshot } from "./protocol/types";
-import type { SurfaceApplyResult } from "./protocol/surface-v2";
+import type { Json, SurfaceSnapshot } from "./protocol/types";
+import type { AgentTestContext, AgentTestHarness } from "./agent-test";
 
 const originalWindow = globalThis.window;
 const originalDocument = globalThis.document;
 
-type AgentTestHarness = {
-  selectCharacter(characterId: string): void;
-  sendChat(text: string, characterId?: string): void;
-  refreshCharacters(): void;
-  applySurface(message: SurfaceMessage | unknown): SurfaceApplyResult;
-  setWidgetState(scope: string, state: Json): void;
-  patchWidgetState(scope: string, patch: JsonPatch): void;
-  setBusError(message: string | null): void;
-  getSnapshot(): { selectedCharacterId: string };
-  getState(scope?: string): Json | Record<string, Json>;
-  getText(selector?: string): string;
-  waitForText(text: string, timeoutMs?: number): Promise<boolean>;
-};
-
 type AgentTestModule = {
   shouldInstallAgentTestHarness(): boolean;
-  installAgentTestHarness(ctx: {
-    dispatchIntent: (name: string, params?: Json) => void;
-    getBlueprint: () => BlueprintV2;
-    getSurface: () => SurfaceSnapshot;
-    applySurface: (message: SurfaceMessage | unknown) => SurfaceApplyResult;
-    setWidgetState: (scope: string, state: Json) => void;
-    patchWidgetState: (scope: string, patch: JsonPatch) => void;
-    getState: () => Record<string, Json>;
-    getSelectedCharacterId: () => string;
-    getBusError: () => string | null;
-    setBusError: (message: string | null) => void;
-  }): AgentTestHarness | null;
+  installAgentTestHarness(ctx: AgentTestContext): AgentTestHarness | null;
 };
 
 const agentTestModules = import.meta.glob<AgentTestModule>("./agent-test.ts");

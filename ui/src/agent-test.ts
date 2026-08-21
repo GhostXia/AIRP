@@ -1,5 +1,5 @@
 import { defineComponent } from "vue";
-import type { BlueprintV2, Json, JsonPatch, SurfaceMessage, SurfaceSnapshot } from "./protocol/types";
+import type { BlueprintV2, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
 import type { SurfaceApplyResult } from "./protocol/surface-v2";
 import { registerModuleWidget, registerVueWidget, resolveWidget } from "./registry";
 
@@ -25,7 +25,7 @@ export interface AgentTestHarness {
   selectCharacter(characterId: string): void;
   sendChat(text: string, characterId?: string): void;
   refreshCharacters(): void;
-  applySurface(message: SurfaceMessage | unknown): SurfaceApplyResult;
+  applySurface(message: unknown): SurfaceApplyResult;
   setWidgetState(scope: string, state: Json): void;
   patchWidgetState(scope: string, patch: JsonPatch): void;
   getWidgetLifecycle(): WidgetLifecycleEvidence;
@@ -46,7 +46,7 @@ export interface AgentTestContext {
   dispatchIntent: DispatchIntent;
   getBlueprint: () => BlueprintV2 | null;
   getSurface: () => SurfaceSnapshot | null;
-  applySurface: (message: SurfaceMessage | unknown) => SurfaceApplyResult;
+  applySurface: (message: unknown) => SurfaceApplyResult;
   setWidgetState: (scope: string, state: Json) => void;
   patchWidgetState: (scope: string, patch: JsonPatch) => void;
   getState: () => Record<string, Json>;
@@ -176,5 +176,6 @@ export function installAgentTestHarness(ctx: AgentTestContext): AgentTestHarness
 
 function clone<T>(value: T): T {
   if (value == null) return value;
+  // Harness payloads are JSON; this also unwraps Vue proxies that structuredClone rejects.
   return JSON.parse(JSON.stringify(value)) as T;
 }
