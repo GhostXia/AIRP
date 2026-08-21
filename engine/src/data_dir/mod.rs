@@ -49,6 +49,7 @@ pub(crate) use paths::{
     ensure_context_bundle_dir, legacy_preset_json_path, preset_json_path,
 };
 pub use security::{safe_resolve_for_write, safe_resolve_under_data_root, validate_id_segment};
+pub(crate) use session::resolve_session_dir_read_only;
 pub use session::{
     create_session, create_session_with_id, delete_session, list_sessions, resolve_session_dir,
     session_dir, session_was_deleted,

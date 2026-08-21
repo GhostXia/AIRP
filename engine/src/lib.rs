@@ -60,6 +60,8 @@ pub mod style;
 pub mod timeline_export;
 mod turn_commit;
 pub mod types;
+mod ui_activity;
+pub mod ui_surface;
 pub mod ulid;
 pub mod worldbook_graph;
 

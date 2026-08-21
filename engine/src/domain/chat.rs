@@ -160,7 +160,30 @@ impl ChatService {
     ) -> Result<HistoryWindow, AirpError> {
         let limit = limit.unwrap_or(50).clamp(1, 200);
         let log = self.history(character_id, session_id)?;
+        Self::history_window_from_log(log, limit, before)
+    }
 
+    /// Read an existing history window without creating, migrating, or repairing assets.
+    pub fn history_window_read_only(
+        &self,
+        character_id: &CharacterId,
+        session_id: Option<&SessionId>,
+        limit: Option<usize>,
+        before: Option<&str>,
+    ) -> Result<Option<HistoryWindow>, AirpError> {
+        let limit = limit.unwrap_or(50).clamp(1, 200);
+        let log = self.with_session(character_id, session_id, || {
+            ChatLog::load_existing_read_only(&self.data_root, character_id.as_str(), session_id)
+        })?;
+        log.map(|log| Self::history_window_from_log(log, limit, before))
+            .transpose()
+    }
+
+    fn history_window_from_log(
+        log: ChatLog,
+        limit: usize,
+        before: Option<&str>,
+    ) -> Result<HistoryWindow, AirpError> {
         // PR #270 audit B5 修复：history_window 必须按**激活路径**返回消息。
         // 旧实现返回物理 slice [start..end]，分支后会混入 sibling-branch 消息，
         // WebUI 不做客户端过滤 → 用户看到其他分支的消息串在当前分支里。
@@ -1011,5 +1034,84 @@ impl ChatService {
         }
         result?;
         Ok(backup_id)
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::*;
+    use crate::adapter::MessageRole;
+
+    fn message(role: MessageRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            role,
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn history_window_read_only_returns_active_branch_with_durable_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("read-only-branch").unwrap();
+
+        let (log, _) = service
+            .append(&character, None, message(MessageRole::User, "root"))
+            .unwrap();
+        let root_id = log.message_ids[0].clone();
+        let (log, _) = service
+            .append(
+                &character,
+                None,
+                message(MessageRole::Assistant, "old branch"),
+            )
+            .unwrap();
+        let old_branch_id = log.message_ids[1].clone();
+        let (log, _) = service
+            .append_with_branch(
+                &character,
+                None,
+                message(MessageRole::Assistant, "active branch"),
+                Some(root_id.clone()),
+            )
+            .unwrap();
+        let active_branch_id = log.message_ids[2].clone();
+        let (log, _) = service
+            .append(&character, None, message(MessageRole::User, "active tail"))
+            .unwrap();
+        let active_tail_id = log.message_ids[3].clone();
+
+        let window = service
+            .history_window_read_only(&character, None, Some(2), None)
+            .unwrap()
+            .expect("existing history");
+
+        assert_eq!(
+            window
+                .messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["active branch", "active tail"]
+        );
+        assert_eq!(window.message_ids, vec![active_branch_id, active_tail_id]);
+        assert!(!window.message_ids.contains(&old_branch_id));
+        assert_eq!(window.active_path.first(), Some(&root_id));
+        assert_eq!(window.total, 3);
+        assert!(window.has_more);
+    }
+
+    #[test]
+    fn history_window_read_only_does_not_create_missing_assets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = ChatService::new(tmp.path());
+        let character = CharacterId::new("missing-read-only").unwrap();
+
+        let window = service
+            .history_window_read_only(&character, None, Some(10), None)
+            .unwrap();
+
+        assert!(window.is_none());
+        assert!(!tmp.path().join("characters").exists());
     }
 }

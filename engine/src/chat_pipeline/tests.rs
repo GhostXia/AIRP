@@ -83,6 +83,7 @@ mod tests {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            ui_surfaces: Default::default(),
             plugins: Default::default(),
             plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -1015,6 +1016,7 @@ mod tests_ms6 {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            ui_surfaces: Default::default(),
             plugins: Default::default(),
             plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -1253,6 +1255,7 @@ mod tests_issue27 {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            ui_surfaces: Default::default(),
             plugins: Default::default(),
             plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -1422,6 +1425,7 @@ mod tests_dx1 {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            ui_surfaces: Default::default(),
             plugins: Default::default(),
             plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -1988,6 +1992,7 @@ mod tests_a1b_pipeline_e2e {
             plugin_tools: Default::default(),
             plugin_tools_update: Default::default(),
             extensions: std::sync::OnceLock::new(),
+            ui_surfaces: Default::default(),
             plugins: Default::default(),
             plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),

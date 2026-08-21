@@ -32,6 +32,7 @@ mod sessions;
 mod settings;
 mod state;
 mod style;
+mod surfaces;
 mod timeline_export;
 mod worldbook_graph;
 
@@ -112,6 +113,7 @@ pub(super) use style::{
     get_drift, get_style_profile, list_style_profiles, rollback_drift, style_learn, style_review,
     update_drift,
 };
+pub(super) use surfaces::{get_surface_events, get_surface_snapshot};
 pub(super) use timeline_export::{export_session_timeline_endpoint, get_session_timeline_endpoint};
 pub(super) use worldbook_graph::get_lorebook_graph_endpoint;
 

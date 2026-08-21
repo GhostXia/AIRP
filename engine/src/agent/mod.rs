@@ -372,6 +372,36 @@ async fn run_loop(
                 let result = run_generation_step(pipeline).await;
                 if let Some(e) = result.error {
                     tracing::warn!(err = %e, "generation step upstream error");
+                    let session_dir = result
+                        .finalizer
+                        .session_operation_lease
+                        .as_ref()
+                        .and(result.finalizer.session_dir.clone());
+                    let generation_id = result
+                        .finalizer
+                        .session_operation_lease
+                        .as_ref()
+                        .map(|lease| lease.generation_id().to_string());
+                    if let Some(session_dir) = session_dir {
+                        let persisted = tokio::task::spawn_blocking(move || {
+                            crate::ui_activity::record_failure(
+                                &session_dir,
+                                crate::ui_activity::ActivitySource::Agent,
+                                crate::ui_activity::ActivityFailureCode::UpstreamError,
+                                generation_id.as_deref(),
+                            )
+                        })
+                        .await;
+                        match persisted {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                tracing::warn!(%error, "failed to persist agent activity receipt")
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "agent activity persistence task failed")
+                            }
+                        }
+                    }
                     return emit_done(tx, StopReason::UpstreamError, steps_taken, tokens_estimated)
                         .await;
                 }
@@ -690,6 +720,7 @@ mod tests {
             plugin_tools: Default::default(),
             plugin_tools_update: tokio::sync::Mutex::new(()),
             extensions: std::sync::OnceLock::new(),
+            ui_surfaces: Default::default(),
             plugins: Default::default(),
             plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),

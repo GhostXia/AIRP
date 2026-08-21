@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "description": "AIRP Engine Surface SSE transport contract. Event data is the JSON serialization of the corresponding airp_state_protocol Surface v2 message.",
+  "compatibility": "additive-payload-fields-only",
+  "transport": {
+    "responseContentType": "text/event-stream",
+    "dataEncoding": "json-utf8",
+    "resumeRequestHeader": "Last-Event-ID",
+    "eventId": {
+      "wireField": "id",
+      "meaning": "opaque-replay-cursor",
+      "resumeRule": "Send the last successfully applied event id verbatim as Last-Event-ID. Clients must not parse or synthesize cursors."
+    },
+    "keepAlive": {
+      "wireField": "comment",
+      "data": "keepalive",
+      "clientBehavior": "ignore"
+    }
+  },
+  "extensionRules": [
+    "eventNames is closed for version 1; clients must not reinterpret unknown event names as snapshots or patches.",
+    "Event data inherits the opaque-additive unknown-field policy of surface-protocol-v2.json.",
+    "The SSE event name and data.kind discriminator must match.",
+    "A client must apply an event id only after its JSON data has been validated and applied successfully."
+  ],
+  "eventNames": ["snapshot", "patch"],
+  "events": {
+    "snapshot": {
+      "dataKind": "snapshot",
+      "payloadSchema": {
+        "$ref": "surface-protocol-v2.json#/$defs/snapshot"
+      },
+      "requiredDataFields": ["kind", "protocol", "surfaceId", "revision", "blueprint"]
+    },
+    "patch": {
+      "dataKind": "patch",
+      "payloadSchema": {
+        "$ref": "surface-protocol-v2.json#/$defs/patchEvent"
+      },
+      "requiredDataFields": ["kind", "protocol", "surfaceId", "baseRevision", "revision", "patch"]
+    }
+  }
+}

@@ -52,8 +52,9 @@ use handlers::{
     get_effective_persona_endpoint, get_lorebook_graph_endpoint, get_persona_endpoint,
     get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint, get_resident_memory,
     get_routing_endpoint, get_scene_endpoint, get_session_timeline_endpoint, get_settings,
-    get_style_profile, get_template_endpoint, get_user_model, get_world_events, import_character,
-    import_preset_endpoint, instantiate_template_endpoint, list_agent_tools, list_backups_endpoint,
+    get_style_profile, get_surface_events, get_surface_snapshot, get_template_endpoint,
+    get_user_model, get_world_events, import_character, import_preset_endpoint,
+    instantiate_template_endpoint, list_agent_tools, list_backups_endpoint,
     list_character_revisions_endpoint, list_characters, list_conversation_policies_endpoint,
     list_conversations_endpoint, list_images_endpoint, list_models, list_personas_endpoint,
     list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
@@ -102,6 +103,8 @@ pub struct DaemonState {
     /// 惰性初始化（首次访问 extensions 端点时从 data_root 加载），
     /// 避免全部 18 个构造点承担加载成本与测试 tmp 目录差异。
     pub extensions: std::sync::OnceLock<Arc<crate::extensions::ExtensionStore>>,
+    /// Ephemeral, reconstructable Surface snapshots and replay rings.
+    pub ui_surfaces: std::sync::Mutex<crate::ui_surface::SurfaceRegistry>,
     /// #498 §6：trusted plugin 声明（daemon 启动时扫描
     /// `data/plugins/manifests/*.json`，main.rs 负责 spawn）。
     pub plugins: std::sync::RwLock<Vec<crate::plugins::TrustedPluginManifest>>,
@@ -406,6 +409,14 @@ pub fn create_router_with_conversation_policy_registry(
 
     let v1_routes = Router::new()
         .route("/v1/chat/completions", post(chat_completion))
+        .route(
+            "/v1/ui/surfaces/session/:session_id",
+            get(get_surface_snapshot),
+        )
+        .route(
+            "/v1/ui/surfaces/session/:session_id/events",
+            get(get_surface_events),
+        )
         // C-P0：桌面壳进程互信换短时效 UI token（bearer 注入通道）。
         .route(
             "/v1/desktop-session",
