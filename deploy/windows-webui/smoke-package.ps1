@@ -135,6 +135,12 @@ try {
     if ($rolePage.StatusCode -ne 200 -or $runtimeAsset.StatusCode -ne 200) {
         throw 'Nested WebUI screens/assets were not packaged.'
     }
+    if (Test-Path -LiteralPath (Join-Path $package 'airp-ui.exe')) {
+        $desktopPage = Invoke-WebRequest -UseBasicParsing -Uri "$origin/desktop/"
+        if ($desktopPage.StatusCode -ne 200 -or $desktopPage.Content -notmatch '/desktop/assets/') {
+            throw 'Vue /desktop/ bundle was not packaged with the desktop UI.'
+        }
+    }
     if ($root.Headers['Cache-Control'] -ne 'no-store') { throw 'WebUI cache policy is not no-store.' }
     if ($root.Headers['Content-Security-Policy'] -notmatch "script-src 'self'") {
         throw 'WebUI CSP is missing the same-origin script boundary.'

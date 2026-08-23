@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-08-21
-> 代码基线：#564 PR 5 Engine Surface runtime candidate `8d4efbdb5a358097d838f354c3a1a0a3b1a43628`（其后的文档提交不改变运行代码）
+> 基线日期：2026-08-23
+> 代码基线：#564 PR 6 HttpEngineBus + dual-entry candidate（本文与实现同分支）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -14,6 +14,8 @@
 本次增量校准（2026-08-21，#564 PR 4）：`ui/` 已具备受限但可运行的 Surface v2 客户端运行时，覆盖递归 `split/tabs/stack/widget` 渲染、原子 snapshot/patch 应用、稳定 Widget relocation、生命周期与局部错误隔离、5000 条消息虚拟滚动，以及浏览器 runtime smoke。PR gate 运行 `smoke:runtime` 并保存截图与 `runtime-evidence.json`。**该阶段产品入口仍未切换**：Engine Surface endpoint 当时仍属 PR 5；`HttpEngineBus`、`/desktop/` 和真实 Engine 垂直链路继续属于后续 PR，正式产品主面和 Tauri 默认入口仍是 `webui/`。
 
 本次增量校准（2026-08-21，#564 PR 5）：Engine 已提供 bearer 保护的 session Surface snapshot/SSE，只读投影 Chat、Memory、Character State 与 Activity，使用有界 replay ring、opaque cursor、过期/前一 boot snapshot resync、多用户有效根隔离和 `protocol/surface-sse-events.json` 机器合同。关键 chat/Agent 失败以封闭脱敏回执保留，reload/resync 后仍可见；Activity 不进入角色 prompt。**真实桌面链路仍未接通**：`HttpEngineBus`、`/desktop/`、Tauri 双入口与 Widget intent 写闭环属于 PR 6–9，正式产品主面仍是 `webui/`。
+
+本次增量校准（2026-08-23，#564 PR 6）：Vue 已通过同源 `HttpEngineBus` 消费 bearer 保护的 Surface snapshot/SSE；认证流使用 streaming fetch、动态 bearer、401 rotation、成功应用后才推进 opaque cursor，并在断流时 replay、协议/patch 失败时确定性 snapshot resync。Engine 同时承载旧 WebUI `/` 与 Vue `/desktop/`，Tauri 默认仍走 `/`，仅 `AIRP_DESKTOP_UI=blueprint` 选择 `/desktop/`，bundle 缺失时可见回退。浏览器和 Tauri 使用同一 REST+SSE Bus，未恢复 Tauri 业务 relay。**写闭环仍未交付**：Widget intent executor 与第三方 host parity 属于 PR 7–9，Vue 当前真实 Surface 为只读迁移入口。
 
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 

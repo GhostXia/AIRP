@@ -1,0 +1,158 @@
+import { describe, expect, it } from "vitest";
+import { SurfaceStore } from "./surface-v2";
+import { HttpEngineBus } from "./http-engine-bus";
+import type { SurfaceSnapshot } from "./types";
+
+function snapshot(revision = "1", title = "one"): SurfaceSnapshot {
+  return {
+    kind: "snapshot",
+    protocol: { major: 2, minor: 0 },
+    surfaceId: "session:s1",
+    revision,
+    blueprint: {
+      version: 2,
+      root: { type: "widget", id: "chat-node", instanceId: "chat" },
+      widgets: [{ id: "chat", type: "core.chat", props: { title } }],
+    },
+  };
+}
+
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function stream(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+    },
+  }), { headers: { "Content-Type": "text/event-stream" } });
+}
+
+function closedStream(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  }), { headers: { "Content-Type": "text/event-stream" } });
+}
+
+async function until(predicate: () => boolean): Promise<void> {
+  for (let index = 0; index < 100; index += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("condition was not reached");
+}
+
+describe("HttpEngineBus", () => {
+  it("applies split CRLF SSE and sends the last accepted opaque cursor", async () => {
+    const calls: Array<{ path: string; cursor: string | null }> = [];
+    const store = new SurfaceStore();
+    const patch = JSON.stringify({
+      kind: "patch", protocol: { major: 2, minor: 0 }, surfaceId: "session:s1",
+      baseRevision: "1", revision: "2",
+      patch: [{ op: "replace", path: "/blueprint/widgets/0/props/title", value: "two" }],
+    });
+    const fetchImpl = async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = new URL(String(input));
+      calls.push({ path: url.pathname, cursor: new Headers(init?.headers).get("Last-Event-ID") });
+      if (url.pathname === "/version") return json({ version: "test" });
+      if (url.pathname.endsWith("/events")) {
+        return stream([`id: cursor-2\r`, `\nevent: patch\r\ndata: ${patch}\r\n\r\n`]);
+      }
+      return json({ cursor: "cursor-1", snapshot: snapshot() });
+    };
+    const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
+    const stop = await bus.connect({ characterId: "alice", sessionId: "s1" }, store);
+    await until(() => store.snapshot?.revision === "2");
+    stop();
+    expect(store.snapshot?.blueprint.widgets[0].props).toEqual({ title: "two" });
+    expect(calls.find((call) => call.path.endsWith("/events"))?.cursor).toBe("cursor-1");
+    expect(calls.every((call) => !String(call.path).includes("secret"))).toBe(true);
+  });
+
+  it("retries a transient resync failure and then installs the fresh snapshot", async () => {
+    let snapshots = 0;
+    let streams = 0;
+    const store = new SurfaceStore();
+    const fetchImpl = async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/version") return json({ version: "test" });
+      if (url.pathname.endsWith("/events")) {
+        streams += 1;
+        if (streams === 1) {
+          return stream([`id: bad\nevent: patch\ndata: ${JSON.stringify(snapshot())}\n\n`]);
+        }
+        return stream([]);
+      }
+      snapshots += 1;
+      if (snapshots === 2) return json({ message: "temporarily unavailable" }, 503);
+      return json({ cursor: `cursor-${snapshots}`, snapshot: snapshot(String(snapshots), `snapshot-${snapshots}`) });
+    };
+    const bus = new HttpEngineBus({
+      base: "http://engine.test", bearer: () => "secret", fetchImpl,
+      sleep: async () => {},
+    });
+    const stop = await bus.connect({ characterId: "alice", sessionId: "s1" }, store);
+    await until(() => snapshots >= 3);
+    stop();
+    expect(store.snapshot?.blueprint.widgets[0].props).toEqual({ title: "snapshot-3" });
+  });
+
+  it("reconnects a broken stream from the last successfully applied cursor", async () => {
+    const cursors: Array<string | null> = [];
+    let streams = 0;
+    const store = new SurfaceStore();
+    const event = JSON.stringify({
+      kind: "patch", protocol: { major: 2, minor: 0 }, surfaceId: "session:s1",
+      baseRevision: "1", revision: "2",
+      patch: [{ op: "replace", path: "/blueprint/widgets/0/props/title", value: "accepted" }],
+    });
+    const fetchImpl = async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/version") return json({ version: "test" });
+      if (!url.pathname.endsWith("/events")) return json({ cursor: "cursor-1", snapshot: snapshot() });
+      streams += 1;
+      cursors.push(new Headers(init?.headers).get("Last-Event-ID"));
+      return streams === 1
+        ? closedStream([`id: cursor-2\nevent: patch\ndata: ${event}\n\n`])
+        : stream([]);
+    };
+    const bus = new HttpEngineBus({
+      base: "http://engine.test", bearer: () => "secret", fetchImpl,
+      sleep: async () => {},
+    });
+    const stop = await bus.connect({ characterId: "alice", sessionId: "s1" }, store);
+    await until(() => streams >= 2);
+    stop();
+    expect(cursors).toEqual(["cursor-1", "cursor-2"]);
+    expect(store.snapshot?.revision).toBe("2");
+  });
+
+  it("renews once on 401 and resolves the bearer again for the retry", async () => {
+    let bearer = "stale";
+    const auth: string[] = [];
+    const fetchImpl = async (_input: URL | RequestInfo, init?: RequestInit) => {
+      const value = new Headers(init?.headers).get("Authorization") ?? "";
+      auth.push(value);
+      return value === "Bearer fresh" ? json({ ok: true }) : json({ message: "expired" }, 401);
+    };
+    const bus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => bearer,
+      renew: async () => { bearer = "fresh"; return true; },
+      fetchImpl,
+    });
+    await expect(bus.dispatchIntent(
+      "session:s1", "chat", "chat.send", { text: "hi" },
+    )).resolves.toEqual({ ok: true });
+    expect(auth).toEqual(["Bearer stale", "Bearer fresh"]);
+  });
+});

@@ -3,7 +3,12 @@ import App from "./App.vue";
 import { setDefaultEsmImporter } from "./registry";
 import { initEngineGrants } from "./registry/consent";
 import statusPill from "./widgets/status.module";
+import { consumeDesktopTokenFragment } from "./protocol/desktop-session";
 import "./styles/desktop.css";
+
+// The Tauri shell delivers the short-lived bearer in a fragment. Consume and
+// erase it before any Engine-authoritative bootstrap request is made.
+consumeDesktopTokenFragment();
 
 // Map the demo's local esm source specifiers to in-repo modules so the third-
 // party widget loads with no network/CDN. A real host would leave the default

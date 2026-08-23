@@ -5,6 +5,8 @@ import vue from "@vitejs/plugin-vue";
 // point at it.
 export default defineConfig({
   plugins: [vue()],
+  // The production bundle has its own namespace beside the legacy /assets/.
+  base: "/desktop/",
   clearScreen: false,
   server: {
     port: 1420,

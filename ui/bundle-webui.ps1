@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $source = Join-Path $PSScriptRoot "..\webui"
 $dest = Join-Path $PSScriptRoot "src-tauri\webui-bundle"
+$desktopSource = Join-Path $PSScriptRoot "dist"
 
 if (-not (Test-Path (Join-Path $source "index.html"))) {
     throw "webui source not found at $source (index.html missing)"
@@ -13,4 +14,13 @@ if (-not (Test-Path (Join-Path $source "index.html"))) {
 if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item -Recurse -Path (Join-Path $source "*") -Destination $dest
-Write-Host "webui staged for desktop bundle -> $dest"
+
+& npm run build
+if ($LASTEXITCODE -ne 0) { throw "Vue desktop build failed with exit code $LASTEXITCODE" }
+if (-not (Test-Path (Join-Path $desktopSource "index.html"))) {
+    throw "Vue desktop output not found at $desktopSource"
+}
+$desktopDest = Join-Path $dest "desktop"
+New-Item -ItemType Directory -Force -Path $desktopDest | Out-Null
+Copy-Item -Recurse -Path (Join-Path $desktopSource "*") -Destination $desktopDest
+Write-Host "legacy WebUI + Vue /desktop/ staged -> $dest"

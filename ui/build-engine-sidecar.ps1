@@ -32,7 +32,8 @@ Write-Host "=== cargo build --release -p airp-core --bin airp-core ==="
 & $cargo build --release -p airp-core --bin airp-core
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$src = Join-Path $repoRoot "target\release\airp-core.exe"
+$targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoRoot "target" }
+$src = Join-Path $targetRoot "release\airp-core.exe"
 if (-not (Test-Path -LiteralPath $src)) { throw "engine binary not found at $src" }
 
 $binDir = Join-Path $PSScriptRoot "src-tauri\binaries"

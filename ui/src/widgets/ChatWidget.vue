@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import type { WidgetInstance, Json } from "../protocol/types";
 import { computeWindow } from "./virtual-window";
 
-const props = defineProps<{ instance: WidgetInstance; state: unknown }>();
+const props = defineProps<{ instance: WidgetInstance; state: unknown; readOnly?: boolean }>();
 const emit = defineEmits<{ (e: "intent", name: string, params?: Json): void }>();
 
 interface Msg {
@@ -19,7 +19,12 @@ interface Msg {
 // Task 1.2: chat state is `{ messages: {id: Msg}, order: id[] }`. We render
 // in `order` sequence, looking each id up in `messages` (O(1)). Virtual scroll
 // windows over `order` so 100k logs stay bounded (perf contract).
-type ChatState = { messages?: Record<string, Msg>; order?: string[] };
+type ChatState = {
+  messages?: Record<string, Msg> | Array<{ role?: unknown; content?: unknown }>;
+  order?: string[];
+  message_ids?: string[];
+  message_timestamps?: Array<string | null>;
+};
 
 // Fixed row height for the virtualized window (performance contract: only the
 // viewport slice is rendered, so a 100k-message log stays bounded).
@@ -32,8 +37,22 @@ const title = computed(() => {
 const chatState = computed<ChatState>(
   () => (props.state as ChatState | null) ?? {},
 );
-const messagesById = computed<Record<string, Msg>>(() => chatState.value.messages ?? {});
-const order = computed<string[]>(() => chatState.value.order ?? []);
+const projected = computed(() => Array.isArray(chatState.value.messages));
+const projectedMessages = computed<Msg[]>(() => {
+  if (!Array.isArray(chatState.value.messages)) return [];
+  return chatState.value.messages.map((message, index) => ({
+    id: chatState.value.message_ids?.[index] ?? `projected-${index}`,
+    role: typeof message.role === "string" ? message.role : "unknown",
+    text: typeof message.content === "string" ? message.content : "",
+    ts: chatState.value.message_timestamps?.[index] ?? undefined,
+  }));
+});
+const messagesById = computed<Record<string, Msg>>(() => projected.value
+  ? Object.fromEntries(projectedMessages.value.map((message) => [message.id, message]))
+  : chatState.value.messages as Record<string, Msg> ?? {});
+const order = computed<string[]>(() => projected.value
+  ? projectedMessages.value.map((message) => message.id)
+  : chatState.value.order ?? []);
 
 const scrollEl = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
@@ -63,7 +82,7 @@ function onScroll(): void {
   scrollTop.value = el.scrollTop;
   viewportH.value = el.clientHeight;
   // Near the top → ask the Gateway for an older history window.
-  if (el.scrollTop < ITEM_H * 2) emit("intent", "chat.loadMore");
+  if (!props.readOnly && !projected.value && el.scrollTop < ITEM_H * 2) emit("intent", "chat.loadMore");
 }
 
 onMounted(() => {
@@ -73,6 +92,7 @@ onMounted(() => {
 const draft = ref("");
 
 function send(): void {
+  if (props.readOnly) return;
   const text = draft.value.trim();
   if (!text) return;
   emit("intent", "chat.send", { text });
@@ -97,8 +117,8 @@ function send(): void {
       <div class="spacer" :style="{ height: vwin.padBottom + 'px' }"></div>
     </div>
     <form class="w-chat-composer" @submit.prevent="send">
-      <input v-model="draft" placeholder="说点什么…" />
-      <button type="submit">发送</button>
+      <input v-model="draft" :disabled="readOnly" :placeholder="readOnly ? 'PR6 只读 Surface；发送将在 Chat 纵切开放' : '说点什么…'" />
+      <button type="submit" :disabled="readOnly">发送</button>
     </form>
   </div>
 </template>

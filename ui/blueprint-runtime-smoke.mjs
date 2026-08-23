@@ -70,7 +70,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.goto(`${origin}/?airp_agent_test=1`, { waitUntil: "networkidle" });
+  await page.goto(`${origin}/?airp_agent_test=1&airp_fixture=1`, { waitUntil: "networkidle" });
   await page.locator('[data-blueprint-version="2"]').waitFor({ state: "visible" });
 
   for (const kind of ["split", "tabs", "stack", "widget"]) {

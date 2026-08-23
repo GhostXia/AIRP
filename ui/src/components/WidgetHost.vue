@@ -17,7 +17,12 @@ import { needsConsent, canMount, grant, effectiveCapabilities } from "../registr
 import { SandboxBridge, createIframeTransport } from "../registry/sandbox-bridge";
 import { WidgetLifecycle } from "./widget-lifecycle";
 
-const props = defineProps<{ instance: WidgetInstance; state: unknown; stateRevision?: number }>();
+const props = defineProps<{
+  instance: WidgetInstance;
+  state: unknown;
+  stateRevision?: number;
+  readOnly?: boolean;
+}>();
 const emit = defineEmits<{ (e: "intent", name: string, params?: Json): void }>();
 
 const reg = resolveWidget(props.instance.type);
@@ -45,6 +50,7 @@ const lifecycle = new WidgetLifecycle((error) => {
   failed.value = errMsg(error);
 });
 function onIntent(name: string, params?: Json): void {
+  if (props.readOnly) return;
   emit("intent", name, params);
 }
 async function approve(): Promise<void> {
@@ -91,7 +97,7 @@ function makeContext(): WidgetContext {
     },
     getState: () => props.state,
     onState: (cb) => lifecycle.onState(cb),
-    emit: (name, params) => lifecycle.run(() => emit("intent", name, params)),
+    emit: (name, params) => lifecycle.run(() => onIntent(name, params)),
     // Only the consented capabilities reach the widget (host-enforced).
     capabilities: manifest ? effectiveCapabilities(manifest) : props.instance.capabilities ?? [],
   };
@@ -135,7 +141,7 @@ async function mountSandbox(): Promise<void> {
     const transport = createIframeTransport(sandboxEl.value, source);
     const bridge = new SandboxBridge(
       transport,
-      (name, params) => lifecycle.run(() => emit("intent", name, params)),
+      (name, params) => lifecycle.run(() => onIntent(name, params)),
       (message) => lifecycle.fail(message),
     );
     sandboxBridge = bridge;
@@ -205,6 +211,7 @@ onErrorCaptured((e) => {
       v-else-if="reg?.kind === 'vue' && vueComponent"
       :instance="instance"
       :state="state"
+      :read-only="readOnly"
       @intent="onIntent"
     />
     <div v-else-if="sandboxed" ref="sandboxEl" class="widget-sandbox"></div>

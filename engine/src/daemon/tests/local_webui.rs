@@ -24,6 +24,10 @@ async fn local_webui_serves_assets_runtime_mode_and_preserves_not_found() {
         .to_str()
         .unwrap()
         .contains("script-src 'self'"));
+    assert!(!runtime.headers()[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap()
+        .contains("style-src-attr"));
     let runtime_body = axum::body::to_bytes(runtime.into_body(), usize::MAX)
         .await
         .unwrap();
@@ -49,6 +53,99 @@ async fn local_webui_serves_assets_runtime_mode_and_preserves_not_found() {
         .await
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn local_webui_mounts_desktop_spa_without_masking_missing_assets() {
+    let (state, _data_guard) = make_state_no_key();
+    let webui = tempfile::tempdir().unwrap();
+    std::fs::write(webui.path().join("index.html"), "<h1>legacy</h1>").unwrap();
+    std::fs::create_dir_all(webui.path().join("desktop/assets")).unwrap();
+    std::fs::write(
+        webui.path().join("desktop/index.html"),
+        "<h1>blueprint desktop</h1>",
+    )
+    .unwrap();
+    std::fs::write(
+        webui.path().join("desktop/assets/app.js"),
+        "window.desktop = true;",
+    )
+    .unwrap();
+    let router = create_local_webui_router(state, webui.path().to_path_buf());
+
+    let redirect = router
+        .clone()
+        .oneshot(Request::get("/desktop").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(redirect.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(redirect.headers()[header::LOCATION], "/desktop/");
+
+    for path in ["/desktop/", "/desktop/workspace/story"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header(header::ACCEPT, "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(response.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .contains("style-src-attr 'unsafe-inline'"));
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("blueprint desktop"));
+    }
+
+    let asset = router
+        .clone()
+        .oneshot(
+            Request::get("/desktop/assets/app.js")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(asset.status(), StatusCode::OK);
+
+    let missing_asset = router
+        .clone()
+        .oneshot(
+            Request::get("/desktop/assets/missing.js")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_asset.status(), StatusCode::NOT_FOUND);
+
+    let non_navigation = router
+        .clone()
+        .oneshot(
+            Request::get("/desktop/workspace/story")
+                .header(header::ACCEPT, "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(non_navigation.status(), StatusCode::NOT_FOUND);
+
+    let legacy = router
+        .oneshot(Request::get("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(legacy.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("legacy"));
 }
 
 #[tokio::test]

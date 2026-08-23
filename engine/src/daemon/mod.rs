@@ -17,7 +17,7 @@ use axum::{
     handler::Handler,
     http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{any, delete, get, post, put},
     Router,
 };
@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 use decompose_handlers::{
     decompose_character, decompose_preset, enhance_or_apply_character_analysis,
@@ -880,6 +880,10 @@ fn webui_router_with_mode(
 ) -> Router {
     let runtime_config =
         format!("window.AIRP_WEBUI_CONFIG = Object.freeze({{ mode: '{mode}' }});\n");
+    let desktop_dir = webui_dir.join("desktop");
+    let desktop_index = desktop_dir.join("index.html");
+    let desktop_router = Router::new()
+        .fallback_service(ServeDir::new(desktop_dir).fallback(ServeFile::new(desktop_index)));
     create_router(state)
         .route(
             "/runtime-config.js",
@@ -893,11 +897,26 @@ fn webui_router_with_mode(
                 )
             }),
         )
+        .route(
+            "/desktop",
+            get(|| async { Redirect::permanent("/desktop/") }),
+        )
+        .nest("/desktop", desktop_router)
         .fallback_service(ServeDir::new(webui_dir))
         .layer(middleware::from_fn(local_webui_security_headers))
 }
 
 async fn local_webui_security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
+    let request_path = request.uri().path().to_string();
+    let accepts_html = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|item| item.trim().starts_with("text/html"))
+        });
     // C-P1：widget 沙箱 iframe 以 sandbox="allow-scripts"（无 allow-same-origin）
     // 运行于 opaque origin，其内 import() widget module 属 CORS 请求。
     // /assets/widgets/ 是 loopback 静态公开资产（不含任何秘密），附
@@ -907,11 +926,28 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
     // 沙箱的 CORS module import 需要 ACAO:*），且内容寻址不可变，可附
     // immutable 缓存。仅精确前缀匹配；其余路径一律不加。
     let is_extension_asset = request.uri().path().starts_with("/extensions/");
+    let is_desktop_asset = request.uri().path().starts_with("/desktop/");
     // 沙箱引导页自身要被宿主 iframe 嵌入：X-Frame-Options DENY 会拒绝它。
     // 不削弱安全：该页 CSP 仍带 frame-ancestors 'none'（第三方不得嵌它），
     // 且宿主以 event.source === iframe.contentWindow 门控消息来源。
     let is_sandbox_frame = request.uri().path() == "/assets/widgets/sandbox-frame.html";
     let mut response = next.run(request).await;
+    // The scoped SPA fallback may answer an extensionless client route with
+    // index.html, but a missing JS/CSS/image must remain a real 404. Returning
+    // HTML 200 for a hashed asset hides packaging damage and defeats nosniff.
+    let is_desktop_index = matches!(request_path.as_str(), "/desktop/" | "/desktop/index.html");
+    let is_extensionless = std::path::Path::new(&request_path).extension().is_none();
+    let invalid_desktop_fallback = request_path.starts_with("/desktop/")
+        && !is_desktop_index
+        && response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/html"))
+        && (!is_extensionless || !accepts_html);
+    if invalid_desktop_fallback {
+        response = StatusCode::NOT_FOUND.into_response();
+    }
     // #485 E5：immutable 长缓存只适用于成功响应；必须在 mutate headers
     // 前捕获状态，否则 404/500 错误响应也会被客户端按 immutable 缓存。
     let status = response.status();
@@ -921,6 +957,11 @@ async fn local_webui_security_headers(request: Request<axum::body::Body>, next: 
         HeaderValue::from_static(if is_sandbox_frame {
             // 引导页须被同源宿主页嵌入：frame-ancestors 放宽为 'self'。
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+        } else if is_desktop_asset {
+            // Vue uses bounded runtime style attributes for virtualized row
+            // geometry. Keep this exception scoped to the desktop bundle;
+            // inline scripts remain forbidden and the legacy WebUI is unchanged.
+            "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         } else {
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         }),

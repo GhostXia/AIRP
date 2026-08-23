@@ -173,9 +173,9 @@ try {
     if (-not $stopped) { throw 'engine sidecar remained alive after UI exit' }
     Assert-LockHasNoOwner -Path $lock
 
-    # 6. Reopen after graceful shutdown.  The lock inode is intentionally
-    # retained; a second launch must acquire it, publish a fresh owner, and
-    # clean it again on exit.
+    # 6. Reopen through the explicit Blueprint entry. The lock inode is
+    # retained; this also proves both shell entries share lifecycle semantics.
+    $env:AIRP_DESKTOP_UI = 'blueprint'
     $secondUiProcess = Start-Process -FilePath $ui -WorkingDirectory $package -PassThru -WindowStyle Hidden
     try {
         $secondReady = $false
@@ -190,6 +190,10 @@ try {
             catch { Start-Sleep -Milliseconds 250 }
         }
         if (-not $secondReady) { throw "bundled engine did not become ready on second launch on port $Port" }
+        $desktopRoot = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/desktop/" -TimeoutSec 5
+        if ($desktopRoot.StatusCode -ne 200 -or $desktopRoot.Content -notmatch '/desktop/assets/') {
+            throw 'Blueprint desktop bundle was not hosted on the explicit second launch'
+        }
         Assert-LiveLockOwner -Path $lock -ExpectedShellPid $secondUiProcess.Id -ExpectedPort $Port -ExpectedShellProcess $secondUiProcess
         if (-not $secondUiProcess.CloseMainWindow()) {
             throw 'could not request graceful shutdown for second UI launch'
@@ -214,6 +218,7 @@ try {
     Write-Host 'Desktop UI smoke passed: readiness, same-origin hosting, shared data folder, graceful exit, lock reuse, and cleanup.'
 }
 finally {
+    Remove-Item Env:AIRP_DESKTOP_UI -ErrorAction SilentlyContinue
     # 失败路径清理：壳被强杀时 sidecar 可能存活（锁文件还在），先按归属
     # 锁的 engine_pid 清理残留 engine，再强杀壳，避免占端口/挡下次 smoke。
     if (Test-Path -LiteralPath $lock -PathType Leaf) {

@@ -18,12 +18,12 @@
     "test": "vitest run",
     "smoke:shell": "node desktop-shell-smoke.mjs --out dist/shell-smoke",
     "smoke:runtime": "node blueprint-runtime-smoke.mjs --out dist/runtime-smoke",
+    "smoke:http-bus": "node http-engine-bus-browser-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "bundle:webui": "powershell -ExecutionPolicy Bypass -File ./bundle-webui.ps1"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "vue": "^3.4.21"
   },
