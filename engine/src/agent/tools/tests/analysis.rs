@@ -40,6 +40,7 @@ async fn enhance_analysis_returns_preview_and_rejects_world_book() {
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),

@@ -31,6 +31,7 @@ mod session_recovery;
 mod sessions;
 mod state_scene;
 mod style;
+mod surfaces;
 mod templates;
 
 /// Build a `DaemonState` rooted at a fresh tempdir, optionally with an
@@ -48,6 +49,7 @@ pub(super) fn make_state_with_key(key: Option<&str>) -> (Arc<DaemonState>, tempf
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
@@ -106,6 +108,7 @@ pub(super) fn make_state_no_key() -> (Arc<DaemonState>, tempfile::TempDir) {
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
@@ -142,6 +145,7 @@ pub(super) fn make_state_with_data_root(data_root: std::path::PathBuf) -> Arc<Da
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),

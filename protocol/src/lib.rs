@@ -1574,6 +1574,50 @@ mod tests {
     }
 
     #[test]
+    fn surface_sse_authority_matches_binding_shapes() {
+        let sse: Value = serde_json::from_str(include_str!("../surface-sse-events.json")).unwrap();
+        let surface: Value =
+            serde_json::from_str(include_str!("../surface-protocol-v2.json")).unwrap();
+        let snapshot: SurfaceSnapshot =
+            serde_json::from_str(include_str!("../fixtures/surface-v2/rust-to-ts.json")).unwrap();
+        let patch: SurfacePatchEvent =
+            serde_json::from_str(include_str!("../fixtures/surface-v2/ts-to-rust.json")).unwrap();
+
+        assert_eq!(sse["eventNames"], json!(["snapshot", "patch"]));
+        assert_eq!(sse["transport"]["responseContentType"], "text/event-stream");
+        assert_eq!(sse["transport"]["resumeRequestHeader"], "Last-Event-ID");
+
+        for (event_name, payload) in [
+            ("snapshot", serde_json::to_value(snapshot).unwrap()),
+            ("patch", serde_json::to_value(patch).unwrap()),
+        ] {
+            let schema_name = if event_name == "snapshot" {
+                "snapshot"
+            } else {
+                "patchEvent"
+            };
+            assert_eq!(sse["events"][event_name]["dataKind"], payload["kind"]);
+            assert_eq!(
+                sse["events"][event_name]["payloadSchema"]["$ref"],
+                format!("surface-protocol-v2.json#/$defs/{schema_name}")
+            );
+            assert_eq!(
+                sse["events"][event_name]["requiredDataFields"],
+                surface["$defs"][schema_name]["required"]
+            );
+            for field in sse["events"][event_name]["requiredDataFields"]
+                .as_array()
+                .unwrap()
+            {
+                assert!(
+                    payload.get(field.as_str().unwrap()).is_some(),
+                    "{event_name} Rust serialization is missing {field}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rust_snapshot_serializes_exactly_to_rust_to_ts_fixture() {
         let expected: Value =
             serde_json::from_str(include_str!("../fixtures/surface-v2/rust-to-ts.json")).unwrap();

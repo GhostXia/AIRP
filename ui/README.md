@@ -1,6 +1,6 @@
 # AIRP UI
 
-`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端目录。当前运行事实仍是 C-P0 的 Tauri 壳同源承载 `webui/`；Owner 已在 [#564](https://github.com/GhostXia/AIRP/issues/564) 决定恢复协议驱动的 Vue Blueprint/Widget 桌面主面，因为该设计具有更好的兼容性与扩展性。目标架构、资产处置和双入口回退见 [`../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。本页最后在 2026-08-21 的 PR #584 runtime candidate `c421a6d` 上复核。
+`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端目录。当前运行事实仍是 C-P0 的 Tauri 壳同源承载 `webui/`；Owner 已在 [#564](https://github.com/GhostXia/AIRP/issues/564) 决定恢复协议驱动的 Vue Blueprint/Widget 桌面主面，因为该设计具有更好的兼容性与扩展性。目标架构、资产处置和双入口回退见 [`../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。本页最后在 2026-08-21 的 PR 5 Engine Surface runtime candidate `8d4efbd` 上复核。
 
 历史候选发布事实：Actions run `31309894372` 在 commit `affa315a5917109e2ae337382cfcdcb36021073a` 对 artifact `airp-webui-windows-x64` 的包内 desktop smoke 成功；该证据不覆盖 PR #584 candidate `c421a6d`，也不替代 GUI 真机与真实 provider 验收。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 和 `release` environment required reviewer 配置阻塞。
 
@@ -45,7 +45,7 @@ ui/
         └── lifecycle.rs   # startup ownership and shutdown rules
 ```
 
-The Rust protocol crate lives in `../protocol`. Surface v2 uses [`../protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) as its machine-readable authority; Rust and TypeScript bindings remain manual mirrors locked by shared positive/negative/migration fixtures and parity tests. The older Envelope/Blueprint v1 types remain for demo compatibility and explicit migration only. The Vue preview now includes the bounded v2 renderer and client store, but still does not provide an Engine Surface endpoint, `HttpEngineBus`, or `/desktop/` product entry.
+The Rust protocol crate lives in `../protocol`. Surface v2 uses [`../protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) as its payload authority and [`../protocol/surface-sse-events.json`](../protocol/surface-sse-events.json) as its SSE transport authority; Rust and TypeScript bindings remain manual mirrors locked by fixtures and parity tests. The older Envelope/Blueprint v1 types remain for demo compatibility and explicit migration only. Engine session Surface snapshot/SSE now exists, but the Vue preview still has no `HttpEngineBus` and `/desktop/` is not a product entry.
 
 ## Local Commands
 

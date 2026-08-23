@@ -122,6 +122,7 @@ async fn setup_with_quota(
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
@@ -167,6 +168,7 @@ async fn setup(upstream_url: &str) -> (Arc<DaemonState>, tempfile::TempDir) {
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
@@ -207,6 +209,7 @@ async fn setup_with_endpoint(endpoint: String) -> (Arc<DaemonState>, tempfile::T
         provider_routing_update: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),

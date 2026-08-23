@@ -62,6 +62,7 @@ async fn test_health_endpoint_returns_status() {
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
@@ -134,6 +135,7 @@ async fn test_health_provider_configured_when_api_key_and_endpoint_set() {
         plugin_tools: Default::default(),
         plugin_tools_update: Default::default(),
         extensions: std::sync::OnceLock::new(),
+        ui_surfaces: Default::default(),
         plugins: Default::default(),
         plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),

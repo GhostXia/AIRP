@@ -357,8 +357,31 @@ pub(super) async fn persist_live_state(
 /// Commit one converged Agent generation through the same persistence, state,
 /// volume, and maintenance finalizer used by the ordinary chat pipeline.
 pub async fn finalize_generation(finalizer: FinalizerCtx, raw_acc: String, cleaned_acc: String) {
+    let session_dir = finalizer.session_dir.clone();
+    let generation_id = finalizer
+        .session_operation_lease
+        .as_ref()
+        .map(|lease| lease.generation_id().to_string());
     if let Err(error) = run_finalize(finalizer, raw_acc, cleaned_acc).await {
         tracing::error!(%error, "agent generation finalization failed");
+        if let Some(session_dir) = session_dir {
+            let persisted = tokio::task::spawn_blocking(move || {
+                crate::ui_activity::record_failure(
+                    &session_dir,
+                    crate::ui_activity::ActivitySource::Agent,
+                    crate::ui_activity::ActivityFailureCode::FinalizationFailed,
+                    generation_id.as_deref(),
+                )
+            })
+            .await;
+            match persisted {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "failed to persist agent activity receipt")
+                }
+                Err(error) => tracing::warn!(%error, "agent activity persistence task failed"),
+            }
+        }
     }
 }
 

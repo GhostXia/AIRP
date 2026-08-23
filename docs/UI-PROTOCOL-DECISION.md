@@ -71,7 +71,7 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 | Consent/sandbox | 保留为 UI 纵深防御 |
 | 通用协议/市场野心 | 仅未来可能性，非当前范围 |
 
-Surface v2 当前只交付协议 authority、Rust/TypeScript binding/guard、共享 fixture 和客户端原子 store；它没有把 Engine endpoint、renderer、`HttpEngineBus` 或桌面入口变成运行事实。旧文档中“Blueprint v2 未交付”的宽泛表述自 PR 2 起仅对运行闭环成立，不再适用于协议层。
+Surface v2 当前已交付 payload authority、Rust/TypeScript binding/guard、共享 fixture、客户端原子 store、受限 renderer，以及 Engine session Surface snapshot/SSE。SSE transport authority 为 [`protocol/surface-sse-events.json`](../protocol/surface-sse-events.json)：cursor opaque、事件名封闭、`Last-Event-ID` 恢复，ring 缺口或前一 boot cursor 回退完整 snapshot。它仍未把 `HttpEngineBus`、`/desktop/` 或真实 Widget intent 闭环变成运行事实。旧文档中“Blueprint v2 未交付”的宽泛表述仅对尚未接通的产品闭环成立，不再适用于协议、客户端 runtime 或 Engine 只读投影。
 
 ## 实践方向
 

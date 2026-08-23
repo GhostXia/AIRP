@@ -285,6 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 plugin_tools: std::sync::RwLock::new(plugin_tools),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
                 extensions: std::sync::OnceLock::new(),
+                ui_surfaces: Default::default(),
                 plugins: std::sync::RwLock::new(plugin_manifests),
                 plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(plugin_children)),
                 shutdown: tokio::sync::watch::channel(false).0,
@@ -417,6 +418,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 plugin_tools: Default::default(),
                 plugin_tools_update: tokio::sync::Mutex::new(()),
                 extensions: std::sync::OnceLock::new(),
+                ui_surfaces: Default::default(),
                 // Run 命令不 spawn trusted plugin（#498 §6.3 仅 daemon 生命周期）。
                 plugins: Default::default(),
                 plugin_children: std::sync::Arc::new(tokio::sync::Mutex::new(

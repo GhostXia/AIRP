@@ -64,6 +64,14 @@ pub fn build_sse_stream(
         .session_operation_lease
         .as_ref()
         .and_then(|lease| lease.cancellation());
+    let activity_session_dir = finalizer
+        .session_operation_lease
+        .as_ref()
+        .and(finalizer.session_dir.clone());
+    let activity_generation_id = finalizer
+        .session_operation_lease
+        .as_ref()
+        .map(|lease| lease.generation_id().to_string());
 
     // ── Processing task ───────────────────────────────────────────────────────
     tokio::spawn(async move {
@@ -110,6 +118,16 @@ pub fn build_sse_stream(
                     failed = true;
                     let code = crate::adapter::streaming_failure_code(&error);
                     tracing::error!(failure_code = code, "chat upstream stream failed");
+                    record_activity_failure(
+                        activity_session_dir.clone(),
+                        activity_generation_id.clone(),
+                        if code == "timeout" {
+                            crate::ui_activity::ActivityFailureCode::Timeout
+                        } else {
+                            crate::ui_activity::ActivityFailureCode::UpstreamError
+                        },
+                    )
+                    .await;
                     let _ = chunk_tx
                         .send(SseMessage::Error {
                             code: code.to_string(),
@@ -177,6 +195,14 @@ pub fn build_sse_stream(
                     crate::error::AirpError::Conflict(message)
                         if message == "generation_cancelled"
                 );
+                if !cancelled {
+                    record_activity_failure(
+                        activity_session_dir,
+                        activity_generation_id,
+                        crate::ui_activity::ActivityFailureCode::FinalizationFailed,
+                    )
+                    .await;
+                }
                 let _ = chunk_tx
                     .send(SseMessage::Error {
                         code: if cancelled {
@@ -205,6 +231,30 @@ pub fn build_sse_stream(
         })
     })
     .flat_map(stream::iter)
+}
+
+async fn record_activity_failure(
+    session_dir: Option<std::path::PathBuf>,
+    generation_id: Option<String>,
+    code: crate::ui_activity::ActivityFailureCode,
+) {
+    let Some(session_dir) = session_dir else {
+        return;
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        crate::ui_activity::record_failure(
+            &session_dir,
+            crate::ui_activity::ActivitySource::Chat,
+            code,
+            generation_id.as_deref(),
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(%error, "failed to persist chat activity receipt"),
+        Err(error) => tracing::warn!(%error, "chat activity persistence task failed"),
+    }
 }
 
 pub(super) fn chunks_result_to_events(result: SseMessage) -> Vec<Result<Event, Infallible>> {

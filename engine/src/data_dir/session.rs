@@ -59,6 +59,35 @@ pub fn resolve_session_dir(
     }
 }
 
+/// Resolve an existing session directory without creating directories or
+/// migrating legacy layouts.
+///
+/// `SessionId` is validated when constructed. The character path segment is
+/// validated here because this crate-internal API accepts it as a string.
+pub(crate) fn resolve_session_dir_read_only(
+    root: &Path,
+    character_id: &str,
+    session_id: Option<&crate::types::SessionId>,
+) -> Result<Option<PathBuf>, AirpError> {
+    let character_id = crate::types::CharacterId::new(character_id)?;
+    let character = super::paths::character_dir_path(root, &character_id);
+    let (current, legacy) = match session_id {
+        Some(session_id) => {
+            let session = character.join("sessions").join(session_id.to_string());
+            (session.join("memory"), session)
+        }
+        None => (character.join("memory"), character.join("session")),
+    };
+
+    if current.is_dir() {
+        Ok(Some(current))
+    } else if legacy.is_dir() {
+        Ok(Some(legacy))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn list_sessions(
     root: &Path,
     character_id: &str,
@@ -161,4 +190,72 @@ pub fn delete_session(
     fs::File::create(marker)?.sync_all()?;
     fs::remove_dir_all(&dir)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_resolver_returns_none_without_creating_assets() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let resolved = resolve_session_dir_read_only(tmp.path(), "alice", None).unwrap();
+
+        assert!(resolved.is_none());
+        assert!(!tmp.path().join("characters").exists());
+    }
+
+    #[test]
+    fn read_only_resolver_validates_character_id() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let error = resolve_session_dir_read_only(tmp.path(), "../alice", None).unwrap_err();
+
+        assert!(matches!(error, AirpError::BadRequest(_)));
+        assert!(!tmp.path().join("characters").exists());
+    }
+
+    #[test]
+    fn read_only_resolver_preserves_default_legacy_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join("characters").join("alice").join("session");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("current.md"), "legacy").unwrap();
+
+        let resolved = resolve_session_dir_read_only(tmp.path(), "alice", None)
+            .unwrap()
+            .expect("legacy session");
+
+        assert_eq!(resolved, legacy);
+        assert!(resolved.join("current.md").is_file());
+        assert!(!tmp
+            .path()
+            .join("characters")
+            .join("alice")
+            .join("memory")
+            .exists());
+    }
+
+    #[test]
+    fn read_only_resolver_preserves_named_legacy_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session_id = crate::types::SessionId::new();
+        let legacy = tmp
+            .path()
+            .join("characters")
+            .join("alice")
+            .join("sessions")
+            .join(session_id.to_string());
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("current.md"), "legacy").unwrap();
+
+        let resolved = resolve_session_dir_read_only(tmp.path(), "alice", Some(&session_id))
+            .unwrap()
+            .expect("legacy named session");
+
+        assert_eq!(resolved, legacy);
+        assert!(resolved.join("current.md").is_file());
+        assert!(!resolved.join("memory").exists());
+    }
 }
