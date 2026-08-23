@@ -165,10 +165,14 @@ async function initializeBus(): Promise<void> {
       bearer: currentBearer,
       renew: () => renewDesktopSession(),
       onConnection: (connected) => {
+        if (attempt !== busAttempt) return;
         connectionState.value = connected ? "connected" : "connecting";
         if (connected) busError.value = null;
       },
-      onError: (error) => { busError.value = error.message; },
+      onError: (error) => {
+        if (attempt !== busAttempt) return;
+        busError.value = error.message;
+      },
     });
     bus = built;
     const selected = await built.resolveScope();

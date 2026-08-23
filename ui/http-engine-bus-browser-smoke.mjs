@@ -102,10 +102,14 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const failures = [];
   const httpFailures = [];
+  let intentRequests = 0;
   page.on("console", (message) => {
     if (message.type() === "error") failures.push(`${message.location().url}: ${message.text()}`);
   });
   page.on("requestfailed", (request) => failures.push(`${request.url()}: ${request.failure()?.errorText}`));
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/v1/ui/intents") intentRequests += 1;
+  });
   page.on("response", (response) => {
     if (response.status() >= 400) httpFailures.push(`${response.status()} ${response.url()}`);
   });
@@ -118,6 +122,8 @@ try {
   assert.match(await page.locator(".surface__kicker").innerText(), /^Surface \/ session:/i);
   assert.equal(await page.locator(".w-chat-composer input").isDisabled(), true,
     "truncated Engine projection must remain explicitly read-only");
+  await page.locator(".w-chat-composer").dispatchEvent("submit");
+  await page.waitForTimeout(50);
   assert.equal(new URL(page.url()).hash, "", "token fragment was not scrubbed");
   assert.equal(await page.evaluate(() => sessionStorage.getItem("airp_bearer")), desktopSession.token);
   const renewed = await page.evaluate(async () => {
@@ -133,6 +139,7 @@ try {
   });
   assert.equal(renewed.ok, true);
   assert.notEqual(renewed.newToken, renewed.oldToken, "desktop-session renewal did not rotate the token");
+  assert.equal(intentRequests, 0, "read-only /desktop/ path dispatched an intent request");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);
   assert.equal(failures.length, 0, `browser errors: ${failures.join("\n")}`);
   console.log("HttpEngineBus real-Engine browser smoke passed");

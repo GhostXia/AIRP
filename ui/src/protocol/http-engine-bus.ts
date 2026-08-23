@@ -163,10 +163,9 @@ export class HttpEngineBus {
           cursor = await this.loadSnapshot(scope, target, controller.signal);
           acceptedCursor.value = cursor;
           needsSnapshot = false;
-          failures = 0;
           this.onConnection?.(true);
         }
-        await this.stream(scope, target, acceptedCursor, controller.signal);
+        await this.stream(scope, target, acceptedCursor, controller.signal, () => { failures = 0; });
         cursor = acceptedCursor.value;
         failures = 0;
       } catch (error) {
@@ -175,6 +174,9 @@ export class HttpEngineBus {
         this.onConnection?.(false);
         if (error instanceof ResyncRequired) {
           needsSnapshot = true;
+          this.onError?.({ code: "surface_resyncing", message: messageOf(error), recoverable: true });
+          await this.sleep(RETRY_DELAYS_MS[Math.min(failures, RETRY_DELAYS_MS.length - 1)]);
+          failures += 1;
           continue;
         }
         if (error instanceof HttpFailure
@@ -203,6 +205,7 @@ export class HttpEngineBus {
     target: SurfaceTarget,
     cursor: { value: string },
     signal: AbortSignal,
+    onAccepted: () => void,
   ): Promise<void> {
     const response = await this.authorizedFetch(this.surfacePath(scope, true), {
       signal,
@@ -240,6 +243,7 @@ export class HttpEngineBus {
         const applied = target.apply(message);
         if (applied.status !== "applied") throw new ResyncRequired(applied.error.message);
         cursor.value = parsed.id;
+        onAccepted();
       }
       if (encoder.encode(buffer).byteLength > MAX_SSE_BUFFER_BYTES) {
         throw new ResyncRequired("Surface SSE frame exceeds limit");

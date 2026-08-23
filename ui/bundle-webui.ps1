@@ -15,8 +15,13 @@ if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item -Recurse -Path (Join-Path $source "*") -Destination $dest
 
-& npm run build
-if ($LASTEXITCODE -ne 0) { throw "Vue desktop build failed with exit code $LASTEXITCODE" }
+Push-Location $PSScriptRoot
+try {
+    & npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Vue desktop build failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}
 if (-not (Test-Path (Join-Path $desktopSource "index.html"))) {
     throw "Vue desktop output not found at $desktopSource"
 }

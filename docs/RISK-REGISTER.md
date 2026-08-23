@@ -1,6 +1,6 @@
 # AIRP Risk Register
 
-> Last reviewed: 2026-08-12 at `main@7a90d88`. Registered RR-018 for the #564 dual-UI migration. Runtime risks are not closed by documentation alone. Formal `v0.0.5` remains blocked by #130 real provider/browser/Compose acceptance and the missing required-reviewer policy on the `release` environment (`protection_rules=[]`, `can_admins_bypass=true`).
+> Last reviewed: 2026-08-23 for the #564 PR 6 candidate. RR-018 now includes the same-origin `/desktop/` and `HttpEngineBus` controls; runtime risks are not closed by documentation alone. Formal `v0.0.5` remains blocked by #130 real provider/browser/Compose acceptance and the missing required-reviewer policy on the `release` environment (`protection_rules=[]`, `can_admins_bypass=true`).
 
 ## RR-001 · `card_path` local arbitrary file read
 

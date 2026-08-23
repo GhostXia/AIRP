@@ -1,7 +1,7 @@
 # UI 协议与 Widget 决策
 
 > 状态：已接受；2026-08-12 的桌面目标架构由 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 增量取代本文 2026-08-05/06 对 Blueprint 与 Vue 主面的校准结论
-> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）；2026-08-12，`main@7a90d88`（#564 重新启动协议驱动桌面主面）
+> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）；2026-08-12，`main@7a90d88`（#564 重新启动协议驱动桌面主面）；2026-08-23（#564 PR 6 candidate，同源 `/desktop/` + `HttpEngineBus`）
 > 上位决策：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)
 
 ## 结论

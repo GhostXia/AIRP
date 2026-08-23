@@ -35,7 +35,8 @@ or extension write executors; those remain PR 7–9.
 - A real-Engine Chrome smoke imports a synthetic character, creates a session,
   opens `/desktop/` with a short desktop-session token, consumes the token
   fragment, rotates the token, and verifies a live non-fixture Surface under
-  the production CSP. An oversized chat projection also proves the PR 6
-  transport remains explicitly read-only.
+  the production CSP. An oversized chat projection proves the bounded renderer
+  remains usable, while a separate network assertion proves the read-only
+  `/desktop/` path sends no intent request.
 - Windows package smoke checks the bundled Vue assets and exercises both the
   default WebUI entry and the explicit Blueprint entry.

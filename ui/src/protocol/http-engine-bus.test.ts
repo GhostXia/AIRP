@@ -81,6 +81,7 @@ describe("HttpEngineBus", () => {
   it("retries a transient resync failure and then installs the fresh snapshot", async () => {
     let snapshots = 0;
     let streams = 0;
+    const delays: number[] = [];
     const store = new SurfaceStore();
     const fetchImpl = async (input: URL | RequestInfo) => {
       const url = new URL(String(input));
@@ -98,12 +99,13 @@ describe("HttpEngineBus", () => {
     };
     const bus = new HttpEngineBus({
       base: "http://engine.test", bearer: () => "secret", fetchImpl,
-      sleep: async () => {},
+      sleep: async (milliseconds) => { delays.push(milliseconds); },
     });
     const stop = await bus.connect({ characterId: "alice", sessionId: "s1" }, store);
     await until(() => snapshots >= 3);
     stop();
     expect(store.snapshot?.blueprint.widgets[0].props).toEqual({ title: "snapshot-3" });
+    expect(delays).toEqual([250, 500]);
   });
 
   it("reconnects a broken stream from the last successfully applied cursor", async () => {

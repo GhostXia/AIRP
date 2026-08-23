@@ -117,7 +117,7 @@ function send(): void {
       <div class="spacer" :style="{ height: vwin.padBottom + 'px' }"></div>
     </div>
     <form class="w-chat-composer" @submit.prevent="send">
-      <input v-model="draft" :disabled="readOnly" :placeholder="readOnly ? 'PR6 只读 Surface；发送将在 Chat 纵切开放' : '说点什么…'" />
+      <input v-model="draft" :disabled="readOnly" :placeholder="readOnly ? '当前为只读 Surface；发送功能尚未开放' : '说点什么…'" />
       <button type="submit" :disabled="readOnly">发送</button>
     </form>
   </div>
