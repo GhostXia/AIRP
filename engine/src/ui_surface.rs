@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 pub const DEFAULT_SURFACE_RING_EVENTS: usize = 256;
 pub const DEFAULT_SURFACE_RING_BYTES: usize = 1_048_576;
+pub const DEFAULT_SURFACE_ENTRIES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SurfaceScope {
@@ -208,6 +209,7 @@ struct SurfaceEntry {
     snapshot: SurfaceSnapshot,
     cursor: SurfaceCursor,
     sequence: u64,
+    last_touched: u64,
 }
 
 struct RingEvent {
@@ -222,8 +224,10 @@ pub struct SurfaceRegistry {
     entries: HashMap<SurfaceScope, SurfaceEntry>,
     ring: VecDeque<RingEvent>,
     ring_bytes: usize,
+    max_entries: usize,
     max_events: usize,
     max_bytes: usize,
+    touch_clock: u64,
 }
 
 impl Default for SurfaceRegistry {
@@ -234,17 +238,27 @@ impl Default for SurfaceRegistry {
 
 impl SurfaceRegistry {
     pub fn new() -> Self {
-        Self::with_limits(DEFAULT_SURFACE_RING_EVENTS, DEFAULT_SURFACE_RING_BYTES)
+        Self::with_all_limits(
+            DEFAULT_SURFACE_ENTRIES,
+            DEFAULT_SURFACE_RING_EVENTS,
+            DEFAULT_SURFACE_RING_BYTES,
+        )
     }
 
     pub fn with_limits(max_events: usize, max_bytes: usize) -> Self {
+        Self::with_all_limits(DEFAULT_SURFACE_ENTRIES, max_events, max_bytes)
+    }
+
+    pub fn with_all_limits(max_entries: usize, max_events: usize, max_bytes: usize) -> Self {
         Self {
             boot_id: uuid::Uuid::new_v4().simple().to_string(),
             entries: HashMap::new(),
             ring: VecDeque::new(),
             ring_bytes: 0,
+            max_entries: max_entries.max(1),
             max_events,
             max_bytes,
+            touch_clock: 0,
         }
     }
 
@@ -254,7 +268,9 @@ impl SurfaceRegistry {
         props: SessionSurfaceProps,
     ) -> Result<SurfacePublish, SurfaceRegistryError> {
         validate_scope(&scope)?;
+        let last_touched = self.next_touch()?;
         let Some(previous) = self.entries.get(&scope).cloned() else {
+            self.evict_for_insert();
             let sequence = 1;
             let snapshot = build_session_surface(&scope, SurfaceRevision::new(1), props)?;
             let cursor = self.cursor(&scope, sequence);
@@ -269,6 +285,7 @@ impl SurfaceRegistry {
                     snapshot,
                     cursor,
                     sequence,
+                    last_touched,
                 },
             );
             self.push_ring(scope, sequence, event.clone());
@@ -277,6 +294,9 @@ impl SurfaceRegistry {
 
         let mut next = build_session_surface(&scope, previous.snapshot.revision, props)?;
         if previous.snapshot.blueprint == next.blueprint {
+            if let Some(entry) = self.entries.get_mut(&scope) {
+                entry.last_touched = last_touched;
+            }
             return Ok(SurfacePublish::Unchanged {
                 revision: previous.snapshot.revision,
                 cursor: previous.cursor,
@@ -296,13 +316,17 @@ impl SurfaceRegistry {
             .checked_add(1)
             .ok_or(SurfaceRegistryError::RevisionExhausted)?;
         let cursor = self.cursor(&scope, sequence);
-        let patch = props_patch(&previous.snapshot, &next);
-        let message = match validate_surface_patch_event(&patch) {
-            Ok(()) => SurfaceMessage::Patch(patch),
-            Err(error) if error.code == airp_state_protocol::SurfaceErrorCode::DocumentTooLarge => {
-                SurfaceMessage::Snapshot(next.clone())
-            }
-            Err(error) => return Err(error.into()),
+        let message = match props_patch(&previous.snapshot, &next) {
+            Some(patch) => match validate_surface_patch_event(&patch) {
+                Ok(()) => SurfaceMessage::Patch(patch),
+                Err(error)
+                    if error.code == airp_state_protocol::SurfaceErrorCode::DocumentTooLarge =>
+                {
+                    SurfaceMessage::Snapshot(next.clone())
+                }
+                Err(error) => return Err(error.into()),
+            },
+            None => SurfaceMessage::Snapshot(next.clone()),
         };
         let event = SurfaceEvent {
             cursor: cursor.clone(),
@@ -315,6 +339,7 @@ impl SurfaceRegistry {
                 snapshot: next,
                 cursor,
                 sequence,
+                last_touched,
             },
         );
         self.push_ring(scope, sequence, event.clone());
@@ -387,6 +412,35 @@ impl SurfaceRegistry {
         self.ring_bytes
     }
 
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn next_touch(&mut self) -> Result<u64, SurfaceRegistryError> {
+        self.touch_clock = self
+            .touch_clock
+            .checked_add(1)
+            .ok_or(SurfaceRegistryError::RevisionExhausted)?;
+        Ok(self.touch_clock)
+    }
+
+    fn evict_for_insert(&mut self) {
+        if self.entries.len() < self.max_entries {
+            return;
+        }
+        let Some(evicted) = self
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_touched)
+            .map(|(scope, _)| scope.clone())
+        else {
+            return;
+        };
+        self.entries.remove(&evicted);
+        self.ring.retain(|event| event.scope != evicted);
+        self.ring_bytes = self.ring.iter().map(|event| event.bytes).sum();
+    }
+
     fn snapshot_replay(&self, entry: &SurfaceEntry) -> Result<SurfaceReplay, SurfaceRegistryError> {
         let event = SurfaceEvent {
             cursor: entry.cursor.clone(),
@@ -434,7 +488,21 @@ impl SurfaceRegistry {
     }
 }
 
-fn props_patch(previous: &SurfaceSnapshot, next: &SurfaceSnapshot) -> SurfacePatchEvent {
+fn props_patch(previous: &SurfaceSnapshot, next: &SurfaceSnapshot) -> Option<SurfacePatchEvent> {
+    let aligned = previous.blueprint.version == next.blueprint.version
+        && previous.blueprint.root == next.blueprint.root
+        && previous.blueprint.widgets.len() == next.blueprint.widgets.len()
+        && previous
+            .blueprint
+            .widgets
+            .iter()
+            .zip(&next.blueprint.widgets)
+            .all(|(before, after)| {
+                before.id == after.id && before.widget_type == after.widget_type
+            });
+    if !aligned {
+        return None;
+    }
     let patch = previous
         .blueprint
         .widgets
@@ -449,14 +517,14 @@ fn props_patch(previous: &SurfaceSnapshot, next: &SurfaceSnapshot) -> SurfacePat
             from: None,
         })
         .collect();
-    SurfacePatchEvent {
+    Some(SurfacePatchEvent {
         kind: SurfaceMessageKind::Patch,
         protocol: SurfaceProtocolVersion::default(),
         surface_id: next.surface_id.clone(),
         base_revision: previous.revision,
         revision: next.revision,
         patch,
-    }
+    })
 }
 
 fn validate_message(message: &SurfaceMessage) -> Result<(), SurfaceRegistryError> {
@@ -506,7 +574,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::{
-        build_session_surface, SessionSurfaceProps, SurfaceMessage, SurfacePublish,
+        build_session_surface, props_patch, SessionSurfaceProps, SurfaceMessage, SurfacePublish,
         SurfaceRegistry, SurfaceReplay, SurfaceScope,
     };
 
@@ -739,6 +807,36 @@ mod tests {
                 .props,
             Some(json!({"messages": ["second"]}))
         );
+    }
+
+    #[test]
+    fn entry_cache_evicts_the_least_recently_published_scope() {
+        let first = scope("character-a", "session-a");
+        let second = scope("character-b", "session-b");
+        let third = scope("character-c", "session-c");
+        let mut registry = SurfaceRegistry::with_all_limits(2, 32, usize::MAX);
+        registry.publish(first.clone(), props("first")).unwrap();
+        registry.publish(second.clone(), props("second")).unwrap();
+        registry.publish(first.clone(), props("first")).unwrap();
+        registry.publish(third.clone(), props("third")).unwrap();
+
+        assert_eq!(registry.entry_count(), 2);
+        assert!(registry.current(&first).is_ok());
+        assert!(registry.current(&third).is_ok());
+        assert!(matches!(
+            registry.current(&second),
+            Err(super::SurfaceRegistryError::UnknownScope)
+        ));
+    }
+
+    #[test]
+    fn structural_blueprint_changes_require_a_snapshot() {
+        let scope = scope("character-a", "session-a");
+        let previous = build_session_surface(&scope, 1.into(), props("before")).unwrap();
+        let mut next = build_session_surface(&scope, 2.into(), props("after")).unwrap();
+        next.blueprint.widgets.swap(0, 1);
+
+        assert!(props_patch(&previous, &next).is_none());
     }
 
     #[test]

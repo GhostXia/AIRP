@@ -313,7 +313,11 @@ async fn run_loop(
                 }
             }
             PlanAction::Generate => {
-                let operation = if let Some(character_id) = req.base.character_id.as_ref() {
+                let (operation, activity_session_dir, activity_generation_id) = if let Some(
+                    character_id,
+                ) =
+                    req.base.character_id.as_ref()
+                {
                     let effective_root = match crate::data_dir::resolve_effective_root(
                         &state.data_root,
                         req.base.user_id.as_deref(),
@@ -336,7 +340,21 @@ async fn run_loop(
                         req.base.session_id.as_ref(),
                         SessionCommand::Completion,
                     ) {
-                        Ok(operation) => Some(operation),
+                        Ok(operation) => {
+                            let generation_id = Some(operation.generation_id().to_string());
+                            let session_dir = match crate::data_dir::resolve_session_dir_read_only(
+                                &effective_root,
+                                character_id.as_str(),
+                                req.base.session_id.as_ref(),
+                            ) {
+                                Ok(session_dir) => session_dir,
+                                Err(error) => {
+                                    tracing::warn!(%error, "agent activity session resolution failed");
+                                    None
+                                }
+                            };
+                            (Some(operation), session_dir, generation_id)
+                        }
                         Err(error) => {
                             tracing::warn!(%error, "agent generation session admission failed");
                             return emit_done(
@@ -349,7 +367,7 @@ async fn run_loop(
                         }
                     }
                 } else {
-                    None
+                    (None, None, None)
                 };
                 // 派生纯净 subagent：复用 prepare_pipeline 装配全新上下文。
                 // 戒律#6：base 请求里无任何协调器噪声（协调器状态不进 system prompt / messages）。
@@ -357,6 +375,12 @@ async fn run_loop(
                     Ok(p) => p,
                     Err(e) => {
                         tracing::error!(err = %e, "prepare_pipeline failed in loop");
+                        record_agent_failure(
+                            activity_session_dir,
+                            activity_generation_id,
+                            crate::ui_activity::ActivityFailureCode::UpstreamError,
+                        )
+                        .await;
                         return emit_done(
                             tx,
                             StopReason::UpstreamError,
@@ -372,36 +396,16 @@ async fn run_loop(
                 let result = run_generation_step(pipeline).await;
                 if let Some(e) = result.error {
                     tracing::warn!(err = %e, "generation step upstream error");
-                    let session_dir = result
-                        .finalizer
-                        .session_operation_lease
-                        .as_ref()
-                        .and(result.finalizer.session_dir.clone());
-                    let generation_id = result
-                        .finalizer
-                        .session_operation_lease
-                        .as_ref()
-                        .map(|lease| lease.generation_id().to_string());
-                    if let Some(session_dir) = session_dir {
-                        let persisted = tokio::task::spawn_blocking(move || {
-                            crate::ui_activity::record_failure(
-                                &session_dir,
-                                crate::ui_activity::ActivitySource::Agent,
-                                crate::ui_activity::ActivityFailureCode::UpstreamError,
-                                generation_id.as_deref(),
-                            )
-                        })
-                        .await;
-                        match persisted {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => {
-                                tracing::warn!(%error, "failed to persist agent activity receipt")
-                            }
-                            Err(error) => {
-                                tracing::warn!(%error, "agent activity persistence task failed")
-                            }
-                        }
-                    }
+                    record_agent_failure(
+                        result.finalizer.session_dir.clone(),
+                        result
+                            .finalizer
+                            .session_operation_lease
+                            .as_ref()
+                            .map(|lease| lease.generation_id().to_string()),
+                        crate::ui_activity::ActivityFailureCode::UpstreamError,
+                    )
+                    .await;
                     return emit_done(tx, StopReason::UpstreamError, steps_taken, tokens_estimated)
                         .await;
                 }
@@ -424,6 +428,30 @@ async fn run_loop(
                 return emit_done(tx, StopReason::Converged, steps_taken, tokens_estimated).await;
             }
         }
+    }
+}
+
+async fn record_agent_failure(
+    session_dir: Option<std::path::PathBuf>,
+    generation_id: Option<String>,
+    code: crate::ui_activity::ActivityFailureCode,
+) {
+    let Some(session_dir) = session_dir else {
+        return;
+    };
+    let persisted = tokio::task::spawn_blocking(move || {
+        crate::ui_activity::record_failure(
+            &session_dir,
+            crate::ui_activity::ActivitySource::Agent,
+            code,
+            generation_id.as_deref(),
+        )
+    })
+    .await;
+    match persisted {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(%error, "failed to persist agent activity receipt"),
+        Err(error) => tracing::warn!(%error, "agent activity persistence task failed"),
     }
 }
 

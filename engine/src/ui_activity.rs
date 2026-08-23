@@ -69,26 +69,28 @@ pub(crate) fn record_failure(
     code: ActivityFailureCode,
     generation_id: Option<&str>,
 ) -> Result<(), AirpError> {
-    let mut window = read_window(session_dir)?;
-    window.items.push(ActivityReceipt {
-        schema_version: SCHEMA_VERSION,
-        activity_id: crate::ulid::new_id(),
-        occurred_at_unix_ms: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .min(u64::MAX as u128) as u64,
-        source,
-        kind: ActivityKind::Failed,
-        severity: ActivitySeverity::Error,
-        code,
-        generation_id: generation_id.map(ToOwned::to_owned),
-    });
-    if window.items.len() > MAX_RECEIPTS {
-        window.items.drain(..window.items.len() - MAX_RECEIPTS);
-    }
-    let bytes = serde_json::to_vec_pretty(&window)?;
-    crate::data_dir::replace_file(&activity_path(session_dir), &bytes)
+    crate::memory::with_memory_mutation(session_dir, || {
+        let mut window = read_window(session_dir)?;
+        window.items.push(ActivityReceipt {
+            schema_version: SCHEMA_VERSION,
+            activity_id: crate::ulid::new_id(),
+            occurred_at_unix_ms: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+            source,
+            kind: ActivityKind::Failed,
+            severity: ActivitySeverity::Error,
+            code,
+            generation_id: generation_id.map(ToOwned::to_owned),
+        });
+        if window.items.len() > MAX_RECEIPTS {
+            window.items.drain(..window.items.len() - MAX_RECEIPTS);
+        }
+        let bytes = serde_json::to_vec_pretty(&window)?;
+        crate::data_dir::replace_file(&activity_path(session_dir), &bytes)
+    })
 }
 
 pub(crate) fn read_window(session_dir: &Path) -> Result<ActivityWindow, AirpError> {
@@ -172,5 +174,27 @@ mod tests {
 
         fs::write(&path, vec![b'x'; MAX_FILE_BYTES as usize + 1]).unwrap();
         assert!(read_window(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn concurrent_failures_do_not_drop_receipts() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::thread::scope(|scope| {
+            for index in 0..16 {
+                let session_dir = tmp.path().to_path_buf();
+                scope.spawn(move || {
+                    record_failure(
+                        &session_dir,
+                        ActivitySource::Chat,
+                        ActivityFailureCode::UpstreamError,
+                        Some(&format!("generation-{index}")),
+                    )
+                    .unwrap();
+                });
+            }
+        });
+
+        let window = read_window(tmp.path()).unwrap();
+        assert_eq!(window.items.len(), 16);
     }
 }

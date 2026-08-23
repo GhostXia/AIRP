@@ -28,7 +28,8 @@ Widget props，不成为另一份角色、会话、记忆或状态真相。投�
 - 客户端只把成功应用的 SSE `id` 原样放入 `Last-Event-ID`，不得解析或合成 cursor；
 - 同 boot、同有效数据根、同角色/session 且事件仍在 ring 中时连续 replay；外来、过期、
   未来或前一 boot cursor 均回退到完整 snapshot；
-- ring 同时受 256 条事件和 1 MiB 序列化字节限制；慢消费者不会建立无界 channel；
+- registry 最多保留 128 个最近发布的 Surface，ring 同时受 256 条事件和 1 MiB
+  序列化字节限制；淘汰 scope 下次请求重建 snapshot，慢消费者不会建立无界 channel；
 - 小范围 props 变化发相邻 revision patch，超过 64 KiB patch 合同上限时回退到合法 snapshot；
 - 机器传输合同为 `protocol/surface-sse-events.json`，payload schema 继续引用
   `protocol/surface-protocol-v2.json`。

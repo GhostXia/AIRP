@@ -281,6 +281,35 @@ async fn surface_sse_wire_matches_machine_contract() {
     assert_surface_sse_fields(&contract, event_name, &payload);
 }
 
+#[tokio::test]
+async fn surface_sse_stops_on_daemon_shutdown() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    let uri = format!("/v1/ui/surfaces/session/{session_id}/events?character_id=alice");
+    let response = create_router(state.clone())
+        .oneshot(
+            Request::get(uri)
+                .header("authorization", "Bearer surface-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut stream = response.into_body().into_data_stream();
+    tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .expect("initial Surface snapshot should arrive")
+        .expect("Surface stream should contain a snapshot")
+        .expect("Surface snapshot should not fail");
+
+    state.shutdown.send(true).unwrap();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .expect("Surface stream should observe daemon shutdown");
+    assert!(ended.is_none(), "Surface stream must end during shutdown");
+}
+
 fn parse_surface_sse_frame(wire: &str) -> (String, &str, serde_json::Value) {
     let cursor = wire
         .lines()

@@ -69,8 +69,8 @@ pub(crate) fn resolve_session_dir_read_only(
     character_id: &str,
     session_id: Option<&crate::types::SessionId>,
 ) -> Result<Option<PathBuf>, AirpError> {
-    super::security::validate_id_segment(character_id)?;
-    let character = root.join("characters").join(character_id);
+    let character_id = crate::types::CharacterId::new(character_id)?;
+    let character = super::paths::character_dir_path(root, &character_id);
     let (current, legacy) = match session_id {
         Some(session_id) => {
             let session = character.join("sessions").join(session_id.to_string());

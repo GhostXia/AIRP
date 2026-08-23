@@ -104,6 +104,9 @@ pub(in crate::daemon) async fn get_surface_events(
         let registry = state.ui_surfaces.lock().unwrap_or_else(|p| p.into_inner());
         match registry.replay(&scope, requested.as_ref()) {
             Ok(replay) => replay_events(replay),
+            Err(crate::ui_surface::SurfaceRegistryError::UnknownScope) => {
+                vec![current.clone()]
+            }
             Err(error) => {
                 return AirpError::Internal(format!("Surface replay failed: {error}"))
                     .into_response()
@@ -115,29 +118,45 @@ pub(in crate::daemon) async fn get_surface_events(
         .map(|event| event.cursor.clone())
         .unwrap_or(current.cursor);
     let character_id = query.character_id;
+    let mut shutdown = state.shutdown.subscribe();
     let stream = async_stream::stream! {
+        if *shutdown.borrow() {
+            return;
+        }
         for event in initial {
             yield Ok::<Event, Infallible>(to_sse_event(&event));
         }
         let mut interval = tokio::time::interval(SURFACE_POLL_INTERVAL);
         interval.tick().await;
         loop {
-            interval.tick().await;
-            if let Err(error) = refresh_surface(
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+                _ = interval.tick() => {}
+            }
+            let refreshed = match refresh_surface(
                 state.clone(),
                 effective_root.clone(),
                 character_id.clone(),
                 session_id,
             ).await {
-                tracing::warn!(error = %error, "Surface projection polling stopped");
-                break;
-            }
+                Ok(event) => event,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Surface projection polling stopped");
+                    break;
+                }
+            };
             let replay = {
                 let registry = state.ui_surfaces.lock().unwrap_or_else(|p| p.into_inner());
                 registry.replay(&scope, Some(&last_cursor))
             };
             let events = match replay {
                 Ok(replay) => replay_events(replay),
+                Err(crate::ui_surface::SurfaceRegistryError::UnknownScope) => vec![refreshed],
                 Err(error) => {
                     tracing::warn!(error = %error, "Surface replay polling stopped");
                     break;

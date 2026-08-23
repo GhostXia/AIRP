@@ -357,10 +357,7 @@ pub(super) async fn persist_live_state(
 /// Commit one converged Agent generation through the same persistence, state,
 /// volume, and maintenance finalizer used by the ordinary chat pipeline.
 pub async fn finalize_generation(finalizer: FinalizerCtx, raw_acc: String, cleaned_acc: String) {
-    let session_dir = finalizer
-        .session_operation_lease
-        .as_ref()
-        .and(finalizer.session_dir.clone());
+    let session_dir = finalizer.session_dir.clone();
     let generation_id = finalizer
         .session_operation_lease
         .as_ref()
