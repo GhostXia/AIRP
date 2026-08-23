@@ -915,6 +915,33 @@ fn spawn_readiness_and_navigate(
             return;
         }
 
+        let blueprint_requested =
+            desktop_ui_path(std::env::var("AIRP_DESKTOP_UI").ok().as_deref()) == "/desktop/";
+        let blueprint_available = if blueprint_requested {
+            client
+                .get(format!("{engine_url}/desktop/"))
+                .send()
+                .await
+                .map(|response| response.status().is_success())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let entry_path = if blueprint_requested && blueprint_available {
+            "/desktop/"
+        } else {
+            if blueprint_requested {
+                tracing::warn!("Vue desktop bundle unavailable; falling back to WebUI");
+                show_engine_error(
+                    &app,
+                    "The Blueprint desktop UI was requested but its bundle could not be opened. \
+                     AIRP is falling back to the supported WebUI.\n\n\
+                     Blueprint 桌面界面缺失或启动失败，已回退到 WebUI。",
+                );
+            }
+            "/"
+        };
+
         // 3. bearer 注入通道：进程互信（access key）换短时效 UI token。
         let exchanged =
             exchange_desktop_token(&client, &engine_url, access_key.as_deref(), true).await;
@@ -924,7 +951,7 @@ fn spawn_readiness_and_navigate(
         let token = exchanged.as_ref().map(|(token, _)| token.clone());
 
         // 4. 导航首屏。fragment 不发送到服务端；entry.js 承接写入 sessionStorage。
-        let mut target = format!("{engine_url}/");
+        let mut target = format!("{engine_url}{entry_path}");
         if let Some(ref token) = token {
             target.push_str("#airp-token=");
             target.push_str(token);
@@ -957,6 +984,14 @@ fn spawn_readiness_and_navigate(
             }
         }
     });
+}
+
+fn desktop_ui_path(value: Option<&str>) -> &'static str {
+    if value == Some("blueprint") {
+        "/desktop/"
+    } else {
+        "/"
+    }
 }
 
 /// C-P2：desktop session token 主动续期循环。
@@ -1360,5 +1395,13 @@ mod tests {
         std::fs::write(root.join("not-index.txt"), "x").unwrap();
         assert!(!root.join("index.html").is_file());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_ui_switch_is_explicit_and_defaults_to_webui() {
+        assert_eq!(desktop_ui_path(None), "/");
+        assert_eq!(desktop_ui_path(Some("")), "/");
+        assert_eq!(desktop_ui_path(Some("unknown")), "/");
+        assert_eq!(desktop_ui_path(Some("blueprint")), "/desktop/");
     }
 }

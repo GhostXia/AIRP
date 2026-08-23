@@ -9,10 +9,11 @@ const props = defineProps<{
   state: Record<string, Json>;
   stateRevisions: Record<string, number>;
   activeTabs: Record<string, string>;
+  authoritativeProps?: boolean;
 }>();
 
 const emit = defineEmits<{
-  (event: "intent", name: string, params?: Json): void;
+  (event: "intent", name: string, params?: Json, instanceId?: string): void;
   (event: "activate-tab", tabsId: string, childId: string): void;
   (event: "focus-widget", instanceId: string): void;
 }>();
@@ -54,6 +55,8 @@ const outletIds = computed<Record<string, string>>(() => {
 });
 
 function widgetState(instanceId: string): Json {
+  const projected = props.blueprint.widgets.find((widget) => widget.id === instanceId)?.props;
+  if (props.authoritativeProps) return projected ?? null;
   const value = props.state[instanceId];
   return value === undefined ? null : value;
 }
@@ -80,7 +83,8 @@ function widgetState(instanceId: string): Json {
         :instance="instance"
         :state="widgetState(instance.id)"
         :state-revision="stateRevisions[instance.id] ?? 0"
-        @intent="(name, params) => emit('intent', name, params)"
+        :read-only="authoritativeProps"
+        @intent="(name, params) => emit('intent', name, params, instance.id)"
       />
     </Teleport>
   </div>

@@ -46,6 +46,22 @@ if ($IncludeDesktop) {
     # 与 airp-core.exe、webui\ 共用同一目录结构（不另起炉灶）。
     # 先产出 Tauri externalBin 源文件（ui/src-tauri/binaries/airp-core-<triple>.exe），
     # 再编译壳本身（tauri-build 校验 externalBin 存在）。
+    Push-Location (Join-Path $repoRoot 'ui')
+    try {
+        npm run build
+    } finally {
+        Pop-Location
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Vue desktop build failed with exit code $LASTEXITCODE"
+    }
+    $desktopDist = Join-Path $repoRoot 'ui\dist'
+    if (-not (Test-Path -LiteralPath (Join-Path $desktopDist 'index.html') -PathType Leaf)) {
+        throw "Missing Vue desktop output: $desktopDist"
+    }
+    New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot 'webui\desktop') | Out-Null
+    Copy-Item -Path (Join-Path $desktopDist '*') -Destination (Join-Path $packageRoot 'webui\desktop') -Recurse
+
     & (Join-Path $repoRoot 'ui\build-engine-sidecar.ps1')
     if ($LASTEXITCODE -ne 0) {
         throw "build-engine-sidecar.ps1 failed with exit code $LASTEXITCODE"

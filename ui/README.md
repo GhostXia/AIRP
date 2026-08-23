@@ -1,6 +1,6 @@
 # AIRP UI
 
-`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端目录。当前运行事实仍是 C-P0 的 Tauri 壳同源承载 `webui/`；Owner 已在 [#564](https://github.com/GhostXia/AIRP/issues/564) 决定恢复协议驱动的 Vue Blueprint/Widget 桌面主面，因为该设计具有更好的兼容性与扩展性。目标架构、资产处置和双入口回退见 [`../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。本页最后在 2026-08-21 的 PR 5 Engine Surface runtime candidate `8d4efbd` 上复核。
+`ui/` 是 AIRP 的 Tauri + Vue 桌面客户端目录。当前运行事实是 Tauri 壳同源承载旧 WebUI `/` 与 Vue `/desktop/`，默认仍为旧 WebUI；Owner 已在 [#564](https://github.com/GhostXia/AIRP/issues/564) 决定恢复协议驱动的 Vue Blueprint/Widget 桌面主面，因为该设计具有更好的兼容性与扩展性。目标架构、资产处置和双入口回退见 [`../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md`](../docs/plans/2026-08-12-issue-564-desktop-architecture-baseline.md)。本页最后在 2026-08-23 的 PR 6 HttpEngineBus candidate 上复核。
 
 历史候选发布事实：Actions run `31309894372` 在 commit `affa315a5917109e2ae337382cfcdcb36021073a` 对 artifact `airp-webui-windows-x64` 的包内 desktop smoke 成功；该证据不覆盖 PR #584 candidate `c421a6d`，也不替代 GUI 真机与真实 provider 验收。正式 `v0.0.5` 仍受 [#130](https://github.com/GhostXia/AIRP/issues/130) 和 `release` environment required reviewer 配置阻塞。
 
@@ -11,10 +11,10 @@ UI 继承 AIRP-State-Protocol 的 Blueprint、Widget、patch、guard、虚拟滚
 ## 当前运行事实
 
 - `ui/src-tauri/` 负责 Engine sidecar 生命周期、data root、desktop-session token、原生错误与打包。
-- Tauri 启动后导航到 Engine 同源承载的 WebUI；正式产品主面仍是 `webui/`。
-- `ui/src/` 中的 Vue Blueprint/Widget 代码是可运行的迁移期桌面 preview，但尚不是正式产品主面。
+- Tauri 默认导航到 Engine 同源承载的 WebUI；设置 `AIRP_DESKTOP_UI=blueprint` 才进入 `/desktop/`，正式默认主面仍是 `webui/`。
+- `ui/src/` 中的 Vue Blueprint/Widget 代码已通过同源 `HttpEngineBus` 接入真实只读 Surface，浏览器与 Tauri 使用同一 REST+SSE 链路。
 - Vue preview 使用 canonical WebUI tokens，提供四个工作区、Focus Mode、Context Inspector，以及通过 Surface v2 guard 的固定 fixture。受限 runtime 支持 `split/tabs/stack/widget`、原子 accepted/pending/ephemeral store、稳定 Widget relocation 和局部错误隔离；它不使用 MockBus 冒充 Engine 成功。
-- `createBus()` 的非 Tauri fallback 仍是测试/显式 demo 用 MockBus，但当前 `App.vue` 的浏览器 preview 不调用它；在 #564 PR 6 前不得把任一路径写成真实浏览器产品链路。
+- MockBus 只能由显式测试/demo 工厂创建；生产 `/desktop/` 不再按 Tauri 环境选择 IPC 或 MockBus。
 - 归档的 Tauri `BusRelay` 不在当前源码中，#564 也不会恢复逐 intent 的 Rust 业务 relay。
 
 ## #564 目标职责
@@ -32,7 +32,7 @@ ui/
 ├── package.json
 ├── src/
 │   ├── App.vue
-│   ├── protocol/          # TS-side protocol mirror and TauriBus
+│   ├── protocol/          # TS protocol mirror, HttpEngineBus, explicit legacy/demo buses
 │   ├── registry/          # widget registry, consent, sandbox bridge
 │   ├── state/             # atomic Surface store + local ephemeral UI state
 │   └── widgets/           # first-party widgets
@@ -45,7 +45,7 @@ ui/
         └── lifecycle.rs   # startup ownership and shutdown rules
 ```
 
-The Rust protocol crate lives in `../protocol`. Surface v2 uses [`../protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) as its payload authority and [`../protocol/surface-sse-events.json`](../protocol/surface-sse-events.json) as its SSE transport authority; Rust and TypeScript bindings remain manual mirrors locked by fixtures and parity tests. The older Envelope/Blueprint v1 types remain for demo compatibility and explicit migration only. Engine session Surface snapshot/SSE now exists, but the Vue preview still has no `HttpEngineBus` and `/desktop/` is not a product entry.
+The Rust protocol crate lives in `../protocol`. Surface v2 uses [`../protocol/surface-protocol-v2.json`](../protocol/surface-protocol-v2.json) as its payload authority and [`../protocol/surface-sse-events.json`](../protocol/surface-sse-events.json) as its SSE transport authority; Rust and TypeScript bindings remain manual mirrors locked by fixtures and parity tests. The older Envelope/Blueprint v1 types remain for demo compatibility and explicit migration only. `/desktop/` now consumes the real read-only Engine Surface through `HttpEngineBus`; Widget write executors remain later vertical slices.
 
 ## Local Commands
 

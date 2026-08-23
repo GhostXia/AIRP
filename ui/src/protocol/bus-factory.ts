@@ -1,19 +1,6 @@
 /**
- * Bus factory — picks the right {@link AgentBus} for the current environment
- * (PLAN task B, ②).
- *
- * Inside the Tauri shell the UI talks to the Rust core / engine bridge via
- * {@link TauriBus}; everywhere else (web preview, vitest,
- * `vite dev` outside Tauri) it falls back to {@link MockBus} so the scaffold
- * renders with no backend.
- *
- * Detection uses the `__TAURI_INTERNALS__` global Tauri injects into the
- * webview. `MockBus` is imported statically (it is the zero-backend fallback
- * every non-Tauri target needs); `TauriBus` + `createTauriTransport` are
- * dynamically imported **only on the Tauri branch** so the bundler can split
- * the Tauri transport (and its `@tauri-apps/api` dynamic import) out of the
- * web/vitest bundle. `@tauri-apps/api` is therefore never loaded outside the
- * shell, keeping the mock path dependency-free.
+ * Environment detection plus an explicitly named demo-only MockBus factory.
+ * Production `/desktop/` uses HttpEngineBus in browsers and Tauri alike.
  */
 
 import type { AgentBus } from "./bus";
@@ -26,15 +13,9 @@ export function isTauriEnvironment(): boolean {
 }
 
 /**
- * Build the bus for this environment. Tauri shell → {@link TauriBus} over the
- * real IPC transport (dynamically imported so it stays out of the web bundle);
- * otherwise → {@link MockBus}.
+ * Build an explicit fixture bus for tests/demos. It is never selected from
+ * environment detection, so a browser cannot silently look connected.
  */
-export async function createBus(): Promise<AgentBus> {
-  if (isTauriEnvironment()) {
-    const { TauriBus, createTauriTransport } = await import("./tauri-bus");
-    const transport = await createTauriTransport();
-    return new TauriBus(transport);
-  }
+export function createMockBus(): AgentBus {
   return new MockBus();
 }

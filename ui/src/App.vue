@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import type { BlueprintV2, Envelope, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
+import type { BlueprintV2, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
 import type { SurfaceApplyResult } from "./protocol/surface-v2";
-import type { AgentBus } from "./protocol/bus";
-import { createBus, isTauriEnvironment } from "./protocol/bus-factory";
-import { validateEnvelope } from "./protocol/guard";
+import { HttpEngineBus, type EngineSurfaceScope } from "./protocol/http-engine-bus";
+import { currentBearer, renewDesktopSession } from "./protocol/desktop-session";
+import { isTauriEnvironment } from "./protocol/bus-factory";
 import { stateRevisionStore, stateStore, setState, patchState } from "./state/store";
 import { SurfaceStateStore } from "./state/surface-store";
-import { registerBuiltins, applyManifestMessage } from "./registry";
+import { registerBuiltins } from "./registry";
 import BlueprintRenderer from "./components/BlueprintRenderer.vue";
 import SettingsModal from "./widgets/SettingsModal.vue";
 import DesktopRail from "./components/shell/DesktopRail.vue";
@@ -55,18 +55,20 @@ const SHELL_PREVIEW_SURFACE: SurfaceSnapshot = {
 };
 
 const surface = new SurfaceStateStore();
-const fixtureResult = surface.applySnapshot(SHELL_PREVIEW_SURFACE);
-if (fixtureResult.status !== "applied") {
-  console.warn("[App] preview Surface fixture rejected", fixtureResult);
+const fixturePreview = import.meta.env.DEV && new URLSearchParams(location.search).get("airp_fixture") === "1";
+const productionSurface = !fixturePreview
+  && (location.pathname === "/desktop" || location.pathname.startsWith("/desktop/"));
+if (!productionSurface) {
+  const fixtureResult = surface.applySnapshot(SHELL_PREVIEW_SURFACE);
+  if (fixtureResult.status !== "applied") console.warn("[App] preview Surface fixture rejected", fixtureResult);
 }
 const acceptedSurface = computed(() => surface.acceptedSnapshot);
 
-// PR 3 deliberately renders one fixed, labelled Surface fixture. The real
-// Surface endpoint/runtime arrives in later #564 slices; browser preview must
-// not imply a successful Engine connection.
+// Outside the Engine-hosted /desktop/ entry, development stays on one clearly
+// labelled fixture so a preview can never masquerade as a live connection.
 const isTauri = isTauriEnvironment();
 const connectionState = ref<"preview" | "connecting" | "connected" | "failed">(
-  isTauri ? "connecting" : "preview",
+  productionSurface ? "connecting" : "preview",
 );
 const connectionLabel = computed(() => {
   if (connectionState.value === "connected") return "Engine 已连接";
@@ -96,10 +98,9 @@ setState("w-chat", {
 });
 setState("w-characters", { ids: [], loaded: true });
 
-// The legacy Tauri transport remains available only when this Vue bundle is
-// explicitly run inside Tauri. Browser preview does not construct MockBus.
-let bus: AgentBus | null = null;
-let unsubscribe: (() => void) | null = null;
+let bus: HttpEngineBus | null = null;
+let scope: EngineSurfaceScope | null = null;
+let disconnect: (() => void) | null = null;
 let disposed = false;
 let compactInspectorMedia: MediaQueryList | null = null;
 let busAttempt = 0;
@@ -116,122 +117,80 @@ function focusSurfaceWidget(instanceId: string): void {
   surface.focusWidget(instanceId);
 }
 
-function onEnvelope(e: Envelope): void {
-  const guard = validateEnvelope(e);
-  if (!guard.ok) {
-    console.error("[App] rejected envelope:", guard.error, e);
-    busError.value = `envelope: ${guard.error}`;
-    reportError(e, guard.error);
-    return;
-  }
-  const body = e.body;
-  // Clear a stale backend-error banner once a good (non-error) envelope arrives,
-  // so a successful retry doesn't leave the old error visible (coderabbit finding).
-  if (body.kind !== "error" && busError.value) busError.value = null;
-  if (body.kind === "manifest") {
-    applyManifestMessage(body.op, body.manifests);
-  } else if (body.kind === "blueprint") {
-    // Legacy Envelope blueprints remain isolated until PR6 introduces the
-    // Surface v2 HTTP transport. PR4 renders only its labelled v2 fixture.
-    console.info("[App] ignored legacy blueprint envelope during Surface v2 preview", body.op);
-  } else if (body.kind === "state") {
-    if (body.op === "set") setState(body.scope, body.state ?? null);
-    else if (body.op === "patch" && body.patch) patchState(body.scope, body.patch);
-  } else if (body.kind === "error") {
-    busError.value = `${body.code}: ${body.message}`;
-  }
-}
-
-/** Report a rejected envelope upstream as an `error` body (best-effort). */
-function reportError(rejected: Envelope, reason: string): void {
-  if (!bus) return;
-  const activeBus = bus;
-  Promise.resolve(
-    activeBus.dispatch({
-      v: 1,
-      id: `err-${Date.now()}`,
-      ts: Date.now(),
-      src: "ui",
-      body: { kind: "error", code: "ENVELOPE_INVALID", message: reason, detail: { ref: rejected.id } },
-    }),
-  ).catch((err: unknown) => {
-    console.error("[App] reportError dispatch failed:", err);
-    if (bus === activeBus) invalidateBus(String(err ?? "dispatch failed"));
-  });
-}
-
 // Surfaced in the template so a backend failure isn't a silent empty shell.
 const busError = ref<string | null>(null);
 
 function invalidateBus(message: string): void {
   busAttempt += 1;
-  const stop = unsubscribe;
-  unsubscribe = null;
+  const stop = disconnect;
+  const activeBus = bus;
+  disconnect = null;
   bus = null;
-  stop?.();
+  scope = null;
+  if (stop) stop();
+  else activeBus?.disconnect();
   connectionState.value = "failed";
   busError.value = message;
 }
 
-function onIntent(name: string, params?: Json): void {
-  if (!bus) return;
+function applySurface(message: unknown): SurfaceApplyResult {
+  const result = surface.apply(message);
+  if (result.status === "applied") busError.value = null;
+  return result;
+}
+
+function onIntent(name: string, params?: Json, instanceId = "desktop-shell"): void {
+  const surfaceId = acceptedSurface.value?.surfaceId;
+  if (!bus || !scope || !surfaceId) return;
   const activeBus = bus;
-  // Phase 0: characters.select records the selection locally (the engine is
-  // stateless per-call; the chosen id rides on each chat.send). chat.send is
-  // tagged with the current selection so the engine knows which card to assemble.
-  // M4: 选角色后拉 chat history（legacy 单 session），让用户重启后看到旧对话。
-  if (name === "characters.select") {
-    const id = (params as { character_id?: string } | undefined)?.character_id;
-    if (id) {
-      selectedCharacterId.value = id;
-      // 拉取该角色的 chat history。此处递归调用 onIntent 函数本身，但
-      // chat.history 走正常 dispatch 路径，不会回到 characters.select 分支，
-      // 因此不会无限递归。
-      onIntent("chat.history", { character_id: id } as Json);
-    }
-    return;
-  }
-  let finalParams = params;
-  if (name === "chat.send" && selectedCharacterId.value) {
-    const obj = (params ?? {}) as Record<string, Json>;
-    finalParams = { ...obj, character_id: selectedCharacterId.value } as Json;
-  }
-  Promise.resolve(
-    activeBus.dispatch({
-      v: 1,
-      id: `ui-${Date.now()}`,
-      ts: Date.now(),
-      src: "ui",
-      body: { kind: "intent", name, params: finalParams },
-    }),
-  ).catch((err: unknown) => {
+  void activeBus.dispatchIntent(surfaceId, instanceId, name, params).catch((err: unknown) => {
     console.error("[App] dispatch failed:", err);
-    if (bus === activeBus) invalidateBus(String(err ?? "dispatch failed"));
+    if (bus === activeBus) busError.value = String(err ?? "intent dispatch failed");
   });
 }
 
 async function initializeBus(): Promise<void> {
-  if (!isTauri || disposed) return;
+  if (!productionSurface || disposed) return;
   const attempt = ++busAttempt;
   connectionState.value = "connecting";
   busError.value = null;
-  unsubscribe?.();
-  unsubscribe = null;
+  const previousStop = disconnect;
+  const previousBus = bus;
+  if (previousStop) previousStop();
+  else previousBus?.disconnect();
+  disconnect = null;
   bus = null;
   try {
-    const built = await createBus();
-    if (disposed || attempt !== busAttempt) return;
-    const stop = await built.subscribe(onEnvelope);
+    const built = new HttpEngineBus({
+      bearer: currentBearer,
+      renew: () => renewDesktopSession(),
+      onConnection: (connected) => {
+        if (attempt !== busAttempt) return;
+        connectionState.value = connected ? "connected" : "connecting";
+        if (connected) busError.value = null;
+      },
+      onError: (error) => {
+        if (attempt !== busAttempt) return;
+        busError.value = error.message;
+      },
+    });
+    bus = built;
+    const selected = await built.resolveScope();
+    if (disposed || attempt !== busAttempt) {
+      built.disconnect();
+      if (bus === built) bus = null;
+      return;
+    }
+    scope = selected;
+    selectedCharacterId.value = selected.characterId;
+    const stop = await built.connect(selected, { apply: applySurface });
     if (disposed || attempt !== busAttempt) {
       stop();
       return;
     }
-    unsubscribe = stop;
+    disconnect = stop;
     bus = built;
     connectionState.value = "connected";
-    setState("w-characters", { ids: [], loaded: false });
-    setState("w-settings", { loaded: false });
-    onIntent("characters.list", {});
   } catch (err) {
     if (attempt !== busAttempt) return;
     console.error("[App] createBus failed:", err);
@@ -240,11 +199,7 @@ async function initializeBus(): Promise<void> {
 }
 
 async function refreshCharacters(): Promise<void> {
-  if (!bus) {
-    await initializeBus();
-    return;
-  }
-  onIntent("characters.list", {});
+  await initializeBus();
 }
 
 type AgentTestInstaller = {
@@ -272,7 +227,7 @@ async function installOptionalAgentTestHarness(): Promise<void> {
     dispatchIntent: onIntent,
     getBlueprint: () => acceptedSurface.value?.blueprint ?? null,
     getSurface: () => acceptedSurface.value,
-    applySurface: (message) => surface.apply(message),
+    applySurface,
     setWidgetState: setState,
     patchWidgetState: patchState,
     getState: () => stateStore,
@@ -286,7 +241,7 @@ onMounted(async () => {
   compactInspectorMedia = window.matchMedia("(max-width: 1180px)");
   collapseForCompactViewport(compactInspectorMedia);
   compactInspectorMedia.addEventListener("change", collapseForCompactViewport);
-  if (isTauri) await initializeBus();
+  if (productionSurface) await initializeBus();
   try {
     await installOptionalAgentTestHarness();
   } catch (err) {
@@ -296,10 +251,12 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true;
   busAttempt += 1;
-  const stop = unsubscribe;
-  unsubscribe = null;
+  const stop = disconnect;
+  const activeBus = bus;
+  disconnect = null;
   bus = null;
-  stop?.();
+  if (stop) stop();
+  else activeBus?.disconnect();
   compactInspectorMedia?.removeEventListener("change", collapseForCompactViewport);
 });
 </script>
@@ -341,8 +298,9 @@ onUnmounted(() => {
         <UiButton label="重试 Engine 连接" @click="refreshCharacters">重试</UiButton>
       </div>
       <div v-else class="status-banner" role="status">
-        <strong>Blueprint runtime preview</strong>
-        <span>当前 Surface 是本地 v2 fixture；没有使用 MockBus 或 legacy Engine 消息制造真实 Surface 状态。</span>
+        <strong>{{ productionSurface ? "Engine Surface" : "Blueprint runtime preview" }}</strong>
+        <span v-if="productionSurface">当前 Surface 来自 Engine snapshot + SSE；断流或 patch 失败会自动重同步。</span>
+        <span v-else>当前 Surface 是本地 v2 fixture；没有使用 MockBus 或 legacy Engine 消息制造真实 Surface 状态。</span>
       </div>
 
       <section class="surface" aria-label="动态 Surface 容器">
@@ -360,6 +318,7 @@ onUnmounted(() => {
             :state="stateStore"
             :state-revisions="stateRevisionStore"
             :active-tabs="surface.activeTabByNodeId"
+            :authoritative-props="productionSurface"
             @activate-tab="activateSurfaceTab"
             @focus-widget="focusSurfaceWidget"
             @intent="onIntent"

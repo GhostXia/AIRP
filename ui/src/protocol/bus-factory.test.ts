@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isTauriEnvironment, createBus } from "./bus-factory";
+import { isTauriEnvironment, createMockBus } from "./bus-factory";
 import { MockBus } from "./bus";
 import type { AgentBus } from "./bus";
 
@@ -8,8 +8,8 @@ describe("bus-factory", () => {
     expect(isTauriEnvironment()).toBe(false);
   });
 
-  it("createBus returns MockBus outside the Tauri shell", async () => {
-    const bus: AgentBus = await createBus();
+  it("MockBus requires an explicit demo/test factory call", () => {
+    const bus: AgentBus = createMockBus();
     expect(bus).toBeInstanceOf(MockBus);
   });
 
@@ -27,10 +27,4 @@ describe("bus-factory", () => {
     expect(isTauriEnvironment()).toBe(false);
   });
 
-  // The Tauri branch of createBus dynamically imports @tauri-apps/api and
-  // builds a real IPC transport, which only works inside the shell. Exercising
-  // it here would either flake on import or assert against an error — neither
-  // proves the live link. The live UI→core→engine round-trip is on the
-  // runtime verification ledger, so we deliberately do NOT unit-
-  // test the Tauri branch here; the branch selection above is what CI guards.
 });

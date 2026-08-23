@@ -16,6 +16,8 @@ import QuestWidget from "../widgets/QuestWidget.vue";
 import MapWidget from "../widgets/MapWidget.vue";
 import CardWidget from "../widgets/CardWidget.vue";
 import CharactersWidget from "../widgets/CharactersWidget.vue";
+import CharacterStateWidget from "../widgets/CharacterStateWidget.vue";
+import ActivityWidget from "../widgets/ActivityWidget.vue";
 import { createClockWidget } from "../widgets/clock.module";
 
 export function registerBuiltins(): void {
@@ -27,6 +29,8 @@ export function registerBuiltins(): void {
   registerVueWidget("core.map", () => MapWidget);
   registerVueWidget("core.card", () => CardWidget);
   registerVueWidget("core.characters", () => CharactersWidget);
+  registerVueWidget("core.character-state", () => CharacterStateWidget);
+  registerVueWidget("core.activity", () => ActivityWidget);
   // A framework-agnostic (vanilla DOM) widget — proves authors aren't tied to Vue.
   registerModuleWidget("core.clock", () => createClockWidget());
 }
