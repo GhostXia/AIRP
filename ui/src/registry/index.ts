@@ -67,3 +67,17 @@ export {
   engineAuthorityState,
   hasEngineGrants,
 } from "./consent";
+export {
+  WIDGET_HOST_API_MAJOR,
+  WIDGET_CAPABILITIES,
+  applyEngineCatalog,
+  initEngineCatalog,
+  engineCatalogState,
+  resetEngineCatalog,
+} from "./engine-catalog";
+export {
+  clearEnginePlugins,
+  initEnginePlugins,
+  missingDependencies,
+  versionAtLeast,
+} from "./plugin-deps";

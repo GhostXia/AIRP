@@ -1,7 +1,7 @@
 # UI 协议与 Widget 决策
 
 > 状态：已接受；2026-08-12 的桌面目标架构由 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 增量取代本文 2026-08-05/06 对 Blueprint 与 Vue 主面的校准结论
-> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）；2026-08-12，`main@7a90d88`（#564 重新启动协议驱动桌面主面）；2026-08-23（#564 PR 6 candidate，同源 `/desktop/` + `HttpEngineBus`）
+> 决策日期：2026-07-03；边界复核：2026-07-30，`main@4f3f792`；2026-08-06，`main@e28ea02`（C-P0~C-P4 落地后复核，见文末修订记录）；2026-08-12，`main@7a90d88`（#564 重新启动协议驱动桌面主面）；2026-08-24（#564 PR 7 candidate，Engine-authoritative Vue Widget host parity）
 > 上位决策：[SOURCE-PROJECT-DECISIONS.md](SOURCE-PROJECT-DECISIONS.md)
 
 ## 结论
@@ -62,7 +62,7 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 | 资产 | 决策 |
 |---|---|
 | Blueprint schema/concept | **2026-08-12 当前目标**：恢复为 AIRP 内部、版本化、受限布局树的运行时渲染合同；Engine 权威下发 Surface snapshot/projection，Vue 渲染 Blueprint/Widget。2026-08-05 的“仅 slot 组合、非运行时渲染技术”结论已由 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) 取代，作为历史保留在修订记录 |
-| Widget Registry / WidgetHost | 保留；首方 RP widget 优先 |
+| Widget Registry / WidgetHost | 保留；Vue 已接 Engine catalog/grants/plugins，第三方 ESM 仅走 digest-pinned opaque iframe；首方 RP widget 优先 |
 | RFC6902 store | 保留；`test` 已做 patch 前预校验，失败不半应用 |
 | Tauri + Vue shell | **2026-08-12 当前目标**：恢复 Vue Blueprint/Widget 桌面主面；Tauri 保留 sidecar/token/native/package 职责，不恢复业务 relay。当前运行包仍承载 WebUI，迁移期以 `/` + `/desktop/` 双入口和 WebUI 回退共存；数据权威、资产处置与切换门禁见 [#564 PR 1 决策](plans/2026-08-12-issue-564-desktop-architecture-baseline.md) |
 | AgentBus 抽象 | 保留为 UI 侧接缝，但默认实现指向 AIRP engine |
@@ -71,7 +71,7 @@ AIRP 首先是一个带无头引擎的 RP 特化 AI Agent 客户端。UI 协议�
 | Consent/sandbox | 保留为 UI 纵深防御 |
 | 通用协议/市场野心 | 仅未来可能性，非当前范围 |
 
-Surface v2 当前已交付 payload authority、Rust/TypeScript binding/guard、共享 fixture、客户端原子 store、受限 renderer、Engine session Surface snapshot/SSE、同源 `/desktop/` 与浏览器/Tauri 共用的 `HttpEngineBus`。SSE transport authority 为 [`protocol/surface-sse-events.json`](../protocol/surface-sse-events.json)：cursor opaque、事件名封闭、`Last-Event-ID` 恢复，ring 缺口或前一 boot cursor 回退完整 snapshot。真实 Widget intent 写闭环仍未交付。旧文档中“Blueprint v2 未交付”的宽泛表述仅对尚未完成的写入和扩展闭环成立。
+Surface v2 当前已交付 payload authority、Rust/TypeScript binding/guard、共享 fixture、客户端原子 store、受限 renderer、Engine session Surface snapshot/SSE、同源 `/desktop/`、浏览器/Tauri 共用的 `HttpEngineBus`，以及 Engine-authoritative catalog/grants/plugins 的 Vue Widget host。SSE transport authority 为 [`protocol/surface-sse-events.json`](../protocol/surface-sse-events.json)：cursor opaque、事件名封闭、`Last-Event-ID` 恢复，ring 缺口或前一 boot cursor 回退完整 snapshot。第三方 ESM 在 Vue/WebUI 均保持 digest-pinned opaque iframe；WebUI 固定 slot plan 不进入 Blueprint v2。真实 Widget intent 写闭环仍未交付。
 
 ## 实践方向
 

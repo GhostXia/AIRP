@@ -126,7 +126,7 @@
       try {
         const transport = d.transportFactory
           ? d.transportFactory(target, source)
-          : d.sandbox.createIframeTransport(target, source, doc);
+          : d.sandbox.createIframeTransport(target, source, doc, instance.id);
         bridge = new d.sandbox.SandboxBridge(
           transport,
           (name, params) => onIntent(name, params),

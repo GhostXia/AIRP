@@ -134,7 +134,7 @@
    * source 相对宿主页面（doc.baseURI）解析为绝对 URL 后传入 frame——frame
    * 内是独立文档，不能继承宿主的相对基准。
    */
-  function createIframeTransport(container, source, doc) {
+  function createIframeTransport(container, source, doc, instanceId) {
     const d = doc || document;
     const win = d.defaultView || (typeof window !== 'undefined' ? window : null);
     const base = d.baseURI || (win && win.location ? win.location.href : undefined);
@@ -142,8 +142,16 @@
     // frame 读不到父源（opaque origin + no-referrer），由宿主把自己的 origin
     // 经 ?origin= 传入，供 iframe 回邮时做精准 targetOrigin。
     const hostOrigin = new URL(base).origin;
+    if (!instanceId) throw new Error('sandbox instance id is required');
+    if (new URL(absoluteSource).origin !== hostOrigin) {
+      throw new Error('sandbox widget source must be same-origin');
+    }
+    const bridgeSession = globalThis.crypto.randomUUID();
     const frameUrl = new URL(
-      FRAME_RELATIVE + '?src=' + encodeURIComponent(absoluteSource) + '&origin=' + encodeURIComponent(hostOrigin),
+      FRAME_RELATIVE + '?src=' + encodeURIComponent(absoluteSource)
+        + '&origin=' + encodeURIComponent(hostOrigin)
+        + '&bridge_session=' + encodeURIComponent(bridgeSession)
+        + '&instance_id=' + encodeURIComponent(instanceId),
       base,
     ).href;
 
@@ -152,6 +160,7 @@
     // iframe 为 opaque origin，无法读取宿主 DOM/存储/cookie。
     iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('src', frameUrl);
+    iframe.setAttribute('referrerpolicy', 'no-referrer');
     // 透明 + 填满：widget 在 iframe 内自渲染。
     iframe.style.border = '0';
     iframe.style.width = '100%';
@@ -165,7 +174,10 @@
       // 它的 source 不同。
       if (ev.source !== iframe.contentWindow) return;
       const msg = ev.data;
-      if (!msg || typeof msg.kind !== 'string') return;
+      if (!msg || msg.bridge_session !== bridgeSession || msg.instance_id !== instanceId
+        || (msg.kind !== 'ready'
+          && !(msg.kind === 'intent' && typeof msg.name === 'string' && msg.name.length > 0)
+          && !(msg.kind === 'error' && typeof msg.message === 'string'))) return;
       for (const cb of listeners) cb(msg);
     }
     win.addEventListener('message', onWindow);
@@ -174,7 +186,10 @@
       postMessage: (msg) => {
         // Chrome 不接受 'null' 作 targetOrigin（抛 SyntaxError），opaque origin
         // 也无法精准匹配；'*' 只投递给本 iframe 窗口对象，无旁路。
-        if (iframe.contentWindow) iframe.contentWindow.postMessage(msg, '*');
+        if (iframe.contentWindow) iframe.contentWindow.postMessage(Object.assign({}, msg, {
+          bridge_session: bridgeSession,
+          instance_id: instanceId,
+        }), '*');
       },
       onMessage: (cb) => {
         listeners.add(cb);

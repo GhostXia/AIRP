@@ -431,7 +431,11 @@ test('sandbox frame: external bootstrap signals ready, handles mount/state, buff
   assert.match(js, /msg\.kind === 'state'/, 'bootstrap must handle state');
   assert.match(js, /hasState/, 'bootstrap must buffer state for late onState registration');
   assert.match(js, /params\.get\('origin'\)/, 'bootstrap must use the host-supplied origin as targetOrigin');
-  assert.match(js, /parent\.postMessage\(msg, TARGET\)/, 'bootstrap must post back with a precise targetOrigin');
+  assert.match(js, /parent\.postMessage\(Object\.assign\(\{\}, msg, \{/, 'bootstrap must bind outbound messages to wire identity');
+  assert.match(js, /ev\.source !== parent/, 'bootstrap must accept messages only from its parent window');
+  assert.match(js, /ev\.origin !== TARGET/, 'bootstrap must gate host messages on the expected origin');
+  assert.match(js, /msg\.bridge_session !== BRIDGE_SESSION/, 'bootstrap must gate on the random bridge session');
+  assert.match(js, /msg\.instance_id !== INSTANCE_ID/, 'bootstrap must gate on the widget instance');
   assert.match(js, /new URLSearchParams\(window\.location\.search\)/, 'widget source must arrive via the frame URL, never be baked into code');
 });
 
@@ -452,7 +456,7 @@ test('sandbox transport: createIframeTransport builds a sandboxed same-origin fr
     removeEventListener() {},
   };
   const container = doc.createElement('div');
-  const transport = sandbox.createIframeTransport(container, '../assets/widgets/status.module.js', doc);
+  const transport = sandbox.createIframeTransport(container, '../assets/widgets/status.module.js', doc, 'w-status');
   const iframe = container.children[0];
   assert.equal(iframe.attributes.sandbox, 'allow-scripts');
   const src = iframe.attributes.src;
@@ -460,6 +464,9 @@ test('sandbox transport: createIframeTransport builds a sandboxed same-origin fr
   const passed = decodeURIComponent(new URL(src).searchParams.get('src'));
   assert.equal(passed, 'http://127.0.0.1:8765/assets/widgets/status.module.js', 'source must be resolved against the host page base');
   assert.equal(new URL(src).searchParams.get('origin'), 'http://127.0.0.1:8765', 'frame must learn the host origin from the host itself');
+  assert.ok(new URL(src).searchParams.get('bridge_session'), 'frame must receive a random bridge session');
+  assert.equal(new URL(src).searchParams.get('instance_id'), 'w-status', 'frame must receive the stable instance id');
+  assert.equal(iframe.attributes.referrerpolicy, 'no-referrer');
   transport.destroy();
 });
 
@@ -474,7 +481,10 @@ test('sandbox transport: gates on event.source === iframe.contentWindow (contrac
   assert.match(code, /setAttribute\('sandbox', 'allow-scripts'\)/, 'sandbox attribute must be exactly allow-scripts');
   // host → iframe 只能 '*'（Chrome 拒收 'null' targetOrigin，实证 2026-08-05）；
   // 安全由 event.source 门控承担，绝不得反向退化门控。
-  assert.match(code, /postMessage\(msg, '\*'\)/, 'host posts to the sandbox frame window directly');
+  assert.match(code, /postMessage\(Object\.assign\(\{\}, msg, \{/, 'host binds outbound messages to wire identity');
+  assert.match(code, /msg\.bridge_session !== bridgeSession/, 'host must gate on the random bridge session');
+  assert.match(code, /msg\.instance_id !== instanceId/, 'host must gate on the widget instance');
+  assert.match(code, /msg\.kind === 'intent'.*typeof msg\.name === 'string'/s, 'host must validate intent message shape');
 });
 
 // ══ 5. widget-host 四态 + BUG-6 ═══════════════════════════════════════════

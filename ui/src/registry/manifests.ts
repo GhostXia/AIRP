@@ -2,9 +2,8 @@
  * Manifest registry — maps a widget `type` to its published manifest (WidgetDef).
  *
  * Lets the UI know a widget's `entry` (how to load it), props/state schema, and
- * requested capabilities. `registerEsmWidgetsFromManifests` wires any
- * `entry.kind === "esm"` manifest into the component registry so third-party
- * widgets load dynamically from their `source`.
+ * requested capabilities. Production ESM entries remain opaque-frame-only;
+ * an explicit importer can register them in-process for unit-test fixtures.
  *
  * Fed over the wire by a downstream `manifest` body (see ManifestMsg): `op:"set"`
  * replaces the whole set (call {@link clearManifests} first); `op:"patch"`
@@ -14,11 +13,8 @@
 
 import type { WidgetDef, SetOrPatch } from "../protocol/types";
 import { registerEsmWidget, unregisterWidget } from "./registry";
-
 const manifests = new Map<string, WidgetDef>();
-// Types this module registered into the component registry (esm widgets only),
-// so a `set` (full replacement) can drop the stale ones without touching builtins.
-const esmRegistered = new Set<string>();
+const fixtureEsmRegistered = new Set<string>();
 
 export function registerManifest(manifest: WidgetDef): void {
   manifests.set(manifest.type, manifest);
@@ -38,14 +34,14 @@ export function allManifests(): WidgetDef[] {
  * for a full reset.
  */
 export function clearManifests(): void {
-  for (const type of esmRegistered) unregisterWidget(type);
-  esmRegistered.clear();
+  for (const type of fixtureEsmRegistered) unregisterWidget(type);
+  fixtureEsmRegistered.clear();
   manifests.clear();
 }
 
 /**
- * Record manifests and auto-register their esm widgets into the component
- * registry. `importer` is injectable for testing.
+ * Record manifests. An explicit `importer` registers ESM widgets only as a
+ * test-fixture seam; production catalog startup never supplies one.
  */
 export function registerEsmWidgetsFromManifests(
   list: WidgetDef[],
@@ -53,9 +49,12 @@ export function registerEsmWidgetsFromManifests(
 ): void {
   for (const manifest of list) {
     registerManifest(manifest);
-    if (manifest.entry?.kind === "esm" && manifest.entry.source) {
+    // Explicit importers are a test/fixture seam only. Engine catalog startup
+    // never supplies one, so production third-party ESM cannot enter the host
+    // process and is loaded solely by the opaque sandbox frame.
+    if (importer && manifest.entry?.kind === "esm" && manifest.entry.source) {
       registerEsmWidget(manifest.type, manifest.entry.source, importer);
-      esmRegistered.add(manifest.type);
+      fixtureEsmRegistered.add(manifest.type);
     }
   }
 }
