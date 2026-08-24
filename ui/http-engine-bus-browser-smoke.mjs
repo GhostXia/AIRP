@@ -85,12 +85,14 @@ try {
   });
   const sessionId = await request("POST", `/v1/sessions/${encodeURIComponent(imported.character_id)}`);
   const widgetSource = `export default () => ({ mount(element, ctx) {
+    globalThis.__airpSmokeMounts = (globalThis.__airpSmokeMounts || 0) + 1;
     let storageBlocked = false;
     let hostDomBlocked = false;
     try { sessionStorage.getItem("airp_bearer"); } catch { storageBlocked = true; }
     try { parent.document.body; } catch { hostDomBlocked = true; }
     element.textContent = JSON.stringify({ storageBlocked, hostDomBlocked,
-      instanceId: ctx.instance.id, capabilities: ctx.capabilities });
+      instanceId: ctx.instance.id, capabilities: ctx.capabilities,
+      mountCalls: globalThis.__airpSmokeMounts });
   }});`;
   const widgetBytes = Buffer.from(widgetSource);
   const widgetSha = createHash("sha256").update(widgetBytes).digest("hex");
@@ -234,6 +236,7 @@ try {
     hostDomBlocked: true,
     instanceId: "desktop-sandbox-smoke",
     capabilities: ["read:state"],
+    mountCalls: 1,
   });
   assert.equal(intentRequests, 0, "read-only /desktop/ path dispatched an intent request");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);

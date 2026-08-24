@@ -161,6 +161,7 @@ export function createIframeTransport(
   source: string,
   instanceId: string,
 ): SandboxTransport {
+  if (!instanceId) throw new Error("sandbox instance id is required");
   const base = document.baseURI || location.href;
   const hostOrigin = new URL(base).origin;
   const absoluteSource = new URL(source, base);

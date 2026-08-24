@@ -216,4 +216,19 @@ describe("createIframeTransport", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("rejects an empty instance identity before creating a frame", () => {
+    const createElement = vi.fn();
+    vi.stubGlobal("document", {
+      baseURI: "http://127.0.0.1:8765/desktop/",
+      createElement,
+    });
+    try {
+      expect(() => createIframeTransport({} as HTMLElement, "/extensions/aabb/index.js", ""))
+        .toThrow(/instance id is required/);
+      expect(createElement).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
