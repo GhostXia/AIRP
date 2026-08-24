@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { SandboxBridge, type SandboxTransport, type HostToSandbox, type SandboxToHost } from "./sandbox-bridge";
-import { sandboxBootstrap } from "./sandbox-bridge";
+import { SandboxBridge, createIframeTransport, type SandboxTransport, type HostToSandbox, type SandboxToHost } from "./sandbox-bridge";
 import type { WidgetInstance } from "../protocol/types";
 
 /** A mock transport: lets the test pump messages in both directions. */
@@ -149,39 +148,72 @@ describe("SandboxBridge", () => {
   });
 });
 
-describe("sandboxBootstrap", () => {
-  it("embeds the source as a JSON-quoted string (no injection / interpolation ambiguity)", () => {
-    const html = sandboxBootstrap("https://cdn.acme/widget.js");
-    expect(html).toContain('var SRC = "https://cdn.acme/widget.js"');
-    // the sandbox attr lives on the iframe element (createIframeTransport),
-    // not in the bootstrap html — the bootstrap is just the srcdoc payload
-    expect(html).not.toContain('sandbox="allow-scripts"');
-    // the bootstrap must post ready
-    expect(html).toContain('send({ kind: "ready" })');
+describe("createIframeTransport", () => {
+  it("uses the static opaque frame and binds messages to window, session, and instance", () => {
+    const posted = vi.fn();
+    let onMessage: ((event: MessageEvent) => void) | undefined;
+    const attributes: Record<string, string> = {};
+    const contentWindow = { postMessage: posted };
+    const iframe = {
+      contentWindow,
+      style: {},
+      setAttribute: (name: string, value: string) => { attributes[name] = value; },
+      remove: vi.fn(),
+    };
+    const appendChild = vi.fn();
+    vi.stubGlobal("document", {
+      baseURI: "http://127.0.0.1:8765/desktop/",
+      createElement: () => iframe,
+    });
+    vi.stubGlobal("location", { href: "http://127.0.0.1:8765/desktop/" });
+    vi.stubGlobal("crypto", { randomUUID: () => "bridge-123" });
+    vi.stubGlobal("window", {
+      addEventListener: (_name: string, listener: (event: MessageEvent) => void) => { onMessage = listener; },
+      removeEventListener: vi.fn(),
+    });
+    try {
+      const transport = createIframeTransport(
+        { appendChild } as unknown as HTMLElement,
+        "/extensions/aabb/index.js",
+        "widget-7",
+      );
+      const frameUrl = new URL(attributes.src);
+      expect(attributes.sandbox).toBe("allow-scripts");
+      expect(attributes.referrerpolicy).toBe("no-referrer");
+      expect(frameUrl.pathname).toBe("/assets/widgets/sandbox-frame.html");
+      expect(frameUrl.searchParams.get("src")).toBe("http://127.0.0.1:8765/extensions/aabb/index.js");
+      expect(frameUrl.searchParams.get("bridge_session")).toBe("bridge-123");
+      expect(frameUrl.searchParams.get("instance_id")).toBe("widget-7");
+
+      const received = vi.fn();
+      transport.onMessage(received);
+      onMessage?.({ source: {}, data: { kind: "ready", bridge_session: "bridge-123", instance_id: "widget-7" } } as MessageEvent);
+      onMessage?.({ source: contentWindow, data: { kind: "ready", bridge_session: "wrong", instance_id: "widget-7" } } as unknown as MessageEvent);
+      onMessage?.({ source: contentWindow, data: { kind: "ready", bridge_session: "bridge-123", instance_id: "widget-7" } } as unknown as MessageEvent);
+      expect(received).toHaveBeenCalledTimes(1);
+
+      transport.postMessage({ kind: "state", state: { ok: true } });
+      expect(posted).toHaveBeenCalledWith({
+        kind: "state",
+        state: { ok: true },
+        bridge_session: "bridge-123",
+        instance_id: "widget-7",
+      }, "*");
+      transport.destroy();
+      expect(iframe.remove).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
-  it("escapes a source containing quotes/backslashes so the inline script stays valid", () => {
-    // A source with a double-quote would break the inline `var SRC = "..."`.
-    // JSON.stringify must escape it.
-    const html = sandboxBootstrap('a"b\\c');
-    expect(html).toContain('var SRC = "a\\"b\\\\c"');
-  });
-
-  it("buffers state so a slice arriving before onState registration is replayed", () => {
-    // Regression guard: the widget import() is async, so a `state` message can
-    // land before the widget calls onState. The bootstrap must keep the last
-    // value (hasState/lastState) and replay it on registration, instead of the
-    // old window.__sandboxStateCb pattern that silently dropped it.
-    const html = sandboxBootstrap("https://cdn.acme/widget.js");
-    expect(html).toContain("hasState");
-    expect(html).toContain("lastState = msg.state");
-    expect(html).toContain("if (hasState)");
-    expect(html).not.toContain("__sandboxStateCb");
-  });
-
-  it("posts back to the opaque parent origin explicitly", () => {
-    const html = sandboxBootstrap("https://cdn.acme/widget.js");
-    expect(html).toContain('parent.postMessage(msg, "null")');
-    expect(html).not.toContain('parent.postMessage(msg, "*")');
+  it("rejects cross-origin widget sources", () => {
+    vi.stubGlobal("document", { baseURI: "http://127.0.0.1:8765/desktop/" });
+    vi.stubGlobal("location", { href: "http://127.0.0.1:8765/desktop/" });
+    try {
+      expect(() => createIframeTransport({} as HTMLElement, "https://example.invalid/widget.js", "widget-7"))
+        .toThrow(/same-origin/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

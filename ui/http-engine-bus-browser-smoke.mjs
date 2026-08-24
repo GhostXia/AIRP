@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import net from "node:net";
@@ -83,6 +84,35 @@ try {
     card_json: JSON.stringify({ spec: "chara_card_v2", data: { name: "Smoke Alice", first_mes: "Hello" } }),
   });
   const sessionId = await request("POST", `/v1/sessions/${encodeURIComponent(imported.character_id)}`);
+  const widgetSource = `export default () => ({ mount(element, ctx) {
+    let storageBlocked = false;
+    let hostDomBlocked = false;
+    try { sessionStorage.getItem("airp_bearer"); } catch { storageBlocked = true; }
+    try { parent.document.body; } catch { hostDomBlocked = true; }
+    element.textContent = JSON.stringify({ storageBlocked, hostDomBlocked,
+      instanceId: ctx.instance.id, capabilities: ctx.capabilities });
+  }});`;
+  const widgetBytes = Buffer.from(widgetSource);
+  const widgetSha = createHash("sha256").update(widgetBytes).digest("hex");
+  const installedWidget = await request("POST", "/v1/extensions/install", {
+    manifest: {
+      type: "acme.desktop-smoke",
+      version: "1.0.0",
+      title: "Desktop sandbox smoke",
+      host_api: "1",
+      capabilities: ["read:state"],
+      entry: { kind: "esm", source: "https://invalid.example/widget.js", sandbox: true },
+    },
+    files: [{
+      path: "index.js",
+      content_base64: widgetBytes.toString("base64"),
+      sha256: widgetSha,
+    }],
+    slot: "workbench.grid",
+  });
+  await request("POST", `/v1/extensions/${encodeURIComponent(installedWidget.id)}/grants`, {
+    action: "grant",
+  });
   // Force the Engine's bounded-props marker. Read-only authorization must be
   // explicit; it must never be inferred from the normal messages[] shape.
   const historyDir = path.join(data, "characters", imported.character_id, "sessions", String(sessionId), "history");
@@ -139,6 +169,72 @@ try {
   });
   assert.equal(renewed.ok, true);
   assert.notEqual(renewed.newToken, renewed.oldToken, "desktop-session renewal did not rotate the token");
+
+  const sandboxContract = await page.evaluate(async () => {
+    const token = sessionStorage.getItem("airp_bearer");
+    const headers = { Authorization: `Bearer ${token}` };
+    const catalog = await fetch("/v1/extensions/catalog", { headers }).then((response) => response.json());
+    const grants = await fetch("/v1/grants", { headers }).then((response) => response.json());
+    const manifest = catalog.manifests.find((item) => item.type === "acme.desktop-smoke");
+    const grant = grants.grants.find((item) => item.type === "acme.desktop-smoke");
+    if (!manifest || !grant) throw new Error("installed widget missing from Engine catalog/grants");
+    const session = crypto.randomUUID();
+    const instanceId = "desktop-sandbox-smoke";
+    const frameUrl = new URL("/assets/widgets/sandbox-frame.html", location.origin);
+    frameUrl.searchParams.set("src", new URL(manifest.entry.source, location.origin).href);
+    frameUrl.searchParams.set("origin", location.origin);
+    frameUrl.searchParams.set("bridge_session", session);
+    frameUrl.searchParams.set("instance_id", instanceId);
+    const iframe = document.createElement("iframe");
+    iframe.dataset.pr7Smoke = "true";
+    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    iframe.src = frameUrl.href;
+    document.body.appendChild(iframe);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sandbox frame did not become ready")), 5_000);
+      function onMessage(event) {
+        const message = event.data;
+        if (event.source !== iframe.contentWindow || message?.bridge_session !== session
+          || message?.instance_id !== instanceId || message?.kind !== "ready") return;
+        clearTimeout(timer);
+        window.removeEventListener("message", onMessage);
+        // A stale-session mount must be ignored before the valid mount arrives.
+        iframe.contentWindow.postMessage({
+          kind: "mount", instance: { id: instanceId, type: manifest.type },
+          capabilities: grant.granted_capabilities,
+          bridge_session: "stale-session", instance_id: instanceId,
+        }, "*");
+        iframe.contentWindow.postMessage({
+          kind: "mount", instance: { id: instanceId, type: manifest.type },
+          capabilities: grant.granted_capabilities,
+          bridge_session: session, instance_id: instanceId,
+        }, "*");
+        resolve();
+      }
+      window.addEventListener("message", onMessage);
+    });
+    return {
+      source: manifest.entry.source,
+      sandbox: iframe.getAttribute("sandbox"),
+      referrerPolicy: iframe.getAttribute("referrerpolicy"),
+      granted: grant.granted_capabilities,
+    };
+  });
+  assert.match(sandboxContract.source, /^\/extensions\/[0-9a-f]{64}\/index\.js$/,
+    "Engine catalog did not pin the widget source to its package digest");
+  assert.equal(sandboxContract.sandbox, "allow-scripts");
+  assert.equal(sandboxContract.referrerPolicy, "no-referrer");
+  assert.deepEqual(sandboxContract.granted, ["read:state"]);
+  const sandboxBody = page.frameLocator('iframe[data-pr7-smoke="true"]').locator("body");
+  await sandboxBody.getByText(/storageBlocked/).waitFor({ state: "visible" });
+  const sandboxEvidence = JSON.parse(await sandboxBody.innerText());
+  assert.deepEqual(sandboxEvidence, {
+    storageBlocked: true,
+    hostDomBlocked: true,
+    instanceId: "desktop-sandbox-smoke",
+    capabilities: ["read:state"],
+  });
   assert.equal(intentRequests, 0, "read-only /desktop/ path dispatched an intent request");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);
   assert.equal(failures.length, 0, `browser errors: ${failures.join("\n")}`);

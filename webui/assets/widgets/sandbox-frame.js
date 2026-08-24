@@ -7,8 +7,8 @@
 // 宿主对象引用。state 缓冲回放保证首个 state 切片不丢（对译
 // ui/src/registry/sandbox-bridge.ts 的 SANDBOX_BOOTSTRAP 行为）。
 //
-// module import 自 opaque origin 属 CORS 请求；engine 对 /assets/widgets/
-// 响应附 Access-Control-Allow-Origin:*（本地 loopback 静态资产）。
+// module import 自 opaque origin 属 CORS 请求；engine 对静态 widget 与
+// /extensions/<digest>/ 响应附 Access-Control-Allow-Origin:*。
 (function () {
   'use strict';
 
@@ -18,11 +18,16 @@
   // origin 经 ?origin= 传入，回邮用它做精准 targetOrigin（实证：对真实
   // origin 的父窗发 targetOrigin "null" 会被浏览器静默丢弃）。
   var TARGET = params.get('origin') || '*';
+  var BRIDGE_SESSION = params.get('bridge_session');
+  var INSTANCE_ID = params.get('instance_id');
 
   function send(msg) {
     // 宿主以 event.source === iframe.contentWindow 门控消息来源，恶意
     // frame 无法冒充；即便 TARGET 退化 '*' 也仅投递给父窗。
-    parent.postMessage(msg, TARGET);
+    parent.postMessage(Object.assign({}, msg, {
+      bridge_session: BRIDGE_SESSION,
+      instance_id: INSTANCE_ID,
+    }), TARGET);
   }
 
   // 缓冲最新 state：state 消息可能先于 widget 的异步 import 注册 onState
@@ -47,8 +52,16 @@
   };
 
   window.addEventListener('message', function (ev) {
+    if (ev.source !== parent) return;
+    if (TARGET !== '*' && ev.origin !== TARGET) return;
     var msg = ev.data || {};
+    if (!BRIDGE_SESSION || !INSTANCE_ID
+      || msg.bridge_session !== BRIDGE_SESSION || msg.instance_id !== INSTANCE_ID) return;
     if (msg.kind === 'mount') {
+      if (!msg.instance || msg.instance.id !== INSTANCE_ID) {
+        send({ kind: 'error', message: 'sandbox mount instance identity mismatch' });
+        return;
+      }
       ctx.instance = msg.instance;
       ctx.capabilities = msg.capabilities || [];
       if (!SRC) {

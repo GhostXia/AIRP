@@ -16,6 +16,7 @@ import { getManifest } from "../registry/manifests";
 import { needsConsent, canMount, grant, effectiveCapabilities } from "../registry/consent";
 import { SandboxBridge, createIframeTransport } from "../registry/sandbox-bridge";
 import { WidgetLifecycle } from "./widget-lifecycle";
+import { missingDependencies } from "../registry/plugin-deps";
 
 const props = defineProps<{
   instance: WidgetInstance;
@@ -38,10 +39,14 @@ const gated = computed(() => !!manifest && needsConsent(manifest) && !canMount(m
 // allow-same-origin); the WidgetContext is bridged over postMessage so it
 // cannot touch host DOM/global/same-origin resources (PLAN task D, SECURITY.md).
 // Only esm widgets whose manifest opts in (`entry.sandbox: true`) take this
-// path; in-process esm stays the default.
+// path; production third-party ESM never enters the host process.
 const sandboxed = computed(
   () => !!manifest && manifest.entry?.kind === "esm" && manifest.entry.sandbox === true,
 );
+const sandboxRejected = computed(
+  () => !!manifest && manifest.entry?.kind === "esm" && manifest.entry.sandbox !== true,
+);
+const missingPlugins = computed(() => manifest ? missingDependencies(manifest) : []);
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -138,7 +143,7 @@ async function mountSandbox(): Promise<void> {
     return;
   }
   try {
-    const transport = createIframeTransport(sandboxEl.value, source);
+    const transport = createIframeTransport(sandboxEl.value, source, props.instance.id);
     const bridge = new SandboxBridge(
       transport,
       (name, params) => lifecycle.run(() => onIntent(name, params)),
@@ -193,6 +198,10 @@ onErrorCaptured((e) => {
   <div class="widget-host">
     <div v-if="failed" class="widget-error">widget 出错：{{ instance.type }} — {{ failed }}</div>
 
+    <div v-else-if="sandboxRejected" class="widget-error">
+      widget 拒载：{{ instance.type }} — 第三方 ESM 必须使用 opaque sandbox
+    </div>
+
     <div v-else-if="gated" class="widget-consent">
       <div class="w-title">第三方 widget：{{ instance.type }}</div>
       <div class="source">来源：{{ manifest?.entry?.source ?? "—" }}</div>
@@ -206,17 +215,25 @@ onErrorCaptured((e) => {
       <div class="note">未授权前不会加载、不获得任何权限。我们不审核其代码，风险自担。</div>
     </div>
 
-    <component
-      :is="vueComponent"
-      v-else-if="reg?.kind === 'vue' && vueComponent"
-      :instance="instance"
-      :state="state"
-      :read-only="readOnly"
-      @intent="onIntent"
-    />
-    <div v-else-if="sandboxed" ref="sandboxEl" class="widget-sandbox"></div>
-    <div v-else-if="reg?.kind === 'module'" ref="moduleEl" class="widget-mount"></div>
-    <div v-else class="widget-missing">未注册的 widget：{{ instance.type }}</div>
+    <template v-else>
+      <div v-if="missingPlugins.length" class="widget-plugin-hint">
+        <strong>依赖的 trusted plugin 不可用</strong>
+        <span v-for="plugin in missingPlugins" :key="plugin.id">
+          {{ plugin.id }}（{{ plugin.reason === "stopped" ? "已停止" : plugin.reason === "version-too-low" ? "版本过低" : "未安装" }}）
+        </span>
+      </div>
+      <component
+        :is="vueComponent"
+        v-if="reg?.kind === 'vue' && vueComponent"
+        :instance="instance"
+        :state="state"
+        :read-only="readOnly"
+        @intent="onIntent"
+      />
+      <div v-else-if="sandboxed" ref="sandboxEl" class="widget-sandbox"></div>
+      <div v-else-if="reg?.kind === 'module'" ref="moduleEl" class="widget-mount"></div>
+      <div v-else class="widget-missing">未注册的 widget：{{ instance.type }}</div>
+    </template>
   </div>
 </template>
 
@@ -265,4 +282,5 @@ onErrorCaptured((e) => {
   opacity: 0.6;
   font-size: 12px;
 }
+.widget-plugin-hint { display: grid; gap: 4px; padding: 8px; color: var(--warning); font-size: 12px; }
 </style>

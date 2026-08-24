@@ -9,13 +9,13 @@
  * the host listens for `intent` messages from the iframe and pushes `state`
  * messages in; the widget never gets a direct reference to host objects.
  *
- * The iframe loads a small bootstrap (`SANDBOX_BOOTSTRAP`) via `srcdoc`, which
- * dynamically `import()`s the widget's `source` and calls its
+ * The iframe loads a shared, CSP-compatible static bootstrap page, which
+ * dynamically `import()`s the widget's same-origin digest-pinned `source` and calls its
  * `mount(iframe.document.body, ctxProxy)` where `ctxProxy` translates calls
  * into `postMessage` to the host. `allow-scripts` permits the import + mount.
  *
- * Message protocol (host ↔ iframe), all `postMessage` with targetOrigin `"null"`
- * (the iframe is opaque; the host gates on `event.source === iframe.contentWindow`):
+ * Every message carries a random bridge session and stable instance id. The
+ * iframe is opaque, so the host also gates on its exact `contentWindow`.
  *
  * - host → iframe: `{ kind: "mount", instance, capabilities }` then
  *   `{ kind: "state", state }` per state change.
@@ -26,9 +26,8 @@
  * unit-testable without a real iframe (see `sandbox-bridge.test.ts`). The live
  * transport (`createIframeTransport`) builds a real iframe element.
  *
- * NOTE: the real end-to-end sandboxed load (remote esm inside the iframe) is a
- * runtime verification item (PLAN §2.5 D) — CI covers the bridge protocol and
- * the host-side gating, not browser frame behavior.
+ * Browser smoke covers the real opaque-frame path in addition to these unit
+ * tests for bridge lifecycle and host-side gating.
  */
 
 import type { WidgetInstance, Json, Capability } from "../protocol/types";
@@ -153,77 +152,31 @@ export class SandboxBridge {
 }
 
 /**
- * The HTML written into the iframe via `srcdoc`. It waits for the host's
- * `mount` message, dynamically `import()`s the widget `source`, and proxies
- * the `WidgetContext` over `postMessage`. Kept as a function so the source
- * can be interpolated without string concatenation ambiguity.
- *
- * The bootstrap uses `parent.postMessage(msg, "null")` to reach the host; the
- * host gates on `event.source === iframe.contentWindow` (see
- * `createIframeTransport`), so a hostile iframe cannot spoof messages from a
- * different frame.
- */
-export function sandboxBootstrap(source: string): string {
-  // The bootstrap is self-contained and runs inside the iframe. It cannot
-  // reference host modules. It defines a `ctxProxy` that turns every call into
-  // a postMessage to the parent, then imports the widget factory and mounts.
-  const safeSource = JSON.stringify(source);
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:transparent;color:inherit;font:inherit}</style></head>
-<body><script>
-(function(){
-  var SRC = ${safeSource};
-  function send(msg){ parent.postMessage(msg, "null"); }
-  // Buffer the latest state: a state message can arrive before the widget's
-  // async import has registered its onState callback. We keep the last value
-  // and replay it on registration, so the first state slice is never dropped.
-  var lastState; var hasState = false; var stateCb = null;
-  // WidgetContext proxy: the widget calls these; we translate to messages.
-  var ctx = {
-    instance: null,
-    getState: function(){ return hasState ? lastState : undefined; },
-    onState: function(cb){
-      stateCb = cb;
-      if (hasState) { try { cb(lastState); } catch(e){ send({ kind: "error", message: String(e && e.message || e) }); } }
-      return function(){ if (stateCb === cb) stateCb = null; };
-    },
-    emit: function(name, params){ send({ kind: "intent", name: name, params: params }); },
-    capabilities: []
-  };
-  window.addEventListener("message", function(ev){
-    var msg = ev.data || {};
-    if (msg.kind === "mount") {
-      ctx.instance = msg.instance;
-      ctx.capabilities = msg.capabilities || [];
-      import(SRC).then(function(mod){
-        var factory = typeof mod === "function" ? mod : mod.default;
-        if (typeof factory !== "function") throw new Error("esm widget default export must be a WidgetFactory");
-        return factory().mount(document.body, ctx);
-      }).catch(function(e){ send({ kind: "error", message: String(e && e.message || e) }); });
-    } else if (msg.kind === "state") {
-      lastState = msg.state; hasState = true;
-      try { if (stateCb) stateCb(msg.state); } catch(e){ send({ kind: "error", message: String(e && e.message || e) }); }
-    }
-  });
-  send({ kind: "ready" });
-})();
-</script></body></html>`;
-}
-
-/**
- * Build a live iframe transport: creates an `<iframe sandbox="allow-scripts">`
- * with the given widget `source` baked into its `srcdoc`, wires `postMessage`
- * (gating on `event.source === iframe.contentWindow`), and returns a
- * {@link SandboxTransport}. The host appends the iframe to `container`.
+ * Build a live transport through the shared static sandbox frame. Every wire
+ * message is bound to a random bridge session and the stable Widget instance,
+ * in addition to the iframe window identity check.
  */
 export function createIframeTransport(
   container: HTMLElement,
   source: string,
+  instanceId: string,
 ): SandboxTransport {
+  const base = document.baseURI || location.href;
+  const hostOrigin = new URL(base).origin;
+  const absoluteSource = new URL(source, base);
+  if (absoluteSource.origin !== hostOrigin) throw new Error("sandbox widget source must be same-origin");
+  const bridgeSession = crypto.randomUUID();
+  const frameUrl = new URL("/assets/widgets/sandbox-frame.html", base);
+  frameUrl.searchParams.set("src", absoluteSource.href);
+  frameUrl.searchParams.set("origin", hostOrigin);
+  frameUrl.searchParams.set("bridge_session", bridgeSession);
+  frameUrl.searchParams.set("instance_id", instanceId);
   const iframe = document.createElement("iframe");
   // `allow-scripts` lets the widget run; deliberately NO `allow-same-origin`,
   // so the iframe is opaque-origin and cannot read host DOM/storage/cookies.
   iframe.setAttribute("sandbox", "allow-scripts");
-  iframe.setAttribute("srcdoc", sandboxBootstrap(source));
+  iframe.setAttribute("src", frameUrl.href);
+  iframe.setAttribute("referrerpolicy", "no-referrer");
   // Transparent + filling: the widget renders its own DOM inside the iframe.
   iframe.style.border = "0";
   iframe.style.width = "100%";
@@ -236,16 +189,25 @@ export function createIframeTransport(
     // Gate: only accept messages originating from this iframe's window. A
     // hostile sibling frame cannot spoof because its `source` differs.
     if (ev.source !== iframe.contentWindow) return;
-    const msg = ev.data as SandboxToHost;
-    if (!msg || typeof msg.kind !== "string") return;
+    const wire = ev.data as SandboxToHost & { bridge_session?: unknown; instance_id?: unknown };
+    if (!wire || wire.bridge_session !== bridgeSession || wire.instance_id !== instanceId) return;
+    if (wire.kind !== "ready"
+      && !(wire.kind === "intent" && typeof wire.name === "string" && wire.name.length > 0)
+      && !(wire.kind === "error" && typeof wire.message === "string")) return;
+    const msg = wire as SandboxToHost;
     for (const cb of listeners) cb(msg);
   }
   window.addEventListener("message", onWindow);
 
   return {
     postMessage: (msg) => {
-      // targetOrigin "null" precisely targets the opaque-origin sandbox frame.
-      iframe.contentWindow?.postMessage(msg, "null");
+      // Opaque origins cannot be named as targetOrigin; window identity plus
+      // the per-mount bridge session prevents sibling/stale frame confusion.
+      iframe.contentWindow?.postMessage({
+        ...msg,
+        bridge_session: bridgeSession,
+        instance_id: instanceId,
+      }, "*");
     },
     onMessage: (cb) => {
       listeners.add(cb);

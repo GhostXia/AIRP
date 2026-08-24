@@ -140,11 +140,20 @@ export interface WidgetDef {
   /** JSON Schema for state (serde `stateSchema`). */
   stateSchema?: Json;
   capabilities?: Capability[];
+  /** Required WidgetContext host contract; omitted means major 1. */
+  host_api?: string;
+  /** Optional trusted local plugin dependencies; missing entries degrade visibly. */
+  trusted_plugins?: TrustedPluginDependency[];
   intents?: string[];
   entry?: WidgetEntry;
   author?: string;
   homepage?: string;
   license?: string;
+}
+
+export interface TrustedPluginDependency {
+  id: string;
+  min_host_api?: string;
 }
 
 export interface WidgetEntry {
