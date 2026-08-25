@@ -30,7 +30,14 @@ type ChatState = {
   message_swipe_index?: number[];
   has_more?: boolean;
   oldest_id?: string | null;
-  context?: { character_id?: string; session_id?: string };
+  context?: {
+    character_id?: string;
+    session_id?: string;
+    persona_id?: string;
+    persona_source?: string;
+    scene_id?: string | null;
+    worldbook_source_ids?: string[];
+  };
 };
 
 type ChatOperation = {
@@ -57,6 +64,19 @@ const chatState = computed<ChatState>(
   () => (props.state as ChatState | null) ?? {},
 );
 const operation = computed<ChatOperation>(() => (props.operation as ChatOperation | null) ?? {});
+const contextChips = computed(() => {
+  const context = chatState.value.context;
+  if (!context) return [];
+  return [
+    ...(context.character_id ? [{ key: "character", label: "角色", id: context.character_id }] : []),
+    ...(context.session_id ? [{ key: "session", label: "会话", id: context.session_id }] : []),
+    ...(context.persona_id ? [{ key: "persona", label: "Persona", id: context.persona_id }] : []),
+    ...(context.scene_id ? [{ key: "scene", label: "场景", id: context.scene_id }] : []),
+    ...(context.worldbook_source_ids ?? []).map((id, index) => ({
+      key: `worldbook-${index}`, label: "世界书", id,
+    })),
+  ];
+});
 const busy = computed(() => [
   "streaming", "stopping", "submitting", "awaiting_surface", "reconciling", "recovery_required",
 ].includes(operation.value.status ?? ""));
@@ -187,11 +207,24 @@ function swipe(message: Msg, direction: -1 | 1): void {
 </script>
 
 <template>
-  <div class="w-chat">
+  <div
+    class="w-chat"
+    :class="{ 'w-chat--cancellable': operation?.status === 'streaming' || operation?.status === 'stopping' }"
+  >
     <div class="w-title">
       <span>{{ title }}</span>
-      <span v-if="chatState.context?.character_id" class="context-chip">角色 {{ chatState.context.character_id }}</span>
-      <span v-if="chatState.context?.session_id" class="context-chip">会话 {{ chatState.context.session_id.slice(0, 8) }}</span>
+      <ul v-if="contextChips.length" class="context-strip" aria-label="当前对话上下文">
+        <li
+          v-for="chip in contextChips"
+          :key="chip.key"
+          class="context-chip"
+          :title="`${chip.label} ${chip.id}`"
+          :aria-label="`${chip.label} ${chip.id}`"
+        >
+          <span class="context-chip__label">{{ chip.label }}</span>
+          <span class="context-chip__id">{{ chip.id }}</span>
+        </li>
+      </ul>
     </div>
     <div ref="scrollEl" class="w-chat-log" @scroll="onScroll">
       <div class="spacer" :style="{ height: vwin.padTop + 'px' }"></div>
@@ -217,12 +250,13 @@ function swipe(message: Msg, direction: -1 | 1): void {
       <button
         v-if="operation?.status === 'retryable' && operation.retryName"
         type="button"
+        class="generation-action--secondary"
         :disabled="readOnly"
         @click="emit('intent', operation.retryName, operation.retryParams)"
       >重试未提交操作</button>
-      <button type="button" :disabled="readOnly || busy" @click="generate('chat.regen')">重新生成</button>
-      <button type="button" :disabled="readOnly || busy" @click="generate('chat.continue')">继续</button>
-      <button v-if="operation?.status === 'streaming' || operation?.status === 'stopping'" type="button" @click="emit('intent', 'chat.stop')">停止</button>
+      <button class="generation-action--secondary" type="button" :disabled="readOnly || busy" @click="generate('chat.regen')">重新生成</button>
+      <button class="generation-action--secondary" type="button" :disabled="readOnly || busy" @click="generate('chat.continue')">继续</button>
+      <button v-if="operation?.status === 'streaming' || operation?.status === 'stopping'" class="generation-action--stop" type="button" @click="emit('intent', 'chat.stop')">停止</button>
     </div>
     <form class="w-chat-composer" @submit.prevent="send">
       <input v-model="draft" :disabled="readOnly || busy" :placeholder="readOnly ? '当前为只读 Surface；发送功能尚未开放' : busy ? '等待当前操作完成…' : '说点什么…'" />
@@ -238,8 +272,11 @@ function swipe(message: Msg, direction: -1 | 1): void {
   height: 100%;
   min-height: 0;
 }
-.w-title { display: flex; align-items: center; gap: 6px; padding: 12px 14px 9px; border-bottom: 1px solid var(--border-default); color: var(--text-secondary); font: 700 10px/1 var(--font-utility); letter-spacing: .08em; text-transform: uppercase; }
-.context-chip { overflow: hidden; max-width: 150px; padding: 3px 6px; border: 1px solid var(--border-default); border-radius: 999px; color: var(--text-tertiary); font-weight: 550; letter-spacing: 0; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
+.w-title { display: grid; min-width: 0; gap: 7px; padding: 10px 14px 8px; border-bottom: 1px solid var(--border-default); color: var(--text-secondary); font: 700 10px/1 var(--font-utility); letter-spacing: .08em; text-transform: uppercase; }
+.context-strip { display: flex; min-width: 0; margin: 0; padding: 0 0 2px; overflow-x: auto; gap: 6px; list-style: none; overscroll-behavior-inline: contain; scrollbar-width: thin; text-transform: none; }
+.context-chip { display: inline-flex; flex: 0 0 auto; min-width: 0; max-width: 220px; padding: 3px 6px; border: 1px solid var(--border-default); border-radius: 999px; color: var(--text-tertiary); font-weight: 550; letter-spacing: 0; white-space: nowrap; }
+.context-chip__label { margin-right: 4px; color: var(--text-secondary); }
+.context-chip__id { overflow: hidden; font-family: var(--font-utility); text-overflow: ellipsis; user-select: text; }
 .w-chat-log {
   flex: 1;
   overflow-y: auto;
@@ -284,4 +321,10 @@ function swipe(message: Msg, direction: -1 | 1): void {
 }
 .w-chat-composer button { border: 1px solid var(--primary-action); border-radius: var(--radius-input); background: var(--primary-action); color: var(--text-inverse); padding: 0 14px; cursor: pointer; font-weight: 650; }
 .w-chat-composer input:focus-visible, .w-chat-composer button:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: 1px; }
+@media (max-height: 420px) {
+  .w-title { gap: 0; padding: 5px 8px 4px; }
+  .w-title > span:first-child { display: none; }
+  .generation-action--secondary { display: none; }
+  .w-chat--cancellable .w-chat-composer { display: none; }
+}
 </style>

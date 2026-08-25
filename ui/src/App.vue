@@ -97,6 +97,14 @@ const activeWorkspacePreset = computed(
 );
 
 setState("w-chat", {
+  context: {
+    character_id: "preview-character-stable-id",
+    session_id: "00000000-0000-4000-8000-000000000001",
+    persona_id: "preview-persona-stable-id",
+    persona_source: "fixture",
+    scene_id: "preview-scene-stable-id",
+    worldbook_source_ids: ["character:preview-character-stable-id"],
+  },
   messages: {
     preview: {
       id: "preview",
@@ -553,6 +561,7 @@ type AgentTestInstaller = {
     getSurface: () => SurfaceSnapshot | null;
     applySurface: (message: unknown) => SurfaceApplyResult;
     setWidgetState: (scope: string, state: Json) => void;
+    setWidgetOperation: (instanceId: string, operation: Json) => void;
     patchWidgetState: (scope: string, patch: JsonPatch) => void;
     getState: () => typeof stateStore;
     getSelectedCharacterId: () => string;
@@ -573,6 +582,7 @@ async function installOptionalAgentTestHarness(): Promise<void> {
     getSurface: () => acceptedSurface.value,
     applySurface,
     setWidgetState: setState,
+    setWidgetOperation: (instanceId, operation) => setOperation(instanceId, operation as Operation),
     patchWidgetState: patchState,
     getState: () => stateStore,
     getSelectedCharacterId: () => selectedCharacterId.value,
@@ -741,4 +751,5 @@ h1 { margin: 0; font: 650 21px/1 var(--font-display); }
 @media (max-width: 1180px) { .desktop-shell { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr) 38px; } .desktop-shell--focus { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector) { position: fixed; top: 0; right: 0; bottom: 0; z-index: 10; width: var(--desktop-inspector-w); overflow: hidden; box-shadow: -12px 0 28px color-mix(in srgb, var(--ink) 14%, transparent); } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector__toggle) { left: 12px; } .desktop-shell:not(.desktop-shell--inspector-collapsed):not(.desktop-shell--focus) :deep(.inspector__body) { padding-top: 52px; } .desktop-shell :deep(.rail__wordmark), .desktop-shell :deep(.rail__copy), .desktop-shell :deep(.rail__focus span:last-child) { display: none; } }
 @media (max-width: 760px) { .desktop-shell, .desktop-shell--inspector-collapsed { grid-template-columns: var(--desktop-rail-compact-w) minmax(0, 1fr); } .desktop-shell :deep(.inspector), .context-toggle { display: none; } .workspace__chapter, .connection { display: none; } .surface { margin: 8px; } .workspace__footer { gap: 10px; } }
 @media (max-height: 640px) { .status-banner { min-height: 34px; padding-block: 4px; } .status-banner > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .surface { margin-top: 8px; } }
+@media (max-height: 420px) { .workspace { grid-template-rows: 44px auto minmax(0, 1fr); } .workspace__topbar { padding-inline: 14px; } .workspace__identity::before { top: -12px; height: 44px; } .status-banner:not(.status-banner--error), .surface__heading, .workspace__footer { display: none; } .surface { margin: 4px 8px; } .surface__body :deep(.blueprint) { padding-block: 0; } }
 </style>

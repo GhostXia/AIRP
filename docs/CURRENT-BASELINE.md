@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
 > 基线日期：2026-08-25
-> 代码基线：#564 PR 8 已合并；Chat transport recovery / 5000-history evidence candidate（本文与实现同分支）
+> 代码基线：#564 PR 8 recovery/evidence 已由 PR #591 合并；stable-context candidate（本文与实现同分支）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -21,7 +21,9 @@
 
 本次增量校准（2026-08-24，#564 PR 8，PR #590 已合并）：Engine 新增 `core.chat` 专用 `/v1/ui/intents` 可信执行边界，从已接受 Surface 反查有效数据根、角色、会话、用户作用域与 Widget 类型，拒绝缺失、歧义、错实例和未知 intent；执行复用既有 Chat pipeline/Coordinator。Vue `/desktop/` 支持 session 选择/创建、历史分页、send SSE、stop、regen、continue 与 swipe，流式文本只保留为临时视图并由下一份 canonical Surface revision 收敛。Memory/Character State/Activity 与第三方 Widget 仍未开放写执行器；真实 provider 手工验收仍是发布边界。
 
-本次增量校准（2026-08-25，#589 recovery/evidence candidate）：Vue 将无终态 SSE EOF 与结果未知的 Chat mutation 明确归入 reconciliation，绝不自动重放；仅在稳定 message ID 投影确认提交后清除临时状态，Engine 报 `not_committed` 或连续两次 fresh idle snapshot 均确认权威历史未变时才开放显式重试，部分/不明提交和 `recovering` 均 fail closed。真实 Engine + packaged Vue + Chrome smoke 以运行时生成的 5,000 条 durable JSONL 验证首屏最近 50 条、cursor 再取 50 条、虚拟 DOM 有界、生成时跟随最新，以及 Chat Surface patch 不重建 Memory/Character State/Activity host。该证据不替代真实 provider 人工验收，也尚未证明 Engine 进程重启后桌面短时 token 的重新交换时延。
+本次增量校准（2026-08-25，#589 recovery/evidence，PR #591 已合并）：Vue 将无终态 SSE EOF 与结果未知的 Chat mutation 明确归入 reconciliation，绝不自动重放；仅在稳定 message ID 投影确认提交后清除临时状态，Engine 报 `not_committed` 或连续两次 fresh idle snapshot 均确认权威历史未变时才开放显式重试，部分/不明提交和 `recovering` 均 fail closed。真实 Engine + packaged Vue + Chrome smoke 以运行时生成的 5,000 条 durable JSONL 验证首屏最近 50 条、cursor 再取 50 条、虚拟 DOM 有界、生成时跟随最新，以及 Chat Surface patch 不重建 Memory/Character State/Activity host。该证据不替代真实 provider 人工验收，也尚未证明 Engine 进程重启后桌面短时 token 的重新交换时延。
+
+本次增量校准（2026-08-25，#589 stable-context candidate）：Engine Chat Surface 追加只读 `context` 投影，Character/Session 来自已接受 Surface scope；user scope 下的 Persona 复用与 Chat pipeline 相同的 session binding → character binding → default 解析并对歧义 fail closed；canonical 角色世界书仅以 path-independent `character:<id>` source ID 投影。Vue 用可访问、保留完整 ID、短视口内自行横向滚动的 chips 呈现真实存在项。chips 是最近一次已接受 Surface 投影的**当前观察值**，不是跨 Surface→intent 的冻结快照或版本锁；若绑定或世界书在投影后变化，Chat pipeline 会在执行时重新解析、读取并校验当时的权威数据。当前 Surface executor 固定 `scene_id=None`，仓库也没有 session→Scene 持久绑定，因此不伪造 Scene chip；该数据合同仍是 #589 开放边界。
 
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
@@ -68,7 +70,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP | 屏 36–42 等已接入 | 功能存在 ≠ 真实 provider/工作流已验收 |
 | Provider / 扩展 | 多 Provider 路由、OpenAI-compatible/Anthropic/Ollama、本地脚本/HTTP webhook 插件 | providers/routing/plugin-tools API；Agent registry 动态合并 | 设置与插件管理入口 | 插件非沙箱；HTTPS webhook 注册+请求 fail-closed DNS 与域名 pin 已落地（RR-014 近端修复 / #381 E-P0-3 / #329 N3）；非通用代码沙箱 |
 | Widget 扩展与桌面壳（v0.0.4 新增） | engine `extensions/`：digest-pinned 安装、catalog 权威下发、capability 封闭集与 grant/revoke、desktop session token 签发与 rotation | `/v1/extensions*`、`/v1/widget-intents`（拒绝默认）、`/v1/grants` 统一授权查询面、`/v1/desktop-session*`；digest-pinned 静态包服务在鉴权层外投放、服务时复检摘要 | Tauri 壳同源承载 webui（C-P0）；slot 挂载、opaque-origin iframe 沙箱、consent 授权 UI、扩展管理 UI、Widget SDK | capability 授权由 engine 逐调用强制（C-P3）；第三方 esm 只有同源 digest 目录加载路径；compat harness 锁 hostApi semver 与 capability 封闭集；intent 面无真实执行器；GUI 真机验证未完成（§2.3） |
-| Blueprint/Surface 桌面恢复（#564 开发中） | Surface v2 guard；确定性 session Blueprint；Chat/Memory/Character State/Activity 投影；有界 replay；脱敏失败回执；扩展 catalog/grants/plugins 权威 | bearer 保护的 snapshot/SSE；opaque cursor + `Last-Event-ID`；失效 cursor snapshot resync；`core.chat` 可信 intent executor | Vue shell、受限 renderer、原子 store、Widget 生命周期、多尺寸 smoke、同源 `/desktop/`、`HttpEngineBus`、opaque iframe 第三方 host parity；Chat session/history/send/stop/regen/continue/swipe；未知提交状态不自动重放；真实 Engine/Chrome 5,000 历史与无关 Widget identity 证据 | 默认仍为 WebUI `/`；仅 `core.chat` 开放写纵切，Memory/State/workspace 与第三方 intent executor 未交付；Persona/Scene/Worldbook 稳定 context chips、真实 provider 手工验收、Engine 重启后的完整桌面凭据恢复仍未完成；WebUI 固定 slot plan 不进入 Blueprint v2 |
+| Blueprint/Surface 桌面恢复（#564 开发中） | Surface v2 guard；确定性 session Blueprint；Chat/Memory/Character State/Activity 投影；有界 replay；脱敏失败回执；扩展 catalog/grants/plugins 权威；Character/Session/effective Persona/canonical Worldbook source context | bearer 保护的 snapshot/SSE；opaque cursor + `Last-Event-ID`；失效 cursor snapshot resync；`core.chat` 可信 intent executor | Vue shell、受限 renderer、原子 store、Widget 生命周期、多尺寸 smoke、同源 `/desktop/`、`HttpEngineBus`、opaque iframe 第三方 host parity；Chat session/history/send/stop/regen/continue/swipe；未知提交状态不自动重放；真实存在项的完整 stable-ID context chips；真实 Engine/Chrome 5,000 历史与无关 Widget identity 证据 | 默认仍为 WebUI `/`；仅 `core.chat` 开放写纵切，Memory/State/workspace 与第三方 intent executor 未交付；session→Scene 持久绑定/Scene chip、真实 provider 手工验收、Engine 重启后的完整桌面凭据恢复仍未完成；WebUI 固定 slot plan 不进入 Blueprint v2 |
 | 部署 | production fail-closed 校验、原子配置更新、secret 脱敏 | loopback 默认；首方 gateway 同源代理 | Windows/Linux 便携包与 production preview | 非多租户；P1/P2/P3 发布门未闭合 |
 
 ### 2.1 结构性事实（2026-08-02 审查确认）
@@ -177,14 +179,15 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 6. 验证快照
 
-### 6.1 当前候选（2026-08-25，PR #591）
+### 6.1 当前候选（2026-08-25，main through PR #591 + stable-context candidate）
 
 | 范围 | 命令 / 说明 | 结果 |
 |---|---|---|
 | UI | `npm run typecheck`；`npm test -- --run` | typecheck 通过；Vitest **21 files / 177 passed** |
 | Rust full workspace | `cargo test --workspace --locked`（先按 CI 流程生成 Tauri sidecar） | **通过**；含 `airp-core` lib **1,476 passed / 5 ignored**、protocol、Tauri 与集成测试；神圣不变式通过 |
 | Blueprint desktop | `npm run smoke:shell`；`npm run smoke:runtime` | 5 个 shell profile 通过；runtime 8 个 virtual rows、0.90 ms p95 |
-| Chat real-Engine browser | `npm run smoke:http-bus`，指向当前 checkout 构建的 debug Engine | 最终 bundle 连续两次通过；独立审计再通过一次；含 5,000 历史分页、局部 Widget identity 与 Chat 写纵切 |
+| Chat real-Engine browser | `AIRP_ENGINE_BINARY=<当前 checkout 源码构建的 Engine>` 后运行 `npm run smoke:http-bus`（脚本默认 release 路径不构成源码新鲜度证明） | 最终 bundle 连续两次通过；独立审计再通过一次；含 5,000 历史分页、局部 Widget identity 与 Chat 写纵切 |
+| Stable context candidate | `cargo test -p airp-core daemon::tests::surfaces --locked`；当前 Engine + final bundle `npm run smoke:http-bus` | Surface **20 passed**；真实浏览器同时核对权威 context JSON 与完整-ID chips；五类视觉 fixture 另由 `smoke:runtime` 覆盖，不替代 Engine 证据 |
 
 ### 6.2 历史验证快照（仅证明标注的旧代码树）
 

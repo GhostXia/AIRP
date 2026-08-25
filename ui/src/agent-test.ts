@@ -27,6 +27,7 @@ export interface AgentTestHarness {
   refreshCharacters(): void;
   applySurface(message: unknown): SurfaceApplyResult;
   setWidgetState(scope: string, state: Json): void;
+  setWidgetOperation(instanceId: string, operation: Json): void;
   patchWidgetState(scope: string, patch: JsonPatch): void;
   getWidgetLifecycle(): WidgetLifecycleEvidence;
   setBusError(message: string | null): void;
@@ -48,6 +49,7 @@ export interface AgentTestContext {
   getSurface: () => SurfaceSnapshot | null;
   applySurface: (message: unknown) => SurfaceApplyResult;
   setWidgetState: (scope: string, state: Json) => void;
+  setWidgetOperation: (instanceId: string, operation: Json) => void;
   patchWidgetState: (scope: string, patch: JsonPatch) => void;
   getState: () => Record<string, Json>;
   getSelectedCharacterId: () => string;
@@ -133,6 +135,9 @@ export function installAgentTestHarness(ctx: AgentTestContext): AgentTestHarness
     },
     setWidgetState(scope, state) {
       ctx.setWidgetState(scope, state);
+    },
+    setWidgetOperation(instanceId, operation) {
+      ctx.setWidgetOperation(instanceId, operation);
     },
     patchWidgetState(scope, patch) {
       ctx.patchWidgetState(scope, patch);

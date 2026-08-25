@@ -120,7 +120,14 @@ try {
 
   const imported = await request("POST", "/v1/characters/import", {
     character_id: "smoke-alice",
-    card_json: JSON.stringify({ spec: "chara_card_v2", data: { name: "Smoke Alice", first_mes: "Hello" } }),
+    card_json: JSON.stringify({
+      spec: "chara_card_v2",
+      data: {
+        name: "Smoke Alice",
+        first_mes: "Hello",
+        character_book: { entries: [{ keys: ["smoke"], content: "Smoke lore" }] },
+      },
+    }),
   });
   const sessionId = await request("POST", `/v1/sessions/${encodeURIComponent(imported.character_id)}`);
   await request("POST", "/v1/chat/history", {
@@ -210,9 +217,24 @@ try {
   assert.equal(firstChat.total, 5_000);
   assert.equal(firstChat.has_more, true);
   assert.equal(firstChat.oldest_id, "m00000000000000000000000000001357");
+  assert.deepEqual(firstChat.context, {
+    character_id: imported.character_id,
+    session_id: sessionId,
+    persona_id: null,
+    persona_source: null,
+    scene_id: null,
+    worldbook_source_ids: [`character:${imported.character_id}`],
+  });
   assert.match(await page.locator(".surface__kicker").innerText(), /^Surface \/ session:/i);
   assert.equal(await page.locator(".w-chat-composer input").isDisabled(), false,
     "core.chat must be the only writable production Surface widget");
+  const contextLabels = await page.getByRole("list", { name: "当前对话上下文" })
+    .locator(".context-chip").evaluateAll((chips) => chips.map((chip) => chip.getAttribute("aria-label")));
+  assert.deepEqual(contextLabels, [
+    `角色 ${imported.character_id}`,
+    `会话 ${sessionId}`,
+    `世界书 character:${imported.character_id}`,
+  ], "real Engine context chips did not preserve authoritative stable identifiers");
   const chatLog = page.locator(".w-chat-log");
   await page.getByText("Durable history 5000", { exact: true }).waitFor({ state: "visible" });
   assert.ok(await chatLog.locator(".msg").count() < 50, "initial virtual DOM rendered the full history page");
