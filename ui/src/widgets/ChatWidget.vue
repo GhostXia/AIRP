@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { WidgetInstance, Json } from "../protocol/types";
 import { computeWindow } from "./virtual-window";
 
@@ -41,6 +41,8 @@ type ChatOperation = {
   userText?: string;
   error?: string;
   history?: ChatState;
+  retryName?: string;
+  retryParams?: Json;
 };
 
 // Fixed row height for the virtualized window (performance contract: only the
@@ -55,7 +57,9 @@ const chatState = computed<ChatState>(
   () => (props.state as ChatState | null) ?? {},
 );
 const operation = computed<ChatOperation>(() => (props.operation as ChatOperation | null) ?? {});
-const busy = computed(() => ["streaming", "stopping", "submitting", "awaiting_surface"].includes(operation.value.status ?? ""));
+const busy = computed(() => [
+  "streaming", "stopping", "submitting", "awaiting_surface", "reconciling", "recovery_required",
+].includes(operation.value.status ?? ""));
 const projected = computed(() => Array.isArray(chatState.value.messages));
 function decodeProjected(state: ChatState): Msg[] {
   if (!Array.isArray(state.messages)) return [];
@@ -86,7 +90,7 @@ const projectedMessages = computed<Msg[]>(() => {
   const bodyAlreadyProjected = last?.role === "assistant"
     && !!op.body
     && (op.mode === "continue" ? last.text.endsWith(op.body) : last.text === op.body);
-  if ((op.status === "streaming" || op.status === "stopping" || op.status === "awaiting_surface") && op.body && !bodyAlreadyProjected) {
+  if (["streaming", "stopping", "awaiting_surface", "reconciling", "recovery_required", "retryable"].includes(op.status ?? "") && op.body && !bodyAlreadyProjected) {
     transient.push({ id: "transient-assistant", role: "assistant", text: op.body });
   }
   return [...durable, ...transient];
@@ -101,6 +105,7 @@ const order = computed<string[]>(() => projected.value
 const scrollEl = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
 const viewportH = ref(0);
+let followLatest = true;
 
 const vwin = computed(() =>
   computeWindow({
@@ -125,6 +130,7 @@ function onScroll(): void {
   if (!el) return;
   scrollTop.value = el.scrollTop;
   viewportH.value = el.clientHeight;
+  followLatest = el.scrollHeight - el.scrollTop - el.clientHeight < ITEM_H * 2;
   // Near the top → ask the Gateway for an older history window.
   if (!props.readOnly && el.scrollTop < ITEM_H * 2 && operation.value.status !== "loading_history") {
     const history = operation.value.history;
@@ -134,11 +140,23 @@ function onScroll(): void {
   }
 }
 
+function scrollToLatest(): void {
+  const el = scrollEl.value;
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
+  scrollTop.value = el.scrollTop;
+}
+
+watch(() => order.value.length, () => {
+  if (followLatest) void nextTick(scrollToLatest);
+});
+
 let resizeObserver: ResizeObserver | null = null;
 onMounted(() => {
   if (scrollEl.value) viewportH.value = scrollEl.value.clientHeight;
   resizeObserver = new ResizeObserver(([entry]) => { viewportH.value = entry.contentRect.height; });
   if (scrollEl.value) resizeObserver.observe(scrollEl.value);
+  void nextTick(scrollToLatest);
 });
 onBeforeUnmount(() => resizeObserver?.disconnect());
 
@@ -148,8 +166,17 @@ function send(): void {
   if (props.readOnly || busy.value) return;
   const text = draft.value.trim();
   if (!text) return;
+  followLatest = true;
   emit("intent", "chat.send", { text });
   draft.value = "";
+  void nextTick(scrollToLatest);
+}
+
+function generate(name: "chat.regen" | "chat.continue"): void {
+  if (props.readOnly || busy.value) return;
+  followLatest = true;
+  emit("intent", name);
+  void nextTick(scrollToLatest);
 }
 
 function swipe(message: Msg, direction: -1 | 1): void {
@@ -187,8 +214,13 @@ function swipe(message: Msg, direction: -1 | 1): void {
     <div v-if="operation?.thinking" class="generation-note">思考中：{{ operation.thinking }}</div>
     <div v-if="operation?.error" class="generation-error" role="alert">{{ operation.error }}</div>
     <div class="generation-actions">
-      <button type="button" :disabled="readOnly || busy" @click="emit('intent', 'chat.regen')">重新生成</button>
-      <button type="button" :disabled="readOnly || busy" @click="emit('intent', 'chat.continue')">继续</button>
+      <button
+        v-if="operation?.status === 'retryable' && operation.retryName"
+        type="button"
+        @click="emit('intent', operation.retryName, operation.retryParams)"
+      >重试未提交操作</button>
+      <button type="button" :disabled="readOnly || busy" @click="generate('chat.regen')">重新生成</button>
+      <button type="button" :disabled="readOnly || busy" @click="generate('chat.continue')">继续</button>
       <button v-if="operation?.status === 'streaming' || operation?.status === 'stopping'" type="button" @click="emit('intent', 'chat.stop')">停止</button>
     </div>
     <form class="w-chat-composer" @submit.prevent="send">

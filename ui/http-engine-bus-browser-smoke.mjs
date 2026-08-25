@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import net from "node:net";
@@ -123,6 +123,19 @@ try {
     card_json: JSON.stringify({ spec: "chara_card_v2", data: { name: "Smoke Alice", first_mes: "Hello" } }),
   });
   const sessionId = await request("POST", `/v1/sessions/${encodeURIComponent(imported.character_id)}`);
+  await request("POST", "/v1/chat/history", {
+    character_id: imported.character_id,
+    session_id: sessionId,
+    limit: 1,
+  });
+  const historyDir = path.join(data, "characters", imported.character_id, "sessions", sessionId, "history");
+  assert.ok(existsSync(historyDir), `Engine did not create the canonical history path: ${historyDir}`);
+  const historyLines = Array.from({ length: 5_000 }, (_, index) => JSON.stringify({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: `Durable history ${String(index + 1).padStart(4, "0")}`,
+    id: `m${(index + 1).toString(16).padStart(32, "0")}`,
+  }));
+  writeFileSync(path.join(historyDir, "chat_log.jsonl"), `${historyLines.join("\n")}\n`);
   const widgetSource = `export default () => ({ mount(element, ctx) {
     globalThis.__airpSmokeMounts = (globalThis.__airpSmokeMounts || 0) + 1;
     let storageBlocked = false;
@@ -162,15 +175,26 @@ try {
   const failures = [];
   const httpFailures = [];
   let intentRequests = 0;
+  let cooperativeStopRequested = false;
   page.on("console", (message) => {
     if (message.type() === "error") failures.push(`${message.location().url}: ${message.text()}`);
   });
-  page.on("requestfailed", (request) => failures.push(`${request.url()}: ${request.failure()?.errorText}`));
+  page.on("requestfailed", (request) => {
+    const expectedStopAbort = cooperativeStopRequested
+      && new URL(request.url()).pathname === "/v1/ui/intents"
+      && request.failure()?.errorText === "net::ERR_ABORTED";
+    if (!expectedStopAbort) failures.push(`${request.url()}: ${request.failure()?.errorText}`);
+  });
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === "/v1/ui/intents") intentRequests += 1;
   });
   page.on("response", (response) => {
     if (response.status() >= 400) httpFailures.push(`${response.status()} ${response.url()}`);
+  });
+  const firstSurfaceResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && /^\/v1\/ui\/surfaces\/session\/[^/]+$/.test(url.pathname);
   });
   await page.goto(
     `${origin}/desktop/?character_id=${encodeURIComponent(imported.character_id)}&session_id=${encodeURIComponent(sessionId)}#airp-token=${desktopSession.token}`,
@@ -178,12 +202,57 @@ try {
   );
   await page.getByText("Engine 已连接").waitFor({ state: "visible" });
   await page.locator('[data-blueprint-version="2"]').waitFor({ state: "visible" });
+  const firstSurface = await (await firstSurfaceResponse).json();
+  const firstChat = firstSurface.snapshot.blueprint.widgets.find((widget) => widget.id === "chat")?.props;
+  assert.equal(firstChat.messages.length, 50, "initial Surface did not contain exactly the latest page");
+  assert.equal(firstChat.messages[0].content, "Durable history 4951");
+  assert.equal(firstChat.messages.at(-1).content, "Durable history 5000");
+  assert.equal(firstChat.total, 5_000);
+  assert.equal(firstChat.has_more, true);
+  assert.equal(firstChat.oldest_id, "m00000000000000000000000000001357");
   assert.match(await page.locator(".surface__kicker").innerText(), /^Surface \/ session:/i);
   assert.equal(await page.locator(".w-chat-composer input").isDisabled(), false,
     "core.chat must be the only writable production Surface widget");
+  const chatLog = page.locator(".w-chat-log");
+  await page.getByText("Durable history 5000", { exact: true }).waitFor({ state: "visible" });
+  assert.ok(await chatLog.locator(".msg").count() < 50, "initial virtual DOM rendered the full history page");
+  const olderPageRequest = page.waitForRequest((request) => {
+    if (new URL(request.url()).pathname !== "/v1/ui/intents" || request.method() !== "POST") return false;
+    return request.postDataJSON()?.name === "chat.loadMore";
+  });
+  const olderPageResponse = page.waitForResponse((response) => {
+    const request = response.request();
+    if (new URL(response.url()).pathname !== "/v1/ui/intents" || request.method() !== "POST") return false;
+    return request.postDataJSON()?.name === "chat.loadMore";
+  });
+  await chatLog.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const olderPageParams = (await olderPageRequest).postDataJSON().params;
+  assert.deepEqual(olderPageParams, { before: firstChat.oldest_id, limit: 50 },
+    "scroll did not request exactly one 50-message cursor page");
+  assert.equal((await olderPageResponse).ok(), true, "50-message cursor page request failed");
+  await page.getByText("Durable history 4901", { exact: true }).waitFor({ state: "visible" });
+  assert.ok(await chatLog.locator(".msg").count() < 50, "virtual DOM became unbounded after pagination");
+  await page.evaluate(() => {
+    globalThis.__airpUnrelatedHosts = Object.fromEntries(
+      ["memory", "character-state", "activity"].map((id) => [
+        id, document.querySelector(`[data-widget-instance="${id}"] .widget-host`),
+      ]),
+    );
+  });
   await page.locator(".w-chat-composer input").fill("Hello Engine");
   await page.locator(".w-chat-composer").dispatchEvent("submit");
   await page.getByText("Smoke reply", { exact: true }).waitFor({ state: "visible" });
+  assert.deepEqual(await page.evaluate(() => Object.entries(globalThis.__airpUnrelatedHosts).map(([id, before]) => {
+    const after = document.querySelector(`[data-widget-instance="${id}"] .widget-host`);
+    return { id, same: before === after, connected: before?.isConnected === true };
+  })), [
+    { id: "memory", same: true, connected: true },
+    { id: "character-state", same: true, connected: true },
+    { id: "activity", same: true, connected: true },
+  ], "chat Surface patch rebuilt an unrelated Widget Host");
   await page.getByRole("button", { name: "重新生成" }).click();
   await page.getByText("Regenerated reply", { exact: true }).waitFor({ state: "visible" });
   await page.getByRole("button", { name: "上一个候选" }).click();
@@ -193,6 +262,7 @@ try {
   await page.getByRole("button", { name: "继续", exact: true }).click();
   await page.getByRole("button", { name: "停止" }).waitFor({ state: "visible" });
   await page.getByText("unfinished", { exact: true }).waitFor({ state: "visible" });
+  cooperativeStopRequested = true;
   await page.getByRole("button", { name: "停止" }).click();
   await page.getByRole("button", { name: "停止" }).waitFor({ state: "hidden" });
   for (let attempt = 0; attempt < 100 && !providerCancelled; attempt += 1) {
@@ -291,7 +361,7 @@ try {
     capabilities: ["read:state"],
     mountCalls: 1,
   });
-  assert.equal(intentRequests, 6, "Chat vertical slice did not dispatch every expected intent");
+  assert.equal(intentRequests, 7, "Chat vertical slice did not dispatch every expected intent");
   assert.ok(providerRequests >= 7, "Chat vertical slice did not reuse the Engine provider pipeline");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);
   assert.equal(failures.length, 0, `browser errors: ${failures.join("\n")}`);

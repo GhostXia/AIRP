@@ -30,6 +30,8 @@ export class IntentStreamFailure extends Error {
   constructor(readonly data: Record<string, unknown>, message: string) { super(message); }
 }
 
+export class IntentStreamInterrupted extends Error {}
+
 export interface HttpEngineBusOptions {
   base?: string;
   fetchImpl?: typeof fetch;
@@ -247,7 +249,7 @@ export class HttpEngineBus {
         if (done) break;
       }
       if (!terminal || terminal.data.type !== "done") {
-        throw new Error("Intent stream ended without a terminal frame");
+        throw new IntentStreamInterrupted("Intent stream ended without a terminal frame");
       }
       return terminal;
     } finally {
