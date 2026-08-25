@@ -407,9 +407,12 @@ async function stopActiveChatBeforeScopeChange(): Promise<boolean> {
   }
 }
 
-async function selectSession(sessionId: string): Promise<void> {
+async function selectSession(sessionId: string, control?: HTMLSelectElement): Promise<void> {
   if (!sessionId || sessionId === selectedSessionId.value) return;
-  if (!await stopActiveChatBeforeScopeChange()) return;
+  if (!await stopActiveChatBeforeScopeChange()) {
+    if (control) control.value = selectedSessionId.value;
+    return;
+  }
   sessionStorage.setItem("airp_session_id", sessionId);
   await initializeBus();
 }
@@ -507,7 +510,7 @@ onUnmounted(() => {
         <div class="workspace__actions">
           <label v-if="productionSurface && sessionIds.length" class="session-picker">
             <span>会话</span>
-            <select :value="selectedSessionId" @change="selectSession(($event.target as HTMLSelectElement).value)">
+            <select :value="selectedSessionId" @change="selectSession(($event.target as HTMLSelectElement).value, $event.target as HTMLSelectElement)">
               <option v-for="sessionId in sessionIds" :key="sessionId" :value="sessionId">{{ sessionId.slice(0, 8) }}</option>
             </select>
           </label>

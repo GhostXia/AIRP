@@ -45,14 +45,24 @@ Swipe 函数和按钮都受统一 busy 门禁约束，避免与 send/regen/conti
 
 `core.chat` manifest 已改为与 executor 一致的 send/regen/continue/stop/swipe/loadMore 封闭集合。
 
-## 2. 权威与恢复边界
+## 2. 首轮 audit bot 处理
+
+- **B1（已修）**：基线日期与 2026-08-25 审计证据对齐。
+- **B2（已修）**：session DELETE 接受同族 `user_id` query，在对应 effective root 删除；新增 wrong-scope 404 与 scoped delete 测试。
+- **B3（不采纳）**：bot 建议把 `user_id` 绑定到 authenticated principal，但当前 daemon access key 和 desktop session token 都是进程级授权，不携带用户 claim；既有 Chat、Conversation、Persona 等 API 也由进程级授权调用方显式选择 `user_id`，基线明确产品并非多租户。仅在本 PR 三个端点伪造 principal 会形成错误且不兼容的安全模型。真正的多租户身份绑定应作为独立架构变更，而不是本纵切的局部补丁。
+- **B4（已修）**：browser smoke 在 provider server 不存在时立即完成清理；存在时先 `close` 再 `closeAllConnections`，避免活动 SSE 令 finally 挂起。
+- **B5（已修）**：停止失败时把 session select DOM 值恢复为当前权威 session。
+- **B6（已修）**：intent SSE 在成功、typed error、解析错误与大小限制等所有退出路径取消 reader 并释放 lock；测试断言 error 路径实际触发 cancel。
+- **N1（已修）**：Vitest 全局 stub 改由 `afterEach` 无条件恢复。
+
+## 3. 权威与恢复边界
 
 - 浏览器只提交 Surface id、instance id、intent 名称与参数；Engine 从已接受的 Surface registry 反查 effective root、character、session、user 与 Widget 类型。
 - 未注册、歧义、错实例、错 Widget、过期会话和未知 intent 均 fail closed。
 - send/regen/continue 复用既有 Chat pipeline 与 SSE 合同；stop 通过当前 Coordinator generation id 协作取消。
 - Vue 的流文本、思考文本、pending/error 和旧页历史仅为临时视图 overlay，不成为第二份 durable truth store。
 
-## 3. #589 保留的未完成门禁
+## 4. #589 保留的未完成门禁
 
 以下项目不属于本 PR 可宣称完成的证据，因此 PR 描述不使用 `Closes #589`：
 
@@ -63,12 +73,13 @@ Swipe 函数和按钮都受统一 busy 门禁约束，避免与 send/regen/conti
 
 这些是原 issue 的剩余完成条件，不另建重复 issue；后续 PR 继续在 #589 下收口。
 
-## 4. 裁决
+## 5. 裁决
 
 | 类别 | 数量 | 处理 |
 |---|---:|---|
 | 本 PR 代码阻塞项 | 0 | 可以进入仓库首轮 audit bot 门禁 |
-| 已修复审计项 | 6 | A1–A6 已验证 |
+| 已修复审计项 | 12 | A1–A6、B1–B2、B4–B6、N1 已验证 |
+| 不采纳意见 | 1 | B3 与当前进程级授权模型不相容 |
 | 原 issue 剩余门禁 | 4 | 保留 #589 开放，不虚报完成 |
 
 **最终建议：PR #590 可以在仓库 audit bot 首轮通过且人工 review 后合并；合并不得关闭 #589。**

@@ -52,6 +52,13 @@ pub(in crate::daemon) struct CreateSessionQuery {
     user_id: Option<UserId>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(in crate::daemon) struct DeleteSessionQuery {
+    #[serde(default)]
+    force: bool,
+    user_id: Option<UserId>,
+}
+
 pub(in crate::daemon) async fn create_session_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
@@ -94,11 +101,14 @@ pub(in crate::daemon) async fn create_session_endpoint(
 pub(in crate::daemon) async fn delete_session_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path((character_id, session_id)): axum::extract::Path<(String, String)>,
-    axum::extract::Query(params): axum::extract::Query<crate::daemon::handlers::DeleteForceParams>,
+    axum::extract::Query(params): axum::extract::Query<DeleteSessionQuery>,
 ) -> Result<Json<serde_json::Value>, AirpError> {
     let cid = CharacterId::new(character_id)?;
     let sid = SessionId::parse(&session_id)?;
-    let data_root = state.data_root.clone();
+    let data_root = params.user_id.map_or_else(
+        || state.data_root.clone(),
+        |user_id| state.data_root.join("users").join(user_id.as_str()),
+    );
     let force = params.force;
     let cid_str = cid.as_str().to_string();
     let sid_str = sid.to_string();

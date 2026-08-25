@@ -298,7 +298,12 @@ try {
   console.log("HttpEngineBus real-Engine browser smoke passed");
 } finally {
   await browser?.close().catch(() => {});
-  await new Promise((resolve) => providerServer?.close(resolve));
+  if (providerServer) {
+    await new Promise((resolve) => {
+      providerServer.close(resolve);
+      providerServer.closeAllConnections();
+    });
+  }
   if (child && child.exitCode === null) {
     child.kill();
     await Promise.race([

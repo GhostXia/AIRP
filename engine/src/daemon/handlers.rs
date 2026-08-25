@@ -53,7 +53,7 @@ pub(super) use character_templates::{
 };
 pub(super) use characters::{
     delete_character_endpoint, get_character_card, import_character, list_characters,
-    reextract_character_assets, update_character_card, DeleteForceParams,
+    reextract_character_assets, update_character_card,
 };
 pub(super) use chat::{
     cancel_chat_generation, chat_completion, continue_chat, delete_message, edit_message,

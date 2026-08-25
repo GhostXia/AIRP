@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SurfaceStore } from "./surface-v2";
 import { HttpEngineBus } from "./http-engine-bus";
 import type { SurfaceSnapshot } from "./types";
@@ -52,6 +52,8 @@ async function until(predicate: () => boolean): Promise<void> {
 }
 
 describe("HttpEngineBus", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("applies split CRLF SSE and sends the last accepted opaque cursor", async () => {
     const calls: Array<{ path: string; cursor: string | null }> = [];
     const store = new SurfaceStore();
@@ -175,13 +177,21 @@ describe("HttpEngineBus", () => {
   });
 
   it("surfaces typed chat stream errors", async () => {
-    const fetchImpl = async () => closedStream([
-      "event: error\ndata: {\"type\":\"error\",\"text\":\"provider unavailable\"}\n\n",
-    ]);
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const fetchImpl = async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          "event: error\ndata: {\"type\":\"error\",\"text\":\"provider unavailable\"}\n\n",
+        ));
+      },
+      cancel() { cancelled = true; },
+    }), { headers: { "Content-Type": "text/event-stream" } });
     const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
     await expect(bus.dispatchIntent(
       "session:s1", "chat", "chat.send", { text: "hi" },
     )).rejects.toThrow("provider unavailable");
+    expect(cancelled).toBe(true);
   });
 
   it("rejects unknown and post-terminal intent frames", async () => {
@@ -228,6 +238,5 @@ describe("HttpEngineBus", () => {
       "GET /v1/sessions/alice?user_id=tenant-a",
       "POST /v1/sessions/alice?user_id=tenant-a",
     ]);
-    vi.unstubAllGlobals();
   });
 });

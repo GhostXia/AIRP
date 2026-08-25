@@ -205,50 +205,55 @@ export class HttpEngineBus {
     const encoder = new TextEncoder();
     let buffer = "";
     let terminal: IntentStreamEvent | null = null;
-    while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      buffer = buffer.replace(/\r\n/g, "\n");
-      let boundary: number;
-      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        if (!frame || frame.startsWith(":")) continue;
-        if (encoder.encode(frame).byteLength > MAX_SSE_BUFFER_BYTES) {
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        buffer = buffer.replace(/\r\n/g, "\n");
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (!frame || frame.startsWith(":")) continue;
+          if (encoder.encode(frame).byteLength > MAX_SSE_BUFFER_BYTES) {
+            throw new Error("Intent SSE frame exceeds limit");
+          }
+          let event = "message";
+          const dataLines: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trimStart();
+            else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+          }
+          if (dataLines.length === 0) continue;
+          let data: Record<string, unknown>;
+          try { data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>; }
+          catch { throw new Error("Invalid intent SSE JSON"); }
+          if (terminal) throw new Error("Intent stream emitted a frame after its terminal frame");
+          if (event !== "message" && event !== "error") throw new Error(`Unknown intent SSE event: ${event}`);
+          if ((event === "error") !== (data.type === "error")) {
+            throw new Error("Intent SSE event name does not match its data type");
+          }
+          const parsed = { event, data };
+          onEvent?.(parsed);
+          if (event === "error" || data.type === "done") terminal = parsed;
+          if (event === "error") {
+            const detail = typeof data.text === "string" ? data.text : "Chat generation failed";
+            throw new IntentStreamFailure(data, detail);
+          }
+        }
+        if (encoder.encode(buffer).byteLength > MAX_SSE_BUFFER_BYTES) {
           throw new Error("Intent SSE frame exceeds limit");
         }
-        let event = "message";
-        const dataLines: string[] = [];
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) event = line.slice(6).trimStart();
-          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-        }
-        if (dataLines.length === 0) continue;
-        let data: Record<string, unknown>;
-        try { data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>; }
-        catch { throw new Error("Invalid intent SSE JSON"); }
-        if (terminal) throw new Error("Intent stream emitted a frame after its terminal frame");
-        if (event !== "message" && event !== "error") throw new Error(`Unknown intent SSE event: ${event}`);
-        if ((event === "error") !== (data.type === "error")) {
-          throw new Error("Intent SSE event name does not match its data type");
-        }
-        const parsed = { event, data };
-        onEvent?.(parsed);
-        if (event === "error" || data.type === "done") terminal = parsed;
-        if (event === "error") {
-          const detail = typeof data.text === "string" ? data.text : "Chat generation failed";
-          throw new IntentStreamFailure(data, detail);
-        }
+        if (done) break;
       }
-      if (encoder.encode(buffer).byteLength > MAX_SSE_BUFFER_BYTES) {
-        throw new Error("Intent SSE frame exceeds limit");
+      if (!terminal || terminal.data.type !== "done") {
+        throw new Error("Intent stream ended without a terminal frame");
       }
-      if (done) break;
+      return terminal;
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
-    if (!terminal || terminal.data.type !== "done") {
-      throw new Error("Intent stream ended without a terminal frame");
-    }
-    return terminal;
   }
 
   private async run(
