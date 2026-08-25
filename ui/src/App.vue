@@ -353,6 +353,7 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
       targetIndex: typeof raw?.index === "number" ? raw.index : undefined,
       startedRevision: acceptedSurface.value?.revision,
       baseline: captureChatBaseline(acceptedSurface.value, instanceId),
+      idleObservations: 0,
       retryName: name,
       retryParams: params,
     });

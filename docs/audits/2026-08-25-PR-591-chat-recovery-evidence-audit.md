@@ -44,3 +44,11 @@ PASS. All blocking findings were fixed and independently rechecked. No deferred
 non-blocking audit findings remain from this audit. Real configured-provider
 acceptance and complete desktop credential recovery across an Engine process
 restart remain explicit #589 gates, not claims of this PR.
+
+## First audit-bot follow-up
+
+The first completed CodeRabbit review reported four additional issues. All were
+accepted and fixed: Swipe now resets recovery observations; retry is disabled
+on read-only Surfaces; the current verification snapshot is separated from the
+historical `main@830426e` results; and Persona/Scene/Worldbook context chips are
+listed explicitly as an open #589 boundary. No audit-bot item was deferred.

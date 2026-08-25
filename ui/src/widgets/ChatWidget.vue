@@ -217,6 +217,7 @@ function swipe(message: Msg, direction: -1 | 1): void {
       <button
         v-if="operation?.status === 'retryable' && operation.retryName"
         type="button"
+        :disabled="readOnly"
         @click="emit('intent', operation.retryName, operation.retryParams)"
       >重试未提交操作</button>
       <button type="button" :disabled="readOnly || busy" @click="generate('chat.regen')">重新生成</button>
