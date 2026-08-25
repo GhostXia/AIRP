@@ -44,3 +44,22 @@ Automated tests cover trusted target resolution, forged/unregistered target
 rejection, JSON and split-frame Chat SSE handling, typed stream errors, and the
 existing Surface suite. A real configured provider remains a manual acceptance
 gate and must not be represented by a mock result.
+
+## 2026-08-25 recovery and long-history follow-up
+
+The client treats an intent stream that ends without a protocol terminal as an
+unknown commit outcome. It never replays that mutation automatically. Recovery
+compares the next authoritative Chat projection with a pre-dispatch baseline
+using stable message IDs and candidate indexes, while the projected Coordinator
+phase distinguishes generating, committing, recovering, and idle. A retry is
+offered only for an explicit `not_committed` error or after two fresh idle
+snapshots both leave the canonical projection unchanged. Partial, changed but
+incomplete, and recovery-required outcomes remain blocked for inspection.
+
+The real-Engine browser smoke creates a 5,000-line canonical chat log at runtime
+and verifies the initial latest-50 window, one cursor-based older page, bounded
+virtual DOM, latest-message following, and DOM identity preservation for the
+unrelated Memory, Character State, and Activity Widget hosts after a Chat patch.
+It remains mock-provider evidence. Real configured-provider acceptance and the
+complete desktop credential path across an Engine process restart remain open
+gates in #589.

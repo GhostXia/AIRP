@@ -2,7 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { BlueprintV2, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
 import type { SurfaceApplyResult } from "./protocol/surface-v2";
-import { HttpEngineBus, IntentStreamFailure, type EngineSurfaceScope } from "./protocol/http-engine-bus";
+import {
+  HttpEngineBus, IntentStreamFailure, IntentStreamInterrupted, type EngineSurfaceScope,
+} from "./protocol/http-engine-bus";
 import { currentBearer, renewDesktopSession } from "./protocol/desktop-session";
 import { isTauriEnvironment } from "./protocol/bus-factory";
 import { stateRevisionStore, stateStore, setState, patchState } from "./state/store";
@@ -14,6 +16,11 @@ import DesktopRail from "./components/shell/DesktopRail.vue";
 import ContextInspector from "./components/shell/ContextInspector.vue";
 import UiButton from "./components/primitives/UiButton.vue";
 import { WORKSPACE_PRESETS, type WorkspaceId } from "./shell-model";
+import {
+  cancellationIsExplicitlyNotCommitted, captureChatBaseline, chatProjectionChanged,
+  classifyChatRecoveryProjection,
+  type ChatOperationBaseline,
+} from "./chat-recovery";
 
 // Register first-party widgets into the open registry.
 registerBuiltins();
@@ -135,6 +142,10 @@ type Operation = {
   history?: Record<string, unknown>;
   targetMessageId?: string;
   targetIndex?: number;
+  baseline?: ChatOperationBaseline;
+  idleObservations?: number;
+  retryName?: string;
+  retryParams?: Json;
 };
 
 function operationFor(instanceId: string): Operation {
@@ -171,41 +182,56 @@ function mergeHistory(previous: Record<string, unknown> | undefined, next: Recor
   };
 }
 
-function operationIsProjected(instanceId: string, operation: Operation): boolean {
-  const widget = acceptedSurface.value?.blueprint.widgets.find((candidate) => candidate.id === instanceId);
-  const projected = widget?.props as {
-    messages?: Array<{ role?: unknown; content?: unknown }>;
-    message_ids?: string[];
-    message_swipe_index?: number[];
-  } | null;
-  if (operation.mode === "swipe" && operation.targetMessageId && Number.isInteger(operation.targetIndex)) {
-    const index = projected?.message_ids?.indexOf(operation.targetMessageId) ?? -1;
-    return index >= 0 && projected?.message_swipe_index?.[index] === operation.targetIndex;
+function reconcileAcceptedOperations(freshIdleObservation = false): void {
+  const snapshot = acceptedSurface.value;
+  if (!snapshot) return;
+  for (const [instanceId, raw] of Object.entries(widgetOperations.value)) {
+    const operation = raw as Operation;
+    if (!operation.status || !["awaiting_surface", "reconciling", "recovery_required"].includes(operation.status)) {
+      continue;
+    }
+    const projection = classifyChatRecoveryProjection(snapshot, instanceId, operation);
+    if (projection === "recovery_required") {
+      setOperation(instanceId, {
+        ...operation,
+        status: "recovery_required",
+        error: "Engine 检测到未完成提交，需要先完成会话恢复；请勿重复提交。",
+      });
+      continue;
+    }
+    if (projection === "committed") {
+      setOperation(instanceId, { history: operation.history });
+      continue;
+    }
+    if (operation.status === "awaiting_surface") continue;
+    if (projection === "busy") {
+      setOperation(instanceId, { ...operation, status: "reconciling", idleObservations: 0 });
+    } else if (projection === "unchanged" && operation.status === "reconciling" && !freshIdleObservation) {
+      queueMicrotask(() => {
+        if (bus && scope) void probeRecoveringOperation(bus, scope, instanceId);
+      });
+    } else if ((projection === "changed" || projection === "unchanged") && freshIdleObservation) {
+      if (projection === "changed" || chatProjectionChanged(snapshot, instanceId, operation)) {
+        setOperation(instanceId, {
+          ...operation,
+          status: "recovery_required",
+          error: "权威历史已变化但无法确认完整提交；请检查历史，切勿直接重试。",
+        });
+      } else {
+        const observations = (operation.idleObservations ?? 0) + 1;
+        setOperation(instanceId, observations >= 2 ? {
+          ...operation,
+          status: "retryable",
+          idleObservations: observations,
+          error: "Engine 已连续确认权威历史未变化；本次未提交，可以安全重试。",
+        } : { ...operation, status: "reconciling", idleObservations: observations });
+      }
+    }
   }
-  const messages = projected?.messages;
-  if (!Array.isArray(messages)) return false;
-  if (operation.mode === "send" && operation.userText) {
-    const userProjected = [...messages].reverse().some(
-      (message) => message.role === "user" && message.content === operation.userText,
-    );
-    if (!userProjected || !operation.body) return userProjected;
-  }
-  if (!operation.body) return true;
-  const assistant = [...messages].reverse().find((message) => message.role === "assistant");
-  if (typeof assistant?.content !== "string") return false;
-  return operation.mode === "continue"
-    ? assistant.content.endsWith(operation.body)
-    : assistant.content === operation.body;
 }
 
 watch(() => acceptedSurface.value?.revision, (revision) => {
-  if (!revision) return;
-  for (const [instanceId, raw] of Object.entries(widgetOperations.value)) {
-    const operation = raw as Operation;
-    if (operation.status === "awaiting_surface" && operationIsProjected(instanceId, operation)) {
-      setOperation(instanceId, { history: operation.history });
-    }
-  }
+  if (revision) reconcileAcceptedOperations();
 });
 
 function invalidateBus(message: string): void {
@@ -223,8 +249,56 @@ function invalidateBus(message: string): void {
 
 function applySurface(message: unknown): SurfaceApplyResult {
   const result = surface.apply(message);
-  if (result.status === "applied") busError.value = null;
+  if (result.status === "applied") {
+    busError.value = null;
+    queueMicrotask(() => reconcileAcceptedOperations());
+  }
   return result;
+}
+
+const recoveryProbes = new Map<string, HttpEngineBus>();
+
+async function refreshSurfaceForBus(
+  activeBus: HttpEngineBus,
+  activeScope: EngineSurfaceScope,
+): Promise<void> {
+  await activeBus.refreshSurface(activeScope, {
+    apply(message) {
+      if (bus !== activeBus) throw new Error("Discarding a stale Surface refresh");
+      return applySurface(message);
+    },
+  });
+}
+
+async function probeRecoveringOperation(
+  activeBus: HttpEngineBus,
+  activeScope: EngineSurfaceScope,
+  instanceId: string,
+  attempts = 2,
+): Promise<void> {
+  if (recoveryProbes.get(instanceId) === activeBus) return;
+  recoveryProbes.set(instanceId, activeBus);
+  try {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await refreshSurfaceForBus(activeBus, activeScope);
+      if (bus !== activeBus) return;
+      reconcileAcceptedOperations(true);
+      if (operationFor(instanceId).status !== "reconciling") return;
+    }
+  } catch (err: unknown) {
+    if (bus === activeBus) busError.value = String(err ?? "Surface refresh failed");
+  } finally {
+    if (recoveryProbes.get(instanceId) === activeBus) recoveryProbes.delete(instanceId);
+  }
+}
+
+function probeAllRecoveringOperations(): void {
+  if (!bus || !scope) return;
+  for (const [instanceId, raw] of Object.entries(widgetOperations.value)) {
+    if ((raw as Operation).status === "reconciling") {
+      void probeRecoveringOperation(bus, scope, instanceId);
+    }
+  }
 }
 
 async function reconcileOperation(
@@ -233,15 +307,14 @@ async function reconcileOperation(
   instanceId: string,
 ): Promise<boolean> {
   try {
-    await activeBus.refreshSurface(activeScope, { apply: applySurface });
+    await refreshSurfaceForBus(activeBus, activeScope);
   } catch (err: unknown) {
     if (bus === activeBus) busError.value = String(err ?? "Surface refresh failed");
     return false;
   }
   if (bus !== activeBus) return false;
-  const live = operationFor(instanceId);
-  setOperation(instanceId, { history: live.history });
-  return true;
+  reconcileAcceptedOperations(true);
+  return operationFor(instanceId).status === undefined;
 }
 
 async function onIntent(name: string, params?: Json, instanceId = "desktop-shell"): Promise<void> {
@@ -251,6 +324,7 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
   const activeScope = scope;
   const current = operationFor(instanceId);
   const streams = ["chat.send", "chat.regen", "chat.continue"];
+  const recoverableMutations = [...streams, "chat.swipe"];
   if (streams.includes(name)) {
     const raw = params as { text?: unknown } | undefined;
     setOperation(instanceId, {
@@ -261,6 +335,9 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
       thinking: "",
       userText: name === "chat.send" && typeof raw?.text === "string" ? raw.text : undefined,
       startedRevision: acceptedSurface.value?.revision,
+      baseline: captureChatBaseline(acceptedSurface.value, instanceId),
+      retryName: name,
+      retryParams: params,
     });
   } else if (name === "chat.stop") {
     setOperation(instanceId, { ...current, status: "stopping" });
@@ -275,6 +352,10 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
       targetMessageId: typeof raw?.message_id === "string" ? raw.message_id : undefined,
       targetIndex: typeof raw?.index === "number" ? raw.index : undefined,
       startedRevision: acceptedSurface.value?.revision,
+      baseline: captureChatBaseline(acceptedSurface.value, instanceId),
+      idleObservations: 0,
+      retryName: name,
+      retryParams: params,
     });
   }
   try {
@@ -305,18 +386,50 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
     }
   } catch (err: unknown) {
     if (bus === activeBus) {
-      const typed = err instanceof IntentStreamFailure ? err.data.error as { code?: unknown } | undefined : undefined;
+      const typed = err instanceof IntentStreamFailure
+        ? err.data.error as { code?: unknown; commit_state?: unknown } | undefined
+        : undefined;
       if (typed?.code === "cancelled") {
         const live = operationFor(instanceId);
         const commitState = err instanceof IntentStreamFailure
           ? (err.data.error as { commit_state?: unknown } | undefined)?.commit_state
           : undefined;
-        if (commitState === "partially_committed") {
-          setOperation(instanceId, { ...live, status: "awaiting_surface" });
-          await reconcileOperation(activeBus, activeScope, instanceId);
+        if (cancellationIsExplicitlyNotCommitted(commitState)) {
+          if (bus === activeBus) setOperation(instanceId, { history: live.history });
           return;
         }
-        if (bus === activeBus) setOperation(instanceId, { history: live.history });
+        setOperation(instanceId, {
+          ...live,
+          status: "reconciling",
+          error: commitState === "partially_committed"
+            ? "取消结果正在与 Engine 权威历史核对；请勿重复提交。"
+            : "取消回执缺少明确的未提交状态，正在核对 Engine 权威历史；请勿重复提交。",
+        });
+        await probeRecoveringOperation(activeBus, activeScope, instanceId);
+        return;
+      }
+      if (recoverableMutations.includes(name) && (
+        err instanceof IntentStreamInterrupted
+        || !(err instanceof IntentStreamFailure)
+        || typed?.commit_state !== "not_committed"
+      )) {
+        const live = operationFor(instanceId);
+        setOperation(instanceId, {
+          ...live,
+          status: "reconciling",
+          idleObservations: 0,
+          error: "连接在终态前中断，正在核对 Engine 权威历史；不会自动重放。",
+        });
+        await probeRecoveringOperation(activeBus, activeScope, instanceId);
+        return;
+      }
+      if (recoverableMutations.includes(name)) {
+        const live = operationFor(instanceId);
+        setOperation(instanceId, {
+          ...live,
+          status: "retryable",
+          error: "Engine 已确认本次未提交，可以安全重试。",
+        });
         return;
       }
       console.error("[App] dispatch failed:", err);
@@ -347,6 +460,7 @@ async function initializeBus(): Promise<void> {
         if (attempt !== busAttempt) return;
         connectionState.value = connected ? "connected" : "connecting";
         if (connected) busError.value = null;
+        if (connected) queueMicrotask(probeAllRecoveringOperations);
       },
       onError: (error) => {
         if (attempt !== busAttempt) return;

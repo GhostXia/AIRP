@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SurfaceStore } from "./surface-v2";
-import { HttpEngineBus } from "./http-engine-bus";
+import { HttpEngineBus, IntentStreamInterrupted } from "./http-engine-bus";
 import type { SurfaceSnapshot } from "./types";
 
 function snapshot(revision = "1", title = "one"): SurfaceSnapshot {
@@ -174,6 +174,20 @@ describe("HttpEngineBus", () => {
       { type: "body_chunk", text: "hello" },
       { type: "done" },
     ]);
+  });
+
+  it("classifies terminal-free intent EOF without replaying the mutation", async () => {
+    let requests = 0;
+    const bus = new HttpEngineBus({
+      base: "http://engine.test", bearer: () => "secret",
+      fetchImpl: async () => {
+        requests += 1;
+        return closedStream(["event: message\ndata: {\"type\":\"body_chunk\",\"text\":\"partial\"}\n\n"]);
+      },
+    });
+    await expect(bus.dispatchIntent("session:s1", "chat", "chat.send", { text: "hi" }))
+      .rejects.toBeInstanceOf(IntentStreamInterrupted);
+    expect(requests).toBe(1);
   });
 
   it("surfaces typed chat stream errors", async () => {
