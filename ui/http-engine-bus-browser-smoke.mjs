@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import net from "node:net";
 import path from "node:path";
@@ -40,6 +41,8 @@ const origin = `http://127.0.0.1:${port}`;
 const bearer = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 let child;
 let browser;
+let providerServer;
+let providerCancelled = false;
 
 async function request(method, pathname, body) {
   const response = await fetch(`${origin}${pathname}`, {
@@ -56,6 +59,39 @@ async function request(method, pathname, body) {
 }
 
 try {
+  let providerRequests = 0;
+  providerServer = http.createServer((_request, response) => {
+    providerRequests += 1;
+    const replies = ["Smoke reply", "Regenerated reply", " continued", " unfinished"];
+    const logicalRequest = Math.floor((providerRequests - 1) / 2);
+    const reply = replies[Math.min(logicalRequest, replies.length - 1)];
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: reply } }] })}\n\n`);
+    if (providerRequests === 7) {
+      let completed = false;
+      const timer = setTimeout(() => {
+        completed = true;
+        response.end("data: [DONE]\n\n");
+      }, 5_000);
+      response.once("close", () => {
+        clearTimeout(timer);
+        if (!completed) providerCancelled = true;
+      });
+    } else {
+      response.end("data: [DONE]\n\n");
+    }
+  });
+  await new Promise((resolve, reject) => {
+    providerServer.once("error", reject);
+    providerServer.listen(0, "127.0.0.1", resolve);
+  });
+  const providerAddress = providerServer.address();
+  assert.equal(typeof providerAddress, "object");
+  const providerEndpoint = `http://127.0.0.1:${providerAddress.port}/v1/chat/completions`;
   child = spawn(engine, ["daemon", "--port", String(port)], {
     cwd: root,
     env: {
@@ -63,6 +99,9 @@ try {
       AIRP_DATA_DIR: data,
       AIRP_DESKTOP_WEBUI_DIR: webuiDir,
       AIRP_ACCESS_KEY: bearer,
+      AIRP_ENDPOINT: providerEndpoint,
+      AIRP_API_KEY: "smoke-provider-key",
+      AIRP_MODEL: "smoke-model",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -115,18 +154,6 @@ try {
   await request("POST", `/v1/extensions/${encodeURIComponent(installedWidget.id)}/grants`, {
     action: "grant",
   });
-  // Force the Engine's bounded-props marker. Read-only authorization must be
-  // explicit; it must never be inferred from the normal messages[] shape.
-  const historyDir = path.join(data, "characters", imported.character_id, "sessions", String(sessionId), "history");
-  mkdirSync(historyDir, { recursive: true });
-  const now = new Date().toISOString();
-  writeFileSync(path.join(historyDir, "chat_log_meta.json"), JSON.stringify({
-    session_id: String(sessionId), character_id: imported.character_id,
-    created_at: now, updated_at: now, revision: 1,
-  }));
-  writeFileSync(path.join(historyDir, "chat_log.jsonl"), `${JSON.stringify({
-    role: "assistant", content: "x".repeat(210_000), id: "oversized-projection", ts: now,
-  })}\n`);
   const desktopSession = await request("POST", "/v1/desktop-session");
   assert.equal(typeof desktopSession.token, "string");
 
@@ -152,10 +179,36 @@ try {
   await page.getByText("Engine 已连接").waitFor({ state: "visible" });
   await page.locator('[data-blueprint-version="2"]').waitFor({ state: "visible" });
   assert.match(await page.locator(".surface__kicker").innerText(), /^Surface \/ session:/i);
-  assert.equal(await page.locator(".w-chat-composer input").isDisabled(), true,
-    "truncated Engine projection must remain explicitly read-only");
+  assert.equal(await page.locator(".w-chat-composer input").isDisabled(), false,
+    "core.chat must be the only writable production Surface widget");
+  await page.locator(".w-chat-composer input").fill("Hello Engine");
   await page.locator(".w-chat-composer").dispatchEvent("submit");
-  await page.waitForTimeout(50);
+  await page.getByText("Smoke reply", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "重新生成" }).click();
+  await page.getByText("Regenerated reply", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "上一个候选" }).click();
+  await page.getByText("Smoke reply", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByText("Smoke reply continued", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByRole("button", { name: "停止" }).waitFor({ state: "visible" });
+  await page.getByText("unfinished", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "停止" }).click();
+  await page.getByRole("button", { name: "停止" }).waitFor({ state: "hidden" });
+  for (let attempt = 0; attempt < 100 && !providerCancelled; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(providerCancelled, true, "stop did not close the active upstream provider stream");
+  // The router-wide limiter covers Surface polling and all setup calls too;
+  // allow its bucket to replenish before the one canonical history probe.
+  await new Promise((resolve) => setTimeout(resolve, 2_500));
+  const stoppedHistory = await request("POST", "/v1/chat/history", {
+    character_id: imported.character_id,
+    session_id: sessionId,
+    limit: 50,
+  });
+  assert.equal(stoppedHistory.messages?.at(-1)?.content, "Smoke reply continued",
+    "cancelled continue did not converge to the Engine's canonical history");
   assert.equal(new URL(page.url()).hash, "", "token fragment was not scrubbed");
   assert.equal(await page.evaluate(() => sessionStorage.getItem("airp_bearer")), desktopSession.token);
   const renewed = await page.evaluate(async () => {
@@ -238,12 +291,14 @@ try {
     capabilities: ["read:state"],
     mountCalls: 1,
   });
-  assert.equal(intentRequests, 0, "read-only /desktop/ path dispatched an intent request");
+  assert.equal(intentRequests, 6, "Chat vertical slice did not dispatch every expected intent");
+  assert.ok(providerRequests >= 7, "Chat vertical slice did not reuse the Engine provider pipeline");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);
   assert.equal(failures.length, 0, `browser errors: ${failures.join("\n")}`);
   console.log("HttpEngineBus real-Engine browser smoke passed");
 } finally {
   await browser?.close().catch(() => {});
+  await new Promise((resolve) => providerServer?.close(resolve));
   if (child && child.exitCode === null) {
     child.kill();
     await Promise.race([

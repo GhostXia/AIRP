@@ -23,6 +23,7 @@ const props = defineProps<{
   state: unknown;
   stateRevision?: number;
   readOnly?: boolean;
+  operation?: Json;
 }>();
 const emit = defineEmits<{ (e: "intent", name: string, params?: Json): void }>();
 
@@ -228,6 +229,7 @@ onErrorCaptured((e) => {
         :instance="instance"
         :state="state"
         :read-only="readOnly"
+        :operation="operation"
         @intent="onIntent"
       />
       <div v-else-if="sandboxed" ref="sandboxEl" class="widget-sandbox"></div>

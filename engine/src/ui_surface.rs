@@ -21,6 +21,7 @@ pub struct SurfaceScope {
     data_root: String,
     character_id: String,
     session_id: String,
+    user_id: Option<String>,
 }
 
 impl SurfaceScope {
@@ -33,7 +34,34 @@ impl SurfaceScope {
             data_root: data_root.to_string_lossy().into_owned(),
             character_id: character_id.into(),
             session_id: session_id.into(),
+            user_id: None,
         }
+    }
+
+    pub fn for_user(
+        data_root: &Path,
+        character_id: impl Into<String>,
+        session_id: impl Into<String>,
+        user_id: Option<String>,
+    ) -> Self {
+        Self {
+            data_root: data_root.to_string_lossy().into_owned(),
+            character_id: character_id.into(),
+            session_id: session_id.into(),
+            user_id,
+        }
+    }
+
+    pub fn character_id(&self) -> &str {
+        &self.character_id
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        self.user_id.as_deref()
     }
 }
 
@@ -95,6 +123,8 @@ pub enum SurfaceReplay {
 pub enum SurfaceRegistryError {
     InvalidScope(&'static str),
     UnknownScope,
+    AmbiguousSurface,
+    UnknownInstance,
     RevisionExhausted,
     Validation(SurfaceValidationError),
 }
@@ -104,6 +134,10 @@ impl std::fmt::Display for SurfaceRegistryError {
         match self {
             Self::InvalidScope(field) => write!(formatter, "surface {field} must not be empty"),
             Self::UnknownScope => formatter.write_str("surface scope is not registered"),
+            Self::AmbiguousSurface => formatter.write_str("surface id resolves to multiple scopes"),
+            Self::UnknownInstance => {
+                formatter.write_str("widget instance is not in the accepted surface")
+            }
             Self::RevisionExhausted => formatter.write_str("surface revision is exhausted"),
             Self::Validation(error) => write!(formatter, "surface validation failed: {error}"),
         }
@@ -114,7 +148,11 @@ impl std::error::Error for SurfaceRegistryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Validation(error) => Some(error),
-            Self::InvalidScope(_) | Self::UnknownScope | Self::RevisionExhausted => None,
+            Self::InvalidScope(_)
+            | Self::UnknownScope
+            | Self::AmbiguousSurface
+            | Self::UnknownInstance
+            | Self::RevisionExhausted => None,
         }
     }
 }
@@ -186,6 +224,9 @@ fn validate_scope(scope: &SurfaceScope) -> Result<(), SurfaceRegistryError> {
     if scope.session_id.is_empty() {
         return Err(SurfaceRegistryError::InvalidScope("session_id"));
     }
+    if scope.user_id.as_deref().is_some_and(str::is_empty) {
+        return Err(SurfaceRegistryError::InvalidScope("user_id"));
+    }
     Ok(())
 }
 
@@ -228,6 +269,12 @@ pub struct SurfaceRegistry {
     max_events: usize,
     max_bytes: usize,
     touch_clock: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurfaceIntentTarget {
+    pub scope: SurfaceScope,
+    pub widget_type: String,
 }
 
 impl Default for SurfaceRegistry {
@@ -404,6 +451,36 @@ impl SurfaceRegistry {
         Ok(event)
     }
 
+    /// Resolve an intent against the exact host-accepted Surface snapshot.
+    /// Surface ids are presentation identifiers rather than tenant keys, so a
+    /// duplicate id across registered scopes is rejected instead of guessed.
+    pub fn resolve_intent_target(
+        &self,
+        surface_id: &str,
+        instance_id: &str,
+    ) -> Result<SurfaceIntentTarget, SurfaceRegistryError> {
+        let mut matches = self.entries.iter().filter_map(|(scope, entry)| {
+            (entry.snapshot.surface_id == surface_id).then_some((scope, entry))
+        });
+        let Some((scope, entry)) = matches.next() else {
+            return Err(SurfaceRegistryError::UnknownScope);
+        };
+        if matches.next().is_some() {
+            return Err(SurfaceRegistryError::AmbiguousSurface);
+        }
+        let widget = entry
+            .snapshot
+            .blueprint
+            .widgets
+            .iter()
+            .find(|widget| widget.id == instance_id)
+            .ok_or(SurfaceRegistryError::UnknownInstance)?;
+        Ok(SurfaceIntentTarget {
+            scope: scope.clone(),
+            widget_type: widget.widget_type.clone(),
+        })
+    }
+
     pub fn ring_event_count(&self) -> usize {
         self.ring.len()
     }
@@ -555,6 +632,10 @@ fn scope_fingerprint(scope: &SurfaceScope) -> String {
     digest.update(scope.character_id.as_bytes());
     digest.update(scope.session_id.len().to_be_bytes());
     digest.update(scope.session_id.as_bytes());
+    if let Some(user_id) = &scope.user_id {
+        digest.update(user_id.len().to_be_bytes());
+        digest.update(user_id.as_bytes());
+    }
     digest
         .finalize()
         .iter()
@@ -807,6 +888,37 @@ mod tests {
                 .props,
             Some(json!({"messages": ["second"]}))
         );
+    }
+
+    #[test]
+    fn intent_resolution_requires_one_exact_registered_surface_and_widget() {
+        let mut registry = SurfaceRegistry::new();
+        let first = SurfaceScope::for_user(
+            Path::new("tenant-a"),
+            "character",
+            "session",
+            Some("alice".into()),
+        );
+        registry.publish(first.clone(), props("first")).unwrap();
+        let target = registry
+            .resolve_intent_target("session:session", "chat")
+            .unwrap();
+        assert_eq!(target.scope, first);
+        assert_eq!(target.widget_type, "core.chat");
+        assert!(registry
+            .resolve_intent_target("session:session", "missing")
+            .is_err());
+
+        let second = SurfaceScope::for_user(
+            Path::new("tenant-b"),
+            "character",
+            "session",
+            Some("bob".into()),
+        );
+        registry.publish(second, props("second")).unwrap();
+        assert!(registry
+            .resolve_intent_target("session:session", "chat")
+            .is_err());
     }
 
     #[test]

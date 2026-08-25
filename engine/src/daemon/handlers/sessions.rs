@@ -11,7 +11,7 @@
 use crate::daemon::DaemonState;
 use crate::domain::ChatService;
 use crate::error::AirpError;
-use crate::types::{CharacterId, SessionId};
+use crate::types::{CharacterId, SessionId, UserId};
 use axum::{extract::Query, Json};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -23,9 +23,13 @@ use std::sync::Arc;
 pub(in crate::daemon) async fn list_sessions_endpoint(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
     axum::extract::Path(character_id): axum::extract::Path<String>,
+    Query(query): Query<SessionScopeQuery>,
 ) -> Result<Json<Vec<SessionId>>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let data_root = state.data_root.clone();
+    let data_root = query.user_id.map_or_else(
+        || state.data_root.clone(),
+        |user_id| state.data_root.join("users").join(user_id.as_str()),
+    );
     let sessions =
         tokio::task::spawn_blocking(move || ChatService::new(&data_root).list_sessions(&cid))
             .await
@@ -38,8 +42,14 @@ pub(in crate::daemon) async fn list_sessions_endpoint(
 /// `ChatService::create_session` 是同步文件 IO；在 async handler 中用
 /// `spawn_blocking` 包装避免阻塞 tokio worker 线程（#433）。
 #[derive(Debug, Deserialize)]
+pub(in crate::daemon) struct SessionScopeQuery {
+    user_id: Option<UserId>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(in crate::daemon) struct CreateSessionQuery {
     session_id: Option<String>,
+    user_id: Option<UserId>,
 }
 
 pub(in crate::daemon) async fn create_session_endpoint(
@@ -48,7 +58,10 @@ pub(in crate::daemon) async fn create_session_endpoint(
     Query(query): Query<CreateSessionQuery>,
 ) -> Result<Json<SessionId>, AirpError> {
     let cid = CharacterId::new(character_id)?;
-    let data_root = state.data_root.clone();
+    let data_root = query.user_id.map_or_else(
+        || state.data_root.clone(),
+        |user_id| state.data_root.join("users").join(user_id.as_str()),
+    );
     let requested_sid = query
         .session_id
         .map(|sid| SessionId::parse(&sid))

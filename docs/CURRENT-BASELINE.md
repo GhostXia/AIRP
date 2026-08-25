@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
-> 基线日期：2026-08-23
-> 代码基线：#564 PR 6 HttpEngineBus + dual-entry candidate（本文与实现同分支）
+> 基线日期：2026-08-24
+> 代码基线：#564 PR 8 Chat Widget vertical-slice candidate（本文与实现同分支）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -18,6 +18,8 @@
 本次增量校准（2026-08-23，#564 PR 6）：Vue 已通过同源 `HttpEngineBus` 消费 bearer 保护的 Surface snapshot/SSE；认证流使用 streaming fetch、动态 bearer、401 rotation、成功应用后才推进 opaque cursor，并在断流时 replay、协议/patch 失败时确定性 snapshot resync。Engine 同时承载旧 WebUI `/` 与 Vue `/desktop/`，Tauri 默认仍走 `/`，仅 `AIRP_DESKTOP_UI=blueprint` 选择 `/desktop/`，bundle 缺失时可见回退。浏览器和 Tauri 使用同一 REST+SSE Bus，未恢复 Tauri 业务 relay。**写闭环仍未交付**：Widget intent executor 与第三方 host parity 属于 PR 7–9，Vue 当前真实 Surface 为只读迁移入口。
 
 本次增量校准（2026-08-24，#564 PR 7 candidate）：Vue WidgetHost 已消费 Engine 权威 catalog/grants/plugins，并对 catalog major、capability 封闭集、manifest、sandbox 与 trusted-plugin 声明 fail-closed；生产第三方 ESM 不再进入宿主进程，只能在 `sandbox="allow-scripts"`、无 `allow-same-origin` 的 opaque iframe 中运行。WebUI 与 Vue bridge 均以 iframe window、随机 bridge session、稳定 instance id 校验消息，销毁后释放监听；真实 Engine Chrome smoke 验证 digest-pinned source、授权 capability 投影以及 iframe 无法读取 bearer/sessionStorage/宿主 DOM。固定 slot plan 仍只服务 WebUI，不进入 Blueprint v2。**写闭环仍未交付**：当前 Engine Surface 保持只读，Chat/Memory/Character State executor 属于 PR 8–9。
+
+本次增量校准（2026-08-24，#564 PR 8 candidate）：Engine 新增 `core.chat` 专用 `/v1/ui/intents` 可信执行边界，从已接受 Surface 反查有效数据根、角色、会话、用户作用域与 Widget 类型，拒绝缺失、歧义、错实例和未知 intent；执行复用既有 Chat pipeline/Coordinator。Vue `/desktop/` 支持 session 选择/创建、历史分页、send SSE、stop、regen、continue 与 swipe，流式文本只保留为临时视图并由下一份 canonical Surface revision 收敛。Memory/Character State/Activity 与第三方 Widget 仍未开放写执行器；真实 provider 手工验收仍是发布边界。
 
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
@@ -41,7 +43,7 @@ AIRP 是面向 Role Play 的 AI Agent 客户端，采用“无头 Engine + 可�
 | `webui/` | 无构建、多页面、同源 WebUI（当前 44 屏；`assets/widgets/` 为 widget 运行时与 SDK 资产面） | **正式产品交付主面** |
 | `airp-engine-console/` | WebUI 视觉与交互样板 | 设计基线，不是第二套运行时 |
 | `protocol/` | `airp-state-protocol`：共享线协议类型 | Rust workspace 成员 |
-| `ui/`、`ui/src-tauri/` | 当前运行事实：Tauri 壳同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；Surface v2 authority、客户端原子 store、受限 Blueprint/Widget runtime、Engine session Surface snapshot/SSE、`HttpEngineBus`、同源 `/desktop/` 与 Engine-authoritative Widget host parity 已交付；目标事实：#564 恢复 Vue Blueprint/Widget 桌面主面 | **#564 开发中**；默认入口仍是 WebUI `/`，`AIRP_DESKTOP_UI=blueprint` 才选择只读 `/desktop/`。真实 Widget intent 写闭环未交付，见 §2.3 和 #564 PR 1–7 决策 |
+| `ui/`、`ui/src-tauri/` | 当前运行事实：Tauri 壳同源承载 engine webui 资产 + bearer 注入与 token 续期通道（C-P0）；Surface v2 authority、客户端原子 store、受限 Blueprint/Widget runtime、Engine session Surface snapshot/SSE、`HttpEngineBus`、同源 `/desktop/`、Engine-authoritative Widget host parity 与首个 `core.chat` 写纵切已交付；目标事实：#564 恢复 Vue Blueprint/Widget 桌面主面 | **#564 开发中**；默认入口仍是 WebUI `/`，`AIRP_DESKTOP_UI=blueprint` 才选择 `/desktop/`。Memory/State/workspace 写闭环未交付，见 §2.3 和 #564 PR 1–8 决策 |
 | `deploy/windows-webui/` | Windows 便携 WebUI 包 | 当前优先 artifact |
 | `deploy/linux-webui/` | Linux musl 便携包 | 手动构建 artifact |
 | `deploy/production/` | 单实例自托管 HTTPS preview | P0 拓扑，不是正式发布 |
@@ -64,7 +66,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 | 创作工具 | 图片生成、角色模板、风格学习、对话示例、时间线、卡片 diff | 对应 HTTP | 屏 36–42 等已接入 | 功能存在 ≠ 真实 provider/工作流已验收 |
 | Provider / 扩展 | 多 Provider 路由、OpenAI-compatible/Anthropic/Ollama、本地脚本/HTTP webhook 插件 | providers/routing/plugin-tools API；Agent registry 动态合并 | 设置与插件管理入口 | 插件非沙箱；HTTPS webhook 注册+请求 fail-closed DNS 与域名 pin 已落地（RR-014 近端修复 / #381 E-P0-3 / #329 N3）；非通用代码沙箱 |
 | Widget 扩展与桌面壳（v0.0.4 新增） | engine `extensions/`：digest-pinned 安装、catalog 权威下发、capability 封闭集与 grant/revoke、desktop session token 签发与 rotation | `/v1/extensions*`、`/v1/widget-intents`（拒绝默认）、`/v1/grants` 统一授权查询面、`/v1/desktop-session*`；digest-pinned 静态包服务在鉴权层外投放、服务时复检摘要 | Tauri 壳同源承载 webui（C-P0）；slot 挂载、opaque-origin iframe 沙箱、consent 授权 UI、扩展管理 UI、Widget SDK | capability 授权由 engine 逐调用强制（C-P3）；第三方 esm 只有同源 digest 目录加载路径；compat harness 锁 hostApi semver 与 capability 封闭集；intent 面无真实执行器；GUI 真机验证未完成（§2.3） |
-| Blueprint/Surface 桌面恢复（#564 开发中） | Surface v2 guard；确定性 session Blueprint；Chat/Memory/Character State/Activity 只读投影；有界 replay；脱敏失败回执；扩展 catalog/grants/plugins 权威 | bearer 保护的 snapshot/SSE；opaque cursor + `Last-Event-ID`；失效 cursor snapshot resync；Widget grant 查询 | Vue shell、受限 renderer、原子 store、Widget 生命周期、多尺寸 smoke、同源 `/desktop/`、`HttpEngineBus` 与 opaque iframe 第三方 host parity 已接 Engine | 当前是真实 Engine 只读迁移入口，默认仍为 WebUI `/`；真实 intent 写 executor 未交付，不得宣称产品闭环；WebUI 固定 slot plan 不进入 Blueprint v2 |
+| Blueprint/Surface 桌面恢复（#564 开发中） | Surface v2 guard；确定性 session Blueprint；Chat/Memory/Character State/Activity 投影；有界 replay；脱敏失败回执；扩展 catalog/grants/plugins 权威 | bearer 保护的 snapshot/SSE；opaque cursor + `Last-Event-ID`；失效 cursor snapshot resync；`core.chat` 可信 intent executor | Vue shell、受限 renderer、原子 store、Widget 生命周期、多尺寸 smoke、同源 `/desktop/`、`HttpEngineBus`、opaque iframe 第三方 host parity；Chat session/history/send/stop/regen/continue/swipe | 默认仍为 WebUI `/`；仅 `core.chat` 开放写纵切，Memory/State/workspace 与第三方 intent executor 未交付；真实 provider 手工验收未完成；WebUI 固定 slot plan 不进入 Blueprint v2 |
 | 部署 | production fail-closed 校验、原子配置更新、secret 脱敏 | loopback 默认；首方 gateway 同源代理 | Windows/Linux 便携包与 production preview | 非多租户；P1/P2/P3 发布门未闭合 |
 
 ### 2.1 结构性事实（2026-08-02 审查确认）

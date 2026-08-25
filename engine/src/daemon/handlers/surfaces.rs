@@ -47,11 +47,13 @@ pub(in crate::daemon) async fn get_surface_snapshot(
         return surface_auth_unavailable();
     }
     let effective_root = effective_root(&state, query.user_id.as_ref());
+    let user_id = query.user_id.as_ref().map(ToString::to_string);
     match refresh_surface(
         state.clone(),
         effective_root.clone(),
         query.character_id.clone(),
         session_id,
+        user_id,
     )
     .await
     {
@@ -80,21 +82,24 @@ pub(in crate::daemon) async fn get_surface_events(
         return surface_auth_unavailable();
     }
     let effective_root = effective_root(&state, query.user_id.as_ref());
+    let user_id = query.user_id.as_ref().map(ToString::to_string);
     let current = match refresh_surface(
         state.clone(),
         effective_root.clone(),
         query.character_id.clone(),
         session_id,
+        user_id.clone(),
     )
     .await
     {
         Ok(event) => event,
         Err(error) => return error.into_response(),
     };
-    let scope = SurfaceScope::new(
+    let scope = SurfaceScope::for_user(
         &effective_root,
         query.character_id.to_string(),
         session_id.to_string(),
+        user_id.clone(),
     );
     let requested = headers
         .get("last-event-id")
@@ -143,6 +148,7 @@ pub(in crate::daemon) async fn get_surface_events(
                 effective_root.clone(),
                 character_id.clone(),
                 session_id,
+                user_id.clone(),
             ).await {
                 Ok(event) => event,
                 Err(error) => {
@@ -183,9 +189,10 @@ async fn refresh_surface(
     effective_root: std::path::PathBuf,
     character_id: CharacterId,
     session_id: SessionId,
+    user_id: Option<String>,
 ) -> Result<SurfaceEvent, AirpError> {
     tokio::task::spawn_blocking(move || {
-        refresh_surface_blocking(&state, &effective_root, &character_id, &session_id)
+        refresh_surface_blocking(&state, &effective_root, &character_id, &session_id, user_id)
     })
     .await
     .map_err(|error| AirpError::Internal(format!("Surface projection task failed: {error}")))?
@@ -196,12 +203,14 @@ fn refresh_surface_blocking(
     effective_root: &std::path::Path,
     character_id: &CharacterId,
     session_id: &SessionId,
+    user_id: Option<String>,
 ) -> Result<SurfaceEvent, AirpError> {
     let props = project_session(state, effective_root, character_id, session_id)?;
-    let scope = SurfaceScope::new(
+    let scope = SurfaceScope::for_user(
         effective_root,
         character_id.to_string(),
         session_id.to_string(),
+        user_id,
     );
     let mut registry = state.ui_surfaces.lock().unwrap_or_else(|p| p.into_inner());
     registry
@@ -226,11 +235,20 @@ fn project_session(
     .ok_or_else(|| {
         AirpError::NotFound(format!("session {session_id} for character {character_id}"))
     })?;
-    let chat = ChatService::new(effective_root)
+    let mut chat = ChatService::new(effective_root)
         .history_window_read_only(character_id, Some(session_id), Some(50), None)?
         .map(serde_json::to_value)
         .transpose()?
         .unwrap_or_else(|| json!({"messages": [], "message_ids": [], "total": 0}));
+    if let Some(chat) = chat.as_object_mut() {
+        chat.insert(
+            "context".into(),
+            json!({
+                "character_id": character_id,
+                "session_id": session_id,
+            }),
+        );
+    }
     let memory = json!({
         "content": crate::memory::read_resident_memory(&session_dir)?,
         "capacity_chars": crate::memory::ResidentMemoryConfig::default().capacity_chars,

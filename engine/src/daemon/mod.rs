@@ -41,9 +41,10 @@ use handlers::{
     create_scene_endpoint, create_session_endpoint, delete_backup_endpoint,
     delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
     delete_plugin_tool_endpoint, delete_session_endpoint, diff_character_revisions_endpoint,
-    edit_message, execute_conversation_migration_endpoint, execute_conversation_turn_endpoint,
-    export_session_timeline_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
-    get_backup_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
+    dispatch_ui_intent, edit_message, execute_conversation_migration_endpoint,
+    execute_conversation_turn_endpoint, export_session_timeline_endpoint,
+    generate_dialogue_examples_endpoint, generate_image_endpoint, get_backup_endpoint,
+    get_character_avatar, get_character_card, get_character_lorebook,
     get_character_revision_endpoint, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_chat_session_state,
     get_conversation_capabilities_endpoint, get_conversation_endpoint,
@@ -417,6 +418,7 @@ pub fn create_router_with_conversation_policy_registry(
             "/v1/ui/surfaces/session/:session_id/events",
             get(get_surface_events),
         )
+        .route("/v1/ui/intents", post(dispatch_ui_intent))
         // C-P0：桌面壳进程互信换短时效 UI token（bearer 注入通道）。
         .route(
             "/v1/desktop-session",

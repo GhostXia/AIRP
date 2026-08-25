@@ -10,6 +10,8 @@ const props = defineProps<{
   stateRevisions: Record<string, number>;
   activeTabs: Record<string, string>;
   authoritativeProps?: boolean;
+  writableWidgetTypes?: string[];
+  operations?: Record<string, Json>;
 }>();
 
 const emit = defineEmits<{
@@ -60,6 +62,10 @@ function widgetState(instanceId: string): Json {
   const value = props.state[instanceId];
   return value === undefined ? null : value;
 }
+
+function isReadOnly(widgetType: string): boolean {
+  return !!props.authoritativeProps && !(props.writableWidgetTypes ?? []).includes(widgetType);
+}
 </script>
 
 <template>
@@ -83,7 +89,8 @@ function widgetState(instanceId: string): Json {
         :instance="instance"
         :state="widgetState(instance.id)"
         :state-revision="stateRevisions[instance.id] ?? 0"
-        :read-only="authoritativeProps"
+        :read-only="isReadOnly(instance.type)"
+        :operation="operations?.[instance.id]"
         @intent="(name, params) => emit('intent', name, params, instance.id)"
       />
     </Teleport>

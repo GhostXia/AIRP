@@ -29,7 +29,7 @@
       }
     }
   },
-  "intents": ["chat.send", "chat.regenerate", "chat.loadMore"],
+  "intents": ["chat.send", "chat.regen", "chat.continue", "chat.stop", "chat.swipe", "chat.loadMore"],
   "capabilities": ["read:state"],
   "entry": { "kind": "builtin" },
   "author": "AIRP",

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { WidgetInstance, Json } from "../protocol/types";
 import { computeWindow } from "./virtual-window";
 
-const props = defineProps<{ instance: WidgetInstance; state: unknown; readOnly?: boolean }>();
+const props = defineProps<{ instance: WidgetInstance; state: unknown; readOnly?: boolean; operation?: Json }>();
 const emit = defineEmits<{ (e: "intent", name: string, params?: Json): void }>();
 
 interface Msg {
@@ -14,6 +14,8 @@ interface Msg {
   // 新消息（chat.send 流式 turn）当前无 ts，留 undefined。未来 ChatWidget
   // 想显示时间戳时可直接读此字段。
   ts?: string;
+  candidateIndex?: number;
+  candidateCount?: number;
 }
 
 // Task 1.2: chat state is `{ messages: {id: Msg}, order: id[] }`. We render
@@ -24,6 +26,21 @@ type ChatState = {
   order?: string[];
   message_ids?: string[];
   message_timestamps?: Array<string | null>;
+  message_candidates?: string[][];
+  message_swipe_index?: number[];
+  has_more?: boolean;
+  oldest_id?: string | null;
+  context?: { character_id?: string; session_id?: string };
+};
+
+type ChatOperation = {
+  status?: string;
+  mode?: string;
+  body?: string;
+  thinking?: string;
+  userText?: string;
+  error?: string;
+  history?: ChatState;
 };
 
 // Fixed row height for the virtualized window (performance contract: only the
@@ -37,15 +54,42 @@ const title = computed(() => {
 const chatState = computed<ChatState>(
   () => (props.state as ChatState | null) ?? {},
 );
+const operation = computed<ChatOperation>(() => (props.operation as ChatOperation | null) ?? {});
+const busy = computed(() => ["streaming", "stopping", "submitting", "awaiting_surface"].includes(operation.value.status ?? ""));
 const projected = computed(() => Array.isArray(chatState.value.messages));
-const projectedMessages = computed<Msg[]>(() => {
-  if (!Array.isArray(chatState.value.messages)) return [];
-  return chatState.value.messages.map((message, index) => ({
-    id: chatState.value.message_ids?.[index] ?? `projected-${index}`,
+function decodeProjected(state: ChatState): Msg[] {
+  if (!Array.isArray(state.messages)) return [];
+  return state.messages.map((message, index) => ({
+    id: state.message_ids?.[index] ?? `projected-${index}`,
     role: typeof message.role === "string" ? message.role : "unknown",
     text: typeof message.content === "string" ? message.content : "",
-    ts: chatState.value.message_timestamps?.[index] ?? undefined,
+    ts: state.message_timestamps?.[index] ?? undefined,
+    candidateIndex: state.message_swipe_index?.[index] ?? 0,
+    candidateCount: Math.max(1, state.message_candidates?.[index]?.length ?? 0),
   }));
+}
+const projectedMessages = computed<Msg[]>(() => {
+  const older = decodeProjected(operation.value.history ?? {});
+  const current = decodeProjected(chatState.value);
+  const seen = new Set<string>();
+  const durable = [...older, ...current].filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+  const transient: Msg[] = [];
+  const op = operation.value;
+  const last = durable[durable.length - 1];
+  if (op.userText && !(last?.role === "user" && last.text === op.userText)) {
+    transient.push({ id: "transient-user", role: "user", text: op.userText });
+  }
+  const bodyAlreadyProjected = last?.role === "assistant"
+    && !!op.body
+    && (op.mode === "continue" ? last.text.endsWith(op.body) : last.text === op.body);
+  if ((op.status === "streaming" || op.status === "stopping" || op.status === "awaiting_surface") && op.body && !bodyAlreadyProjected) {
+    transient.push({ id: "transient-assistant", role: "assistant", text: op.body });
+  }
+  return [...durable, ...transient];
 });
 const messagesById = computed<Record<string, Msg>>(() => projected.value
   ? Object.fromEntries(projectedMessages.value.map((message) => [message.id, message]))
@@ -82,27 +126,46 @@ function onScroll(): void {
   scrollTop.value = el.scrollTop;
   viewportH.value = el.clientHeight;
   // Near the top → ask the Gateway for an older history window.
-  if (!props.readOnly && !projected.value && el.scrollTop < ITEM_H * 2) emit("intent", "chat.loadMore");
+  if (!props.readOnly && el.scrollTop < ITEM_H * 2 && operation.value.status !== "loading_history") {
+    const history = operation.value.history;
+    const hasMore = history ? history.has_more : chatState.value.has_more;
+    const before = history?.oldest_id ?? chatState.value.oldest_id ?? order.value[0];
+    if (hasMore && before) emit("intent", "chat.loadMore", { before, limit: 50 });
+  }
 }
 
+let resizeObserver: ResizeObserver | null = null;
 onMounted(() => {
   if (scrollEl.value) viewportH.value = scrollEl.value.clientHeight;
+  resizeObserver = new ResizeObserver(([entry]) => { viewportH.value = entry.contentRect.height; });
+  if (scrollEl.value) resizeObserver.observe(scrollEl.value);
 });
+onBeforeUnmount(() => resizeObserver?.disconnect());
 
 const draft = ref("");
 
 function send(): void {
-  if (props.readOnly) return;
+  if (props.readOnly || busy.value) return;
   const text = draft.value.trim();
   if (!text) return;
   emit("intent", "chat.send", { text });
   draft.value = "";
 }
+
+function swipe(message: Msg, direction: -1 | 1): void {
+  if (props.readOnly || busy.value || !message.candidateCount || message.candidateCount < 2) return;
+  const next = ((message.candidateIndex ?? 0) + direction + message.candidateCount) % message.candidateCount;
+  emit("intent", "chat.swipe", { message_id: message.id, index: next });
+}
 </script>
 
 <template>
   <div class="w-chat">
-    <div class="w-title">{{ title }}</div>
+    <div class="w-title">
+      <span>{{ title }}</span>
+      <span v-if="chatState.context?.character_id" class="context-chip">角色 {{ chatState.context.character_id }}</span>
+      <span v-if="chatState.context?.session_id" class="context-chip">会话 {{ chatState.context.session_id.slice(0, 8) }}</span>
+    </div>
     <div ref="scrollEl" class="w-chat-log" @scroll="onScroll">
       <div class="spacer" :style="{ height: vwin.padTop + 'px' }"></div>
       <div
@@ -113,12 +176,24 @@ function send(): void {
       >
         <span class="role">{{ m.role }}</span>
         <span class="text">{{ m.text }}</span>
+        <span v-if="(m.candidateCount ?? 0) > 1" class="swipe-controls">
+          <button type="button" :disabled="readOnly || busy" aria-label="上一个候选" @click="swipe(m, -1)">‹</button>
+          {{ (m.candidateIndex ?? 0) + 1 }}/{{ m.candidateCount }}
+          <button type="button" :disabled="readOnly || busy" aria-label="下一个候选" @click="swipe(m, 1)">›</button>
+        </span>
       </div>
       <div class="spacer" :style="{ height: vwin.padBottom + 'px' }"></div>
     </div>
+    <div v-if="operation?.thinking" class="generation-note">思考中：{{ operation.thinking }}</div>
+    <div v-if="operation?.error" class="generation-error" role="alert">{{ operation.error }}</div>
+    <div class="generation-actions">
+      <button type="button" :disabled="readOnly || busy" @click="emit('intent', 'chat.regen')">重新生成</button>
+      <button type="button" :disabled="readOnly || busy" @click="emit('intent', 'chat.continue')">继续</button>
+      <button v-if="operation?.status === 'streaming' || operation?.status === 'stopping'" type="button" @click="emit('intent', 'chat.stop')">停止</button>
+    </div>
     <form class="w-chat-composer" @submit.prevent="send">
-      <input v-model="draft" :disabled="readOnly" :placeholder="readOnly ? '当前为只读 Surface；发送功能尚未开放' : '说点什么…'" />
-      <button type="submit" :disabled="readOnly">发送</button>
+      <input v-model="draft" :disabled="readOnly || busy" :placeholder="readOnly ? '当前为只读 Surface；发送功能尚未开放' : busy ? '等待当前操作完成…' : '说点什么…'" />
+      <button type="submit" :disabled="readOnly || busy">发送</button>
     </form>
   </div>
 </template>
@@ -130,7 +205,8 @@ function send(): void {
   height: 100%;
   min-height: 0;
 }
-.w-title { padding: 12px 14px 9px; border-bottom: 1px solid var(--border-default); color: var(--text-secondary); font: 700 10px/1 var(--font-utility); letter-spacing: .08em; text-transform: uppercase; }
+.w-title { display: flex; align-items: center; gap: 6px; padding: 12px 14px 9px; border-bottom: 1px solid var(--border-default); color: var(--text-secondary); font: 700 10px/1 var(--font-utility); letter-spacing: .08em; text-transform: uppercase; }
+.context-chip { overflow: hidden; max-width: 150px; padding: 3px 6px; border: 1px solid var(--border-default); border-radius: 999px; color: var(--text-tertiary); font-weight: 550; letter-spacing: 0; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
 .w-chat-log {
   flex: 1;
   overflow-y: auto;
@@ -156,6 +232,14 @@ function send(): void {
   border-top: 1px solid var(--border-default);
   background: var(--bg-subtle);
 }
+.generation-actions { display: flex; gap: 6px; padding: 6px 8px 0; border-top: 1px solid var(--border-default); }
+.generation-actions button, .swipe-controls button { border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; }
+.generation-actions button { padding: 5px 9px; }
+.generation-actions button:disabled, .swipe-controls button:disabled { cursor: not-allowed; opacity: .45; }
+.swipe-controls { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; color: var(--text-tertiary); font-size: 11px; }
+.generation-note, .generation-error { max-height: 52px; overflow: auto; padding: 5px 9px; font-size: 11px; }
+.generation-note { color: var(--text-tertiary); background: var(--bg-subtle); }
+.generation-error { color: var(--danger); background: var(--danger-tint); }
 .w-chat-composer input {
   flex: 1;
   min-width: 0;
