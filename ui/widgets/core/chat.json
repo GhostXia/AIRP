@@ -19,12 +19,29 @@
         "description": "Windowed message slice; full history lives in the Gateway.",
         "items": {
           "type": "object",
-          "required": ["id", "role", "text"],
+          "required": ["role", "content"],
           "properties": {
-            "id": { "type": "string" },
-            "role": { "type": "string", "enum": ["user", "assistant", "system", "narrator"] },
-            "text": { "type": "string" }
+            "role": { "type": "string", "enum": ["user", "assistant", "system"] },
+            "content": { "type": "string" }
           }
+        }
+      },
+      "message_ids": { "type": "array", "items": { "type": "string" } },
+      "has_more": { "type": "boolean" },
+      "oldest_id": { "type": ["string", "null"] },
+      "context": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "character_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "persona_id": { "type": ["string", "null"] },
+          "persona_source": {
+            "type": ["string", "null"],
+            "enum": ["session_binding", "character_binding", "default", null]
+          },
+          "scene_id": { "type": ["string", "null"] },
+          "worldbook_source_ids": { "type": "array", "items": { "type": "string" } }
         }
       }
     }

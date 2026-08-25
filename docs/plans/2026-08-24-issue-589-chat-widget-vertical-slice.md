@@ -63,3 +63,31 @@ unrelated Memory, Character State, and Activity Widget hosts after a Chat patch.
 It remains mock-provider evidence. Real configured-provider acceptance and the
 complete desktop credential path across an Engine process restart remain open
 gates in #589.
+
+## 2026-08-25 stable context follow-up
+
+The Chat Surface projects only context that the current first-party executor can
+derive independently: Character and Session from the accepted Surface scope,
+the effective Persona from the same binding resolver used by the Chat pipeline,
+and an existing canonical character Worldbook as the path-independent source ID
+`character:<id>`. Persona ambiguity fails the Surface closed. A non-user Surface
+has no Persona context.
+
+The Widget renders only present values as an accessible context list. Full IDs
+remain in DOM text and accessible names; visual truncation and horizontal
+overflow stay local to the strip at short widths. The preview fixture may cover
+all visual chip variants, but real-Engine evidence asserts only authoritative
+values.
+
+These chips report the latest accepted Surface projection, not a context token
+that pins a later intent. Persona bindings and Worldbook files may change after
+projection; the Chat pipeline deliberately resolves and validates them again at
+execution time and uses that then-current authority. A future workflow that
+requires snapshot isolation must add an explicit versioned context token and
+reject drift rather than inferring that guarantee from these informational IDs.
+
+Scene remains deliberately absent: the first-party Surface executor fixes
+`scene_id` to `None`, and no persistent session-to-Scene binding exists. Guessing
+from character membership would be ambiguous and would misrepresent prompt
+context. A versioned binding and execution contract is required before a real
+Scene chip can be delivered.

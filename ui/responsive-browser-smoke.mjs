@@ -72,21 +72,53 @@ try {
   const page = await browser.newPage({ viewport: { width: 360, height: 320 } });
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
-  await page.goto(`${origin}/?airp_agent_test=1`, { waitUntil: 'domcontentloaded' });
+  // Vite redirects its configured `/desktop/` base there even when the smoke
+  // starts at `/`; keep the preview fixture explicit so this layout-only test
+  // never attempts to connect to an Engine.
+  await page.goto(`${origin}/?airp_agent_test=1&airp_fixture=1`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForFunction(() => window.__AIRP_AGENT_TEST__?.version === 1, null, { timeout: 15_000 });
   } catch (error) {
     throw new Error(`${error.message}\npage errors: ${pageErrors.join(' | ')}\nbody: ${(await page.locator('body').textContent())?.slice(0, 500)}`);
   }
-  await page.locator('.blueprint').waitFor({ state: 'visible' });
+  try {
+    await page.locator('.blueprint').waitFor({ state: 'visible' });
+  } catch (error) {
+    const layout = await page.evaluate(() => [...document.querySelectorAll('.app, .surface, .surface__body, .blueprint')]
+      .map(node => ({
+        selector: node.className,
+        clientWidth: node.clientWidth,
+        clientHeight: node.clientHeight,
+        scrollWidth: node.scrollWidth,
+        scrollHeight: node.scrollHeight,
+      })));
+    throw new Error(`${error.message}\nlayout: ${JSON.stringify(layout)}\nbody: ${(await page.locator('body').textContent())?.slice(0, 500)}`);
+  }
 
   // Add enough messages to force a real scroll owner at the short viewport.
   await page.evaluate(() => {
-    for (let i = 0; i < 24; i += 1) {
-      window.__AIRP_AGENT_TEST__.sendChat(`responsive viewport message ${i}`);
-    }
+    const harness = window.__AIRP_AGENT_TEST__;
+    const order = Array.from({ length: 24 }, (_, index) => `responsive-${index}`);
+    const messages = Object.fromEntries(order.map((id, index) => [id, {
+      id,
+      role: "narrator",
+      text: `responsive viewport message ${index}`,
+    }]));
+    harness.setWidgetState("w-chat", {
+      order,
+      messages,
+      context: {
+        character_id: "responsive-character-with-a-very-long-stable-identifier",
+        session_id: "00000000-0000-4000-8000-000000000003",
+        persona_id: "responsive-persona-with-a-very-long-stable-identifier",
+        scene_id: "responsive-scene-with-a-very-long-stable-identifier",
+        worldbook_source_ids: ["character:responsive-character-with-a-very-long-stable-identifier"],
+      },
+    });
+    harness.setWidgetOperation("w-chat", { status: "streaming" });
   });
-  await page.waitForFunction(() => document.querySelectorAll('.w-chat-log .msg').length >= 10);
+  await page.waitForFunction(() => document.querySelectorAll('.w-chat-log .msg').length > 0
+    && window.__AIRP_AGENT_TEST__.getState("w-chat")?.order?.length === 24);
 
   const widths = await page.evaluate(() => {
     const nodes = [document.documentElement, document.body, document.querySelector('.app'), document.querySelector('.blueprint')];
@@ -99,6 +131,19 @@ try {
   for (const entry of widths) {
     assert.ok(entry.scrollWidth <= entry.clientWidth + 1, `${entry.name} has horizontal overflow: ${JSON.stringify(entry)}`);
   }
+
+  const contextOverflow = await page.locator('.context-strip').evaluate(strip => ({
+    clientWidth: strip.clientWidth,
+    scrollWidth: strip.scrollWidth,
+    labels: [...strip.querySelectorAll('.context-chip')].map(chip => chip.getAttribute('aria-label')),
+  }));
+  assert.ok(contextOverflow.scrollWidth > contextOverflow.clientWidth,
+    `context strip must own long-ID overflow: ${JSON.stringify(contextOverflow)}`);
+  assert.equal(contextOverflow.labels.length, 5, 'all fixture context chips must remain available at short width');
+  const stop = page.getByRole('button', { name: '停止', exact: true });
+  await stop.waitFor({ state: 'visible' });
+  assert.equal(await stop.isEnabled(), true, 'stream cancellation must remain enabled at short height');
+  await stop.click();
 
   const scrollability = await page.locator('.w-chat-log').evaluate(log => ({
     clientHeight: log.clientHeight,

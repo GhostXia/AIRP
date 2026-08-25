@@ -329,6 +329,159 @@ async fn equal_character_and_session_ids_do_not_alias_across_user_roots() {
 }
 
 #[tokio::test]
+async fn surface_context_uses_session_persona_binding_before_character_binding() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let user_id = crate::types::UserId::new("tenant-a").unwrap();
+    let character_id = crate::types::CharacterId::new("alice").unwrap();
+    let session_id = crate::types::SessionId::new();
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, Some(user_id.as_str())).unwrap();
+    crate::data_dir::create_session_with_id(&effective_root, character_id.as_str(), &session_id)
+        .unwrap();
+    create_surface_persona(&state, &user_id, "character-persona");
+    create_surface_persona(&state, &user_id, "session-persona");
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    service
+        .bind(
+            &user_id,
+            "character-persona",
+            crate::domain::PersonaBinding {
+                character_id: character_id.to_string(),
+                session_id: None,
+            },
+        )
+        .unwrap();
+    service
+        .bind(
+            &user_id,
+            "session-persona",
+            crate::domain::PersonaBinding {
+                character_id: character_id.to_string(),
+                session_id: Some(session_id.to_string()),
+            },
+        )
+        .unwrap();
+
+    let snapshot = user_surface_snapshot_json(
+        create_router(state),
+        user_id.as_str(),
+        &character_id,
+        &session_id,
+    )
+    .await;
+    let context = chat_context(&snapshot);
+    assert_eq!(context["character_id"], character_id.as_str());
+    assert_eq!(context["session_id"], session_id.to_string());
+    assert_eq!(context["persona_id"], "session-persona");
+    assert_eq!(context["persona_source"], "session_binding");
+    assert!(context["scene_id"].is_null());
+}
+
+#[tokio::test]
+async fn surface_context_projects_default_persona_for_user_without_binding() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let user_id = crate::types::UserId::new("tenant-a").unwrap();
+    let character_id = crate::types::CharacterId::new("alice").unwrap();
+    let session_id = crate::types::SessionId::new();
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, Some(user_id.as_str())).unwrap();
+    crate::data_dir::create_session_with_id(&effective_root, character_id.as_str(), &session_id)
+        .unwrap();
+
+    let snapshot = user_surface_snapshot_json(
+        create_router(state),
+        user_id.as_str(),
+        &character_id,
+        &session_id,
+    )
+    .await;
+    let context = chat_context(&snapshot);
+    assert_eq!(context["persona_id"], "default");
+    assert_eq!(context["persona_source"], "default");
+}
+
+#[tokio::test]
+async fn surface_context_has_no_persona_without_user_scope() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+
+    let snapshot = surface_snapshot_json(create_router(state), "alice", &session_id).await;
+    let context = chat_context(&snapshot);
+    assert!(context["persona_id"].is_null());
+    assert!(context["persona_source"].is_null());
+}
+
+#[tokio::test]
+async fn surface_context_projects_only_existing_canonical_character_worldbook() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let present_session = crate::types::SessionId::new();
+    let missing_session = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "with-lore", &present_session)
+        .unwrap();
+    crate::data_dir::create_session_with_id(&state.data_root, "without-lore", &missing_session)
+        .unwrap();
+    let lorebook = crate::data_dir::char_world_lorebook_path(&state.data_root, "with-lore");
+    std::fs::create_dir_all(lorebook.parent().unwrap()).unwrap();
+    std::fs::write(&lorebook, r#"{"entries":[]}"#).unwrap();
+    let app = create_router(state);
+
+    let present = surface_snapshot_json(app.clone(), "with-lore", &present_session).await;
+    let missing = surface_snapshot_json(app, "without-lore", &missing_session).await;
+    assert_eq!(
+        chat_context(&present)["worldbook_source_ids"],
+        serde_json::json!(["character:with-lore"])
+    );
+    assert_eq!(
+        chat_context(&missing)["worldbook_source_ids"],
+        serde_json::json!([])
+    );
+}
+
+#[tokio::test]
+async fn surface_context_fails_closed_on_ambiguous_persona_binding() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let user_id = crate::types::UserId::new("tenant-a").unwrap();
+    let character_id = crate::types::CharacterId::new("alice").unwrap();
+    let session_id = crate::types::SessionId::new();
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, Some(user_id.as_str())).unwrap();
+    crate::data_dir::create_session_with_id(&effective_root, character_id.as_str(), &session_id)
+        .unwrap();
+    let service = crate::domain::PersonaService::new(&state.data_root);
+    for persona_id in ["first", "second"] {
+        create_surface_persona(&state, &user_id, persona_id);
+        let mut persona = service.get(&user_id, persona_id, "User").unwrap();
+        persona.bindings.push(crate::domain::PersonaBinding {
+            character_id: character_id.to_string(),
+            session_id: Some(session_id.to_string()),
+        });
+        let path = crate::data_dir::user_persona_multi_path(&state.data_root, &user_id, persona_id)
+            .unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(&persona).unwrap()).unwrap();
+    }
+    let uri = format!(
+        "/v1/ui/surfaces/session/{session_id}?character_id={character_id}&user_id={user_id}"
+    );
+
+    let response = create_router(state)
+        .oneshot(
+            Request::get(uri)
+                .header("authorization", "Bearer surface-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("ambiguous session-scoped persona binding"));
+}
+
+#[tokio::test]
 async fn character_discovery_respects_the_surface_user_scope() {
     let (state, _tmp) = make_state_with_key(Some("surface-secret"));
     for (user, character) in [("tenant-a", "alice"), ("tenant-b", "bob")] {
@@ -614,6 +767,34 @@ fn widget_props<'a>(snapshot: &'a serde_json::Value, widget_id: &str) -> &'a ser
         .and_then(|widgets| widgets.iter().find(|widget| widget["id"] == widget_id))
         .map(|widget| &widget["props"])
         .expect("Surface snapshot should contain the requested widget")
+}
+
+fn chat_context(snapshot: &serde_json::Value) -> &serde_json::Value {
+    &widget_props(snapshot, "chat")["context"]
+}
+
+fn create_surface_persona(
+    state: &std::sync::Arc<crate::daemon::DaemonState>,
+    user_id: &crate::types::UserId,
+    persona_id: &str,
+) {
+    crate::domain::PersonaService::new(&state.data_root)
+        .save(
+            user_id,
+            persona_id,
+            0,
+            crate::domain::Persona {
+                schema: crate::domain::Persona::SCHEMA,
+                revision: 0,
+                updated_at: String::new(),
+                name: persona_id.to_string(),
+                description: String::new(),
+                variables: std::collections::HashMap::new(),
+                id: persona_id.to_string(),
+                bindings: Vec::new(),
+            },
+        )
+        .unwrap();
 }
 
 async fn user_surface_snapshot_json(

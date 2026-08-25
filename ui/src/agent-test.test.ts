@@ -92,6 +92,7 @@ describe("agent UI test harness", () => {
       getSurface: () => surface,
       applySurface: () => ({ status: "applied", snapshot: surface }),
       setWidgetState: (scope, value) => { state[scope] = value; },
+      setWidgetOperation: (instanceId, operation) => { state[`operation:${instanceId}`] = operation; },
       patchWidgetState: (scope, patch) => {
         const target = state[scope] as Record<string, Json>;
         for (const op of patch) if (op.op === "replace") target[op.path.slice(1)] = op.value ?? null;
@@ -120,6 +121,8 @@ describe("agent UI test harness", () => {
     expect(harness!.applySurface(surface)).toMatchObject({ status: "applied" });
     harness!.setWidgetState("w-chat", { ready: true });
     expect(state["w-chat"]).toEqual({ ready: true });
+    harness!.setWidgetOperation("w-chat", { status: "streaming" });
+    expect(state["operation:w-chat"]).toEqual({ status: "streaming" });
     harness!.patchWidgetState("w-chat", [{ op: "replace", path: "/ready", value: false }]);
     expect(state["w-chat"]).toEqual({ ready: false });
     expect(busError).toBe("offline");

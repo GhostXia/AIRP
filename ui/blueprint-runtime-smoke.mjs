@@ -90,12 +90,31 @@ try {
     const harness = window.__AIRP_AGENT_TEST__;
     const order = Array.from({ length: 5_000 }, (_, index) => `m-${index}`);
     const messages = Object.fromEntries(order.map((id, index) => [id, { id, role: "narrator", text: `message ${index}` }]));
-    harness.setWidgetState("w-chat", { order, messages });
+    harness.setWidgetState("w-chat", {
+      order,
+      messages,
+      context: {
+        character_id: "character-with-a-complete-stable-identifier",
+        session_id: "00000000-0000-4000-8000-000000000002",
+        persona_id: "persona-with-a-complete-stable-identifier",
+        scene_id: "scene-with-a-complete-stable-identifier",
+        worldbook_source_ids: ["character:character-with-a-complete-stable-identifier"],
+      },
+    });
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
     return document.querySelectorAll(".w-chat .msg").length;
   });
   assert.ok(virtualRows > 0 && virtualRows < 100, `5,000-message fixture rendered ${virtualRows} rows`);
+  const contextLabels = await page.locator('[aria-label="当前对话上下文"] .context-chip')
+    .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("aria-label")));
+  assert.deepEqual(contextLabels, [
+    "角色 character-with-a-complete-stable-identifier",
+    "会话 00000000-0000-4000-8000-000000000002",
+    "Persona persona-with-a-complete-stable-identifier",
+    "场景 scene-with-a-complete-stable-identifier",
+    "世界书 character:character-with-a-complete-stable-identifier",
+  ], "context chips did not preserve complete stable identifiers");
   await tabs.nth(1).focus();
   await page.keyboard.press("ArrowLeft");
   const virtualScroll = await page.evaluate(async () => {

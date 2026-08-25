@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::{
     daemon::DaemonState,
-    domain::{ChatService, StateService},
+    domain::{ChatService, PersonaService, StateService},
     error::AirpError,
     types::{CharacterId, SessionId, UserId},
     ui_surface::{
@@ -47,13 +47,12 @@ pub(in crate::daemon) async fn get_surface_snapshot(
         return surface_auth_unavailable();
     }
     let effective_root = effective_root(&state, query.user_id.as_ref());
-    let user_id = query.user_id.as_ref().map(ToString::to_string);
     match refresh_surface(
         state.clone(),
         effective_root.clone(),
         query.character_id.clone(),
         session_id,
-        user_id,
+        query.user_id,
     )
     .await
     {
@@ -82,7 +81,7 @@ pub(in crate::daemon) async fn get_surface_events(
         return surface_auth_unavailable();
     }
     let effective_root = effective_root(&state, query.user_id.as_ref());
-    let user_id = query.user_id.as_ref().map(ToString::to_string);
+    let user_id = query.user_id;
     let current = match refresh_surface(
         state.clone(),
         effective_root.clone(),
@@ -99,7 +98,7 @@ pub(in crate::daemon) async fn get_surface_events(
         &effective_root,
         query.character_id.to_string(),
         session_id.to_string(),
-        user_id.clone(),
+        user_id.as_ref().map(ToString::to_string),
     );
     let requested = headers
         .get("last-event-id")
@@ -189,7 +188,7 @@ async fn refresh_surface(
     effective_root: std::path::PathBuf,
     character_id: CharacterId,
     session_id: SessionId,
-    user_id: Option<String>,
+    user_id: Option<UserId>,
 ) -> Result<SurfaceEvent, AirpError> {
     tokio::task::spawn_blocking(move || {
         refresh_surface_blocking(&state, &effective_root, &character_id, &session_id, user_id)
@@ -203,14 +202,21 @@ fn refresh_surface_blocking(
     effective_root: &std::path::Path,
     character_id: &CharacterId,
     session_id: &SessionId,
-    user_id: Option<String>,
+    user_id: Option<UserId>,
 ) -> Result<SurfaceEvent, AirpError> {
-    let props = project_session(state, effective_root, character_id, session_id)?;
+    let props = project_session(
+        state,
+        &state.data_root,
+        effective_root,
+        character_id,
+        session_id,
+        user_id.as_ref(),
+    )?;
     let scope = SurfaceScope::for_user(
         effective_root,
         character_id.to_string(),
         session_id.to_string(),
-        user_id,
+        user_id.as_ref().map(ToString::to_string),
     );
     let mut registry = state.ui_surfaces.lock().unwrap_or_else(|p| p.into_inner());
     registry
@@ -223,9 +229,11 @@ fn refresh_surface_blocking(
 
 fn project_session(
     state: &DaemonState,
+    data_root: &std::path::Path,
     effective_root: &std::path::Path,
     character_id: &CharacterId,
     session_id: &SessionId,
+    user_id: Option<&UserId>,
 ) -> Result<SessionSurfaceProps, AirpError> {
     let session_dir = crate::data_dir::resolve_session_dir_read_only(
         effective_root,
@@ -241,11 +249,41 @@ fn project_session(
         .transpose()?
         .unwrap_or_else(|| json!({"messages": [], "message_ids": [], "total": 0}));
     if let Some(chat) = chat.as_object_mut() {
+        let (persona_id, persona_source) = match user_id {
+            Some(user_id) => {
+                let resolution = PersonaService::new(data_root).resolve_effective_persona(
+                    user_id,
+                    character_id.as_str(),
+                    Some(&session_id.to_string()),
+                )?;
+                (
+                    Some(
+                        resolution
+                            .effective_persona_id
+                            .unwrap_or_else(|| "default".to_string()),
+                    ),
+                    Some(resolution.source),
+                )
+            }
+            None => (None, None),
+        };
+        let worldbook_source_ids =
+            if crate::data_dir::char_world_lorebook_path(effective_root, character_id.as_str())
+                .is_file()
+            {
+                vec![format!("character:{character_id}")]
+            } else {
+                Vec::new()
+            };
         chat.insert(
             "context".into(),
             json!({
                 "character_id": character_id,
                 "session_id": session_id,
+                "persona_id": persona_id,
+                "persona_source": persona_source,
+                "scene_id": Option::<String>::None,
+                "worldbook_source_ids": worldbook_source_ids,
             }),
         );
     }
