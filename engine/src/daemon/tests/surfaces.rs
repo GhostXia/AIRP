@@ -58,6 +58,196 @@ async fn surface_snapshot_requires_configured_and_valid_bearer() {
 }
 
 #[tokio::test]
+async fn chat_intent_resolves_scope_from_the_accepted_surface() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    let app = create_router(state);
+
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::get(surface_uri("alice", &session_id))
+                .header("authorization", "Bearer surface-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), axum::http::StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/intents")
+                .header("authorization", "Bearer surface-secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "surface_id": format!("session:{session_id}"),
+                        "instance_id": "chat",
+                        "name": "chat.loadMore",
+                        "params": {"limit": 20}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+    let rejected = app
+        .oneshot(
+            Request::post("/v1/ui/intents")
+                .header("authorization", "Bearer surface-secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "surface_id": format!("session:{session_id}"),
+                        "instance_id": "memory",
+                        "name": "chat.loadMore"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn chat_send_intent_reaches_the_existing_sse_pipeline() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    std::fs::write(
+        state.data_root.join("characters/alice/card.json"),
+        r#"{"name":"Alice","description":"","personality":"","scenario":"","first_mes":"","mes_example":""}"#,
+    )
+    .unwrap();
+    let app = create_router(state);
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::get(surface_uri("alice", &session_id))
+                .header("authorization", "Bearer surface-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), axum::http::StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/ui/intents")
+                .header("authorization", "Bearer surface-secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "surface_id": format!("session:{session_id}"),
+                        "instance_id": "chat",
+                        "name": "chat.send",
+                        "params": {"text": "hello"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert!(response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/event-stream"));
+}
+
+#[tokio::test]
+async fn chat_intent_rejects_an_unregistered_surface() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let response = create_router(state)
+        .oneshot(
+            Request::post("/v1/ui/intents")
+                .header("authorization", "Bearer surface-secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"surface_id":"session:forged","instance_id":"chat","name":"chat.loadMore"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn stale_registered_surface_cannot_resurrect_a_deleted_session() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    let app = create_router(state.clone());
+    let snapshot = app
+        .clone()
+        .oneshot(
+            Request::get(surface_uri("alice", &session_id))
+                .header("authorization", "Bearer surface-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), axum::http::StatusCode::OK);
+    let session_dir = state
+        .data_root
+        .join("characters/alice/sessions")
+        .join(session_id.to_string());
+    std::fs::remove_dir_all(&session_dir).unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/ui/intents")
+                .header("authorization", "Bearer surface-secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "surface_id": format!("session:{session_id}"),
+                        "instance_id": "chat",
+                        "name": "chat.loadMore"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    assert!(!session_dir.exists());
+}
+
+#[tokio::test]
+async fn chat_intent_fails_closed_when_daemon_auth_is_disabled() {
+    let (state, _tmp) = make_state_with_key(None);
+    let response = create_router(state)
+        .oneshot(
+            Request::post("/v1/ui/intents")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"surface_id":"session:forged","instance_id":"chat","name":"chat.loadMore"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
 async fn surface_api_fails_closed_when_daemon_auth_is_disabled() {
     let (state, _tmp) = make_state_with_key(None);
     let session_id = crate::types::SessionId::new();
@@ -136,6 +326,42 @@ async fn equal_character_and_session_ids_do_not_alias_across_user_roots() {
 
     assert_eq!(widget_props(&first, "character-state")["mood"], "calm");
     assert_eq!(widget_props(&second, "character-state")["mood"], "focused");
+}
+
+#[tokio::test]
+async fn character_discovery_respects_the_surface_user_scope() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    for (user, character) in [("tenant-a", "alice"), ("tenant-b", "bob")] {
+        std::fs::create_dir_all(
+            state
+                .data_root
+                .join("users")
+                .join(user)
+                .join("characters")
+                .join(character),
+        )
+        .unwrap();
+    }
+    let app = create_router(state);
+    for (user, expected) in [("tenant-a", "alice"), ("tenant-b", "bob")] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/characters?user_id={user}"))
+                    .header("authorization", "Bearer surface-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let characters: Vec<String> = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(characters, vec![expected]);
+    }
 }
 
 #[tokio::test]

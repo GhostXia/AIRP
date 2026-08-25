@@ -20,8 +20,8 @@ use crate::revision::atomic::{
     commit_revision, next_content_revision, CommitOptions, StagedRevision,
 };
 use crate::revision::manifest::{AssetKind, AssetSource};
-use crate::types::CharacterId;
-use axum::Json;
+use crate::types::{CharacterId, UserId};
+use axum::{extract::Query, Json};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::Arc;
@@ -110,10 +110,22 @@ pub(in crate::daemon) struct ImportCharacterResponse {
 // ── Character handlers ────────────────────────────────────────────────────────
 
 /// GET /v1/characters — list all available character folder names
+#[derive(Debug, Deserialize)]
+pub(in crate::daemon) struct CharacterListQuery {
+    user_id: Option<UserId>,
+}
+
 pub(in crate::daemon) async fn list_characters(
     axum::extract::State(state): axum::extract::State<Arc<DaemonState>>,
+    Query(query): Query<CharacterListQuery>,
 ) -> Result<Json<Vec<String>>, AirpError> {
-    let chars = data_dir::list_characters(&state.data_root)?;
+    let data_root = query.user_id.map_or_else(
+        || state.data_root.clone(),
+        |user_id| state.data_root.join("users").join(user_id.as_str()),
+    );
+    let chars = tokio::task::spawn_blocking(move || data_dir::list_characters(&data_root))
+        .await
+        .map_err(|error| AirpError::Internal(format!("list characters task failed: {error}")))??;
     Ok(Json(chars))
 }
 

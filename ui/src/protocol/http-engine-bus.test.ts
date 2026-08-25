@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SurfaceStore } from "./surface-v2";
 import { HttpEngineBus } from "./http-engine-bus";
 import type { SurfaceSnapshot } from "./types";
@@ -52,6 +52,8 @@ async function until(predicate: () => boolean): Promise<void> {
 }
 
 describe("HttpEngineBus", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("applies split CRLF SSE and sends the last accepted opaque cursor", async () => {
     const calls: Array<{ path: string; cursor: string | null }> = [];
     const store = new SurfaceStore();
@@ -156,5 +158,85 @@ describe("HttpEngineBus", () => {
       "session:s1", "chat", "chat.send", { text: "hi" },
     )).resolves.toEqual({ ok: true });
     expect(auth).toEqual(["Bearer stale", "Bearer fresh"]);
+  });
+
+  it("parses chat intent SSE across chunk boundaries and requires done", async () => {
+    const frames: unknown[] = [];
+    const fetchImpl = async () => closedStream([
+      "event: message\r\ndata: {\"type\":\"body_chunk\",\"text\":\"hel",
+      "lo\"}\r\n\r\nevent: message\r\ndata: {\"type\":\"done\"}\r\n\r\n",
+    ]);
+    const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
+    await expect(bus.dispatchIntent(
+      "session:s1", "chat", "chat.send", { text: "hi" }, (event) => frames.push(event.data),
+    )).resolves.toMatchObject({ data: { type: "done" } });
+    expect(frames).toEqual([
+      { type: "body_chunk", text: "hello" },
+      { type: "done" },
+    ]);
+  });
+
+  it("surfaces typed chat stream errors", async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const fetchImpl = async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          "event: error\ndata: {\"type\":\"error\",\"text\":\"provider unavailable\"}\n\n",
+        ));
+      },
+      cancel() { cancelled = true; },
+    }), { headers: { "Content-Type": "text/event-stream" } });
+    const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
+    await expect(bus.dispatchIntent(
+      "session:s1", "chat", "chat.send", { text: "hi" },
+    )).rejects.toThrow("provider unavailable");
+    expect(cancelled).toBe(true);
+  });
+
+  it("rejects unknown and post-terminal intent frames", async () => {
+    const unknownBus = new HttpEngineBus({
+      base: "http://engine.test", bearer: () => "secret",
+      fetchImpl: async () => closedStream(["event: mystery\ndata: {\"type\":\"body_chunk\",\"text\":\"x\"}\n\n"]),
+    });
+    await expect(unknownBus.dispatchIntent("session:s1", "chat", "chat.send", { text: "hi" }))
+      .rejects.toThrow("Unknown intent SSE event");
+
+    const trailingBus = new HttpEngineBus({
+      base: "http://engine.test", bearer: () => "secret",
+      fetchImpl: async () => closedStream([
+        "event: message\ndata: {\"type\":\"done\"}\n\n",
+        "event: message\ndata: {\"type\":\"body_chunk\",\"text\":\"late\"}\n\n",
+      ]),
+    });
+    await expect(trailingBus.dispatchIntent("session:s1", "chat", "chat.send", { text: "hi" }))
+      .rejects.toThrow("after its terminal frame");
+  });
+
+  it("bootstraps a first session when the selected character has none", async () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("location", { search: "?user_id=tenant-a" });
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    });
+    const methods: string[] = [];
+    const fetchImpl = async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = new URL(String(input));
+      methods.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
+      if (url.pathname === "/v1/characters") return json(["alice"]);
+      if (url.pathname === "/v1/sessions/alice" && init?.method === "POST") return json("new-session");
+      if (url.pathname === "/v1/sessions/alice") return json([]);
+      throw new Error(`unexpected request ${url}`);
+    };
+    const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
+    await expect(bus.resolveScope()).resolves.toMatchObject({
+      characterId: "alice", sessionId: "new-session", userId: "tenant-a",
+    });
+    expect(methods).toEqual([
+      "GET /v1/characters?user_id=tenant-a",
+      "GET /v1/sessions/alice?user_id=tenant-a",
+      "POST /v1/sessions/alice?user_id=tenant-a",
+    ]);
   });
 });

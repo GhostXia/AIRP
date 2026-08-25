@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "description": "Trusted first-party Engine Surface intent contract. The Engine derives character, session, user scope, and widget type from its accepted Surface registry; clients cannot submit those authority fields.",
+  "compatibility": "additive-only",
+  "request": {
+    "required": ["surface_id", "instance_id", "name"],
+    "optional": ["params"],
+    "forbiddenAuthorityFields": ["character_id", "session_id", "user_id", "widget_type", "capabilities"]
+  },
+  "widgets": {
+    "core.chat": {
+      "intents": {
+        "chat.send": { "params": { "text": "string", "user_profile": "optional object" }, "response": "chat SSE" },
+        "chat.regen": { "params": {}, "response": "chat SSE" },
+        "chat.continue": { "params": {}, "response": "chat SSE" },
+        "chat.stop": { "params": {}, "response": "SessionCoordinatorStatus JSON" },
+        "chat.swipe": { "params": { "message_id": "string", "index": "integer" }, "response": "SwipeResponse JSON" },
+        "chat.loadMore": { "params": { "before": "optional string", "limit": "optional integer" }, "response": "HistoryWindow JSON" }
+      }
+    }
+  },
+  "streamContract": "sse-events.json"
+}

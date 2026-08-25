@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { BlueprintV2, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
 import type { SurfaceApplyResult } from "./protocol/surface-v2";
-import { HttpEngineBus, type EngineSurfaceScope } from "./protocol/http-engine-bus";
+import { HttpEngineBus, IntentStreamFailure, type EngineSurfaceScope } from "./protocol/http-engine-bus";
 import { currentBearer, renewDesktopSession } from "./protocol/desktop-session";
 import { isTauriEnvironment } from "./protocol/bus-factory";
 import { stateRevisionStore, stateStore, setState, patchState } from "./state/store";
@@ -77,6 +77,9 @@ const connectionLabel = computed(() => {
   return "固定协议预览";
 });
 const selectedCharacterId = ref<string>("");
+const selectedSessionId = ref<string>("");
+const sessionIds = ref<string[]>([]);
+const creatingSession = ref(false);
 const showSettings = ref(false);
 
 const activeWorkspace = ref<WorkspaceId>("story");
@@ -119,6 +122,91 @@ function focusSurfaceWidget(instanceId: string): void {
 
 // Surfaced in the template so a backend failure isn't a silent empty shell.
 const busError = ref<string | null>(null);
+const widgetOperations = ref<Record<string, Json>>({});
+
+type Operation = {
+  status?: string;
+  mode?: string;
+  body?: string;
+  thinking?: string;
+  userText?: string;
+  error?: string;
+  startedRevision?: string;
+  history?: Record<string, unknown>;
+  targetMessageId?: string;
+  targetIndex?: number;
+};
+
+function operationFor(instanceId: string): Operation {
+  return (widgetOperations.value[instanceId] as Operation | undefined) ?? {};
+}
+
+function setOperation(instanceId: string, operation: Operation): void {
+  widgetOperations.value = { ...widgetOperations.value, [instanceId]: operation as Json };
+}
+
+function mergeHistory(previous: Record<string, unknown> | undefined, next: Record<string, unknown>): Record<string, unknown> {
+  if (!previous || !Array.isArray(previous.message_ids) || !Array.isArray(next.message_ids)) return next;
+  const vectorFields = [
+    "messages", "message_timestamps", "message_candidates", "message_swipe_index", "message_parents",
+  ] as const;
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const source of [next, previous]) {
+    const ids = source.message_ids as unknown[];
+    ids.forEach((id, index) => {
+      if (typeof id !== "string" || rows.has(id)) return;
+      const row: Record<string, unknown> = {};
+      for (const field of vectorFields) {
+        const values = source[field];
+        if (Array.isArray(values)) row[field] = values[index];
+      }
+      rows.set(id, row);
+    });
+  }
+  return {
+    ...previous,
+    ...next,
+    message_ids: [...rows.keys()],
+    ...Object.fromEntries(vectorFields.map((field) => [field, [...rows.values()].map((row) => row[field])])),
+  };
+}
+
+function operationIsProjected(instanceId: string, operation: Operation): boolean {
+  const widget = acceptedSurface.value?.blueprint.widgets.find((candidate) => candidate.id === instanceId);
+  const projected = widget?.props as {
+    messages?: Array<{ role?: unknown; content?: unknown }>;
+    message_ids?: string[];
+    message_swipe_index?: number[];
+  } | null;
+  if (operation.mode === "swipe" && operation.targetMessageId && Number.isInteger(operation.targetIndex)) {
+    const index = projected?.message_ids?.indexOf(operation.targetMessageId) ?? -1;
+    return index >= 0 && projected?.message_swipe_index?.[index] === operation.targetIndex;
+  }
+  const messages = projected?.messages;
+  if (!Array.isArray(messages)) return false;
+  if (operation.mode === "send" && operation.userText) {
+    const userProjected = [...messages].reverse().some(
+      (message) => message.role === "user" && message.content === operation.userText,
+    );
+    if (!userProjected || !operation.body) return userProjected;
+  }
+  if (!operation.body) return true;
+  const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+  if (typeof assistant?.content !== "string") return false;
+  return operation.mode === "continue"
+    ? assistant.content.endsWith(operation.body)
+    : assistant.content === operation.body;
+}
+
+watch(() => acceptedSurface.value?.revision, (revision) => {
+  if (!revision) return;
+  for (const [instanceId, raw] of Object.entries(widgetOperations.value)) {
+    const operation = raw as Operation;
+    if (operation.status === "awaiting_surface" && operationIsProjected(instanceId, operation)) {
+      setOperation(instanceId, { history: operation.history });
+    }
+  }
+});
 
 function invalidateBus(message: string): void {
   busAttempt += 1;
@@ -139,19 +227,110 @@ function applySurface(message: unknown): SurfaceApplyResult {
   return result;
 }
 
-function onIntent(name: string, params?: Json, instanceId = "desktop-shell"): void {
+async function reconcileOperation(
+  activeBus: HttpEngineBus,
+  activeScope: EngineSurfaceScope,
+  instanceId: string,
+): Promise<boolean> {
+  try {
+    await activeBus.refreshSurface(activeScope, { apply: applySurface });
+  } catch (err: unknown) {
+    if (bus === activeBus) busError.value = String(err ?? "Surface refresh failed");
+    return false;
+  }
+  if (bus !== activeBus) return false;
+  const live = operationFor(instanceId);
+  setOperation(instanceId, { history: live.history });
+  return true;
+}
+
+async function onIntent(name: string, params?: Json, instanceId = "desktop-shell"): Promise<void> {
   const surfaceId = acceptedSurface.value?.surfaceId;
   if (!bus || !scope || !surfaceId) return;
   const activeBus = bus;
-  void activeBus.dispatchIntent(surfaceId, instanceId, name, params).catch((err: unknown) => {
-    console.error("[App] dispatch failed:", err);
-    if (bus === activeBus) busError.value = String(err ?? "intent dispatch failed");
-  });
+  const activeScope = scope;
+  const current = operationFor(instanceId);
+  const streams = ["chat.send", "chat.regen", "chat.continue"];
+  if (streams.includes(name)) {
+    const raw = params as { text?: unknown } | undefined;
+    setOperation(instanceId, {
+      history: current.history,
+      status: "streaming",
+      mode: name.slice(5),
+      body: "",
+      thinking: "",
+      userText: name === "chat.send" && typeof raw?.text === "string" ? raw.text : undefined,
+      startedRevision: acceptedSurface.value?.revision,
+    });
+  } else if (name === "chat.stop") {
+    setOperation(instanceId, { ...current, status: "stopping" });
+  } else if (name === "chat.loadMore") {
+    setOperation(instanceId, { ...current, status: "loading_history" });
+  } else if (name === "chat.swipe") {
+    const raw = params as { message_id?: unknown; index?: unknown } | undefined;
+    setOperation(instanceId, {
+      ...current,
+      status: "submitting",
+      mode: "swipe",
+      targetMessageId: typeof raw?.message_id === "string" ? raw.message_id : undefined,
+      targetIndex: typeof raw?.index === "number" ? raw.index : undefined,
+      startedRevision: acceptedSurface.value?.revision,
+    });
+  }
+  try {
+    const result = await activeBus.dispatchIntent(surfaceId, instanceId, name, params, ({ data }) => {
+      if (bus !== activeBus) return;
+      const live = operationFor(instanceId);
+      if (data.type === "body_chunk" && typeof data.text === "string") {
+        setOperation(instanceId, { ...live, status: "streaming", body: `${live.body ?? ""}${data.text}` });
+      } else if (data.type === "think_chunk" && typeof data.text === "string") {
+        setOperation(instanceId, { ...live, status: "streaming", thinking: `${live.thinking ?? ""}${data.text}` });
+      } else if (data.type === "done") {
+        setOperation(instanceId, { ...live, status: "awaiting_surface" });
+      }
+    });
+    if (bus !== activeBus) return;
+    if (streams.includes(name)) {
+      await reconcileOperation(activeBus, activeScope, instanceId);
+    } else if (name === "chat.loadMore" && result && typeof result === "object") {
+      const live = operationFor(instanceId);
+      setOperation(instanceId, {
+        ...live,
+        status: undefined,
+        history: mergeHistory(live.history, result as Record<string, unknown>),
+      });
+    } else if (name === "chat.swipe") {
+      setOperation(instanceId, { ...operationFor(instanceId), status: "awaiting_surface" });
+      await reconcileOperation(activeBus, activeScope, instanceId);
+    }
+  } catch (err: unknown) {
+    if (bus === activeBus) {
+      const typed = err instanceof IntentStreamFailure ? err.data.error as { code?: unknown } | undefined : undefined;
+      if (typed?.code === "cancelled") {
+        const live = operationFor(instanceId);
+        const commitState = err instanceof IntentStreamFailure
+          ? (err.data.error as { commit_state?: unknown } | undefined)?.commit_state
+          : undefined;
+        if (commitState === "partially_committed") {
+          setOperation(instanceId, { ...live, status: "awaiting_surface" });
+          await reconcileOperation(activeBus, activeScope, instanceId);
+          return;
+        }
+        if (bus === activeBus) setOperation(instanceId, { history: live.history });
+        return;
+      }
+      console.error("[App] dispatch failed:", err);
+      const message = String(err ?? "intent dispatch failed");
+      setOperation(instanceId, { ...operationFor(instanceId), status: "error", error: message });
+      busError.value = message;
+    }
+  }
 }
 
 async function initializeBus(): Promise<void> {
   if (!productionSurface || disposed) return;
   const attempt = ++busAttempt;
+  const previousScope = scope;
   connectionState.value = "connecting";
   busError.value = null;
   const previousStop = disconnect;
@@ -182,7 +361,16 @@ async function initializeBus(): Promise<void> {
       return;
     }
     scope = selected;
+    if (previousScope && (
+      previousScope.characterId !== selected.characterId
+      || previousScope.sessionId !== selected.sessionId
+      || previousScope.userId !== selected.userId
+    )) {
+      widgetOperations.value = {};
+    }
     selectedCharacterId.value = selected.characterId;
+    selectedSessionId.value = selected.sessionId;
+    sessionIds.value = await built.listSessions(selected.characterId, selected.userId);
     const stop = await built.connect(selected, { apply: applySurface });
     if (disposed || attempt !== busAttempt) {
       stop();
@@ -200,6 +388,48 @@ async function initializeBus(): Promise<void> {
 
 async function refreshCharacters(): Promise<void> {
   await initializeBus();
+}
+
+async function stopActiveChatBeforeScopeChange(): Promise<boolean> {
+  const operation = operationFor("chat");
+  if (operation.status !== "streaming" && operation.status !== "stopping") return true;
+  const surfaceId = acceptedSurface.value?.surfaceId;
+  if (!bus || !surfaceId) return false;
+  try {
+    await bus.dispatchIntent(surfaceId, "chat", "chat.stop");
+    setOperation("chat", {});
+    return true;
+  } catch (error) {
+    const message = String(error ?? "active generation could not be stopped");
+    setOperation("chat", { ...operation, status: "error", error: message });
+    busError.value = message;
+    return false;
+  }
+}
+
+async function selectSession(sessionId: string, control?: HTMLSelectElement): Promise<void> {
+  if (!sessionId || sessionId === selectedSessionId.value) return;
+  if (!await stopActiveChatBeforeScopeChange()) {
+    if (control) control.value = selectedSessionId.value;
+    return;
+  }
+  sessionStorage.setItem("airp_session_id", sessionId);
+  await initializeBus();
+}
+
+async function createSession(): Promise<void> {
+  if (!bus || !scope || creatingSession.value) return;
+  creatingSession.value = true;
+  try {
+    if (!await stopActiveChatBeforeScopeChange()) return;
+    const sessionId = await bus.createSession(scope.characterId, scope.userId);
+    sessionStorage.setItem("airp_session_id", sessionId);
+    await initializeBus();
+  } catch (error) {
+    busError.value = String(error ?? "session creation failed");
+  } finally {
+    creatingSession.value = false;
+  }
 }
 
 type AgentTestInstaller = {
@@ -278,6 +508,13 @@ onUnmounted(() => {
           <h1 id="workspace-title">{{ activeWorkspacePreset.label }}</h1>
         </div>
         <div class="workspace__actions">
+          <label v-if="productionSurface && sessionIds.length" class="session-picker">
+            <span>会话</span>
+            <select :value="selectedSessionId" @change="selectSession(($event.target as HTMLSelectElement).value, $event.target as HTMLSelectElement)">
+              <option v-for="sessionId in sessionIds" :key="sessionId" :value="sessionId">{{ sessionId.slice(0, 8) }}</option>
+            </select>
+          </label>
+          <UiButton v-if="productionSurface" label="创建会话" :disabled="creatingSession || !bus" @click="createSession">新会话</UiButton>
           <span class="connection" :class="{ 'connection--live': connectionState === 'connected' }">
             <span aria-hidden="true"></span>{{ connectionLabel }}
           </span>
@@ -319,6 +556,8 @@ onUnmounted(() => {
             :state-revisions="stateRevisionStore"
             :active-tabs="surface.activeTabByNodeId"
             :authoritative-props="productionSurface"
+            :writable-widget-types="productionSurface ? ['core.chat'] : []"
+            :operations="widgetOperations"
             @activate-tab="activateSurfaceTab"
             @focus-widget="focusSurfaceWidget"
             @intent="onIntent"
@@ -367,6 +606,8 @@ onUnmounted(() => {
 .workspace__chapter, .surface__kicker, .surface__revision { color: var(--text-tertiary); font: 600 10px/1 var(--font-utility); letter-spacing: .08em; text-transform: uppercase; }
 h1 { margin: 0; font: 650 21px/1 var(--font-display); }
 .workspace__actions { display: flex; align-items: center; gap: 8px; }
+.session-picker { display: flex; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 10px; }
+.session-picker select { max-width: 110px; border: 1px solid var(--border-default); border-radius: var(--radius-input); background: var(--bg-surface); color: var(--text-primary); padding: 5px; }
 .connection { display: flex; align-items: center; gap: 7px; margin-right: 4px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
 .connection > span { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px var(--warning-tint); }
 .connection--live > span { background: var(--success); box-shadow: 0 0 0 3px var(--success-tint); }

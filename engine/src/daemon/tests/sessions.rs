@@ -80,6 +80,102 @@ async fn create_session_then_list_shows_it() {
     );
 }
 
+#[tokio::test]
+async fn create_and_list_sessions_respect_the_optional_user_scope() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let create = app
+        .clone()
+        .oneshot(
+            axum::http::Request::post("/v1/sessions/alice?user_id=tenant-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    let created: String =
+        serde_json::from_slice(&axum::body::to_bytes(create.into_body(), 256).await.unwrap())
+            .unwrap();
+
+    for (user, expected) in [("tenant-a", 1usize), ("tenant-b", 0usize)] {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get(format!("/v1/sessions/alice?user_id={user}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let sessions: Vec<String> = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sessions.len(), expected);
+        if expected == 1 {
+            assert_eq!(sessions[0], created);
+        }
+    }
+}
+
+#[tokio::test]
+async fn delete_session_respects_the_optional_user_scope() {
+    let (state, _tmp) = make_state_with_key(None);
+    let app = create_router(state);
+    let create = app
+        .clone()
+        .oneshot(
+            axum::http::Request::post("/v1/sessions/alice?user_id=tenant-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created: String =
+        serde_json::from_slice(&axum::body::to_bytes(create.into_body(), 256).await.unwrap())
+            .unwrap();
+
+    let wrong_scope = app
+        .clone()
+        .oneshot(
+            axum::http::Request::delete(format!("/v1/sessions/alice/{created}?user_id=tenant-b"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_scope.status(), StatusCode::NOT_FOUND);
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            axum::http::Request::delete(format!(
+                "/v1/sessions/alice/{created}?user_id=tenant-a&force=true"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::OK);
+
+    let list = app
+        .oneshot(
+            axum::http::Request::get("/v1/sessions/alice?user_id=tenant-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let sessions: Vec<String> =
+        serde_json::from_slice(&axum::body::to_bytes(list.into_body(), 1024).await.unwrap())
+            .unwrap();
+    assert!(sessions.is_empty());
+}
+
 /// A caller-selected ID makes creation idempotent when the first response is lost.
 #[tokio::test]
 async fn create_session_with_id_is_idempotent() {

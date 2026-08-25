@@ -21,6 +21,15 @@ export interface EngineBusError {
   recoverable: boolean;
 }
 
+export interface IntentStreamEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+export class IntentStreamFailure extends Error {
+  constructor(readonly data: Record<string, unknown>, message: string) { super(message); }
+}
+
 export interface HttpEngineBusOptions {
   base?: string;
   fetchImpl?: typeof fetch;
@@ -72,10 +81,13 @@ export class HttpEngineBus {
 
   async resolveScope(): Promise<EngineSurfaceScope> {
     const query = new URLSearchParams(location.search);
+    const userId = query.get("user_id") ?? undefined;
     const rememberedCharacter = query.get("character_id")
       ?? query.get("character")
       ?? sessionStorage.getItem("airp_character_id");
-    const characters = await this.requestJson("/v1/characters") as unknown;
+    const characterQuery = new URLSearchParams();
+    if (userId) characterQuery.set("user_id", userId);
+    const characters = await this.requestJson(`/v1/characters${characterQuery.size ? `?${characterQuery}` : ""}`) as unknown;
     if (!Array.isArray(characters) || !characters.every((value) => typeof value === "string")) {
       throw new Error("Engine returned an invalid character list");
     }
@@ -84,21 +96,39 @@ export class HttpEngineBus {
       : characters[0];
     if (!characterId) throw new Error("没有可用角色；请先在 WebUI 导入角色");
 
-    const sessions = await this.requestJson(`/v1/sessions/${encodeURIComponent(characterId)}`) as unknown;
-    if (!Array.isArray(sessions) || !sessions.every((value) => typeof value === "string")) {
-      throw new Error("Engine returned an invalid session list");
-    }
+    const sessions = await this.listSessions(characterId, userId);
     const rememberedSession = query.get("session_id")
       ?? query.get("session")
       ?? sessionStorage.getItem("airp_session_id");
-    const sessionId = rememberedSession && sessions.includes(rememberedSession)
+    let sessionId = rememberedSession && sessions.includes(rememberedSession)
       ? rememberedSession
       : sessions[0];
-    if (!sessionId) throw new Error("该角色没有会话；请先在 WebUI 创建会话");
+    if (!sessionId) sessionId = await this.createSession(characterId, userId);
     sessionStorage.setItem("airp_character_id", characterId);
     sessionStorage.setItem("airp_session_id", sessionId);
-    const userId = query.get("user_id") ?? undefined;
     return { characterId, sessionId, ...(userId ? { userId } : {}) };
+  }
+
+  async listSessions(characterId: string, userId?: string): Promise<string[]> {
+    const query = new URLSearchParams();
+    if (userId) query.set("user_id", userId);
+    const suffix = query.size ? `?${query}` : "";
+    const sessions = await this.requestJson(`/v1/sessions/${encodeURIComponent(characterId)}${suffix}`) as unknown;
+    if (!Array.isArray(sessions) || !sessions.every((value) => typeof value === "string")) {
+      throw new Error("Engine returned an invalid session list");
+    }
+    return sessions;
+  }
+
+  async createSession(characterId: string, userId?: string): Promise<string> {
+    const query = new URLSearchParams();
+    if (userId) query.set("user_id", userId);
+    const suffix = query.size ? `?${query}` : "";
+    const sessionId = await this.requestJson(`/v1/sessions/${encodeURIComponent(characterId)}${suffix}`, {
+      method: "POST",
+    });
+    if (typeof sessionId !== "string") throw new Error("Engine returned an invalid session id");
+    return sessionId;
   }
 
   async connect(scope: EngineSurfaceScope, target: SurfaceTarget): Promise<() => void> {
@@ -133,17 +163,97 @@ export class HttpEngineBus {
     instanceId: string,
     name: string,
     params?: Json,
+    onEvent?: (event: IntentStreamEvent) => void,
   ): Promise<unknown> {
-    return this.requestJson("/v1/ui/intents", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        surface_id: surfaceId,
-        instance_id: instanceId,
-        name,
-        ...(params === undefined ? {} : { params }),
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort("Intent response headers timed out"), JSON_REQUEST_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await this.authorizedFetch("/v1/ui/intents", {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({
+          surface_id: surfaceId,
+          instance_id: instanceId,
+          name,
+          ...(params === undefined ? {} : { params }),
+        }),
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) throw await this.httpError(response);
+    if ((response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+      return this.consumeIntentStream(response, onEvent);
+    }
+    return response.json();
+  }
+
+  async refreshSurface(scope: EngineSurfaceScope, target: SurfaceTarget): Promise<void> {
+    const controller = new AbortController();
+    await this.loadSnapshot(scope, target, controller.signal);
+  }
+
+  private async consumeIntentStream(
+    response: Response,
+    onEvent?: (event: IntentStreamEvent) => void,
+  ): Promise<IntentStreamEvent> {
+    if (!response.body) throw new Error("Intent stream has no body");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let buffer = "";
+    let terminal: IntentStreamEvent | null = null;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        buffer = buffer.replace(/\r\n/g, "\n");
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (!frame || frame.startsWith(":")) continue;
+          if (encoder.encode(frame).byteLength > MAX_SSE_BUFFER_BYTES) {
+            throw new Error("Intent SSE frame exceeds limit");
+          }
+          let event = "message";
+          const dataLines: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trimStart();
+            else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+          }
+          if (dataLines.length === 0) continue;
+          let data: Record<string, unknown>;
+          try { data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>; }
+          catch { throw new Error("Invalid intent SSE JSON"); }
+          if (terminal) throw new Error("Intent stream emitted a frame after its terminal frame");
+          if (event !== "message" && event !== "error") throw new Error(`Unknown intent SSE event: ${event}`);
+          if ((event === "error") !== (data.type === "error")) {
+            throw new Error("Intent SSE event name does not match its data type");
+          }
+          const parsed = { event, data };
+          onEvent?.(parsed);
+          if (event === "error" || data.type === "done") terminal = parsed;
+          if (event === "error") {
+            const detail = typeof data.text === "string" ? data.text : "Chat generation failed";
+            throw new IntentStreamFailure(data, detail);
+          }
+        }
+        if (encoder.encode(buffer).byteLength > MAX_SSE_BUFFER_BYTES) {
+          throw new Error("Intent SSE frame exceeds limit");
+        }
+        if (done) break;
+      }
+      if (!terminal || terminal.data.type !== "done") {
+        throw new Error("Intent stream ended without a terminal frame");
+      }
+      return terminal;
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   }
 
   private async run(
