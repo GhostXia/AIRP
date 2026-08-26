@@ -4,11 +4,91 @@ import type { SurfaceApplyResult } from "./surface-v2";
 const MAX_SSE_BUFFER_BYTES = 512 * 1024;
 const JSON_REQUEST_TIMEOUT_MS = 10_000;
 const RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
+const WORKSPACE_WIDGET_TYPES = new Set([
+  "core.activity", "core.card", "core.character-state", "core.characters", "core.chat",
+  "core.clock", "core.emotion", "core.inventory", "core.map", "core.memory", "core.quest",
+]);
 
 export interface EngineSurfaceScope {
   characterId: string;
   sessionId: string;
   userId?: string;
+}
+
+/** Durable Workspace revisions are canonical decimal u64 strings. */
+export type WorkspaceRevision = string;
+
+export interface WorkspaceScope {
+  userId?: string;
+}
+
+export interface WorkspaceWidget {
+  id: string;
+  type: string;
+}
+
+export type WorkspaceNode =
+  | {
+      type: "split";
+      id: string;
+      orientation: "horizontal" | "vertical";
+      ratioBasisPoints: number;
+      children: [WorkspaceNode, WorkspaceNode];
+    }
+  | { type: "tabs"; id: string; active: string; children: WorkspaceNode[] }
+  | { type: "stack"; id: string; children: WorkspaceNode[] }
+  | { type: "widget"; id: string; instanceId: string };
+
+export interface WorkspaceLayout {
+  version: number;
+  root: WorkspaceNode;
+  widgets: WorkspaceWidget[];
+}
+
+export interface WorkspaceDocument {
+  schema: number;
+  id: string;
+  revision: WorkspaceRevision;
+  updatedAt: string;
+  layout: WorkspaceLayout;
+}
+
+export interface WorkspaceResizeSplitCommand {
+  type: "resize_split";
+  split_id: string;
+  ratio_basis_points: number;
+}
+
+/** Additive command union; the initial HTTP contract exposes split resizing. */
+export type WorkspaceCommand = WorkspaceResizeSplitCommand;
+
+export interface WorkspaceCommandRequest {
+  expected_revision: WorkspaceRevision;
+  command: WorkspaceCommand;
+}
+
+export interface WorkspaceHistoryEntry {
+  revision: WorkspaceRevision;
+  updated_at: string;
+  source_kind: string;
+  parent_revision: WorkspaceRevision | null;
+}
+
+export interface WorkspaceHistoryResponse {
+  entries: WorkspaceHistoryEntry[];
+}
+
+export interface WorkspaceRollbackRequest {
+  expected_revision: WorkspaceRevision;
+  target_revision: WorkspaceRevision;
+}
+
+/** Raw export remains available even when a future workspace schema is unknown. */
+export interface WorkspaceRawExport {
+  text: string;
+  schema: string | null;
+  sha256: string | null;
+  contentDisposition: string | null;
 }
 
 export interface SurfaceTarget {
@@ -49,7 +129,11 @@ interface SnapshotResponse {
 
 class ResyncRequired extends Error {}
 export class HttpFailure extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly data?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "HttpFailure";
   }
@@ -61,6 +145,196 @@ export class HttpFailure extends Error {
 
 function messageOf(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isRevision(value: unknown): value is WorkspaceRevision {
+  return typeof value === "string"
+    && /^(0|[1-9][0-9]*)$/.test(value)
+    && BigInt(value) <= 18_446_744_073_709_551_615n;
+}
+
+function isIdentifier(value: unknown): value is string {
+  return typeof value === "string"
+    && new TextEncoder().encode(value).byteLength <= 128
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
+}
+
+function isBoundedString(value: unknown, maxBytes: number): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && new TextEncoder().encode(value).byteLength <= maxBytes;
+}
+
+interface WorkspaceParseState {
+  nodes: number;
+  nodeIds: Set<string>;
+  widgetIds: Set<string>;
+  widgetRefs: Set<string>;
+}
+
+function nodeId(node: WorkspaceNode): string {
+  return node.id;
+}
+
+function parseWorkspaceNode(value: unknown, state: WorkspaceParseState, depth = 1): WorkspaceNode | null {
+  if (!isRecord(value) || !isIdentifier(value.type) || !isIdentifier(value.id)) return null;
+  state.nodes += 1;
+  if (depth > 16 || state.nodes > 512 || state.nodeIds.has(value.id)) return null;
+  state.nodeIds.add(value.id);
+  if (value.type === "split") {
+    if (!hasOnlyKeys(value, ["type", "id", "orientation", "ratioBasisPoints", "children"])
+      || (value.orientation !== "horizontal" && value.orientation !== "vertical")
+      || typeof value.ratioBasisPoints !== "number"
+      || !Number.isInteger(value.ratioBasisPoints)
+      || value.ratioBasisPoints < 1_000
+      || value.ratioBasisPoints > 9_000
+      || !Array.isArray(value.children)
+      || value.children.length !== 2) return null;
+    const left = parseWorkspaceNode(value.children[0], state, depth + 1);
+    const right = parseWorkspaceNode(value.children[1], state, depth + 1);
+    return left && right ? {
+      type: "split",
+      id: value.id,
+      orientation: value.orientation,
+      ratioBasisPoints: value.ratioBasisPoints,
+      children: [left, right],
+    } : null;
+  }
+  if (value.type === "tabs") {
+    if (!hasOnlyKeys(value, ["type", "id", "active", "children"])
+      || !isIdentifier(value.active)
+      || !Array.isArray(value.children)
+      || value.children.length < 1
+      || value.children.length > 32) return null;
+    const children = value.children.map((child) => parseWorkspaceNode(child, state, depth + 1));
+    return children.every((child): child is WorkspaceNode => child !== null)
+      && children.some((child) => nodeId(child) === value.active)
+      ? { type: "tabs", id: value.id, active: value.active, children }
+      : null;
+  }
+  if (value.type === "stack") {
+    if (!hasOnlyKeys(value, ["type", "id", "children"])
+      || !Array.isArray(value.children)
+      || value.children.length < 1
+      || value.children.length > 32) return null;
+    const children = value.children.map((child) => parseWorkspaceNode(child, state, depth + 1));
+    return children.every((child): child is WorkspaceNode => child !== null)
+      ? { type: "stack", id: value.id, children }
+      : null;
+  }
+  if (value.type === "widget") {
+    if (!hasOnlyKeys(value, ["type", "id", "instanceId"])
+      || !isIdentifier(value.instanceId)
+      || !state.widgetIds.has(value.instanceId)
+      || state.widgetRefs.has(value.instanceId)) return null;
+    state.widgetRefs.add(value.instanceId);
+    return isIdentifier(value.instanceId)
+      ? { type: "widget", id: value.id, instanceId: value.instanceId }
+      : null;
+  }
+  return null;
+}
+
+function parseWorkspaceDocument(value: unknown): WorkspaceDocument {
+  if (!isRecord(value)
+    || !hasOnlyKeys(value, ["schema", "id", "revision", "updatedAt", "layout"])
+    || value.schema !== 1
+    || !isIdentifier(value.id)
+    || !isRevision(value.revision)
+    || !isBoundedString(value.updatedAt, 64)
+    || !isRecord(value.layout)
+    || !hasOnlyKeys(value.layout, ["version", "root", "widgets"])
+    || value.layout.version !== 1
+    || !Array.isArray(value.layout.widgets)
+    || value.layout.widgets.length > 128) {
+    throw new Error("Engine returned an invalid workspace document");
+  }
+  const widgetIds = new Set<string>();
+  const widgets: WorkspaceWidget[] = [];
+  for (const widget of value.layout.widgets) {
+    if (!isRecord(widget)
+      || !hasOnlyKeys(widget, ["id", "type"])
+      || !isIdentifier(widget.id)
+      || typeof widget.type !== "string"
+      || !WORKSPACE_WIDGET_TYPES.has(widget.type)
+      || widgetIds.has(widget.id)) {
+      throw new Error("Engine returned an invalid workspace document");
+    }
+    widgetIds.add(widget.id);
+    widgets.push({ id: widget.id, type: widget.type });
+  }
+  const state: WorkspaceParseState = {
+    nodes: 0,
+    nodeIds: new Set(),
+    widgetIds,
+    widgetRefs: new Set(),
+  };
+  const root = parseWorkspaceNode(value.layout.root, state);
+  if (root === null) {
+    throw new Error("Engine returned an invalid workspace document");
+  }
+  if (state.widgetRefs.size !== widgetIds.size) {
+    throw new Error("Engine returned an invalid workspace document");
+  }
+  return {
+    schema: value.schema,
+    id: value.id,
+    revision: value.revision,
+    updatedAt: value.updatedAt,
+    layout: { version: value.layout.version, root, widgets },
+  };
+}
+
+function parseWorkspaceHistory(value: unknown): WorkspaceHistoryResponse {
+  if (!isRecord(value)
+    || !hasOnlyKeys(value, ["entries"])
+    || !Array.isArray(value.entries)
+    || value.entries.length > 256) {
+    throw new Error("Engine returned an invalid workspace history");
+  }
+  const entries = value.entries.map((entry): WorkspaceHistoryEntry | null => (
+    isRecord(entry)
+      && hasOnlyKeys(entry, ["revision", "updated_at", "source_kind", "parent_revision"])
+      && isRevision(entry.revision)
+      && isBoundedString(entry.updated_at, 64)
+      && isIdentifier(entry.source_kind)
+      && (entry.parent_revision === null || isRevision(entry.parent_revision))
+      ? {
+          revision: entry.revision,
+          updated_at: entry.updated_at,
+          source_kind: entry.source_kind,
+          parent_revision: entry.parent_revision,
+        }
+      : null
+  ));
+  if (!entries.every((entry): entry is WorkspaceHistoryEntry => entry !== null)) {
+    throw new Error("Engine returned an invalid workspace history");
+  }
+  return { entries };
+}
+
+function assertWorkspaceCommand(request: WorkspaceCommandRequest): void {
+  if (!isRevision(request.expected_revision)
+    || !isIdentifier(request.command.split_id)
+    || !Number.isSafeInteger(request.command.ratio_basis_points)
+    || request.command.ratio_basis_points < 1_000
+    || request.command.ratio_basis_points > 9_000) {
+    throw new Error("invalid workspace command request");
+  }
+}
+
+function assertWorkspaceRollback(request: WorkspaceRollbackRequest): void {
+  if (!isRevision(request.expected_revision) || !isRevision(request.target_revision)) {
+    throw new Error("invalid workspace rollback request");
+  }
 }
 
 export class HttpEngineBus {
@@ -138,6 +412,58 @@ export class HttpEngineBus {
     });
     if (typeof sessionId !== "string") throw new Error("Engine returned an invalid session id");
     return sessionId;
+  }
+
+  async getWorkspace(scope: WorkspaceScope = {}): Promise<WorkspaceDocument> {
+    return parseWorkspaceDocument(await this.requestJson(this.workspacePath(scope)));
+  }
+
+  /** Sends exactly one mutation request; a 409 is surfaced as HttpFailure and is never replayed. */
+  async sendWorkspaceCommand(
+    request: WorkspaceCommandRequest,
+    scope: WorkspaceScope = {},
+  ): Promise<WorkspaceDocument> {
+    assertWorkspaceCommand(request);
+    return parseWorkspaceDocument(await this.requestJson(this.workspacePath(scope, "/commands"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(request),
+    }));
+  }
+
+  async history(scope: WorkspaceScope = {}, limit?: number): Promise<WorkspaceHistoryResponse> {
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)) {
+      throw new Error("workspace history limit must be between 1 and 256");
+    }
+    const query = this.workspaceQuery(scope);
+    if (limit !== undefined) query.set("limit", String(limit));
+    const suffix = query.size ? `?${query}` : "";
+    return parseWorkspaceHistory(await this.requestJson(`/v1/ui/workspace/history${suffix}`));
+  }
+
+  /** Reads the export without parsing or normalizing its future-compatible JSON text. */
+  async exportWorkspace(scope: WorkspaceScope = {}): Promise<WorkspaceRawExport> {
+    const response = await this.requestResponse(this.workspacePath(scope, "/export"), {
+      headers: { Accept: "application/json" },
+    });
+    return {
+      text: await response.text(),
+      schema: response.headers.get("x-airp-workspace-schema"),
+      sha256: response.headers.get("x-airp-workspace-sha256"),
+      contentDisposition: response.headers.get("content-disposition"),
+    };
+  }
+
+  async rollback(
+    request: WorkspaceRollbackRequest,
+    scope: WorkspaceScope = {},
+  ): Promise<WorkspaceDocument> {
+    assertWorkspaceRollback(request);
+    return parseWorkspaceDocument(await this.requestJson(this.workspacePath(scope, "/rollback"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(request),
+    }));
   }
 
   async connect(scope: EngineSurfaceScope, target: SurfaceTarget): Promise<() => void> {
@@ -392,12 +718,28 @@ export class HttpEngineBus {
     return `/v1/ui/surfaces/session/${encodeURIComponent(scope.sessionId)}${suffix}?${query}`;
   }
 
+  private workspaceQuery(scope: WorkspaceScope): URLSearchParams {
+    const query = new URLSearchParams();
+    if (scope.userId) query.set("user_id", scope.userId);
+    return query;
+  }
+
+  private workspacePath(scope: WorkspaceScope, suffix = ""): string {
+    const query = this.workspaceQuery(scope);
+    return `/v1/ui/workspace${suffix}${query.size ? `?${query}` : ""}`;
+  }
+
   private async requestJson(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.requestResponse(path, init);
+    return response.json();
+  }
+
+  private async requestResponse(path: string, init: RequestInit = {}): Promise<Response> {
     const timeout = AbortSignal.timeout(JSON_REQUEST_TIMEOUT_MS);
     const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
     const response = await this.authorizedFetch(path, { ...init, signal });
     if (!response.ok) throw await this.httpError(response);
-    return response.json();
+    return response;
   }
 
   private async authorizedFetch(path: string, init: RequestInit): Promise<Response> {
@@ -415,11 +757,14 @@ export class HttpEngineBus {
 
   private async httpError(response: Response): Promise<Error> {
     let detail = `${response.status} ${response.statusText}`.trim();
+    let data: Record<string, unknown> | undefined;
     try {
-      const body = await response.json() as { message?: unknown; error?: { message?: unknown } };
-      const message = body.message ?? body.error?.message;
+      const body = await response.json() as unknown;
+      const bodyRecord = isRecord(body) ? body : undefined;
+      data = bodyRecord && isRecord(bodyRecord.error) ? bodyRecord.error : undefined;
+      const message = bodyRecord?.message ?? data?.message;
       if (typeof message === "string") detail = message;
     } catch { /* retain HTTP status */ }
-    return new HttpFailure(response.status, detail);
+    return new HttpFailure(response.status, detail, data);
   }
 }

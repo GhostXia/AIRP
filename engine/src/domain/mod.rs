@@ -32,7 +32,8 @@ pub use persona::{
 pub use plot::{PlotArc, PlotPhase, PlotService};
 pub use state::{StateService, StateSnapshot};
 pub use workspace::{
-    WorkspaceExport, WorkspaceHistoryEntry, WorkspaceMigrationPlan, WorkspaceService,
+    WorkspaceCommand, WorkspaceExport, WorkspaceHistoryEntry, WorkspaceMigrationPlan,
+    WorkspaceService,
 };
 pub use world_event::{WorldClock, WorldEvent, WorldEventService};
 

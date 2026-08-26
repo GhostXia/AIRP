@@ -29,6 +29,8 @@
 
 本次增量校准（2026-08-26，#577 PR 10a candidate）：新增 layout-only Workspace v1 机器合同与独立领域资产。持久化面只允许布局节点、受界 split 比例和 Widget `id`/`type`，不接受 Surface props、Chat、Memory、Character State、Activity、token、路径或可执行 UI 内容；验证复用 Surface 的 ID、引用、重复、深度、节点、children 与 Widget 数量上限。固定 `default` workspace 位于已解析 effective root 的 `ui/workspaces/default`，写入执行 expected-revision CAS、不可变 revision 和原子 `current_revision` 提交；历史沿已提交 parent lineage，orphan 编号跳过且不伪装成 committed history，rollback 把旧布局提交为更高 revision。未知 future major 只能原样导出，当前实现不得覆盖；v1 Blueprint migration 仅 dry-run 并丢弃 props/state/capability。该 candidate **尚无 HTTP、`core.workspace` intent、Surface/Vue 消费、import/apply 或独立 workspace backup 对象**，不得宣称用户工作区已进入产品闭环。
 
+本次增量校准（2026-08-26，#577 PR 10b candidate）：Workspace 资产新增强制 bearer 的 HTTP 适配面与 `HttpEngineBus` 客户端：读取、严格 `1..=256` 历史、原始字节导出、forward rollback，以及首个 Engine-authoritative `resize_split` 命令。mutation 只接受十进制字符串 CAS 与封闭命令，不接受整份布局或 JSON Patch；冲突返回稳定 `workspace_revision_conflict` 和字符串 `current_revision`，future major 返回 `workspace_unsupported_major`，只有原始导出继续可用。daemon bearer 仍是进程级凭证，`user_id` 只表示既有 effective-root 命名空间隔离，不构成租户授权。该 candidate **尚无 Vue store/编辑控件、Surface shell actor、其他布局命令、migration apply/import 或独立 backup 对象**，不得宣称 PR 10 或用户工作区产品闭环完成。
+
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
 本次校准（2026-08-02 v0.0.3 docs-pass）做了三件事：
@@ -51,7 +53,7 @@ AIRP 是面向 Role Play 的 AI Agent 客户端，采用“无头 Engine + 可�
 | `webui/` | 无构建、多页面、同源 WebUI（当前 44 屏；`assets/widgets/` 为 widget 运行时与 SDK 资产面） | **正式产品交付主面** |
 | `airp-engine-console/` | WebUI 视觉与交互样板 | 设计基线，不是第二套运行时 |
 | `protocol/` | `airp-state-protocol`：共享线协议类型 | Rust workspace 成员 |
-| `ui/`、`ui/src-tauri/` | 当前运行事实：Tauri 壳同源承载 engine webui 资产 + bearer 注入、token 续期与 owned Engine 有界自动恢复；Surface v2 authority、客户端原子 store、受限 Blueprint/Widget runtime、Engine session Surface snapshot/SSE、`HttpEngineBus`、同源 `/desktop/`、Engine-authoritative Widget host parity、`core.chat` 写纵切及 Memory/Character State CAS-write candidate 已交付；目标事实：#564 恢复 Vue Blueprint/Widget 桌面主面 | **#564 开发中**；默认入口仍是 WebUI `/`，`AIRP_DESKTOP_UI=blueprint` 才选择 `/desktop/`。PR 8/9 仍有真实 provider 与 session→Scene 门禁，workspace 写闭环未交付，见 §2.3、#589、#593 和 #564 PR 1–9 决策 |
+| `ui/`、`ui/src-tauri/` | 当前运行事实：Tauri 壳同源承载 engine webui 资产 + bearer 注入、token 续期与 owned Engine 有界自动恢复；Surface v2 authority、客户端原子 store、受限 Blueprint/Widget runtime、Engine session Surface snapshot/SSE、`HttpEngineBus`、同源 `/desktop/`、Engine-authoritative Widget host parity、`core.chat` 写纵切、Memory/Character State CAS-write candidate，以及 Workspace HTTP 客户端已交付；目标事实：#564 恢复 Vue Blueprint/Widget 桌面主面 | **#564 开发中**；默认入口仍是 WebUI `/`，`AIRP_DESKTOP_UI=blueprint` 才选择 `/desktop/`。PR 8/9 仍有真实 provider 与 session→Scene 门禁；Workspace 当前只有 HTTP/首个 resize 命令，没有 Vue 编辑闭环，见 §2.3、#577、#589、#593 和 #564 决策 |
 | `deploy/windows-webui/` | Windows 便携 WebUI 包 | 当前优先 artifact |
 | `deploy/linux-webui/` | Linux musl 便携包 | 手动构建 artifact |
 | `deploy/production/` | 单实例自托管 HTTPS preview | P0 拓扑，不是正式发布 |

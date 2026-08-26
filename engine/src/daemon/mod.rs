@@ -15,7 +15,7 @@ use crate::config::{DeploymentMode, VolumeConfig};
 use axum::{
     extract::{ConnectInfo, DefaultBodyLimit},
     handler::Handler,
-    http::{header, HeaderValue, Method, Request, StatusCode},
+    http::{header, HeaderName, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
     routing::{any, delete, get, post, put},
@@ -43,8 +43,8 @@ use handlers::{
     delete_plugin_tool_endpoint, delete_session_endpoint, diff_character_revisions_endpoint,
     dispatch_ui_intent, edit_message, execute_conversation_migration_endpoint,
     execute_conversation_turn_endpoint, export_session_timeline_endpoint,
-    generate_dialogue_examples_endpoint, generate_image_endpoint, get_backup_endpoint,
-    get_character_avatar, get_character_card, get_character_lorebook,
+    export_workspace_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
+    get_backup_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
     get_character_revision_endpoint, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_chat_session_state,
     get_conversation_capabilities_endpoint, get_conversation_endpoint,
@@ -54,21 +54,23 @@ use handlers::{
     get_persona_multi_endpoint, get_plot_arc, get_preset_endpoint, get_resident_memory,
     get_routing_endpoint, get_scene_endpoint, get_session_timeline_endpoint, get_settings,
     get_style_profile, get_surface_events, get_surface_snapshot, get_template_endpoint,
-    get_user_model, get_world_events, import_character, import_preset_endpoint,
-    instantiate_template_endpoint, list_agent_tools, list_backups_endpoint,
-    list_character_revisions_endpoint, list_characters, list_conversation_policies_endpoint,
-    list_conversations_endpoint, list_images_endpoint, list_models, list_personas_endpoint,
-    list_plugin_tools_endpoint, list_presets_endpoint, list_providers_endpoint,
-    list_scenes_endpoint, list_sessions_endpoint, list_style_profiles, list_templates_endpoint,
-    plan_conversation_migration_endpoint, preview_chat_assembly, recover_chat_session,
-    reextract_character_assets, regen_chat, resolve_provider_endpoint, restore_backup_endpoint,
-    rollback_chat, rollback_conversation_migration_endpoint, rollback_drift, serve_image_endpoint,
+    get_user_model, get_workspace_endpoint, get_workspace_history_endpoint, get_world_events,
+    import_character, import_preset_endpoint, instantiate_template_endpoint, list_agent_tools,
+    list_backups_endpoint, list_character_revisions_endpoint, list_characters,
+    list_conversation_policies_endpoint, list_conversations_endpoint, list_images_endpoint,
+    list_models, list_personas_endpoint, list_plugin_tools_endpoint, list_presets_endpoint,
+    list_providers_endpoint, list_scenes_endpoint, list_sessions_endpoint, list_style_profiles,
+    list_templates_endpoint, plan_conversation_migration_endpoint, preview_chat_assembly,
+    recover_chat_session, reextract_character_assets, regen_chat, resolve_provider_endpoint,
+    restore_backup_endpoint, rollback_chat, rollback_conversation_migration_endpoint,
+    rollback_drift, rollback_workspace_endpoint, serve_image_endpoint,
     serve_session_image_endpoint, style_learn, style_review, swipe_chat, switch_branch,
     test_plugin_tool_endpoint, unbind_persona_endpoint, update_character_card,
     update_character_lorebook, update_drift, update_persona_endpoint,
     update_persona_multi_endpoint, update_plot_arc, update_providers_endpoint,
     update_resident_memory, update_routing_endpoint, update_settings, update_user_model,
-    upsert_plugin_tool_endpoint, verify_backup_endpoint,
+    upsert_plugin_tool_endpoint, verify_backup_endpoint, workspace_command_endpoint,
+    WORKSPACE_HTTP_MAX_BODY_BYTES,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -419,6 +421,26 @@ pub fn create_router_with_conversation_policy_registry(
             get(get_surface_events),
         )
         .route("/v1/ui/intents", post(dispatch_ui_intent))
+        .route("/v1/ui/workspace", get(get_workspace_endpoint))
+        .route(
+            "/v1/ui/workspace/commands",
+            post(
+                workspace_command_endpoint
+                    .layer(DefaultBodyLimit::max(WORKSPACE_HTTP_MAX_BODY_BYTES)),
+            ),
+        )
+        .route(
+            "/v1/ui/workspace/history",
+            get(get_workspace_history_endpoint),
+        )
+        .route("/v1/ui/workspace/export", get(export_workspace_endpoint))
+        .route(
+            "/v1/ui/workspace/rollback",
+            post(
+                rollback_workspace_endpoint
+                    .layer(DefaultBodyLimit::max(WORKSPACE_HTTP_MAX_BODY_BYTES)),
+            ),
+        )
         // C-P0：桌面壳进程互信换短时效 UI token（bearer 注入通道）。
         .route(
             "/v1/desktop-session",
@@ -1024,7 +1046,11 @@ fn cors_layer(state: &DaemonState) -> CorsLayer {
     CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
-        .expose_headers([header::CONTENT_DISPOSITION])
+        .expose_headers([
+            header::CONTENT_DISPOSITION,
+            HeaderName::from_static("x-airp-workspace-schema"),
+            HeaderName::from_static("x-airp-workspace-sha256"),
+        ])
         .allow_origin(AllowOrigin::list(origins))
 }
 

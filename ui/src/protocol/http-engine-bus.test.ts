@@ -3,6 +3,30 @@ import { SurfaceStore } from "./surface-v2";
 import { HttpEngineBus, HttpFailure, IntentStreamInterrupted } from "./http-engine-bus";
 import type { SurfaceSnapshot } from "./types";
 
+const workspace = {
+  schema: 1,
+  id: "default",
+  revision: "42",
+  updatedAt: "2026-08-26T00:00:00Z",
+  layout: {
+    version: 1,
+    root: {
+      type: "split",
+      id: "root",
+      orientation: "horizontal",
+      ratioBasisPoints: 6500,
+      children: [
+        { type: "widget", id: "chat-node", instanceId: "chat" },
+        { type: "widget", id: "memory-node", instanceId: "memory" },
+      ],
+    },
+    widgets: [
+      { id: "chat", type: "core.chat" },
+      { id: "memory", type: "core.memory" },
+    ],
+  },
+};
+
 function snapshot(revision = "1", title = "one"): SurfaceSnapshot {
   return {
     kind: "snapshot",
@@ -177,6 +201,149 @@ describe("HttpEngineBus", () => {
     expect(failure).toBeInstanceOf(HttpFailure);
     expect(failure).toMatchObject({ status: 409, isConflict: true, message: "revision mismatch" });
     expect(requests).toBe(1);
+  });
+
+  it("uses bearer-authenticated, encoded workspace routes with decimal-string revisions", async () => {
+    const requests: Array<{ method: string; path: string; body: string | null; auth: string | null }> = [];
+    const fetchImpl = async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requests.push({
+        method: init?.method ?? "GET",
+        path: `${url.pathname}${url.search}`,
+        body: typeof init?.body === "string" ? init.body : null,
+        auth: new Headers(init?.headers).get("Authorization"),
+      });
+      if (url.pathname === "/v1/ui/workspace/history") {
+        return json({ entries: [{
+          revision: "42", updated_at: "2026-08-26T00:00:00+00:00", source_kind: "workspace_update", parent_revision: "41",
+        }] });
+      }
+      if (url.pathname === "/v1/ui/workspace/export") {
+        return new Response('{"schema":99,"revision":"9007199254740993"}', {
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Content-Disposition": 'attachment; filename="workspace.json"',
+            "X-AIRP-Workspace-Schema": "99",
+            "X-AIRP-Workspace-SHA256": "aabb",
+          },
+        });
+      }
+      return json(workspace);
+    };
+    const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
+    const scope = { userId: "tenant a/&?" };
+
+    await expect(bus.getWorkspace(scope)).resolves.toMatchObject({ revision: "42" });
+    await expect(bus.sendWorkspaceCommand({
+      expected_revision: "42",
+      command: { type: "resize_split", split_id: "root", ratio_basis_points: 7000 },
+    }, scope)).resolves.toMatchObject({ revision: "42" });
+    await expect(bus.history(scope, 25)).resolves.toEqual({ entries: [{
+      revision: "42", updated_at: "2026-08-26T00:00:00+00:00", source_kind: "workspace_update", parent_revision: "41",
+    }] });
+    await expect(bus.rollback({ expected_revision: "42", target_revision: "7" }, scope))
+      .resolves.toMatchObject({ revision: "42" });
+    await expect(bus.exportWorkspace(scope)).resolves.toEqual({
+      text: '{"schema":99,"revision":"9007199254740993"}',
+      schema: "99",
+      sha256: "aabb",
+      contentDisposition: 'attachment; filename="workspace.json"',
+    });
+
+    expect(requests).toEqual([
+      { method: "GET", path: "/v1/ui/workspace?user_id=tenant+a%2F%26%3F", body: null, auth: "Bearer secret" },
+      {
+        method: "POST",
+        path: "/v1/ui/workspace/commands?user_id=tenant+a%2F%26%3F",
+        body: JSON.stringify({
+          expected_revision: "42",
+          command: { type: "resize_split", split_id: "root", ratio_basis_points: 7000 },
+        }),
+        auth: "Bearer secret",
+      },
+      { method: "GET", path: "/v1/ui/workspace/history?user_id=tenant+a%2F%26%3F&limit=25", body: null, auth: "Bearer secret" },
+      {
+        method: "POST",
+        path: "/v1/ui/workspace/rollback?user_id=tenant+a%2F%26%3F",
+        body: JSON.stringify({ expected_revision: "42", target_revision: "7" }),
+        auth: "Bearer secret",
+      },
+      { method: "GET", path: "/v1/ui/workspace/export?user_id=tenant+a%2F%26%3F", body: null, auth: "Bearer secret" },
+    ]);
+  });
+
+  it("does not replay a workspace command after a 409 conflict", async () => {
+    let requests = 0;
+    const bus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => "secret",
+      fetchImpl: async () => {
+        requests += 1;
+        return json({ error: {
+          code: "workspace_revision_conflict",
+          message: "workspace revision conflict",
+          current_revision: "43",
+          recovery: "refresh_and_retry",
+        } }, 409);
+      },
+    });
+
+    const failure = await bus.sendWorkspaceCommand({
+      expected_revision: "42",
+      command: { type: "resize_split", split_id: "root", ratio_basis_points: 7000 },
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      status: 409,
+      isConflict: true,
+      message: "workspace revision conflict",
+      data: {
+        code: "workspace_revision_conflict",
+        current_revision: "43",
+        recovery: "refresh_and_retry",
+      },
+    });
+    expect(requests).toBe(1);
+  });
+
+  it("rejects invalid typed workspace responses and history limits before dispatch", async () => {
+    const fetchImpl = vi.fn(async () => json({ ...workspace, revision: 42 }));
+    const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
+    await expect(bus.getWorkspace()).rejects.toThrow("invalid workspace document");
+    await expect(bus.history({}, 0)).rejects.toThrow("between 1 and 256");
+    await expect(bus.history({}, 257)).rejects.toThrow("between 1 and 256");
+    await expect(bus.sendWorkspaceCommand({
+      expected_revision: "01",
+      command: { type: "resize_split", split_id: "root", ratio_basis_points: 7000 },
+    })).rejects.toThrow("invalid workspace command request");
+    await expect(bus.rollback({ expected_revision: "42", target_revision: "01" }))
+      .rejects.toThrow("invalid workspace rollback request");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    const futureBus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => "secret",
+      fetchImpl: async () => json({ ...workspace, schema: 2, layout: { ...workspace.layout, version: 2 } }),
+    });
+    await expect(futureBus.getWorkspace()).rejects.toThrow("invalid workspace document");
+
+    const untrustedWidgetBus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => "secret",
+      fetchImpl: async () => json({
+        ...workspace,
+        layout: { ...workspace.layout, widgets: [{ id: "chat", type: "acme.future" }] },
+      }),
+    });
+    await expect(untrustedWidgetBus.getWorkspace()).rejects.toThrow("invalid workspace document");
+
+    const oversizedHistoryBus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => "secret",
+      fetchImpl: async () => json({ entries: Array.from({ length: 257 }, () => ({
+        revision: "1", updated_at: "2026-08-26T00:00:00Z", source_kind: "test", parent_revision: null,
+      })) }),
+    });
+    await expect(oversizedHistoryBus.history()).rejects.toThrow("invalid workspace history");
   });
 
   it("parses chat intent SSE across chunk boundaries and requires done", async () => {

@@ -64,6 +64,17 @@ pub struct WorkspaceMigrationPlan {
     pub writes_performed: bool,
 }
 
+/// Engine-authoritative layout mutation. The client names a bounded domain
+/// operation and never submits a replacement document or JSON Patch.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkspaceCommand {
+    ResizeSplit {
+        split_id: String,
+        ratio_basis_points: u16,
+    },
+}
+
 impl WorkspaceService {
     pub fn new(effective_root: impl AsRef<Path>) -> Self {
         Self {
@@ -83,6 +94,25 @@ impl WorkspaceService {
     ) -> Result<WorkspaceDocumentV1, AirpError> {
         let _guard = workspace_guard()?;
         self.commit_layout_under_lock(expected_revision, layout, "workspace_update", None, None)
+    }
+
+    pub fn execute(
+        &self,
+        expected_revision: u64,
+        command: WorkspaceCommand,
+    ) -> Result<WorkspaceDocumentV1, AirpError> {
+        let _guard = workspace_guard()?;
+        let current = read_current_revision(&self.asset_dir())?.unwrap_or(0);
+        if current != expected_revision {
+            return Err(workspace_conflict(expected_revision, current));
+        }
+        let mut layout = if current == 0 {
+            default_document().layout
+        } else {
+            self.load_revision(current)?.1.layout
+        };
+        apply_workspace_command(&mut layout, command)?;
+        self.commit_layout_under_lock(expected_revision, layout, "workspace_command", None, None)
     }
 
     pub fn history(&self, limit: usize) -> Result<Vec<WorkspaceHistoryEntry>, AirpError> {
@@ -314,9 +344,26 @@ impl WorkspaceService {
         revision: u64,
     ) -> Result<(RevisionManifest, WorkspaceDocumentV1, Vec<u8>), AirpError> {
         let (manifest, bytes) = self.load_verified_bytes(revision)?;
-        let document: WorkspaceDocumentV1 = serde_json::from_slice(&bytes).map_err(|error| {
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
             AirpError::Internal(format!(
                 "workspace revision {revision} JSON is invalid: {error}"
+            ))
+        })?;
+        if let Some(actual) = value
+            .get("schema")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+        {
+            if actual != WORKSPACE_SCHEMA_MAJOR {
+                return Err(AirpError::WorkspaceUnsupportedMajor {
+                    actual,
+                    supported: WORKSPACE_SCHEMA_MAJOR,
+                });
+            }
+        }
+        let document: WorkspaceDocumentV1 = serde_json::from_value(value).map_err(|error| {
+            AirpError::Internal(format!(
+                "workspace revision {revision} JSON shape is invalid: {error}"
             ))
         })?;
         validate_workspace_document(&document).map_err(|error| {
@@ -373,9 +420,56 @@ fn workspace_guard() -> Result<std::sync::MutexGuard<'static, ()>, AirpError> {
 }
 
 fn workspace_conflict(expected: u64, current: u64) -> AirpError {
-    AirpError::Conflict(format!(
-        "workspace revision conflict: expected {expected}, current {current}"
-    ))
+    AirpError::WorkspaceRevisionConflict { expected, current }
+}
+
+fn apply_workspace_command(
+    layout: &mut WorkspaceLayoutV1,
+    command: WorkspaceCommand,
+) -> Result<(), AirpError> {
+    match command {
+        WorkspaceCommand::ResizeSplit {
+            split_id,
+            ratio_basis_points,
+        } => {
+            let Some(node) = find_node_mut(&mut layout.root, &split_id) else {
+                return Err(AirpError::NotFound(format!(
+                    "workspace layout node {split_id} not found"
+                )));
+            };
+            let WorkspaceNodeV1::Split {
+                ratio_basis_points: ratio,
+                ..
+            } = node
+            else {
+                return Err(AirpError::BadRequest(format!(
+                    "workspace layout node {split_id} is not a split"
+                )));
+            };
+            *ratio = ratio_basis_points;
+            Ok(())
+        }
+    }
+}
+
+fn find_node_mut<'a>(node: &'a mut WorkspaceNodeV1, id: &str) -> Option<&'a mut WorkspaceNodeV1> {
+    let matches = match node {
+        WorkspaceNodeV1::Split { id: node_id, .. }
+        | WorkspaceNodeV1::Tabs { id: node_id, .. }
+        | WorkspaceNodeV1::Stack { id: node_id, .. }
+        | WorkspaceNodeV1::Widget { id: node_id, .. } => node_id == id,
+    };
+    if matches {
+        return Some(node);
+    }
+    match node {
+        WorkspaceNodeV1::Split { children, .. }
+        | WorkspaceNodeV1::Tabs { children, .. }
+        | WorkspaceNodeV1::Stack { children, .. } => children
+            .iter_mut()
+            .find_map(|child| find_node_mut(child, id)),
+        WorkspaceNodeV1::Widget { .. } => None,
+    }
 }
 
 fn export_from_bytes(bytes: &[u8]) -> Result<WorkspaceExport, AirpError> {
@@ -537,7 +631,7 @@ mod tests {
         assert_eq!(saved.revision, SurfaceRevision::new(1));
         assert!(matches!(
             service.save(0, saved.layout.clone()),
-            Err(AirpError::Conflict(_))
+            Err(AirpError::WorkspaceRevisionConflict { .. })
         ));
         assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(1));
     }
@@ -661,10 +755,44 @@ mod tests {
         assert_eq!(
             results
                 .iter()
-                .filter(|result| matches!(result, Err(AirpError::Conflict(_))))
+                .filter(|result| {
+                    matches!(result, Err(AirpError::WorkspaceRevisionConflict { .. }))
+                })
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn command_reducer_commits_only_valid_targeted_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let resized = service
+            .execute(
+                0,
+                WorkspaceCommand::ResizeSplit {
+                    split_id: "workspace-root".to_string(),
+                    ratio_basis_points: 6_000,
+                },
+            )
+            .unwrap();
+        let WorkspaceNodeV1::Split {
+            ratio_basis_points, ..
+        } = resized.layout.root
+        else {
+            panic!("default workspace root must remain a split");
+        };
+        assert_eq!(ratio_basis_points, 6_000);
+
+        let failed = service.execute(
+            1,
+            WorkspaceCommand::ResizeSplit {
+                split_id: "chat-node".to_string(),
+                ratio_basis_points: 5_000,
+            },
+        );
+        assert!(matches!(failed, Err(AirpError::BadRequest(_))));
+        assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(1));
     }
 
     #[test]
@@ -691,7 +819,10 @@ mod tests {
         assert_eq!(export.schema, WORKSPACE_SCHEMA_MAJOR + 1);
         assert_eq!(export.sha256, sha256_hex(&bytes));
         assert_eq!(export.raw_json.as_bytes(), bytes);
-        assert!(service.read().is_err());
+        assert!(matches!(
+            service.read(),
+            Err(AirpError::WorkspaceUnsupportedMajor { .. })
+        ));
         assert!(service.save(1, default_document().layout).is_err());
         assert_eq!(
             fs::read_to_string(service.asset_dir().join("current_revision")).unwrap(),
