@@ -21,6 +21,7 @@
 mod lifecycle;
 
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Mutex;
 
 use tauri::async_runtime::JoinHandle;
@@ -35,6 +36,7 @@ use tracing_subscriber::EnvFilter;
 /// 用此值，避免桌面入口（8765）与浏览器入口（cmd 硬编码 8765）端口错位
 /// （审计 N-02）。
 const DEFAULT_ENGINE_PORT: u16 = 8765;
+const MAX_UNEXPECTED_ENGINE_RESTARTS: u8 = 3;
 
 #[derive(Debug, serde::Deserialize, Default)]
 struct SidecarSettings {
@@ -67,6 +69,14 @@ impl<C> PublishedSidecar<C> {
     fn take(&mut self) -> (Option<C>, Option<String>) {
         (self.child.take(), self.instance_id.take())
     }
+
+    fn take_if_instance(&mut self, expected_instance_id: &str) -> Option<C> {
+        if self.instance_id.as_deref() != Some(expected_instance_id) {
+            return None;
+        }
+        self.instance_id.take();
+        self.child.take()
+    }
 }
 
 /// 壳自启 sidecar 的生命周期状态。
@@ -78,7 +88,9 @@ struct SidecarState<C> {
     shutting_down: bool,
     shutdown_complete: bool,
     published: PublishedSidecar<C>,
+    pending_terminated_instance_id: Option<String>,
     startup: Option<JoinHandle<()>>,
+    unexpected_restart_attempts: u8,
 }
 
 impl<C> Default for SidecarState<C> {
@@ -87,7 +99,9 @@ impl<C> Default for SidecarState<C> {
             shutting_down: false,
             shutdown_complete: false,
             published: PublishedSidecar::default(),
+            pending_terminated_instance_id: None,
             startup: None,
+            unexpected_restart_attempts: 0,
         }
     }
 }
@@ -110,10 +124,32 @@ impl<C> SidecarState<C> {
 
     fn publish(&mut self, child: C, instance_id: String) {
         self.published.publish(child, instance_id);
+        // A successful replacement has overwritten the durable owner record.
+        // The terminated instance no longer needs shutdown-time cleanup.
+        self.pending_terminated_instance_id = None;
     }
 
     fn take_published(&mut self) -> (Option<C>, Option<String>) {
-        self.published.take()
+        let (child, published_instance_id) = self.published.take();
+        let instance_id =
+            published_instance_id.or_else(|| self.pending_terminated_instance_id.take());
+        (child, instance_id)
+    }
+
+    fn take_unexpected_termination(&mut self, expected_instance_id: &str) -> Option<(C, bool)> {
+        if self.shutting_down || self.shutdown_complete {
+            return None;
+        }
+        let child = self.published.take_if_instance(expected_instance_id)?;
+        // Keep cleanup ownership while recovery waits for the old port and
+        // lifecycle lock. If shutdown wins that race, finish_shutdown can
+        // still clear this exact terminated instance's durable owner record.
+        self.pending_terminated_instance_id = Some(expected_instance_id.to_owned());
+        if self.unexpected_restart_attempts >= MAX_UNEXPECTED_ENGINE_RESTARTS {
+            return Some((child, false));
+        }
+        self.unexpected_restart_attempts += 1;
+        Some((child, true))
     }
 }
 
@@ -165,6 +201,7 @@ struct EngineSidecar {
 
 /// 捆绑 sidecar 启动序列所需的全部上下文（setup 同步段解析，
 /// 异步段消费；所有字段不可变，跨线程安全）。
+#[derive(Clone)]
 struct StartupContext {
     data_root: PathBuf,
     engine_url: String,
@@ -616,7 +653,7 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
             if freed {
                 // Keep the same locked inode while replacing the owner record;
                 // unlinking here would let a POSIX peer bypass flock.
-                spawn_sidecar(&app, &context, lock_guard).await;
+                spawn_sidecar(&app, &context, lock_guard, false).await;
             } else {
                 // Preserve the old owner record for the next startup's
                 // self-healing retry when the engine did not release the port.
@@ -657,7 +694,7 @@ async fn run_startup_sequence(app: tauri::AppHandle, context: StartupContext) {
             show_port_conflict_error(&app, context.port);
         }
         lifecycle::StartupPlan::SpawnFresh => {
-            spawn_sidecar(&app, &context, lock_guard).await;
+            spawn_sidecar(&app, &context, lock_guard, false).await;
         }
     }
 }
@@ -689,6 +726,7 @@ async fn spawn_sidecar(
     app: &tauri::AppHandle,
     context: &StartupContext,
     lock_guard: lifecycle::LockGuard,
+    recover_existing_webview: bool,
 ) {
     let port = context.port;
     let port_arg = port.to_string();
@@ -772,7 +810,8 @@ async fn spawn_sidecar(
         // publishes child/id while its state mutex is still held.
         let instance_id = lock.instance_id.clone();
         drop(lock_guard);
-        Ok((child, instance_id, (rx, pid)))
+        let monitor_instance_id = instance_id.clone();
+        Ok((child, instance_id, (rx, pid, monitor_instance_id)))
     });
     if let Some(lock_guard) = lock_guard {
         // Rejected transactions never invoke the action; release the
@@ -780,18 +819,21 @@ async fn spawn_sidecar(
         drop(lock_guard);
     }
 
-    let (mut rx, pid) = match transaction {
+    let (mut rx, pid, instance_id) = match transaction {
         SpawnTransaction::Rejected => return,
         SpawnTransaction::Failed(message) => {
             show_engine_error(app, &message);
             return;
         }
-        SpawnTransaction::Published((rx, pid)) => (rx, pid),
+        SpawnTransaction::Published((rx, pid, instance_id)) => (rx, pid, instance_id),
     };
 
     // Single receiver yields all CommandEvent variants (Stdout/Stderr/
     // Terminated/...). Log each for debuggability.
+    let monitor_app = app.clone();
+    let monitor_context = context.clone();
     tauri::async_runtime::spawn(async move {
+        let mut terminated = false;
         while let Some(ev) = rx.recv().await {
             match ev {
                 CommandEvent::Stdout(b) => tracing::info!(
@@ -800,10 +842,40 @@ async fn spawn_sidecar(
                 CommandEvent::Stderr(b) => tracing::warn!(
                     target: "airp-core",
                     "engine err: {}", String::from_utf8_lossy(&b).trim_end()),
-                CommandEvent::Terminated(p) => tracing::warn!(
-                    target: "airp-core",
-                    "engine sidecar terminated: {:?}", p),
+                CommandEvent::Terminated(p) => {
+                    tracing::warn!(
+                        target: "airp-core",
+                        "engine sidecar terminated: {:?}", p);
+                    terminated = true;
+                    break;
+                }
                 _ => {}
+            }
+        }
+        if terminated {
+            let termination = monitor_app
+                .state::<EngineSidecar>()
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take_unexpected_termination(&instance_id);
+            match termination {
+                Some((_child, true)) => {
+                    schedule_sidecar_recovery(monitor_app, monitor_context, instance_id);
+                }
+                Some((_child, false)) => {
+                    tracing::error!(
+                        max_restarts = MAX_UNEXPECTED_ENGINE_RESTARTS,
+                        "engine sidecar restart budget exhausted"
+                    );
+                    show_engine_error(
+                        &monitor_app,
+                        "The Engine stopped repeatedly and AIRP will not restart it again. \
+                         Close AIRP, inspect the logs, and reopen it.\n\
+                         引擎连续异常退出，AIRP 已停止自动重启；请关闭 AIRP、检查日志后再打开。",
+                    );
+                }
+                None => {}
             }
         }
     });
@@ -813,13 +885,87 @@ async fn spawn_sidecar(
         data_root = %context.data_root.display(),
         "engine sidecar spawned"
     );
-    if !is_shutting_down(app) {
+    if !is_shutting_down(app) && recover_existing_webview {
+        spawn_readiness_and_recover_webview(
+            app.clone(),
+            context.engine_url.clone(),
+            context.access_key.clone(),
+        );
+    } else if !is_shutting_down(app) {
         spawn_readiness_and_navigate(
             app.clone(),
             context.engine_url.clone(),
             context.access_key.clone(),
         );
     }
+}
+
+/// Recover a sidecar that terminated while its owning desktop shell remains
+/// alive. The same in-memory access key is reused, but the restarted Engine's
+/// desktop-session registry is intentionally empty; recovery therefore
+/// exchanges a fresh short-lived token and replaces the stale token in the
+/// existing WebView without reloading its local drafts.
+fn schedule_sidecar_recovery(
+    app: tauri::AppHandle,
+    context: StartupContext,
+    terminated_instance_id: String,
+) {
+    let recovery: Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async move {
+        for _ in 0..30 {
+            if is_shutting_down(&app) {
+                return;
+            }
+            if !lifecycle::is_port_occupied(context.port) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        if lifecycle::is_port_occupied(context.port) || is_shutting_down(&app) {
+            tracing::error!(
+                port = context.port,
+                "engine sidecar terminated but its port did not become free"
+            );
+            show_port_conflict_error(&app, context.port);
+            return;
+        }
+
+        let lock_path = context.data_root.join(lifecycle::LOCK_FILE_NAME);
+        let mut lock_guard = match lifecycle::acquire_lock(&lock_path) {
+            Ok(guard) => guard,
+            Err(error) => {
+                tracing::error!(%error, "failed to acquire lifecycle lock for sidecar recovery");
+                show_engine_error(
+                    &app,
+                    &format!(
+                        "AIRP could not restart its Engine after an unexpected exit: {error}\n\
+                         引擎意外退出后无法取得重启锁，请关闭 AIRP 后重新打开。"
+                    ),
+                );
+                return;
+            }
+        };
+        if lock_guard
+            .read_lock()
+            .as_ref()
+            .map(|lock| lock.instance_id.as_str())
+            != Some(terminated_instance_id.as_str())
+        {
+            tracing::warn!(
+                terminated_instance_id,
+                "sidecar recovery abandoned because lifecycle ownership changed"
+            );
+            return;
+        }
+        if is_shutting_down(&app) {
+            return;
+        }
+        tracing::info!(
+            port = context.port,
+            "restarting unexpectedly terminated engine sidecar"
+        );
+        spawn_sidecar(&app, &context, lock_guard, true).await;
+    });
+    tauri::async_runtime::spawn(recovery);
 }
 
 /// engine 就绪 → webui 承载探测 → bearer 交换 → 首屏导航。
@@ -982,6 +1128,85 @@ fn spawn_readiness_and_navigate(
                 tracing::error!(%error, url = %target, "invalid WebUI navigation URL");
                 show_engine_error(&app, &format!("Invalid WebUI URL: {error}"));
             }
+        }
+    });
+}
+
+/// Wait for a replacement Engine, exchange a token from the shell-only access
+/// key, and update the existing WebView in place. Keeping the document alive is
+/// important: local widget drafts survive while Vue reconnects to an
+/// authoritative snapshot, and no uncertain mutation is replayed implicitly.
+fn spawn_readiness_and_recover_webview(
+    app: tauri::AppHandle,
+    engine_url: String,
+    access_key: Option<String>,
+) {
+    tauri::async_runtime::spawn(async move {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(500))
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let mut ready = false;
+        for _ in 0..50 {
+            if is_shutting_down(&app) {
+                return;
+            }
+            if client
+                .get(format!("{engine_url}/version"))
+                .send()
+                .await
+                .map(|response| response.status().is_success())
+                .unwrap_or(false)
+            {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        if !ready {
+            show_engine_error(
+                &app,
+                "The restarted Engine did not become ready. Close AIRP and reopen it.\n\
+                 重启后的引擎未能就绪，请关闭 AIRP 后重新打开。",
+            );
+            return;
+        }
+        let Some((token, expires_in)) =
+            exchange_desktop_token(&client, &engine_url, access_key.as_deref(), true).await
+        else {
+            show_engine_error(
+                &app,
+                "The Engine restarted, but AIRP could not recover desktop credentials. \
+                 Close AIRP and reopen it.\n引擎已重启，但桌面凭据恢复失败，请关闭 AIRP 后重新打开。",
+            );
+            return;
+        };
+        if is_shutting_down(&app) {
+            return;
+        }
+        let script = format!(
+            "try {{ sessionStorage.setItem('airp_bearer', {}); \
+             window.dispatchEvent(new CustomEvent('airp-engine-restarted', \
+             {{ detail: {{ expires_in: {expires_in} }} }})); }} catch (e) {{}}",
+            serde_json::to_string(&token).unwrap_or_else(|_| "''".to_string())
+        );
+        match app.get_webview_window("main") {
+            Some(window) => match window.eval(&script) {
+                Ok(()) => tracing::info!(
+                    expires_in,
+                    "desktop credentials recovered after engine restart"
+                ),
+                Err(error) => {
+                    tracing::error!(%error, "failed to recover credentials in existing webview");
+                    show_engine_error(
+                        &app,
+                        "AIRP restarted its Engine but could not reconnect the desktop window. \
+                         Close AIRP and reopen it.\n引擎已重启，但桌面窗口重连失败，请关闭 AIRP 后重新打开。",
+                    );
+                }
+            },
+            None => tracing::warn!("main window gone during engine recovery"),
         }
     });
 }
@@ -1232,6 +1457,68 @@ fn show_engine_error_then_exit(app: &tauri::AppHandle, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unexpected_termination_releases_only_the_matching_published_child() {
+        let mut state = SidecarState::<u32>::default();
+        state.publish(7, "instance-7".to_string());
+
+        assert_eq!(state.take_unexpected_termination("stale-instance"), None);
+        assert!(state.published.child.is_some());
+        assert_eq!(
+            state.take_unexpected_termination("instance-7"),
+            Some((7, true))
+        );
+        assert!(state.published.child.is_none());
+        assert!(state.published.instance_id.is_none());
+        assert!(state.can_spawn());
+    }
+
+    #[test]
+    fn shutdown_never_turns_termination_into_a_respawn() {
+        let mut state = SidecarState::<u32>::default();
+        state.publish(7, "instance-7".to_string());
+        assert!(matches!(state.request_shutdown(), ExitRequest::Start(None)));
+
+        assert_eq!(state.take_unexpected_termination("instance-7"), None);
+        assert_eq!(state.published.child, Some(7));
+        assert!(!state.can_spawn());
+    }
+
+    #[test]
+    fn shutdown_preserves_cleanup_owner_while_recovery_is_pending() {
+        let mut state = SidecarState::<u32>::default();
+        state.publish(17, "instance-17".to_owned());
+
+        assert_eq!(
+            state.take_unexpected_termination("instance-17"),
+            Some((17, true))
+        );
+        assert!(matches!(state.request_shutdown(), ExitRequest::Start(None)));
+        assert_eq!(
+            state.take_published(),
+            (None, Some("instance-17".to_owned()))
+        );
+    }
+
+    #[test]
+    fn unexpected_restart_budget_is_bounded() {
+        let mut state = SidecarState::<u32>::default();
+        for attempt in 0..MAX_UNEXPECTED_ENGINE_RESTARTS {
+            let instance = format!("instance-{attempt}");
+            state.publish(u32::from(attempt), instance.clone());
+            assert_eq!(
+                state.take_unexpected_termination(&instance),
+                Some((u32::from(attempt), true))
+            );
+        }
+        state.publish(99, "instance-exhausted".to_string());
+        assert_eq!(
+            state.take_unexpected_termination("instance-exhausted"),
+            Some((99, false))
+        );
+        assert!(state.published.child.is_none());
+    }
 
     #[test]
     fn state_mutex_serializes_publish_before_shutdown() {
