@@ -375,6 +375,23 @@ pub const SURFACE_MAX_BLUEPRINT_NODES: usize = 512;
 pub const SURFACE_MAX_WIDGET_INSTANCES: usize = 128;
 pub const SURFACE_MAX_CHILDREN: usize = 32;
 pub const SURFACE_MAX_IDENTIFIER_LENGTH: usize = 128;
+pub const WORKSPACE_SCHEMA_MAJOR: u16 = 1;
+pub const WORKSPACE_MAX_DOCUMENT_BYTES: usize = 262_144;
+pub const WORKSPACE_SPLIT_RATIO_MIN: u16 = 1_000;
+pub const WORKSPACE_SPLIT_RATIO_MAX: u16 = 9_000;
+pub const WORKSPACE_WIDGET_TYPES: &[&str] = &[
+    "core.activity",
+    "core.card",
+    "core.character-state",
+    "core.characters",
+    "core.chat",
+    "core.clock",
+    "core.emotion",
+    "core.inventory",
+    "core.map",
+    "core.memory",
+    "core.quest",
+];
 
 pub const SURFACE_FORBIDDEN_FIELDS: &[&str] = &[
     "html",
@@ -542,6 +559,64 @@ pub struct WidgetInstanceV2 {
     pub widget_type: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub props: Option<Value>,
+}
+
+/// Durable user workspace contract. Unlike a Surface snapshot this document
+/// contains layout identity only: domain projections and Widget props are
+/// deliberately absent and must be rebuilt by the Engine at runtime.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceDocumentV1 {
+    pub schema: u16,
+    pub id: String,
+    /// Decimal-string revision; never encode this as a JSON number because UI
+    /// clients cannot represent every u64 value exactly.
+    pub revision: SurfaceRevision,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+    pub layout: WorkspaceLayoutV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceLayoutV1 {
+    pub version: u16,
+    pub root: WorkspaceNodeV1,
+    pub widgets: Vec<WorkspaceWidgetV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum WorkspaceNodeV1 {
+    Split {
+        id: String,
+        orientation: SplitOrientation,
+        #[serde(rename = "ratioBasisPoints")]
+        ratio_basis_points: u16,
+        children: Vec<WorkspaceNodeV1>,
+    },
+    Tabs {
+        id: String,
+        active: String,
+        children: Vec<WorkspaceNodeV1>,
+    },
+    Stack {
+        id: String,
+        children: Vec<WorkspaceNodeV1>,
+    },
+    Widget {
+        id: String,
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceWidgetV1 {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub widget_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1046,6 +1121,144 @@ fn validate_surface_blueprint(blueprint: &BlueprintV2) -> Result<(), SurfaceVali
         ));
     }
     Ok(())
+}
+
+fn workspace_node_to_surface(
+    node: &WorkspaceNodeV1,
+) -> Result<LayoutNodeV2, SurfaceValidationError> {
+    Ok(match node {
+        WorkspaceNodeV1::Split {
+            id,
+            orientation,
+            ratio_basis_points,
+            children,
+        } => {
+            if !(WORKSPACE_SPLIT_RATIO_MIN..=WORKSPACE_SPLIT_RATIO_MAX).contains(ratio_basis_points)
+            {
+                return Err(SurfaceValidationError::new(
+                    SurfaceErrorCode::InvalidBlueprint,
+                    format!(
+                        "workspace split ratio must be between {} and {} basis points",
+                        WORKSPACE_SPLIT_RATIO_MIN, WORKSPACE_SPLIT_RATIO_MAX
+                    ),
+                ));
+            }
+            LayoutNodeV2::Split {
+                id: id.clone(),
+                orientation: *orientation,
+                children: children
+                    .iter()
+                    .map(workspace_node_to_surface)
+                    .collect::<Result<Vec<_>, _>>()?,
+            }
+        }
+        WorkspaceNodeV1::Tabs {
+            id,
+            active,
+            children,
+        } => LayoutNodeV2::Tabs {
+            id: id.clone(),
+            active: active.clone(),
+            children: children
+                .iter()
+                .map(workspace_node_to_surface)
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        WorkspaceNodeV1::Stack { id, children } => LayoutNodeV2::Stack {
+            id: id.clone(),
+            children: children
+                .iter()
+                .map(workspace_node_to_surface)
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        WorkspaceNodeV1::Widget { id, instance_id } => LayoutNodeV2::Widget {
+            id: id.clone(),
+            instance_id: instance_id.clone(),
+        },
+    })
+}
+
+/// Validate a durable workspace without ever accepting runtime Widget props.
+/// The layout is lowered to the Surface authority so both contracts share the
+/// same identifier, reference, duplicate, depth, node, and child limits.
+pub fn validate_workspace_document(
+    document: &WorkspaceDocumentV1,
+) -> Result<(), SurfaceValidationError> {
+    let bytes = serde_json::to_vec(document).map_err(|error| {
+        SurfaceValidationError::new(
+            SurfaceErrorCode::InvalidBlueprint,
+            format!("workspace is not serializable JSON: {error}"),
+        )
+    })?;
+    if bytes.len() > WORKSPACE_MAX_DOCUMENT_BYTES {
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::DocumentTooLarge,
+            "workspace exceeds the document byte limit",
+        ));
+    }
+    if document.schema != WORKSPACE_SCHEMA_MAJOR {
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::UnsupportedMajor,
+            format!("unsupported workspace schema major {}", document.schema),
+        ));
+    }
+    validate_surface_identifier(&document.id, "workspace id")?;
+    if document.updated_at.is_empty() || document.updated_at.len() > 64 {
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::InvalidBlueprint,
+            "workspace updatedAt must be a bounded non-empty timestamp",
+        ));
+    }
+    if document.layout.version != WORKSPACE_SCHEMA_MAJOR {
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::UnsupportedMajor,
+            format!(
+                "unsupported workspace layout major {}",
+                document.layout.version
+            ),
+        ));
+    }
+    if document
+        .layout
+        .widgets
+        .iter()
+        .any(|widget| !WORKSPACE_WIDGET_TYPES.contains(&widget.widget_type.as_str()))
+    {
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::InvalidBlueprint,
+            "workspace widget type is not in the v1 first-party allowlist",
+        ));
+    }
+    let blueprint = BlueprintV2 {
+        version: SURFACE_PROTOCOL_MAJOR,
+        root: workspace_node_to_surface(&document.layout.root)?,
+        widgets: document
+            .layout
+            .widgets
+            .iter()
+            .map(|widget| WidgetInstanceV2 {
+                id: widget.id.clone(),
+                widget_type: widget.widget_type.clone(),
+                props: None,
+            })
+            .collect(),
+    };
+    validate_surface_blueprint(&blueprint)
+}
+
+/// Parse and validate an untrusted workspace JSON document. Strict serde
+/// shapes reject unknown fields before they can be silently discarded.
+pub fn validate_workspace_document_json(
+    raw: &Value,
+) -> Result<WorkspaceDocumentV1, SurfaceValidationError> {
+    let document: WorkspaceDocumentV1 = serde_json::from_value(raw.clone()).map_err(|error| {
+        SurfaceValidationError::new(
+            SurfaceErrorCode::InvalidBlueprint,
+            format!("workspace JSON shape is invalid: {error}"),
+        )
+    })?;
+    validate_workspace_document(&document)?;
+    Ok(document)
 }
 
 /// Validate a typed v2 snapshot against the authority and its resource limits.
@@ -1946,5 +2159,172 @@ mod tests {
             fixture["expectedV2"]
         );
         assert!(serde_json::from_value::<BlueprintV2>(fixture["v1"].clone()).is_err());
+    }
+
+    fn workspace_document() -> WorkspaceDocumentV1 {
+        WorkspaceDocumentV1 {
+            schema: WORKSPACE_SCHEMA_MAJOR,
+            id: "default".into(),
+            revision: SurfaceRevision::new(1),
+            updated_at: "2026-08-26T00:00:00Z".into(),
+            layout: WorkspaceLayoutV1 {
+                version: WORKSPACE_SCHEMA_MAJOR,
+                root: WorkspaceNodeV1::Split {
+                    id: "root".into(),
+                    orientation: SplitOrientation::Horizontal,
+                    ratio_basis_points: 5_000,
+                    children: vec![
+                        WorkspaceNodeV1::Widget {
+                            id: "chat-node".into(),
+                            instance_id: "chat".into(),
+                        },
+                        WorkspaceNodeV1::Widget {
+                            id: "memory-node".into(),
+                            instance_id: "memory".into(),
+                        },
+                    ],
+                },
+                widgets: vec![
+                    WorkspaceWidgetV1 {
+                        id: "chat".into(),
+                        widget_type: "core.chat".into(),
+                    },
+                    WorkspaceWidgetV1 {
+                        id: "memory".into(),
+                        widget_type: "core.memory".into(),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn workspace_contract_is_layout_only_and_strict() {
+        let document = workspace_document();
+        validate_workspace_document(&document).unwrap();
+
+        let encoded = serde_json::to_value(&document).unwrap();
+        assert_eq!(encoded["revision"], json!("1"));
+        let mut maximum = encoded.clone();
+        maximum["revision"] = json!(u64::MAX.to_string());
+        assert_eq!(
+            serde_json::from_value::<WorkspaceDocumentV1>(maximum)
+                .unwrap()
+                .revision,
+            SurfaceRevision::new(u64::MAX)
+        );
+        let mut unsafe_number = encoded.clone();
+        unsafe_number["revision"] = json!(9_007_199_254_740_993_u64);
+        assert!(serde_json::from_value::<WorkspaceDocumentV1>(unsafe_number).is_err());
+
+        let mut with_props = serde_json::to_value(&document).unwrap();
+        with_props["layout"]["widgets"][0]["props"] = json!({ "content": "secret" });
+        assert_eq!(
+            validate_workspace_document_json(&with_props)
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::InvalidBlueprint
+        );
+
+        let mut unknown_major = document.clone();
+        unknown_major.schema = WORKSPACE_SCHEMA_MAJOR + 1;
+        assert_eq!(
+            validate_workspace_document(&unknown_major)
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::UnsupportedMajor
+        );
+    }
+
+    #[test]
+    fn workspace_contract_reuses_surface_limits_and_checks_split_ratio() {
+        let mut document = workspace_document();
+        let WorkspaceNodeV1::Split {
+            ratio_basis_points, ..
+        } = &mut document.layout.root
+        else {
+            panic!("fixture root must be split");
+        };
+        *ratio_basis_points = WORKSPACE_SPLIT_RATIO_MIN - 1;
+        assert_eq!(
+            validate_workspace_document(&document).unwrap_err().code,
+            SurfaceErrorCode::InvalidBlueprint
+        );
+
+        let mut duplicate = workspace_document();
+        duplicate.layout.widgets[1].id = "chat".into();
+        assert_eq!(
+            validate_workspace_document(&duplicate).unwrap_err().code,
+            SurfaceErrorCode::DuplicateInstanceId
+        );
+
+        for invalid_type in [
+            "core/chat",
+            "C:\\secret",
+            "opaque_token",
+            "core.chat=secret",
+            "core..chat",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signature",
+            "secret.payload",
+            "acme.third-party-example",
+        ] {
+            let mut invalid = workspace_document();
+            invalid.layout.widgets[0].widget_type = invalid_type.into();
+            assert_eq!(
+                validate_workspace_document(&invalid).unwrap_err().code,
+                SurfaceErrorCode::InvalidBlueprint,
+                "{invalid_type:?} must not be a durable Workspace v1 widget type"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_machine_contract_matches_rust_authority() {
+        let contract: Value = serde_json::from_str(include_str!("../workspace-v1.json")).unwrap();
+        assert_eq!(contract["schema"], json!(WORKSPACE_SCHEMA_MAJOR));
+        assert_eq!(
+            contract["document"]["maxBytes"],
+            json!(WORKSPACE_MAX_DOCUMENT_BYTES)
+        );
+        assert_eq!(
+            contract["layout"]["splitRatioBasisPoints"]["minimum"],
+            json!(WORKSPACE_SPLIT_RATIO_MIN)
+        );
+        assert_eq!(
+            contract["layout"]["splitRatioBasisPoints"]["maximum"],
+            json!(WORKSPACE_SPLIT_RATIO_MAX)
+        );
+        assert_eq!(
+            contract["layout"]["maxDepth"],
+            json!(SURFACE_MAX_BLUEPRINT_DEPTH)
+        );
+        assert_eq!(
+            contract["layout"]["maxNodes"],
+            json!(SURFACE_MAX_BLUEPRINT_NODES)
+        );
+        assert_eq!(
+            contract["layout"]["maxChildren"],
+            json!(SURFACE_MAX_CHILDREN)
+        );
+        assert_eq!(
+            contract["layout"]["maxWidgets"],
+            json!(SURFACE_MAX_WIDGET_INSTANCES)
+        );
+        assert!(contract["document"]["revisionEncoding"]
+            .as_str()
+            .unwrap()
+            .contains("decimal u64 JSON string"));
+        assert_eq!(
+            contract["layout"]["widgetTypes"],
+            serde_json::to_value(WORKSPACE_WIDGET_TYPES).unwrap()
+        );
+        assert!(contract["persistence"]["rollback"]
+            .as_str()
+            .unwrap()
+            .contains("response history caps do not limit ancestry"));
+        assert!(contract["persistence"]["unknownMajor"]
+            .as_str()
+            .unwrap()
+            .contains("lossless raw UTF-8 JSON export plus SHA-256"));
     }
 }

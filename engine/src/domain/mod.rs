@@ -12,6 +12,7 @@ mod lorebook;
 mod persona;
 mod plot;
 mod state;
+mod workspace;
 mod world_event;
 
 pub use analysis::AnalysisService;
@@ -30,6 +31,9 @@ pub use persona::{
 };
 pub use plot::{PlotArc, PlotPhase, PlotService};
 pub use state::{StateService, StateSnapshot};
+pub use workspace::{
+    WorkspaceExport, WorkspaceHistoryEntry, WorkspaceMigrationPlan, WorkspaceService,
+};
 pub use world_event::{WorldClock, WorldEvent, WorldEventService};
 
 // ── ChatService 已提取至 `domain/chat.rs`（E-P1-1 slice 5）────────────────────
