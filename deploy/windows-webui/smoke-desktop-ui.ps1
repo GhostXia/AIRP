@@ -163,6 +163,7 @@ Remove-Item Env:AIRP_DATA_DIR -ErrorAction SilentlyContinue
 Remove-Item Env:AIRP_WEBUI_DIR -ErrorAction SilentlyContinue
 $env:AIRP_DAEMON_PORT = "$Port"
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$debugPort"
+$env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $scratchRoot 'webview2-user-data'
 $env:AIRP_SMOKE_CDP_URL = "http://127.0.0.1:$debugPort"
 $env:AIRP_SMOKE_ORIGIN = "http://127.0.0.1:$Port"
 $env:AIRP_SMOKE_RESTART_EVIDENCE_FILE = $restartEvidence
@@ -351,6 +352,7 @@ finally {
     }
     Remove-Item Env:AIRP_DAEMON_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+    Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
     Remove-Item Env:AIRP_SMOKE_CDP_URL -ErrorAction SilentlyContinue
     Remove-Item Env:AIRP_SMOKE_ORIGIN -ErrorAction SilentlyContinue
     Remove-Item Env:AIRP_SMOKE_RESTART_EVIDENCE_FILE -ErrorAction SilentlyContinue
