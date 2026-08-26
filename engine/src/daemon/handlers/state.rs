@@ -11,6 +11,7 @@
 
 use crate::daemon::DaemonState;
 use crate::data_dir;
+use crate::domain::StateService;
 use crate::types::CharacterId;
 use axum::{
     http::{header, StatusCode},
@@ -46,16 +47,10 @@ pub(in crate::daemon) async fn get_character_state(
         Ok(id) => id,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
-    let live_path = data_dir::char_state_dir(&state.data_root, char_id.as_str()).join("live.json");
-    match fs::read_to_string(&live_path) {
-        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
-            Ok(value) => Json(value).into_response(),
-            Err(error) => crate::error::AirpError::Json(error).into_response(),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            StatusCode::NOT_FOUND.into_response()
-        }
-        Err(error) => crate::error::AirpError::Io(error).into_response(),
+    match StateService::new(&state.data_root).read_optional(&char_id) {
+        Ok(Some(value)) => Json(value).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => error.into_response(),
     }
 }
 
@@ -92,21 +87,10 @@ pub(in crate::daemon) async fn get_character_state_history(
         .unwrap_or(50)
         .clamp(1, 1000);
 
-    let history_path = data_dir::char_state_history_path(&state.data_root, char_id.as_str());
-    let Ok(text) = fs::read_to_string(&history_path) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-
-    let entries: Vec<serde_json::Value> = text
-        .lines()
-        .rev()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .take(limit)
-        .collect();
-
-    match serde_json::to_string(&entries) {
-        Ok(json) => ([(header::CONTENT_TYPE, "application/json")], json).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    match StateService::new(&state.data_root).read_history(&char_id, limit) {
+        Ok(Some(entries)) => Json(entries).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => error.into_response(),
     }
 }
 

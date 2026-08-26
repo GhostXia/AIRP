@@ -1164,11 +1164,25 @@ async fn cp4_1_read_intent_executors_return_data() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // 预置角色数据：live.json + resident.md + world/lorebook.json。
+    // 预置角色数据：committed state + resident.md + world/lorebook.json。
     let root = state.data_root.clone();
     let state_path = crate::data_dir::char_state_dir(&root, "alice").join("live.json");
-    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
-    std::fs::write(&state_path, r#"{"hp": 100, "location": "forest"}"#).unwrap();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let state_service = crate::domain::StateService::new(&root);
+    state_service
+        .write(
+            &character,
+            &serde_json::json!({"hp": 50, "location": "camp"}),
+        )
+        .unwrap();
+    let stale_state = std::fs::read(&state_path).unwrap();
+    state_service
+        .write(
+            &character,
+            &serde_json::json!({"hp": 100, "location": "forest"}),
+        )
+        .unwrap();
+    std::fs::write(&state_path, stale_state).unwrap();
 
     let memory_path = crate::data_dir::resolve_session_dir(&root, "alice", None)
         .unwrap()
@@ -1185,7 +1199,7 @@ async fn cp4_1_read_intent_executors_return_data() {
     )
     .unwrap();
 
-    // read:state → 200 + live.json 内容。
+    // read:state → 200 + committed revision 内容，并修复 stale live 投影。
     let mut envelope = intent_envelope("data.read", "acme.reader", "inst-1", Some("read:state"));
     envelope["params"] = serde_json::json!({ "character_id": "alice" });
     let resp = router

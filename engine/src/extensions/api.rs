@@ -618,14 +618,11 @@ async fn exec_intent_read(
                 }))
             }
             "read:state" => {
-                let live =
-                    crate::data_dir::char_state_dir(&data_root, cid.as_str()).join("live.json");
-                match std::fs::read_to_string(&live) {
-                    Ok(text) => serde_json::from_str(&text).map_err(AirpError::from),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(AirpError::NotFound(
-                        format!("state for character {cid} not found"),
-                    )),
-                    Err(e) => Err(AirpError::from(e)),
+                match crate::domain::StateService::new(&data_root).read_optional(&cid)? {
+                    Some(state) => Ok(state),
+                    None => Err(AirpError::NotFound(format!(
+                        "state for character {cid} not found"
+                    ))),
                 }
             }
             "read:worldbook" => LorebookService::new(&data_root)

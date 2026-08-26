@@ -83,6 +83,63 @@ async fn test_mls3_state_returns_live_json() {
 }
 
 #[tokio::test]
+async fn state_and_history_endpoints_recover_committed_revision_projections() {
+    let (state, _tmp) = make_state_no_key();
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let service = crate::domain::StateService::new(&state.data_root);
+    service
+        .write(&character, &serde_json::json!({"hp": 50}))
+        .unwrap();
+    let state_dir = crate::data_dir::char_state_dir(&state.data_root, "alice");
+    let live_path = state_dir.join("live.json");
+    let history_path = crate::data_dir::char_state_history_path(&state.data_root, "alice");
+    let stale_live = std::fs::read(&live_path).unwrap();
+    let stale_history = std::fs::read(&history_path).unwrap();
+    service
+        .write(&character, &serde_json::json!({"hp": 100}))
+        .unwrap();
+    std::fs::write(&live_path, &stale_live).unwrap();
+    std::fs::write(&history_path, &stale_history).unwrap();
+
+    let router = create_router(state);
+    let history_response = router
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/alice/state/history?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(history_response.status(), StatusCode::OK);
+    let history_body = axum::body::to_bytes(history_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let history: Vec<serde_json::Value> = serde_json::from_slice(&history_body).unwrap();
+    assert_eq!(history[0]["revision"], 2);
+    assert_eq!(history[0]["state"]["hp"], 100);
+
+    std::fs::write(&live_path, stale_live).unwrap();
+    let state_response = router
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/characters/alice/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let state_body = axum::body::to_bytes(state_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&state_body).unwrap()["hp"],
+        100
+    );
+}
+
+#[tokio::test]
 async fn test_mls3_state_bad_json_returns_500_without_leaking_contents_or_path() {
     let (state, _tmp) = make_state_no_key();
     let state_dir = state

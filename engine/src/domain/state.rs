@@ -8,13 +8,15 @@
 //! `docs/LOCK-ORDER-CONTRACT.md` §2.2 / §3 R1 / §3 R2.
 
 use std::fs;
-use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::data_dir;
 use crate::error::AirpError;
-use crate::revision::atomic::{commit_revision, CommitOptions, StagedRevision};
-use crate::revision::manifest::{AssetKind, AssetSource};
+use crate::revision::atomic::{
+    commit_revision, next_content_revision, read_current_revision, CommitOptions, StagedRevision,
+};
+use crate::revision::manifest::{AssetKind, AssetSource, RevisionManifest};
 use crate::types::CharacterId;
 
 use super::lock_order;
@@ -67,6 +69,17 @@ impl StateService {
     /// — a corrupt `live.json` must not be overwritten with an empty object
     /// by a subsequent write.
     pub fn read(&self, character_id: &CharacterId) -> Result<serde_json::Value, AirpError> {
+        Ok(self
+            .read_optional(character_id)?
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default())))
+    }
+
+    /// Read live state while preserving the distinction between a missing
+    /// state asset and a committed empty object.
+    pub fn read_optional(
+        &self,
+        character_id: &CharacterId,
+    ) -> Result<Option<serde_json::Value>, AirpError> {
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let _character_track = lock_order::track_character_read();
@@ -75,7 +88,40 @@ impl StateService {
         let _state_track = lock_order::track_state();
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
-        Self::load_live_value(character_id, &state_dir)
+        self.recover_projections_under_lock(character_id, &state_dir)?;
+        if !state_dir.join("live.json").exists() {
+            return Ok(None);
+        }
+        Self::load_live_value(character_id, &state_dir).map(Some)
+    }
+
+    /// Read newest-first committed history after repairing its projection.
+    pub fn read_history(
+        &self,
+        character_id: &CharacterId,
+        limit: usize,
+    ) -> Result<Option<Vec<serde_json::Value>>, AirpError> {
+        let character = character_lock(character_id.as_str());
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
+        let state_boundary = state_lock(character_id.as_str());
+        let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+        let _state_track = lock_order::track_state();
+
+        let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        self.recover_projections_under_lock(character_id, &state_dir)?;
+        let history_path =
+            data_dir::char_state_history_path(&self.data_root, character_id.as_str());
+        if !history_path.exists() {
+            return Ok(None);
+        }
+        let entries = fs::read(&history_path)?
+            .split(|byte| *byte == b'\n')
+            .rev()
+            .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+            .take(limit)
+            .collect();
+        Ok(Some(entries))
     }
 
     /// Read the state and revision metadata used by the Character State
@@ -92,6 +138,7 @@ impl StateService {
         let _state_track = lock_order::track_state();
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        self.recover_projections_under_lock(character_id, &state_dir)?;
         let state = Self::load_live_value(character_id, &state_dir)?;
         let history_path =
             data_dir::char_state_history_path(&self.data_root, character_id.as_str());
@@ -121,6 +168,7 @@ impl StateService {
         let _state_track = lock_order::track_state();
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        self.recover_projections_under_lock(character_id, &state_dir)?;
         let history_path =
             data_dir::char_state_history_path(&self.data_root, character_id.as_str());
         let current_revision = latest_revision(&history_path)?;
@@ -200,6 +248,7 @@ impl StateService {
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         fs::create_dir_all(&state_dir)?;
+        self.recover_projections_under_lock(character_id, &state_dir)?;
 
         let mut value: serde_json::Value = Self::load_live_value(character_id, &state_dir)?;
 
@@ -221,6 +270,7 @@ impl StateService {
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         fs::create_dir_all(&state_dir)?;
+        self.recover_projections_under_lock(character_id, &state_dir)?;
         self.commit_state_under_lock(character_id, &state_dir, state)
     }
 
@@ -248,7 +298,7 @@ impl StateService {
         })
     }
 
-    /// Validate + atomically write + history.jsonl append + revision snapshot.
+    /// Validate, publish one immutable revision, then refresh mutable projections.
     ///
     /// Must be called with both `character_lock` (read) and `state_lock`
     /// (mutex) already held by the caller. Extracted from `write` so that
@@ -268,7 +318,15 @@ impl StateService {
 
         let history_path =
             data_dir::char_state_history_path(&self.data_root, character_id.as_str());
-        let revision = latest_revision(&history_path)? + 1;
+        let current_revision = match read_current_revision(state_dir)? {
+            Some(revision) => revision,
+            None => latest_revision(&history_path)?,
+        };
+        let revision = next_content_revision(state_dir)?.max(
+            current_revision
+                .checked_add(1)
+                .ok_or_else(|| AirpError::Internal("character state revision overflow".into()))?,
+        );
         let snapshot = StateSnapshot {
             revision,
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -276,18 +334,9 @@ impl StateService {
         };
 
         let state_bytes = serde_json::to_vec_pretty(state)?;
-        data_dir::replace_file(&state_dir.join("live.json"), &state_bytes)?;
-        let mut history = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(history_path)?;
-        serde_json::to_writer(&mut history, &snapshot)?;
-        history.write_all(b"\n")?;
-        history.sync_data()?;
 
-        // #115 Phase 2e：State 接入统一 revision 合同。
-        // `live.json` + `history.jsonl` 已写入；下面在 `characters/{id}/state/` 下
-        // 创建 `revisions/{content_revision}/` + `current_revision` 不可变快照。
+        // #115 Phase 2e：State 接入统一 revision 合同。不可变 revision 与
+        // `current_revision` 是提交点；`live.json` / `history.jsonl` 是可恢复投影。
         // State 已有 `revision`（从 history.jsonl 派生），直接复用为 content_revision，
         // 不需要 lazy migration。
         // 批准文件 `state.json` 内容 = state Value 序列化（与 live.json 对齐，
@@ -309,17 +358,98 @@ impl StateService {
                 source_filename: None,
                 converter_version: None,
                 imported_at: Some(snapshot.timestamp.clone()),
-                parent_revision: if revision > 1 {
-                    Some(revision - 1)
+                parent_revision: if current_revision > 0 {
+                    Some(current_revision)
                 } else {
                     None
                 },
             },
-            files: vec![("state.json".to_string(), state_bytes)],
+            files: vec![("state.json".to_string(), state_bytes.clone())],
         };
         let commit_opts = CommitOptions::new(state_dir);
         commit_revision(&staged, &commit_opts)?;
+        self.materialize_projections(character_id, state_dir, &snapshot, &state_bytes)?;
         Ok(snapshot)
+    }
+
+    /// Repair `live.json` and `history.jsonl` from the atomically published
+    /// `current_revision`. A missing pointer denotes legacy state and is left
+    /// untouched until its next write migrates it into the revision contract.
+    fn recover_projections_under_lock(
+        &self,
+        character_id: &CharacterId,
+        state_dir: &Path,
+    ) -> Result<(), AirpError> {
+        let Some(revision) = read_current_revision(state_dir)? else {
+            return Ok(());
+        };
+        let revision_dir = state_dir.join("revisions").join(revision.to_string());
+        let manifest =
+            RevisionManifest::from_json_bytes(&fs::read(revision_dir.join("manifest.json"))?)?;
+        manifest.verify_against_disk(&revision_dir)?;
+        if manifest.content_revision != revision
+            || manifest.asset_kind != AssetKind::State
+            || manifest.asset_id != character_id.as_str()
+        {
+            return Err(AirpError::Internal(format!(
+                "character state revision identity mismatch for {} at revision {revision}",
+                character_id.as_str()
+            )));
+        }
+        let state_bytes = fs::read(revision_dir.join("state.json"))?;
+        let state = serde_json::from_slice(&state_bytes)?;
+        let snapshot = StateSnapshot {
+            revision,
+            timestamp: manifest.created_at,
+            state,
+        };
+        self.materialize_projections(character_id, state_dir, &snapshot, &state_bytes)
+    }
+
+    fn materialize_projections(
+        &self,
+        character_id: &CharacterId,
+        state_dir: &Path,
+        snapshot: &StateSnapshot,
+        state_bytes: &[u8],
+    ) -> Result<(), AirpError> {
+        let live_path = state_dir.join("live.json");
+        let live_matches = fs::read(&live_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .is_some_and(|state| state == snapshot.state);
+        if !live_matches {
+            data_dir::replace_file(&live_path, state_bytes)?;
+        }
+
+        let history_path =
+            data_dir::char_state_history_path(&self.data_root, character_id.as_str());
+        if latest_snapshot(&history_path)?
+            .as_ref()
+            .is_some_and(|latest| {
+                latest.revision == snapshot.revision
+                    && latest.timestamp == snapshot.timestamp
+                    && latest.state == snapshot.state
+            })
+        {
+            return Ok(());
+        }
+
+        let mut repaired = Vec::new();
+        if history_path.exists() {
+            for line in fs::read(&history_path)?.split(|byte| *byte == b'\n') {
+                let Ok(previous) = serde_json::from_slice::<StateSnapshot>(line) else {
+                    continue;
+                };
+                if previous.revision < snapshot.revision {
+                    serde_json::to_writer(&mut repaired, &previous)?;
+                    repaired.push(b'\n');
+                }
+            }
+        }
+        serde_json::to_writer(&mut repaired, snapshot)?;
+        repaired.push(b'\n');
+        data_dir::replace_file(&history_path, &repaired)
     }
 }
 
@@ -701,5 +831,105 @@ mod tests {
             Err(AirpError::BadRequest(_))
         ));
         assert!(!data_dir::char_state_dir(tmp.path(), character.as_str()).exists());
+    }
+
+    #[test]
+    fn restart_repairs_every_projection_stage_from_current_revision() {
+        for stage in ["commit-only", "live-only", "history-only"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let character = CharacterId::new("alice").unwrap();
+            let service = StateService::new(tmp.path());
+            let first = service
+                .write(&character, &serde_json::json!({"mood": "calm"}))
+                .unwrap();
+            let state_dir = data_dir::char_state_dir(tmp.path(), character.as_str());
+            let live_path = state_dir.join("live.json");
+            let history_path = data_dir::char_state_history_path(tmp.path(), character.as_str());
+            let first_live = fs::read(&live_path).unwrap();
+            let first_history = fs::read(&history_path).unwrap();
+
+            let second = service
+                .write(&character, &serde_json::json!({"mood": "focused"}))
+                .unwrap();
+            let second_live = fs::read(&live_path).unwrap();
+            let second_history = fs::read(&history_path).unwrap();
+
+            match stage {
+                "commit-only" => {
+                    fs::write(&live_path, &first_live).unwrap();
+                    fs::write(&history_path, &first_history).unwrap();
+                }
+                "live-only" => fs::write(&history_path, &first_history).unwrap(),
+                "history-only" => fs::write(&live_path, &first_live).unwrap(),
+                _ => unreachable!(),
+            }
+
+            let restarted = StateService::new(tmp.path());
+            let (revision, timestamp, state) = restarted.read_surface_state(&character).unwrap();
+            assert_eq!(revision, second.revision, "stage={stage}");
+            assert_eq!(timestamp.as_deref(), Some(second.timestamp.as_str()));
+            assert_eq!(state, second.state, "stage={stage}");
+            assert_eq!(fs::read(&live_path).unwrap(), second_live, "stage={stage}");
+            assert_eq!(
+                fs::read(&history_path).unwrap(),
+                second_history,
+                "stage={stage}"
+            );
+            assert_eq!(first.revision, 1);
+        }
+    }
+
+    #[test]
+    fn restart_rolls_back_legacy_half_commit_beyond_current_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let service = StateService::new(tmp.path());
+        let first = service
+            .write(&character, &serde_json::json!({"mood": "calm"}))
+            .unwrap();
+        service
+            .write(&character, &serde_json::json!({"mood": "focused"}))
+            .unwrap();
+
+        let state_dir = data_dir::char_state_dir(tmp.path(), character.as_str());
+        fs::write(state_dir.join("current_revision"), "1").unwrap();
+
+        let restarted = StateService::new(tmp.path());
+        let (revision, timestamp, state) = restarted.read_surface_state(&character).unwrap();
+        assert_eq!(revision, 1);
+        assert_eq!(timestamp.as_deref(), Some(first.timestamp.as_str()));
+        assert_eq!(state, first.state);
+        assert_eq!(
+            latest_revision(&state_dir.join("history.jsonl")).unwrap(),
+            1
+        );
+
+        let after_recovery = restarted
+            .write(&character, &serde_json::json!({"mood": "resolved"}))
+            .unwrap();
+        assert_eq!(after_recovery.revision, 3, "orphan revision 2 is immutable");
+    }
+
+    #[test]
+    fn legacy_history_migrates_without_resetting_revision_sequence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let service = StateService::new(tmp.path());
+        service
+            .write(&character, &serde_json::json!({"mood": "legacy"}))
+            .unwrap();
+        let state_dir = data_dir::char_state_dir(tmp.path(), character.as_str());
+        fs::remove_file(state_dir.join("current_revision")).unwrap();
+        fs::remove_dir_all(state_dir.join("revisions")).unwrap();
+
+        let migrated = service
+            .write(&character, &serde_json::json!({"mood": "current"}))
+            .unwrap();
+        assert_eq!(migrated.revision, 2);
+        assert_eq!(read_current_revision(&state_dir).unwrap(), Some(2));
+        assert_eq!(
+            latest_revision(&state_dir.join("history.jsonl")).unwrap(),
+            2
+        );
     }
 }

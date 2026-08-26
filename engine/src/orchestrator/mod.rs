@@ -402,10 +402,11 @@ impl Orchestrator {
 /// No-op if live.json doesn't exist or can't be parsed.
 fn inject_live_state(data_root: &Path, character_id: &str, prompt: &mut String) {
     let state_dir = crate::data_dir::char_state_dir(data_root, character_id);
-    let Ok(json) = std::fs::read_to_string(state_dir.join("live.json")) else {
+    let Ok(character_id) = crate::types::CharacterId::new(character_id) else {
         return;
     };
-    let Ok(state) = serde_json::from_str::<serde_json::Value>(&json) else {
+    let Ok(Some(state)) = crate::domain::StateService::new(data_root).read_optional(&character_id)
+    else {
         return;
     };
 
@@ -760,6 +761,27 @@ mod tests {
             prompt.contains("<state>"),
             "should include state tag instruction"
         );
+    }
+
+    #[test]
+    fn test_ls4_inject_live_state_recovers_committed_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = crate::types::CharacterId::new("hero").unwrap();
+        let service = crate::domain::StateService::new(tmp.path());
+        service
+            .write(&character, &serde_json::json!({"hp": 40}))
+            .unwrap();
+        let live_path = crate::data_dir::char_state_dir(tmp.path(), "hero").join("live.json");
+        let stale_live = std::fs::read(&live_path).unwrap();
+        service
+            .write(&character, &serde_json::json!({"hp": 80}))
+            .unwrap();
+        std::fs::write(&live_path, stale_live).unwrap();
+
+        let mut prompt = String::new();
+        super::inject_live_state(tmp.path(), "hero", &mut prompt);
+        assert!(prompt.contains("\"hp\": 80"));
+        assert!(!prompt.contains("\"hp\": 40"));
     }
 
     // MS-9 tests for build_multi_char_system_prompt
