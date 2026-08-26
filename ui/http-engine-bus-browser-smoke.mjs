@@ -181,7 +181,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const failures = [];
   const httpFailures = [];
-  let intentRequests = 0;
+  const intentRequests = [];
   let cooperativeStopRequested = false;
   page.on("console", (message) => {
     if (message.type() === "error") failures.push(`${message.location().url}: ${message.text()}`);
@@ -193,7 +193,9 @@ try {
     if (!expectedStopAbort) failures.push(`${request.url()}: ${request.failure()?.errorText}`);
   });
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/v1/ui/intents") intentRequests += 1;
+    if (new URL(request.url()).pathname === "/v1/ui/intents") {
+      intentRequests.push(request.postDataJSON()?.name ?? `<${request.method()}>`);
+    }
   });
   page.on("response", (response) => {
     if (response.status() >= 400) httpFailures.push(`${response.status()} ${response.url()}`);
@@ -469,7 +471,17 @@ try {
     capabilities: ["read:state"],
     mountCalls: 1,
   });
-  assert.equal(intentRequests, 9, "Surface write and Chat vertical slices did not dispatch every expected intent");
+  assert.deepEqual(intentRequests, [
+    "memory.replace",
+    "characterState.patch",
+    "chat.loadMore",
+    "chat.send",
+    "chat.regen",
+    "chat.swipe",
+    "chat.continue",
+    "chat.continue",
+    "chat.stop",
+  ], "Surface write and Chat vertical slices dispatched an unexpected intent sequence");
   assert.ok(providerRequests >= 7, "Chat vertical slice did not reuse the Engine provider pipeline");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);
   assert.equal(failures.length, 0, `browser errors: ${failures.join("\n")}`);
