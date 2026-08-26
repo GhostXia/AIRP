@@ -1,15 +1,22 @@
 param(
     [string]$PackageRoot = (Join-Path $PSScriptRoot '..\..\dist\airp-webui-windows-x64'),
-    [int]$Port = 18765
+    [int]$Port = 18765,
+    [switch]$AllowHeadlessWebViewFallback
 )
 
 $ErrorActionPreference = 'Stop'
-$package = (Resolve-Path $PackageRoot).Path
+$packageSource = (Resolve-Path $PackageRoot).Path
+$scratchRoot = $null
+$package = $packageSource
 $ui = Join-Path $package 'airp-ui.exe'
 $engine = Join-Path $package 'airp-core.exe'
 $webui = Join-Path $package 'webui'
 $data = Join-Path $package 'data'
 $lock = Join-Path $data 'engine-instance.lock'
+$debugPort = $Port + 1
+$restartEvidence = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ("airp-desktop-restart-" + [Guid]::NewGuid().ToString('N') + '.json')
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 if (-not (Test-Path -LiteralPath $ui -PathType Leaf)) {
     throw 'Portable airp-ui.exe is missing.'
@@ -83,31 +90,71 @@ function Assert-LiveLockOwner {
     throw "engine instance lock owner verification timed out: $lastError"
 }
 
+function Assert-PortAvailable {
+    param(
+        [Parameter(Mandatory = $true)][int]$PortNumber,
+        [Parameter(Mandatory = $true)][string]$Purpose
+    )
+
+    if (Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue) {
+        throw "$Purpose port $PortNumber is already in use; choose a free port before desktop smoke."
+    }
+}
+
+function Get-OwnedEngineProcess {
+    param(
+        [Parameter(Mandatory = $true)]$LockRecord,
+        [Parameter(Mandatory = $true)][string]$ExpectedEnginePath,
+        [Parameter(Mandatory = $true)][int]$ExpectedPort,
+        [Parameter(Mandatory = $true)][int[]]$AllowedShellPids
+    )
+
+    $shellPid = [int]$LockRecord.shell_pid
+    $enginePid = [int]$LockRecord.engine_pid
+    if ($AllowedShellPids -notcontains $shellPid) {
+        throw "lock shell PID $shellPid was not launched by this smoke"
+    }
+    if ([int]$LockRecord.port -ne $ExpectedPort) {
+        throw "lock port $($LockRecord.port) does not match smoke port $ExpectedPort"
+    }
+    $process = Get-Process -Id $enginePid -ErrorAction Stop
+    if (-not [string]::Equals(
+        [System.IO.Path]::GetFullPath($process.Path),
+        [System.IO.Path]::GetFullPath($ExpectedEnginePath),
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "lock PID $enginePid does not run the isolated packaged airp-core.exe"
+    }
+    $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $enginePid"
+    if (-not $processInfo -or [int]$processInfo.ParentProcessId -ne $shellPid) {
+        throw "lock PID $enginePid is not a child of owned shell PID $shellPid"
+    }
+    return $process
+}
+
 # 便携包体数据共用前提：包内 data/ 不预建。壳在便携模式（包体标记
 # airp-core.exe + webui/index.html 齐备）下以 exe 同目录 data/ 为数据根，
 # setup 会 create_dir_all 补齐；保持全新解压包状态可顺带回归断言
 # "首次桌面启动即共享包内 data/"（审计 P1 修复）。
 
-# 端口必须空闲：若残留 engine 占用（壳会走 ReuseExternalHosting 分支，
-# 退出不 kill 外部进程，后面"退出即停止"断言会误判），直接失败提示。
-# 判定"任何 HTTP 响应即视为占用"：IWR 成功（2xx）走 try，非 2xx 抛异常
-# 且 Exception.Response 非 null；连接失败（端口空闲）抛异常但 Response 为 null。
-# 必须用标志位 + try 外 throw：脚本自身 throw 抛 RuntimeException（无 Response），
-# 若放在 try 内会被 catch 吞掉（审计 B-01 实测复现）。
-$portOccupied = $false
-try {
-    $null = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/version" -TimeoutSec 1
-    $portOccupied = $true
+# Engine 与 WebView2 调试监听都必须由本次 smoke 独占。若任一端口已被
+# 占用，直接失败；清理阶段绝不根据端口反向查找并终止未知进程。
+Assert-PortAvailable -PortNumber $Port -Purpose 'Engine'
+Assert-PortAvailable -PortNumber $debugPort -Purpose 'WebView2 debug'
+
+# Never run this stateful smoke against the supplied package in place. Copy
+# package assets into a unique root and exclude any existing portable data/.
+$scratchRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ("airp-desktop-smoke-" + [Guid]::NewGuid().ToString('N'))
+$package = Join-Path $scratchRoot 'package'
+New-Item -ItemType Directory -Path $package -Force | Out-Null
+Get-ChildItem -LiteralPath $packageSource | Where-Object { $_.Name -ne 'data' } | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $package -Recurse
 }
-catch {
-    if ($_.Exception.Response) {
-        $portOccupied = $true
-    }
-    # 连接失败且无 HTTP 响应 = 端口空闲，继续
-}
-if ($portOccupied) {
-    throw "Port $Port is already serving an engine; clean up the leftover process before desktop smoke."
-}
+$ui = Join-Path $package 'airp-ui.exe'
+$engine = Join-Path $package 'airp-core.exe'
+$webui = Join-Path $package 'webui'
+$data = Join-Path $package 'data'
+$lock = Join-Path $data 'engine-instance.lock'
 
 # 清环境干扰：继承的 engine 地址/access key 会让壳跳过捆绑 sidecar 或
 # 改变 bearer 通道，破坏"从包体拉起 engine"的验证语义。
@@ -116,11 +163,18 @@ Remove-Item Env:AIRP_ACCESS_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:AIRP_DATA_DIR -ErrorAction SilentlyContinue
 Remove-Item Env:AIRP_WEBUI_DIR -ErrorAction SilentlyContinue
 $env:AIRP_DAEMON_PORT = "$Port"
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$debugPort"
+$env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $scratchRoot 'webview2-user-data'
+$env:AIRP_SMOKE_CDP_URL = "http://127.0.0.1:$debugPort"
+$env:AIRP_SMOKE_ORIGIN = "http://127.0.0.1:$Port"
+$env:AIRP_SMOKE_RESTART_EVIDENCE_FILE = $restartEvidence
 
 $uiProcess = $null
 $secondUiProcess = $null
+$launchedShellPids = [System.Collections.Generic.List[int]]::new()
 try {
     $uiProcess = Start-Process -FilePath $ui -WorkingDirectory $package -PassThru -WindowStyle Hidden
+    $launchedShellPids.Add($uiProcess.Id)
 
     # 1. 就绪：壳自启的捆绑 engine 在指定端口响应 /version。
     $ready = $false
@@ -157,7 +211,75 @@ try {
     Assert-LiveLockOwner -Path $lock -ExpectedShellPid $uiProcess.Id -ExpectedPort $Port -ExpectedShellProcess $uiProcess
     Write-Host "Desktop shell uses the shared package data folder: $data"
 
-    # 5. 优雅退出：关窗口 → 壳退出 → sidecar 停止 → 归属锁清理。
+    # 5. Real WebView2 credential/recovery evidence. Attach to the packaged
+    # desktop WebView over a loopback-only smoke CDP port, create durable
+    # Memory/State through authenticated Engine intents, then force-kill only
+    # the owned Engine. The still-running shell must respawn it, exchange a new
+    # short-lived token, reconnect the existing WebView, and recover authority.
+    $webViewEvidenceAvailable = $false
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        if ($uiProcess.HasExited) {
+            throw 'AIRP UI exited before WebView2 evidence capability was determined'
+        }
+        if (Get-NetTCPConnection -LocalPort $debugPort -State Listen -ErrorAction SilentlyContinue) {
+            $webViewEvidenceAvailable = $true
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    if ($webViewEvidenceAvailable) {
+        & node (Join-Path $repoRoot 'ui\packaged-desktop-restart-smoke.mjs') before
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged desktop pre-restart evidence failed with code $LASTEXITCODE."
+        }
+    }
+    elseif ($AllowHeadlessWebViewFallback) {
+        Write-Warning 'WebView2 CDP is unavailable in this non-interactive runner; continuing with packaged process/lock recovery evidence only.'
+    }
+    else {
+        throw 'WebView2 CDP endpoint did not become ready; interactive desktop evidence is required unless -AllowHeadlessWebViewFallback is explicit.'
+    }
+    $beforeLock = Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
+    $terminatedEnginePid = [int]$beforeLock.engine_pid
+    $terminatedInstanceId = [string]$beforeLock.instance_id
+    $terminatedEngine = Get-OwnedEngineProcess -LockRecord $beforeLock `
+        -ExpectedEnginePath $engine -ExpectedPort $Port `
+        -AllowedShellPids $launchedShellPids.ToArray()
+    Stop-Process -InputObject $terminatedEngine -Force
+
+    $recovered = $false
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
+        if ($uiProcess.HasExited) {
+            throw "AIRP UI exited while recovering Engine PID $terminatedEnginePid"
+        }
+        try {
+            $currentLock = Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
+            $currentEnginePid = [int]$currentLock.engine_pid
+            $version = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/version" -TimeoutSec 1
+            if ($currentLock.shell_pid -eq $uiProcess.Id -and
+                $currentEnginePid -gt 0 -and
+                $currentEnginePid -ne $terminatedEnginePid -and
+                [string]$currentLock.instance_id -ne $terminatedInstanceId -and
+                $version.name -eq 'airp-core') {
+                $recovered = $true
+                break
+            }
+        }
+        catch { }
+        Start-Sleep -Milliseconds 250
+    }
+    if (-not $recovered) {
+        throw "Desktop shell did not recover terminated Engine PID $terminatedEnginePid."
+    }
+    Assert-LiveLockOwner -Path $lock -ExpectedShellPid $uiProcess.Id -ExpectedPort $Port -ExpectedShellProcess $uiProcess
+    if ($webViewEvidenceAvailable) {
+        & node (Join-Path $repoRoot 'ui\packaged-desktop-restart-smoke.mjs') after
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged desktop post-restart evidence failed with code $LASTEXITCODE."
+        }
+    }
+
+    # 6. 优雅退出：关窗口 → 壳退出 → sidecar 停止 → 归属锁清理。
     if (-not $uiProcess.CloseMainWindow()) {
         throw 'could not request a graceful UI shutdown'
     }
@@ -173,10 +295,12 @@ try {
     if (-not $stopped) { throw 'engine sidecar remained alive after UI exit' }
     Assert-LockHasNoOwner -Path $lock
 
-    # 6. Reopen through the explicit Blueprint entry. The lock inode is
+    # 7. Reopen through the explicit Blueprint entry. The lock inode is
     # retained; this also proves both shell entries share lifecycle semantics.
+    Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
     $env:AIRP_DESKTOP_UI = 'blueprint'
     $secondUiProcess = Start-Process -FilePath $ui -WorkingDirectory $package -PassThru -WindowStyle Hidden
+    $launchedShellPids.Add($secondUiProcess.Id)
     try {
         $secondReady = $false
         for ($attempt = 0; $attempt -lt 60; $attempt++) {
@@ -219,18 +343,28 @@ try {
 }
 finally {
     Remove-Item Env:AIRP_DESKTOP_UI -ErrorAction SilentlyContinue
-    # 失败路径清理：壳被强杀时 sidecar 可能存活（锁文件还在），先按归属
-    # 锁的 engine_pid 清理残留 engine，再强杀壳，避免占端口/挡下次 smoke。
+    if ($secondUiProcess -and -not $secondUiProcess.HasExited) {
+        Stop-Process -Id $secondUiProcess.Id -Force
+        $secondUiProcess.WaitForExit(5000) | Out-Null
+    }
+    if ($uiProcess -and -not $uiProcess.HasExited) {
+        Stop-Process -Id $uiProcess.Id -Force
+        $uiProcess.WaitForExit(5000) | Out-Null
+    }
+    # Failure cleanup acts only on the exact isolated executable recorded by a
+    # lock whose shell PID was launched by this smoke. Never kill a PID merely
+    # because it currently owns the test port.
     if (Test-Path -LiteralPath $lock -PathType Leaf) {
         try {
             $lockRaw = Get-Content -LiteralPath $lock -Raw
             if (-not [string]::IsNullOrWhiteSpace($lockRaw)) {
                 $lockJson = $lockRaw | ConvertFrom-Json
                 if ($lockJson.engine_pid) {
-                    if (Get-Process -Id $lockJson.engine_pid -ErrorAction SilentlyContinue) {
-                        Stop-Process -Id $lockJson.engine_pid -Force
-                        Write-Host "Cleaned up leftover engine process $($lockJson.engine_pid)"
-                    }
+                    $ownedEngine = Get-OwnedEngineProcess -LockRecord $lockJson `
+                        -ExpectedEnginePath $engine -ExpectedPort $Port `
+                        -AllowedShellPids $launchedShellPids.ToArray()
+                    Stop-Process -InputObject $ownedEngine -Force
+                    Write-Host "Cleaned up owned leftover engine process $($lockJson.engine_pid)"
                 }
             }
         }
@@ -238,18 +372,14 @@ finally {
             Write-Warning "Failed to clean leftover engine from lock: $_"
         }
     }
-    if ($uiProcess -and -not $uiProcess.HasExited) {
-        Stop-Process -Id $uiProcess.Id -Force
-    }
-    # 防御冗余（审计 N-03）：锁文件路径依赖壳的便携模式判定。若壳异常
-    # 回落 %APPDATA%（前置预检应已拦截），锁不在包内 $lock 路径，上方锁级
-    # 清理会跳过。此时按端口查找 LISTENING 进程并清理，确保不残留 engine。
-    $portConn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($portConn) {
-        $portConn | ForEach-Object {
-            Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
-            Write-Host "Cleaned up leftover process on port $Port (PID $($_.OwningProcess))"
-        }
-    }
     Remove-Item Env:AIRP_DAEMON_PORT -ErrorAction SilentlyContinue
+    Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+    Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
+    Remove-Item Env:AIRP_SMOKE_CDP_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:AIRP_SMOKE_ORIGIN -ErrorAction SilentlyContinue
+    Remove-Item Env:AIRP_SMOKE_RESTART_EVIDENCE_FILE -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $restartEvidence -Force -ErrorAction SilentlyContinue
+    if ($scratchRoot -and (Test-Path -LiteralPath $scratchRoot -PathType Container)) {
+        Remove-Item -LiteralPath $scratchRoot -Recurse -Force
+    }
 }

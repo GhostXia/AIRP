@@ -546,6 +546,10 @@ async function initializeBus(): Promise<void> {
   }
 }
 
+function recoverAfterEngineRestart(): void {
+  void initializeBus();
+}
+
 async function refreshCharacters(): Promise<void> {
   await initializeBus();
 }
@@ -633,6 +637,7 @@ onMounted(async () => {
   compactInspectorMedia = window.matchMedia("(max-width: 1180px)");
   collapseForCompactViewport(compactInspectorMedia);
   compactInspectorMedia.addEventListener("change", collapseForCompactViewport);
+  window.addEventListener("airp-engine-restarted", recoverAfterEngineRestart);
   if (productionSurface) await initializeBus();
   try {
     await installOptionalAgentTestHarness();
@@ -650,6 +655,7 @@ onUnmounted(() => {
   if (stop) stop();
   else activeBus?.disconnect();
   compactInspectorMedia?.removeEventListener("change", collapseForCompactViewport);
+  window.removeEventListener("airp-engine-restarted", recoverAfterEngineRestart);
 });
 </script>
 
