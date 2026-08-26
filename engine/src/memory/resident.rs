@@ -6,6 +6,7 @@
 //! 容量上限默认 ~2000 字符（可配置）；超限触发 `compress::compress_resident_memory`。
 
 use crate::error::AirpError;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
@@ -50,6 +51,37 @@ pub(crate) fn read_resident_memory_unlocked(session_dir: &Path) -> Result<String
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(e) => Err(AirpError::from(e)),
     }
+}
+
+/// SHA-256 of the exact UTF-8 bytes exposed by the Memory Surface.
+pub fn resident_memory_content_hash(content: &str) -> String {
+    format!("{:x}", Sha256::digest(content.as_bytes()))
+}
+
+/// Atomically replace resident memory when the caller still holds the latest
+/// Surface snapshot. The hash comparison and write share the mutation lock so
+/// a concurrent extraction, compression, or manual edit cannot be lost.
+pub fn replace_resident_memory(
+    session_dir: &Path,
+    content: &str,
+    expected_content_hash: &str,
+    config: &ResidentMemoryConfig,
+) -> Result<(), AirpError> {
+    super::with_memory_mutation(session_dir, || {
+        if content.chars().count() > config.capacity_chars {
+            return Err(AirpError::BadRequest(format!(
+                "resident memory exceeds capacity of {} characters",
+                config.capacity_chars
+            )));
+        }
+        let current = read_resident_memory_unlocked(session_dir)?;
+        if resident_memory_content_hash(&current) != expected_content_hash {
+            return Err(AirpError::Conflict(
+                "resident memory content hash is stale".to_string(),
+            ));
+        }
+        write_resident_memory_unlocked(session_dir, content)
+    })
 }
 
 /// 写入 resident memory（覆盖）。使用原子写（temp + rename + parent sync）
@@ -146,6 +178,46 @@ mod tests {
         write_resident_memory(tmp.path(), "# 记忆\n\n- 用户喜欢猫").unwrap();
         let content = read_resident_memory(tmp.path()).unwrap();
         assert!(content.contains("用户喜欢猫"));
+    }
+
+    #[test]
+    fn replace_uses_exact_sha256_compare_and_swap() {
+        let tmp = tempdir().unwrap();
+        write_resident_memory(tmp.path(), "before").unwrap();
+        let expected = resident_memory_content_hash("before");
+
+        replace_resident_memory(
+            tmp.path(),
+            "after",
+            &expected,
+            &ResidentMemoryConfig { capacity_chars: 20 },
+        )
+        .unwrap();
+        assert_eq!(read_resident_memory(tmp.path()).unwrap(), "after");
+
+        let stale = replace_resident_memory(
+            tmp.path(),
+            "lost update",
+            &expected,
+            &ResidentMemoryConfig { capacity_chars: 20 },
+        );
+        assert!(matches!(stale, Err(AirpError::Conflict(_))));
+        assert_eq!(read_resident_memory(tmp.path()).unwrap(), "after");
+    }
+
+    #[test]
+    fn replace_rejects_content_over_capacity_without_writing() {
+        let tmp = tempdir().unwrap();
+        write_resident_memory(tmp.path(), "before").unwrap();
+        let result = replace_resident_memory(
+            tmp.path(),
+            "123456",
+            &resident_memory_content_hash("before"),
+            &ResidentMemoryConfig { capacity_chars: 5 },
+        );
+
+        assert!(matches!(result, Err(AirpError::BadRequest(_))));
+        assert_eq!(read_resident_memory(tmp.path()).unwrap(), "before");
     }
 
     #[test]

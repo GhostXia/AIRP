@@ -32,6 +32,26 @@ pub struct StateSnapshot {
     pub state: serde_json::Value,
 }
 
+const CHARACTER_STATE_MAX_PATCH_BYTES: usize = airp_state_protocol::SURFACE_MAX_PATCH_BYTES;
+const CHARACTER_STATE_MAX_PATCH_OPERATIONS: usize =
+    airp_state_protocol::SURFACE_MAX_PATCH_OPERATIONS;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+enum CharacterStatePatchOperation {
+    Add {
+        path: String,
+        value: serde_json::Value,
+    },
+    Replace {
+        path: String,
+        value: serde_json::Value,
+    },
+    Remove {
+        path: String,
+    },
+}
+
 impl StateService {
     pub fn new(data_root: impl AsRef<Path>) -> Self {
         Self {
@@ -56,6 +76,64 @@ impl StateService {
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         Self::load_live_value(character_id, &state_dir)
+    }
+
+    /// Read the state and revision metadata used by the Character State
+    /// Surface while holding the same locks as mutations.
+    pub fn read_surface_state(
+        &self,
+        character_id: &CharacterId,
+    ) -> Result<(u64, Option<String>, serde_json::Value), AirpError> {
+        let character = character_lock(character_id.as_str());
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
+        let state_boundary = state_lock(character_id.as_str());
+        let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+        let _state_track = lock_order::track_state();
+
+        let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        let state = Self::load_live_value(character_id, &state_dir)?;
+        let history_path =
+            data_dir::char_state_history_path(&self.data_root, character_id.as_str());
+        let latest = latest_snapshot(&history_path)?;
+        Ok((
+            latest.as_ref().map_or(0, |snapshot| snapshot.revision),
+            latest.map(|snapshot| snapshot.timestamp),
+            state,
+        ))
+    }
+
+    /// Apply a bounded top-level JSON Patch with optimistic concurrency.
+    /// Revision comparison, patch application, schema validation, and commit
+    /// all occur inside the existing character/state lock order.
+    pub fn patch(
+        &self,
+        character_id: &CharacterId,
+        expected_revision: u64,
+        patch: &[serde_json::Value],
+    ) -> Result<StateSnapshot, AirpError> {
+        validate_patch_limits(patch)?;
+        let character = character_lock(character_id.as_str());
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
+        let state_boundary = state_lock(character_id.as_str());
+        let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+        let _state_track = lock_order::track_state();
+
+        let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        let history_path =
+            data_dir::char_state_history_path(&self.data_root, character_id.as_str());
+        let current_revision = latest_revision(&history_path)?;
+        if current_revision != expected_revision {
+            return Err(AirpError::Conflict(format!(
+                "character state revision is stale: expected {expected_revision}, current {current_revision}"
+            )));
+        }
+
+        let mut state = Self::load_live_value(character_id, &state_dir)?;
+        apply_top_level_patch(&mut state, patch)?;
+        fs::create_dir_all(&state_dir)?;
+        self.commit_state_under_lock(character_id, &state_dir, &state)
     }
 
     /// Atomically mutate a character's live state under the state lock.
@@ -246,8 +324,12 @@ impl StateService {
 }
 
 fn latest_revision(path: &Path) -> Result<u64, AirpError> {
+    Ok(latest_snapshot(path)?.map_or(0, |snapshot| snapshot.revision))
+}
+
+fn latest_snapshot(path: &Path) -> Result<Option<StateSnapshot>, AirpError> {
     if !path.exists() {
-        return Ok(0);
+        return Ok(None);
     }
     let mut file = fs::File::open(path)?;
     let mut position = file.metadata()?.len();
@@ -260,14 +342,13 @@ fn latest_revision(path: &Path) -> Result<u64, AirpError> {
         block.extend_from_slice(&suffix);
         let first_newline = block.iter().position(|byte| *byte == b'\n');
         let complete_lines = first_newline.map_or(&[][..], |index| &block[index + 1..]);
-        if let Some(revision) = complete_lines
+        if let Some(snapshot) = complete_lines
             .split(|byte| *byte == b'\n')
             .rev()
             .filter(|line| !line.is_empty())
             .find_map(|line| serde_json::from_slice::<StateSnapshot>(line).ok())
-            .map(|entry| entry.revision)
         {
-            return Ok(revision);
+            return Ok(Some(snapshot));
         }
         suffix = match first_newline {
             Some(index) => block[..index].to_vec(),
@@ -275,7 +356,93 @@ fn latest_revision(path: &Path) -> Result<u64, AirpError> {
         };
         position = start;
     }
-    Ok(serde_json::from_slice::<StateSnapshot>(&suffix).map_or(0, |entry| entry.revision))
+    Ok(serde_json::from_slice::<StateSnapshot>(&suffix).ok())
+}
+
+fn validate_patch_limits(patch: &[serde_json::Value]) -> Result<(), AirpError> {
+    if patch.is_empty() {
+        return Err(AirpError::BadRequest(
+            "character state patch must contain at least one operation".to_string(),
+        ));
+    }
+    if patch.len() > CHARACTER_STATE_MAX_PATCH_OPERATIONS {
+        return Err(AirpError::BadRequest(format!(
+            "character state patch exceeds {CHARACTER_STATE_MAX_PATCH_OPERATIONS} operations"
+        )));
+    }
+    if serde_json::to_vec(patch)?.len() > CHARACTER_STATE_MAX_PATCH_BYTES {
+        return Err(AirpError::BadRequest(format!(
+            "character state patch exceeds {CHARACTER_STATE_MAX_PATCH_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn apply_top_level_patch(
+    state: &mut serde_json::Value,
+    patch: &[serde_json::Value],
+) -> Result<(), AirpError> {
+    let object = state.as_object_mut().ok_or_else(|| {
+        AirpError::BadRequest("character state must be a JSON object".to_string())
+    })?;
+    for operation in patch {
+        let operation: CharacterStatePatchOperation = serde_json::from_value(operation.clone())
+            .map_err(|error| {
+                AirpError::BadRequest(format!("invalid character state patch operation: {error}"))
+            })?;
+        match operation {
+            CharacterStatePatchOperation::Add { path, value } => {
+                object.insert(top_level_pointer(&path)?, value);
+            }
+            CharacterStatePatchOperation::Replace { path, value } => {
+                let key = top_level_pointer(&path)?;
+                let target = object.get_mut(&key).ok_or_else(|| {
+                    AirpError::BadRequest(format!(
+                        "character state replace target does not exist: {path}"
+                    ))
+                })?;
+                *target = value;
+            }
+            CharacterStatePatchOperation::Remove { path } => {
+                let key = top_level_pointer(&path)?;
+                if object.remove(&key).is_none() {
+                    return Err(AirpError::BadRequest(format!(
+                        "character state remove target does not exist: {path}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn top_level_pointer(path: &str) -> Result<String, AirpError> {
+    let encoded = path.strip_prefix('/').ok_or_else(|| {
+        AirpError::BadRequest("character state patch path must be a JSON Pointer".to_string())
+    })?;
+    if encoded.is_empty() || encoded.contains('/') {
+        return Err(AirpError::BadRequest(
+            "character state patch path must select one top-level field".to_string(),
+        ));
+    }
+    let mut decoded = String::with_capacity(encoded.len());
+    let mut chars = encoded.chars();
+    while let Some(character) = chars.next() {
+        if character != '~' {
+            decoded.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('0') => decoded.push('~'),
+            Some('1') => decoded.push('/'),
+            _ => {
+                return Err(AirpError::BadRequest(
+                    "character state patch path has invalid JSON Pointer escaping".to_string(),
+                ))
+            }
+        }
+    }
+    Ok(decoded)
 }
 
 fn validate_state(schema: &serde_json::Value, state: &serde_json::Value) -> Result<(), AirpError> {
@@ -417,5 +584,122 @@ mod tests {
         fs::write(&history, bytes).unwrap();
 
         assert_eq!(latest_revision(&history).unwrap(), 7);
+    }
+
+    #[test]
+    fn patch_preserves_unrelated_fields_and_rejects_nested_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let service = StateService::new(tmp.path());
+        service
+            .write(
+                &character,
+                &serde_json::json!({"mood": "calm", "location": "home"}),
+            )
+            .unwrap();
+
+        let patched = service
+            .patch(
+                &character,
+                1,
+                &[
+                    serde_json::json!({"op": "replace", "path": "/mood", "value": "focused"}),
+                    serde_json::json!({"op": "add", "path": "/hp", "value": 10}),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            patched.state,
+            serde_json::json!({"mood": "focused", "location": "home", "hp": 10})
+        );
+
+        let nested = service.patch(
+            &character,
+            2,
+            &[serde_json::json!({
+                "op": "replace",
+                "path": "/stats/hp",
+                "value": 9
+            })],
+        );
+        assert!(matches!(nested, Err(AirpError::BadRequest(_))));
+        assert_eq!(service.read(&character).unwrap(), patched.state);
+    }
+
+    #[test]
+    fn concurrent_patches_with_one_revision_have_one_winner() {
+        use std::sync::{Arc, Barrier};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let service = StateService::new(tmp.path());
+        service
+            .write(&character, &serde_json::json!({"stable": true}))
+            .unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let handles: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|field| {
+                let service = service.clone();
+                let character = character.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    service.patch(
+                        &character,
+                        1,
+                        &[serde_json::json!({
+                            "op": "add",
+                            "path": format!("/{field}"),
+                            "value": true
+                        })],
+                    )
+                })
+            })
+            .collect();
+
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(AirpError::Conflict(_))))
+                .count(),
+            1
+        );
+        let (revision, _, state) = service.read_surface_state(&character).unwrap();
+        assert_eq!(revision, 2);
+        assert_eq!(state["stable"], true);
+        assert_ne!(state.get("first").is_some(), state.get("second").is_some());
+    }
+
+    #[test]
+    fn patch_limits_reject_excessive_count_and_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let service = StateService::new(tmp.path());
+        let too_many = (0..=CHARACTER_STATE_MAX_PATCH_OPERATIONS)
+            .map(|index| {
+                serde_json::json!({"op": "add", "path": format!("/field-{index}"), "value": true})
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            service.patch(&character, 0, &too_many),
+            Err(AirpError::BadRequest(_))
+        ));
+
+        let too_large = vec![serde_json::json!({
+            "op": "add",
+            "path": "/large",
+            "value": "x".repeat(CHARACTER_STATE_MAX_PATCH_BYTES)
+        })];
+        assert!(matches!(
+            service.patch(&character, 0, &too_large),
+            Err(AirpError::BadRequest(_))
+        ));
+        assert!(!data_dir::char_state_dir(tmp.path(), character.as_str()).exists());
     }
 }

@@ -17,6 +17,27 @@
         "chat.swipe": { "params": { "message_id": "string", "index": "integer" }, "response": "SwipeResponse JSON" },
         "chat.loadMore": { "params": { "before": "optional string", "limit": "optional integer" }, "response": "HistoryWindow JSON" }
       }
+    },
+    "core.memory": {
+      "intents": {
+        "memory.replace": {
+          "params": { "content": "string", "expected_content_hash": "lowercase SHA-256 hex string" },
+          "response": "ResidentMemorySnapshot JSON",
+          "conflict": "409 when resident memory no longer matches expected_content_hash"
+        }
+      }
+    },
+    "core.character-state": {
+      "intents": {
+        "characterState.patch": {
+          "params": {
+            "expected_revision": "non-negative integer",
+            "patch": "bounded array of top-level add/replace/remove JSON Patch operations"
+          },
+          "response": "CharacterStateProjection JSON",
+          "conflict": "409 when current character-state revision differs from expected_revision"
+        }
+      }
     }
   },
   "streamContract": "sse-events.json"

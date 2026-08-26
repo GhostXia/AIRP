@@ -1,0 +1,31 @@
+{
+  "type": "core.character-state",
+  "version": "0.2.0",
+  "title": "角色状态",
+  "description": "Editable character-scoped state with revision-based top-level patch concurrency control.",
+  "stateSchema": {
+    "type": "object",
+    "required": ["revision", "timestamp", "state", "source"],
+    "properties": {
+      "revision": { "type": "integer", "minimum": 0 },
+      "timestamp": { "type": ["string", "null"] },
+      "state": { "type": "object" },
+      "source": {
+        "type": "object",
+        "required": ["kind", "scope", "character_id"],
+        "properties": {
+          "kind": { "const": "character_state" },
+          "scope": { "const": "character" },
+          "character_id": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false
+  },
+  "intents": ["characterState.patch"],
+  "capabilities": ["read:state", "write:state"],
+  "entry": { "kind": "builtin" },
+  "author": "AIRP",
+  "license": "MIT OR Apache-2.0"
+}

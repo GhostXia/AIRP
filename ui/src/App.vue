@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { BlueprintV2, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
 import type { SurfaceApplyResult } from "./protocol/surface-v2";
 import {
-  HttpEngineBus, IntentStreamFailure, IntentStreamInterrupted, type EngineSurfaceScope,
+  HttpEngineBus, HttpFailure, IntentStreamFailure, IntentStreamInterrupted, type EngineSurfaceScope,
 } from "./protocol/http-engine-bus";
 import { currentBearer, renewDesktopSession } from "./protocol/desktop-session";
 import { isTauriEnvironment } from "./protocol/bus-factory";
@@ -21,6 +21,9 @@ import {
   classifyChatRecoveryProjection,
   type ChatOperationBaseline,
 } from "./chat-recovery";
+import {
+  WRITABLE_SURFACE_WIDGET_TYPES, isNonStreamingSurfaceMutation,
+} from "./state/surface-mutations";
 
 // Register first-party widgets into the open registry.
 registerBuiltins();
@@ -333,6 +336,7 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
   const current = operationFor(instanceId);
   const streams = ["chat.send", "chat.regen", "chat.continue"];
   const recoverableMutations = [...streams, "chat.swipe"];
+  const surfaceMutation = isNonStreamingSurfaceMutation(name);
   if (streams.includes(name)) {
     const raw = params as { text?: unknown } | undefined;
     setOperation(instanceId, {
@@ -365,7 +369,10 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
       retryName: name,
       retryParams: params,
     });
+  } else if (surfaceMutation) {
+    setOperation(instanceId, { status: "saving" });
   }
+  let mutationAccepted = false;
   try {
     const result = await activeBus.dispatchIntent(surfaceId, instanceId, name, params, ({ data }) => {
       if (bus !== activeBus) return;
@@ -379,6 +386,12 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
       }
     });
     if (bus !== activeBus) return;
+    if (surfaceMutation) {
+      mutationAccepted = true;
+      await refreshSurfaceForBus(activeBus, activeScope);
+      if (bus === activeBus) setOperation(instanceId, { status: "saved" });
+      return;
+    }
     if (streams.includes(name)) {
       await reconcileOperation(activeBus, activeScope, instanceId);
     } else if (name === "chat.loadMore" && result && typeof result === "object") {
@@ -394,6 +407,31 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
     }
   } catch (err: unknown) {
     if (bus === activeBus) {
+      if (surfaceMutation) {
+        const conflict = err instanceof HttpFailure && err.isConflict;
+        let refreshError: string | undefined;
+        try {
+          await refreshSurfaceForBus(activeBus, activeScope);
+        } catch (refreshFailure) {
+          refreshError = String(refreshFailure ?? "Surface refresh failed");
+        }
+        if (bus === activeBus) {
+          setOperation(instanceId, conflict
+            ? {
+                status: "conflict",
+                error: refreshError
+                  ? `权威版本已变化；草稿已保留，但刷新失败：${refreshError}`
+                  : "权威版本已变化；已载入最新版本并保留草稿，请审核后再次保存。",
+              }
+            : {
+                status: "error",
+                error: mutationAccepted
+                  ? `写入已被 Engine 接受；已尝试刷新权威版本且不会自动重放。${refreshError ? `刷新失败：${refreshError}。` : ""}${String(err ?? "")}`
+                  : `保存结果未知或失败；已尝试刷新权威版本，草稿已保留且不会自动重放。${refreshError ? `刷新失败：${refreshError}。` : ""}${String(err ?? "")}`,
+              });
+        }
+        return;
+      }
       const typed = err instanceof IntentStreamFailure
         ? err.data.error as { code?: unknown; commit_state?: unknown } | undefined
         : undefined;
@@ -680,7 +718,7 @@ onUnmounted(() => {
             :state-revisions="stateRevisionStore"
             :active-tabs="surface.activeTabByNodeId"
             :authoritative-props="productionSurface"
-            :writable-widget-types="productionSurface ? ['core.chat'] : []"
+            :writable-widget-types="productionSurface ? [...WRITABLE_SURFACE_WIDGET_TYPES] : []"
             :operations="widgetOperations"
             @activate-tab="activateSurfaceTab"
             @focus-widget="focusSurfaceWidget"

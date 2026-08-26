@@ -72,6 +72,71 @@ async fn state_and_lorebook_tools_roundtrip_with_confirmation() {
     assert_eq!(current.output["entries"][0]["content"], "Open runtime");
 }
 
+#[tokio::test]
+async fn state_tools_use_the_trusted_effective_root_and_matching_character_gate() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    let effective_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, Some("tenant-a")).unwrap();
+    crate::data_dir::ensure_data_dirs(&effective_root).unwrap();
+    let character = CharacterId::new("alice").unwrap();
+    let session_id = crate::types::SessionId::new();
+    let registry = registry_for_root(state.clone(), effective_root.clone());
+    let tool = registry.get("update_character_state").unwrap();
+
+    let same_root_generation = state
+        .session_coordinators
+        .try_submit(
+            &effective_root,
+            &character,
+            Some(&session_id),
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+    let conflict = tool
+        .call(
+            serde_json::json!({"character_id": "alice", "state": {"hp": 90}}),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        conflict,
+        AirpError::Conflict(message) if message == "character_state_busy"
+    ));
+    drop(same_root_generation);
+
+    let other_root_generation = state
+        .session_coordinators
+        .try_submit(
+            &state.data_root,
+            &character,
+            Some(&session_id),
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+    tool.call(
+        serde_json::json!({"character_id": "alice", "state": {"hp": 90}}),
+        false,
+    )
+    .await
+    .unwrap();
+    drop(other_root_generation);
+
+    assert_eq!(
+        crate::domain::StateService::new(&effective_root)
+            .read(&character)
+            .unwrap(),
+        serde_json::json!({"hp": 90})
+    );
+    assert_eq!(
+        crate::domain::StateService::new(&state.data_root)
+            .read(&character)
+            .unwrap(),
+        serde_json::json!({})
+    );
+}
+
 /// #126: Verify update_lorebook tool accepts SillyTavern form and normalizes
 /// via the shared WorldbookNormalizer, preserving ST-only fields in extensions.
 #[tokio::test]

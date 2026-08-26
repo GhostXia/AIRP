@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SurfaceStore } from "./surface-v2";
-import { HttpEngineBus, IntentStreamInterrupted } from "./http-engine-bus";
+import { HttpEngineBus, HttpFailure, IntentStreamInterrupted } from "./http-engine-bus";
 import type { SurfaceSnapshot } from "./types";
 
 function snapshot(revision = "1", title = "one"): SurfaceSnapshot {
@@ -158,6 +158,25 @@ describe("HttpEngineBus", () => {
       "session:s1", "chat", "chat.send", { text: "hi" },
     )).resolves.toEqual({ ok: true });
     expect(auth).toEqual(["Bearer stale", "Bearer fresh"]);
+  });
+
+  it("exposes HTTP 409 as a typed conflict without replaying the intent", async () => {
+    let requests = 0;
+    const bus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => "secret",
+      fetchImpl: async () => {
+        requests += 1;
+        return json({ message: "revision mismatch" }, 409);
+      },
+    });
+
+    const failure = await bus.dispatchIntent(
+      "session:s1", "character-state", "characterState.patch", { expected_revision: 4, patch: [] },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(HttpFailure);
+    expect(failure).toMatchObject({ status: 409, isConflict: true, message: "revision mismatch" });
+    expect(requests).toBe(1);
   });
 
   it("parses chat intent SSE across chunk boundaries and requires done", async () => {

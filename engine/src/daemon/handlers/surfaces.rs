@@ -287,11 +287,33 @@ fn project_session(
             }),
         );
     }
+    let memory_content = crate::memory::read_resident_memory(&session_dir)?;
+    let memory_content_hash = crate::memory::resident_memory_content_hash(&memory_content);
+    let memory_char_count = memory_content.chars().count();
     let memory = json!({
-        "content": crate::memory::read_resident_memory(&session_dir)?,
+        "content": memory_content,
+        "content_hash": memory_content_hash,
+        "char_count": memory_char_count,
         "capacity_chars": crate::memory::ResidentMemoryConfig::default().capacity_chars,
+        "source": {
+            "kind": "resident_memory",
+            "scope": "session",
+            "character_id": character_id,
+            "session_id": session_id,
+        },
     });
-    let character_state = StateService::new(effective_root).read(character_id)?;
+    let (state_revision, state_timestamp, state_value) =
+        StateService::new(effective_root).read_surface_state(character_id)?;
+    let character_state = json!({
+        "revision": state_revision,
+        "timestamp": state_timestamp,
+        "state": state_value,
+        "source": {
+            "kind": "character_state",
+            "scope": "character",
+            "character_id": character_id,
+        },
+    });
     let live_activity = serde_json::to_value(state.session_coordinators.status(
         effective_root,
         character_id,

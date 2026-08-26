@@ -21,9 +21,11 @@ use crate::daemon::DaemonState;
 use crate::data_dir;
 use crate::domain::{LorebookService, StateService};
 use crate::error::AirpError;
+use crate::session_coordinator::SessionCommand;
 use crate::types::CharacterId;
 use serde_json::Value;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -42,7 +44,7 @@ fn read_lorebook_or_empty(
 
 /// `get_character_state`：读角色当前 state/live.json。readonly。
 struct GetCharacterStateTool {
-    state: Arc<DaemonState>,
+    effective_root: PathBuf,
 }
 
 impl Tool for GetCharacterStateTool {
@@ -58,11 +60,11 @@ impl Tool for GetCharacterStateTool {
         params: Value,
         _confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
-        let state = self.state.clone();
+        let effective_root = self.effective_root.clone();
         Box::pin(async move {
             let character = required_character_id(&params)?;
             let path =
-                data_dir::char_state_dir(&state.data_root, character.as_str()).join("live.json");
+                data_dir::char_state_dir(&effective_root, character.as_str()).join("live.json");
             // #160 A1：原 `path.exists()` + `std::fs::read` 在 async future 内
             // 阻塞 executor worker；改 tokio::fs 与 analysis 写路径一致。
             if !tokio::fs::try_exists(&path).await? {
@@ -82,6 +84,7 @@ impl Tool for GetCharacterStateTool {
 /// `update_character_state`：校验并替换角色 live state，生成 revisioned 快照。mutate。
 struct UpdateCharacterStateTool {
     state: Arc<DaemonState>,
+    effective_root: PathBuf,
 }
 
 impl Tool for UpdateCharacterStateTool {
@@ -99,12 +102,19 @@ impl Tool for UpdateCharacterStateTool {
         _confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
         let daemon = self.state.clone();
+        let effective_root = self.effective_root.clone();
         Box::pin(async move {
             let character = required_character_id(&params)?;
             let value = params
                 .get("state")
                 .ok_or_else(|| AirpError::BadRequest("missing state".to_string()))?;
-            let snapshot = StateService::new(&daemon.data_root).write(&character, value)?;
+            let _operation = daemon.session_coordinators.try_submit(
+                &effective_root,
+                &character,
+                None,
+                SessionCommand::AgentToolMutation,
+            )?;
+            let snapshot = StateService::new(&effective_root).write(&character, value)?;
             Ok(ToolResult {
                 output: serde_json::to_value(snapshot)?,
                 dry_run: false,
@@ -115,7 +125,7 @@ impl Tool for UpdateCharacterStateTool {
 
 /// `get_lorebook`：读规范化 AIRP v1 lorebook。readonly。
 struct GetLorebookTool {
-    state: Arc<DaemonState>,
+    effective_root: PathBuf,
 }
 
 impl Tool for GetLorebookTool {
@@ -131,10 +141,10 @@ impl Tool for GetLorebookTool {
         params: Value,
         _confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
-        let daemon = self.state.clone();
+        let effective_root = self.effective_root.clone();
         Box::pin(async move {
             let character = required_character_id(&params)?;
-            let lorebook = LorebookService::new(&daemon.data_root).read(&character)?;
+            let lorebook = LorebookService::new(&effective_root).read(&character)?;
             Ok(ToolResult {
                 output: serde_json::to_value(lorebook)?,
                 dry_run: false,
@@ -146,7 +156,7 @@ impl Tool for GetLorebookTool {
 /// `update_lorebook`：替换角色 lorebook。destructive → 默认 dry-run。
 /// 支持 AIRP canonical 或 SillyTavern form，通过共享 WorldbookNormalizer 规范化。
 struct UpdateLorebookTool {
-    state: Arc<DaemonState>,
+    effective_root: PathBuf,
 }
 
 impl Tool for UpdateLorebookTool {
@@ -162,7 +172,7 @@ impl Tool for UpdateLorebookTool {
         params: Value,
         confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
-        let daemon = self.state.clone();
+        let effective_root = self.effective_root.clone();
         Box::pin(async move {
             let character = required_character_id(&params)?;
             let raw = params
@@ -185,7 +195,7 @@ impl Tool for UpdateLorebookTool {
                     dry_run: true,
                 });
             }
-            LorebookService::new(&daemon.data_root).write(&character, &lorebook)?;
+            LorebookService::new(&effective_root).write(&character, &lorebook)?;
             Ok(ToolResult {
                 output: serde_json::json!({
                     "updated": character.as_str(),
@@ -200,7 +210,7 @@ impl Tool for UpdateLorebookTool {
 
 /// `apply_lorebook`：返回被文本触发的 enabled 条目。readonly。
 struct ApplyLorebookTool {
-    state: Arc<DaemonState>,
+    effective_root: PathBuf,
 }
 
 impl Tool for ApplyLorebookTool {
@@ -217,14 +227,14 @@ impl Tool for ApplyLorebookTool {
         params: Value,
         _confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
-        let state = self.state.clone();
+        let effective_root = self.effective_root.clone();
         Box::pin(async move {
             let character = required_character_id(&params)?;
             let text = params
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or_else(|| AirpError::BadRequest("missing text".to_string()))?;
-            let lorebook = read_lorebook_or_empty(&state.data_root, &character)?;
+            let lorebook = read_lorebook_or_empty(&effective_root, &character)?;
             let context = lorebook.trigger(text);
             let output = crate::context_limit::truncate_for_context(&context);
             Ok(ToolResult {
@@ -243,7 +253,7 @@ impl Tool for ApplyLorebookTool {
 /// `merge_lorebooks`：合并多角色 lorebook，不写盘。readonly。
 /// strategy：union 或 primary_only。
 struct MergeLorebooksTool {
-    state: Arc<DaemonState>,
+    effective_root: PathBuf,
 }
 
 impl Tool for MergeLorebooksTool {
@@ -261,7 +271,7 @@ impl Tool for MergeLorebooksTool {
         params: Value,
         _confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>> {
-        let state = self.state.clone();
+        let effective_root = self.effective_root.clone();
         Box::pin(async move {
             let raw_ids = params
                 .get("character_ids")
@@ -298,11 +308,11 @@ impl Tool for MergeLorebooksTool {
             }
 
             let lorebooks = if strategy == "primary_only" {
-                vec![read_lorebook_or_empty(&state.data_root, &characters[0])?]
+                vec![read_lorebook_or_empty(&effective_root, &characters[0])?]
             } else {
                 characters
                     .iter()
-                    .map(|character| read_lorebook_or_empty(&state.data_root, character))
+                    .map(|character| read_lorebook_or_empty(&effective_root, character))
                     .collect::<Result<Vec<_>, _>>()?
             };
             let merged = crate::orchestrator::merge_lorebooks(&lorebooks);
@@ -326,28 +336,29 @@ impl Tool for MergeLorebooksTool {
 }
 
 /// 由 facade `default_registry` 集中调用，注册本 family 全部 6 个工具。
-pub(super) fn register(reg: &mut ToolRegistry, state: Arc<DaemonState>) {
+pub(super) fn register(reg: &mut ToolRegistry, state: Arc<DaemonState>, effective_root: PathBuf) {
     const COLLISION: &str = "built-in tool name collision";
     reg.register(Box::new(GetCharacterStateTool {
-        state: state.clone(),
+        effective_root: effective_root.clone(),
     }))
     .expect(COLLISION);
     reg.register(Box::new(UpdateCharacterStateTool {
         state: state.clone(),
+        effective_root: effective_root.clone(),
     }))
     .expect(COLLISION);
     reg.register(Box::new(GetLorebookTool {
-        state: state.clone(),
+        effective_root: effective_root.clone(),
     }))
     .expect(COLLISION);
     reg.register(Box::new(UpdateLorebookTool {
-        state: state.clone(),
+        effective_root: effective_root.clone(),
     }))
     .expect(COLLISION);
     reg.register(Box::new(ApplyLorebookTool {
-        state: state.clone(),
+        effective_root: effective_root.clone(),
     }))
     .expect(COLLISION);
-    reg.register(Box::new(MergeLorebooksTool { state }))
+    reg.register(Box::new(MergeLorebooksTool { effective_root }))
         .expect(COLLISION);
 }

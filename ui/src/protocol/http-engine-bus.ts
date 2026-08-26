@@ -48,8 +48,15 @@ interface SnapshotResponse {
 }
 
 class ResyncRequired extends Error {}
-class HttpFailure extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+export class HttpFailure extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "HttpFailure";
+  }
+
+  get isConflict(): boolean {
+    return this.status === 409;
+  }
 }
 
 function messageOf(value: unknown): string {

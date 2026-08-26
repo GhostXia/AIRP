@@ -141,8 +141,8 @@ pub struct AgentLoop {
 }
 
 impl AgentLoop {
-    pub fn new(state: Arc<DaemonState>) -> Self {
-        let registry = tools::default_registry(state.clone());
+    pub fn new(state: Arc<DaemonState>, effective_root: std::path::PathBuf) -> Self {
+        let registry = tools::registry_for_root(state.clone(), effective_root);
         Self { state, registry }
     }
 

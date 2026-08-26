@@ -211,6 +211,9 @@ try {
   await page.locator('[data-blueprint-version="2"]').waitFor({ state: "visible" });
   const firstSurface = await (await firstSurfaceResponse).json();
   const firstChat = firstSurface.snapshot.blueprint.widgets.find((widget) => widget.id === "chat")?.props;
+  const firstMemory = firstSurface.snapshot.blueprint.widgets.find((widget) => widget.id === "memory")?.props;
+  const firstCharacterState = firstSurface.snapshot.blueprint.widgets
+    .find((widget) => widget.id === "character-state")?.props;
   assert.equal(firstChat.messages.length, 50, "initial Surface did not contain exactly the latest page");
   assert.equal(firstChat.messages[0].content, "Durable history 4951");
   assert.equal(firstChat.messages.at(-1).content, "Durable history 5000");
@@ -225,9 +228,29 @@ try {
     scene_id: null,
     worldbook_source_ids: [`character:${imported.character_id}`],
   });
+  assert.deepEqual(firstMemory.source, {
+    kind: "resident_memory",
+    scope: "session",
+    character_id: imported.character_id,
+    session_id: sessionId,
+  });
+  assert.equal(typeof firstMemory.content_hash, "string");
+  assert.equal(firstMemory.char_count, 0);
+  assert.deepEqual(firstCharacterState.source, {
+    kind: "character_state",
+    scope: "character",
+    character_id: imported.character_id,
+  });
+  assert.equal(Number.isInteger(firstCharacterState.revision), true);
+  assert.equal(typeof firstCharacterState.state, "object");
   assert.match(await page.locator(".surface__kicker").innerText(), /^Surface \/ session:/i);
   assert.equal(await page.locator(".w-chat-composer input").isDisabled(), false,
-    "core.chat must be the only writable production Surface widget");
+    "core.chat must remain writable on the production Surface");
+  assert.equal(await page.locator('[data-widget-instance="memory"] textarea').evaluate((element) => element.readOnly), false,
+    "core.memory must be writable on the production Surface");
+  assert.equal(await page.locator('[data-widget-instance="character-state"] textarea')
+    .evaluate((element) => element.readOnly), false,
+  "core.character-state must be writable on the production Surface");
   const contextLabels = await page.getByRole("list", { name: "当前对话上下文" })
     .locator(".context-chip").evaluateAll((chips) => chips.map((chip) => chip.getAttribute("aria-label")));
   assert.deepEqual(contextLabels, [
@@ -235,6 +258,69 @@ try {
     `会话 ${sessionId}`,
     `世界书 character:${imported.character_id}`,
   ], "real Engine context chips did not preserve authoritative stable identifiers");
+  await page.evaluate(() => {
+    globalThis.__airpChatHostBeforeStateWrites = document.querySelector(
+      '[data-widget-instance="chat"] .widget-host',
+    );
+  });
+
+  await page.getByRole("tab", { name: "memory-node", exact: true }).click();
+  await page.getByText("未分类 resident memory", { exact: true }).waitFor({ state: "visible" });
+  const memoryEditor = page.getByLabel("编辑未分类 resident memory");
+  const memoryIntentRequest = page.waitForRequest((request) => {
+    if (new URL(request.url()).pathname !== "/v1/ui/intents" || request.method() !== "POST") return false;
+    return request.postDataJSON()?.name === "memory.replace";
+  });
+  const memorySurfaceResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && /^\/v1\/ui\/surfaces\/session\/[^/]+$/.test(url.pathname);
+  });
+  await memoryEditor.fill("Smoke resident memory edit");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  assert.deepEqual((await memoryIntentRequest).postDataJSON().params, {
+    content: "Smoke resident memory edit",
+    expected_content_hash: firstMemory.content_hash,
+  }, "memory editor did not use exact content-hash CAS");
+  const memorySurface = await (await memorySurfaceResponse).json();
+  const updatedMemory = memorySurface.snapshot.blueprint.widgets.find((widget) => widget.id === "memory")?.props;
+  assert.equal(updatedMemory.content, "Smoke resident memory edit");
+  assert.equal(updatedMemory.char_count, 26);
+  await page.getByText("已保存并刷新权威 Surface。", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await memoryEditor.inputValue(), "Smoke resident memory edit");
+
+  const characterEditor = page.getByLabel("编辑顶层 JSON object");
+  const nextCharacterState = { ...firstCharacterState.state, smoke_status: "edited" };
+  const characterIntentRequest = page.waitForRequest((request) => {
+    if (new URL(request.url()).pathname !== "/v1/ui/intents" || request.method() !== "POST") return false;
+    return request.postDataJSON()?.name === "characterState.patch";
+  });
+  const characterSurfaceResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && /^\/v1\/ui\/surfaces\/session\/[^/]+$/.test(url.pathname);
+  });
+  await characterEditor.fill(JSON.stringify(nextCharacterState, null, 2));
+  await page.getByRole("button", { name: "应用字段变更", exact: true }).click();
+  assert.deepEqual((await characterIntentRequest).postDataJSON().params, {
+    expected_revision: firstCharacterState.revision,
+    patch: [{ op: "add", path: "/smoke_status", value: "edited" }],
+  }, "character-state editor did not send a top-level revisioned patch");
+  const characterSurface = await (await characterSurfaceResponse).json();
+  const updatedCharacterState = characterSurface.snapshot.blueprint.widgets
+    .find((widget) => widget.id === "character-state")?.props;
+  assert.equal(updatedCharacterState.state.smoke_status, "edited");
+  assert.equal(updatedCharacterState.revision, firstCharacterState.revision + 1);
+  await page.getByText("已保存并刷新权威 Surface。", { exact: true }).last().waitFor({ state: "visible" });
+  assert.deepEqual(JSON.parse(await characterEditor.inputValue()), nextCharacterState);
+  assert.deepEqual(await page.evaluate(() => {
+    const before = globalThis.__airpChatHostBeforeStateWrites;
+    const after = document.querySelector('[data-widget-instance="chat"] .widget-host');
+    return { same: before === after, connected: before?.isConnected === true };
+  }), { same: true, connected: true }, "state writes rebuilt the unrelated Chat Widget Host");
+  assert.equal(providerRequests, 0, "Memory/State writes unexpectedly invoked the provider");
+
+  await page.getByRole("tab", { name: "chat-node", exact: true }).click();
   const chatLog = page.locator(".w-chat-log");
   await page.getByText("Durable history 5000", { exact: true }).waitFor({ state: "visible" });
   assert.ok(await chatLog.locator(".msg").count() < 50, "initial virtual DOM rendered the full history page");
@@ -383,7 +469,7 @@ try {
     capabilities: ["read:state"],
     mountCalls: 1,
   });
-  assert.equal(intentRequests, 7, "Chat vertical slice did not dispatch every expected intent");
+  assert.equal(intentRequests, 9, "Surface write and Chat vertical slices did not dispatch every expected intent");
   assert.ok(providerRequests >= 7, "Chat vertical slice did not reuse the Engine provider pipeline");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);
   assert.equal(failures.length, 0, `browser errors: ${failures.join("\n")}`);
