@@ -1,6 +1,7 @@
 param(
     [string]$PackageRoot = (Join-Path $PSScriptRoot '..\..\dist\airp-webui-windows-x64'),
-    [int]$Port = 18765
+    [int]$Port = 18765,
+    [switch]$AllowHeadlessWebViewFallback
 )
 
 $ErrorActionPreference = 'Stop'
@@ -215,9 +216,28 @@ try {
     # Memory/State through authenticated Engine intents, then force-kill only
     # the owned Engine. The still-running shell must respawn it, exchange a new
     # short-lived token, reconnect the existing WebView, and recover authority.
-    & node (Join-Path $repoRoot 'ui\packaged-desktop-restart-smoke.mjs') before
-    if ($LASTEXITCODE -ne 0) {
-        throw "Packaged desktop pre-restart evidence failed with code $LASTEXITCODE."
+    $webViewEvidenceAvailable = $false
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        if ($uiProcess.HasExited) {
+            throw 'AIRP UI exited before WebView2 evidence capability was determined'
+        }
+        if (Get-NetTCPConnection -LocalPort $debugPort -State Listen -ErrorAction SilentlyContinue) {
+            $webViewEvidenceAvailable = $true
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    if ($webViewEvidenceAvailable) {
+        & node (Join-Path $repoRoot 'ui\packaged-desktop-restart-smoke.mjs') before
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged desktop pre-restart evidence failed with code $LASTEXITCODE."
+        }
+    }
+    elseif ($AllowHeadlessWebViewFallback) {
+        Write-Warning 'WebView2 CDP is unavailable in this non-interactive runner; continuing with packaged process/lock recovery evidence only.'
+    }
+    else {
+        throw 'WebView2 CDP endpoint did not become ready; interactive desktop evidence is required unless -AllowHeadlessWebViewFallback is explicit.'
     }
     $beforeLock = Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
     $terminatedEnginePid = [int]$beforeLock.engine_pid
@@ -252,9 +272,11 @@ try {
         throw "Desktop shell did not recover terminated Engine PID $terminatedEnginePid."
     }
     Assert-LiveLockOwner -Path $lock -ExpectedShellPid $uiProcess.Id -ExpectedPort $Port -ExpectedShellProcess $uiProcess
-    & node (Join-Path $repoRoot 'ui\packaged-desktop-restart-smoke.mjs') after
-    if ($LASTEXITCODE -ne 0) {
-        throw "Packaged desktop post-restart evidence failed with code $LASTEXITCODE."
+    if ($webViewEvidenceAvailable) {
+        & node (Join-Path $repoRoot 'ui\packaged-desktop-restart-smoke.mjs') after
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged desktop post-restart evidence failed with code $LASTEXITCODE."
+        }
     }
 
     # 6. 优雅退出：关窗口 → 壳退出 → sidecar 停止 → 归属锁清理。

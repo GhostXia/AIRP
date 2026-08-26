@@ -68,10 +68,13 @@ add real configured-provider acceptance where model state writes are involved.
 Packaged restart credential recovery is now closed: the desktop shell performs
 a bounded owned-sidecar restart, exchanges a fresh token without reloading the
 document, and tells Vue to rebuild its Bus from authority while retaining dirty
-Memory/State drafts and never replaying them automatically. Windows package
-smoke kills the exact owned Engine PID and verifies lock ownership, old/new
-token rejection/acceptance, authoritative state, draft retention, and explicit
-post-recovery CAS writes without any provider configuration. Blind non-UI whole-state
+Memory/State drafts and never replaying them automatically. Interactive Windows
+package smoke kills the exact owned Engine PID and verifies lock ownership,
+old/new token rejection/acceptance, authoritative state, draft retention, and
+explicit post-recovery CAS writes without any provider configuration. The
+non-interactive GitHub runner does not expose WebView2 CDP, so its explicit
+fallback verifies packaged process/instance/lock recovery and cleanup but does
+not claim browser-state evidence. Blind non-UI whole-state
 writers are now closed: the same locked read both renders the model prompt state
 and supplies the revision used by `<state>` finalization, and Agent
 `get_character_state` returns revision metadata

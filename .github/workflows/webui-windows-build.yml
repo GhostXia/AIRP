@@ -175,7 +175,7 @@ jobs:
 
       - name: Smoke desktop UI inside the package
         shell: pwsh
-        run: .\deploy\windows-webui\smoke-desktop-ui.ps1
+        run: .\deploy\windows-webui\smoke-desktop-ui.ps1 -AllowHeadlessWebViewFallback
 
       - name: Smoke packaged HttpEngineBus in Chrome
         working-directory: ui
