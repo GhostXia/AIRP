@@ -61,10 +61,15 @@ arbitrary patching, and automatic conflict replay are intentionally out of scope
   summary, or model advice. Character State displays stored state without
   inventing field-level provenance that the domain does not record.
 
-## Remaining PR 9 boundaries
+## Remaining #593 boundaries
 
-This slice does not close #593 by itself. Before PR 9 completion, independently
-audit the existing multi-file Character State commit failure semantics and all
-blind non-UI State writers, add real configured-provider acceptance where model
-state writes are involved, and demonstrate package/restart recovery. Any work
-not completed in the delivering PR remains explicit in #593 or a linked issue.
+This slice does not close #593 by itself. Before closing the issue, independently
+audit all blind non-UI State writers, add real configured-provider acceptance
+where model state writes are involved, and demonstrate package/restart
+credential recovery. Character State multi-file process-interruption recovery
+is now closed by treating the immutable revision plus atomic `current_revision`
+as the commit point and repairing `live.json` / `history.jsonl` projections on
+every locked public read or write. This does not claim Windows power-loss
+durability for directory metadata because the current std-only `sync_dir`
+implementation is a no-op on Windows. Any work not completed in the delivering
+PR remains explicit in #593 or a linked issue.

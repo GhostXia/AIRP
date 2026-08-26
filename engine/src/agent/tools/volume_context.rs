@@ -15,7 +15,7 @@ use super::params::{optional_session_id, required_character_id};
 use super::*;
 use crate::daemon::DaemonState;
 use crate::data_dir;
-use crate::domain::LorebookService;
+use crate::domain::{LorebookService, StateService};
 use crate::error::AirpError;
 use crate::types::PresetId;
 use serde_json::Value;
@@ -210,13 +210,17 @@ impl Tool for ExportContextBundleTool {
                 }
             }
 
-            let state_path =
-                data_dir::char_state_dir(&state.data_root, character.as_str()).join("live.json");
-            let live_state = match tokio::fs::read_to_string(&state_path).await {
-                Ok(state) => Some(state),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
+            let state_root = state.data_root.clone();
+            let state_character = character.clone();
+            let live_state = tokio::task::spawn_blocking(move || {
+                StateService::new(state_root)
+                    .read_optional(&state_character)?
+                    .map(|state| serde_json::to_string_pretty(&state))
+                    .transpose()
+                    .map_err(AirpError::from)
+            })
+            .await
+            .map_err(|error| AirpError::Internal(format!("state read task failed: {error}")))??;
 
             // #160 A3：在任何 bundle 清理/写入前完成 preset 路径验证。
             // 原顺序（先清理旧 sidecar → 再验证 preset）会在 preset 缺失时留下

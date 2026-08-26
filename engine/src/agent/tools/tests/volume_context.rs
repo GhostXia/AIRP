@@ -32,12 +32,17 @@ async fn export_context_bundle_output_directs_isolated_subagent() {
         .unwrap(),
     )
     .unwrap();
-    StateService::new(&state.data_root)
-        .write(
-            &CharacterId::new("alice").unwrap(),
-            &serde_json::json!({"hp": 9}),
-        )
+    let character = CharacterId::new("alice").unwrap();
+    let state_service = StateService::new(&state.data_root);
+    state_service
+        .write(&character, &serde_json::json!({"hp": 4}))
         .unwrap();
+    let live_path = crate::data_dir::char_state_dir(&state.data_root, "alice").join("live.json");
+    let stale_live = std::fs::read(&live_path).unwrap();
+    state_service
+        .write(&character, &serde_json::json!({"hp": 9}))
+        .unwrap();
+    std::fs::write(&live_path, stale_live).unwrap();
     LorebookService::new(&state.data_root)
         .write(
             &CharacterId::new("alice").unwrap(),

@@ -18,7 +18,6 @@
 use super::params::required_character_id;
 use super::*;
 use crate::daemon::DaemonState;
-use crate::data_dir;
 use crate::domain::{LorebookService, StateService};
 use crate::error::AirpError;
 use crate::session_coordinator::SessionCommand;
@@ -63,18 +62,19 @@ impl Tool for GetCharacterStateTool {
         let effective_root = self.effective_root.clone();
         Box::pin(async move {
             let character = required_character_id(&params)?;
-            let path =
-                data_dir::char_state_dir(&effective_root, character.as_str()).join("live.json");
-            // #160 A1：原 `path.exists()` + `std::fs::read` 在 async future 内
-            // 阻塞 executor worker；改 tokio::fs 与 analysis 写路径一致。
-            if !tokio::fs::try_exists(&path).await? {
+            let character_label = character.to_string();
+            let loaded = tokio::task::spawn_blocking(move || {
+                StateService::new(effective_root).read_optional(&character)
+            })
+            .await
+            .map_err(|error| AirpError::Internal(format!("state read task failed: {error}")))??;
+            let Some(state) = loaded else {
                 return Err(AirpError::NotFound(format!(
-                    "state for {character} not found"
+                    "state for {character_label} not found"
                 )));
-            }
-            let bytes = tokio::fs::read(&path).await?;
+            };
             Ok(ToolResult {
-                output: serde_json::from_slice(&bytes)?,
+                output: state,
                 dry_run: false,
             })
         })

@@ -26,12 +26,24 @@ async fn state_and_lorebook_tools_roundtrip_with_confirmation() {
         .unwrap();
     assert_eq!(updated.output["revision"], 1);
 
+    let state_path = crate::data_dir::char_state_dir(&state.data_root, "alice").join("live.json");
+    let stale_state = std::fs::read(&state_path).unwrap();
+    let updated = update_state
+        .call(
+            serde_json::json!({"character_id": "alice", "state": {"hp": 80}}),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.output["revision"], 2);
+    std::fs::write(&state_path, stale_state).unwrap();
+
     let get_state = reg.get("get_character_state").unwrap();
     let current = get_state
         .call(serde_json::json!({"character_id": "alice"}), false)
         .await
         .unwrap();
-    assert_eq!(current.output["hp"], 90);
+    assert_eq!(current.output["hp"], 80);
 
     let lorebook = serde_json::json!({
         "entries": [{
