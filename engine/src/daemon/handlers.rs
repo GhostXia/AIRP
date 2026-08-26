@@ -35,6 +35,7 @@ mod style;
 mod surfaces;
 mod timeline_export;
 mod ui_intents;
+mod workspace;
 mod worldbook_graph;
 
 // #155 PR 4/5/6：re-export moved handlers 保持 `daemon/mod.rs` 的 `use handlers::{...}` 不变。
@@ -117,6 +118,10 @@ pub(super) use style::{
 pub(super) use surfaces::{get_surface_events, get_surface_snapshot};
 pub(super) use timeline_export::{export_session_timeline_endpoint, get_session_timeline_endpoint};
 pub(super) use ui_intents::dispatch_ui_intent;
+pub(super) use workspace::{
+    export_workspace_endpoint, get_workspace_endpoint, get_workspace_history_endpoint,
+    rollback_workspace_endpoint, workspace_command_endpoint, WORKSPACE_HTTP_MAX_BODY_BYTES,
+};
 pub(super) use worldbook_graph::get_lorebook_graph_endpoint;
 
 // M_MCP MCP-2：角色卡导入的 `pub(crate)` 共享实现，供未来 daemon HTTP handler 与

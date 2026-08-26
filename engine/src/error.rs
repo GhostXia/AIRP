@@ -51,6 +51,14 @@ pub enum AirpError {
     #[error("冲突: {0}")]
     Conflict(String),
 
+    /// Workspace optimistic-concurrency failure with machine-readable revisions.
+    #[error("workspace revision conflict: expected {expected}, current {current}")]
+    WorkspaceRevisionConflict { expected: u64, current: u64 },
+
+    /// A persisted workspace was written by a newer incompatible schema.
+    #[error("unsupported workspace schema major {actual}; supported major is {supported}")]
+    WorkspaceUnsupportedMajor { actual: u16, supported: u16 },
+
     /// 路径遍历攻击保护：用户提供的路径 canonicalize 后越出 `data_root` 子树。
     /// 映射到 HTTP 400。
     #[error("路径越出 data_root: {0:?}")]
@@ -104,7 +112,9 @@ impl AirpError {
         match self {
             AirpError::BadRequest(_) | AirpError::PathEscape(_) => StatusCode::BAD_REQUEST,
             AirpError::NotFound(_) => StatusCode::NOT_FOUND,
-            AirpError::Conflict(_) => StatusCode::CONFLICT,
+            AirpError::Conflict(_)
+            | AirpError::WorkspaceRevisionConflict { .. }
+            | AirpError::WorkspaceUnsupportedMajor { .. } => StatusCode::CONFLICT,
             AirpError::Upstream { .. } => StatusCode::BAD_GATEWAY,
             AirpError::QuotaExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             AirpError::Io(_)
@@ -130,6 +140,8 @@ impl AirpError {
             AirpError::PathEscape(_) => "path_escape",
             AirpError::NotFound(_) => "not_found",
             AirpError::Conflict(_) => "conflict",
+            AirpError::WorkspaceRevisionConflict { .. } => "workspace_revision_conflict",
+            AirpError::WorkspaceUnsupportedMajor { .. } => "workspace_unsupported_major",
             AirpError::Upstream { .. } => "upstream",
             AirpError::QuotaExceeded(_) => "quota_exceeded",
             AirpError::Io(_) => "io_error",
@@ -165,6 +177,8 @@ impl AirpError {
                 "correct_request"
             }
             AirpError::Conflict(_) => "refresh_and_retry",
+            AirpError::WorkspaceRevisionConflict { .. } => "refresh_and_retry",
+            AirpError::WorkspaceUnsupportedMajor { .. } => "export_or_upgrade",
             AirpError::Upstream { .. } => "retry_with_backoff",
             AirpError::QuotaExceeded(_) => "wait_or_reduce_usage",
             AirpError::Io(_)
@@ -191,6 +205,12 @@ struct AirpErrorBody {
     code: &'static str,
     message: String,
     recovery: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual_major: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    supported_major: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]
@@ -210,6 +230,15 @@ impl IntoResponse for AirpError {
         let recovery = self.recovery_str();
         let internal_message = self.to_string();
         let message = self.public_message();
+        let (current_revision, actual_major, supported_major) = match &self {
+            AirpError::WorkspaceRevisionConflict { current, .. } => {
+                (Some(current.to_string()), None, None)
+            }
+            AirpError::WorkspaceUnsupportedMajor { actual, supported } => {
+                (None, Some(*actual), Some(*supported))
+            }
+            _ => (None, None, None),
+        };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(err = %internal_message, "internal error");
         }
@@ -219,6 +248,9 @@ impl IntoResponse for AirpError {
                 code,
                 message,
                 recovery,
+                current_revision,
+                actual_major,
+                supported_major,
             },
         };
         (status, Json(body)).into_response()
