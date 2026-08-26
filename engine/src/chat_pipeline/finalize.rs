@@ -66,7 +66,14 @@ pub(super) async fn run_finalize(
         if let Some(lease) = ctx.session_operation_lease.as_mut() {
             lease.begin_commit()?;
         }
-        let (stripped, live_state) = extract_state_content(&cleaned_acc);
+        // The streaming FSM intentionally hides `<state>` blocks from visible
+        // output, so `cleaned_acc` normally no longer contains them. Extract
+        // state from the complete provider output while keeping the persisted
+        // assistant message based on the cleaned text. State is accepted only
+        // from raw provider output, never from variable substitution or another
+        // post-provider transformation.
+        let (stripped, _) = extract_state_content(&cleaned_acc);
+        let (_, live_state) = extract_state_content(&raw_acc);
         let message_expected = !stripped.trim().is_empty();
         let state_expected = live_state.is_some();
         let volume_expected = ctx
