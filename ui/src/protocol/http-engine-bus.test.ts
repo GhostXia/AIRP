@@ -215,7 +215,7 @@ describe("HttpEngineBus", () => {
       });
       if (url.pathname === "/v1/ui/workspace/history") {
         return json({ entries: [{
-          revision: "42", updated_at: "2026-08-26T00:00:00Z", source_kind: "workspace_update", parent_revision: "41",
+          revision: "42", updated_at: "2026-08-26T00:00:00+00:00", source_kind: "workspace_update", parent_revision: "41",
         }] });
       }
       if (url.pathname === "/v1/ui/workspace/export") {
@@ -239,7 +239,7 @@ describe("HttpEngineBus", () => {
       command: { type: "resize_split", split_id: "root", ratio_basis_points: 7000 },
     }, scope)).resolves.toMatchObject({ revision: "42" });
     await expect(bus.history(scope, 25)).resolves.toEqual({ entries: [{
-      revision: "42", updated_at: "2026-08-26T00:00:00Z", source_kind: "workspace_update", parent_revision: "41",
+      revision: "42", updated_at: "2026-08-26T00:00:00+00:00", source_kind: "workspace_update", parent_revision: "41",
     }] });
     await expect(bus.rollback({ expected_revision: "42", target_revision: "7" }, scope))
       .resolves.toMatchObject({ revision: "42" });

@@ -167,6 +167,12 @@ function isIdentifier(value: unknown): value is string {
     && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
 }
 
+function isBoundedString(value: unknown, maxBytes: number): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && new TextEncoder().encode(value).byteLength <= maxBytes;
+}
+
 interface WorkspaceParseState {
   nodes: number;
   nodeIds: Set<string>;
@@ -243,9 +249,7 @@ function parseWorkspaceDocument(value: unknown): WorkspaceDocument {
     || value.schema !== 1
     || !isIdentifier(value.id)
     || !isRevision(value.revision)
-    || typeof value.updatedAt !== "string"
-    || value.updatedAt.length < 1
-    || new TextEncoder().encode(value.updatedAt).byteLength > 64
+    || !isBoundedString(value.updatedAt, 64)
     || !isRecord(value.layout)
     || !hasOnlyKeys(value.layout, ["version", "root", "widgets"])
     || value.layout.version !== 1
@@ -300,7 +304,7 @@ function parseWorkspaceHistory(value: unknown): WorkspaceHistoryResponse {
     isRecord(entry)
       && hasOnlyKeys(entry, ["revision", "updated_at", "source_kind", "parent_revision"])
       && isRevision(entry.revision)
-      && isIdentifier(entry.updated_at)
+      && isBoundedString(entry.updated_at, 64)
       && isIdentifier(entry.source_kind)
       && (entry.parent_revision === null || isRevision(entry.parent_revision))
       ? {
