@@ -394,6 +394,33 @@ mod tests {
     }
 
     #[test]
+    fn prepare_captures_character_state_revision_for_finalize_cas() {
+        let tmp = tempdir().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        crate::data_dir::ensure_data_dirs(&state.data_root).unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        crate::domain::StateService::new(&state.data_root)
+            .write(&character, &serde_json::json!({"hp": 90}))
+            .unwrap();
+        let mut req = base_request();
+        req.character_id = Some(character.clone());
+
+        let pipeline = prepare_pipeline(&req, &state).unwrap();
+        assert_eq!(pipeline.finalizer.expected_state_revision, 1);
+        assert!(pipeline.system_prompt.contains("\"hp\": 90"));
+
+        crate::domain::StateService::new(&state.data_root)
+            .replace_if_revision(&character, 1, &serde_json::json!({"hp": 80}))
+            .unwrap();
+        let stale = crate::domain::StateService::new(&state.data_root).replace_if_revision(
+            &character,
+            pipeline.finalizer.expected_state_revision,
+            &serde_json::json!({"hp": 1}),
+        );
+        assert!(matches!(stale, Err(crate::error::AirpError::Conflict(_))));
+    }
+
+    #[test]
     fn prepare_resolves_provider_priority_request_over_default() {
         // 请求体里指定 endpoint 应覆盖 daemon 默认
         let tmp = tempdir().unwrap();
@@ -512,10 +539,14 @@ mod tests {
         let world_dir = char_dir.join("world");
         fs::create_dir_all(&world_dir).unwrap();
         fs::write(world_dir.join("current_revision"), "5").unwrap();
-        // 角色 state revision
-        let state_dir = char_dir.join("state");
-        fs::create_dir_all(&state_dir).unwrap();
-        fs::write(state_dir.join("current_revision"), "42").unwrap();
+        // 角色 state revision。State 读取会校验不可变 revision manifest，
+        // 因此这里用真实提交生成有效的 revision 42，而不是只伪造指针。
+        let state_service = crate::domain::StateService::new(&effective_root);
+        for revision in 1..=42 {
+            state_service
+                .write(&cid, &serde_json::json!({"revision_fixture": revision}))
+                .unwrap();
+        }
         // 角色 memory revision（已升级路径，CF-3 后 memory/ 为权威）
         let memory_dir = char_dir.join("memory");
         fs::create_dir_all(&memory_dir).unwrap();
@@ -826,7 +857,9 @@ mod tests_mls3 {
     async fn test_mls3_history_appended_on_first_call() {
         let tmp = tempdir().unwrap();
         let state = serde_json::json!({"hp": 80, "location": "dock"});
-        persist_live_state(tmp.path(), "bob", &state).await.unwrap();
+        persist_live_state(tmp.path(), "bob", 0, &state)
+            .await
+            .unwrap();
 
         let history_path = crate::data_dir::char_state_history_path(tmp.path(), "bob");
         assert!(history_path.exists(), "history.jsonl should exist");
@@ -854,9 +887,15 @@ mod tests_mls3 {
         let s2 = serde_json::json!({"hp": 50});
         let s3 = serde_json::json!({"hp": 20});
 
-        persist_live_state(tmp.path(), "carol", &s1).await.unwrap();
-        persist_live_state(tmp.path(), "carol", &s2).await.unwrap();
-        persist_live_state(tmp.path(), "carol", &s3).await.unwrap();
+        persist_live_state(tmp.path(), "carol", 0, &s1)
+            .await
+            .unwrap();
+        persist_live_state(tmp.path(), "carol", 1, &s2)
+            .await
+            .unwrap();
+        persist_live_state(tmp.path(), "carol", 2, &s3)
+            .await
+            .unwrap();
 
         let history_path = crate::data_dir::char_state_history_path(tmp.path(), "carol");
         let file = std::fs::File::open(&history_path).unwrap();
@@ -876,8 +915,12 @@ mod tests_mls3 {
         let s1 = serde_json::json!({"turn": 1});
         let s2 = serde_json::json!({"turn": 2});
 
-        persist_live_state(tmp.path(), "dave", &s1).await.unwrap();
-        persist_live_state(tmp.path(), "dave", &s2).await.unwrap();
+        persist_live_state(tmp.path(), "dave", 0, &s1)
+            .await
+            .unwrap();
+        persist_live_state(tmp.path(), "dave", 1, &s2)
+            .await
+            .unwrap();
 
         let state_dir = crate::data_dir::char_state_dir(tmp.path(), "dave");
         let live_json: serde_json::Value =
@@ -893,6 +936,23 @@ mod tests_mls3 {
             .lines()
             .count();
         assert_eq!(line_count, 2, "history should contain 2 entries");
+    }
+
+    #[tokio::test]
+    async fn test_mls3_model_state_rejects_revision_changed_after_prepare() {
+        let tmp = tempdir().unwrap();
+        let character = crate::types::CharacterId::new("erin").unwrap();
+        let service = crate::domain::StateService::new(tmp.path());
+        service
+            .write(&character, &serde_json::json!({"hp": 90}))
+            .unwrap();
+        service
+            .replace_if_revision(&character, 1, &serde_json::json!({"hp": 80}))
+            .unwrap();
+
+        let stale = persist_live_state(tmp.path(), "erin", 1, &serde_json::json!({"hp": 1})).await;
+        assert!(matches!(stale, Err(crate::error::AirpError::Conflict(_))));
+        assert_eq!(service.read(&character).unwrap()["hp"], 80);
     }
 }
 
@@ -919,7 +979,9 @@ mod tests_mls9 {
         assert_eq!(state_opt.as_ref().unwrap()["hp"], 90);
 
         let state = state_opt.unwrap();
-        persist_live_state(tmp.path(), "eve", &state).await.unwrap();
+        persist_live_state(tmp.path(), "eve", 0, &state)
+            .await
+            .unwrap();
 
         // Inject into prompt and verify presence
         let mut prompt = String::new();
@@ -939,7 +1001,7 @@ mod tests_mls9 {
     async fn test_ls9_empty_state_object_persisted() {
         let tmp = tempdir().unwrap();
         let state = serde_json::json!({});
-        persist_live_state(tmp.path(), "frank", &state)
+        persist_live_state(tmp.path(), "frank", 0, &state)
             .await
             .unwrap();
 
@@ -2467,6 +2529,7 @@ mod tests_b1_finalize_empty_stripped {
             session_id: None,
             user_id: None,
             data_root,
+            expected_state_revision: 0,
             session_dir: None,
             provider_config: Arc::new(ProviderConfig {
                 provider: Provider::OpenAI,
@@ -2668,6 +2731,7 @@ mod tests_bug_d_finalize_order {
             session_id: None,
             user_id: None,
             data_root,
+            expected_state_revision: 0,
             session_dir: None,
             provider_config: Arc::new(ProviderConfig {
                 provider: Provider::OpenAI,
@@ -2952,6 +3016,7 @@ mod tests_bug_e_seal_skips_maintenance {
             session_id: None,
             user_id: None,
             data_root,
+            expected_state_revision: 0,
             session_dir: Some(session_dir),
             provider_config: Arc::new(ProviderConfig {
                 provider: Provider::OpenAI,

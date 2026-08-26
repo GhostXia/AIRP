@@ -164,7 +164,7 @@ fn default_registry_exposes_sorted_30_tool_snapshot_with_descriptions_and_side_e
         ),
         (
             "get_character_state",
-            "Read a character's current state/live.json.",
+            "Read a character's current state with revision metadata.",
             ToolSideEffect::Readonly,
         ),
         (
@@ -244,7 +244,7 @@ fn default_registry_exposes_sorted_30_tool_snapshot_with_descriptions_and_side_e
         ),
         (
             "update_character_state",
-            "Validate and replace a character's live state, creating a revisioned snapshot.",
+            "Replace a character's whole state using character_id, state, and expected_revision from get_character_state; stale revisions conflict.",
             ToolSideEffect::Mutate,
         ),
         (

@@ -308,6 +308,7 @@ pub(super) fn prepare_scene_pipeline(
                 .map(crate::types::UserId::new)
                 .transpose()?,
             data_root: effective_root.clone(),
+            expected_state_revision: 0,
             session_dir: session_dir_opt,
             provider_config,
             gen_params,

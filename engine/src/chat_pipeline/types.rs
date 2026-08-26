@@ -58,6 +58,9 @@ pub struct FinalizerCtx {
     pub user_id: Option<UserId>,
     /// 数据根目录。
     pub data_root: PathBuf,
+    /// Character State revision observed before prompt assembly. Model-emitted
+    /// whole-state replacement must compare-and-swap against this revision.
+    pub expected_state_revision: u64,
     /// 卷系统 session 目录；为 `None` 时跳过卷副作用。
     pub session_dir: Option<PathBuf>,
     /// 共享连接层配置（与 `PreparedPipeline.provider_config` 同源）。

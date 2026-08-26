@@ -19,7 +19,7 @@ async fn state_and_lorebook_tools_roundtrip_with_confirmation() {
     let update_state = reg.get("update_character_state").unwrap();
     let updated = update_state
         .call(
-            serde_json::json!({"character_id": "alice", "state": {"hp": 90}}),
+            serde_json::json!({"character_id": "alice", "expected_revision": 0, "state": {"hp": 90}}),
             false,
         )
         .await
@@ -30,7 +30,7 @@ async fn state_and_lorebook_tools_roundtrip_with_confirmation() {
     let stale_state = std::fs::read(&state_path).unwrap();
     let updated = update_state
         .call(
-            serde_json::json!({"character_id": "alice", "state": {"hp": 80}}),
+            serde_json::json!({"character_id": "alice", "expected_revision": 1, "state": {"hp": 80}}),
             false,
         )
         .await
@@ -43,7 +43,19 @@ async fn state_and_lorebook_tools_roundtrip_with_confirmation() {
         .call(serde_json::json!({"character_id": "alice"}), false)
         .await
         .unwrap();
-    assert_eq!(current.output["hp"], 80);
+    assert_eq!(current.output["revision"], 2);
+    assert_eq!(current.output["state"]["hp"], 80);
+    let stale = update_state
+        .call(
+            serde_json::json!({
+                "character_id": "alice",
+                "expected_revision": 1,
+                "state": {"hp": 1}
+            }),
+            false,
+        )
+        .await;
+    assert!(matches!(stale, Err(AirpError::Conflict(_))));
 
     let lorebook = serde_json::json!({
         "entries": [{
@@ -107,7 +119,7 @@ async fn state_tools_use_the_trusted_effective_root_and_matching_character_gate(
         .unwrap();
     let conflict = tool
         .call(
-            serde_json::json!({"character_id": "alice", "state": {"hp": 90}}),
+            serde_json::json!({"character_id": "alice", "expected_revision": 0, "state": {"hp": 90}}),
             false,
         )
         .await
@@ -128,7 +140,7 @@ async fn state_tools_use_the_trusted_effective_root_and_matching_character_gate(
         )
         .unwrap();
     tool.call(
-        serde_json::json!({"character_id": "alice", "state": {"hp": 90}}),
+        serde_json::json!({"character_id": "alice", "expected_revision": 0, "state": {"hp": 90}}),
         false,
     )
     .await
