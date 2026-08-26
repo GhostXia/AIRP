@@ -55,6 +55,64 @@ async fn surface_snapshot_requires_configured_and_valid_bearer() {
             .len(),
         4
     );
+    let memory = widget_props(&json, "memory");
+    assert_eq!(
+        memory
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "capacity_chars",
+            "char_count",
+            "content",
+            "content_hash",
+            "source"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    );
+    assert_eq!(memory["content"], "");
+    assert_eq!(memory["char_count"], 0);
+    assert_eq!(
+        memory["content_hash"],
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        memory["source"],
+        serde_json::json!({
+            "kind": "resident_memory",
+            "scope": "session",
+            "character_id": "alice",
+            "session_id": session_id,
+        })
+    );
+    let character_state = widget_props(&json, "character-state");
+    assert_eq!(
+        character_state
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["revision", "source", "state", "timestamp"]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    );
+    assert_eq!(character_state["revision"], 0);
+    assert!(character_state["timestamp"].is_null());
+    assert_eq!(character_state["state"], serde_json::json!({}));
+    assert_eq!(
+        character_state["source"],
+        serde_json::json!({
+            "kind": "character_state",
+            "scope": "character",
+            "character_id": "alice",
+        })
+    );
 }
 
 #[tokio::test]
@@ -115,6 +173,272 @@ async fn chat_intent_resolves_scope_from_the_accepted_surface() {
         .await
         .unwrap();
     assert_eq!(rejected.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn memory_replace_intent_succeeds_then_rejects_stale_and_oversized_edits() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "alice", Some(&session_id)).unwrap();
+    crate::memory::write_resident_memory(&session_dir, "before").unwrap();
+    let app = create_router(state);
+    let snapshot = surface_snapshot_json(app.clone(), "alice", &session_id).await;
+    let expected_hash = widget_props(&snapshot, "memory")["content_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let updated = post_surface_intent(
+        app.clone(),
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "memory",
+            "name": "memory.replace",
+            "params": {"content": "after", "expected_content_hash": expected_hash}
+        }),
+    )
+    .await;
+    assert_eq!(updated.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        crate::memory::read_resident_memory(&session_dir).unwrap(),
+        "after"
+    );
+
+    let stale = post_surface_intent(
+        app.clone(),
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "memory",
+            "name": "memory.replace",
+            "params": {"content": "lost", "expected_content_hash": expected_hash}
+        }),
+    )
+    .await;
+    assert_eq!(stale.status(), axum::http::StatusCode::CONFLICT);
+
+    let malformed = post_surface_intent(
+        app.clone(),
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "memory",
+            "name": "memory.replace",
+            "params": {"content": "lost", "expected_content_hash": "not-a-sha256"}
+        }),
+    )
+    .await;
+    assert_eq!(malformed.status(), axum::http::StatusCode::BAD_REQUEST);
+
+    let capacity = crate::memory::ResidentMemoryConfig::default().capacity_chars;
+    let oversized = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "memory",
+            "name": "memory.replace",
+            "params": {
+                "content": "x".repeat(capacity + 1),
+                "expected_content_hash": crate::memory::resident_memory_content_hash("after")
+            }
+        }),
+    )
+    .await;
+    assert_eq!(oversized.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        crate::memory::read_resident_memory(&session_dir).unwrap(),
+        "after"
+    );
+}
+
+#[tokio::test]
+async fn memory_replace_uses_the_accepted_user_scope() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let alice_session = crate::types::SessionId::new();
+    let bob_session = crate::types::SessionId::new();
+    let alice_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, Some("tenant-a")).unwrap();
+    let bob_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, Some("tenant-b")).unwrap();
+    crate::data_dir::create_session_with_id(&alice_root, character.as_str(), &alice_session)
+        .unwrap();
+    crate::data_dir::create_session_with_id(&bob_root, character.as_str(), &bob_session).unwrap();
+    let alice_dir =
+        crate::data_dir::resolve_session_dir(&alice_root, character.as_str(), Some(&alice_session))
+            .unwrap();
+    let bob_dir =
+        crate::data_dir::resolve_session_dir(&bob_root, character.as_str(), Some(&bob_session))
+            .unwrap();
+    crate::memory::write_resident_memory(&alice_dir, "alice memory").unwrap();
+    crate::memory::write_resident_memory(&bob_dir, "bob memory").unwrap();
+    let app = create_router(state);
+    let snapshot =
+        user_surface_snapshot_json(app.clone(), "tenant-a", &character, &alice_session).await;
+    let hash = widget_props(&snapshot, "memory")["content_hash"]
+        .as_str()
+        .unwrap();
+
+    let response = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{alice_session}"),
+            "instance_id": "memory",
+            "name": "memory.replace",
+            "params": {"content": "tenant-a only", "expected_content_hash": hash}
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        crate::memory::read_resident_memory(&alice_dir).unwrap(),
+        "tenant-a only"
+    );
+    assert_eq!(
+        crate::memory::read_resident_memory(&bob_dir).unwrap(),
+        "bob memory"
+    );
+}
+
+#[tokio::test]
+async fn character_state_patch_preserves_fields_and_enforces_revision_and_schema() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, character.as_str(), &session_id)
+        .unwrap();
+    let state_dir = crate::data_dir::char_state_dir(&state.data_root, character.as_str());
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("schema.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "mood": {"type": "string"},
+                "hp": {"type": "integer"},
+                "location": {"type": "string"}
+            },
+            "additionalProperties": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    crate::domain::StateService::new(&state.data_root)
+        .write(
+            &character,
+            &serde_json::json!({"mood": "calm", "hp": 10, "location": "home"}),
+        )
+        .unwrap();
+    let app = create_router(state.clone());
+    surface_snapshot_json(app.clone(), character.as_str(), &session_id).await;
+
+    let updated = post_surface_intent(
+        app.clone(),
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "character-state",
+            "name": "characterState.patch",
+            "params": {
+                "expected_revision": 1,
+                "patch": [{"op": "replace", "path": "/mood", "value": "focused"}]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(updated.status(), axum::http::StatusCode::OK);
+    let state_value = crate::domain::StateService::new(&state.data_root)
+        .read(&character)
+        .unwrap();
+    assert_eq!(state_value["mood"], "focused");
+    assert_eq!(state_value["hp"], 10);
+    assert_eq!(state_value["location"], "home");
+
+    let stale = post_surface_intent(
+        app.clone(),
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "character-state",
+            "name": "characterState.patch",
+            "params": {
+                "expected_revision": 1,
+                "patch": [{"op": "remove", "path": "/location"}]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(stale.status(), axum::http::StatusCode::CONFLICT);
+
+    let invalid = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "character-state",
+            "name": "characterState.patch",
+            "params": {
+                "expected_revision": 2,
+                "patch": [{"op": "replace", "path": "/hp", "value": "many"}]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(invalid.status(), axum::http::StatusCode::BAD_REQUEST);
+    let (revision, _, unchanged) = crate::domain::StateService::new(&state.data_root)
+        .read_surface_state(&character)
+        .unwrap();
+    assert_eq!(revision, 2);
+    assert_eq!(unchanged, state_value);
+}
+
+#[tokio::test]
+async fn character_state_patch_is_rejected_during_active_generation() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let character = crate::types::CharacterId::new("alice").unwrap();
+    let editing_session_id = crate::types::SessionId::new();
+    let generating_session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(
+        &state.data_root,
+        character.as_str(),
+        &editing_session_id,
+    )
+    .unwrap();
+    crate::data_dir::create_session_with_id(
+        &state.data_root,
+        character.as_str(),
+        &generating_session_id,
+    )
+    .unwrap();
+    let app = create_router(state.clone());
+    surface_snapshot_json(app.clone(), character.as_str(), &editing_session_id).await;
+    let _generation = state
+        .session_coordinators
+        .try_submit(
+            &state.data_root,
+            &character,
+            Some(&generating_session_id),
+            crate::session_coordinator::SessionCommand::Completion,
+        )
+        .unwrap();
+
+    let response = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{editing_session_id}"),
+            "instance_id": "character-state",
+            "name": "characterState.patch",
+            "params": {
+                "expected_revision": 0,
+                "patch": [{"op": "add", "path": "/mood", "value": "busy"}]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        crate::domain::StateService::new(&state.data_root)
+            .read(&character)
+            .unwrap(),
+        serde_json::json!({})
+    );
 }
 
 #[tokio::test]
@@ -324,8 +648,14 @@ async fn equal_character_and_session_ids_do_not_alias_across_user_roots() {
         user_surface_snapshot_json(app.clone(), "tenant-a", &character_id, &session_id).await;
     let second = user_surface_snapshot_json(app, "tenant-b", &character_id, &session_id).await;
 
-    assert_eq!(widget_props(&first, "character-state")["mood"], "calm");
-    assert_eq!(widget_props(&second, "character-state")["mood"], "focused");
+    assert_eq!(
+        widget_props(&first, "character-state")["state"]["mood"],
+        "calm"
+    );
+    assert_eq!(
+        widget_props(&second, "character-state")["state"]["mood"],
+        "focused"
+    );
 }
 
 #[tokio::test]
@@ -747,6 +1077,21 @@ async fn surface_snapshot_json(
         .await
         .unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+async fn post_surface_intent(
+    app: axum::Router,
+    payload: serde_json::Value,
+) -> axum::response::Response {
+    app.oneshot(
+        Request::post("/v1/ui/intents")
+            .header("authorization", "Bearer surface-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
 }
 
 fn activity_failure_code(snapshot: &serde_json::Value) -> &str {

@@ -27,6 +27,7 @@ use crate::error::AirpError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -193,6 +194,13 @@ impl Tool for EchoTool {
 /// 但 `ToolRegistry::list` 最终按 name 字典序输出，故注册顺序不影响
 /// `/v1/agent/tools` 响应。
 pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
+    let data_root = state.data_root.clone();
+    registry_for_root(state, data_root)
+}
+
+/// Construct a registry whose stateful tools are bound to a trusted effective
+/// data root derived by the HTTP boundary, never by model-supplied params.
+pub(crate) fn registry_for_root(state: Arc<DaemonState>, effective_root: PathBuf) -> ToolRegistry {
     // 内建工具集是编译期固定的、名字不重复的集合；若这里冒出重名，那是新增
     // 工具时的编程错误，应在启动时立刻炸出来，而非静默覆盖（issue #24）。
     let mut reg = ToolRegistry::new();
@@ -203,7 +211,7 @@ pub fn default_registry(state: Arc<DaemonState>) -> ToolRegistry {
     // M_AGENT-2 第二批：角色类 3 工具（list/get/delete）。
     character::register(&mut reg, state.clone());
     // #155 PR 3：state + lorebook family 6 工具。
-    state_lorebook::register(&mut reg, state.clone());
+    state_lorebook::register(&mut reg, state.clone(), effective_root);
     // #115 P1 第二阶段：preset family 2 工具（get + update）。
     state_preset::register(&mut reg, state.clone());
     // #155 PR 3：volume seal + context bundle export family 2 工具。

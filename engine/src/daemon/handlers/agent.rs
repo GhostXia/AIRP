@@ -41,7 +41,7 @@ pub(in crate::daemon) async fn agent_run(
     let cancel = tokio_util::sync::CancellationToken::new();
     // 客户端断连 → drop SSE 流 → 我们不显式取消（M_AGENT-1 骨架）；
     // M_AGENT-5 会接 SSE 连接生命周期到 cancel token。
-    let looper = crate::agent::AgentLoop::new(state);
+    let looper = crate::agent::AgentLoop::new(state, effective_root);
     Ok(Sse::new(looper.run(payload, cancel)))
 }
 

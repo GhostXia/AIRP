@@ -1,26 +1,31 @@
 {
   "type": "core.memory",
-  "version": "0.1.0",
-  "title": "记忆",
-  "description": "Long-term memory / archive entries for the current session.",
+  "version": "0.2.0",
+  "title": "未分类 resident memory",
+  "description": "Editable session-scoped resident memory text. Its content is unclassified and is not presented as verified fact or advice.",
   "stateSchema": {
     "type": "object",
+    "required": ["content", "content_hash", "char_count", "capacity_chars", "source"],
     "properties": {
-      "entries": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "required": ["id", "text"],
-          "properties": {
-            "id": { "type": "string" },
-            "text": { "type": "string" },
-            "pinned": { "type": "boolean" }
-          }
-        }
+      "content": { "type": "string" },
+      "content_hash": { "type": "string" },
+      "char_count": { "type": "integer", "minimum": 0 },
+      "capacity_chars": { "type": "integer", "minimum": 0 },
+      "source": {
+        "type": "object",
+        "required": ["kind", "scope", "character_id", "session_id"],
+        "properties": {
+          "kind": { "const": "resident_memory" },
+          "scope": { "const": "session" },
+          "character_id": { "type": "string" },
+          "session_id": { "type": "string" }
+        },
+        "additionalProperties": false
       }
-    }
+    },
+    "additionalProperties": false
   },
-  "intents": ["memory.pin", "memory.delete"],
+  "intents": ["memory.replace"],
   "capabilities": ["read:memory", "write:memory"],
   "entry": { "kind": "builtin" },
   "author": "AIRP",

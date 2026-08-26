@@ -36,7 +36,8 @@ pub use fts::{FtsStore, SearchResult};
 pub(crate) use resident::write_resident_memory_if_unchanged;
 pub use resident::{
     append_resident_memory, inject_resident_memory, is_over_capacity, read_resident_memory,
-    write_resident_memory, ResidentMemoryConfig, RESIDENT_MEMORY_DEFAULT_CAP,
+    replace_resident_memory, resident_memory_content_hash, write_resident_memory,
+    ResidentMemoryConfig, RESIDENT_MEMORY_DEFAULT_CAP,
 };
 pub use user_model::{
     append_user_model_in_home, read_user_model, write_user_model, USER_MODEL_CAP,

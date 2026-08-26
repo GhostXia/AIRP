@@ -44,6 +44,13 @@ impl SessionCommand {
             | Self::AgentToolMutation => SessionPhase::Committing,
         }
     }
+
+    fn uses_character_state_gate(self) -> bool {
+        matches!(
+            self,
+            Self::Completion | Self::Regen | Self::Continue | Self::AgentToolMutation
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -100,6 +107,9 @@ impl SessionCoordinatorRegistry {
         command: SessionCommand,
     ) -> Result<SessionCommandLease, AirpError> {
         let key = session_key(data_root, character_id, session_id);
+        let character_key = command
+            .uses_character_state_gate()
+            .then(|| character_key(data_root, character_id));
         let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.retain(|_, entry| entry.strong_count() > 0);
         let state = match entries.get(&key).and_then(Weak::upgrade) {
@@ -123,6 +133,28 @@ impl SessionCoordinatorRegistry {
         if coordinator.status.phase != SessionPhase::Idle {
             return Err(AirpError::Conflict("session_busy".to_string()));
         }
+        let character_state = character_key.as_ref().map(|character_key| {
+            match entries.get(character_key).and_then(Weak::upgrade) {
+                Some(state) => state,
+                None => {
+                    let state = Arc::new(Mutex::new(CoordinatorState {
+                        status: SessionCoordinatorStatus::idle(),
+                        cancellation: None,
+                    }));
+                    entries.insert(character_key.clone(), Arc::downgrade(&state));
+                    state
+                }
+            }
+        });
+        let mut character_coordinator = character_state
+            .as_ref()
+            .map(|state| state.lock().unwrap_or_else(|p| p.into_inner()));
+        if character_coordinator
+            .as_ref()
+            .is_some_and(|coordinator| coordinator.status.phase != SessionPhase::Idle)
+        {
+            return Err(AirpError::Conflict("character_state_busy".to_string()));
+        }
         drop(entries);
         // Do not hold the global registry mutex across filesystem access: a
         // slow data root for one session must not serialize unrelated sessions.
@@ -138,17 +170,27 @@ impl SessionCoordinatorRegistry {
             command: Some(command),
             generation_id: Some(generation_id.clone()),
         };
+        if let Some(character_coordinator) = character_coordinator.as_mut() {
+            character_coordinator.status = SessionCoordinatorStatus {
+                phase: command.initial_phase(),
+                command: Some(command),
+                generation_id: Some(generation_id.clone()),
+            };
+        }
         let cancellation = matches!(
             command,
             SessionCommand::Completion | SessionCommand::Regen | SessionCommand::Continue
         )
         .then(CancellationToken::new);
         coordinator.cancellation = cancellation.clone();
+        drop(character_coordinator);
         drop(coordinator);
         Ok(SessionCommandLease {
             registry: self.clone(),
             key,
             state,
+            character_key,
+            character_state,
             generation_id,
             cancellation,
             released: false,
@@ -236,6 +278,8 @@ pub(crate) struct SessionCommandLease {
     registry: SessionCoordinatorRegistry,
     key: String,
     state: Arc<Mutex<CoordinatorState>>,
+    character_key: Option<String>,
+    character_state: Option<Arc<Mutex<CoordinatorState>>>,
     generation_id: String,
     cancellation: Option<CancellationToken>,
     released: bool,
@@ -257,6 +301,10 @@ impl SessionCommandLease {
 
     pub(crate) fn begin_commit(&mut self) -> Result<(), AirpError> {
         let mut coordinator = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut character_coordinator = self
+            .character_state
+            .as_ref()
+            .map(|state| state.lock().unwrap_or_else(|p| p.into_inner()));
         if self.released
             || coordinator.status.generation_id.as_deref() != Some(self.generation_id.as_str())
         {
@@ -270,6 +318,9 @@ impl SessionCommandLease {
             return Err(AirpError::Conflict("generation_cancelled".to_string()));
         }
         coordinator.status.phase = SessionPhase::Committing;
+        if let Some(character_coordinator) = character_coordinator.as_mut() {
+            character_coordinator.status.phase = SessionPhase::Committing;
+        }
         Ok(())
     }
 
@@ -283,15 +334,37 @@ impl SessionCommandLease {
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let mut coordinator = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut character_coordinator = self
+            .character_state
+            .as_ref()
+            .map(|state| state.lock().unwrap_or_else(|p| p.into_inner()));
         if coordinator.status.generation_id.as_deref() == Some(self.generation_id.as_str()) {
             coordinator.status = SessionCoordinatorStatus::idle();
             coordinator.cancellation = None;
+        }
+        if let Some(character_coordinator) = character_coordinator.as_mut() {
+            if character_coordinator.status.generation_id.as_deref()
+                == Some(self.generation_id.as_str())
+            {
+                character_coordinator.status = SessionCoordinatorStatus::idle();
+                character_coordinator.cancellation = None;
+            }
         }
         if entries
             .get(&self.key)
             .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(&self.state)))
         {
             entries.remove(&self.key);
+        }
+        if let (Some(character_key), Some(character_state)) =
+            (&self.character_key, &self.character_state)
+        {
+            if entries
+                .get(character_key)
+                .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(character_state)))
+            {
+                entries.remove(character_key);
+            }
         }
         self.released = true;
     }
@@ -312,6 +385,13 @@ fn session_key(
         .map(ToString::to_string)
         .unwrap_or_else(|| "legacy".to_string());
     format!("{}::{character_id}/{session}", data_root.to_string_lossy())
+}
+
+fn character_key(data_root: &Path, character_id: &CharacterId) -> String {
+    format!(
+        "character-state::{}::{character_id}",
+        data_root.to_string_lossy()
+    )
 }
 
 #[cfg(test)]
@@ -348,18 +428,60 @@ mod tests {
     }
 
     #[test]
-    fn different_sessions_do_not_share_an_owner() {
+    fn different_sessions_keep_independent_session_only_commands() {
         let registry = SessionCoordinatorRegistry::default();
         let character = CharacterId::new("char-a").unwrap();
         let first = SessionId::new();
         let second = SessionId::new();
         let root = Path::new("data");
         let _first = registry
-            .try_submit(root, &character, Some(&first), SessionCommand::Completion)
+            .try_submit(root, &character, Some(&first), SessionCommand::Swipe)
             .unwrap();
         let _second = registry
-            .try_submit(root, &character, Some(&second), SessionCommand::Completion)
+            .try_submit(root, &character, Some(&second), SessionCommand::Swipe)
             .unwrap();
+    }
+
+    #[test]
+    fn character_state_writers_are_serialized_across_sessions() {
+        let registry = SessionCoordinatorRegistry::default();
+        let character = CharacterId::new("char-a").unwrap();
+        let first = SessionId::new();
+        let second = SessionId::new();
+        let root = Path::new("data");
+        let generation = registry
+            .try_submit(root, &character, Some(&first), SessionCommand::Completion)
+            .unwrap();
+
+        assert!(matches!(
+            registry.try_submit(
+                root,
+                &character,
+                Some(&second),
+                SessionCommand::AgentToolMutation,
+            ),
+            Err(AirpError::Conflict(message)) if message == "character_state_busy"
+        ));
+
+        drop(generation);
+        let mutation = registry
+            .try_submit(
+                root,
+                &character,
+                Some(&second),
+                SessionCommand::AgentToolMutation,
+            )
+            .unwrap();
+        assert!(matches!(
+            registry.try_submit(
+                root,
+                &character,
+                Some(&first),
+                SessionCommand::Completion,
+            ),
+            Err(AirpError::Conflict(message)) if message == "character_state_busy"
+        ));
+        drop(mutation);
     }
 
     #[test]
