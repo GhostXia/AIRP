@@ -64,9 +64,16 @@ arbitrary patching, and automatic conflict replay are intentionally out of scope
 ## Remaining #593 boundaries
 
 This slice does not close #593 by itself. Before closing the issue, independently
-audit all blind non-UI State writers, add real configured-provider acceptance
-where model state writes are involved, and demonstrate package/restart
-credential recovery. Character State multi-file process-interruption recovery
+add real configured-provider acceptance where model state writes are involved,
+and demonstrate package/restart credential recovery. Blind non-UI whole-state
+writers are now closed: the same locked read both renders the model prompt state
+and supplies the revision used by `<state>` finalization, and Agent
+`get_character_state` returns revision metadata
+that `update_character_state` must submit as `expected_revision`; stale writes
+return conflict; Agent finalization reports `finalization_error` rather than a
+false converged result. Field-level relationship/plot writers remain lock-local
+`mutate` operations over the latest state and therefore do not replay a stale
+whole-state snapshot. Character State multi-file process-interruption recovery
 is now closed by treating the immutable revision plus atomic `current_revision`
 as the commit point and repairing `live.json` / `history.jsonl` projections on
 every locked public read or write. This does not claim Windows power-loss

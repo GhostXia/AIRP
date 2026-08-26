@@ -130,6 +130,17 @@ impl StateService {
         &self,
         character_id: &CharacterId,
     ) -> Result<(u64, Option<String>, serde_json::Value), AirpError> {
+        Ok(self
+            .read_surface_state_optional(character_id)?
+            .unwrap_or_else(|| (0, None, serde_json::Value::Object(Default::default()))))
+    }
+
+    /// Optional form of [`Self::read_surface_state`] for callers whose public
+    /// contract distinguishes a missing state asset from a committed `{}`.
+    pub fn read_surface_state_optional(
+        &self,
+        character_id: &CharacterId,
+    ) -> Result<Option<(u64, Option<String>, serde_json::Value)>, AirpError> {
         let character = character_lock(character_id.as_str());
         let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
         let _character_track = lock_order::track_character_read();
@@ -139,15 +150,18 @@ impl StateService {
 
         let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
         self.recover_projections_under_lock(character_id, &state_dir)?;
-        let state = Self::load_live_value(character_id, &state_dir)?;
+        if !state_dir.join("live.json").exists() {
+            return Ok(None);
+        }
         let history_path =
             data_dir::char_state_history_path(&self.data_root, character_id.as_str());
+        let state = Self::load_live_value(character_id, &state_dir)?;
         let latest = latest_snapshot(&history_path)?;
-        Ok((
+        Ok(Some((
             latest.as_ref().map_or(0, |snapshot| snapshot.revision),
             latest.map(|snapshot| snapshot.timestamp),
             state,
-        ))
+        )))
     }
 
     /// Apply a bounded top-level JSON Patch with optimistic concurrency.
@@ -182,6 +196,40 @@ impl StateService {
         apply_top_level_patch(&mut state, patch)?;
         fs::create_dir_all(&state_dir)?;
         self.commit_state_under_lock(character_id, &state_dir, &state)
+    }
+
+    /// Replace the whole state only when the caller's observed revision is
+    /// still current. Intended for non-UI writers that operate on a previously
+    /// observed whole-state snapshot.
+    pub fn replace_if_revision(
+        &self,
+        character_id: &CharacterId,
+        expected_revision: u64,
+        state: &serde_json::Value,
+    ) -> Result<StateSnapshot, AirpError> {
+        let character = character_lock(character_id.as_str());
+        let _character_guard = character.read().unwrap_or_else(|p| p.into_inner());
+        let _character_track = lock_order::track_character_read();
+        let state_boundary = state_lock(character_id.as_str());
+        let _state_guard = state_boundary.lock().unwrap_or_else(|p| p.into_inner());
+        let _state_track = lock_order::track_state();
+
+        let state_dir = data_dir::char_state_dir(&self.data_root, character_id.as_str());
+        self.recover_projections_under_lock(character_id, &state_dir)?;
+        // Preserve the same corruption contract as `read`/`mutate`: a legacy
+        // revision-0 live file must be parseable before any replacement may
+        // overwrite it. Missing state still validates as an empty object.
+        let _ = Self::load_live_value(character_id, &state_dir)?;
+        let history_path =
+            data_dir::char_state_history_path(&self.data_root, character_id.as_str());
+        let current_revision = latest_revision(&history_path)?;
+        if current_revision != expected_revision {
+            return Err(AirpError::Conflict(format!(
+                "character state revision is stale: expected {expected_revision}, current {current_revision}"
+            )));
+        }
+        fs::create_dir_all(&state_dir)?;
+        self.commit_state_under_lock(character_id, &state_dir, state)
     }
 
     /// Atomically mutate a character's live state under the state lock.
@@ -931,5 +979,68 @@ mod tests {
             latest_revision(&state_dir.join("history.jsonl")).unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn whole_state_replace_rejects_stale_revision_without_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let service = StateService::new(tmp.path());
+        service
+            .write(&character, &serde_json::json!({"hp": 90}))
+            .unwrap();
+        service
+            .replace_if_revision(&character, 1, &serde_json::json!({"hp": 80}))
+            .unwrap();
+
+        let stale = service.replace_if_revision(&character, 1, &serde_json::json!({"hp": 1}));
+        assert!(matches!(stale, Err(AirpError::Conflict(_))));
+        assert_eq!(
+            service.read(&character).unwrap(),
+            serde_json::json!({"hp": 80})
+        );
+    }
+
+    #[test]
+    fn surface_optional_keeps_history_only_state_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let history_path = data_dir::char_state_history_path(tmp.path(), character.as_str());
+        fs::create_dir_all(history_path.parent().unwrap()).unwrap();
+        fs::write(
+            &history_path,
+            serde_json::to_vec(&StateSnapshot {
+                revision: 1,
+                timestamp: "2026-08-26T00:00:00Z".to_string(),
+                state: serde_json::json!({"hp": 90}),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(StateService::new(tmp.path())
+            .read_surface_state_optional(&character)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn whole_state_replace_preserves_malformed_legacy_live_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let character = CharacterId::new("alice").unwrap();
+        let state_dir = data_dir::char_state_dir(tmp.path(), character.as_str());
+        fs::create_dir_all(&state_dir).unwrap();
+        let malformed = br#"{"hp": "#;
+        fs::write(state_dir.join("live.json"), malformed).unwrap();
+
+        let result = StateService::new(tmp.path()).replace_if_revision(
+            &character,
+            0,
+            &serde_json::json!({"hp": 1}),
+        );
+        assert!(matches!(result, Err(AirpError::Internal(_))));
+        assert_eq!(fs::read(state_dir.join("live.json")).unwrap(), malformed);
+        assert!(!state_dir.join("current_revision").exists());
+        assert!(!state_dir.join("revisions").exists());
     }
 }

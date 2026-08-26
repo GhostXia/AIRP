@@ -92,7 +92,6 @@ fn prepare_pipeline_with_mode(
     // DX-1: per-user data root isolation
     let effective_root =
         effective_root_for_mode(&state.data_root, payload.user_id.as_deref(), mode)?;
-
     // Resolve all Persona inputs before timeline advancement, chat persistence,
     // or any other request side effect. A rejected explicit Persona must leave
     // user state untouched.
@@ -240,6 +239,9 @@ fn prepare_pipeline_with_mode(
         &payload.message,
         next_checkpoint.as_deref(),
     );
+    // Bind finalization to the same locked read whose value was rendered into
+    // the prompt, rather than to a separate state observation.
+    let expected_state_revision = assembly.state_revision.unwrap_or(0);
     let mut system_prompt = assembly.prompt;
     let mut prompt_parts = assembly.parts;
 
@@ -482,6 +484,7 @@ fn prepare_pipeline_with_mode(
                 .map(crate::types::UserId::new)
                 .transpose()?,
             data_root: effective_root.clone(),
+            expected_state_revision,
             session_dir: session_dir_opt,
             provider_config,
             gen_params,

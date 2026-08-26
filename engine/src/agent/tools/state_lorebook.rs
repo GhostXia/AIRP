@@ -3,13 +3,14 @@
 //! 设计纪律（#155 PR 3）：
 //! - 6 个 tool struct 保持私有；对 facade 只暴露 [`register`]，
 //!   由 `default_registry` 集中调用，不暴露 struct 类型。
-//! - 不改任何 `ToolMeta` 文案、side_effect 或入参/出参形状。
+//! - Character State 工具显式暴露 revision/expected_revision CAS 合同；
+//!   其余工具保持既有 `ToolMeta`、side_effect 与入参/出参形状。
 //! - 共享 helper 走 [`super::params`]，不重复实现。
 //! - `read_lorebook_or_empty` 是本 family 内部 helper，不外泄。
 //!
 //! 工具清单：
-//! - `get_character_state`：读角色 live.json（readonly）
-//! - `update_character_state`：校验并替换角色状态，生成 revision 快照（mutate）
+//! - `get_character_state`：读取角色状态与 revision 元数据（readonly）
+//! - `update_character_state`：按 expected revision 校验并替换角色状态（mutate）
 //! - `get_lorebook`：读规范化 AIRP v1 lorebook（readonly）
 //! - `update_lorebook`：替换 lorebook，支持 canonical / SillyTavern form（destructive）
 //! - `apply_lorebook`：返回被文本触发的 enabled 条目（readonly）
@@ -41,7 +42,7 @@ fn read_lorebook_or_empty(
     }
 }
 
-/// `get_character_state`：读角色当前 state/live.json。readonly。
+/// `get_character_state`：读取角色当前 state 与 revision 元数据。readonly。
 struct GetCharacterStateTool {
     effective_root: PathBuf,
 }
@@ -50,7 +51,7 @@ impl Tool for GetCharacterStateTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "get_character_state",
-            description: "Read a character's current state/live.json.",
+            description: "Read a character's current state with revision metadata.",
             side_effect: ToolSideEffect::Readonly,
         }
     }
@@ -64,24 +65,28 @@ impl Tool for GetCharacterStateTool {
             let character = required_character_id(&params)?;
             let character_label = character.to_string();
             let loaded = tokio::task::spawn_blocking(move || {
-                StateService::new(effective_root).read_optional(&character)
+                StateService::new(effective_root).read_surface_state_optional(&character)
             })
             .await
             .map_err(|error| AirpError::Internal(format!("state read task failed: {error}")))??;
-            let Some(state) = loaded else {
+            let Some((revision, updated_at, state)) = loaded else {
                 return Err(AirpError::NotFound(format!(
                     "state for {character_label} not found"
                 )));
             };
             Ok(ToolResult {
-                output: state,
+                output: serde_json::json!({
+                    "revision": revision,
+                    "updated_at": updated_at,
+                    "state": state,
+                }),
                 dry_run: false,
             })
         })
     }
 }
 
-/// `update_character_state`：校验并替换角色 live state，生成 revisioned 快照。mutate。
+/// `update_character_state`：按 expected revision 校验并替换角色 live state。mutate。
 struct UpdateCharacterStateTool {
     state: Arc<DaemonState>,
     effective_root: PathBuf,
@@ -91,8 +96,7 @@ impl Tool for UpdateCharacterStateTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "update_character_state",
-            description:
-                "Validate and replace a character's live state, creating a revisioned snapshot.",
+            description: "Replace a character's whole state using character_id, state, and expected_revision from get_character_state; stale revisions conflict.",
             side_effect: ToolSideEffect::Mutate,
         }
     }
@@ -108,13 +112,25 @@ impl Tool for UpdateCharacterStateTool {
             let value = params
                 .get("state")
                 .ok_or_else(|| AirpError::BadRequest("missing state".to_string()))?;
+            let expected_revision = params
+                .get("expected_revision")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    AirpError::BadRequest(
+                        "expected_revision must be a non-negative integer".to_string(),
+                    )
+                })?;
             let _operation = daemon.session_coordinators.try_submit(
                 &effective_root,
                 &character,
                 None,
                 SessionCommand::AgentToolMutation,
             )?;
-            let snapshot = StateService::new(&effective_root).write(&character, value)?;
+            let snapshot = StateService::new(&effective_root).replace_if_revision(
+                &character,
+                expected_revision,
+                value,
+            )?;
             Ok(ToolResult {
                 output: serde_json::to_value(snapshot)?,
                 dry_run: false,

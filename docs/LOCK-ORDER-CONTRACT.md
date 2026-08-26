@@ -73,7 +73,7 @@ character_lock.read()  →  session_lock.lock()
 - 同步 std 锁；闭包内为纯同步 I/O，不跨 `.await`。
 - 同时持两把锁直到 `operation()` 返回。
 
-### 2.2 `StateService::read` / `mutate` / `mutate_locked` / `write`（`domain.rs`）
+### 2.2 `StateService::read*` / `patch` / `replace_if_revision` / `mutate*` / `write`（`domain.rs`）
 
 ```text
 character_lock.read()  →  state_lock.lock()
@@ -81,6 +81,7 @@ character_lock.read()  →  state_lock.lock()
 
 - 同步 std 锁；闭包内为纯同步 I/O，不跨 `.await`。
 - `mutate` 在持锁期间执行 `revision 恢复 → load → closure → schema 校验 → revision commit → live/history 投影`；原子 `current_revision` 是提交点，后两项可在下次 read/write 时从不可变 revision 恢复。
+- `patch` 与 `replace_if_revision` 在同一临界区内比较 expected revision；前者用于有界顶层 patch，后者用于模型/Agent 的 whole-state CAS。关系与剧情等字段级内部 writer 使用 `mutate*`，基于锁内最新值更新，不携带陈旧 whole-state 快照。
 - `mutate_locked`（#437 fix path 4 新增）：与 `mutate` 行为一致，但**不** acquire `character_lock.read()`，要求调用方已持有 `character_lock.read()`（或 `.write()`）作为外层门控。仅供 `advance_plot`（§2.3）使用以避免 `StateService::mutate` 内部 acquire 与外层 acquire 构成递归 read；其他调用方应继续使用 `mutate`。
 
 ### 2.3 `agent::tools::plot::advance_plot`（`plot.rs`）—— 唯一合法 session→state 嵌套，R1 已闭合（#437 fix path 4）

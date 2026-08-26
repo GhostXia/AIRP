@@ -130,6 +130,8 @@ pub enum StopReason {
     Cancelled,
     /// 上游错误。
     UpstreamError,
+    /// 模型已返回，但持久化或状态提交未完整成功。
+    FinalizationError,
 }
 
 // ── AgentLoop ────────────────────────────────────────────────────────────────
@@ -421,7 +423,18 @@ async fn run_loop(
                         })
                         .await;
                 }
-                finalize_generation(result.finalizer, result.raw_acc, result.cleaned_acc).await;
+                if finalize_generation(result.finalizer, result.raw_acc, result.cleaned_acc)
+                    .await
+                    .is_err()
+                {
+                    return emit_done(
+                        tx,
+                        StopReason::FinalizationError,
+                        steps_taken,
+                        tokens_estimated,
+                    )
+                    .await;
+                }
                 return emit_done(tx, StopReason::Converged, steps_taken, tokens_estimated).await;
             }
             PlanAction::Finish => {
@@ -913,6 +926,10 @@ mod tests {
         assert_eq!(done["stop_reason"], "upstream_error");
         assert_eq!(done["steps_taken"], 1);
         assert_eq!(done["tokens_estimated"], 42);
+        assert_eq!(
+            serde_json::to_value(StopReason::FinalizationError).unwrap(),
+            serde_json::json!("finalization_error")
+        );
     }
 
     #[test]

@@ -43,6 +43,8 @@ pub(crate) struct SystemPromptPart {
 pub(crate) struct SystemPromptAssembly {
     pub(crate) prompt: String,
     pub(crate) parts: Vec<SystemPromptPart>,
+    /// Revision of the exact Character State snapshot rendered into `prompt`.
+    pub(crate) state_revision: Option<u64>,
 }
 
 impl Orchestrator {
@@ -314,9 +316,10 @@ impl Orchestrator {
         }
 
         // M_LS LS-4: inject live state so LLM sees current values and knows to update them
+        let mut state_revision = None;
         if let Some(char_id) = character_id {
             let mut state_part = String::new();
-            inject_live_state(data_root, char_id, &mut state_part);
+            state_revision = inject_live_state(data_root, char_id, &mut state_part);
             if !state_part.is_empty() {
                 parts.push(SystemPromptPart {
                     source_kind: "state",
@@ -362,7 +365,11 @@ impl Orchestrator {
         }
 
         let prompt = parts.iter().map(|part| part.content.as_str()).collect();
-        SystemPromptAssembly { prompt, parts }
+        SystemPromptAssembly {
+            prompt,
+            parts,
+            state_revision,
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -400,14 +407,15 @@ impl Orchestrator {
 /// a `[Current State]` block to `prompt`. When schema is present, renders labeled rows
 /// alongside raw JSON and lists expected keys in the `<state>` instruction.
 /// No-op if live.json doesn't exist or can't be parsed.
-fn inject_live_state(data_root: &Path, character_id: &str, prompt: &mut String) {
+fn inject_live_state(data_root: &Path, character_id: &str, prompt: &mut String) -> Option<u64> {
     let state_dir = crate::data_dir::char_state_dir(data_root, character_id);
     let Ok(character_id) = crate::types::CharacterId::new(character_id) else {
-        return;
+        return None;
     };
-    let Ok(Some(state)) = crate::domain::StateService::new(data_root).read_optional(&character_id)
+    let Ok(Some((revision, _, state))) =
+        crate::domain::StateService::new(data_root).read_surface_state_optional(&character_id)
     else {
-        return;
+        return None;
     };
 
     // Try to load schema for richer rendering (LS-7/8 enhancement).
@@ -458,6 +466,7 @@ fn inject_live_state(data_root: &Path, character_id: &str, prompt: &mut String) 
              at the very end of your response as: <state>{...}</state>\n\n",
         );
     }
+    Some(revision)
 }
 
 /// MS-4: Build a multi-character system prompt from a scene config + loaded card JSON strings.
@@ -670,13 +679,17 @@ fn build_multi_char_system_prompt_assembly_inner(
     });
 
     let prompt = parts.iter().map(|part| part.content.as_str()).collect();
-    SystemPromptAssembly { prompt, parts }
+    SystemPromptAssembly {
+        prompt,
+        parts,
+        state_revision: None,
+    }
 }
 
 /// M_LS LS-9: test-only shim so cross-module tests can call the private `inject_live_state`.
 #[cfg(test)]
 pub fn inject_live_state_for_test(data_root: &Path, character_id: &str, prompt: &mut String) {
-    inject_live_state(data_root, character_id, prompt);
+    let _ = inject_live_state(data_root, character_id, prompt);
 }
 
 /// M0 F-40 / 6.0g + 6.0k：角色卡字段提取结果。
@@ -762,7 +775,6 @@ mod tests {
             "should include state tag instruction"
         );
     }
-
     #[test]
     fn test_ls4_inject_live_state_recovers_committed_revision() {
         let tmp = tempfile::tempdir().unwrap();

@@ -131,7 +131,13 @@ pub(super) async fn run_finalize(
         // 若上面的消息追加失败（`?` 传播 Err），state 不会被写入，
         // 避免 live.json 领先于 chat_log 的不一致。
         if let Some(ref state) = live_state {
-            persist_live_state(&ctx.data_root, cid.as_str(), state).await?;
+            persist_live_state(
+                &ctx.data_root,
+                cid.as_str(),
+                ctx.expected_state_revision,
+                state,
+            )
+            .await?;
         }
         if let Some(commit) = turn_commit.as_mut() {
             commit.mark_state_committed()?;
@@ -340,47 +346,55 @@ pub(super) async fn run_finalize(
     Ok(())
 }
 
-/// Writes `state` to `characters/{character_id}/state/live.json` (overwrite).
-///
-/// Failures are silently logged; state persistence is best-effort.
+/// Replaces Character State only if `expected_revision` is still current.
+/// Conflicts and persistence failures propagate to the turn finalizer.
 pub(super) async fn persist_live_state(
     data_root: &std::path::Path,
     character_id: &str,
+    expected_revision: u64,
     state: &serde_json::Value,
 ) -> Result<(), AirpError> {
     let character = crate::types::CharacterId::new(character_id)?;
     crate::domain::StateService::new(data_root)
-        .write(&character, state)
+        .replace_if_revision(&character, expected_revision, state)
         .map(|_| ())
 }
 
 /// Commit one converged Agent generation through the same persistence, state,
 /// volume, and maintenance finalizer used by the ordinary chat pipeline.
-pub async fn finalize_generation(finalizer: FinalizerCtx, raw_acc: String, cleaned_acc: String) {
+pub async fn finalize_generation(
+    finalizer: FinalizerCtx,
+    raw_acc: String,
+    cleaned_acc: String,
+) -> Result<(), AirpError> {
     let session_dir = finalizer.session_dir.clone();
     let generation_id = finalizer
         .session_operation_lease
         .as_ref()
         .map(|lease| lease.generation_id().to_string());
-    if let Err(error) = run_finalize(finalizer, raw_acc, cleaned_acc).await {
-        tracing::error!(%error, "agent generation finalization failed");
-        if let Some(session_dir) = session_dir {
-            let persisted = tokio::task::spawn_blocking(move || {
-                crate::ui_activity::record_failure(
-                    &session_dir,
-                    crate::ui_activity::ActivitySource::Agent,
-                    crate::ui_activity::ActivityFailureCode::FinalizationFailed,
-                    generation_id.as_deref(),
-                )
-            })
-            .await;
-            match persisted {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(%error, "failed to persist agent activity receipt")
+    match run_finalize(finalizer, raw_acc, cleaned_acc).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            tracing::error!(%error, "agent generation finalization failed");
+            if let Some(session_dir) = session_dir {
+                let persisted = tokio::task::spawn_blocking(move || {
+                    crate::ui_activity::record_failure(
+                        &session_dir,
+                        crate::ui_activity::ActivitySource::Agent,
+                        crate::ui_activity::ActivityFailureCode::FinalizationFailed,
+                        generation_id.as_deref(),
+                    )
+                })
+                .await;
+                match persisted {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "failed to persist agent activity receipt")
+                    }
+                    Err(error) => tracing::warn!(%error, "agent activity persistence task failed"),
                 }
-                Err(error) => tracing::warn!(%error, "agent activity persistence task failed"),
             }
+            Err(error)
         }
     }
 }
