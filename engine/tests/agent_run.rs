@@ -9,6 +9,7 @@
 //!
 //!   4. 收敛后共用 chat finalizer，且只持久化一次。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -22,7 +23,7 @@ use wiremock::{Mock, MockServer, Request as WiremockRequest, Respond, ResponseTe
 use airp_core::adapter::{BackendEngine, Provider};
 use airp_core::config::VolumeConfig;
 use airp_core::daemon::{create_router, DaemonState, MutableConfig};
-use airp_core::domain::ChatService;
+use airp_core::domain::{ChatService, StateService};
 use airp_core::quota::QuotaConfig;
 use airp_core::types::CharacterId;
 
@@ -33,13 +34,36 @@ fn inline_card() -> &'static str {
 fn build_sse_body(tokens: &[&str]) -> String {
     let mut out = String::new();
     for tk in tokens {
-        out.push_str(&format!(
-            "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n\n",
-            tk
-        ));
+        let event = serde_json::json!({"choices": [{"delta": {"content": tk}}]});
+        out.push_str(&format!("data: {event}\n\n"));
     }
     out.push_str("data: [DONE]\n\n");
     out
+}
+
+#[derive(Clone)]
+struct StateCasConflictMode {
+    data_root: PathBuf,
+}
+
+impl Respond for StateCasConflictMode {
+    fn respond(&self, request: &WiremockRequest) -> ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap();
+        assert_eq!(body["stream"], true);
+        StateService::new(&self.data_root)
+            .replace_if_revision(
+                &CharacterId::new("testchar").unwrap(),
+                1,
+                &serde_json::json!({"hp": 80}),
+            )
+            .unwrap();
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(build_sse_body(&[
+                "A durable reply.",
+                "<state>{\"hp\": 70}</state>",
+            ]))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -268,6 +292,79 @@ async fn agent_run_upstream_error_terminates_with_typed_done() {
         events.iter().any(|e| e["type"] == "tool_result"),
         "tool step should have completed before upstream failure"
     );
+}
+
+#[tokio::test]
+async fn agent_run_state_cas_conflict_reports_finalization_error_with_recovery_evidence() {
+    let server = MockServer::start().await;
+    let (state, _tmp) = setup(&server.uri()).await;
+    let character = CharacterId::new("testchar").unwrap();
+    StateService::new(&state.data_root)
+        .write(&character, &serde_json::json!({"hp": 90}))
+        .unwrap();
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(StateCasConflictMode {
+            data_root: state.data_root.clone(),
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let events = run_agent_and_collect(state.clone(), 1).await;
+    let done_events: Vec<_> = events
+        .iter()
+        .filter(|event| event["type"] == "done")
+        .collect();
+    assert_eq!(done_events.len(), 1);
+    assert!(events
+        .iter()
+        .all(|event| event["stop_reason"] != "converged"));
+    let done = events.last().expect("at least done event");
+    assert_eq!(done["type"], "done");
+    assert_eq!(done["stop_reason"], "finalization_error");
+
+    let history = ChatService::new(&state.data_root)
+        .history(&character, None)
+        .unwrap();
+    assert_eq!(history.messages.len(), 2);
+    assert_eq!(
+        history.messages[1].role,
+        airp_core::adapter::MessageRole::Assistant
+    );
+    assert_eq!(history.messages[1].content, "A durable reply.");
+    assert!(!history.messages[1].content.contains("<state>"));
+
+    let (revision, _, current) = StateService::new(&state.data_root)
+        .read_surface_state(&character)
+        .unwrap();
+    assert_eq!(revision, 2);
+    assert_eq!(current, serde_json::json!({"hp": 80}));
+
+    let marker_path = state
+        .data_root
+        .join("characters/testchar/history/turn_commit.json");
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(marker_path).unwrap()).unwrap();
+    assert_eq!(marker["schema_version"], 2);
+    assert_eq!(marker["phase"], "message_committed");
+    assert_eq!(marker["message_expected"], true);
+    assert_eq!(marker["state_expected"], true);
+    assert_eq!(marker["volume_expected"], true);
+    let generation_id = marker["generation_id"].as_str().unwrap();
+    assert!(!generation_id.is_empty());
+
+    let activity_path = state
+        .data_root
+        .join("characters/testchar/memory/ui-activity.json");
+    let activity: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(activity_path).unwrap()).unwrap();
+    let receipt = activity["items"].as_array().unwrap().last().unwrap();
+    assert_eq!(receipt["source"], "agent");
+    assert_eq!(receipt["kind"], "failed");
+    assert_eq!(receipt["severity"], "error");
+    assert_eq!(receipt["code"], "finalization_failed");
+    assert_eq!(receipt["generation_id"], generation_id);
 }
 
 #[tokio::test]

@@ -71,7 +71,11 @@ and supplies the revision used by `<state>` finalization, and Agent
 `get_character_state` returns revision metadata
 that `update_character_state` must submit as `expected_revision`; stale writes
 return conflict; Agent finalization reports `finalization_error` rather than a
-false converged result. Field-level relationship/plot writers remain lock-local
+false converged result. The finalizer extracts model state only from complete
+raw provider output because the streaming FSM deliberately hides `<state>` from
+visible cleaned output; an Agent end-to-end conflict test binds the message,
+marker, state, activity receipt, and wire result to one generation. Field-level
+relationship/plot writers remain lock-local
 `mutate` operations over the latest state and therefore do not replay a stale
 whole-state snapshot. Character State multi-file process-interruption recovery
 is now closed by treating the immutable revision plus atomic `current_revision`
