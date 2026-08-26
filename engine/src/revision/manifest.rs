@@ -50,6 +50,9 @@ pub(crate) enum AssetKind {
     /// 预留变体避免未来接入 revision 时再改 schema 枚举。序列化为 `"analysis"`，
     /// 由 `rename_all = "lowercase"` 自动派生，无需单独 `rename`。
     Analysis,
+    /// Versioned, layout-only user workspace. Runtime Widget props and domain
+    /// projections are never approved files for this asset kind.
+    Workspace,
 }
 
 impl AssetKind {
@@ -64,6 +67,7 @@ impl AssetKind {
             AssetKind::SoulDrift => "soul_drift",
             AssetKind::WorldEvents => "world_events",
             AssetKind::Analysis => "analysis",
+            AssetKind::Workspace => "workspace",
         }
     }
 }

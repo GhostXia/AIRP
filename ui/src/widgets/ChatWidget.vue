@@ -126,6 +126,10 @@ const scrollEl = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
 const viewportH = ref(0);
 let followLatest = true;
+// One top-edge crossing requests one page. Appending older rows can emit a
+// synthetic scroll event while the viewport is still at the top; do not turn
+// that layout event into an unbounded pagination chain.
+let historyLoadArmed = true;
 
 const vwin = computed(() =>
   computeWindow({
@@ -152,11 +156,16 @@ function onScroll(): void {
   viewportH.value = el.clientHeight;
   followLatest = el.scrollHeight - el.scrollTop - el.clientHeight < ITEM_H * 2;
   // Near the top → ask the Gateway for an older history window.
-  if (!props.readOnly && el.scrollTop < ITEM_H * 2 && operation.value.status !== "loading_history") {
+  if (el.scrollTop >= ITEM_H * 2) historyLoadArmed = true;
+  if (!props.readOnly && historyLoadArmed && el.scrollTop < ITEM_H * 2
+    && operation.value.status !== "loading_history") {
     const history = operation.value.history;
     const hasMore = history ? history.has_more : chatState.value.has_more;
     const before = history?.oldest_id ?? chatState.value.oldest_id ?? order.value[0];
-    if (hasMore && before) emit("intent", "chat.loadMore", { before, limit: 50 });
+    if (hasMore && before) {
+      historyLoadArmed = false;
+      emit("intent", "chat.loadMore", { before, limit: 50 });
+    }
   }
 }
 

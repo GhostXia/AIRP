@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "purpose": "Durable layout-only user workspace; runtime Widget props and domain data are forbidden",
+  "document": {
+    "required": ["schema", "id", "revision", "updatedAt", "layout"],
+    "unknownFields": "reject",
+    "maxBytes": 262144,
+    "revisionEncoding": "canonical decimal u64 JSON string; JSON numbers are rejected"
+  },
+  "layout": {
+    "version": 1,
+    "nodeTypes": ["split", "tabs", "stack", "widget"],
+    "splitRatioBasisPoints": { "minimum": 1000, "maximum": 9000 },
+    "maxDepth": 16,
+    "maxNodes": 512,
+    "maxChildren": 32,
+    "maxWidgets": 128,
+    "widgetFields": ["id", "type"],
+    "widgetTypes": ["core.activity", "core.card", "core.character-state", "core.characters", "core.chat", "core.clock", "core.emotion", "core.inventory", "core.map", "core.memory", "core.quest"],
+    "forbiddenWidgetFields": ["props", "state", "content", "token"]
+  },
+  "persistence": {
+    "revision": "optimistic CAS; every successful mutation creates a higher immutable revision",
+    "retention": "v1 keeps all committed immutable revisions; history responses are capped at 256 entries",
+    "rollback": "forward commit of any validated committed ancestor; response history caps do not limit ancestry traversal; the current pointer never moves backward",
+    "unknownMajor": "lossless raw UTF-8 JSON export plus SHA-256 only; mutation, reset and automatic migration are forbidden"
+  }
+}
