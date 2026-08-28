@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::{
     daemon::DaemonState,
-    domain::{ChatService, PersonaService, StateService},
+    domain::{ChatService, PersonaService, StateService, WorkspaceService},
     error::AirpError,
     types::{CharacterId, SessionId, UserId},
     ui_surface::{
@@ -204,6 +204,7 @@ fn refresh_surface_blocking(
     session_id: &SessionId,
     user_id: Option<UserId>,
 ) -> Result<SurfaceEvent, AirpError> {
+    let workspace = WorkspaceService::new(effective_root).read()?;
     let props = project_session(
         state,
         &state.data_root,
@@ -220,7 +221,7 @@ fn refresh_surface_blocking(
     );
     let mut registry = state.ui_surfaces.lock().unwrap_or_else(|p| p.into_inner());
     registry
-        .publish(scope.clone(), props)
+        .publish_workspace(scope.clone(), props, workspace.revision, workspace.layout)
         .map_err(|error| AirpError::Internal(format!("Surface publish failed: {error}")))?;
     registry
         .current(&scope)

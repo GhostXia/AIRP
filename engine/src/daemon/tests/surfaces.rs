@@ -116,6 +116,42 @@ async fn surface_snapshot_requires_configured_and_valid_bearer() {
 }
 
 #[tokio::test]
+async fn surface_refresh_consumes_the_saved_workspace_for_the_effective_root() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    let workspace = crate::domain::WorkspaceService::new(&state.data_root);
+    let app = create_router(state);
+
+    let initial = surface_snapshot_json(app.clone(), "alice", &session_id).await;
+    assert_eq!(initial["snapshot"]["revision"], "1");
+    assert_eq!(
+        initial["snapshot"]["blueprint"]["root"]["id"],
+        "workspace-root"
+    );
+
+    workspace
+        .execute(
+            0,
+            crate::domain::WorkspaceCommand::ActivateTab {
+                tabs_id: "workspace-primary".to_string(),
+                node_id: "memory-node".to_string(),
+            },
+        )
+        .unwrap();
+    let refreshed = surface_snapshot_json(app, "alice", &session_id).await;
+    assert_eq!(refreshed["snapshot"]["revision"], "2");
+    assert_eq!(
+        refreshed["snapshot"]["blueprint"]["root"]["children"][0]["active"],
+        "memory-node"
+    );
+    assert_eq!(
+        widget_props(&refreshed, "chat")["context"]["character_id"],
+        "alice"
+    );
+}
+
+#[tokio::test]
 async fn chat_intent_resolves_scope_from_the_accepted_surface() {
     let (state, _tmp) = make_state_with_key(Some("surface-secret"));
     let session_id = crate::types::SessionId::new();
@@ -173,6 +209,66 @@ async fn chat_intent_resolves_scope_from_the_accepted_surface() {
         .await
         .unwrap();
     assert_eq!(rejected.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn future_workspace_major_revokes_stale_surface_intent_authority() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    let workspace = crate::domain::WorkspaceService::new(&state.data_root);
+    let committed = workspace
+        .execute(0, crate::domain::WorkspaceCommand::ResetLayout)
+        .unwrap();
+    let app = create_router(state.clone());
+    surface_snapshot_json(app.clone(), "alice", &session_id).await;
+
+    let mut future = serde_json::to_value(committed).unwrap();
+    future["schema"] = serde_json::json!(airp_state_protocol::WORKSPACE_SCHEMA_MAJOR + 1);
+    future["revision"] = serde_json::json!("2");
+    future["updatedAt"] = serde_json::json!("2026-08-28T00:00:00Z");
+    future["layout"]["version"] =
+        serde_json::json!(airp_state_protocol::WORKSPACE_SCHEMA_MAJOR + 1);
+    crate::revision::atomic::commit_revision(
+        &crate::revision::atomic::StagedRevision {
+            content_revision: 2,
+            asset_kind: crate::revision::manifest::AssetKind::Workspace,
+            asset_id: "default".to_string(),
+            created_at: "2026-08-28T00:00:00Z".to_string(),
+            source: crate::revision::manifest::AssetSource {
+                source_kind: "test_future_workspace".to_string(),
+                source_hash: None,
+                source_filename: None,
+                converter_version: None,
+                imported_at: None,
+                parent_revision: Some(1),
+            },
+            files: vec![(
+                "workspace.json".to_string(),
+                serde_json::to_vec_pretty(&future).unwrap(),
+            )],
+        },
+        &crate::revision::atomic::CommitOptions::new(
+            state
+                .data_root
+                .join("ui")
+                .join("workspaces")
+                .join("default"),
+        ),
+    )
+    .unwrap();
+
+    let response = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "chat",
+            "name": "chat.loadMore",
+            "params": {"limit": 20}
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -642,6 +738,17 @@ async fn equal_character_and_session_ids_do_not_alias_across_user_roots() {
             .write(&character_id, &serde_json::json!({"mood": mood}))
             .unwrap();
     }
+    let tenant_a_root =
+        crate::data_dir::resolve_effective_root(&state.data_root, Some("tenant-a")).unwrap();
+    crate::domain::WorkspaceService::new(tenant_a_root)
+        .execute(
+            0,
+            crate::domain::WorkspaceCommand::ActivateTab {
+                tabs_id: "workspace-primary".to_string(),
+                node_id: "memory-node".to_string(),
+            },
+        )
+        .unwrap();
     let app = create_router(state);
 
     let first =
@@ -655,6 +762,14 @@ async fn equal_character_and_session_ids_do_not_alias_across_user_roots() {
     assert_eq!(
         widget_props(&second, "character-state")["state"]["mood"],
         "focused"
+    );
+    assert_eq!(
+        first["snapshot"]["blueprint"]["root"]["children"][0]["active"],
+        "memory-node"
+    );
+    assert_eq!(
+        second["snapshot"]["blueprint"]["root"]["children"][0]["active"],
+        "chat-node"
     );
 }
 

@@ -1239,6 +1239,45 @@ fn workspace_node_to_surface(
     })
 }
 
+/// Lower a durable Workspace layout into the executable-free Surface
+/// Blueprint shape. Runtime projection props remain absent until the Engine
+/// attaches them for the current domain scope.
+pub fn workspace_layout_to_blueprint(
+    layout: &WorkspaceLayoutV1,
+) -> Result<BlueprintV2, SurfaceValidationError> {
+    if layout.version != WORKSPACE_SCHEMA_MAJOR {
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::UnsupportedMajor,
+            format!("unsupported workspace layout major {}", layout.version),
+        ));
+    }
+    if layout
+        .widgets
+        .iter()
+        .any(|widget| !WORKSPACE_WIDGET_TYPES.contains(&widget.widget_type.as_str()))
+    {
+        return Err(SurfaceValidationError::new(
+            SurfaceErrorCode::InvalidBlueprint,
+            "workspace widget type is not in the v1 first-party allowlist",
+        ));
+    }
+    let blueprint = BlueprintV2 {
+        version: SURFACE_PROTOCOL_MAJOR,
+        root: workspace_node_to_surface(&layout.root)?,
+        widgets: layout
+            .widgets
+            .iter()
+            .map(|widget| WidgetInstanceV2 {
+                id: widget.id.clone(),
+                widget_type: widget.widget_type.clone(),
+                props: None,
+            })
+            .collect(),
+    };
+    validate_surface_blueprint(&blueprint)?;
+    Ok(blueprint)
+}
+
 /// Validate a durable workspace without ever accepting runtime Widget props.
 /// The layout is lowered to the Surface authority so both contracts share the
 /// same identifier, reference, duplicate, depth, node, and child limits.
@@ -1270,41 +1309,7 @@ pub fn validate_workspace_document(
             "workspace updatedAt must be a bounded non-empty timestamp",
         ));
     }
-    if document.layout.version != WORKSPACE_SCHEMA_MAJOR {
-        return Err(SurfaceValidationError::new(
-            SurfaceErrorCode::UnsupportedMajor,
-            format!(
-                "unsupported workspace layout major {}",
-                document.layout.version
-            ),
-        ));
-    }
-    if document
-        .layout
-        .widgets
-        .iter()
-        .any(|widget| !WORKSPACE_WIDGET_TYPES.contains(&widget.widget_type.as_str()))
-    {
-        return Err(SurfaceValidationError::new(
-            SurfaceErrorCode::InvalidBlueprint,
-            "workspace widget type is not in the v1 first-party allowlist",
-        ));
-    }
-    let blueprint = BlueprintV2 {
-        version: SURFACE_PROTOCOL_MAJOR,
-        root: workspace_node_to_surface(&document.layout.root)?,
-        widgets: document
-            .layout
-            .widgets
-            .iter()
-            .map(|widget| WidgetInstanceV2 {
-                id: widget.id.clone(),
-                widget_type: widget.widget_type.clone(),
-                props: None,
-            })
-            .collect(),
-    };
-    validate_surface_blueprint(&blueprint)
+    workspace_layout_to_blueprint(&document.layout).map(|_| ())
 }
 
 /// Parse and validate an untrusted workspace JSON document. Strict serde
@@ -2264,6 +2269,12 @@ mod tests {
         let document = workspace_document();
         validate_workspace_document(&document).unwrap();
 
+        let blueprint = workspace_layout_to_blueprint(&document.layout).unwrap();
+        assert!(blueprint
+            .widgets
+            .iter()
+            .all(|widget| widget.props.is_none()));
+
         let encoded = serde_json::to_value(&document).unwrap();
         assert_eq!(encoded["revision"], json!("1"));
         let mut maximum = encoded.clone();
@@ -2294,6 +2305,24 @@ mod tests {
                 .unwrap_err()
                 .code,
             SurfaceErrorCode::UnsupportedMajor
+        );
+
+        let mut future_layout = document.layout.clone();
+        future_layout.version = WORKSPACE_SCHEMA_MAJOR + 1;
+        assert_eq!(
+            workspace_layout_to_blueprint(&future_layout)
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::UnsupportedMajor
+        );
+
+        let mut unknown_widget = document.layout.clone();
+        unknown_widget.widgets[0].widget_type = "core.future".into();
+        assert_eq!(
+            workspace_layout_to_blueprint(&unknown_widget)
+                .unwrap_err()
+                .code,
+            SurfaceErrorCode::InvalidBlueprint
         );
     }
 

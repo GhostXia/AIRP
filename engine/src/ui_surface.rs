@@ -4,10 +4,11 @@ use std::{
 };
 
 use airp_state_protocol::{
-    validate_surface_patch_event, validate_surface_snapshot, BlueprintV2, LayoutNodeV2,
-    SplitOrientation, SurfaceMessageKind, SurfacePatchEvent, SurfacePatchOp, SurfacePatchOperation,
-    SurfaceProtocolVersion, SurfaceRevision, SurfaceSnapshot, SurfaceValidationError,
-    WidgetInstanceV2, SURFACE_PROTOCOL_MAJOR,
+    validate_surface_patch_event, validate_surface_snapshot, workspace_layout_to_blueprint,
+    BlueprintV2, LayoutNodeV2, SplitOrientation, SurfaceMessageKind, SurfacePatchEvent,
+    SurfacePatchOp, SurfacePatchOperation, SurfaceProtocolVersion, SurfaceRevision,
+    SurfaceSnapshot, SurfaceValidationError, WidgetInstanceV2, WorkspaceLayoutV1,
+    SURFACE_PROTOCOL_MAJOR,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -163,55 +164,88 @@ impl From<SurfaceValidationError> for SurfaceRegistryError {
     }
 }
 
-pub fn build_session_surface(
+#[cfg(test)]
+fn build_session_surface(
     scope: &SurfaceScope,
     revision: SurfaceRevision,
     props: SessionSurfaceProps,
 ) -> Result<SurfaceSnapshot, SurfaceRegistryError> {
+    build_session_surface_with_layout(scope, revision, props, None)
+}
+
+fn build_session_surface_with_layout(
+    scope: &SurfaceScope,
+    revision: SurfaceRevision,
+    props: SessionSurfaceProps,
+    layout: Option<&WorkspaceLayoutV1>,
+) -> Result<SurfaceSnapshot, SurfaceRegistryError> {
     validate_scope(scope)?;
-    let widgets = vec![
-        widget("chat", "core.chat", props.chat),
-        widget("memory", "core.memory", props.memory),
-        widget(
-            "character-state",
-            "core.character-state",
-            props.character_state,
-        ),
-        widget("activity", "core.activity", props.activity),
-    ];
+    let blueprint = match layout {
+        Some(layout) => {
+            let mut blueprint = workspace_layout_to_blueprint(layout)?;
+            for widget in &mut blueprint.widgets {
+                widget.props = projected_props(&widget.widget_type, &props);
+            }
+            blueprint
+        }
+        None => default_session_blueprint(props),
+    };
     let snapshot = SurfaceSnapshot {
         kind: SurfaceMessageKind::Snapshot,
         protocol: SurfaceProtocolVersion::default(),
         surface_id: format!("session:{}", scope.session_id),
         revision,
-        blueprint: BlueprintV2 {
-            version: SURFACE_PROTOCOL_MAJOR,
-            root: LayoutNodeV2::Split {
-                id: "session-root".into(),
-                orientation: SplitOrientation::Horizontal,
-                children: vec![
-                    LayoutNodeV2::Tabs {
-                        id: "session-tabs".into(),
-                        active: "chat-node".into(),
-                        children: vec![
-                            widget_node("chat-node", "chat"),
-                            widget_node("memory-node", "memory"),
-                        ],
-                    },
-                    LayoutNodeV2::Stack {
-                        id: "session-context".into(),
-                        children: vec![
-                            widget_node("character-state-node", "character-state"),
-                            widget_node("activity-node", "activity"),
-                        ],
-                    },
-                ],
-            },
-            widgets,
-        },
+        blueprint,
     };
     validate_surface_snapshot(&snapshot)?;
     Ok(snapshot)
+}
+
+fn default_session_blueprint(props: SessionSurfaceProps) -> BlueprintV2 {
+    BlueprintV2 {
+        version: SURFACE_PROTOCOL_MAJOR,
+        root: LayoutNodeV2::Split {
+            id: "session-root".into(),
+            orientation: SplitOrientation::Horizontal,
+            children: vec![
+                LayoutNodeV2::Tabs {
+                    id: "session-tabs".into(),
+                    active: "chat-node".into(),
+                    children: vec![
+                        widget_node("chat-node", "chat"),
+                        widget_node("memory-node", "memory"),
+                    ],
+                },
+                LayoutNodeV2::Stack {
+                    id: "session-context".into(),
+                    children: vec![
+                        widget_node("character-state-node", "character-state"),
+                        widget_node("activity-node", "activity"),
+                    ],
+                },
+            ],
+        },
+        widgets: vec![
+            widget("chat", "core.chat", props.chat),
+            widget("memory", "core.memory", props.memory),
+            widget(
+                "character-state",
+                "core.character-state",
+                props.character_state,
+            ),
+            widget("activity", "core.activity", props.activity),
+        ],
+    }
+}
+
+fn projected_props(widget_type: &str, props: &SessionSurfaceProps) -> Option<Value> {
+    match widget_type {
+        "core.chat" => Some(props.chat.clone()),
+        "core.memory" => Some(props.memory.clone()),
+        "core.character-state" => Some(props.character_state.clone()),
+        "core.activity" => Some(props.activity.clone()),
+        _ => None,
+    }
 }
 
 fn validate_scope(scope: &SurfaceScope) -> Result<(), SurfaceRegistryError> {
@@ -251,6 +285,7 @@ struct SurfaceEntry {
     cursor: SurfaceCursor,
     sequence: u64,
     last_touched: u64,
+    workspace_revision: Option<SurfaceRevision>,
 }
 
 struct RingEvent {
@@ -275,6 +310,7 @@ pub struct SurfaceRegistry {
 pub struct SurfaceIntentTarget {
     pub scope: SurfaceScope,
     pub widget_type: String,
+    pub workspace_revision: Option<SurfaceRevision>,
 }
 
 impl Default for SurfaceRegistry {
@@ -309,23 +345,61 @@ impl SurfaceRegistry {
         }
     }
 
-    pub fn publish(
+    #[cfg(test)]
+    fn publish(
         &mut self,
         scope: SurfaceScope,
         props: SessionSurfaceProps,
     ) -> Result<SurfacePublish, SurfaceRegistryError> {
+        self.publish_with_layout(scope, props, None)
+    }
+
+    pub fn publish_workspace(
+        &mut self,
+        scope: SurfaceScope,
+        props: SessionSurfaceProps,
+        workspace_revision: SurfaceRevision,
+        layout: WorkspaceLayoutV1,
+    ) -> Result<SurfacePublish, SurfaceRegistryError> {
+        self.publish_with_layout(scope, props, Some((workspace_revision, layout)))
+    }
+
+    fn publish_with_layout(
+        &mut self,
+        scope: SurfaceScope,
+        props: SessionSurfaceProps,
+        workspace: Option<(SurfaceRevision, WorkspaceLayoutV1)>,
+    ) -> Result<SurfacePublish, SurfaceRegistryError> {
         validate_scope(&scope)?;
+        if let (Some(previous), Some((workspace_revision, _))) =
+            (self.entries.get(&scope), workspace.as_ref())
+        {
+            if previous
+                .workspace_revision
+                .is_some_and(|accepted| accepted > *workspace_revision)
+            {
+                return Ok(SurfacePublish::Unchanged {
+                    revision: previous.snapshot.revision,
+                    cursor: previous.cursor.clone(),
+                });
+            }
+        }
         let last_touched = self.next_touch()?;
         let Some(previous) = self.entries.get(&scope).cloned() else {
-            self.evict_for_insert();
             let sequence = 1;
-            let snapshot = build_session_surface(&scope, SurfaceRevision::new(1), props)?;
+            let snapshot = build_session_surface_with_layout(
+                &scope,
+                SurfaceRevision::new(1),
+                props,
+                workspace.as_ref().map(|(_, layout)| layout),
+            )?;
             let cursor = self.cursor(&scope, sequence);
             let event = SurfaceEvent {
                 cursor: cursor.clone(),
                 message: SurfaceMessage::Snapshot(snapshot.clone()),
             };
             validate_message(&event.message)?;
+            self.evict_for_insert();
             self.entries.insert(
                 scope.clone(),
                 SurfaceEntry {
@@ -333,16 +407,23 @@ impl SurfaceRegistry {
                     cursor,
                     sequence,
                     last_touched,
+                    workspace_revision: workspace.as_ref().map(|(revision, _)| *revision),
                 },
             );
             self.push_ring(scope, sequence, event.clone());
             return Ok(SurfacePublish::Changed(event));
         };
 
-        let mut next = build_session_surface(&scope, previous.snapshot.revision, props)?;
+        let mut next = build_session_surface_with_layout(
+            &scope,
+            previous.snapshot.revision,
+            props,
+            workspace.as_ref().map(|(_, layout)| layout),
+        )?;
         if previous.snapshot.blueprint == next.blueprint {
             if let Some(entry) = self.entries.get_mut(&scope) {
                 entry.last_touched = last_touched;
+                entry.workspace_revision = workspace.as_ref().map(|(revision, _)| *revision);
             }
             return Ok(SurfacePublish::Unchanged {
                 revision: previous.snapshot.revision,
@@ -387,6 +468,7 @@ impl SurfaceRegistry {
                 cursor,
                 sequence,
                 last_touched,
+                workspace_revision: workspace.as_ref().map(|(revision, _)| *revision),
             },
         );
         self.push_ring(scope, sequence, event.clone());
@@ -478,6 +560,7 @@ impl SurfaceRegistry {
         Ok(SurfaceIntentTarget {
             scope: scope.clone(),
             widget_type: widget.widget_type.clone(),
+            workspace_revision: entry.workspace_revision,
         })
     }
 
@@ -650,9 +733,11 @@ mod tests {
 
     use airp_state_protocol::{
         validate_surface_patch_event, validate_surface_snapshot, LayoutNodeV2, SurfaceMessageKind,
-        SurfacePatchOperation,
+        SurfacePatchOperation, WorkspaceCommand,
     };
     use serde_json::{json, Value};
+
+    use crate::domain::WorkspaceService;
 
     use super::{
         build_session_surface, props_patch, SessionSurfaceProps, SurfaceMessage, SurfacePublish,
@@ -727,6 +812,220 @@ mod tests {
         assert!(matches!(children[0], LayoutNodeV2::Tabs { .. }));
         assert!(matches!(children[1], LayoutNodeV2::Stack { .. }));
         validate_surface_snapshot(&first).unwrap();
+    }
+
+    #[test]
+    fn saved_workspace_drives_surface_structure_without_duplicating_domain_props() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceService::new(root.path());
+        let opened = workspace
+            .execute(
+                0,
+                WorkspaceCommand::OpenWidget {
+                    instance_id: "map".to_string(),
+                    widget_type: "core.map".to_string(),
+                    target_id: "workspace-context".to_string(),
+                    index: None,
+                },
+            )
+            .unwrap();
+        let scope = scope("character-a", "session-a");
+        let mut registry = SurfaceRegistry::new();
+        let first = changed(
+            registry
+                .publish_workspace(
+                    scope.clone(),
+                    props("projected"),
+                    opened.revision,
+                    opened.layout,
+                )
+                .unwrap(),
+        );
+        let first = snapshot(&first);
+        assert_eq!(first.revision.value(), 1);
+        assert!(matches!(
+            &first.blueprint.root,
+            LayoutNodeV2::Split { id, .. } if id == "workspace-root"
+        ));
+        assert_eq!(
+            first
+                .blueprint
+                .widgets
+                .iter()
+                .find(|widget| widget.id == "chat")
+                .unwrap()
+                .props,
+            Some(json!({"messages": ["projected"]}))
+        );
+        assert_eq!(
+            first
+                .blueprint
+                .widgets
+                .iter()
+                .find(|widget| widget.id == "map")
+                .unwrap()
+                .props,
+            None
+        );
+
+        let activated = workspace
+            .execute(
+                1,
+                WorkspaceCommand::ActivateTab {
+                    tabs_id: "workspace-primary".to_string(),
+                    node_id: "memory-node".to_string(),
+                },
+            )
+            .unwrap();
+        let second = changed(
+            registry
+                .publish_workspace(
+                    scope,
+                    props("projected"),
+                    activated.revision,
+                    activated.layout,
+                )
+                .unwrap(),
+        );
+        let second = snapshot(&second);
+        assert_eq!(second.revision.value(), 2);
+        assert!(matches!(
+            &second.blueprint.root,
+            LayoutNodeV2::Split { children, .. }
+                if matches!(&children[0], LayoutNodeV2::Tabs { active, .. } if active == "memory-node")
+        ));
+    }
+
+    #[test]
+    fn workspace_structure_stays_aligned_while_props_updates_use_a_patch() {
+        let root = tempfile::tempdir().unwrap();
+        let document = WorkspaceService::new(root.path()).read().unwrap();
+        let scope = scope("character-a", "session-a");
+        let mut registry = SurfaceRegistry::new();
+        changed(
+            registry
+                .publish_workspace(
+                    scope.clone(),
+                    props("before"),
+                    document.revision,
+                    document.layout.clone(),
+                )
+                .unwrap(),
+        );
+
+        let update = changed(
+            registry
+                .publish_workspace(scope, props("after"), document.revision, document.layout)
+                .unwrap(),
+        );
+        assert!(matches!(update.message, SurfaceMessage::Patch(_)));
+    }
+
+    #[test]
+    fn older_workspace_revision_cannot_replace_newer_surface_structure() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceService::new(root.path());
+        let old = workspace.read().unwrap();
+        let current = workspace
+            .execute(
+                0,
+                WorkspaceCommand::ActivateTab {
+                    tabs_id: "workspace-primary".to_string(),
+                    node_id: "memory-node".to_string(),
+                },
+            )
+            .unwrap();
+        let scope = scope("character-a", "session-a");
+        let mut registry = SurfaceRegistry::new();
+        changed(
+            registry
+                .publish_workspace(
+                    scope.clone(),
+                    props("current"),
+                    current.revision,
+                    current.layout,
+                )
+                .unwrap(),
+        );
+
+        let stale = registry
+            .publish_workspace(scope.clone(), props("stale"), old.revision, old.layout)
+            .unwrap();
+        assert!(matches!(stale, SurfacePublish::Unchanged { .. }));
+        let accepted_event = registry.current(&scope).unwrap();
+        let accepted = snapshot(&accepted_event);
+        assert_eq!(accepted.revision.value(), 1);
+        assert!(matches!(
+            &accepted.blueprint.root,
+            LayoutNodeV2::Split { children, .. }
+                if matches!(&children[0], LayoutNodeV2::Tabs { active, .. } if active == "memory-node")
+        ));
+        assert_eq!(
+            accepted
+                .blueprint
+                .widgets
+                .iter()
+                .find(|widget| widget.id == "chat")
+                .unwrap()
+                .props,
+            Some(json!({"messages": ["current"]}))
+        );
+    }
+
+    #[test]
+    fn ratio_only_change_advances_workspace_authority_without_surface_event() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceService::new(root.path());
+        let old = workspace.read().unwrap();
+        let resized = workspace
+            .execute(
+                0,
+                WorkspaceCommand::ResizeSplit {
+                    split_id: "workspace-root".to_string(),
+                    ratio_basis_points: 6_500,
+                },
+            )
+            .unwrap();
+        let scope = scope("character-a", "session-a");
+        let mut registry = SurfaceRegistry::new();
+        changed(
+            registry
+                .publish_workspace(
+                    scope.clone(),
+                    props("accepted"),
+                    old.revision,
+                    old.layout.clone(),
+                )
+                .unwrap(),
+        );
+
+        let ratio_only = registry
+            .publish_workspace(
+                scope.clone(),
+                props("accepted"),
+                resized.revision,
+                resized.layout,
+            )
+            .unwrap();
+        assert!(matches!(ratio_only, SurfacePublish::Unchanged { .. }));
+        let stale = registry
+            .publish_workspace(scope.clone(), props("stale"), old.revision, old.layout)
+            .unwrap();
+        assert!(matches!(stale, SurfacePublish::Unchanged { .. }));
+
+        let accepted_event = registry.current(&scope).unwrap();
+        let accepted = snapshot(&accepted_event);
+        assert_eq!(accepted.revision.value(), 1);
+        assert_eq!(
+            accepted
+                .blueprint
+                .widgets
+                .iter()
+                .find(|widget| widget.id == "chat")
+                .unwrap()
+                .props,
+            Some(json!({"messages": ["accepted"]}))
+        );
     }
 
     #[test]
