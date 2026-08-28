@@ -1,0 +1,56 @@
+{
+  "source": {
+    "version": "legacy-workspace-fixture",
+    "profile": "story",
+    "theme": {
+      "name": "legacy-theme",
+      "tokens": {
+        "accent": "ignored-by-workspace-migration"
+      }
+    },
+    "layout": {
+      "type": "dock",
+      "areas": [
+        {
+          "id": "primary",
+          "widgets": ["chat", "memory"],
+          "props": { "dock": "center" }
+        }
+      ]
+    },
+    "widgets": [
+      {
+        "id": "chat",
+        "type": "core.chat",
+        "props": { "session": "must-not-migrate" }
+      },
+      {
+        "id": "memory",
+        "type": "core.memory"
+      }
+    ]
+  },
+  "expected_workspace_layout": {
+    "version": 1,
+    "root": {
+      "type": "stack",
+      "id": "legacy-area-0",
+      "children": [
+        {
+          "type": "widget",
+          "id": "legacy-area-0-widget-0",
+          "instanceId": "chat"
+        },
+        {
+          "type": "widget",
+          "id": "legacy-area-0-widget-1",
+          "instanceId": "memory"
+        }
+      ]
+    },
+    "widgets": [
+      { "id": "chat", "type": "core.chat" },
+      { "id": "memory", "type": "core.memory" }
+    ]
+  }
+}

@@ -9,6 +9,32 @@ use crate::revision::{
 
 const AUTH: &str = "Bearer workspace-secret";
 
+fn blueprint_v1_source() -> serde_json::Value {
+    serde_json::json!({
+        "version": "legacy-http-test",
+        "profile": "story",
+        "theme": {
+            "name": "legacy-theme",
+            "tokens": { "accent": "kept-for-parsing-but-not-migrated" }
+        },
+        "layout": {
+            "type": "tabs",
+            "areas": [{
+                "id": "main",
+                "widgets": ["chat"],
+                "props": { "arbitrary": [true, 7, { "nested": "value" }] }
+            }]
+        },
+        "widgets": [{
+            "id": "chat",
+            "type": "core.chat",
+            "props": { "runtime": "must-drop" },
+            "state": "session",
+            "capabilities": ["read:memory"]
+        }]
+    })
+}
+
 async fn request_json(
     app: Router,
     method: axum::http::Method,
@@ -54,10 +80,34 @@ async fn workspace_requires_configured_and_valid_bearer() {
             .header("content-type", "application/json")
             .body(Body::from("{}"))
             .unwrap(),
+        Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        Request::post("/v1/ui/workspace/migrations/blueprint-v1/apply")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        Request::post("/v1/ui/workspace/migrations/rollback")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
     ] {
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["cache-control"], "no-store");
 
     let (configured, _tmp) = make_state_with_key(Some("workspace-secret"));
     let app = create_router(configured);
@@ -71,6 +121,20 @@ async fn workspace_requires_configured_and_valid_bearer() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "source": blueprint_v1_source() }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()["cache-control"], "no-store");
     let response = app
         .oneshot(
             Request::get("/v1/ui/workspace")
@@ -385,5 +449,476 @@ async fn workspace_future_major_is_structured_and_only_raw_export_remains_availa
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX).await.unwrap(),
         bytes
+    );
+}
+
+#[tokio::test]
+async fn workspace_migration_dry_run_is_strict_bounded_no_store_and_write_free() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
+                .header("authorization", AUTH)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "source": blueprint_v1_source() }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(plan["source"], "blueprint-v1");
+    assert_eq!(plan["writes_performed"], false);
+    assert_eq!(plan["workspace"]["revision"], "0");
+    assert_eq!(plan["recovery"], "review_and_apply");
+    assert!(!plan["workspace"].to_string().contains("must-drop"));
+    assert!(!state.data_root.join("ui/workspaces/default").exists());
+    assert!(crate::backup::list_backups(&state.data_root)
+        .unwrap()
+        .is_empty());
+
+    let mut unknown_sources = Vec::new();
+    let mut top_level = blueprint_v1_source();
+    top_level["unexpected"] = serde_json::json!(true);
+    unknown_sources.push(top_level);
+    let mut theme = blueprint_v1_source();
+    theme["theme"]["unexpected"] = serde_json::json!(true);
+    unknown_sources.push(theme);
+    let mut layout = blueprint_v1_source();
+    layout["layout"]["unexpected"] = serde_json::json!(true);
+    unknown_sources.push(layout);
+    let mut area = blueprint_v1_source();
+    area["layout"]["areas"][0]["unexpected"] = serde_json::json!(true);
+    unknown_sources.push(area);
+    let mut widget = blueprint_v1_source();
+    widget["widgets"][0]["unexpected"] = serde_json::json!(true);
+    unknown_sources.push(widget);
+    for source_with_unknown in unknown_sources {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
+                    .header("authorization", AUTH)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "source": source_with_unknown }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+
+    let oversized = serde_json::json!({
+        "source": blueprint_v1_source(),
+        "padding": "x".repeat(
+            super::super::handlers::WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES
+        )
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
+                .header("authorization", AUTH)
+                .header("content-type", "application/json")
+                .body(Body::from(oversized.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+
+    for (path, payload) in [
+        (
+            "/v1/ui/workspace/migrations/blueprint-v1/apply",
+            serde_json::json!({
+                "expected_revision": "0",
+                "source": blueprint_v1_source(),
+                "planned_source_sha256": "unused",
+                "planned_candidate_sha256": "unused",
+                "planned_converter_version": "unused",
+                "padding": "x".repeat(
+                    super::super::handlers::WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES
+                )
+            }),
+        ),
+        (
+            "/v1/ui/workspace/migrations/rollback",
+            serde_json::json!({
+                "expected_revision": "0",
+                "backup_id": "unused",
+                "padding": "x".repeat(
+                    super::super::handlers::WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES
+                )
+            }),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(path)
+                    .header("authorization", AUTH)
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+    assert!(!state.data_root.join("ui/workspaces/default").exists());
+    assert!(crate::backup::list_backups(&state.data_root)
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn workspace_migration_revision_zero_apply_creates_verified_backup_and_rolls_forward() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state.clone());
+    let (status, plan) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/dry-run",
+        Some(serde_json::json!({ "source": blueprint_v1_source() })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, applied) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/apply",
+        Some(serde_json::json!({
+            "expected_revision": "0",
+            "source": blueprint_v1_source(),
+            "planned_source_sha256": plan["source_sha256"],
+            "planned_candidate_sha256": plan["candidate_sha256"],
+            "planned_converter_version": plan["converter_version"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(applied["workspace"]["revision"], "1");
+    assert_eq!(applied["source_sha256"], plan["source_sha256"]);
+    assert_eq!(applied["candidate_sha256"], plan["candidate_sha256"]);
+    assert_eq!(applied["converter_version"], plan["converter_version"]);
+    assert_eq!(applied["recovery"], "rollback_with_backup_id");
+    let backup_id = applied["backup_id"].as_str().unwrap();
+    assert!(crate::backup::verify_backup(&state.data_root, backup_id).is_ok());
+
+    let (status, rolled) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/rollback",
+        Some(serde_json::json!({
+            "expected_revision": "1",
+            "backup_id": backup_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rolled["workspace"]["revision"], "2");
+    assert_eq!(rolled["backup_id"], backup_id);
+    assert_eq!(rolled["recovery"], "forward_rollback_completed");
+
+    let (status, history) = request_json(
+        app,
+        axum::http::Method::GET,
+        "/v1/ui/workspace/history?limit=10",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        history["entries"][0]["source_kind"],
+        "workspace_backup_rollback"
+    );
+    assert_eq!(
+        history["entries"][1]["source_kind"],
+        "workspace_migration_blueprint_v1"
+    );
+}
+
+#[tokio::test]
+async fn workspace_migration_rejections_create_no_revision_or_backup() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state.clone());
+    let (_, plan) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/dry-run",
+        Some(serde_json::json!({ "source": blueprint_v1_source() })),
+    )
+    .await;
+    let valid_apply = serde_json::json!({
+        "expected_revision": "0",
+        "source": blueprint_v1_source(),
+        "planned_source_sha256": plan["source_sha256"],
+        "planned_candidate_sha256": plan["candidate_sha256"],
+        "planned_converter_version": plan["converter_version"]
+    });
+
+    let mut numeric_revision = valid_apply.clone();
+    numeric_revision["expected_revision"] = serde_json::json!(0);
+    let (status, _) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/apply",
+        Some(numeric_revision),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let mut mismatched = valid_apply.clone();
+    mismatched["planned_candidate_sha256"] = serde_json::json!("wrong");
+    let (status, _) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/apply",
+        Some(mismatched),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/commands",
+        Some(serde_json::json!({
+            "expected_revision": "0",
+            "command": { "type": "reset_layout" }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, stale) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/apply",
+        Some(valid_apply),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(stale["error"]["code"], "workspace_revision_conflict");
+    assert_eq!(stale["error"]["current_revision"], "1");
+
+    let (status, current) =
+        request_json(app, axum::http::Method::GET, "/v1/ui/workspace", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(current["revision"], "1");
+    assert!(crate::backup::list_backups(&state.data_root)
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn workspace_migration_backup_is_user_scoped_and_tamper_safe() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state.clone());
+    let (_, plan) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/dry-run?user_id=alice",
+        Some(serde_json::json!({ "source": blueprint_v1_source() })),
+    )
+    .await;
+    let (status, applied) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/apply?user_id=alice",
+        Some(serde_json::json!({
+            "expected_revision": "0",
+            "source": blueprint_v1_source(),
+            "planned_source_sha256": plan["source_sha256"],
+            "planned_candidate_sha256": plan["candidate_sha256"],
+            "planned_converter_version": plan["converter_version"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let alice_backup_id = applied["backup_id"].as_str().unwrap();
+    let (status, invalid_id) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/rollback?user_id=alice",
+        Some(serde_json::json!({
+            "expected_revision": "1",
+            "backup_id": "../outside"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_id["error"]["code"], "bad_request");
+
+    let (status, rejection) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/rollback?user_id=bob",
+        Some(serde_json::json!({
+            "expected_revision": "0",
+            "backup_id": alice_backup_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(rejection["error"]["code"], "not_found");
+    let (status, bob) = request_json(
+        app.clone(),
+        axum::http::Method::GET,
+        "/v1/ui/workspace?user_id=bob",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bob["revision"], "0");
+
+    let (status, _) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/commands",
+        Some(serde_json::json!({
+            "expected_revision": "0",
+            "command": { "type": "reset_layout" }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, root_plan) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/dry-run",
+        Some(serde_json::json!({ "source": blueprint_v1_source() })),
+    )
+    .await;
+    let (status, root_applied) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/apply",
+        Some(serde_json::json!({
+            "expected_revision": "1",
+            "source": blueprint_v1_source(),
+            "planned_source_sha256": root_plan["source_sha256"],
+            "planned_candidate_sha256": root_plan["candidate_sha256"],
+            "planned_converter_version": root_plan["converter_version"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let root_backup_id = root_applied["backup_id"].as_str().unwrap();
+    let manifest = crate::backup::read_backup_manifest(&state.data_root, root_backup_id).unwrap();
+    let approved = manifest
+        .files
+        .first()
+        .expect("revision-one backup has a file");
+    std::fs::write(
+        state
+            .data_root
+            .join("backups")
+            .join(root_backup_id)
+            .join("files")
+            .join(&approved.path),
+        b"tampered",
+    )
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/workspace/migrations/rollback")
+                .header("authorization", AUTH)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": "2",
+                        "backup_id": root_backup_id
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let tampered: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(tampered["error"]["code"], "internal_error");
+    assert_eq!(tampered["error"]["message"], "internal error");
+    assert!(!tampered.to_string().contains("backups"));
+    let (status, current) =
+        request_json(app, axum::http::Method::GET, "/v1/ui/workspace", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(current["revision"], "2");
+}
+
+#[tokio::test]
+async fn workspace_migration_apply_fails_closed_for_future_major_without_backup() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state.clone());
+    let (_, mut future) = request_json(
+        app.clone(),
+        axum::http::Method::GET,
+        "/v1/ui/workspace",
+        None,
+    )
+    .await;
+    future["schema"] = serde_json::json!(99);
+    future["revision"] = serde_json::json!("1");
+    let bytes = serde_json::to_vec_pretty(&future).unwrap();
+    commit_revision(
+        &StagedRevision {
+            content_revision: 1,
+            asset_kind: AssetKind::Workspace,
+            asset_id: "default".to_string(),
+            created_at: "future-migration-test".to_string(),
+            source: AssetSource::default(),
+            files: vec![("workspace.json".to_string(), bytes)],
+        },
+        &CommitOptions::new(state.data_root.join("ui/workspaces/default")),
+    )
+    .unwrap();
+    let (_, plan) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/dry-run",
+        Some(serde_json::json!({ "source": blueprint_v1_source() })),
+    )
+    .await;
+    let (status, rejection) = request_json(
+        app,
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/apply",
+        Some(serde_json::json!({
+            "expected_revision": "1",
+            "source": blueprint_v1_source(),
+            "planned_source_sha256": plan["source_sha256"],
+            "planned_candidate_sha256": plan["candidate_sha256"],
+            "planned_converter_version": plan["converter_version"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejection["error"]["code"], "workspace_unsupported_major");
+    assert!(crate::backup::list_backups(&state.data_root)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        std::fs::read_to_string(
+            state
+                .data_root
+                .join("ui/workspaces/default/current_revision")
+        )
+        .unwrap(),
+        "1"
     );
 }

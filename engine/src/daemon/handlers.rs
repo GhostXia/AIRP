@@ -119,8 +119,10 @@ pub(super) use surfaces::{get_surface_events, get_surface_snapshot};
 pub(super) use timeline_export::{export_session_timeline_endpoint, get_session_timeline_endpoint};
 pub(super) use ui_intents::dispatch_ui_intent;
 pub(super) use workspace::{
+    apply_workspace_migration_endpoint, dry_run_workspace_migration_endpoint,
     export_workspace_endpoint, get_workspace_endpoint, get_workspace_history_endpoint,
-    rollback_workspace_endpoint, workspace_command_endpoint, WORKSPACE_HTTP_MAX_BODY_BYTES,
+    rollback_workspace_endpoint, rollback_workspace_migration_endpoint, workspace_command_endpoint,
+    WORKSPACE_HTTP_MAX_BODY_BYTES, WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES,
 };
 pub(super) use worldbook_graph::get_lorebook_graph_endpoint;
 
