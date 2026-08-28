@@ -5,8 +5,8 @@
 //! - `backup_id`：ULID-like 唯一标识（uuid v4 simple）
 //! - `created_at`：RFC3339 UTC 时间戳
 //! - `engine_version` / `data_schema_version`：版本兼容性协商
-//! - `source`：provenance（manual / pre_delete / pre_restore_rollback）
-//! - `scope`：备份覆盖范围（full / character / session）
+//! - `source`：provenance（manual / pre_delete / pre_restore_rollback / pre_migration）
+//! - `scope`：备份覆盖范围（full / character / session / workspace）
 //! - `secrets_excluded`：v1 恒为 true（排除 secrets.json + settings.json）
 //! - `files`：批准文件集合（相对 data_root 路径 + per-file SHA-256 + 字节数）
 //! - `tree_sha256`：覆盖 `files` 子树的 `AIRP-TREE-SHA256-v1`
@@ -53,6 +53,8 @@ pub(crate) enum BackupSource {
     PreDelete,
     /// restore 前自动创建的回滚点。
     PreRestoreRollback,
+    /// Workspace migration 前自动创建的内部备份。
+    PreMigration,
 }
 
 impl BackupSource {
@@ -61,6 +63,7 @@ impl BackupSource {
             BackupSource::Manual => "manual",
             BackupSource::PreDelete => "pre_delete",
             BackupSource::PreRestoreRollback => "pre_restore_rollback",
+            BackupSource::PreMigration => "pre_migration",
         }
     }
 }
@@ -78,6 +81,8 @@ pub(crate) enum BackupScope {
         character_id: String,
         session_id: String,
     },
+    /// Workspace migration 前的固定子树快照。
+    Workspace { revision: u64 },
 }
 
 impl BackupScope {
@@ -93,6 +98,7 @@ impl BackupScope {
                 character_id,
                 session_id,
             } => format!("characters/{character_id}/sessions/{session_id}"),
+            BackupScope::Workspace { .. } => "ui/workspaces/default".to_string(),
         }
     }
 }
@@ -410,6 +416,24 @@ mod tests {
             m.scope.subtree_prefix(),
             "characters/alice/sessions/deadbeef"
         );
+    }
+
+    #[test]
+    fn pre_migration_workspace_scope_roundtrip_and_fixed_path() {
+        let mut m = sample_manifest();
+        m.source = BackupSource::PreMigration;
+        m.scope = BackupScope::Workspace { revision: 42 };
+
+        let bytes = m.to_json_bytes().unwrap();
+        let parsed = BackupManifest::from_json_bytes(&bytes).unwrap();
+
+        assert_eq!(parsed.source, BackupSource::PreMigration);
+        assert_eq!(parsed.scope, BackupScope::Workspace { revision: 42 });
+        assert_eq!(parsed.scope.subtree_prefix(), "ui/workspaces/default");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["source"]["kind"], "pre_migration");
+        assert_eq!(value["scope"]["kind"], "workspace");
+        assert_eq!(value["scope"]["revision"], 42);
     }
 
     #[test]

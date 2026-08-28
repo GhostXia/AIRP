@@ -33,5 +33,5 @@ pub(crate) mod snapshot;
 pub(crate) use manifest::{BackupScope, BackupSource};
 pub(crate) use snapshot::{
     create_backup, delete_backup, list_backups, read_backup_manifest, restore_backup,
-    verify_backup, CreateBackupOptions,
+    verify_backup, with_created_verified_backup, with_verified_backup, CreateBackupOptions,
 };

@@ -59,6 +59,19 @@ pub enum AirpError {
     #[error("unsupported workspace schema major {actual}; supported major is {supported}")]
     WorkspaceUnsupportedMajor { actual: u16, supported: u16 },
 
+    /// Migration backup is durable but the following Workspace commit failed.
+    #[error(
+        "workspace migration recovery commit failed; verified backup {backup_id} was retained"
+    )]
+    WorkspaceMigrationCommitFailed { backup_id: String },
+
+    /// The commit returned an error and durable authority could not be read
+    /// back conclusively. Clients must re-read before choosing recovery.
+    #[error(
+        "workspace migration recovery outcome is unknown; verified backup {backup_id} was retained"
+    )]
+    WorkspaceMigrationOutcomeUnknown { backup_id: String },
+
     /// 路径遍历攻击保护：用户提供的路径 canonicalize 后越出 `data_root` 子树。
     /// 映射到 HTTP 400。
     #[error("路径越出 data_root: {0:?}")]
@@ -126,6 +139,8 @@ impl AirpError {
             | AirpError::Volume(_)
             | AirpError::Fsm(_)
             | AirpError::Sqlite(_)
+            | AirpError::WorkspaceMigrationCommitFailed { .. }
+            | AirpError::WorkspaceMigrationOutcomeUnknown { .. }
             | AirpError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -142,6 +157,10 @@ impl AirpError {
             AirpError::Conflict(_) => "conflict",
             AirpError::WorkspaceRevisionConflict { .. } => "workspace_revision_conflict",
             AirpError::WorkspaceUnsupportedMajor { .. } => "workspace_unsupported_major",
+            AirpError::WorkspaceMigrationCommitFailed { .. } => "workspace_migration_commit_failed",
+            AirpError::WorkspaceMigrationOutcomeUnknown { .. } => {
+                "workspace_migration_outcome_unknown"
+            }
             AirpError::Upstream { .. } => "upstream",
             AirpError::QuotaExceeded(_) => "quota_exceeded",
             AirpError::Io(_) => "io_error",
@@ -179,6 +198,8 @@ impl AirpError {
             AirpError::Conflict(_) => "refresh_and_retry",
             AirpError::WorkspaceRevisionConflict { .. } => "refresh_and_retry",
             AirpError::WorkspaceUnsupportedMajor { .. } => "export_or_upgrade",
+            AirpError::WorkspaceMigrationCommitFailed { .. } => "retain_backup_and_inspect",
+            AirpError::WorkspaceMigrationOutcomeUnknown { .. } => "refresh_before_recovery",
             AirpError::Upstream { .. } => "retry_with_backoff",
             AirpError::QuotaExceeded(_) => "wait_or_reduce_usage",
             AirpError::Io(_)
@@ -211,6 +232,8 @@ struct AirpErrorBody {
     actual_major: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     supported_major: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -230,14 +253,18 @@ impl IntoResponse for AirpError {
         let recovery = self.recovery_str();
         let internal_message = self.to_string();
         let message = self.public_message();
-        let (current_revision, actual_major, supported_major) = match &self {
+        let (current_revision, actual_major, supported_major, backup_id) = match &self {
             AirpError::WorkspaceRevisionConflict { current, .. } => {
-                (Some(current.to_string()), None, None)
+                (Some(current.to_string()), None, None, None)
             }
             AirpError::WorkspaceUnsupportedMajor { actual, supported } => {
-                (None, Some(*actual), Some(*supported))
+                (None, Some(*actual), Some(*supported), None)
             }
-            _ => (None, None, None),
+            AirpError::WorkspaceMigrationCommitFailed { backup_id }
+            | AirpError::WorkspaceMigrationOutcomeUnknown { backup_id } => {
+                (None, None, None, Some(backup_id.clone()))
+            }
+            _ => (None, None, None, None),
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(err = %internal_message, "internal error");
@@ -251,6 +278,7 @@ impl IntoResponse for AirpError {
                 current_revision,
                 actual_major,
                 supported_major,
+                backup_id,
             },
         };
         (status, Json(body)).into_response()
@@ -330,6 +358,47 @@ mod tests {
             !bytes.windows(b"hunter2".len()).any(|w| w == b"hunter2"),
             "500 响应不得泄露内部细节"
         );
+    }
+
+    #[tokio::test]
+    async fn migration_commit_failure_exposes_only_the_recovery_backup_id() {
+        use axum::body::to_bytes;
+        let resp = AirpError::WorkspaceMigrationCommitFailed {
+            backup_id: "0123456789abcdef0123456789abcdef".to_string(),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "workspace_migration_commit_failed");
+        assert_eq!(value["error"]["recovery"], "retain_backup_and_inspect");
+        assert_eq!(
+            value["error"]["backup_id"],
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(value["error"]["message"], "internal error");
+    }
+
+    #[tokio::test]
+    async fn migration_unknown_outcome_requires_refresh_and_exposes_backup_id() {
+        use axum::body::to_bytes;
+        let resp = AirpError::WorkspaceMigrationOutcomeUnknown {
+            backup_id: "fedcba9876543210fedcba9876543210".to_string(),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["error"]["code"],
+            "workspace_migration_outcome_unknown"
+        );
+        assert_eq!(value["error"]["recovery"], "refresh_before_recovery");
+        assert_eq!(
+            value["error"]["backup_id"],
+            "fedcba9876543210fedcba9876543210"
+        );
+        assert_eq!(value["error"]["message"], "internal error");
     }
 
     #[tokio::test]
