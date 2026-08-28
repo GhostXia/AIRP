@@ -20,7 +20,7 @@ use crate::{
         },
         DaemonState,
     },
-    domain::StateService,
+    domain::{StateService, WorkspaceService},
     error::AirpError,
     session_coordinator::SessionCommand,
     types::{CharacterId, SessionId},
@@ -124,6 +124,35 @@ async fn dispatch(
     let user_id = target.scope.user_id().map(ToOwned::to_owned);
     let effective_root =
         crate::data_dir::resolve_effective_root(&state.data_root, user_id.as_deref())?;
+    let accepted_workspace_revision = target.workspace_revision.ok_or_else(|| {
+        AirpError::BadRequest("intent target is not backed by a Workspace revision".into())
+    })?;
+    let workspace = tokio::task::spawn_blocking({
+        let effective_root = effective_root.clone();
+        move || WorkspaceService::new(effective_root).read()
+    })
+    .await
+    .map_err(|error| AirpError::Internal(format!("intent Workspace check failed: {error}")))??;
+    if workspace.revision != accepted_workspace_revision {
+        return Err(AirpError::Conflict(
+            "accepted Surface no longer matches the current Workspace revision".into(),
+        ));
+    }
+    let workspace_widget = workspace
+        .layout
+        .widgets
+        .iter()
+        .find(|widget| widget.id == request.instance_id)
+        .ok_or_else(|| {
+            AirpError::Conflict(
+                "intent Widget is no longer present in the current Workspace".into(),
+            )
+        })?;
+    if workspace_widget.widget_type != target.widget_type {
+        return Err(AirpError::Conflict(
+            "intent Widget type no longer matches the current Workspace".into(),
+        ));
+    }
     let session_dir = tokio::task::spawn_blocking({
         let effective_root = effective_root.clone();
         let character_id = character_id.clone();
