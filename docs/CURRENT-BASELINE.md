@@ -1,7 +1,7 @@
 # AIRP 当前开发基线
 
 > 基线日期：2026-08-28
-> 代码基线：#577 PR 10c 已由 PR #605 合并；PR 10d saved Workspace → session Surface consumption candidate（本文与实现同分支）
+> 代码基线：#577 PR 10d 已由 PR #608 合并；PR 10e Vue accepted Workspace + responsive ratio controls candidate（本文与实现同分支）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
 > 真理顺序：当前源码、manifest、测试与可重复运行证据 > 本文 > 专题合同 > 路线图/研究材料 > 历史归档。
 
@@ -34,6 +34,8 @@
 本次增量校准（2026-08-26，#577 PR 10c candidate）：Workspace command reducer 与 `HttpEngineBus` 的封闭命令集扩展为 `open_widget`、`close_widget`、`move_widget`、`resize_split`、`activate_tab` 和 `reset_layout`。open 只接受 Workspace v1 首方 Widget allowlist，并由 Engine 确定性派生 placement node；move 的 index 表示移除源 placement 后目标容器中的插入位置；close/move 会维护 tabs active 引用。所有命令先在当前布局副本上执行，再经完整 Workspace 验证与 expected-revision CAS 一次提交，失败不发布 revision。该 candidate **仍无 Vue 编辑器、保存布局到 session Surface 的消费链、migration apply/import 或独立 backup 对象**，不得宣称 PR 10 完成。
 
 本次增量校准（2026-08-28，#577 PR 10d candidate）：Engine 每次刷新 session Surface 时，从与 session 相同的 effective root 读取并验证 `default` Workspace，把其结构降为 Surface v2 Blueprint，再按首方 Widget type 附加当前 Chat、Memory、Character State 与 Activity 投影；Workspace 不复制业务 props。Surface v2 可表达的保存结构变化沿既有 polling/replay 产生新 snapshot，纯 props 变化仍可产生 patch；registry 以 Workspace revision 单调接收并拒绝并发迟到的旧布局，不同 user effective root 的布局互不别名。未知 future major 或无效 Workspace 在替换 registry 当前值前失败，客户端继续保留最后已接受 Surface，但该显示回退不延续写权限：每次 intent 都重新验证当前 Workspace 与已接受 revision。**Surface v2 Split 尚无 ratio 字段，因此 ratio-only 变化不推进 Surface revision、也不发事件；`ratioBasisPoints` 虽被 Workspace 持久化和验证，却尚不能驱动可见 resize 或动态分辨率自适应。Vue 编辑控件、ratio 消费、migration/import/backup 与多 Workspace 仍未交付。**
+
+本次增量校准（2026-08-28，#577 PR 10e candidate）：生产 Vue 在连接 session Surface 前读取同一 user scope 的 accepted-only Workspace；新 Bus 与 user scope 仅在 Workspace、session list 和 Surface connection 全部就绪后原子发布。命令只使用当前十进制字符串 revision 一次，成功后整体接收 Engine 文档，冲突/失败/未知结果只 GET 最新状态而不自动重放；已发布 Bus 上的手动读取与命令共享 operation epoch，初始化读取另由 candidate/attempt identity 约束，且旧 revision 不得覆盖较新 accepted document。Vue 不改写 accepted Surface Blueprint，只把 Surface v2 尚不能表达的 split ratio 映射到渲染轨道；宽屏可按 5% 步进保存比例，横向 split 在 760 CSS px 以下自动纵向堆叠并隐藏比例控件，返回宽屏后继续使用保存值。tab 点击也改走 Workspace command，等待 Engine Surface polling 收敛，并在 pending 时暴露 busy/disabled 语义。真实 Engine + Chrome smoke 验证默认 65/35 → revision-CAS 70/30、实际 CSS 比例、760/761px 边界、精确无重复命令序列、后续 tab 使用新 revision，以及 Memory/State/Chat 纵切不回归。**open/close/move/reset 控件、拖拽 resize、migration/import/backup 和多 Workspace 仍未交付。**
 
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 

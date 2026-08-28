@@ -3,12 +3,14 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { BlueprintV2, Json, JsonPatch, SurfaceSnapshot } from "./protocol/types";
 import type { SurfaceApplyResult } from "./protocol/surface-v2";
 import {
-  HttpEngineBus, HttpFailure, IntentStreamFailure, IntentStreamInterrupted, type EngineSurfaceScope,
+  HttpEngineBus, HttpFailure, IntentStreamFailure, IntentStreamInterrupted,
+  type EngineSurfaceScope, type WorkspaceCommand,
 } from "./protocol/http-engine-bus";
 import { currentBearer, renewDesktopSession } from "./protocol/desktop-session";
 import { isTauriEnvironment } from "./protocol/bus-factory";
 import { stateRevisionStore, stateStore, setState, patchState } from "./state/store";
 import { SurfaceStateStore } from "./state/surface-store";
+import { WorkspaceRequestGate, WorkspaceStateStore } from "./state/workspace-store";
 import { registerBuiltins } from "./registry";
 import BlueprintRenderer from "./components/BlueprintRenderer.vue";
 import SettingsModal from "./widgets/SettingsModal.vue";
@@ -65,6 +67,8 @@ const SHELL_PREVIEW_SURFACE: SurfaceSnapshot = {
 };
 
 const surface = new SurfaceStateStore();
+const workspace = new WorkspaceStateStore();
+const workspaceRequests = new WorkspaceRequestGate();
 const fixturePreview = import.meta.env.DEV && new URLSearchParams(location.search).get("airp_fixture") === "1";
 const productionSurface = !fixturePreview
   && (location.pathname === "/desktop" || location.pathname.startsWith("/desktop/"));
@@ -73,6 +77,7 @@ if (!productionSurface) {
   if (fixtureResult.status !== "applied") console.warn("[App] preview Surface fixture rejected", fixtureResult);
 }
 const acceptedSurface = computed(() => surface.acceptedSnapshot);
+const splitRatioByNodeId = computed(() => workspace.splitRatioByNodeId);
 
 // Outside the Engine-hosted /desktop/ entry, development stays on one clearly
 // labelled fixture so a preview can never masquerade as a live connection.
@@ -90,6 +95,7 @@ const selectedCharacterId = ref<string>("");
 const selectedSessionId = ref<string>("");
 const sessionIds = ref<string[]>([]);
 const creatingSession = ref(false);
+const workspaceBusReady = ref(false);
 const showSettings = ref(false);
 
 const activeWorkspace = ref<WorkspaceId>("story");
@@ -121,6 +127,7 @@ setState("w-characters", { ids: [], loaded: true });
 
 let bus: HttpEngineBus | null = null;
 let scope: EngineSurfaceScope | null = null;
+let connectingBus: HttpEngineBus | null = null;
 let disconnect: (() => void) | null = null;
 let disposed = false;
 let compactInspectorMedia: MediaQueryList | null = null;
@@ -131,7 +138,16 @@ function collapseForCompactViewport(event: MediaQueryListEvent | MediaQueryList)
 }
 
 function activateSurfaceTab(tabsId: string, childId: string): void {
-  surface.activateTab(tabsId, childId);
+  if (!productionSurface) {
+    surface.activateTab(tabsId, childId);
+    return;
+  }
+  void sendWorkspaceCommand({ type: "activate_tab", tabs_id: tabsId, node_id: childId });
+}
+
+function resizeSurfaceSplit(splitId: string, ratioBasisPoints: number): void {
+  if (!productionSurface) return;
+  void sendWorkspaceCommand({ type: "resize_split", split_id: splitId, ratio_basis_points: ratioBasisPoints });
 }
 
 function focusSurfaceWidget(instanceId: string): void {
@@ -140,6 +156,9 @@ function focusSurfaceWidget(instanceId: string): void {
 
 // Surfaced in the template so a backend failure isn't a silent empty shell.
 const busError = ref<string | null>(null);
+const workspaceControlsDisabled = computed(() => productionSurface && (
+  !workspaceBusReady.value || workspace.pendingCommand !== null
+));
 const widgetOperations = ref<Record<string, Json>>({});
 
 type Operation = {
@@ -247,15 +266,69 @@ watch(() => acceptedSurface.value?.revision, (revision) => {
 
 function invalidateBus(message: string): void {
   busAttempt += 1;
+  workspaceRequests.invalidate();
   const stop = disconnect;
   const activeBus = bus;
+  const candidate = connectingBus;
   disconnect = null;
   bus = null;
   scope = null;
+  connectingBus = null;
+  workspaceBusReady.value = false;
   if (stop) stop();
   else activeBus?.disconnect();
+  candidate?.disconnect();
   connectionState.value = "failed";
   busError.value = message;
+  if (workspace.pendingCommand !== null) workspace.fail(message);
+}
+
+async function refreshWorkspace(): Promise<void> {
+  if (!bus || !scope || workspace.pendingCommand !== null) return;
+  const activeBus = bus;
+  const activeScope = scope;
+  const attempt = busAttempt;
+  const operation = workspaceRequests.begin();
+  try {
+    const document = await activeBus.getWorkspace({ userId: activeScope.userId });
+    if (disposed || attempt !== busAttempt || bus !== activeBus || !workspaceRequests.isCurrent(operation)) return;
+    workspace.accept(document);
+  } catch (error) {
+    if (attempt === busAttempt && bus === activeBus && workspaceRequests.isCurrent(operation)) {
+      workspace.fail(String(error ?? "工作区载入失败"));
+    }
+  }
+}
+
+async function sendWorkspaceCommand(command: WorkspaceCommand): Promise<void> {
+  const expectedRevision = workspace.revision;
+  if (!bus || !scope || expectedRevision === null || !workspace.begin(command)) return;
+  const activeBus = bus;
+  const activeScope = scope;
+  const attempt = busAttempt;
+  const operation = workspaceRequests.begin();
+  try {
+    const document = await activeBus.sendWorkspaceCommand(
+      { expected_revision: expectedRevision, command },
+      { userId: activeScope.userId },
+    );
+    if (disposed || attempt !== busAttempt || bus !== activeBus || !workspaceRequests.isCurrent(operation)) return;
+    workspace.finish(document);
+  } catch (error) {
+    if (disposed || attempt !== busAttempt || bus !== activeBus || !workspaceRequests.isCurrent(operation)) return;
+    const conflict = error instanceof HttpFailure && error.isConflict;
+    try {
+      const latest = await activeBus.getWorkspace({ userId: activeScope.userId });
+      if (disposed || attempt !== busAttempt || bus !== activeBus || !workspaceRequests.isCurrent(operation)) return;
+      workspace.accept(latest);
+      workspace.fail(conflict
+        ? "布局已在别处更新；已载入最新版本，原操作没有重放。"
+        : "布局保存结果未知或失败；已载入最新版本，原操作没有重放。");
+    } catch (refreshError) {
+      if (attempt !== busAttempt || bus !== activeBus || !workspaceRequests.isCurrent(operation)) return;
+      workspace.fail(`${conflict ? "布局版本冲突" : "布局保存结果未知或失败"}，且最新版本载入失败：${String(refreshError ?? "未知错误")}`);
+    }
+  }
 }
 
 function applySurface(message: unknown): SurfaceApplyResult {
@@ -488,16 +561,23 @@ async function onIntent(name: string, params?: Json, instanceId = "desktop-shell
 
 async function initializeBus(): Promise<void> {
   if (!productionSurface || disposed) return;
+  if (workspace.pendingCommand !== null) workspace.fail("工作区已切换；未完成的布局操作没有重放。");
   const attempt = ++busAttempt;
+  workspaceRequests.invalidate();
   const previousScope = scope;
   connectionState.value = "connecting";
   busError.value = null;
   const previousStop = disconnect;
   const previousBus = bus;
+  const previousCandidate = connectingBus;
   if (previousStop) previousStop();
   else previousBus?.disconnect();
+  previousCandidate?.disconnect();
   disconnect = null;
   bus = null;
+  scope = null;
+  connectingBus = null;
+  workspaceBusReady.value = false;
   try {
     const built = new HttpEngineBus({
       bearer: currentBearer,
@@ -513,14 +593,27 @@ async function initializeBus(): Promise<void> {
         busError.value = error.message;
       },
     });
-    bus = built;
+    connectingBus = built;
     const selected = await built.resolveScope();
     if (disposed || attempt !== busAttempt) {
       built.disconnect();
-      if (bus === built) bus = null;
+      if (connectingBus === built) connectingBus = null;
       return;
     }
-    scope = selected;
+    const savedWorkspace = await built.getWorkspace({ userId: selected.userId });
+    if (disposed || attempt !== busAttempt) {
+      built.disconnect();
+      if (connectingBus === built) connectingBus = null;
+      return;
+    }
+    const nextSessionIds = await built.listSessions(selected.characterId, selected.userId);
+    const stop = await built.connect(selected, { apply: applySurface });
+    if (disposed || attempt !== busAttempt) {
+      stop();
+      if (connectingBus === built) connectingBus = null;
+      return;
+    }
+    if (previousScope?.userId !== selected.userId) workspace.clear();
     if (previousScope && (
       previousScope.characterId !== selected.characterId
       || previousScope.sessionId !== selected.sessionId
@@ -528,17 +621,17 @@ async function initializeBus(): Promise<void> {
     )) {
       widgetOperations.value = {};
     }
+    workspace.accept(savedWorkspace);
     selectedCharacterId.value = selected.characterId;
     selectedSessionId.value = selected.sessionId;
-    sessionIds.value = await built.listSessions(selected.characterId, selected.userId);
-    const stop = await built.connect(selected, { apply: applySurface });
-    if (disposed || attempt !== busAttempt) {
-      stop();
-      return;
-    }
+    sessionIds.value = nextSessionIds;
     disconnect = stop;
     bus = built;
+    scope = selected;
+    connectingBus = null;
+    workspaceBusReady.value = true;
     connectionState.value = "connected";
+    queueMicrotask(probeAllRecoveringOperations);
   } catch (err) {
     if (attempt !== busAttempt) return;
     console.error("[App] createBus failed:", err);
@@ -648,12 +741,18 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true;
   busAttempt += 1;
+  workspaceRequests.invalidate();
   const stop = disconnect;
   const activeBus = bus;
+  const candidate = connectingBus;
   disconnect = null;
   bus = null;
+  scope = null;
+  connectingBus = null;
+  workspaceBusReady.value = false;
   if (stop) stop();
   else activeBus?.disconnect();
+  candidate?.disconnect();
   compactInspectorMedia?.removeEventListener("change", collapseForCompactViewport);
   window.removeEventListener("airp-engine-restarted", recoverAfterEngineRestart);
 });
@@ -702,9 +801,14 @@ onUnmounted(() => {
         <span>{{ busError }}</span>
         <UiButton label="重试 Engine 连接" @click="refreshCharacters">重试</UiButton>
       </div>
+      <div v-else-if="workspace.lastError" class="status-banner status-banner--error" role="alert">
+        <strong>布局未保存</strong>
+        <span>{{ workspace.lastError }}</span>
+        <UiButton label="载入最新布局" :disabled="workspaceControlsDisabled" @click="refreshWorkspace">载入最新</UiButton>
+      </div>
       <div v-else class="status-banner" role="status">
         <strong>{{ productionSurface ? "Engine Surface" : "Blueprint runtime preview" }}</strong>
-        <span v-if="productionSurface">当前 Surface 来自 Engine snapshot + SSE；断流或 patch 失败会自动重同步。</span>
+        <span v-if="productionSurface">布局 rev {{ workspace.revision ?? "—" }}；{{ workspace.pendingCommand ? "正在保存布局…" : "布局与 Surface 分属各自权威，断流会自动重同步。" }}</span>
         <span v-else>当前 Surface 是本地 v2 fixture；没有使用 MockBus 或 legacy Engine 消息制造真实 Surface 状态。</span>
       </div>
 
@@ -723,10 +827,13 @@ onUnmounted(() => {
             :state="stateStore"
             :state-revisions="stateRevisionStore"
             :active-tabs="surface.activeTabByNodeId"
+            :split-ratios="productionSurface ? splitRatioByNodeId : {}"
+            :resize-disabled="workspaceControlsDisabled"
             :authoritative-props="productionSurface"
             :writable-widget-types="productionSurface ? [...WRITABLE_SURFACE_WIDGET_TYPES] : []"
             :operations="widgetOperations"
             @activate-tab="activateSurfaceTab"
+            @resize-split="resizeSurfaceSplit"
             @focus-widget="focusSurfaceWidget"
             @intent="onIntent"
           />

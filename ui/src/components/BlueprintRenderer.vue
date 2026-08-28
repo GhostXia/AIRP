@@ -9,6 +9,8 @@ const props = defineProps<{
   state: Record<string, Json>;
   stateRevisions: Record<string, number>;
   activeTabs: Record<string, string>;
+  splitRatios?: Record<string, number>;
+  resizeDisabled?: boolean;
   authoritativeProps?: boolean;
   writableWidgetTypes?: string[];
   operations?: Record<string, Json>;
@@ -17,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: "intent", name: string, params?: Json, instanceId?: string): void;
   (event: "activate-tab", tabsId: string, childId: string): void;
+  (event: "resize-split", splitId: string, ratioBasisPoints: number): void;
   (event: "focus-widget", instanceId: string): void;
 }>();
 
@@ -74,7 +77,10 @@ function isReadOnly(widgetType: string): boolean {
       :node="blueprint.root"
       :active-tabs="activeTabs"
       :outlet-ids="outletIds"
+      :split-ratios="splitRatios ?? {}"
+      :resize-disabled="resizeDisabled"
       @activate-tab="(tabsId, childId) => emit('activate-tab', tabsId, childId)"
+      @resize-split="(splitId, ratio) => emit('resize-split', splitId, ratio)"
       @focus-widget="emit('focus-widget', $event)"
     />
 
