@@ -15,6 +15,7 @@ mod state;
 mod workspace;
 mod world_event;
 
+pub use airp_state_protocol::WorkspaceCommand;
 pub use analysis::AnalysisService;
 pub(crate) use chat::RegenSnapshot;
 pub use chat::{ChatService, HistoryWindow, SwipeResponse, SWIPE_CANDIDATES_CAP};
@@ -32,8 +33,7 @@ pub use persona::{
 pub use plot::{PlotArc, PlotPhase, PlotService};
 pub use state::{StateService, StateSnapshot};
 pub use workspace::{
-    WorkspaceCommand, WorkspaceExport, WorkspaceHistoryEntry, WorkspaceMigrationPlan,
-    WorkspaceService,
+    WorkspaceExport, WorkspaceHistoryEntry, WorkspaceMigrationPlan, WorkspaceService,
 };
 pub use world_event::{WorldClock, WorldEvent, WorldEventService};
 

@@ -249,6 +249,41 @@ async fn workspace_http_preserves_string_cas_user_scope_history_and_forward_roll
 }
 
 #[tokio::test]
+async fn workspace_http_accepts_the_closed_layout_command_set() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state);
+    let commands = [
+        serde_json::json!({
+            "type": "open_widget", "instance_id": "map", "widget_type": "core.map",
+            "target_id": "workspace-context", "index": 1
+        }),
+        serde_json::json!({
+            "type": "move_widget", "instance_id": "map",
+            "target_id": "workspace-primary", "index": 1
+        }),
+        serde_json::json!({
+            "type": "activate_tab", "tabs_id": "workspace-primary", "node_id": "map"
+        }),
+        serde_json::json!({"type": "close_widget", "instance_id": "map"}),
+        serde_json::json!({"type": "reset_layout"}),
+    ];
+    for (revision, command) in commands.into_iter().enumerate() {
+        let (status, document) = request_json(
+            app.clone(),
+            axum::http::Method::POST,
+            "/v1/ui/workspace/commands",
+            Some(serde_json::json!({
+                "expected_revision": revision.to_string(),
+                "command": command
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(document["revision"], (revision + 1).to_string());
+    }
+}
+
+#[tokio::test]
 async fn workspace_export_returns_exact_hashed_json() {
     let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
     let app = create_router(state);

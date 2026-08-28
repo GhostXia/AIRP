@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SurfaceStore } from "./surface-v2";
-import { HttpEngineBus, HttpFailure, IntentStreamInterrupted } from "./http-engine-bus";
+import authority from "../../../protocol/workspace-v1.json";
+import {
+  HttpEngineBus, HttpFailure, IntentStreamInterrupted,
+  WORKSPACE_COMMAND_TYPES, WORKSPACE_WIDGET_TYPES,
+} from "./http-engine-bus";
 import type { SurfaceSnapshot } from "./types";
 
 const workspace = {
@@ -76,6 +80,11 @@ async function until(predicate: () => boolean): Promise<void> {
 }
 
 describe("HttpEngineBus", () => {
+  it("keeps Workspace command and Widget allowlists aligned with machine authority", () => {
+    expect(WORKSPACE_COMMAND_TYPES).toEqual(authority.commands.types);
+    expect(WORKSPACE_WIDGET_TYPES).toEqual(authority.layout.widgetTypes);
+  });
+
   afterEach(() => vi.unstubAllGlobals());
 
   it("applies split CRLF SSE and sends the last accepted opaque cursor", async () => {
@@ -305,6 +314,47 @@ describe("HttpEngineBus", () => {
     expect(requests).toBe(1);
   });
 
+  it("serializes the closed workspace layout command set", async () => {
+    const bodies: unknown[] = [];
+    const bus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => "secret",
+      fetchImpl: async (_input, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(workspace);
+      },
+    });
+    await bus.sendWorkspaceCommand({ expected_revision: "42", command: {
+      type: "open_widget", instance_id: "map", widget_type: "core.map",
+      target_id: "workspace-context", index: 1,
+    } });
+    await bus.sendWorkspaceCommand({ expected_revision: "43", command: {
+      type: "move_widget", instance_id: "map", target_id: "workspace-primary", index: 0,
+    } });
+    await bus.sendWorkspaceCommand({ expected_revision: "44", command: {
+      type: "activate_tab", tabs_id: "workspace-primary", node_id: "map",
+    } });
+    await bus.sendWorkspaceCommand({ expected_revision: "45", command: {
+      type: "close_widget", instance_id: "map",
+    } });
+    await bus.sendWorkspaceCommand({ expected_revision: "46", command: { type: "reset_layout" } });
+
+    expect(bodies).toEqual([
+      { expected_revision: "42", command: {
+        type: "open_widget", instance_id: "map", widget_type: "core.map",
+        target_id: "workspace-context", index: 1,
+      } },
+      { expected_revision: "43", command: {
+        type: "move_widget", instance_id: "map", target_id: "workspace-primary", index: 0,
+      } },
+      { expected_revision: "44", command: {
+        type: "activate_tab", tabs_id: "workspace-primary", node_id: "map",
+      } },
+      { expected_revision: "45", command: { type: "close_widget", instance_id: "map" } },
+      { expected_revision: "46", command: { type: "reset_layout" } },
+    ]);
+  });
+
   it("rejects invalid typed workspace responses and history limits before dispatch", async () => {
     const fetchImpl = vi.fn(async () => json({ ...workspace, revision: 42 }));
     const bus = new HttpEngineBus({ base: "http://engine.test", bearer: () => "secret", fetchImpl });
@@ -317,6 +367,9 @@ describe("HttpEngineBus", () => {
     })).rejects.toThrow("invalid workspace command request");
     await expect(bus.rollback({ expected_revision: "42", target_revision: "01" }))
       .rejects.toThrow("invalid workspace rollback request");
+    await expect(bus.sendWorkspaceCommand({ expected_revision: "42", command: {
+      type: "open_widget", instance_id: "x", widget_type: "acme.future", target_id: "root",
+    } })).rejects.toThrow("invalid workspace command request");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
     const futureBus = new HttpEngineBus({

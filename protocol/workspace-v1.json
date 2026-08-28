@@ -19,6 +19,15 @@
     "widgetTypes": ["core.activity", "core.card", "core.character-state", "core.characters", "core.chat", "core.clock", "core.emotion", "core.inventory", "core.map", "core.memory", "core.quest"],
     "forbiddenWidgetFields": ["props", "state", "content", "token"]
   },
+  "commands": {
+    "types": ["open_widget", "close_widget", "move_widget", "resize_split", "activate_tab", "reset_layout"],
+    "unknownFields": "reject",
+    "revisionEncoding": "every request carries expected_revision as a canonical decimal u64 JSON string",
+    "index": "optional integer from 0 through 32; explicit null is rejected; omitted appends",
+    "openWidget": "Engine reuses instance_id as the placement node id and inserts only into tabs or stack; widget_type must be in layout.widgetTypes",
+    "moveWidget": "index addresses target children after source removal; omitted index appends",
+    "resetLayout": "commits the deterministic default layout as a higher immutable revision"
+  },
   "persistence": {
     "revision": "optimistic CAS; every successful mutation creates a higher immutable revision",
     "retention": "v1 keeps all committed immutable revisions; history responses are capped at 256 entries",

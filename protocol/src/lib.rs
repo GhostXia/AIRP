@@ -392,6 +392,14 @@ pub const WORKSPACE_WIDGET_TYPES: &[&str] = &[
     "core.memory",
     "core.quest",
 ];
+pub const WORKSPACE_COMMAND_TYPES: &[&str] = &[
+    "open_widget",
+    "close_widget",
+    "move_widget",
+    "resize_split",
+    "activate_tab",
+    "reset_layout",
+];
 
 pub const SURFACE_FORBIDDEN_FIELDS: &[&str] = &[
     "html",
@@ -617,6 +625,59 @@ pub struct WorkspaceWidgetV1 {
     pub id: String,
     #[serde(rename = "type")]
     pub widget_type: String,
+}
+
+fn deserialize_workspace_index<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let index = usize::deserialize(deserializer)?;
+    if index > SURFACE_MAX_CHILDREN {
+        return Err(serde::de::Error::custom(
+            "workspace command index exceeds the child limit",
+        ));
+    }
+    Ok(Some(index))
+}
+
+/// Closed Workspace v1 mutation contract. Commands describe bounded domain
+/// operations and never carry a replacement layout or JSON Patch.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkspaceCommand {
+    OpenWidget {
+        instance_id: String,
+        widget_type: String,
+        target_id: String,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_workspace_index",
+            skip_serializing_if = "Option::is_none"
+        )]
+        index: Option<usize>,
+    },
+    CloseWidget {
+        instance_id: String,
+    },
+    MoveWidget {
+        instance_id: String,
+        target_id: String,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_workspace_index",
+            skip_serializing_if = "Option::is_none"
+        )]
+        index: Option<usize>,
+    },
+    ResizeSplit {
+        split_id: String,
+        ratio_basis_points: u16,
+    },
+    ActivateTab {
+        tabs_id: String,
+        node_id: String,
+    },
+    ResetLayout,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2318,6 +2379,11 @@ mod tests {
             contract["layout"]["widgetTypes"],
             serde_json::to_value(WORKSPACE_WIDGET_TYPES).unwrap()
         );
+        assert_eq!(
+            contract["commands"]["types"],
+            serde_json::to_value(WORKSPACE_COMMAND_TYPES).unwrap()
+        );
+        assert_eq!(contract["commands"]["unknownFields"], json!("reject"));
         assert!(contract["persistence"]["rollback"]
             .as_str()
             .unwrap()
@@ -2326,5 +2392,53 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("lossless raw UTF-8 JSON export plus SHA-256"));
+    }
+
+    #[test]
+    fn workspace_command_index_is_bounded_and_null_is_not_omission() {
+        let omitted: WorkspaceCommand = serde_json::from_value(json!({
+            "type": "move_widget",
+            "instance_id": "map",
+            "target_id": "workspace-primary"
+        }))
+        .unwrap();
+        assert!(matches!(
+            &omitted,
+            WorkspaceCommand::MoveWidget { index: None, .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(&omitted).unwrap(),
+            json!({
+                "type": "move_widget",
+                "instance_id": "map",
+                "target_id": "workspace-primary"
+            })
+        );
+
+        let maximum: WorkspaceCommand = serde_json::from_value(json!({
+            "type": "open_widget",
+            "instance_id": "map",
+            "widget_type": "core.map",
+            "target_id": "workspace-primary",
+            "index": SURFACE_MAX_CHILDREN
+        }))
+        .unwrap();
+        assert!(matches!(
+            maximum,
+            WorkspaceCommand::OpenWidget {
+                index: Some(SURFACE_MAX_CHILDREN),
+                ..
+            }
+        ));
+
+        for index in [Value::Null, json!(SURFACE_MAX_CHILDREN + 1)] {
+            assert!(serde_json::from_value::<WorkspaceCommand>(json!({
+                "type": "move_widget",
+                "instance_id": "map",
+                "target_id": "workspace-primary",
+                "index": index
+            }))
+            .is_err());
+        }
     }
 }

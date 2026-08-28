@@ -31,6 +31,8 @@
 
 本次增量校准（2026-08-26，#577 PR 10b candidate）：Workspace 资产新增强制 bearer 的 HTTP 适配面与 `HttpEngineBus` 客户端：读取、严格 `1..=256` 历史、原始字节导出、forward rollback，以及首个 Engine-authoritative `resize_split` 命令。mutation 只接受十进制字符串 CAS 与封闭命令，不接受整份布局或 JSON Patch；冲突返回稳定 `workspace_revision_conflict` 和字符串 `current_revision`，future major 返回 `workspace_unsupported_major`，只有原始导出继续可用。daemon bearer 仍是进程级凭证，`user_id` 只表示既有 effective-root 命名空间隔离，不构成租户授权。该 candidate **尚无 Vue store/编辑控件、Surface shell actor、其他布局命令、migration apply/import 或独立 backup 对象**，不得宣称 PR 10 或用户工作区产品闭环完成。
 
+本次增量校准（2026-08-26，#577 PR 10c candidate）：Workspace command reducer 与 `HttpEngineBus` 的封闭命令集扩展为 `open_widget`、`close_widget`、`move_widget`、`resize_split`、`activate_tab` 和 `reset_layout`。open 只接受 Workspace v1 首方 Widget allowlist，并由 Engine 确定性派生 placement node；move 的 index 表示移除源 placement 后目标容器中的插入位置；close/move 会维护 tabs active 引用。所有命令先在当前布局副本上执行，再经完整 Workspace 验证与 expected-revision CAS 一次提交，失败不发布 revision。该 candidate **仍无 Vue 编辑器、保存布局到 session Surface 的消费链、migration apply/import 或独立 backup 对象**，不得宣称 PR 10 完成。
+
 本次校准（2026-08-09，v0.0.5-rc.2 docs-pass）：当前 `main@affa315` 对应 prerelease `v0.0.5-rc.2`。Windows release workflow 负责 exact-tag 校验、包构建和 browser/desktop smoke，当前公开发布交付物只有 `airp-webui-windows-x64.zip`。依赖清单、SBOM、第三方声明和审计 sign-off 信息仍保留在 tagged git tree 的 `docs/sbom/`，供开发用户直接查阅；它们不再由 release CI 生成、上传或作为 sign-off 门禁，既有 rc.2 资产不在本次变更范围内。只凭候选发布证据不能宣称正式 `v0.0.5`：[#130](https://github.com/GhostXia/AIRP/issues/130) 的真实 provider + 真实 browser + production Compose 验收仍未完成；`release` environment API 当前为 `protection_rules=[]`、`can_admins_bypass=true`，required reviewer 配置仍缺失。
 
 本次校准（2026-08-02 v0.0.3 docs-pass）做了三件事：

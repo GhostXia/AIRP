@@ -12,8 +12,8 @@ use std::sync::Mutex;
 
 use airp_state_protocol::{
     migrate_v1_blueprint, validate_workspace_document, Blueprint, BlueprintV2, LayoutNodeV2,
-    SurfaceRevision, WorkspaceDocumentV1, WorkspaceLayoutV1, WorkspaceNodeV1, WorkspaceWidgetV1,
-    WORKSPACE_MAX_DOCUMENT_BYTES, WORKSPACE_SCHEMA_MAJOR,
+    SurfaceRevision, WorkspaceCommand, WorkspaceDocumentV1, WorkspaceLayoutV1, WorkspaceNodeV1,
+    WorkspaceWidgetV1, WORKSPACE_MAX_DOCUMENT_BYTES, WORKSPACE_SCHEMA_MAJOR,
 };
 use sha2::{Digest, Sha256};
 
@@ -62,17 +62,6 @@ pub struct WorkspaceMigrationPlan {
     pub candidate: WorkspaceDocumentV1,
     pub warnings: Vec<String>,
     pub writes_performed: bool,
-}
-
-/// Engine-authoritative layout mutation. The client names a bounded domain
-/// operation and never submits a replacement document or JSON Patch.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum WorkspaceCommand {
-    ResizeSplit {
-        split_id: String,
-        ratio_basis_points: u16,
-    },
 }
 
 impl WorkspaceService {
@@ -427,7 +416,107 @@ fn apply_workspace_command(
     layout: &mut WorkspaceLayoutV1,
     command: WorkspaceCommand,
 ) -> Result<(), AirpError> {
+    let mut candidate = layout.clone();
+    apply_workspace_command_to_candidate(&mut candidate, command)?;
+    *layout = candidate;
+    Ok(())
+}
+
+fn apply_workspace_command_to_candidate(
+    layout: &mut WorkspaceLayoutV1,
+    command: WorkspaceCommand,
+) -> Result<(), AirpError> {
     match command {
+        WorkspaceCommand::OpenWidget {
+            instance_id,
+            widget_type,
+            target_id,
+            index,
+        } => {
+            if layout.widgets.iter().any(|widget| widget.id == instance_id) {
+                return Err(AirpError::Conflict(format!(
+                    "workspace widget instance {instance_id} is already open"
+                )));
+            }
+            let node_id = instance_id.clone();
+            if find_node_mut(&mut layout.root, &node_id).is_some() {
+                return Err(AirpError::Conflict(format!(
+                    "workspace layout node {node_id} already exists"
+                )));
+            }
+            insert_widget_node(
+                &mut layout.root,
+                &target_id,
+                index,
+                WorkspaceNodeV1::Widget {
+                    id: node_id,
+                    instance_id: instance_id.clone(),
+                },
+            )?;
+            layout.widgets.push(WorkspaceWidgetV1 {
+                id: instance_id,
+                widget_type,
+            });
+            Ok(())
+        }
+        WorkspaceCommand::CloseWidget { instance_id } => {
+            let Some(widget_index) = layout
+                .widgets
+                .iter()
+                .position(|widget| widget.id == instance_id)
+            else {
+                return Err(AirpError::NotFound(format!(
+                    "workspace widget instance {instance_id} not found"
+                )));
+            };
+            if remove_widget_node(&mut layout.root, &instance_id).is_none() {
+                return Err(AirpError::Internal(format!(
+                    "workspace widget instance {instance_id} has no placement"
+                )));
+            }
+            layout.widgets.remove(widget_index);
+            Ok(())
+        }
+        WorkspaceCommand::MoveWidget {
+            instance_id,
+            target_id,
+            index,
+        } => {
+            if !layout.widgets.iter().any(|widget| widget.id == instance_id) {
+                return Err(AirpError::NotFound(format!(
+                    "workspace widget instance {instance_id} not found"
+                )));
+            }
+            let preserve_target_active = matches!(
+                find_node_mut(&mut layout.root, &target_id),
+                Some(WorkspaceNodeV1::Tabs { active, children, .. })
+                    if children.iter().any(|child| {
+                        workspace_node_id(child) == active
+                            && matches!(child, WorkspaceNodeV1::Widget {
+                                instance_id: child_instance_id,
+                                ..
+                            } if child_instance_id == &instance_id)
+                    })
+            );
+            let Some(node) = remove_widget_node(&mut layout.root, &instance_id) else {
+                return Err(AirpError::Internal(format!(
+                    "workspace widget instance {instance_id} has no placement"
+                )));
+            };
+            let node_id = workspace_node_id(&node).to_string();
+            insert_widget_node(&mut layout.root, &target_id, index, node)?;
+            if preserve_target_active {
+                let Some(WorkspaceNodeV1::Tabs { active, .. }) =
+                    find_node_mut(&mut layout.root, &target_id)
+                else {
+                    return Err(AirpError::Internal(
+                        "workspace move target changed type during reduction".to_string(),
+                    ));
+                };
+                *active = node_id;
+            }
+            Ok(())
+        }
         WorkspaceCommand::ResizeSplit {
             split_id,
             ratio_basis_points,
@@ -449,6 +538,104 @@ fn apply_workspace_command(
             *ratio = ratio_basis_points;
             Ok(())
         }
+        WorkspaceCommand::ActivateTab { tabs_id, node_id } => {
+            let Some(node) = find_node_mut(&mut layout.root, &tabs_id) else {
+                return Err(AirpError::NotFound(format!(
+                    "workspace layout node {tabs_id} not found"
+                )));
+            };
+            let WorkspaceNodeV1::Tabs {
+                active, children, ..
+            } = node
+            else {
+                return Err(AirpError::BadRequest(format!(
+                    "workspace layout node {tabs_id} is not tabs"
+                )));
+            };
+            if !children
+                .iter()
+                .any(|child| workspace_node_id(child) == node_id)
+            {
+                return Err(AirpError::BadRequest(format!(
+                    "workspace tab {node_id} is not a direct child of {tabs_id}"
+                )));
+            }
+            *active = node_id;
+            Ok(())
+        }
+        WorkspaceCommand::ResetLayout => {
+            *layout = default_document().layout;
+            Ok(())
+        }
+    }
+}
+
+fn insert_widget_node(
+    root: &mut WorkspaceNodeV1,
+    target_id: &str,
+    index: Option<usize>,
+    node: WorkspaceNodeV1,
+) -> Result<(), AirpError> {
+    let Some(target) = find_node_mut(root, target_id) else {
+        return Err(AirpError::NotFound(format!(
+            "workspace target container {target_id} not found"
+        )));
+    };
+    let children = match target {
+        WorkspaceNodeV1::Tabs { children, .. } | WorkspaceNodeV1::Stack { children, .. } => {
+            children
+        }
+        _ => {
+            return Err(AirpError::BadRequest(format!(
+                "workspace target {target_id} is not a tabs or stack container"
+            )))
+        }
+    };
+    let index = index.unwrap_or(children.len());
+    if index > children.len() {
+        return Err(AirpError::BadRequest(format!(
+            "workspace insertion index {index} exceeds target length {}",
+            children.len()
+        )));
+    }
+    children.insert(index, node);
+    Ok(())
+}
+
+fn remove_widget_node(node: &mut WorkspaceNodeV1, instance_id: &str) -> Option<WorkspaceNodeV1> {
+    let (children, active) = match node {
+        WorkspaceNodeV1::Split { children, .. } | WorkspaceNodeV1::Stack { children, .. } => {
+            (children, None)
+        }
+        WorkspaceNodeV1::Tabs {
+            active, children, ..
+        } => (children, Some(active)),
+        WorkspaceNodeV1::Widget { .. } => return None,
+    };
+    if let Some(index) = children.iter().position(|child| {
+        matches!(child, WorkspaceNodeV1::Widget { instance_id: child_id, .. } if child_id == instance_id)
+    }) {
+        let removed = children.remove(index);
+        if let Some(active) = active {
+            if *active == workspace_node_id(&removed) {
+                if let Some(first) = children.first() {
+                    *active = workspace_node_id(first).to_string();
+                }
+            }
+        }
+        return Some(removed);
+    }
+    children
+        .iter_mut()
+        .find_map(|child| remove_widget_node(child, instance_id))
+}
+
+fn workspace_node_id(node: &WorkspaceNodeV1) -> &str {
+    match node {
+        WorkspaceNodeV1::Split { id, .. }
+        | WorkspaceNodeV1::Tabs { id, .. }
+        | WorkspaceNodeV1::Stack { id, .. }
+        | WorkspaceNodeV1::Widget { id, .. } => id,
     }
 }
 
@@ -793,6 +980,146 @@ mod tests {
         );
         assert!(matches!(failed, Err(AirpError::BadRequest(_))));
         assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(1));
+    }
+
+    #[test]
+    fn workspace_widget_commands_preserve_identity_and_commit_forward() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let opened = service
+            .execute(
+                0,
+                WorkspaceCommand::OpenWidget {
+                    instance_id: "map".to_string(),
+                    widget_type: "core.map".to_string(),
+                    target_id: "workspace-context".to_string(),
+                    index: Some(1),
+                },
+            )
+            .unwrap();
+        assert_eq!(opened.revision, SurfaceRevision::new(1));
+        assert!(opened
+            .layout
+            .widgets
+            .iter()
+            .any(|widget| widget.id == "map"));
+
+        let moved = service
+            .execute(
+                1,
+                WorkspaceCommand::MoveWidget {
+                    instance_id: "map".to_string(),
+                    target_id: "workspace-primary".to_string(),
+                    index: Some(1),
+                },
+            )
+            .unwrap();
+        assert_eq!(moved.revision, SurfaceRevision::new(2));
+        let activated = service
+            .execute(
+                2,
+                WorkspaceCommand::ActivateTab {
+                    tabs_id: "workspace-primary".to_string(),
+                    node_id: "map".to_string(),
+                },
+            )
+            .unwrap();
+        let WorkspaceNodeV1::Split { children, .. } = &activated.layout.root else {
+            panic!("default workspace root must remain split");
+        };
+        let WorkspaceNodeV1::Tabs { active, .. } = &children[0] else {
+            panic!("default primary container must remain tabs");
+        };
+        assert_eq!(active, "map");
+
+        let reordered = service
+            .execute(
+                3,
+                WorkspaceCommand::MoveWidget {
+                    instance_id: "map".to_string(),
+                    target_id: "workspace-primary".to_string(),
+                    index: Some(0),
+                },
+            )
+            .unwrap();
+        let WorkspaceNodeV1::Split { children, .. } = &reordered.layout.root else {
+            panic!("default workspace root must remain split");
+        };
+        let WorkspaceNodeV1::Tabs { active, .. } = &children[0] else {
+            panic!("default primary container must remain tabs");
+        };
+        assert_eq!(active, "map");
+
+        let closed = service
+            .execute(
+                4,
+                WorkspaceCommand::CloseWidget {
+                    instance_id: "map".to_string(),
+                },
+            )
+            .unwrap();
+        assert_eq!(closed.revision, SurfaceRevision::new(5));
+        assert!(!closed
+            .layout
+            .widgets
+            .iter()
+            .any(|widget| widget.id == "map"));
+        let WorkspaceNodeV1::Split { children, .. } = &closed.layout.root else {
+            panic!("default workspace root must remain split");
+        };
+        let WorkspaceNodeV1::Tabs { active, .. } = &children[0] else {
+            panic!("default primary container must remain tabs");
+        };
+        assert_eq!(active, "chat-node");
+
+        let reset = service.execute(5, WorkspaceCommand::ResetLayout).unwrap();
+        assert_eq!(reset.revision, SurfaceRevision::new(6));
+        assert_eq!(reset.layout, default_document().layout);
+
+        let maximum_id = "a".repeat(128);
+        let boundary = service
+            .execute(
+                6,
+                WorkspaceCommand::OpenWidget {
+                    instance_id: maximum_id.clone(),
+                    widget_type: "core.map".to_string(),
+                    target_id: "workspace-context".to_string(),
+                    index: None,
+                },
+            )
+            .unwrap();
+        let mut boundary_root = boundary.layout.root.clone();
+        assert!(find_node_mut(&mut boundary_root, &maximum_id).is_some());
+    }
+
+    #[test]
+    fn invalid_widget_command_does_not_publish_a_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let result = service.execute(
+            0,
+            WorkspaceCommand::OpenWidget {
+                instance_id: "unsafe".to_string(),
+                widget_type: "acme.future".to_string(),
+                target_id: "workspace-context".to_string(),
+                index: None,
+            },
+        );
+        assert!(matches!(result, Err(AirpError::BadRequest(_))));
+        assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(0));
+
+        let mut layout = default_document().layout;
+        let original = layout.clone();
+        let result = apply_workspace_command(
+            &mut layout,
+            WorkspaceCommand::MoveWidget {
+                instance_id: "chat".to_string(),
+                target_id: "missing".to_string(),
+                index: None,
+            },
+        );
+        assert!(matches!(result, Err(AirpError::NotFound(_))));
+        assert_eq!(layout, original);
     }
 
     #[test]
