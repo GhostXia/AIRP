@@ -182,6 +182,7 @@ try {
   const failures = [];
   const httpFailures = [];
   const intentRequests = [];
+  const workspaceCommandRequests = [];
   let cooperativeStopRequested = false;
   page.on("console", (message) => {
     if (message.type() === "error") failures.push(`${message.location().url}: ${message.text()}`);
@@ -193,8 +194,11 @@ try {
     if (!expectedStopAbort) failures.push(`${request.url()}: ${request.failure()?.errorText}`);
   });
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/v1/ui/intents") {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === "/v1/ui/intents") {
       intentRequests.push(request.postDataJSON()?.name ?? `<${request.method()}>`);
+    } else if (pathname === "/v1/ui/workspace/commands") {
+      workspaceCommandRequests.push(request.postDataJSON());
     }
   });
   page.on("response", (response) => {
@@ -205,12 +209,22 @@ try {
     return response.request().method() === "GET"
       && /^\/v1\/ui\/surfaces\/session\/[^/]+$/.test(url.pathname);
   });
+  const firstWorkspaceResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET" && url.pathname === "/v1/ui/workspace";
+  });
   await page.goto(
     `${origin}/desktop/?character_id=${encodeURIComponent(imported.character_id)}&session_id=${encodeURIComponent(sessionId)}#airp-token=${desktopSession.token}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.getByText("Engine 已连接").waitFor({ state: "visible" });
   await page.locator('[data-blueprint-version="2"]').waitFor({ state: "visible" });
+  const firstWorkspace = await (await firstWorkspaceResponse).json();
+  assert.equal(firstWorkspace.revision, "0");
+  assert.equal(firstWorkspace.layout.root.id, "workspace-root");
+  assert.equal(firstWorkspace.layout.root.ratioBasisPoints, 6_500);
+  assert.match(await page.locator(".status-banner").innerText(), /布局 rev 0/,
+    "accepted Workspace revision was not exposed in the shell status");
   const firstSurface = await (await firstSurfaceResponse).json();
   const firstChat = firstSurface.snapshot.blueprint.widgets.find((widget) => widget.id === "chat")?.props;
   const firstMemory = firstSurface.snapshot.blueprint.widgets.find((widget) => widget.id === "memory")?.props;
@@ -260,13 +274,57 @@ try {
     `会话 ${sessionId}`,
     `世界书 character:${imported.character_id}`,
   ], "real Engine context chips did not preserve authoritative stable identifiers");
+  const resizeButton = page.getByRole("button", { name: "扩大主分区" });
+  const splitDiagnostics = await page.evaluate(() => ({
+    ridges: document.querySelectorAll(".split-ridge").length,
+    nodes: [...document.querySelectorAll("[data-node-id]")].map((node) => node.getAttribute("data-node-id")),
+    status: document.querySelector(".status-banner")?.textContent,
+  }));
+  assert.equal(splitDiagnostics.ridges, 1, `saved split controls missing: ${JSON.stringify(splitDiagnostics)}`);
+  assert.equal(await resizeButton.isEnabled(), true, "saved Workspace split control is disabled");
+  await resizeButton.click();
+  await page.waitForFunction(() => document.querySelector('.split-ridge output')?.textContent === "70%");
+  assert.deepEqual(workspaceCommandRequests.at(-1), {
+    expected_revision: "0",
+    command: {
+      type: "resize_split",
+      split_id: "workspace-root",
+      ratio_basis_points: 7_000,
+    },
+  }, "visible split resize did not use the accepted Workspace CAS revision");
+  await page.getByLabel("主分区占比 70%").waitFor({ state: "visible" });
+  const renderedSplit = await page.locator('[data-node-id="workspace-root"]').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).map(Number.parseFloat));
+  assert.ok(renderedSplit.length === 2 && renderedSplit[0] / (renderedSplit[0] + renderedSplit[1]) > 0.69,
+    `saved split ratio was not rendered: ${renderedSplit.join(" / ")}`);
+  await page.setViewportSize({ width: 760, height: 800 });
+  assert.equal(await page.locator(".split-ridge").evaluate((element) => getComputedStyle(element).display), "none",
+    "horizontal split ridge remained visible at the compact breakpoint");
+  assert.equal(await page.locator('[data-node-id="workspace-root"]').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length), 1,
+  "horizontal split did not stack at the compact breakpoint");
+  await page.setViewportSize({ width: 761, height: 800 });
+  await resizeButton.waitFor({ state: "visible" });
+  assert.equal(await page.getByLabel("主分区占比 70%").isVisible(), true,
+    "saved desktop split ratio did not return above the compact breakpoint");
   await page.evaluate(() => {
     globalThis.__airpChatHostBeforeStateWrites = document.querySelector(
       '[data-widget-instance="chat"] .widget-host',
     );
   });
 
+  const memoryTabCommand = page.waitForRequest((request) =>
+    new URL(request.url()).pathname === "/v1/ui/workspace/commands"
+      && request.postDataJSON()?.command?.type === "activate_tab");
   await page.getByRole("tab", { name: "memory-node", exact: true }).click();
+  assert.deepEqual((await memoryTabCommand).postDataJSON(), {
+    expected_revision: "1",
+    command: {
+      type: "activate_tab",
+      tabs_id: "workspace-primary",
+      node_id: "memory-node",
+    },
+  }, "tab activation did not follow the resized Workspace revision");
   await page.getByText("未分类 resident memory", { exact: true }).waitFor({ state: "visible" });
   const memoryEditor = page.getByLabel("编辑未分类 resident memory");
   const memoryIntentRequest = page.waitForRequest((request) => {
@@ -482,6 +540,20 @@ try {
     "chat.continue",
     "chat.stop",
   ], "Surface write and Chat vertical slices dispatched an unexpected intent sequence");
+  assert.deepEqual(workspaceCommandRequests, [
+    {
+      expected_revision: "0",
+      command: { type: "resize_split", split_id: "workspace-root", ratio_basis_points: 7_000 },
+    },
+    {
+      expected_revision: "1",
+      command: { type: "activate_tab", tabs_id: "workspace-primary", node_id: "memory-node" },
+    },
+    {
+      expected_revision: "2",
+      command: { type: "activate_tab", tabs_id: "workspace-primary", node_id: "chat-node" },
+    },
+  ], "Workspace mutations were duplicated, reordered, or sent with stale revisions");
   assert.ok(providerRequests >= 7, "Chat vertical slice did not reuse the Engine provider pipeline");
   assert.equal(httpFailures.length, 0, `HTTP failures: ${httpFailures.join("\n")}`);
   assert.equal(failures.length, 0, `browser errors: ${failures.join("\n")}`);
