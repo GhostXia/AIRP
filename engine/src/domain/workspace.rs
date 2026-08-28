@@ -17,19 +17,31 @@ use airp_state_protocol::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::backup::{
+    with_created_verified_backup, with_verified_backup, BackupScope, BackupSource,
+    CreateBackupOptions,
+};
 use crate::error::AirpError;
 use crate::revision::atomic::{
-    commit_revision, next_content_revision, read_current_revision, CommitOptions, StagedRevision,
+    commit_revision, next_content_revision, read_current_revision, sync_revision_authority,
+    CommitOptions, StagedRevision,
 };
 use crate::revision::manifest::{AssetKind, AssetSource, RevisionManifest};
 
 const WORKSPACE_ID: &str = "default";
 const WORKSPACE_FILE: &str = "workspace.json";
 const MAX_HISTORY_ENTRIES: usize = 256;
+const WORKSPACE_MIGRATION_CONVERTER_VERSION: &str = "blueprint-v1-to-workspace-v1@1";
+
+struct WorkspaceCommitIdentity<'a> {
+    source_kind: &'a str,
+    source_hash: Option<&'a str>,
+    converter_version: Option<&'a str>,
+}
 
 /// Global leaf lock for the workspace asset family. AIRP has one daemon
 /// writer; this serializes read-current -> validate -> commit across service
-/// instances. Lock order is WORKSPACE_LOCK -> revision COMMIT_LOCK.
+/// instances. Lock order is WORKSPACE_LOCK -> BACKUP_LOCK -> revision COMMIT_LOCK.
 static WORKSPACE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug)]
@@ -59,9 +71,18 @@ pub struct WorkspaceExport {
 pub struct WorkspaceMigrationPlan {
     pub source: String,
     pub source_sha256: String,
+    pub candidate_sha256: String,
+    pub converter_version: String,
     pub candidate: WorkspaceDocumentV1,
     pub warnings: Vec<String>,
     pub writes_performed: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceMigrationApplyResult {
+    pub document: WorkspaceDocumentV1,
+    pub backup_id: String,
+    pub source_sha256: String,
 }
 
 impl WorkspaceService {
@@ -82,7 +103,14 @@ impl WorkspaceService {
         layout: WorkspaceLayoutV1,
     ) -> Result<WorkspaceDocumentV1, AirpError> {
         let _guard = workspace_guard()?;
-        self.commit_layout_under_lock(expected_revision, layout, "workspace_update", None, None)
+        self.commit_layout_under_lock(
+            expected_revision,
+            layout,
+            "workspace_update",
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn execute(
@@ -101,7 +129,14 @@ impl WorkspaceService {
             self.load_revision(current)?.1.layout
         };
         apply_workspace_command(&mut layout, command)?;
-        self.commit_layout_under_lock(expected_revision, layout, "workspace_command", None, None)
+        self.commit_layout_under_lock(
+            expected_revision,
+            layout,
+            "workspace_command",
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn history(&self, limit: usize) -> Result<Vec<WorkspaceHistoryEntry>, AirpError> {
@@ -153,6 +188,7 @@ impl WorkspaceService {
             "workspace_rollback",
             Some(target_hash),
             Some(format!("revision:{target_revision}")),
+            None,
         )
     }
 
@@ -186,6 +222,7 @@ impl WorkspaceService {
         };
         validate_workspace_document(&candidate)
             .map_err(|error| AirpError::BadRequest(format!("workspace migration: {error}")))?;
+        let candidate_sha256 = sha256_hex(&serde_json::to_vec(&candidate)?);
         let mut warnings = vec![
             "dry-run only; no workspace files or revision pointers were changed".to_string(),
             "legacy theme, state scopes and capabilities are not workspace data".to_string(),
@@ -198,9 +235,163 @@ impl WorkspaceService {
         Ok(WorkspaceMigrationPlan {
             source: "blueprint-v1".to_string(),
             source_sha256: sha256_hex(&source_bytes),
+            candidate_sha256,
+            converter_version: WORKSPACE_MIGRATION_CONVERTER_VERSION.to_string(),
             candidate,
             warnings,
             writes_performed: false,
+        })
+    }
+
+    /// Apply a previously reviewed Blueprint-v1 migration plan. The source is
+    /// converted again under the same deterministic contract and must match
+    /// the reviewed hash. A verified Workspace-only backup is created before
+    /// the candidate is committed as a forward revision.
+    pub fn apply_v1_migration(
+        &self,
+        expected_revision: u64,
+        source: &Blueprint,
+        planned_source_sha256: &str,
+        planned_candidate_sha256: &str,
+        planned_converter_version: &str,
+    ) -> Result<WorkspaceMigrationApplyResult, AirpError> {
+        let plan = self.plan_v1_migration(source)?;
+        if plan.source_sha256 != planned_source_sha256
+            || plan.candidate_sha256 != planned_candidate_sha256
+            || plan.converter_version != planned_converter_version
+        {
+            return Err(AirpError::BadRequest(
+                "workspace migration source, candidate, or converter does not match the reviewed plan"
+                    .to_string(),
+            ));
+        }
+
+        let _guard = workspace_guard()?;
+        let current = read_current_revision(&self.asset_dir())?.unwrap_or(0);
+        if current != expected_revision {
+            return Err(workspace_conflict(expected_revision, current));
+        }
+        if current > 0 {
+            self.load_revision(current)?;
+        }
+
+        // LOCK ORDER: WORKSPACE_LOCK -> BACKUP_LOCK -> revision COMMIT_LOCK.
+        // The fixed Workspace scope prevents callers from selecting paths.
+        let opts = CreateBackupOptions {
+            data_root: self.effective_root.clone(),
+            source: BackupSource::PreMigration,
+            scope: BackupScope::Workspace { revision: current },
+        };
+        let (document, backup) = with_created_verified_backup(&opts, |backup| {
+            let candidate_layout = plan.candidate.layout.clone();
+            let commit_result = self.commit_layout_under_lock(
+                expected_revision,
+                candidate_layout.clone(),
+                "workspace_migration_blueprint_v1",
+                Some(plan.source_sha256.clone()),
+                Some("blueprint-v1.json".to_string()),
+                Some(plan.converter_version.clone()),
+            );
+            match commit_result {
+                Ok(document) => Ok(document),
+                Err(error) => self.reconcile_migration_commit(
+                    expected_revision,
+                    &candidate_layout,
+                    &backup.backup_id,
+                    WorkspaceCommitIdentity {
+                        source_kind: "workspace_migration_blueprint_v1",
+                        source_hash: Some(&plan.source_sha256),
+                        converter_version: Some(&plan.converter_version),
+                    },
+                    error,
+                ),
+            }
+        })?;
+
+        Ok(WorkspaceMigrationApplyResult {
+            document,
+            backup_id: backup.backup_id,
+            source_sha256: plan.source_sha256,
+        })
+    }
+
+    /// Restore the layout captured by a migration backup as another forward
+    /// Workspace revision. The generic destructive backup restore path is not
+    /// used, so revision history and CAS remain authoritative.
+    pub fn rollback_migration_backup(
+        &self,
+        expected_revision: u64,
+        backup_id: &str,
+    ) -> Result<WorkspaceDocumentV1, AirpError> {
+        let _guard = workspace_guard()?;
+        let current = read_current_revision(&self.asset_dir())?.unwrap_or(0);
+        if current != expected_revision {
+            return Err(workspace_conflict(expected_revision, current));
+        }
+        if current > 0 {
+            self.load_revision(current)?;
+        }
+
+        with_verified_backup(&self.effective_root, backup_id, |manifest, backup_dir| {
+            if manifest.source != BackupSource::PreMigration {
+                return Err(AirpError::BadRequest(
+                    "workspace rollback requires a pre-migration backup".to_string(),
+                ));
+            }
+            let backup_revision = match &manifest.scope {
+                BackupScope::Workspace { revision } => *revision,
+                _ => {
+                    return Err(AirpError::BadRequest(
+                        "workspace rollback requires a Workspace-scoped backup".to_string(),
+                    ))
+                }
+            };
+            let layout = if backup_revision == 0 {
+                default_document().layout
+            } else {
+                let relative = format!(
+                    "ui/workspaces/{WORKSPACE_ID}/revisions/{backup_revision}/{WORKSPACE_FILE}"
+                );
+                let approved = manifest
+                    .files
+                    .iter()
+                    .find(|file| file.path == relative)
+                    .ok_or_else(|| {
+                        AirpError::Internal(format!(
+                            "workspace backup {backup_id} lacks approved revision {backup_revision}"
+                        ))
+                    })?;
+                self.layout_from_backup(
+                    backup_dir,
+                    backup_id,
+                    backup_revision,
+                    &approved.sha256,
+                    approved.bytes,
+                )?
+            };
+            let source_hash = manifest.tree_sha256.clone();
+            let candidate_layout = layout.clone();
+            match self.commit_layout_under_lock(
+                expected_revision,
+                layout,
+                "workspace_backup_rollback",
+                Some(source_hash.clone()),
+                Some(format!("backup:{backup_id}")),
+                None,
+            ) {
+                Ok(document) => Ok(document),
+                Err(error) => self.reconcile_migration_commit(
+                    expected_revision,
+                    &candidate_layout,
+                    backup_id,
+                    WorkspaceCommitIdentity {
+                        source_kind: "workspace_backup_rollback",
+                        source_hash: Some(&source_hash),
+                        converter_version: None,
+                    },
+                    error,
+                ),
+            }
         })
     }
 
@@ -209,6 +400,120 @@ impl WorkspaceService {
             .join("ui")
             .join("workspaces")
             .join(WORKSPACE_ID)
+    }
+
+    /// Re-read durable authority after an error because `commit_revision` may
+    /// report a final directory-sync failure after publishing current_revision.
+    /// The Workspace lock is still held, so no other Workspace writer can make
+    /// the observed forward revision look like this migration.
+    fn reconcile_migration_commit(
+        &self,
+        expected_revision: u64,
+        candidate_layout: &WorkspaceLayoutV1,
+        backup_id: &str,
+        expected_identity: WorkspaceCommitIdentity<'_>,
+        commit_error: AirpError,
+    ) -> Result<WorkspaceDocumentV1, AirpError> {
+        let current = match read_current_revision(&self.asset_dir()) {
+            Ok(current) => current.unwrap_or(0),
+            Err(reconcile_error) => {
+                tracing::error!(%backup_id, %commit_error, %reconcile_error, "workspace migration outcome could not be reconciled");
+                return Err(AirpError::WorkspaceMigrationOutcomeUnknown {
+                    backup_id: backup_id.to_string(),
+                });
+            }
+        };
+        if current == expected_revision {
+            tracing::error!(%backup_id, %commit_error, "workspace migration did not publish; verified backup retained");
+            return Err(AirpError::WorkspaceMigrationCommitFailed {
+                backup_id: backup_id.to_string(),
+            });
+        }
+        if current > expected_revision {
+            match self.load_revision(current) {
+                Ok((manifest, document, _))
+                    if document.layout == *candidate_layout
+                        && manifest.source.source_kind == expected_identity.source_kind
+                        && manifest.source.source_hash.as_deref()
+                            == expected_identity.source_hash
+                        && manifest.source.converter_version.as_deref()
+                            == expected_identity.converter_version =>
+                {
+                    if let Err(barrier_error) =
+                        sync_revision_authority(&self.asset_dir(), &self.effective_root, current)
+                    {
+                        tracing::error!(%backup_id, %commit_error, %barrier_error, revision = current, "workspace migration durability barrier failed during reconciliation");
+                        return Err(AirpError::WorkspaceMigrationOutcomeUnknown {
+                            backup_id: backup_id.to_string(),
+                        });
+                    }
+                    match self.load_revision(current) {
+                        Ok((manifest_after, document_after, _))
+                            if document_after.layout == *candidate_layout
+                                && manifest_after.source.source_kind
+                                    == expected_identity.source_kind
+                                && manifest_after.source.source_hash.as_deref()
+                                    == expected_identity.source_hash
+                                && manifest_after.source.converter_version.as_deref()
+                                    == expected_identity.converter_version =>
+                        {
+                            tracing::warn!(%backup_id, %commit_error, revision = current, "workspace migration publish reconciled after renewed durability barrier");
+                            return Ok(document_after);
+                        }
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        tracing::error!(%backup_id, %commit_error, current, expected_revision, "workspace migration outcome is unknown");
+        Err(AirpError::WorkspaceMigrationOutcomeUnknown {
+            backup_id: backup_id.to_string(),
+        })
+    }
+
+    fn layout_from_backup(
+        &self,
+        backup_dir: &Path,
+        backup_id: &str,
+        revision: u64,
+        expected_sha256: &str,
+        expected_bytes: u64,
+    ) -> Result<WorkspaceLayoutV1, AirpError> {
+        let path = backup_dir
+            .join("files")
+            .join("ui")
+            .join("workspaces")
+            .join(WORKSPACE_ID)
+            .join("revisions")
+            .join(revision.to_string())
+            .join(WORKSPACE_FILE);
+        let bytes = fs::read(&path).map_err(|error| {
+            AirpError::Internal(format!(
+                "workspace backup {backup_id} revision {revision} is incomplete: {error}"
+            ))
+        })?;
+        if bytes.len() as u64 != expected_bytes || sha256_hex(&bytes) != expected_sha256 {
+            return Err(AirpError::Internal(format!(
+                "workspace backup {backup_id} revision {revision} changed after verification"
+            )));
+        }
+        let document: WorkspaceDocumentV1 = serde_json::from_slice(&bytes).map_err(|error| {
+            AirpError::Internal(format!(
+                "workspace backup {backup_id} revision {revision} is invalid JSON: {error}"
+            ))
+        })?;
+        validate_workspace_document(&document).map_err(|error| {
+            AirpError::Internal(format!(
+                "workspace backup {backup_id} revision {revision} is invalid: {error}"
+            ))
+        })?;
+        if document.id != WORKSPACE_ID || document.revision.value() != revision {
+            return Err(AirpError::Internal(format!(
+                "workspace backup {backup_id} revision identity mismatch"
+            )));
+        }
+        Ok(document.layout)
     }
 
     fn read_under_lock(&self) -> Result<WorkspaceDocumentV1, AirpError> {
@@ -226,6 +531,7 @@ impl WorkspaceService {
         source_kind: &str,
         source_hash: Option<String>,
         source_filename: Option<String>,
+        converter_version: Option<String>,
     ) -> Result<WorkspaceDocumentV1, AirpError> {
         let current = read_current_revision(&self.asset_dir())?.unwrap_or(0);
         if current != expected_revision {
@@ -257,7 +563,7 @@ impl WorkspaceService {
                 source_kind: source_kind.to_string(),
                 source_hash,
                 source_filename,
-                converter_version: None,
+                converter_version,
                 imported_at: None,
                 parent_revision: (current > 0).then_some(current),
             },
@@ -808,6 +1114,29 @@ fn workspace_node_from_surface(node: &LayoutNodeV2) -> Result<WorkspaceNodeV1, A
 mod tests {
     use super::*;
 
+    fn legacy_blueprint() -> Blueprint {
+        Blueprint {
+            version: "legacy".to_string(),
+            profile: None,
+            theme: None,
+            layout: airp_state_protocol::Layout {
+                kind: airp_state_protocol::LayoutKind::Tabs,
+                areas: vec![airp_state_protocol::Area {
+                    id: "main".to_string(),
+                    widgets: vec!["chat".to_string()],
+                    props: None,
+                }],
+            },
+            widgets: vec![airp_state_protocol::WidgetInstance {
+                id: "chat".to_string(),
+                kind: "core.chat".to_string(),
+                props: Some(serde_json::json!({"content": "must-drop"})),
+                state: Some("session".to_string()),
+                capabilities: None,
+            }],
+        }
+    }
+
     #[test]
     fn default_is_uncommitted_and_first_save_uses_cas() {
         let root = tempfile::tempdir().unwrap();
@@ -888,26 +1217,7 @@ mod tests {
     fn v1_migration_is_dry_run_and_drops_props() {
         let root = tempfile::tempdir().unwrap();
         let service = WorkspaceService::new(root.path());
-        let source = Blueprint {
-            version: "legacy".to_string(),
-            profile: None,
-            theme: None,
-            layout: airp_state_protocol::Layout {
-                kind: airp_state_protocol::LayoutKind::Tabs,
-                areas: vec![airp_state_protocol::Area {
-                    id: "main".to_string(),
-                    widgets: vec!["chat".to_string()],
-                    props: None,
-                }],
-            },
-            widgets: vec![airp_state_protocol::WidgetInstance {
-                id: "chat".to_string(),
-                kind: "core.chat".to_string(),
-                props: Some(serde_json::json!({"content": "must-drop"})),
-                state: Some("session".to_string()),
-                capabilities: None,
-            }],
-        };
+        let source = legacy_blueprint();
         let plan = service.plan_v1_migration(&source).unwrap();
         assert!(!plan.writes_performed);
         assert_eq!(plan.candidate.revision, SurfaceRevision::new(0));
@@ -915,6 +1225,302 @@ mod tests {
         assert!(!serde_json::to_string(&plan.candidate)
             .unwrap()
             .contains("must-drop"));
+    }
+
+    #[test]
+    fn migration_apply_creates_verified_backup_before_forward_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+
+        let applied = service
+            .apply_v1_migration(
+                0,
+                &source,
+                &plan.source_sha256,
+                &plan.candidate_sha256,
+                &plan.converter_version,
+            )
+            .unwrap();
+
+        assert_eq!(applied.document.revision, SurfaceRevision::new(1));
+        assert_eq!(applied.source_sha256, plan.source_sha256);
+        let manifest =
+            crate::backup::read_backup_manifest(root.path(), &applied.backup_id).unwrap();
+        assert_eq!(manifest.source, BackupSource::PreMigration);
+        assert_eq!(manifest.scope, BackupScope::Workspace { revision: 0 });
+        assert!(crate::backup::verify_backup(root.path(), &applied.backup_id).is_ok());
+        assert_eq!(
+            service.history(10).unwrap()[0].source_kind,
+            "workspace_migration_blueprint_v1"
+        );
+        let revision_manifest = service.load_revision(1).unwrap().0;
+        assert_eq!(
+            revision_manifest.source.source_hash.as_deref(),
+            Some(plan.source_sha256.as_str())
+        );
+        assert_eq!(
+            revision_manifest.source.converter_version.as_deref(),
+            Some(plan.converter_version.as_str())
+        );
+        let rolled = service
+            .rollback_migration_backup(1, &applied.backup_id)
+            .unwrap();
+        assert_eq!(rolled.revision, SurfaceRevision::new(2));
+        assert_eq!(rolled.layout, default_document().layout);
+    }
+
+    #[test]
+    fn migration_hash_or_stale_cas_creates_no_backup_or_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+
+        assert!(matches!(
+            service.apply_v1_migration(
+                0,
+                &source,
+                "not-the-reviewed-hash",
+                &plan.candidate_sha256,
+                &plan.converter_version,
+            ),
+            Err(AirpError::BadRequest(_))
+        ));
+        assert!(matches!(
+            service.apply_v1_migration(
+                0,
+                &source,
+                &plan.source_sha256,
+                "not-the-reviewed-candidate",
+                &plan.converter_version,
+            ),
+            Err(AirpError::BadRequest(_))
+        ));
+        let initial = service.save(0, default_document().layout).unwrap();
+        assert!(matches!(
+            service.apply_v1_migration(
+                0,
+                &source,
+                &plan.source_sha256,
+                &plan.candidate_sha256,
+                &plan.converter_version,
+            ),
+            Err(AirpError::WorkspaceRevisionConflict { .. })
+        ));
+        assert_eq!(service.read().unwrap().revision, initial.revision);
+        assert!(crate::backup::list_backups(root.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_commit_failure_retains_verified_discoverable_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+        crate::revision::atomic::fail_next_commit_at(
+            crate::revision::atomic::CommitFailpoint::AfterRevisionPublish,
+        );
+
+        let backup_id = match service.apply_v1_migration(
+            0,
+            &source,
+            &plan.source_sha256,
+            &plan.candidate_sha256,
+            &plan.converter_version,
+        ) {
+            Err(AirpError::WorkspaceMigrationCommitFailed { backup_id }) => backup_id,
+            other => panic!("expected structured retained-backup error, got {other:?}"),
+        };
+
+        assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(0));
+        assert!(crate::backup::verify_backup(root.path(), &backup_id).is_ok());
+        assert_eq!(
+            crate::backup::list_backups(root.path()).unwrap()[0].backup_id,
+            backup_id
+        );
+    }
+
+    #[test]
+    fn migration_reconciles_pointer_published_before_final_sync_error() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+        crate::revision::atomic::fail_next_commit_at(
+            crate::revision::atomic::CommitFailpoint::AfterPointerPublish,
+        );
+
+        let applied = service
+            .apply_v1_migration(
+                0,
+                &source,
+                &plan.source_sha256,
+                &plan.candidate_sha256,
+                &plan.converter_version,
+            )
+            .unwrap();
+
+        assert_eq!(applied.document.revision, SurfaceRevision::new(1));
+        assert_eq!(service.read().unwrap(), applied.document);
+        assert!(crate::backup::verify_backup(root.path(), &applied.backup_id).is_ok());
+        assert_eq!(
+            crate::revision::atomic::take_authority_sync_trace(),
+            vec![
+                service.asset_dir().join("revisions/1"),
+                service.asset_dir().join("revisions"),
+                service.asset_dir(),
+                root.path().join("ui/workspaces"),
+                root.path().join("ui"),
+                root.path().to_path_buf(),
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_reports_unknown_when_renewed_durability_barrier_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+        crate::revision::atomic::fail_next_commit_at(
+            crate::revision::atomic::CommitFailpoint::AfterPointerPublish,
+        );
+        crate::revision::atomic::fail_authority_sync_at(0);
+
+        let backup_id = match service.apply_v1_migration(
+            0,
+            &source,
+            &plan.source_sha256,
+            &plan.candidate_sha256,
+            &plan.converter_version,
+        ) {
+            Err(AirpError::WorkspaceMigrationOutcomeUnknown { backup_id }) => backup_id,
+            other => panic!("expected outcome unknown, got {other:?}"),
+        };
+
+        assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(1));
+        assert!(crate::backup::verify_backup(root.path(), &backup_id).is_ok());
+    }
+
+    #[test]
+    fn migration_reports_unknown_when_authoritative_pointer_cannot_be_read() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let plan = service.plan_v1_migration(&legacy_blueprint()).unwrap();
+        fs::create_dir_all(service.asset_dir()).unwrap();
+        fs::write(service.asset_dir().join("current_revision"), "corrupt").unwrap();
+
+        assert!(matches!(
+            service.reconcile_migration_commit(
+                0,
+                &plan.candidate.layout,
+                "0123456789abcdef0123456789abcdef",
+                WorkspaceCommitIdentity {
+                    source_kind: "workspace_migration_blueprint_v1",
+                    source_hash: Some(&plan.source_sha256),
+                    converter_version: Some(&plan.converter_version),
+                },
+                AirpError::Internal("simulated final sync failure".to_string()),
+            ),
+            Err(AirpError::WorkspaceMigrationOutcomeUnknown { backup_id })
+                if backup_id == "0123456789abcdef0123456789abcdef"
+        ));
+    }
+
+    #[test]
+    fn migration_backup_rollback_reports_unknown_when_authority_is_unreadable() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        fs::create_dir_all(service.asset_dir()).unwrap();
+        fs::write(service.asset_dir().join("current_revision"), "corrupt").unwrap();
+
+        assert!(matches!(
+            service.reconcile_migration_commit(
+                2,
+                &default_document().layout,
+                "fedcba9876543210fedcba9876543210",
+                WorkspaceCommitIdentity {
+                    source_kind: "workspace_backup_rollback",
+                    source_hash: Some("backup-tree-hash"),
+                    converter_version: None,
+                },
+                AirpError::Internal("simulated rollback sync failure".to_string()),
+            ),
+            Err(AirpError::WorkspaceMigrationOutcomeUnknown { backup_id })
+                if backup_id == "fedcba9876543210fedcba9876543210"
+        ));
+    }
+
+    #[test]
+    fn migration_backup_rollback_restores_layout_as_higher_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        let original = service
+            .execute(
+                0,
+                WorkspaceCommand::ResizeSplit {
+                    split_id: "workspace-root".to_string(),
+                    ratio_basis_points: 7_000,
+                },
+            )
+            .unwrap();
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+        let applied = service
+            .apply_v1_migration(
+                1,
+                &source,
+                &plan.source_sha256,
+                &plan.candidate_sha256,
+                &plan.converter_version,
+            )
+            .unwrap();
+
+        crate::revision::atomic::fail_next_commit_at(
+            crate::revision::atomic::CommitFailpoint::AfterPointerPublish,
+        );
+
+        let rolled = service
+            .rollback_migration_backup(2, &applied.backup_id)
+            .unwrap();
+
+        assert_eq!(rolled.revision, SurfaceRevision::new(3));
+        assert_eq!(rolled.layout, original.layout);
+        assert_eq!(
+            service.history(10).unwrap()[0].source_kind,
+            "workspace_backup_rollback"
+        );
+    }
+
+    #[test]
+    fn migration_backup_rollback_reports_definite_prepublish_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+        service.save(0, default_document().layout).unwrap();
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+        let applied = service
+            .apply_v1_migration(
+                1,
+                &source,
+                &plan.source_sha256,
+                &plan.candidate_sha256,
+                &plan.converter_version,
+            )
+            .unwrap();
+        crate::revision::atomic::fail_next_commit_at(
+            crate::revision::atomic::CommitFailpoint::AfterRevisionPublish,
+        );
+
+        assert!(matches!(
+            service.rollback_migration_backup(2, &applied.backup_id),
+            Err(AirpError::WorkspaceMigrationCommitFailed { backup_id })
+                if backup_id == applied.backup_id
+        ));
+        assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(2));
+        assert!(crate::backup::verify_backup(root.path(), &applied.backup_id).is_ok());
     }
 
     #[test]
@@ -948,6 +1554,47 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn migration_and_command_same_revision_allow_exactly_one_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let service = std::sync::Arc::new(WorkspaceService::new(root.path()));
+        let source = legacy_blueprint();
+        let reviewed = service.plan_v1_migration(&source).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+        let migration_service = service.clone();
+        let migration_barrier = barrier.clone();
+        let migration = std::thread::spawn(move || {
+            migration_barrier.wait();
+            migration_service.apply_v1_migration(
+                0,
+                &source,
+                &reviewed.source_sha256,
+                &reviewed.candidate_sha256,
+                &reviewed.converter_version,
+            )
+        });
+        let command_service = service.clone();
+        let command_barrier = barrier.clone();
+        let command = std::thread::spawn(move || {
+            command_barrier.wait();
+            command_service.execute(
+                0,
+                WorkspaceCommand::ResizeSplit {
+                    split_id: "workspace-root".to_string(),
+                    ratio_basis_points: 7_000,
+                },
+            )
+        });
+        barrier.wait();
+
+        let migration = migration.join().unwrap();
+        let command = command.join().unwrap();
+        assert_ne!(migration.is_ok(), command.is_ok());
+        assert_eq!(service.read().unwrap().revision, SurfaceRevision::new(1));
+        assert!(crate::backup::list_backups(root.path()).unwrap().len() <= 1);
     }
 
     #[test]
@@ -1151,6 +1798,19 @@ mod tests {
             Err(AirpError::WorkspaceUnsupportedMajor { .. })
         ));
         assert!(service.save(1, default_document().layout).is_err());
+        let source = legacy_blueprint();
+        let plan = service.plan_v1_migration(&source).unwrap();
+        assert!(matches!(
+            service.apply_v1_migration(
+                1,
+                &source,
+                &plan.source_sha256,
+                &plan.candidate_sha256,
+                &plan.converter_version,
+            ),
+            Err(AirpError::WorkspaceUnsupportedMajor { .. })
+        ));
+        assert!(crate::backup::list_backups(root.path()).unwrap().is_empty());
         assert_eq!(
             fs::read_to_string(service.asset_dir().join("current_revision")).unwrap(),
             "1"

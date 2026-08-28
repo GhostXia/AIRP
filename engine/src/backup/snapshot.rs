@@ -9,7 +9,7 @@
 //! 5. 计算 per-file SHA-256 + tree SHA-256
 //! 6. 构造 manifest，写入 staging `manifest.json`
 //! 7. 全量校验 manifest vs staging
-//! 8. 同步 staging 目录
+//! 8. 自最深子目录向 staging 根逐层同步全部目录项
 //! 9. 原子 rename staging → `data_root/backups/{backup_id}/`
 //! 10. 同步 `backups/` 父目录
 //!
@@ -41,9 +41,11 @@
 //! ## Scoped restore（v1）
 //!
 //! v1 支持 `BackupScope::Full` / `Character` / `Session` 三种 scope 的 restore：
-//! - **Full**：替换 `data_root` 下所有顶层条目（除 `backups/`），见 `swap_full_data_root`
+//! - **Full**：仅当当前 data root 与目标 manifest 均不含 `ui/workspaces/` 时，
+//!   替换 `data_root` 下所有顶层条目（除 `backups/`），见 `swap_full_data_root`
 //! - **Character / Session**：仅替换 `subtree_prefix` 子树（如 `characters/alice/`），
 //!   其他 data_root 内容不受影响，见 `swap_scoped_subtree`
+//! - **Workspace**：generic restore 明确拒绝，必须走 forward-only workspace rollback
 //!
 //! 这是 #342 pre-delete 备份可恢复能力的核心保证：删除 character/session 时创建的
 //! scoped backup 能 restore 回原资源而不影响其他 character/session。
@@ -104,6 +106,43 @@ pub(crate) struct CreatedBackup {
 pub(crate) fn create_backup(opts: &CreateBackupOptions) -> Result<CreatedBackup, AirpError> {
     let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     create_backup_locked(opts)
+}
+
+/// Create and verify a backup, then run `action` while `BACKUP_LOCK` is still
+/// held. The published backup remains on disk if `action` fails, but cannot be
+/// deleted/restored concurrently before the protected transaction ends.
+/// Lock-free list callers may observe it once its directory is published.
+pub(crate) fn with_created_verified_backup<T>(
+    opts: &CreateBackupOptions,
+    action: impl FnOnce(&CreatedBackup) -> Result<T, AirpError>,
+) -> Result<(T, CreatedBackup), AirpError> {
+    let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let created = create_backup_locked(opts)?;
+    created
+        .manifest
+        .verify_against_disk(&created.backup_dir)
+        .map_err(|error| {
+            AirpError::Internal(format!(
+                "new backup {} failed verification: {error}",
+                created.backup_id
+            ))
+        })?;
+    let result = action(&created)?;
+    Ok((result, created))
+}
+
+/// Verify an existing backup and run `action` while `BACKUP_LOCK` remains
+/// held, preventing delete/restore races with consumers of approved bytes.
+pub(crate) fn with_verified_backup<T>(
+    data_root: &Path,
+    backup_id: &str,
+    action: impl FnOnce(&BackupManifest, &Path) -> Result<T, AirpError>,
+) -> Result<T, AirpError> {
+    let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let manifest = read_backup_manifest(data_root, backup_id)?;
+    let backup_dir = data_root.join("backups").join(backup_id);
+    manifest.verify_against_disk(&backup_dir)?;
+    action(&manifest, &backup_dir)
 }
 
 /// `create_backup` 的内部实现，**调用方必须已持有 `BACKUP_LOCK`**。
@@ -171,8 +210,10 @@ fn create_backup_locked(opts: &CreateBackupOptions) -> Result<CreatedBackup, Air
         ))
     })?;
 
-    // 同步 staging 目录
-    sync_dir(&staging_dir)?;
+    // Persist every nested directory entry before publishing the staging tree.
+    // Directory fsync is not recursive on Unix, so syncing only staging/ would
+    // not make files/ui/workspaces/... crash-durable.
+    sync_directory_tree_bottom_up(&staging_dir)?;
 
     // 原子 rename staging → backup_dir
     fs::rename(&staging_dir, &backup_dir).map_err(|e| {
@@ -185,12 +226,52 @@ fn create_backup_locked(opts: &CreateBackupOptions) -> Result<CreatedBackup, Air
 
     // 同步 backups/ 父目录
     sync_dir(&backups_root)?;
+    // `backups/` may have been created by this first backup. Persist the new
+    // directory entry in its stable data-root parent before reporting success.
+    sync_dir(&opts.data_root)?;
 
     Ok(CreatedBackup {
         backup_id,
         manifest,
         backup_dir,
     })
+}
+
+fn sync_directory_tree_bottom_up(root: &Path) -> Result<(), AirpError> {
+    for directory in collect_directory_tree_bottom_up(root)? {
+        sync_dir(&directory)?;
+    }
+    Ok(())
+}
+
+fn collect_directory_tree_bottom_up(root: &Path) -> Result<Vec<PathBuf>, AirpError> {
+    let mut directories = vec![root.to_path_buf()];
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                return Err(AirpError::Internal(format!(
+                    "backup staging contains symlinked directory entry: {}",
+                    entry.path().display()
+                )));
+            }
+            if file_type.is_dir() {
+                let child = entry.path();
+                directories.push(child.clone());
+                pending.push(child);
+            }
+        }
+    }
+    directories.sort_by(|left, right| {
+        right
+            .components()
+            .count()
+            .cmp(&left.components().count())
+            .then_with(|| left.as_os_str().cmp(right.as_os_str()))
+    });
+    Ok(directories)
 }
 
 /// 递归 walk `current`（rooted at `data_root`），复制批准文件到 `staging_files_dir`。
@@ -458,6 +539,8 @@ pub(crate) fn delete_backup(data_root: &Path, backup_id: &str) -> Result<(), Air
 ///
 /// 1. acquire `BACKUP_LOCK`
 /// 2. 校验目标 backup 完整性（file set + per-file SHA-256 + tree SHA-256）；fail-closed
+///    Workspace scope 在 generic restore 入口被拒绝；Full scope 在当前 data root 或
+///    目标 manifest 含 Workspace assets 时也被拒绝，均不进入回滚点创建或 swap
 /// 3. 创建回滚 backup（`source: PreRestoreRollback`，`scope: Full`）——保护当前 data_root
 /// 4. staging：`data_root/.restore-staging-{backup_id}/`，从 backup `files/` 逐文件复制
 ///    （路径经 `validate_approved_path` + `safe_resolve_for_write` 双重校验）
@@ -488,6 +571,25 @@ pub(crate) fn restore_backup(
 
     // 1. 校验目标 backup 完整性
     let manifest = read_backup_manifest(data_root, backup_id)?;
+    if matches!(manifest.scope, BackupScope::Workspace { .. }) {
+        return Err(AirpError::BadRequest(
+            "generic restore 不支持 Workspace scope；请使用 workspace forward-only rollback"
+                .to_string(),
+        ));
+    }
+    let manifest_has_workspace = manifest
+        .files
+        .iter()
+        .any(|file| file.path == "ui/workspaces" || file.path.starts_with("ui/workspaces/"));
+    let current_has_workspace = data_root.join("ui").join("workspaces").exists();
+    if matches!(manifest.scope, BackupScope::Full)
+        && (manifest_has_workspace || current_has_workspace)
+    {
+        return Err(AirpError::BadRequest(
+            "generic full restore cannot replace or remove Workspace assets; use Workspace forward-only recovery"
+                .to_string(),
+        ));
+    }
     let backup_dir = data_root.join("backups").join(backup_id);
     manifest.verify_against_disk(&backup_dir).map_err(|e| {
         AirpError::Internal(format!(
@@ -545,7 +647,7 @@ pub(crate) fn restore_backup(
         f.write_all(&bytes)?;
         f.sync_all()?;
     }
-    sync_dir(&staging_dir)?;
+    sync_directory_tree_bottom_up(&staging_dir)?;
 
     // 5. 根据 scope 选择替换策略
     let subtree_prefix = manifest.scope.subtree_prefix();
@@ -566,8 +668,9 @@ pub(crate) fn restore_backup(
     Ok((backup_id.to_string(), rollback_id))
 }
 
-/// Full scope restore：移除 data_root 下除 `backups/` 与 staging 外的所有顶层条目，
-/// 再 rename staging 内顶层条目 → `data_root/`。
+/// Full scope restore：移除 data_root 下除 `backups/`、staging 与 `ui/` 外的所有
+/// 顶层条目，再 rename staging 内顶层条目 → `data_root/`。`ui/` 单独逐子项替换，
+/// 永不删除或 rename `ui/workspaces/`，因此并发 Workspace 首次创建也不会被抹除。
 fn swap_full_data_root(
     data_root: &Path,
     staging_dir: &Path,
@@ -577,12 +680,14 @@ fn swap_full_data_root(
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| AirpError::Internal("staging 目录名含非 UTF-8 字节".to_string()))?;
+    preflight_full_restore_ui(data_root, staging_dir)?;
+
     let removed_entries = collect_top_level_entries(data_root);
     for entry in &removed_entries {
         let name = entry.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
             AirpError::Internal("data_root 顶层条目名含非 UTF-8 字节".to_string())
         })?;
-        if name == "backups" || name == staging_name {
+        if name == "backups" || name == staging_name || name == "ui" {
             continue;
         }
         let metadata = std::fs::symlink_metadata(entry)?;
@@ -604,6 +709,9 @@ fn swap_full_data_root(
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| AirpError::Internal("staging 顶层条目名含非 UTF-8 字节".to_string()))?;
+        if name == "ui" {
+            continue;
+        }
         let dest = data_root.join(name);
         fs::rename(entry, &dest).map_err(|e| {
             AirpError::Internal(format!(
@@ -613,8 +721,92 @@ fn swap_full_data_root(
             ))
         })?;
     }
+    swap_full_ui_preserving_workspaces(data_root, staging_dir, rollback_id)?;
     // 清理空 staging 目录
     let _ = fs::remove_dir(staging_dir);
+    // Persist top-level renames/removals and staging cleanup after the swap.
+    sync_dir(data_root)?;
+    Ok(())
+}
+
+fn preflight_full_restore_ui(data_root: &Path, staging_dir: &Path) -> Result<(), AirpError> {
+    for (label, path) in [
+        ("current", data_root.join("ui")),
+        ("staging", staging_dir.join("ui")),
+    ] {
+        if !path.exists() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(AirpError::Internal(format!(
+                "restore: {label} ui path must be a real directory"
+            )));
+        }
+    }
+    if staging_dir.join("ui").join("workspaces").exists() {
+        return Err(AirpError::BadRequest(
+            "generic full restore cannot replace Workspace assets".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Replace non-Workspace children of `ui/` without ever removing or renaming
+/// the `ui/` directory or its `workspaces/` child.
+fn swap_full_ui_preserving_workspaces(
+    data_root: &Path,
+    staging_dir: &Path,
+    rollback_id: &str,
+) -> Result<(), AirpError> {
+    let current_ui = data_root.join("ui");
+    let staging_ui = staging_dir.join("ui");
+
+    if current_ui.exists() {
+        for entry in collect_top_level_entries(&current_ui) {
+            if entry.file_name().and_then(|name| name.to_str()) == Some("workspaces") {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&entry)?;
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                fs::remove_dir_all(&entry)?;
+            } else {
+                fs::remove_file(&entry)?;
+            }
+        }
+    }
+
+    if staging_ui.exists() {
+        fs::create_dir_all(&current_ui)?;
+        for entry in collect_top_level_entries(&staging_ui) {
+            let name = entry
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    AirpError::Internal(
+                        "restore: staging ui entry contains non-UTF-8 bytes".to_string(),
+                    )
+                })?;
+            if name == "workspaces" {
+                return Err(AirpError::BadRequest(
+                    "generic full restore cannot replace Workspace assets".to_string(),
+                ));
+            }
+            let destination = current_ui.join(name);
+            fs::rename(&entry, &destination).map_err(|error| {
+                AirpError::Internal(format!(
+                    "restore: rename staging ui entry {} failed: {error} (rollback backup retained: {rollback_id})",
+                    entry.display()
+                ))
+            })?;
+        }
+        let _ = fs::remove_dir(&staging_ui);
+    }
+    if current_ui.exists() {
+        // Persist non-Workspace child removals and renames. Syncing data_root
+        // alone does not persist entries inside ui/ on Unix.
+        sync_dir(&current_ui)?;
+    }
     Ok(())
 }
 
@@ -702,6 +894,10 @@ fn swap_scoped_subtree(
             dest_subtree.display()
         ))
     })?;
+    let destination_parent = dest_subtree.parent().ok_or_else(|| {
+        AirpError::Internal("scoped restore destination has no parent".to_string())
+    })?;
+    sync_directory_chain_to_root(destination_parent, data_root)?;
 
     // 清理 staging 下空的祖先目录（如 staging/characters/ 已空则删）
     cleanup_empty_staging_ancestors(staging_dir, subtree_prefix);
@@ -709,6 +905,34 @@ fn swap_scoped_subtree(
     // 清理空 staging 根
     let _ = fs::remove_dir(staging_dir);
     Ok(())
+}
+
+fn sync_directory_chain_to_root(start: &Path, root: &Path) -> Result<(), AirpError> {
+    for directory in collect_directory_chain_to_root(start, root)? {
+        sync_dir(&directory)?;
+    }
+    Ok(())
+}
+
+fn collect_directory_chain_to_root(start: &Path, root: &Path) -> Result<Vec<PathBuf>, AirpError> {
+    let canonical_root = fs::canonicalize(root)?;
+    let canonical_start = fs::canonicalize(start)?;
+    if !canonical_start.starts_with(&canonical_root) {
+        return Err(AirpError::Internal(
+            "restore sync path is outside data root".to_string(),
+        ));
+    }
+    let mut directory = canonical_start;
+    let mut chain = Vec::new();
+    loop {
+        chain.push(directory.clone());
+        if directory == canonical_root {
+            return Ok(chain);
+        }
+        directory = directory.parent().map(Path::to_path_buf).ok_or_else(|| {
+            AirpError::Internal("restore sync chain did not reach data root".to_string())
+        })?;
+    }
 }
 
 /// 从 staging 根开始向下清理 `subtree_prefix` 路径中已空的祖先目录。
@@ -743,8 +967,9 @@ fn collect_top_level_entries(dir: &Path) -> Vec<PathBuf> {
     entries
 }
 
-/// post-restore 校验：data_root（排除 backups/）下的文件集合应与 manifest.files 一致，
-/// 允许 secret 文件（secrets.json / settings.json）缺失，因为 restore 不写 secret。
+/// post-restore 校验：manifest 中的每个文件必须存在且 hash 匹配。额外文件不导致
+/// 失败：既有 v1 restore 合同容忍维护窗口外的并发写，本实现还必须保留
+/// `ui/workspaces/`。secret 文件本来就不在 manifest 中，也不会由 restore 写入。
 fn post_restore_verify(
     data_root: &Path,
     manifest: &BackupManifest,
@@ -873,6 +1098,52 @@ mod tests {
         assert_eq!(created.manifest.source, BackupSource::Manual);
         assert_eq!(created.manifest.scope, BackupScope::Full);
         assert!(created.manifest.secrets_excluded);
+    }
+
+    #[test]
+    fn backup_directory_barrier_orders_every_nested_parent_bottom_up() {
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("files/ui/workspaces/default/revisions/1")).unwrap();
+        fs::create_dir_all(root.path().join("files/characters/alice")).unwrap();
+
+        let ordered = collect_directory_tree_bottom_up(root.path()).unwrap();
+        for directory in &ordered {
+            if directory == root.path() {
+                continue;
+            }
+            let parent = directory.parent().unwrap();
+            if parent.starts_with(root.path()) {
+                let child_index = ordered.iter().position(|item| item == directory).unwrap();
+                let parent_index = ordered.iter().position(|item| item == parent).unwrap();
+                assert!(
+                    child_index < parent_index,
+                    "child {} must sync before parent {}",
+                    directory.display(),
+                    parent.display()
+                );
+            }
+        }
+        assert_eq!(ordered.last(), Some(&root.path().to_path_buf()));
+        assert_eq!(ordered.len(), 9);
+    }
+
+    #[test]
+    fn scoped_restore_sync_chain_reaches_data_root_bottom_up() {
+        let root = tempdir().unwrap();
+        let start = root.path().join("characters/alice/sessions");
+        fs::create_dir_all(&start).unwrap();
+        let canonical_root = fs::canonicalize(root.path()).unwrap();
+        let canonical_start = fs::canonicalize(&start).unwrap();
+
+        assert_eq!(
+            collect_directory_chain_to_root(&start, root.path()).unwrap(),
+            vec![
+                canonical_start,
+                canonical_root.join("characters/alice"),
+                canonical_root.join("characters"),
+                canonical_root,
+            ]
+        );
     }
 
     #[test]
@@ -1054,6 +1325,132 @@ mod tests {
             !paths.iter().any(|p| p.contains("sessions/sess2")),
             "session-scoped backup 不应包含 sess2: {:?}",
             paths
+        );
+    }
+
+    #[test]
+    fn workspace_backup_only_contains_fixed_subtree_and_verifies() {
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("ui").join("workspaces").join("default");
+        fs::create_dir_all(workspace.join("revisions").join("7")).unwrap();
+        fs::write(
+            workspace.join("revisions").join("7").join("workspace.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("ui").join("workspaces").join("other")).unwrap();
+        fs::write(
+            dir.path()
+                .join("ui")
+                .join("workspaces")
+                .join("other")
+                .join("workspace.json"),
+            "other",
+        )
+        .unwrap();
+        fs::write(dir.path().join("outside.txt"), "outside").unwrap();
+
+        let opts = make_opts(
+            dir.path(),
+            BackupSource::PreMigration,
+            BackupScope::Workspace { revision: 7 },
+        );
+        let created = create_backup(&opts).unwrap();
+        let paths: Vec<&str> = created
+            .manifest
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+
+        assert_eq!(
+            paths,
+            vec!["ui/workspaces/default/revisions/7/workspace.json"]
+        );
+        assert!(verify_backup(dir.path(), &created.backup_id).is_ok());
+    }
+
+    #[test]
+    fn generic_restore_rejects_workspace_scope() {
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("ui").join("workspaces").join("default");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("CURRENT"), "0\n").unwrap();
+        let created = create_backup(&make_opts(
+            dir.path(),
+            BackupSource::PreMigration,
+            BackupScope::Workspace { revision: 0 },
+        ))
+        .unwrap();
+
+        assert!(matches!(
+            restore_backup(dir.path(), &created.backup_id),
+            Err(AirpError::BadRequest(message)) if message.contains("Workspace scope")
+        ));
+        assert_eq!(list_backups(dir.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn generic_full_restore_cannot_replace_or_remove_workspace_assets() {
+        let captured = tempdir().unwrap();
+        fs::create_dir_all(captured.path().join("ui/workspaces/default")).unwrap();
+        fs::write(
+            captured
+                .path()
+                .join("ui/workspaces/default/current_revision"),
+            "1",
+        )
+        .unwrap();
+        let captured_backup = create_backup(&make_opts(
+            captured.path(),
+            BackupSource::Manual,
+            BackupScope::Full,
+        ))
+        .unwrap();
+        assert!(matches!(
+            restore_backup(captured.path(), &captured_backup.backup_id),
+            Err(AirpError::BadRequest(message)) if message.contains("Workspace assets")
+        ));
+
+        let current = tempdir().unwrap();
+        fs::write(current.path().join("ordinary.txt"), "before").unwrap();
+        let ordinary_backup = create_backup(&make_opts(
+            current.path(),
+            BackupSource::Manual,
+            BackupScope::Full,
+        ))
+        .unwrap();
+        fs::create_dir_all(current.path().join("ui/workspaces/default")).unwrap();
+        assert!(matches!(
+            restore_backup(current.path(), &ordinary_backup.backup_id),
+            Err(AirpError::BadRequest(message)) if message.contains("Workspace assets")
+        ));
+    }
+
+    #[test]
+    fn full_swap_preserves_workspace_while_replacing_other_ui_children() {
+        let root = tempdir().unwrap();
+        let staging = root.path().join(".restore-staging-race");
+        fs::create_dir_all(root.path().join("ui/workspaces/default")).unwrap();
+        fs::write(
+            root.path().join("ui/workspaces/default/current_revision"),
+            "7",
+        )
+        .unwrap();
+        fs::write(root.path().join("ui/obsolete.json"), "old").unwrap();
+        fs::create_dir_all(staging.join("ui")).unwrap();
+        fs::write(staging.join("ui/replacement.json"), "new").unwrap();
+
+        swap_full_data_root(root.path(), &staging, "rollback-id").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join("ui/workspaces/default/current_revision")).unwrap(),
+            "7"
+        );
+        assert!(!root.path().join("ui/obsolete.json").exists());
+        assert_eq!(
+            fs::read_to_string(root.path().join("ui/replacement.json")).unwrap(),
+            "new"
         );
     }
 

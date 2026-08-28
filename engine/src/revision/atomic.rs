@@ -35,6 +35,49 @@ use std::sync::Mutex;
 /// 全局粒度是 Phase 2a 的保守选择；per-asset 锁是后续优化，不影响正确性。
 static COMMIT_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommitFailpoint {
+    AfterRevisionPublish,
+    AfterPointerPublish,
+}
+
+#[cfg(test)]
+thread_local! {
+    static COMMIT_FAILPOINT: std::cell::Cell<Option<CommitFailpoint>> = const { std::cell::Cell::new(None) };
+    static AUTHORITY_SYNC_TRACE: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+    static AUTHORITY_SYNC_FAIL_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static AUTHORITY_SYNC_INDEX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_commit_at(stage: CommitFailpoint) {
+    COMMIT_FAILPOINT.with(|failpoint| failpoint.set(Some(stage)));
+}
+
+#[cfg(test)]
+pub(crate) fn fail_authority_sync_at(index: usize) {
+    AUTHORITY_SYNC_INDEX.with(|value| value.set(0));
+    AUTHORITY_SYNC_FAIL_AT.with(|value| value.set(Some(index)));
+}
+
+#[cfg(test)]
+pub(crate) fn take_authority_sync_trace() -> Vec<PathBuf> {
+    AUTHORITY_SYNC_TRACE.with(|trace| std::mem::take(&mut *trace.borrow_mut()))
+}
+
+#[cfg(test)]
+fn take_commit_failpoint(stage: CommitFailpoint) -> bool {
+    COMMIT_FAILPOINT.with(|failpoint| {
+        if failpoint.get() == Some(stage) {
+            failpoint.set(None);
+            true
+        } else {
+            false
+        }
+    })
+}
+
 /// 已准备的 revision 内容：批准文件 + manifest 元数据。
 ///
 /// 调用方构造 `StagedRevision` 后交给 [`commit_revision`] 写入磁盘。
@@ -91,7 +134,10 @@ impl CommitOptions {
 /// - `content_revision` 必须 > 现有 `current_revision`（若存在），防止回退
 /// - 所有 `staged.files` 路径在写入前预校验（拒绝绝对路径 / `..` / 重复）
 /// - `current_revision` 指针通过原子 rename 更新（无 missing-pointer 窗口）
-/// - 任一步失败只留下不被引用的 staging / orphan revision
+/// - pointer publish 前失败只留下 staging / orphan revision
+/// - pointer rename 后的最终目录 sync 失败可能留下“当前可见但崩溃持久性未知”的
+///   authority；需要确定结果的调用方必须在仍持 asset writer lock 时调用
+///   [`sync_revision_authority`] 重做 barrier 并重新验证内容
 pub(crate) fn commit_revision(
     staged: &StagedRevision,
     options: &CommitOptions,
@@ -212,6 +258,13 @@ pub(crate) fn commit_revision(
     // 7. 同步 revisions/ 父目录
     sync_dir(&revisions_dir)?;
 
+    #[cfg(test)]
+    if take_commit_failpoint(CommitFailpoint::AfterRevisionPublish) {
+        return Err(AirpError::Internal(
+            "test-only failure after revision publication".to_string(),
+        ));
+    }
+
     // 8. 原子替换 current_revision 文件。
     //    Rust std::fs::rename 在 Windows 上对文件用 MoveFileExW(MOVEFILE_REPLACE_EXISTING)，
     //    在 Unix 上是原子 rename(2)，均可原子替换已存在的目标文件，无需先 remove_file。
@@ -235,10 +288,100 @@ pub(crate) fn commit_revision(
         ))
     })?;
 
+    #[cfg(test)]
+    if take_commit_failpoint(CommitFailpoint::AfterPointerPublish) {
+        return Err(AirpError::Internal(
+            "test-only failure after current pointer publication".to_string(),
+        ));
+    }
+
     // 9. 同步 current_revision 父目录（asset_dir）
     sync_dir(&options.asset_dir)?;
 
     Ok(revision_dir)
+}
+
+/// Re-establish and verify the durability barrier for an already visible
+/// revision authority after `commit_revision` returned an error. This is used
+/// only while the caller still owns the asset's writer lock. `durability_root`
+/// must be an already-established ancestor (the effective data root); all
+/// directories from the revision through that root are synced bottom-up so a
+/// first-created asset hierarchy is durable on Unix.
+pub(crate) fn sync_revision_authority(
+    asset_dir: &Path,
+    durability_root: &Path,
+    expected_revision: u64,
+) -> Result<(), AirpError> {
+    #[cfg(test)]
+    {
+        AUTHORITY_SYNC_INDEX.with(|value| value.set(0));
+        AUTHORITY_SYNC_TRACE.with(|trace| trace.borrow_mut().clear());
+    }
+    if !asset_dir.starts_with(durability_root) || asset_dir == durability_root {
+        return Err(AirpError::Internal(
+            "revision asset directory is outside its durability root".to_string(),
+        ));
+    }
+    let current = read_current_revision(asset_dir)?.ok_or_else(|| {
+        AirpError::Internal("revision authority is missing during reconciliation".to_string())
+    })?;
+    if current != expected_revision {
+        return Err(AirpError::Internal(format!(
+            "revision authority changed during reconciliation: expected {expected_revision}, current {current}"
+        )));
+    }
+    let revisions_dir = asset_dir.join("revisions");
+    let revision_dir = revisions_dir.join(expected_revision.to_string());
+    if !revision_dir.is_dir() {
+        return Err(AirpError::Internal(format!(
+            "revision {expected_revision} is missing during reconciliation"
+        )));
+    }
+    sync_authority_dir(&revision_dir)?;
+    sync_authority_dir(&revisions_dir)?;
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(asset_dir.join("current_revision"))?
+        .sync_all()?;
+    let mut directory = asset_dir.to_path_buf();
+    loop {
+        sync_authority_dir(&directory)?;
+        if directory == durability_root {
+            break;
+        }
+        directory = directory.parent().map(Path::to_path_buf).ok_or_else(|| {
+            AirpError::Internal(
+                "revision durability root is not an ancestor of the asset directory".to_string(),
+            )
+        })?;
+    }
+    if read_current_revision(asset_dir)? != Some(expected_revision) {
+        return Err(AirpError::Internal(
+            "revision authority changed after reconciliation barrier".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn sync_authority_dir(path: &Path) -> Result<(), AirpError> {
+    #[cfg(test)]
+    {
+        AUTHORITY_SYNC_TRACE.with(|trace| trace.borrow_mut().push(path.to_path_buf()));
+        let index = AUTHORITY_SYNC_INDEX.with(|value| {
+            let index = value.get();
+            value.set(index + 1);
+            index
+        });
+        if AUTHORITY_SYNC_FAIL_AT.with(|value| value.get()) == Some(index) {
+            AUTHORITY_SYNC_FAIL_AT.with(|value| value.set(None));
+            return Err(AirpError::Internal(format!(
+                "test-only authority sync failure at {}",
+                path.display()
+            )));
+        }
+    }
+    sync_dir(path)
 }
 
 /// 预校验 staged 文件路径：拒绝绝对路径 / `..` / `.` / 重复 / 空段 / 反斜杠。

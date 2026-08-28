@@ -35,7 +35,7 @@ use std::sync::Arc;
 #[serde(deny_unknown_fields)]
 pub(in crate::daemon) struct CreateBackupRequest {
     /// backup 来源。仅接受 `"manual"`（HTTP API 不允许直接创建 pre_delete /
-    /// pre_restore_rollback backup，那些由 delete_character / restore 内部创建）。
+    /// pre_restore_rollback / pre_migration backup，那些由系统内部创建）。
     pub source: String,
     /// backup 范围：`"full"` / `"character"` / `"session"`。
     pub scope: BackupScopeRequest,
@@ -129,6 +129,9 @@ pub(in crate::daemon) enum BackupScopeSummary {
         character_id: String,
         session_id: String,
     },
+    Workspace {
+        revision: u64,
+    },
 }
 
 /// manifest.files 单项的 HTTP 序列化形式。
@@ -146,7 +149,7 @@ fn validate_http_source(source: &str) -> Result<BackupSource, AirpError> {
     match source {
         "manual" => Ok(BackupSource::Manual),
         other => Err(AirpError::BadRequest(format!(
-            "POST /v1/backups 仅接受 source=\"manual\"，收到 {:?}。pre_delete / pre_restore_rollback 由系统内部创建",
+            "POST /v1/backups 仅接受 source=\"manual\"，收到 {:?}。pre_delete / pre_restore_rollback / pre_migration 由系统内部创建",
             other
         ))),
     }
@@ -211,6 +214,9 @@ fn scope_to_summary(scope: &BackupScope) -> BackupScopeSummary {
         } => BackupScopeSummary::Session {
             character_id: character_id.clone(),
             session_id: session_id.clone(),
+        },
+        BackupScope::Workspace { revision } => BackupScopeSummary::Workspace {
+            revision: *revision,
         },
     }
 }
@@ -527,6 +533,30 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(v["error"]["message"].as_str().unwrap().contains("manual"));
+    }
+
+    #[tokio::test]
+    async fn create_backup_rejects_internal_workspace_scope() {
+        let (state, _tmp) = make_state_for_http_test();
+        let app = crate::daemon::create_router(state.clone());
+
+        let body = serde_json::json!({
+            "source": "manual",
+            "scope": { "kind": "workspace", "revision": 7 }
+        });
+        let (status, _v) = post_backup(app, body).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn workspace_scope_summary_is_transparent() {
+        let summary =
+            super::scope_to_summary(&crate::backup::BackupScope::Workspace { revision: 7 });
+        let value = serde_json::to_value(summary).unwrap();
+
+        assert_eq!(value["kind"], "workspace");
+        assert_eq!(value["revision"], 7);
     }
 
     #[tokio::test]

@@ -59,6 +59,7 @@
 | `ENV_LOCK` | `config.rs`、`daemon/handlers/characters.rs` | `Mutex<()>` / `tokio::sync::Mutex<()>` | 进程 env reload 串行化 |
 | `DaemonState.provider_routing_update` / `plugin_tools_update` / `settings_update.transaction` | `daemon/mod.rs` | `tokio::sync::Mutex<()>` | per-DaemonState 配置热更新串行化 |
 | `BACKUP_LOCK` | `backup/snapshot.rs` | `Mutex<()>`（std） | 串行化 backup vs backup / backup vs restore（#342 E-P2-1，PR #445 引入） |
+| `WORKSPACE_LOCK` | `domain/workspace.rs` | `Mutex<()>`（std） | 串行化单一 Workspace 的 read/CAS/commit 与 migration recovery |
 
 ## 2. 已核验的嵌套路径
 
@@ -179,6 +180,23 @@ character_lock.read()  →  session_lock.lock()  →  [create_backup 内] BACKUP
 - `restore_backup` 内部调 `create_backup_locked`（非 `create_backup`）以避免 `std::sync::Mutex` 不可重入死锁：`restore_backup` 已持 `BACKUP_LOCK`，再调 `create_backup` 会重入同一 `Mutex` 死锁；split 后 `create_backup_locked` 假设锁已持有，不再 acquire。
 - **残留风险（W-02，#447）**：`restore_backup` 的 swap 阶段（`swap_full_data_root` / `swap_scoped_subtree`）仅持 `BACKUP_LOCK`，不持任何 `character_lock`，可与并发 `append_to_current` / `StateService::mutate` 竞态。v1 缓解：用户在维护窗口执行 restore（无活跃 session）。
 
+### 2.10 Workspace migration transaction（`domain/workspace.rs`，#577 PR 10f-1）
+
+```text
+WORKSPACE_LOCK  →  BACKUP_LOCK  →  COMMIT_LOCK
+```
+
+- migration apply/backup rollback 在持有 `WORKSPACE_LOCK` 后取得 `BACKUP_LOCK`，并在
+  backup 创建或读取、完整 verify、Workspace forward commit 全程保持该锁。
+- `commit_revision` 在 action 内取得 `COMMIT_LOCK`；这是唯一批准的
+  `BACKUP_LOCK → COMMIT_LOCK` utility-lock 嵌套。反向 `COMMIT_LOCK → BACKUP_LOCK`
+  禁止。
+- apply 与 backup rollback 若在 pointer publication 附近收到 commit error，会在仍持
+  外层两把锁时核对 revision identity，并从 revision 自下而上同步至稳定 effective
+  data root、重同步 current 文件后再次验证；完整 barrier 前不得把“当前可见”报告为成功。
+- generic Full restore 不取得 `WORKSPACE_LOCK`；其 swap 算法从路径级保证永不删除、
+  rename 或写入 `ui/workspaces/`，因此并发 Workspace 首次创建不依赖检查时序。
+
 ## 3. 锁序规则
 
 ### R1：`character_lock` 是 per-character 外层门控
@@ -207,9 +225,9 @@ session_lock  →  state_lock   （仅 advance_plot，经 StateService::mutate_l
 - `conversation_io_lock` 可单独持有（`context_projection`、`all_events_locked_async`）。
 - 反向（持 `conversation_io_lock` 时获取 `conversation_lock`）**禁止**。
 
-### R4：全局 utility 锁是叶锁
+### R4：全局 utility 锁通常是叶锁；Backup 到 Commit 有一条显式边
 
-`COMMIT_LOCK`、`QUOTA_LOCK`、`PRESET_WRITE_LOCK`、`PRESET_IMPORT_LOCK`、`INDEX_LOCK`、`ENV_LOCK`、`DaemonState.*_update`、`BACKUP_LOCK` 持有期间**不得**获取任何 per-character / per-conversation / per-session 资源锁。它们必须是临界区的最内层。
+`COMMIT_LOCK`、`QUOTA_LOCK`、`PRESET_WRITE_LOCK`、`PRESET_IMPORT_LOCK`、`INDEX_LOCK`、`ENV_LOCK`、`DaemonState.*_update`、`BACKUP_LOCK` 持有期间**不得**获取任何 per-character / per-conversation / per-session 资源锁。除 §2.10 唯一登记的 `BACKUP_LOCK → COMMIT_LOCK` 外，它们必须是临界区的最内层；`COMMIT_LOCK → BACKUP_LOCK` 禁止。
 
 例外审计：`StateService::mutate` 在持 `character_lock.read + state_lock` 期间调用 `commit_revision`，后者获取 `COMMIT_LOCK`——这是 `character.read → state → COMMIT_LOCK` 的合法外→内序列，`COMMIT_LOCK` 仍为最内层叶锁，不违反 R4。
 
