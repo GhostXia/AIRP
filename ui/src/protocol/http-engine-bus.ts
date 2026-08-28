@@ -4,10 +4,14 @@ import type { SurfaceApplyResult } from "./surface-v2";
 const MAX_SSE_BUFFER_BYTES = 512 * 1024;
 const JSON_REQUEST_TIMEOUT_MS = 10_000;
 const RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
-const WORKSPACE_WIDGET_TYPES = new Set([
+export const WORKSPACE_WIDGET_TYPES = [
   "core.activity", "core.card", "core.character-state", "core.characters", "core.chat",
   "core.clock", "core.emotion", "core.inventory", "core.map", "core.memory", "core.quest",
-]);
+] as const;
+export const WORKSPACE_COMMAND_TYPES = [
+  "open_widget", "close_widget", "move_widget", "resize_split", "activate_tab", "reset_layout",
+] as const;
+const WORKSPACE_WIDGET_TYPE_SET = new Set<string>(WORKSPACE_WIDGET_TYPES);
 
 export interface EngineSurfaceScope {
   characterId: string;
@@ -59,8 +63,43 @@ export interface WorkspaceResizeSplitCommand {
   ratio_basis_points: number;
 }
 
-/** Additive command union; the initial HTTP contract exposes split resizing. */
-export type WorkspaceCommand = WorkspaceResizeSplitCommand;
+export interface WorkspaceOpenWidgetCommand {
+  type: "open_widget";
+  instance_id: string;
+  widget_type: string;
+  target_id: string;
+  index?: number;
+}
+
+export interface WorkspaceCloseWidgetCommand {
+  type: "close_widget";
+  instance_id: string;
+}
+
+export interface WorkspaceMoveWidgetCommand {
+  type: "move_widget";
+  instance_id: string;
+  target_id: string;
+  index?: number;
+}
+
+export interface WorkspaceActivateTabCommand {
+  type: "activate_tab";
+  tabs_id: string;
+  node_id: string;
+}
+
+export interface WorkspaceResetLayoutCommand {
+  type: "reset_layout";
+}
+
+export type WorkspaceCommand =
+  | WorkspaceOpenWidgetCommand
+  | WorkspaceCloseWidgetCommand
+  | WorkspaceMoveWidgetCommand
+  | WorkspaceResizeSplitCommand
+  | WorkspaceActivateTabCommand
+  | WorkspaceResetLayoutCommand;
 
 export interface WorkspaceCommandRequest {
   expected_revision: WorkspaceRevision;
@@ -264,7 +303,7 @@ function parseWorkspaceDocument(value: unknown): WorkspaceDocument {
       || !hasOnlyKeys(widget, ["id", "type"])
       || !isIdentifier(widget.id)
       || typeof widget.type !== "string"
-      || !WORKSPACE_WIDGET_TYPES.has(widget.type)
+      || !WORKSPACE_WIDGET_TYPE_SET.has(widget.type)
       || widgetIds.has(widget.id)) {
       throw new Error("Engine returned an invalid workspace document");
     }
@@ -322,13 +361,48 @@ function parseWorkspaceHistory(value: unknown): WorkspaceHistoryResponse {
 }
 
 function assertWorkspaceCommand(request: WorkspaceCommandRequest): void {
-  if (!isRevision(request.expected_revision)
-    || !isIdentifier(request.command.split_id)
-    || !Number.isSafeInteger(request.command.ratio_basis_points)
-    || request.command.ratio_basis_points < 1_000
-    || request.command.ratio_basis_points > 9_000) {
+  if (!isRevision(request.expected_revision)) {
     throw new Error("invalid workspace command request");
   }
+  if (!isRecord(request.command)) throw new Error("invalid workspace command request");
+  const command = request.command;
+  const validIndex = (index: number | undefined) => index === undefined
+    || (Number.isSafeInteger(index) && index >= 0 && index <= 32);
+  let valid = false;
+  switch (command.type) {
+    case "open_widget":
+      valid = hasOnlyKeys(command, ["type", "instance_id", "widget_type", "target_id", "index"])
+        && isIdentifier(command.instance_id)
+        && WORKSPACE_WIDGET_TYPE_SET.has(command.widget_type)
+        && isIdentifier(command.target_id)
+        && validIndex(command.index);
+      break;
+    case "close_widget":
+      valid = hasOnlyKeys(command, ["type", "instance_id"])
+        && isIdentifier(command.instance_id);
+      break;
+    case "move_widget":
+      valid = hasOnlyKeys(command, ["type", "instance_id", "target_id", "index"])
+        && isIdentifier(command.instance_id)
+        && isIdentifier(command.target_id)
+        && validIndex(command.index);
+      break;
+    case "resize_split":
+      valid = hasOnlyKeys(command, ["type", "split_id", "ratio_basis_points"])
+        && isIdentifier(command.split_id)
+        && Number.isSafeInteger(command.ratio_basis_points)
+        && command.ratio_basis_points >= 1_000
+        && command.ratio_basis_points <= 9_000;
+      break;
+    case "activate_tab":
+      valid = hasOnlyKeys(command, ["type", "tabs_id", "node_id"])
+        && isIdentifier(command.tabs_id) && isIdentifier(command.node_id);
+      break;
+    case "reset_layout":
+      valid = hasOnlyKeys(command, ["type"]);
+      break;
+  }
+  if (!valid) throw new Error("invalid workspace command request");
 }
 
 function assertWorkspaceRollback(request: WorkspaceRollbackRequest): void {
