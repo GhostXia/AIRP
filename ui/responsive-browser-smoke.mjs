@@ -25,6 +25,7 @@ const serverArgs = isWindows
 const server = spawn(serverCommand, serverArgs, {
   cwd: uiDir,
   env: { ...process.env, BROWSER: 'none' },
+  detached: !isWindows,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverOutput = '';
@@ -40,7 +41,11 @@ function stopServer() {
       // The wrapper may have exited while Vite was shutting down.
     }
   } else {
-    server.kill();
+    try {
+      process.kill(-server.pid, 'SIGTERM');
+    } catch {
+      server.kill();
+    }
   }
 }
 
