@@ -344,8 +344,8 @@ fn project_session(
         memory: bounded_props(memory),
         character_state: bounded_props(character_state),
         activity: bounded_props(activity),
-        emotion: bounded_props(emotion),
-        inventory: bounded_props(inventory),
+        emotion: bounded_projection_props(emotion),
+        inventory: bounded_projection_props(inventory),
     })
 }
 
@@ -361,6 +361,26 @@ fn bounded_props(value: Value) -> Value {
         Ok(encoded) if encoded.len() <= MAX_WIDGET_PROPS_BYTES => value,
         Ok(encoded) => json!({"truncated": true, "original_bytes": encoded.len()}),
         Err(_) => json!({"unavailable": true}),
+    }
+}
+
+fn bounded_projection_props(value: Value) -> Value {
+    match serde_json::to_vec(&value) {
+        Ok(encoded) if encoded.len() <= MAX_WIDGET_PROPS_BYTES => value,
+        Ok(_) | Err(_) => {
+            let mut unavailable = serde_json::Map::from_iter([
+                ("available".into(), Value::Bool(false)),
+                ("reason".into(), Value::String("unavailable".into())),
+            ]);
+            if let Some(projection) = value.as_object() {
+                for key in ["revision", "timestamp", "source"] {
+                    if let Some(field) = projection.get(key) {
+                        unavailable.insert(key.into(), field.clone());
+                    }
+                }
+            }
+            Value::Object(unavailable)
+        }
     }
 }
 

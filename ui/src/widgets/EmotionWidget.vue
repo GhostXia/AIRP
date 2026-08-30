@@ -39,9 +39,10 @@ const timestampText = computed(() => projectionTimestamp(metadata.value));
 .w-emotion {
   height: 100%;
   overflow: auto;
-  padding: 12px;
+  min-width: 0;
+  padding: min(12px, 8%);
 }
-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; margin-bottom: 12px; }
 .readonly-badge { border: 1px solid var(--border-default); border-radius: 999px; padding: 3px 7px; color: var(--text-secondary); font-size: 11px; }
 .gauge {
   height: 10px;

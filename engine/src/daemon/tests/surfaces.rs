@@ -218,6 +218,36 @@ async fn emotion_and_inventory_widgets_project_bounded_character_state_read_only
     );
     assert_eq!(inventory["revision"], 1);
 
+    let unicode_items = (0..128)
+        .map(|index| {
+            serde_json::json!({
+                "id": format!("{index:03}{}", "🧭".repeat(125)),
+                "name": "🧭".repeat(256),
+                "icon": "🧭".repeat(16)
+            })
+        })
+        .collect::<Vec<_>>();
+    crate::domain::StateService::new(&state.data_root)
+        .write(
+            &alice,
+            &serde_json::json!({
+                "emotion": -1,
+                "mood": "must-not-leak",
+                "inventory": unicode_items
+            }),
+        )
+        .unwrap();
+    let bounded = surface_snapshot_json(app.clone(), alice.as_str(), &alice_session).await;
+    let emotion = widget_props(&bounded, "emotion");
+    assert_eq!(emotion["available"], false);
+    assert_eq!(emotion["reason"], "invalid");
+    assert!(emotion.get("label").is_none());
+    let inventory = widget_props(&bounded, "inventory");
+    assert_eq!(inventory["available"], false);
+    assert_eq!(inventory["reason"], "unavailable");
+    assert_eq!(inventory["revision"], 2);
+    assert_eq!(inventory["source"]["character_id"], "alice");
+
     let bob = crate::types::CharacterId::new("bob").unwrap();
     let bob_session = crate::types::SessionId::new();
     crate::data_dir::create_session_with_id(&state.data_root, bob.as_str(), &bob_session).unwrap();

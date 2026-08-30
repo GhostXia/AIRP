@@ -192,8 +192,16 @@ fn build_session_surface_with_layout(
     let blueprint = match layout {
         Some(layout) => {
             let mut blueprint = workspace_layout_to_blueprint(layout)?;
+            let mut inventory_projected = false;
             for widget in &mut blueprint.widgets {
-                widget.props = projected_props(&widget.widget_type, &props);
+                widget.props = if widget.widget_type == "core.inventory" && inventory_projected {
+                    Some(unavailable_projection(&props.inventory))
+                } else {
+                    if widget.widget_type == "core.inventory" {
+                        inventory_projected = true;
+                    }
+                    projected_props(&widget.widget_type, &props)
+                };
             }
             blueprint
         }
@@ -259,6 +267,21 @@ fn projected_props(widget_type: &str, props: &SessionSurfaceProps) -> Option<Val
     }
 }
 
+fn unavailable_projection(projection: &Value) -> Value {
+    let mut unavailable = serde_json::Map::from_iter([
+        ("available".into(), Value::Bool(false)),
+        ("reason".into(), Value::String("unavailable".into())),
+    ]);
+    if let Some(projection) = projection.as_object() {
+        for key in ["revision", "timestamp", "source"] {
+            if let Some(value) = projection.get(key) {
+                unavailable.insert(key.into(), value.clone());
+            }
+        }
+    }
+    Value::Object(unavailable)
+}
+
 pub(crate) fn project_character_state_widgets(
     revision: u64,
     timestamp: Option<&str>,
@@ -289,12 +312,14 @@ fn project_emotion(state: &Value, mut projection: serde_json::Map<String, Value>
         };
         projection.insert("reason".into(), Value::String(reason.into()));
     }
-    if let Some(label) = state
-        .and_then(|state| state.get("emotion_label").or_else(|| state.get("mood")))
-        .and_then(Value::as_str)
-        .filter(|label| !label.is_empty() && label.chars().count() <= MAX_EMOTION_LABEL_CHARS)
-    {
-        projection.insert("label".into(), Value::String(label.into()));
+    if emotion.is_some() {
+        if let Some(label) = state
+            .and_then(|state| state.get("emotion_label").or_else(|| state.get("mood")))
+            .and_then(Value::as_str)
+            .filter(|label| !label.is_empty() && label.chars().count() <= MAX_EMOTION_LABEL_CHARS)
+        {
+            projection.insert("label".into(), Value::String(label.into()));
+        }
     }
     Value::Object(projection)
 }
@@ -1008,17 +1033,25 @@ mod tests {
 
         let invalid = json!({
             "emotion": -1,
+            "mood": "must-not-leak",
             "inventory": [{"id": "duplicate", "name": "One"}, {"id": "duplicate", "name": "Two"}]
         });
         let (emotion, inventory) = project_character_state_widgets(8, None, &invalid, "alice");
         assert_eq!(emotion["available"], false);
         assert!(emotion["emotion"].is_null());
+        assert!(emotion["label"].is_null());
         assert_eq!(inventory["available"], false);
         assert!(inventory["items"].is_null());
 
+        let (missing, _) =
+            project_character_state_widgets(9, None, &json!({"mood": "must-not-leak"}), "alice");
+        assert_eq!(missing["available"], false);
+        assert_eq!(missing["reason"], "missing");
+        assert!(missing["label"].is_null());
+
         let unrelated = "x".repeat(200_000);
         let large = json!({"emotion": 50, "inventory": [], "unrelated": unrelated});
-        let (emotion, inventory) = project_character_state_widgets(9, None, &large, "alice");
+        let (emotion, inventory) = project_character_state_widgets(10, None, &large, "alice");
         assert_eq!(emotion["emotion"], 50);
         assert_eq!(inventory["items"], json!([]));
     }
@@ -1227,6 +1260,82 @@ mod tests {
                 .map(|widget| (widget.id.as_str(), widget.widget_type.as_str()))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn repeated_inventory_instances_degrade_without_exhausting_surface_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceService::new(root.path());
+        let mut revision = 0;
+        let mut document = workspace.read().unwrap();
+        for index in 0..20 {
+            document = workspace
+                .execute(
+                    revision,
+                    WorkspaceCommand::OpenWidget {
+                        instance_id: format!("inventory-{index}"),
+                        widget_type: "core.inventory".to_string(),
+                        target_id: "workspace-context".to_string(),
+                        index: None,
+                    },
+                )
+                .unwrap();
+            revision = document.revision.value();
+        }
+
+        let large_items = (0..128)
+            .map(|index| {
+                json!({
+                    "id": format!("{index:03}{}", "x".repeat(125)),
+                    "name": "n".repeat(256),
+                    "icon": "i".repeat(16)
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut projected = props("small");
+        projected.inventory = json!({
+            "available": true,
+            "items": large_items,
+            "revision": 7,
+            "timestamp": null,
+            "source": {
+                "kind": "character_state",
+                "scope": "character",
+                "character_id": "character-a"
+            }
+        });
+        let mut registry = SurfaceRegistry::new();
+        let published = changed(
+            registry
+                .publish_workspace(
+                    scope("character-a", "session-a"),
+                    projected,
+                    document.revision,
+                    document.layout,
+                )
+                .unwrap(),
+        );
+        let published = snapshot(&published);
+        let inventories = published
+            .blueprint
+            .widgets
+            .iter()
+            .filter(|widget| widget.widget_type == "core.inventory")
+            .map(|widget| widget.props.as_ref().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(inventories.len(), 20);
+        assert_eq!(
+            inventories
+                .iter()
+                .filter(|props| props["available"] == true)
+                .count(),
+            1
+        );
+        assert!(inventories.iter().skip(1).all(|props| {
+            props["available"] == false
+                && props["reason"] == "unavailable"
+                && props["revision"] == 7
+        }));
     }
 
     #[test]

@@ -228,11 +228,6 @@ try {
   await page.locator('[data-widget-instance="responsive-inventory"] .w-inventory').waitFor({ state: 'visible' });
 
   const projectionSplit = page.locator('[data-node-id="projection-split"]');
-  await projectionSplit.evaluate(split => {
-    split.style.setProperty('--split-leading', '1000fr');
-    split.style.setProperty('--split-trailing', '9000fr');
-    split.style.setProperty('--split-position', '10%');
-  });
   const meter = page.getByRole('meter', { name: '情绪值' });
   assert.equal(await meter.getAttribute('aria-valuemin'), '0');
   assert.equal(await meter.getAttribute('aria-valuemax'), '100');
@@ -242,46 +237,58 @@ try {
   assert.equal(await page.locator('[data-widget-instance="responsive-inventory"] button').count(), 0);
   await page.getByText('暂无物品', { exact: true }).waitFor({ state: 'visible' });
 
-  for (const width of [320, 760, 761]) {
-    await page.setViewportSize({ width, height: 800 });
-    const layout = await page.evaluate(() => {
-      const split = document.querySelector('[data-node-id="projection-split"]');
-      const children = split ? [...split.children].filter(node => node.classList.contains('layout-widget')) : [];
-      const tracked = [
-        document.documentElement,
-        document.body,
-        document.querySelector('.app'),
-        document.querySelector('.blueprint'),
-        split,
-        ...children,
-      ].filter(Boolean);
-      return {
-        columns: split ? getComputedStyle(split).gridTemplateColumns.split(/\s+/).filter(Boolean) : [],
-        childRects: children.map(node => {
-          const rect = node.getBoundingClientRect();
-          return { top: rect.top, left: rect.left, width: rect.width };
-        }),
-        overflow: tracked.map(node => ({
-          name: node.className || node.tagName,
-          clientWidth: node.clientWidth,
-          scrollWidth: node.scrollWidth,
-        })),
-      };
-    });
-    for (const entry of layout.overflow) {
-      assert.ok(entry.scrollWidth <= entry.clientWidth + 1,
-        `${width}px projection layout has horizontal overflow: ${JSON.stringify(entry)}`);
-    }
-    assert.equal(layout.childRects.length, 2, `${width}px projection widgets were not both mounted`);
-    if (width <= 760) {
-      assert.equal(layout.columns.length, 1, `${width}px horizontal split did not stack: ${layout.columns}`);
-      assert.ok(layout.childRects[1].top > layout.childRects[0].top,
-        `${width}px projection widgets did not stack vertically: ${JSON.stringify(layout.childRects)}`);
-    } else {
-      assert.equal(layout.columns.length, 2, `761px horizontal split did not restore columns: ${layout.columns}`);
-      const share = layout.childRects[0].width / (layout.childRects[0].width + layout.childRects[1].width);
-      assert.ok(share >= 0.09 && share <= 0.11,
-        `761px 10/90 split ratio was not preserved: ${JSON.stringify(layout.childRects)}`);
+  for (const ratio of [1_000, 9_000]) {
+    await projectionSplit.evaluate((split, leading) => {
+      split.style.setProperty('--split-leading', `${leading}fr`);
+      split.style.setProperty('--split-trailing', `${10_000 - leading}fr`);
+      split.style.setProperty('--split-position', `${leading / 100}%`);
+    }, ratio);
+    for (const width of [320, 760, 761]) {
+      await page.setViewportSize({ width, height: 800 });
+      const layout = await page.evaluate(() => {
+        const split = document.querySelector('[data-node-id="projection-split"]');
+        const children = split ? [...split.children].filter(node => node.classList.contains('layout-widget')) : [];
+        const widgetInternals = [
+          ...document.querySelectorAll('.w-emotion, .w-emotion header, .w-inventory, .w-inventory header, .w-inventory .grid'),
+        ];
+        const tracked = [
+          document.documentElement,
+          document.body,
+          document.querySelector('.app'),
+          document.querySelector('.blueprint'),
+          split,
+          ...children,
+          ...widgetInternals,
+        ].filter(Boolean);
+        return {
+          columns: split ? getComputedStyle(split).gridTemplateColumns.split(/\s+/).filter(Boolean) : [],
+          childRects: children.map(node => {
+            const rect = node.getBoundingClientRect();
+            return { top: rect.top, left: rect.left, width: rect.width };
+          }),
+          overflow: tracked.map(node => ({
+            name: node.className || node.tagName,
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+          })),
+        };
+      });
+      for (const entry of layout.overflow) {
+        assert.ok(entry.scrollWidth <= entry.clientWidth + 1,
+          `${width}px at ${ratio / 100}% projection layout has horizontal overflow: ${JSON.stringify(entry)}`);
+      }
+      assert.equal(layout.childRects.length, 2, `${width}px projection widgets were not both mounted`);
+      if (width <= 760) {
+        assert.equal(layout.columns.length, 1, `${width}px horizontal split did not stack: ${layout.columns}`);
+        assert.ok(layout.childRects[1].top > layout.childRects[0].top,
+          `${width}px projection widgets did not stack vertically: ${JSON.stringify(layout.childRects)}`);
+      } else {
+        assert.equal(layout.columns.length, 2, `761px horizontal split did not restore columns: ${layout.columns}`);
+        const share = layout.childRects[0].width / (layout.childRects[0].width + layout.childRects[1].width);
+        const expected = ratio / 10_000;
+        assert.ok(Math.abs(share - expected) <= 0.01,
+          `761px ${ratio / 100}/${100 - ratio / 100} split ratio was not preserved: ${JSON.stringify(layout.childRects)}`);
+      }
     }
   }
 

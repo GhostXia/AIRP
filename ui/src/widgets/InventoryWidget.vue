@@ -40,9 +40,10 @@ const timestampText = computed(() => projectionTimestamp(metadata.value));
 .w-inventory {
   height: 100%;
   overflow: auto;
-  padding: 12px;
+  min-width: 0;
+  padding: min(12px, 8%);
 }
-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; margin-bottom: 12px; }
 .readonly-badge { border: 1px solid var(--border-default); border-radius: 999px; padding: 3px 7px; color: var(--text-secondary); font-size: 11px; }
 .grid {
   list-style: none;
@@ -56,13 +57,15 @@ header { display: flex; align-items: center; justify-content: space-between; gap
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 56px;
+  box-sizing: border-box;
+  min-width: min(56px, 100%);
+  max-width: 100%;
   padding: 6px;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-input);
   background: var(--bg-subtle);
 }
-.name { max-width: 120px; overflow-wrap: anywhere; color: var(--text-primary); font-size: 12px; }
+.name { max-width: 100%; overflow-wrap: anywhere; color: var(--text-primary); font-size: 12px; }
 .qty {
   font-size: 11px;
   color: var(--text-secondary);
