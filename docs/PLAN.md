@@ -28,6 +28,8 @@ Phase 1–5.3 的大量功能已在 2026-07-25 至 2026-07-26 合入；此后 Co
 2. **Turn 级跨资源提交 / 恢复**：单资源原子写不等于跨资源事务（见 #286/#342）。
 3. **插件 DNS 与锁/async 模型**：DNS fail-closed + 请求时 pin 为近端安全门（#329 N3）；锁/并发正确性优先于新工具/新页面。
 
+Agent decision-input 边界按 #178 收口：普通 Generate 保留完整 RP 装配；显式 assignment 与被选择的最小工具证据使用 typed provider blocks；raw 参数/结果、planner transcript、调度预算与 telemetry 不进入生成 payload。该合同是后续智能 NPC/多 Agent 扩张的前置安全地基，不代表完整 runtime 或 UI 已交付。
+
 详细排序与去重挂接以 #381 与 [CURRENT-BASELINE.md](CURRENT-BASELINE.md) §5 为准。
 
 ### 2.2 P1 通过条件

@@ -12,7 +12,6 @@ use std::convert::Infallible;
 use axum::response::sse::Event;
 use futures_util::{stream, Stream, StreamExt};
 
-use crate::adapter::call_streaming_api_auto;
 use crate::xml_unpacker::UnpackedChunk;
 
 use super::finalize::run_finalize;
@@ -36,6 +35,7 @@ pub fn build_sse_stream(
         system_prompt,
         prompt_trace: _,
         messages,
+        decision_inputs,
         fsm,
         unpacker,
         finalizer,
@@ -43,13 +43,14 @@ pub fn build_sse_stream(
         engine,
     } = pipeline;
 
-    let raw_stream = call_streaming_api_auto(
+    let raw_stream = crate::adapter::call_streaming_api_auto_with_decision_inputs(
         &engine,
         http_client,
         provider_config,
         gen_params,
         system_prompt,
         messages,
+        decision_inputs,
     );
 
     let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<SseMessage>(32);

@@ -8,7 +8,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::adapter::{BackendEngine, ChatMessage, GenerationParams, ProviderConfig};
+use crate::adapter::{
+    BackendEngine, ChatMessage, DecisionInputBlock, GenerationParams, ProviderConfig,
+};
 use crate::config::VolumeConfig;
 use crate::domain::RegenSnapshot;
 use crate::fsm::StreamingFsm;
@@ -34,6 +36,9 @@ pub struct PreparedPipeline {
     pub prompt_trace: PromptAssemblyTrace,
     /// 历史消息 + 当前用户消息列表。
     pub messages: Vec<ChatMessage>,
+    /// Explicitly typed assignment/evidence blocks. Ordinary chat preparation
+    /// always leaves this empty; only the agent boundary may attach them.
+    pub(crate) decision_inputs: Vec<DecisionInputBlock>,
     /// 流过滤 FSM 实例。
     pub fsm: StreamingFsm,
     /// XML 标签拆包器实例。
@@ -111,6 +116,8 @@ pub enum SseMessage {
 
 /// 单步生成的累积结果。
 pub struct GenerationStepResult {
+    /// Provider-visible prompt provenance retained for the agent run trace.
+    pub prompt_trace: PromptAssemblyTrace,
     /// 原始上游输出（pre-filter），最贴近计费 token 的代理。
     pub raw_acc: String,
     /// FSM 过滤后的输出（含 `<state>` 等，未拆包）。

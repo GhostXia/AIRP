@@ -106,6 +106,13 @@ pub(crate) fn prepare_scene_participant_pipeline(
         estimated_tokens: crate::volume_store::estimate_tokens(&focus),
         truncated: false,
         stable_or_volatile: crate::orchestrator::trace::Stability::Volatile,
+        input_class: crate::orchestrator::trace::PromptInputClass::RpDomain,
+        content_revision: None,
+        content_hash: None,
+        original_bytes: None,
+        included_bytes: None,
+        redacted: None,
+        evidence_items: None,
     });
     let mut message_position = position + focus.len();
     for message in &messages {
@@ -126,6 +133,13 @@ pub(crate) fn prepare_scene_participant_pipeline(
             estimated_tokens: crate::volume_store::estimate_tokens(&message.content),
             truncated: false,
             stable_or_volatile: crate::orchestrator::trace::Stability::Volatile,
+            input_class: crate::orchestrator::trace::PromptInputClass::RpDomain,
+            content_revision: None,
+            content_hash: None,
+            original_bytes: None,
+            included_bytes: None,
+            redacted: None,
+            evidence_items: None,
         });
         message_position += message.content.len();
     }

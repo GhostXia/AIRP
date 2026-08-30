@@ -69,6 +69,13 @@ pub(super) fn build_prompt_trace(
                 "known" | "state" | "memory" => Stability::Volatile,
                 _ => Stability::Stable,
             },
+            input_class: crate::orchestrator::trace::PromptInputClass::RpDomain,
+            content_revision: None,
+            content_hash: None,
+            original_bytes: None,
+            included_bytes: None,
+            redacted: None,
+            evidence_items: None,
         });
         position += part.content.len();
     }
@@ -101,6 +108,13 @@ pub(super) fn build_prompt_trace(
             estimated_tokens: crate::volume_store::estimate_tokens(&message.content),
             truncated: false,
             stable_or_volatile: Stability::Volatile,
+            input_class: crate::orchestrator::trace::PromptInputClass::RpDomain,
+            content_revision: None,
+            content_hash: None,
+            original_bytes: None,
+            included_bytes: None,
+            redacted: None,
+            evidence_items: None,
         });
         position += message.content.len();
     }

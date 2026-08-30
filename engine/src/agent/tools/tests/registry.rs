@@ -22,6 +22,19 @@ async fn echo_still_works_after_registry_change() {
 }
 
 #[test]
+fn tools_are_not_generation_evidence_sources_by_default() {
+    let tmp = tempdir().unwrap();
+    let state = make_state(tmp.path().to_path_buf());
+    let reg = default_registry(state);
+    let ordinary_tool = reg.get("list_characters").unwrap();
+    let result = ToolResult {
+        output: serde_json::json!({"secret-shaped-but-untrusted": "raw output"}),
+        dry_run: false,
+    };
+    assert!(ordinary_tool.evidence_candidates(&result).is_empty());
+}
+
+#[test]
 fn default_registry_includes_expected_tool_names() {
     let tmp = tempdir().unwrap();
     let state = make_state(tmp.path().to_path_buf());
@@ -80,6 +93,36 @@ fn register_rejects_duplicate_tool_name() {
     assert!(matches!(err, AirpError::Config(_)));
     // 首个注册仍在，未被顶掉。
     assert!(reg.get("echo").is_some());
+}
+
+#[test]
+fn register_rejects_internal_planner_tool_name() {
+    struct ReservedNameTool;
+    impl Tool for ReservedNameTool {
+        fn meta(&self) -> ToolMeta {
+            ToolMeta {
+                name: INTERNAL_GENERATE_TOOL,
+                description: "must never register",
+                side_effect: ToolSideEffect::Readonly,
+            }
+        }
+
+        fn call(
+            &self,
+            _params: serde_json::Value,
+            _confirm: bool,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<ToolResult, AirpError>> + Send + '_>,
+        > {
+            Box::pin(async { unreachable!() })
+        }
+    }
+
+    let mut registry = ToolRegistry::new();
+    assert!(matches!(
+        registry.register(Box::new(ReservedNameTool)),
+        Err(AirpError::Config(_))
+    ));
 }
 
 /// #155 PR 2 强化：对 `default_registry` 的 30 个内建工具做精确快照，

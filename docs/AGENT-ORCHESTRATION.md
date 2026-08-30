@@ -37,13 +37,19 @@ AIRP 不把某一种“强模型 orchestrator + 若干低成本 executor”组�
 
 所有编排方案都必须遵守：
 
-1. **角色平面纯净**：RP 模型上下文只包含 RP 数据；任务调度、工具说明、validator 和升级规则留在控制平面。
+1. **决策输入纯净**：subagent provider payload 只包含有界 RP 数据、显式 scoped assignment，以及由工具自行投影并被 planner 明确选中的最小证据。任务调度、raw tool params/result、planner transcript、validator、预算状态、trace/request ID、时间戳和升级规则留在控制/观测平面。
 2. **有界**：每次 run 和每个 node 都有 step、token、成本、并发、墙钟和重试上限，并可取消。
 3. **能力受控**：每个角色只获得任务所需的最小 capability；破坏性动作仍需精确确认。
 4. **输入输出明确**：node 声明输入、输出 schema、依赖和验收条件；不能靠共享聊天上下文隐式传递关键状态。
 5. **证据可观测**：记录路由原因、模型/provider、预算消耗、工具事件、validator 结果、重试与升级原因；默认对 secret 脱敏。
 6. **写入可仲裁**：并行 worker 不直接争写同一资源；通过独立产物、patch、ChangeInbox 或单写者合并。
 7. **失败可收敛**：禁止无界“模型审模型”循环；每次重试或升级必须有新证据、不同策略或明确终止条件。
+
+### 2.1.1 Decision-input contract（已交付的窄边界）
+
+“纯净 subagent”不是空白 prompt。普通 RP Generate 仍装配角色卡、世界书、Preset、Persona、state、memory/history 和当前用户消息。`POST /v1/agent/run` 还可声明 typed `assignment`；其中 objective、role、viewpoint、output_contract 是受信且有意指导本轮生成的任务指令，但不授予工具权限，也不成为 planner transcript 或控制状态。工具结果只有在工具实现显式给出安全的最小 evidence candidate、planner 通过保留的结构化 `__airp_generate_with_evidence_v1` 控制函数选择其 opaque ID、engine 完成来源校验/脱敏/限额后，才进入最终 provider payload。该内部名称禁止工具或插件注册；planner 返回正文、零个或多个调用均 fail-closed。
+
+OpenAI-compatible 将 assignment/evidence 编为 system content blocks；Anthropic 将其编为 top-level system blocks。两者都不伪装成用户消息，也不重放 tool call transcript。普通或第三方工具默认不产生 evidence candidate，因此 raw `Value` 没有通往 generation 的通用转换。PromptAssemblyTrace 对 assignment/evidence 记录 input class、来源、hash、revision、大小和 redacted/truncated 状态，并以独立 run ID 写入 trace；trace 本身不进入模型输入。输入证据先占用 run token budget，剩余额度再下压为 provider `max_tokens`。
 
 ### 2.2 用户可配置策略
 

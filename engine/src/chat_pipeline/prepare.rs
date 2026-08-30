@@ -472,6 +472,7 @@ fn prepare_pipeline_with_mode(
         system_prompt,
         prompt_trace,
         messages,
+        decision_inputs: Vec::new(),
         fsm,
         unpacker: StreamingXmlUnpacker::new(),
         engine: snapshot.engine.clone(),
