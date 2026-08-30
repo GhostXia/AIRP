@@ -20,7 +20,7 @@ const timestampText = computed(() => projectionTimestamp(metadata.value));
     <ul v-if="view.status === 'available'" class="grid">
       <li v-for="it in items" :key="it.id">
         <div class="cell">
-          <span class="icon">{{ it.icon ?? "▣" }}</span>
+          <span class="icon" aria-hidden="true">{{ it.icon ?? "▣" }}</span>
           <span class="name">{{ it.name }}</span>
           <span v-if="it.qty != null" class="qty">×{{ it.qty }}</span>
         </div>

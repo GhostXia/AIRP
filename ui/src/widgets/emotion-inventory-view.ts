@@ -5,6 +5,12 @@ const MAX_INVENTORY_ID_CHARS = 128;
 const MAX_INVENTORY_NAME_CHARS = 256;
 const MAX_INVENTORY_ICON_CHARS = 16;
 const MAX_INVENTORY_QUANTITY = 1_000_000_000;
+const EMOTION_KEYS = new Set(["available", "emotion", "label", "reason", "revision", "timestamp", "source"]);
+const INVENTORY_KEYS = new Set(["available", "items", "reason", "revision", "timestamp", "source"]);
+const SOURCE_KEYS = new Set(["kind", "scope", "character_id"]);
+const INVENTORY_ITEM_KEYS = new Set(["id", "name", "qty", "icon"]);
+const EMOTION_UNAVAILABLE_REASONS = new Set(["missing", "invalid", "unavailable"]);
+const INVENTORY_UNAVAILABLE_REASONS = new Set(["missing", "invalid", "unavailable", "too_many_items"]);
 
 export interface ProjectionMetadata {
   revision: number;
@@ -47,11 +53,17 @@ function boundedString(value: unknown, maximum: number): value is string {
   return typeof value === "string" && value.length > 0 && [...value].length <= maximum;
 }
 
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
 function metadataFrom(value: Record<string, unknown>): ProjectionMetadata | null {
   const source = record(value.source);
   if (
     !safeRevision(value.revision)
     || !(value.timestamp === null || typeof value.timestamp === "string")
+    || !source
+    || !hasOnlyKeys(source, SOURCE_KEYS)
     || source?.kind !== "character_state"
     || source.scope !== "character"
     || !boundedString(source.character_id, MAX_INVENTORY_ID_CHARS)
@@ -70,16 +82,23 @@ function metadataFrom(value: Record<string, unknown>): ProjectionMetadata | null
 
 export function emotionView(state: unknown): ProjectionView<EmotionValue> {
   const value = record(state);
-  if (!value) return { status: "unavailable", metadata: null };
+  if (!value || !hasOnlyKeys(value, EMOTION_KEYS)) return { status: "unavailable", metadata: null };
   const metadata = metadataFrom(value);
   if (!metadata) return { status: "unavailable", metadata: null };
   if (value.available === false) {
-    return value.emotion === undefined && value.reason === "missing"
+    if (
+      value.emotion !== undefined
+      || value.label !== undefined
+      || typeof value.reason !== "string"
+      || !EMOTION_UNAVAILABLE_REASONS.has(value.reason)
+    ) return { status: "unavailable", metadata };
+    return value.reason === "missing"
       ? { status: "unconfigured", metadata }
       : { status: "unavailable", metadata };
   }
   if (
     value.available !== true
+    || value.reason !== undefined
     || !Number.isInteger(value.emotion)
     || (value.emotion as number) < 0
     || (value.emotion as number) > 100
@@ -101,6 +120,7 @@ function inventoryItem(value: unknown): InventoryItem | null {
   const item = record(value);
   if (
     !item
+    || !hasOnlyKeys(item, INVENTORY_ITEM_KEYS)
     || !boundedString(item.id, MAX_INVENTORY_ID_CHARS)
     || !boundedString(item.name, MAX_INVENTORY_NAME_CHARS)
     || (item.qty !== undefined && (
@@ -121,16 +141,22 @@ function inventoryItem(value: unknown): InventoryItem | null {
 
 export function inventoryView(state: unknown): ProjectionView<InventoryItem[]> {
   const value = record(state);
-  if (!value) return { status: "unavailable", metadata: null };
+  if (!value || !hasOnlyKeys(value, INVENTORY_KEYS)) return { status: "unavailable", metadata: null };
   const metadata = metadataFrom(value);
   if (!metadata) return { status: "unavailable", metadata: null };
   if (value.available === false) {
-    return value.items === undefined && value.reason === "missing"
+    if (
+      value.items !== undefined
+      || typeof value.reason !== "string"
+      || !INVENTORY_UNAVAILABLE_REASONS.has(value.reason)
+    ) return { status: "unavailable", metadata };
+    return value.reason === "missing"
       ? { status: "unconfigured", metadata }
       : { status: "unavailable", metadata };
   }
   if (
     value.available !== true
+    || value.reason !== undefined
     || !Array.isArray(value.items)
     || value.items.length > MAX_INVENTORY_ITEMS
   ) return { status: "unavailable", metadata };

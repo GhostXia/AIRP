@@ -5,6 +5,7 @@
   "description": "Read-only bounded character-state inventory projection with provenance and revision.",
   "stateSchema": {
     "type": "object",
+    "additionalProperties": false,
     "required": ["available", "revision", "timestamp", "source"],
     "properties": {
       "available": { "type": "boolean" },
@@ -40,7 +41,7 @@
     "allOf": [
       {
         "if": { "required": ["available"], "properties": { "available": { "const": true } } },
-        "then": { "required": ["items"] },
+        "then": { "required": ["items"], "not": { "required": ["reason"] } },
         "else": { "required": ["reason"], "not": { "required": ["items"] } }
       }
     ]

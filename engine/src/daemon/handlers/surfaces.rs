@@ -17,8 +17,8 @@ use crate::{
     error::AirpError,
     types::{CharacterId, SessionId, UserId},
     ui_surface::{
-        SessionSurfaceProps, SurfaceCursor, SurfaceEvent, SurfaceMessage, SurfaceReplay,
-        SurfaceScope,
+        project_character_state_widgets, SessionSurfaceProps, SurfaceCursor, SurfaceEvent,
+        SurfaceMessage, SurfaceReplay, SurfaceScope,
     },
 };
 
@@ -305,6 +305,12 @@ fn project_session(
     });
     let (state_revision, state_timestamp, state_value) =
         StateService::new(effective_root).read_surface_state(character_id)?;
+    let (emotion, inventory) = project_character_state_widgets(
+        state_revision,
+        state_timestamp.as_deref(),
+        &state_value,
+        character_id.as_str(),
+    );
     let character_state = json!({
         "revision": state_revision,
         "timestamp": state_timestamp,
@@ -338,6 +344,8 @@ fn project_session(
         memory: bounded_props(memory),
         character_state: bounded_props(character_state),
         activity: bounded_props(activity),
+        emotion: bounded_props(emotion),
+        inventory: bounded_props(inventory),
     })
 }
 

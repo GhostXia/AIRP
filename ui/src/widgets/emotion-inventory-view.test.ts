@@ -63,6 +63,35 @@ describe("emotion and inventory projection views", () => {
       items: [{ id: "same", name: "One" }, { id: "same", name: "Two" }],
     })).toMatchObject({ status: "unavailable" });
   });
+
+  it("rejects contradictory tagged unions and unknown fields", () => {
+    expect(emotionView({ ...metadata, available: true, emotion: 50, reason: "missing" }))
+      .toMatchObject({ status: "unavailable" });
+    expect(emotionView({ ...metadata, available: false, reason: "missing", label: "hidden payload" }))
+      .toMatchObject({ status: "unavailable" });
+    expect(emotionView({ ...metadata, available: false, reason: "future_reason" }))
+      .toMatchObject({ status: "unavailable" });
+    expect(emotionView({ ...metadata, available: true, emotion: 50, extra: true }))
+      .toEqual({ status: "unavailable", metadata: null });
+    expect(emotionView({
+      ...metadata,
+      available: true,
+      emotion: 50,
+      source: { ...metadata.source, extra: true },
+    })).toEqual({ status: "unavailable", metadata: null });
+
+    expect(inventoryView({ ...metadata, available: true, items: [], reason: "missing" }))
+      .toMatchObject({ status: "unavailable" });
+    expect(inventoryView({ ...metadata, available: false, reason: "missing", items: [] }))
+      .toMatchObject({ status: "unavailable" });
+    expect(inventoryView({ ...metadata, available: false, reason: "future_reason" }))
+      .toMatchObject({ status: "unavailable" });
+    expect(inventoryView({
+      ...metadata,
+      available: true,
+      items: [{ id: "tea", name: "Tea", extra: true }],
+    })).toMatchObject({ status: "unavailable" });
+  });
 });
 
 describe("emotion and inventory manifests", () => {
@@ -73,6 +102,10 @@ describe("emotion and inventory manifests", () => {
     expect(inventoryManifest.stateSchema.properties.items.maxItems).toBe(MAX_INVENTORY_ITEMS);
     expect(emotionManifest.stateSchema.required).toEqual(["available", "revision", "timestamp", "source"]);
     expect(inventoryManifest.stateSchema.required).toEqual(["available", "revision", "timestamp", "source"]);
+    expect(emotionManifest.stateSchema.additionalProperties).toBe(false);
+    expect(inventoryManifest.stateSchema.additionalProperties).toBe(false);
+    expect(emotionManifest.stateSchema.allOf[0].then.not).toEqual({ required: ["reason"] });
+    expect(inventoryManifest.stateSchema.allOf[0].then.not).toEqual({ required: ["reason"] });
     expect(JSON.stringify(inventoryManifest)).not.toMatch(/inventory\.(use|drop)/);
   });
 });
