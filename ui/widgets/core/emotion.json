@@ -1,15 +1,40 @@
 {
   "type": "core.emotion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "情绪",
-  "description": "Character emotion/affinity gauge.",
+  "description": "Read-only character-state emotion projection with provenance and revision.",
   "stateSchema": {
     "type": "object",
+    "additionalProperties": false,
+    "required": ["available", "revision", "timestamp", "source"],
     "properties": {
+      "available": { "type": "boolean" },
       "emotion": { "type": "integer", "minimum": 0, "maximum": 100 },
-      "label": { "type": "string" },
-      "lastChange": { "type": "string" }
-    }
+      "label": { "type": "string", "maxLength": 128 },
+      "reason": { "enum": ["missing", "invalid", "unavailable"] },
+      "revision": { "type": "integer", "minimum": 0 },
+      "timestamp": { "type": ["string", "null"] },
+      "source": {
+        "type": "object",
+        "required": ["kind", "scope", "character_id"],
+        "properties": {
+          "kind": { "const": "character_state" },
+          "scope": { "const": "character" },
+          "character_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "allOf": [
+      {
+        "if": { "required": ["available"], "properties": { "available": { "const": true } } },
+        "then": { "required": ["emotion"], "not": { "required": ["reason"] } },
+        "else": {
+          "required": ["reason"],
+          "not": { "anyOf": [{ "required": ["emotion"] }, { "required": ["label"] }] }
+        }
+      }
+    ]
   },
   "capabilities": ["read:state"],
   "entry": { "kind": "builtin" },

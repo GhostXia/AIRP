@@ -208,6 +208,7 @@ jobs:
           npm run build
           npm run smoke:shell
           npm run smoke:runtime
+          npm run smoke:responsive
 
       - name: Upload desktop shell screenshots
         if: always()

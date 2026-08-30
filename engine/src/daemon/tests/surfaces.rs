@@ -152,6 +152,146 @@ async fn surface_refresh_consumes_the_saved_workspace_for_the_effective_root() {
 }
 
 #[tokio::test]
+async fn emotion_and_inventory_widgets_project_bounded_character_state_read_only() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let alice = crate::types::CharacterId::new("alice").unwrap();
+    let alice_session = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, alice.as_str(), &alice_session)
+        .unwrap();
+    let unrelated = "x".repeat(200_000);
+    crate::domain::StateService::new(&state.data_root)
+        .write(
+            &alice,
+            &serde_json::json!({
+                "emotion": 72,
+                "mood": "focused",
+                "inventory": [
+                    {"id": "tea", "name": "Tea", "qty": 2, "icon": "🍵", "private": "drop"}
+                ],
+                "unrelated": unrelated
+            }),
+        )
+        .unwrap();
+    let workspace = crate::domain::WorkspaceService::new(&state.data_root);
+    workspace
+        .execute(
+            0,
+            crate::domain::WorkspaceCommand::OpenWidget {
+                instance_id: "emotion".to_string(),
+                widget_type: "core.emotion".to_string(),
+                target_id: "workspace-context".to_string(),
+                index: None,
+            },
+        )
+        .unwrap();
+    workspace
+        .execute(
+            1,
+            crate::domain::WorkspaceCommand::OpenWidget {
+                instance_id: "inventory".to_string(),
+                widget_type: "core.inventory".to_string(),
+                target_id: "workspace-context".to_string(),
+                index: None,
+            },
+        )
+        .unwrap();
+    let app = create_router(state.clone());
+
+    let snapshot = surface_snapshot_json(app.clone(), alice.as_str(), &alice_session).await;
+    assert_eq!(
+        widget_props(&snapshot, "character-state")["truncated"],
+        true
+    );
+    let emotion = widget_props(&snapshot, "emotion");
+    assert_eq!(emotion["available"], true);
+    assert_eq!(emotion["emotion"], 72);
+    assert_eq!(emotion["label"], "focused");
+    assert_eq!(emotion["revision"], 1);
+    assert_eq!(emotion["source"]["kind"], "character_state");
+    assert_eq!(emotion["source"]["scope"], "character");
+    assert_eq!(emotion["source"]["character_id"], "alice");
+    let inventory = widget_props(&snapshot, "inventory");
+    assert_eq!(inventory["available"], true);
+    assert_eq!(
+        inventory["items"],
+        serde_json::json!([{"id": "tea", "name": "Tea", "qty": 2, "icon": "🍵"}])
+    );
+    assert_eq!(inventory["revision"], 1);
+
+    let unicode_items = (0..128)
+        .map(|index| {
+            serde_json::json!({
+                "id": format!("{index:03}{}", "🧭".repeat(125)),
+                "name": "🧭".repeat(256),
+                "icon": "🧭".repeat(16)
+            })
+        })
+        .collect::<Vec<_>>();
+    crate::domain::StateService::new(&state.data_root)
+        .write(
+            &alice,
+            &serde_json::json!({
+                "emotion": -1,
+                "mood": "must-not-leak",
+                "inventory": unicode_items
+            }),
+        )
+        .unwrap();
+    let bounded = surface_snapshot_json(app.clone(), alice.as_str(), &alice_session).await;
+    let emotion = widget_props(&bounded, "emotion");
+    assert_eq!(emotion["available"], false);
+    assert_eq!(emotion["reason"], "invalid");
+    assert!(emotion.get("label").is_none());
+    let inventory = widget_props(&bounded, "inventory");
+    assert_eq!(inventory["available"], false);
+    assert_eq!(inventory["reason"], "unavailable");
+    assert_eq!(inventory["revision"], 2);
+    assert_eq!(inventory["source"]["character_id"], "alice");
+
+    let bob = crate::types::CharacterId::new("bob").unwrap();
+    let bob_session = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, bob.as_str(), &bob_session).unwrap();
+    let bob_snapshot = surface_snapshot_json(app.clone(), bob.as_str(), &bob_session).await;
+    assert_eq!(widget_props(&bob_snapshot, "emotion")["available"], false);
+    assert_eq!(widget_props(&bob_snapshot, "emotion")["reason"], "missing");
+    assert_eq!(widget_props(&bob_snapshot, "inventory")["available"], false);
+    assert_eq!(
+        widget_props(&bob_snapshot, "inventory")["reason"],
+        "missing"
+    );
+
+    crate::domain::StateService::new(&state.data_root)
+        .write(
+            &alice,
+            &serde_json::json!({
+                "emotion": -1,
+                "inventory": [
+                    {"id": "same", "name": "One"},
+                    {"id": "same", "name": "Two"}
+                ]
+            }),
+        )
+        .unwrap();
+    let refreshed = surface_snapshot_json(app.clone(), alice.as_str(), &alice_session).await;
+    assert_eq!(widget_props(&refreshed, "emotion")["available"], false);
+    assert!(widget_props(&refreshed, "emotion")["emotion"].is_null());
+    assert_eq!(widget_props(&refreshed, "inventory")["available"], false);
+    assert!(widget_props(&refreshed, "inventory")["items"].is_null());
+
+    let rejected = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{alice_session}"),
+            "instance_id": "inventory",
+            "name": "inventory.use",
+            "params": {"id": "tea"}
+        }),
+    )
+    .await;
+    assert_eq!(rejected.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn chat_intent_resolves_scope_from_the_accepted_surface() {
     let (state, _tmp) = make_state_with_key(Some("surface-secret"));
     let session_id = crate::types::SessionId::new();
@@ -731,18 +871,51 @@ async fn equal_character_and_session_ids_do_not_alias_across_user_roots() {
     let (state, _tmp) = make_state_with_key(Some("surface-secret"));
     let session_id = crate::types::SessionId::new();
     let character_id = crate::types::CharacterId::new("shared-character").unwrap();
-    for (user, mood) in [("tenant-a", "calm"), ("tenant-b", "focused")] {
+    for (user, mood, emotion, item) in [
+        ("tenant-a", "calm", 25, "tea"),
+        ("tenant-b", "focused", 75, "map"),
+    ] {
         let root = crate::data_dir::resolve_effective_root(&state.data_root, Some(user)).unwrap();
         crate::data_dir::create_session_with_id(&root, character_id.as_str(), &session_id).unwrap();
         crate::domain::StateService::new(&root)
-            .write(&character_id, &serde_json::json!({"mood": mood}))
+            .write(
+                &character_id,
+                &serde_json::json!({
+                    "mood": mood,
+                    "emotion": emotion,
+                    "inventory": [{"id": item, "name": item}]
+                }),
+            )
+            .unwrap();
+        let workspace = crate::domain::WorkspaceService::new(&root);
+        workspace
+            .execute(
+                0,
+                crate::domain::WorkspaceCommand::OpenWidget {
+                    instance_id: "emotion".to_string(),
+                    widget_type: "core.emotion".to_string(),
+                    target_id: "workspace-context".to_string(),
+                    index: None,
+                },
+            )
+            .unwrap();
+        workspace
+            .execute(
+                1,
+                crate::domain::WorkspaceCommand::OpenWidget {
+                    instance_id: "inventory".to_string(),
+                    widget_type: "core.inventory".to_string(),
+                    target_id: "workspace-context".to_string(),
+                    index: None,
+                },
+            )
             .unwrap();
     }
     let tenant_a_root =
         crate::data_dir::resolve_effective_root(&state.data_root, Some("tenant-a")).unwrap();
     crate::domain::WorkspaceService::new(tenant_a_root)
         .execute(
-            0,
+            2,
             crate::domain::WorkspaceCommand::ActivateTab {
                 tabs_id: "workspace-primary".to_string(),
                 node_id: "memory-node".to_string(),
@@ -763,6 +936,10 @@ async fn equal_character_and_session_ids_do_not_alias_across_user_roots() {
         widget_props(&second, "character-state")["state"]["mood"],
         "focused"
     );
+    assert_eq!(widget_props(&first, "emotion")["emotion"], 25);
+    assert_eq!(widget_props(&second, "emotion")["emotion"], 75);
+    assert_eq!(widget_props(&first, "inventory")["items"][0]["id"], "tea");
+    assert_eq!(widget_props(&second, "inventory")["items"][0]["id"], "map");
     assert_eq!(
         first["snapshot"]["blueprint"]["root"]["children"][0]["active"],
         "memory-node"

@@ -17,8 +17,8 @@ use crate::{
     error::AirpError,
     types::{CharacterId, SessionId, UserId},
     ui_surface::{
-        SessionSurfaceProps, SurfaceCursor, SurfaceEvent, SurfaceMessage, SurfaceReplay,
-        SurfaceScope,
+        project_character_state_widgets, SessionSurfaceProps, SurfaceCursor, SurfaceEvent,
+        SurfaceMessage, SurfaceReplay, SurfaceScope,
     },
 };
 
@@ -305,6 +305,12 @@ fn project_session(
     });
     let (state_revision, state_timestamp, state_value) =
         StateService::new(effective_root).read_surface_state(character_id)?;
+    let (emotion, inventory) = project_character_state_widgets(
+        state_revision,
+        state_timestamp.as_deref(),
+        &state_value,
+        character_id.as_str(),
+    );
     let character_state = json!({
         "revision": state_revision,
         "timestamp": state_timestamp,
@@ -338,6 +344,8 @@ fn project_session(
         memory: bounded_props(memory),
         character_state: bounded_props(character_state),
         activity: bounded_props(activity),
+        emotion: bounded_projection_props(emotion),
+        inventory: bounded_projection_props(inventory),
     })
 }
 
@@ -353,6 +361,26 @@ fn bounded_props(value: Value) -> Value {
         Ok(encoded) if encoded.len() <= MAX_WIDGET_PROPS_BYTES => value,
         Ok(encoded) => json!({"truncated": true, "original_bytes": encoded.len()}),
         Err(_) => json!({"unavailable": true}),
+    }
+}
+
+fn bounded_projection_props(value: Value) -> Value {
+    match serde_json::to_vec(&value) {
+        Ok(encoded) if encoded.len() <= MAX_WIDGET_PROPS_BYTES => value,
+        Ok(_) | Err(_) => {
+            let mut unavailable = serde_json::Map::from_iter([
+                ("available".into(), Value::Bool(false)),
+                ("reason".into(), Value::String("unavailable".into())),
+            ]);
+            if let Some(projection) = value.as_object() {
+                for key in ["revision", "timestamp", "source"] {
+                    if let Some(field) = projection.get(key) {
+                        unavailable.insert(key.into(), field.clone());
+                    }
+                }
+            }
+            Value::Object(unavailable)
+        }
     }
 }
 

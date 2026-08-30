@@ -25,6 +25,7 @@ const serverArgs = isWindows
 const server = spawn(serverCommand, serverArgs, {
   cwd: uiDir,
   env: { ...process.env, BROWSER: 'none' },
+  detached: !isWindows,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverOutput = '';
@@ -40,7 +41,11 @@ function stopServer() {
       // The wrapper may have exited while Vite was shutting down.
     }
   } else {
-    server.kill();
+    try {
+      process.kill(-server.pid, 'SIGTERM');
+    } catch {
+      server.kill();
+    }
   }
 }
 
@@ -178,6 +183,140 @@ try {
   assert.ok(tailRect.scrollTop > 0, `chat log did not scroll: ${JSON.stringify(tailRect)}`);
   assert.ok(tailRect.targetTop >= tailRect.logTop && tailRect.targetBottom <= tailRect.logBottom,
     `logical tail message is outside chat-log bounds: ${JSON.stringify(tailRect)}`);
+
+  const projectionSource = {
+    kind: "character_state",
+    scope: "character",
+    character_id: `responsive-${"character-".repeat(10)}`,
+  };
+  await page.evaluate(({ emotion, inventory, source }) => {
+    const result = window.__AIRP_AGENT_TEST__.applySurface({
+      kind: "snapshot",
+      protocol: { major: 2, minor: 0 },
+      surfaceId: "responsive-projections",
+      revision: "0",
+      blueprint: {
+        version: 2,
+        root: {
+          type: "split",
+          id: "projection-split",
+          orientation: "horizontal",
+          children: [
+            { type: "widget", id: "emotion-node", instanceId: emotion },
+            { type: "widget", id: "inventory-node", instanceId: inventory },
+          ],
+        },
+        widgets: [
+          { id: emotion, type: "core.emotion" },
+          { id: inventory, type: "core.inventory" },
+        ],
+      },
+    });
+    if (result.status !== "applied") throw new Error(`projection Surface rejected: ${JSON.stringify(result)}`);
+    window.__AIRP_AGENT_TEST__.setWidgetState(emotion, {
+      available: true,
+      emotion: 64,
+      label: "平静",
+      revision: 12,
+      timestamp: "2026-08-30T00:00:00Z",
+      source,
+    });
+    window.__AIRP_AGENT_TEST__.setWidgetState(inventory, {
+      available: true,
+      items: [],
+      revision: 12,
+      timestamp: "2026-08-30T00:00:00Z",
+      source,
+    });
+  }, { emotion: "responsive-emotion", inventory: "responsive-inventory", source: projectionSource });
+  await page.locator('[data-widget-instance="responsive-emotion"] .w-emotion').waitFor({ state: 'visible' });
+  await page.locator('[data-widget-instance="responsive-inventory"] .w-inventory').waitFor({ state: 'visible' });
+
+  const projectionSplit = page.locator('[data-node-id="projection-split"]');
+  const meter = page.getByRole('meter', { name: '情绪值' });
+  assert.equal(await meter.getAttribute('aria-valuemin'), '0');
+  assert.equal(await meter.getAttribute('aria-valuemax'), '100');
+  assert.equal(await meter.getAttribute('aria-valuenow'), '64');
+  assert.equal(await page.locator('.readonly-badge').filter({ hasText: '只读' }).count(), 2);
+  assert.equal(await page.locator('[data-widget-instance="responsive-emotion"] button').count(), 0);
+  assert.equal(await page.locator('[data-widget-instance="responsive-inventory"] button').count(), 0);
+  await page.getByText('暂无物品', { exact: true }).waitFor({ state: 'visible' });
+
+  for (const ratio of [1_000, 9_000]) {
+    await projectionSplit.evaluate((split, leading) => {
+      split.style.setProperty('--split-leading', `${leading}fr`);
+      split.style.setProperty('--split-trailing', `${10_000 - leading}fr`);
+      split.style.setProperty('--split-position', `${leading / 100}%`);
+    }, ratio);
+    for (const width of [320, 760, 761]) {
+      await page.setViewportSize({ width, height: 800 });
+      const layout = await page.evaluate(() => {
+        const split = document.querySelector('[data-node-id="projection-split"]');
+        const children = split ? [...split.children].filter(node => node.classList.contains('layout-widget')) : [];
+        const widgetInternals = [
+          ...document.querySelectorAll('.w-emotion, .w-emotion header, .w-inventory, .w-inventory header, .w-inventory .grid'),
+        ];
+        const tracked = [
+          document.documentElement,
+          document.body,
+          document.querySelector('.app'),
+          document.querySelector('.blueprint'),
+          split,
+          ...children,
+          ...widgetInternals,
+        ].filter(Boolean);
+        return {
+          columns: split ? getComputedStyle(split).gridTemplateColumns.split(/\s+/).filter(Boolean) : [],
+          childRects: children.map(node => {
+            const rect = node.getBoundingClientRect();
+            return { top: rect.top, left: rect.left, width: rect.width };
+          }),
+          overflow: tracked.map(node => ({
+            name: node.className || node.tagName,
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+          })),
+        };
+      });
+      for (const entry of layout.overflow) {
+        assert.ok(entry.scrollWidth <= entry.clientWidth + 1,
+          `${width}px at ${ratio / 100}% projection layout has horizontal overflow: ${JSON.stringify(entry)}`);
+      }
+      assert.equal(layout.childRects.length, 2, `${width}px projection widgets were not both mounted`);
+      if (width <= 760) {
+        assert.equal(layout.columns.length, 1, `${width}px horizontal split did not stack: ${layout.columns}`);
+        assert.ok(layout.childRects[1].top > layout.childRects[0].top,
+          `${width}px projection widgets did not stack vertically: ${JSON.stringify(layout.childRects)}`);
+      } else {
+        assert.equal(layout.columns.length, 2, `761px horizontal split did not restore columns: ${layout.columns}`);
+        const share = layout.childRects[0].width / (layout.childRects[0].width + layout.childRects[1].width);
+        const expected = ratio / 10_000;
+        assert.ok(Math.abs(share - expected) <= 0.01,
+          `761px ${ratio / 100}/${100 - ratio / 100} split ratio was not preserved: ${JSON.stringify(layout.childRects)}`);
+      }
+    }
+  }
+
+  await page.evaluate(({ emotion, inventory, source }) => {
+    window.__AIRP_AGENT_TEST__.setWidgetState(emotion, {
+      available: false,
+      reason: "missing",
+      revision: 13,
+      timestamp: null,
+      source,
+    });
+    window.__AIRP_AGENT_TEST__.setWidgetState(inventory, {
+      available: false,
+      reason: "invalid",
+      revision: 13,
+      timestamp: null,
+      source,
+    });
+  }, { emotion: "responsive-emotion", inventory: "responsive-inventory", source: projectionSource });
+  await page.locator('[data-widget-instance="responsive-emotion"]').getByText('未配置', { exact: true })
+    .waitFor({ state: 'visible' });
+  await page.locator('[data-widget-instance="responsive-inventory"]').getByText('不可用', { exact: true })
+    .waitFor({ state: 'visible' });
   console.log(`Responsive short-viewport browser regression passed at ${origin}`);
 } finally {
   await browser.close();

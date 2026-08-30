@@ -1,27 +1,51 @@
 {
   "type": "core.inventory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "物品栏",
-  "description": "Item inventory grid.",
+  "description": "Read-only bounded character-state inventory projection with provenance and revision.",
   "stateSchema": {
     "type": "object",
+    "additionalProperties": false,
+    "required": ["available", "revision", "timestamp", "source"],
     "properties": {
+      "available": { "type": "boolean" },
+      "reason": { "enum": ["missing", "invalid", "unavailable", "too_many_items"] },
       "items": {
         "type": "array",
+        "maxItems": 128,
         "items": {
           "type": "object",
           "required": ["id", "name"],
           "properties": {
-            "id": { "type": "string" },
-            "name": { "type": "string" },
-            "qty": { "type": "integer", "minimum": 0 },
-            "icon": { "type": "string" }
-          }
+            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "qty": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+            "icon": { "type": "string", "minLength": 1, "maxLength": 16 }
+          },
+          "additionalProperties": false
         }
+      },
+      "revision": { "type": "integer", "minimum": 0 },
+      "timestamp": { "type": ["string", "null"] },
+      "source": {
+        "type": "object",
+        "required": ["kind", "scope", "character_id"],
+        "properties": {
+          "kind": { "const": "character_state" },
+          "scope": { "const": "character" },
+          "character_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "additionalProperties": false
       }
-    }
+    },
+    "allOf": [
+      {
+        "if": { "required": ["available"], "properties": { "available": { "const": true } } },
+        "then": { "required": ["items"], "not": { "required": ["reason"] } },
+        "else": { "required": ["reason"], "not": { "required": ["items"] } }
+      }
+    ]
   },
-  "intents": ["inventory.use", "inventory.drop"],
   "capabilities": ["read:state"],
   "entry": { "kind": "builtin" },
   "author": "AIRP",
