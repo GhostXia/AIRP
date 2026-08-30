@@ -35,16 +35,17 @@ use decompose_handlers::{
 };
 use handlers::{
     add_scene_character_endpoint, agent_run, append_conversation_event_endpoint,
-    bind_persona_endpoint, cancel_chat_generation, cancel_conversation_turn_endpoint,
-    chat_completion, chat_search, continue_chat, create_backup_endpoint,
-    create_conversation_endpoint, create_persona_endpoint, create_scene_conversation_endpoint,
-    create_scene_endpoint, create_session_endpoint, delete_backup_endpoint,
-    delete_character_endpoint, delete_message, delete_persona_multi_endpoint,
-    delete_plugin_tool_endpoint, delete_session_endpoint, diff_character_revisions_endpoint,
-    dispatch_ui_intent, edit_message, execute_conversation_migration_endpoint,
-    execute_conversation_turn_endpoint, export_session_timeline_endpoint,
-    export_workspace_endpoint, generate_dialogue_examples_endpoint, generate_image_endpoint,
-    get_backup_endpoint, get_character_avatar, get_character_card, get_character_lorebook,
+    apply_workspace_migration_endpoint, bind_persona_endpoint, cancel_chat_generation,
+    cancel_conversation_turn_endpoint, chat_completion, chat_search, continue_chat,
+    create_backup_endpoint, create_conversation_endpoint, create_persona_endpoint,
+    create_scene_conversation_endpoint, create_scene_endpoint, create_session_endpoint,
+    delete_backup_endpoint, delete_character_endpoint, delete_message,
+    delete_persona_multi_endpoint, delete_plugin_tool_endpoint, delete_session_endpoint,
+    diff_character_revisions_endpoint, dispatch_ui_intent, dry_run_workspace_migration_endpoint,
+    edit_message, execute_conversation_migration_endpoint, execute_conversation_turn_endpoint,
+    export_session_timeline_endpoint, export_workspace_endpoint,
+    generate_dialogue_examples_endpoint, generate_image_endpoint, get_backup_endpoint,
+    get_character_avatar, get_character_card, get_character_lorebook,
     get_character_revision_endpoint, get_character_state, get_character_state_history,
     get_character_state_schema, get_chat_history, get_chat_session_state,
     get_conversation_capabilities_endpoint, get_conversation_endpoint,
@@ -63,14 +64,14 @@ use handlers::{
     list_templates_endpoint, plan_conversation_migration_endpoint, preview_chat_assembly,
     recover_chat_session, reextract_character_assets, regen_chat, resolve_provider_endpoint,
     restore_backup_endpoint, rollback_chat, rollback_conversation_migration_endpoint,
-    rollback_drift, rollback_workspace_endpoint, serve_image_endpoint,
-    serve_session_image_endpoint, style_learn, style_review, swipe_chat, switch_branch,
-    test_plugin_tool_endpoint, unbind_persona_endpoint, update_character_card,
+    rollback_drift, rollback_workspace_endpoint, rollback_workspace_migration_endpoint,
+    serve_image_endpoint, serve_session_image_endpoint, style_learn, style_review, swipe_chat,
+    switch_branch, test_plugin_tool_endpoint, unbind_persona_endpoint, update_character_card,
     update_character_lorebook, update_drift, update_persona_endpoint,
     update_persona_multi_endpoint, update_plot_arc, update_providers_endpoint,
     update_resident_memory, update_routing_endpoint, update_settings, update_user_model,
     upsert_plugin_tool_endpoint, verify_backup_endpoint, workspace_command_endpoint,
-    WORKSPACE_HTTP_MAX_BODY_BYTES,
+    WORKSPACE_HTTP_MAX_BODY_BYTES, WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES,
 };
 
 /// daemon 进程全局共享状态。通过 axum `State<Arc<DaemonState>>` 注入到所有 handler。
@@ -344,6 +345,25 @@ async fn production_cache_policy(
     response
 }
 
+async fn workspace_migration_cache_policy(
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let is_workspace_migration = matches!(
+        request.uri().path(),
+        "/v1/ui/workspace/migrations/blueprint-v1/dry-run"
+            | "/v1/ui/workspace/migrations/blueprint-v1/apply"
+            | "/v1/ui/workspace/migrations/rollback"
+    );
+    let mut response = next.run(request).await;
+    if is_workspace_migration {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
 /// DX-4: Rate-limit key extractor — Bearer token for authenticated requests, peer IP otherwise.
 #[derive(Debug, Clone, Copy)]
 struct UserOrIpKeyExtractor;
@@ -439,6 +459,30 @@ pub fn create_router_with_conversation_policy_registry(
             post(
                 rollback_workspace_endpoint
                     .layer(DefaultBodyLimit::max(WORKSPACE_HTTP_MAX_BODY_BYTES)),
+            ),
+        )
+        .route(
+            "/v1/ui/workspace/migrations/blueprint-v1/dry-run",
+            post(
+                dry_run_workspace_migration_endpoint.layer(DefaultBodyLimit::max(
+                    WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES,
+                )),
+            ),
+        )
+        .route(
+            "/v1/ui/workspace/migrations/blueprint-v1/apply",
+            post(
+                apply_workspace_migration_endpoint.layer(DefaultBodyLimit::max(
+                    WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES,
+                )),
+            ),
+        )
+        .route(
+            "/v1/ui/workspace/migrations/rollback",
+            post(
+                rollback_workspace_migration_endpoint.layer(DefaultBodyLimit::max(
+                    WORKSPACE_MIGRATION_HTTP_MAX_BODY_BYTES,
+                )),
             ),
         )
         // C-P0：桌面壳进程互信换短时效 UI token（bearer 注入通道）。
@@ -848,7 +892,8 @@ pub fn create_router_with_conversation_policy_registry(
         // A2-7: governor over all /v1/* (not just chat).
         .layer(GovernorLayer {
             config: governor_conf.clone(),
-        });
+        })
+        .layer(middleware::from_fn(workspace_migration_cache_policy));
 
     Router::new()
         .route("/version", get(version_handler))

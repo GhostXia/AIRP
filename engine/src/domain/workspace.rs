@@ -323,6 +323,9 @@ impl WorkspaceService {
         expected_revision: u64,
         backup_id: &str,
     ) -> Result<WorkspaceDocumentV1, AirpError> {
+        crate::backup::manifest::validate_backup_id(backup_id).map_err(|_| {
+            AirpError::BadRequest("invalid workspace migration backup id".to_string())
+        })?;
         let _guard = workspace_guard()?;
         let current = read_current_revision(&self.asset_dir())?.unwrap_or(0);
         if current != expected_revision {
@@ -1228,6 +1231,28 @@ mod tests {
     }
 
     #[test]
+    fn v1_migration_matches_the_literal_http_contract_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/fixtures/workspace-v1/blueprint-v1-migration.json"
+        ))
+        .unwrap();
+        let source: Blueprint = serde_json::from_value(fixture["source"].clone()).unwrap();
+        let expected: WorkspaceLayoutV1 =
+            serde_json::from_value(fixture["expected_workspace_layout"].clone()).unwrap();
+        let service = WorkspaceService::new(tempfile::tempdir().unwrap().path());
+
+        let plan = service.plan_v1_migration(&source).unwrap();
+
+        assert_eq!(plan.candidate.layout, expected);
+        assert!(!serde_json::to_string(&plan.candidate)
+            .unwrap()
+            .contains("must-not-migrate"));
+        assert!(!serde_json::to_string(&plan.candidate)
+            .unwrap()
+            .contains("ignored-by-workspace-migration"));
+    }
+
+    #[test]
     fn migration_apply_creates_verified_backup_before_forward_commit() {
         let root = tempfile::tempdir().unwrap();
         let service = WorkspaceService::new(root.path());
@@ -1492,6 +1517,19 @@ mod tests {
             service.history(10).unwrap()[0].source_kind,
             "workspace_backup_rollback"
         );
+    }
+
+    #[test]
+    fn migration_backup_rollback_rejects_non_segment_id_before_lookup() {
+        let root = tempfile::tempdir().unwrap();
+        let service = WorkspaceService::new(root.path());
+
+        assert!(matches!(
+            service.rollback_migration_backup(0, "../outside"),
+            Err(AirpError::BadRequest(message))
+                if message == "invalid workspace migration backup id"
+        ));
+        assert!(!root.path().join("ui/workspaces/default").exists());
     }
 
     #[test]
