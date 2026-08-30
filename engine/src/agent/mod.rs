@@ -457,7 +457,8 @@ async fn run_loop(
                 };
                 cap_generation_to_remaining_budget(
                     &mut pipeline.gen_params,
-                    token_budget.saturating_sub(tokens_estimated),
+                    req.token_budget
+                        .map(|budget| budget.saturating_sub(tokens_estimated)),
                 );
                 inject_scoped_assignment(&mut pipeline, assignment);
                 inject_selected_evidence(&mut pipeline, selected_evidence);
@@ -522,11 +523,11 @@ async fn run_loop(
 
 fn cap_generation_to_remaining_budget(
     gen_params: &mut crate::adapter::GenerationParams,
-    remaining_token_budget: u64,
+    remaining_token_budget: Option<u64>,
 ) {
-    if remaining_token_budget == u64::MAX {
+    let Some(remaining_token_budget) = remaining_token_budget else {
         return;
-    }
+    };
     let budget_cap = u32::try_from(remaining_token_budget).unwrap_or(u32::MAX);
     gen_params.max_tokens = Some(
         gen_params
@@ -1772,9 +1773,28 @@ mod tests {
             temperature: None,
             max_tokens: Some(500),
         };
-        cap_generation_to_remaining_budget(&mut params, 37);
+        cap_generation_to_remaining_budget(&mut params, Some(37));
         assert_eq!(params.max_tokens, Some(37));
-        cap_generation_to_remaining_budget(&mut params, 100);
+        cap_generation_to_remaining_budget(&mut params, Some(100));
         assert_eq!(params.max_tokens, Some(37));
+    }
+
+    #[test]
+    fn absent_run_budget_preserves_provider_output_limit() {
+        let mut configured = crate::adapter::GenerationParams {
+            model: "test".to_string(),
+            temperature: None,
+            max_tokens: Some(500),
+        };
+        cap_generation_to_remaining_budget(&mut configured, None);
+        assert_eq!(configured.max_tokens, Some(500));
+
+        let mut unconfigured = crate::adapter::GenerationParams {
+            model: "test".to_string(),
+            temperature: None,
+            max_tokens: None,
+        };
+        cap_generation_to_remaining_budget(&mut unconfigured, None);
+        assert_eq!(unconfigured.max_tokens, None);
     }
 }
