@@ -16,6 +16,13 @@ use sha2::{Digest, Sha256};
 pub const DEFAULT_SURFACE_RING_EVENTS: usize = 256;
 pub const DEFAULT_SURFACE_RING_BYTES: usize = 1_048_576;
 pub const DEFAULT_SURFACE_ENTRIES: usize = 128;
+const MAX_CHARACTER_ID_CHARS: usize = 128;
+const MAX_EMOTION_LABEL_CHARS: usize = 128;
+const MAX_INVENTORY_ITEMS: usize = 128;
+const MAX_INVENTORY_ID_CHARS: usize = 128;
+const MAX_INVENTORY_NAME_CHARS: usize = 256;
+const MAX_INVENTORY_ICON_CHARS: usize = 16;
+const MAX_INVENTORY_QUANTITY: u64 = 1_000_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SurfaceScope {
@@ -244,8 +251,143 @@ fn projected_props(widget_type: &str, props: &SessionSurfaceProps) -> Option<Val
         "core.memory" => Some(props.memory.clone()),
         "core.character-state" => Some(props.character_state.clone()),
         "core.activity" => Some(props.activity.clone()),
+        "core.emotion" => Some(project_emotion(&props.character_state)),
+        "core.inventory" => Some(project_inventory(&props.character_state)),
         _ => None,
     }
+}
+
+fn project_emotion(character_state: &Value) -> Value {
+    let mut projection = projection_metadata(character_state);
+    let state = character_state.get("state").and_then(Value::as_object);
+    let emotion = state
+        .and_then(|state| state.get("emotion"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= 100);
+    projection.insert("available".into(), Value::Bool(emotion.is_some()));
+    if let Some(emotion) = emotion {
+        projection.insert("emotion".into(), Value::from(emotion));
+    } else {
+        let reason = if state.is_some_and(|state| state.contains_key("emotion")) {
+            "invalid"
+        } else {
+            "missing"
+        };
+        projection.insert("reason".into(), Value::String(reason.into()));
+    }
+    if let Some(label) = state
+        .and_then(|state| state.get("emotion_label").or_else(|| state.get("mood")))
+        .and_then(Value::as_str)
+        .filter(|label| !label.is_empty() && label.chars().count() <= MAX_EMOTION_LABEL_CHARS)
+    {
+        projection.insert("label".into(), Value::String(label.into()));
+    }
+    Value::Object(projection)
+}
+
+fn project_inventory(character_state: &Value) -> Value {
+    let mut projection = projection_metadata(character_state);
+    let Some(state) = character_state.get("state").and_then(Value::as_object) else {
+        projection.insert("available".into(), Value::Bool(false));
+        projection.insert("reason".into(), Value::String("unavailable".into()));
+        return Value::Object(projection);
+    };
+    let Some(raw_inventory) = state.get("inventory") else {
+        projection.insert("available".into(), Value::Bool(false));
+        projection.insert("reason".into(), Value::String("missing".into()));
+        return Value::Object(projection);
+    };
+    let Some(raw_items) = raw_inventory.as_array() else {
+        projection.insert("available".into(), Value::Bool(false));
+        projection.insert("reason".into(), Value::String("invalid".into()));
+        return Value::Object(projection);
+    };
+    if raw_items.len() > MAX_INVENTORY_ITEMS {
+        projection.insert("available".into(), Value::Bool(false));
+        projection.insert("reason".into(), Value::String("too_many_items".into()));
+        return Value::Object(projection);
+    }
+
+    let mut ids = std::collections::HashSet::new();
+    let items = raw_items
+        .iter()
+        .map(|item| sanitize_inventory_item(item, &mut ids))
+        .collect::<Option<Vec<_>>>();
+    match items {
+        Some(items) => {
+            projection.insert("available".into(), Value::Bool(true));
+            projection.insert("items".into(), Value::Array(items));
+        }
+        None => {
+            projection.insert("available".into(), Value::Bool(false));
+            projection.insert("reason".into(), Value::String("invalid".into()));
+        }
+    }
+    Value::Object(projection)
+}
+
+fn projection_metadata(character_state: &Value) -> serde_json::Map<String, Value> {
+    let mut projection = serde_json::Map::new();
+    if let Some(revision) = character_state.get("revision").and_then(Value::as_u64) {
+        projection.insert("revision".into(), Value::from(revision));
+    }
+    if let Some(timestamp) = character_state.get("timestamp") {
+        if timestamp.is_null() || timestamp.is_string() {
+            projection.insert("timestamp".into(), timestamp.clone());
+        }
+    }
+    if let Some(source) = character_state.get("source").and_then(Value::as_object) {
+        let character_id = source.get("character_id").and_then(Value::as_str);
+        let valid = source.get("kind").and_then(Value::as_str) == Some("character_state")
+            && source.get("scope").and_then(Value::as_str) == Some("character")
+            && character_id.is_some_and(|value| {
+                !value.is_empty() && value.chars().count() <= MAX_CHARACTER_ID_CHARS
+            });
+        if valid {
+            projection.insert(
+                "source".into(),
+                serde_json::json!({
+                    "kind": "character_state",
+                    "scope": "character",
+                    "character_id": character_id.unwrap()
+                }),
+            );
+        }
+    }
+    projection
+}
+
+fn sanitize_inventory_item(
+    item: &Value,
+    ids: &mut std::collections::HashSet<String>,
+) -> Option<Value> {
+    let item = item.as_object()?;
+    let id = bounded_nonempty_string(item.get("id")?, MAX_INVENTORY_ID_CHARS)?;
+    let name = bounded_nonempty_string(item.get("name")?, MAX_INVENTORY_NAME_CHARS)?;
+    if !ids.insert(id.to_string()) {
+        return None;
+    }
+    let mut sanitized = serde_json::Map::from_iter([
+        ("id".into(), Value::String(id.into())),
+        ("name".into(), Value::String(name.into())),
+    ]);
+    if let Some(quantity) = item.get("qty") {
+        let quantity = quantity
+            .as_u64()
+            .filter(|quantity| *quantity <= MAX_INVENTORY_QUANTITY)?;
+        sanitized.insert("qty".into(), Value::from(quantity));
+    }
+    if let Some(icon) = item.get("icon") {
+        let icon = bounded_nonempty_string(icon, MAX_INVENTORY_ICON_CHARS)?;
+        sanitized.insert("icon".into(), Value::String(icon.into()));
+    }
+    Some(Value::Object(sanitized))
+}
+
+fn bounded_nonempty_string(value: &Value, max_chars: usize) -> Option<&str> {
+    value
+        .as_str()
+        .filter(|value| !value.is_empty() && value.chars().count() <= max_chars)
 }
 
 fn validate_scope(scope: &SurfaceScope) -> Result<(), SurfaceRegistryError> {
@@ -740,8 +882,8 @@ mod tests {
     use crate::domain::WorkspaceService;
 
     use super::{
-        build_session_surface, props_patch, SessionSurfaceProps, SurfaceMessage, SurfacePublish,
-        SurfaceRegistry, SurfaceReplay, SurfaceScope,
+        build_session_surface, projected_props, props_patch, SessionSurfaceProps, SurfaceMessage,
+        SurfacePublish, SurfaceRegistry, SurfaceReplay, SurfaceScope,
     };
 
     fn scope(character_id: &str, session_id: &str) -> SurfaceScope {
@@ -812,6 +954,72 @@ mod tests {
         assert!(matches!(children[0], LayoutNodeV2::Tabs { .. }));
         assert!(matches!(children[1], LayoutNodeV2::Stack { .. }));
         validate_surface_snapshot(&first).unwrap();
+    }
+
+    #[test]
+    fn emotion_and_inventory_are_bounded_read_only_character_state_projections() {
+        let mut props = props("unused");
+        props.character_state = json!({
+            "revision": 7,
+            "timestamp": "2026-08-30T00:00:00Z",
+            "state": {
+                "emotion": 72,
+                "mood": "focused",
+                "inventory": [
+                    {"id": "tea", "name": "Tea", "qty": 2, "icon": "🍵", "secret": true}
+                ]
+            },
+            "source": {
+                "kind": "character_state",
+                "scope": "character",
+                "character_id": "alice"
+            }
+        });
+
+        assert_eq!(
+            projected_props("core.emotion", &props),
+            Some(json!({
+                "available": true,
+                "emotion": 72,
+                "label": "focused",
+                "revision": 7,
+                "timestamp": "2026-08-30T00:00:00Z",
+                "source": {
+                    "kind": "character_state",
+                    "scope": "character",
+                    "character_id": "alice"
+                }
+            }))
+        );
+        assert_eq!(
+            projected_props("core.inventory", &props),
+            Some(json!({
+                "available": true,
+                "items": [{"id": "tea", "name": "Tea", "qty": 2, "icon": "🍵"}],
+                "revision": 7,
+                "timestamp": "2026-08-30T00:00:00Z",
+                "source": {
+                    "kind": "character_state",
+                    "scope": "character",
+                    "character_id": "alice"
+                }
+            }))
+        );
+
+        props.character_state["state"] = json!({
+            "emotion": -1,
+            "inventory": [{"id": "duplicate", "name": "One"}, {"id": "duplicate", "name": "Two"}]
+        });
+        assert_eq!(
+            projected_props("core.emotion", &props).unwrap()["available"],
+            false
+        );
+        assert!(projected_props("core.emotion", &props).unwrap()["emotion"].is_null());
+        assert_eq!(
+            projected_props("core.inventory", &props).unwrap()["available"],
+            false
+        );
+        assert!(projected_props("core.inventory", &props).unwrap()["items"].is_null());
     }
 
     #[test]

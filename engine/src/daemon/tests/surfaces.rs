@@ -152,6 +152,110 @@ async fn surface_refresh_consumes_the_saved_workspace_for_the_effective_root() {
 }
 
 #[tokio::test]
+async fn emotion_and_inventory_widgets_project_bounded_character_state_read_only() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let alice = crate::types::CharacterId::new("alice").unwrap();
+    let alice_session = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, alice.as_str(), &alice_session)
+        .unwrap();
+    crate::domain::StateService::new(&state.data_root)
+        .write(
+            &alice,
+            &serde_json::json!({
+                "emotion": 72,
+                "mood": "focused",
+                "inventory": [
+                    {"id": "tea", "name": "Tea", "qty": 2, "icon": "🍵", "private": "drop"}
+                ]
+            }),
+        )
+        .unwrap();
+    let workspace = crate::domain::WorkspaceService::new(&state.data_root);
+    workspace
+        .execute(
+            0,
+            crate::domain::WorkspaceCommand::OpenWidget {
+                instance_id: "emotion".to_string(),
+                widget_type: "core.emotion".to_string(),
+                target_id: "workspace-context".to_string(),
+                index: None,
+            },
+        )
+        .unwrap();
+    workspace
+        .execute(
+            1,
+            crate::domain::WorkspaceCommand::OpenWidget {
+                instance_id: "inventory".to_string(),
+                widget_type: "core.inventory".to_string(),
+                target_id: "workspace-context".to_string(),
+                index: None,
+            },
+        )
+        .unwrap();
+    let app = create_router(state.clone());
+
+    let snapshot = surface_snapshot_json(app.clone(), alice.as_str(), &alice_session).await;
+    let emotion = widget_props(&snapshot, "emotion");
+    assert_eq!(emotion["available"], true);
+    assert_eq!(emotion["emotion"], 72);
+    assert_eq!(emotion["label"], "focused");
+    assert_eq!(emotion["revision"], 1);
+    assert_eq!(emotion["source"]["kind"], "character_state");
+    assert_eq!(emotion["source"]["scope"], "character");
+    assert_eq!(emotion["source"]["character_id"], "alice");
+    let inventory = widget_props(&snapshot, "inventory");
+    assert_eq!(inventory["available"], true);
+    assert_eq!(
+        inventory["items"],
+        serde_json::json!([{"id": "tea", "name": "Tea", "qty": 2, "icon": "🍵"}])
+    );
+    assert_eq!(inventory["revision"], 1);
+
+    let bob = crate::types::CharacterId::new("bob").unwrap();
+    let bob_session = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, bob.as_str(), &bob_session).unwrap();
+    let bob_snapshot = surface_snapshot_json(app.clone(), bob.as_str(), &bob_session).await;
+    assert_eq!(widget_props(&bob_snapshot, "emotion")["available"], false);
+    assert_eq!(widget_props(&bob_snapshot, "emotion")["reason"], "missing");
+    assert_eq!(widget_props(&bob_snapshot, "inventory")["available"], false);
+    assert_eq!(
+        widget_props(&bob_snapshot, "inventory")["reason"],
+        "missing"
+    );
+
+    crate::domain::StateService::new(&state.data_root)
+        .write(
+            &alice,
+            &serde_json::json!({
+                "emotion": -1,
+                "inventory": [
+                    {"id": "same", "name": "One"},
+                    {"id": "same", "name": "Two"}
+                ]
+            }),
+        )
+        .unwrap();
+    let refreshed = surface_snapshot_json(app.clone(), alice.as_str(), &alice_session).await;
+    assert_eq!(widget_props(&refreshed, "emotion")["available"], false);
+    assert!(widget_props(&refreshed, "emotion")["emotion"].is_null());
+    assert_eq!(widget_props(&refreshed, "inventory")["available"], false);
+    assert!(widget_props(&refreshed, "inventory")["items"].is_null());
+
+    let rejected = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{alice_session}"),
+            "instance_id": "inventory",
+            "name": "inventory.use",
+            "params": {"id": "tea"}
+        }),
+    )
+    .await;
+    assert_eq!(rejected.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn chat_intent_resolves_scope_from_the_accepted_surface() {
     let (state, _tmp) = make_state_with_key(Some("surface-secret"));
     let session_id = crate::types::SessionId::new();
