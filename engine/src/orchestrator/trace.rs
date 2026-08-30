@@ -86,6 +86,41 @@ pub struct PromptSegment {
     pub estimated_tokens: usize,
     pub truncated: bool,
     pub stable_or_volatile: Stability,
+    /// Trust/source class for provider-visible decision input.
+    pub input_class: PromptInputClass,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_items: Option<Vec<PromptEvidenceProvenance>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptEvidenceProvenance {
+    pub evidence_id: String,
+    pub source_tool: String,
+    pub call_id: String,
+    pub revision: Option<u64>,
+    pub content_hash: String,
+    pub original_bytes: usize,
+    pub included_bytes: usize,
+    pub redacted: bool,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptInputClass {
+    RpDomain,
+    Assignment,
+    SelectedEvidence,
 }
 
 /// Whether a segment is stable across turns or volatile session state.
@@ -205,6 +240,13 @@ mod tests {
             } else {
                 Stability::Stable
             },
+            input_class: PromptInputClass::RpDomain,
+            content_revision: None,
+            content_hash: None,
+            original_bytes: None,
+            included_bytes: None,
+            redacted: None,
+            evidence_items: None,
         }
     }
 

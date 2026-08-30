@@ -12,7 +12,7 @@
 
 use futures_util::StreamExt;
 
-use crate::adapter::call_streaming_api_auto;
+use crate::adapter::call_streaming_api_auto_with_decision_inputs;
 
 use super::types::{GenerationStepResult, PreparedPipeline};
 
@@ -25,8 +25,9 @@ pub async fn run_generation_step(pipeline: PreparedPipeline) -> GenerationStepRe
         provider_config,
         gen_params,
         system_prompt,
-        prompt_trace: _,
+        prompt_trace,
         messages,
+        decision_inputs,
         mut fsm,
         mut unpacker,
         finalizer,
@@ -34,13 +35,14 @@ pub async fn run_generation_step(pipeline: PreparedPipeline) -> GenerationStepRe
         engine,
     } = pipeline;
 
-    let raw_stream = call_streaming_api_auto(
+    let raw_stream = call_streaming_api_auto_with_decision_inputs(
         &engine,
         http_client,
         provider_config,
         gen_params,
         system_prompt,
         messages,
+        decision_inputs,
     );
     tokio::pin!(raw_stream);
 
@@ -72,6 +74,7 @@ pub async fn run_generation_step(pipeline: PreparedPipeline) -> GenerationStepRe
     }
 
     GenerationStepResult {
+        prompt_trace,
         raw_acc,
         cleaned_acc,
         chunks,

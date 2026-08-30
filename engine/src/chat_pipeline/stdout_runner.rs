@@ -4,7 +4,7 @@
 //! 子命令复用全部 daemon 改进（FSM + Unpacker + 持久化 + 卷注入）而不需 TCP
 //! 自 POST。
 
-use crate::adapter::call_streaming_api_auto;
+use crate::adapter::call_streaming_api_auto_with_decision_inputs;
 use crate::error::AirpError;
 use crate::xml_unpacker::UnpackedChunk;
 use futures_util::StreamExt;
@@ -26,6 +26,7 @@ pub async fn run_pipeline_to_stdout(pipeline: PreparedPipeline) -> Result<(), Ai
         system_prompt,
         prompt_trace: _,
         messages,
+        decision_inputs,
         mut fsm,
         mut unpacker,
         finalizer,
@@ -33,13 +34,14 @@ pub async fn run_pipeline_to_stdout(pipeline: PreparedPipeline) -> Result<(), Ai
         engine,
     } = pipeline;
 
-    let raw_stream = call_streaming_api_auto(
+    let raw_stream = call_streaming_api_auto_with_decision_inputs(
         &engine,
         http_client,
         provider_config,
         gen_params,
         system_prompt,
         messages,
+        decision_inputs,
     );
     tokio::pin!(raw_stream);
 

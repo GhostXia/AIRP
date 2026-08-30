@@ -132,7 +132,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 3. 必须保持的不变式
 
-1. **干净提示词**：RP 角色平面只含 RP 数据；工具/调度/审计留在结构化控制平面。`subagent_context_has_no_orchestrator_noise` 神圣不可弱化。  
+1. **干净提示词**：RP 角色平面只含 RP 数据与规划器明确选中的有界事实证据；工具参数、未选工具结果、规划/调度/审计/遥测留在结构化控制平面。选中证据必须带来源与摘要、先脱敏、按输入 token 预算截断，并经 `airp.selected-evidence.v1` 单一通道注入。`subagent_context_has_no_orchestrator_noise` 神圣不可弱化。
 2. **Engine 单一真相**：handler、UI、Agent tool 不复制持久化规则；写路径应收敛到 shared service。  
 3. **有界 Agent**：step/token/墙钟/取消/可观察事件；UI consent 不替代 Engine 授权。  
 4. **用户资产优先**：不兼容演进必须有 versioned migration、升级前备份、完整性验证、可读导出与回滚。  

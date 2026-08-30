@@ -53,6 +53,8 @@ mod world_event;
 pub(crate) use analysis::enhance_md_via_llm_shared;
 pub use analysis::ENHANCE_ANALYSIS_SYSTEM_PROMPT;
 
+pub(crate) const INTERNAL_GENERATE_TOOL: &str = "__airp_generate_with_evidence_v1";
+
 // Phase 4.5：world_event 的类型经 facade 做 pub(crate) re-export，
 // 供 `timeline_export` 模块复用。类型已迁移至 `domain::world_event`（E-P1-3 slice 1）。
 pub(crate) use crate::domain::{WorldClock, WorldEvent};
@@ -88,6 +90,16 @@ pub struct ToolResult {
     pub dry_run: bool,
 }
 
+/// A minimal, tool-owned projection that is safe to offer as generation
+/// evidence. Tools return no candidates by default, so arbitrary/plugin output
+/// remains control-plane-only unless its implementation opts in explicitly.
+#[derive(Debug, Clone)]
+pub struct ToolEvidenceCandidate {
+    pub content: Value,
+    pub revision: Option<u64>,
+    pub redacted: bool,
+}
+
 /// 工具 trait。`call` 是异步 boxed Future（动态分发足够，工具非热路径）。
 pub trait Tool: Send + Sync {
     fn meta(&self) -> ToolMeta;
@@ -101,6 +113,12 @@ pub trait Tool: Send + Sync {
         params: Value,
         confirm: bool,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, AirpError>> + Send + '_>>;
+
+    /// Project the smallest safe facts from a successful result. This method
+    /// intentionally receives no raw call params.
+    fn evidence_candidates(&self, _result: &ToolResult) -> Vec<ToolEvidenceCandidate> {
+        Vec::new()
+    }
 }
 
 /// Tool registry assembled from built-ins; future MCP sources must pass the
@@ -119,6 +137,11 @@ impl ToolRegistry {
     /// （旧实现 `insert` 会悄悄顶掉同名工具，掩盖冲突；issue #24）。
     pub fn register(&mut self, tool: Box<dyn Tool>) -> Result<(), AirpError> {
         let name = tool.meta().name;
+        if name == INTERNAL_GENERATE_TOOL {
+            return Err(AirpError::Config(format!(
+                "reserved internal planner tool name: {name}"
+            )));
+        }
         if self.tools.contains_key(name) {
             return Err(AirpError::Config(format!(
                 "duplicate tool registration: {}",
@@ -180,6 +203,25 @@ impl Tool for EchoTool {
                 dry_run: false,
             })
         })
+    }
+
+    fn evidence_candidates(&self, result: &ToolResult) -> Vec<ToolEvidenceCandidate> {
+        let mut candidates = Vec::new();
+        if let Some(answer) = result.output.get("answer") {
+            candidates.push(ToolEvidenceCandidate {
+                content: serde_json::json!({"answer": answer}),
+                revision: None,
+                redacted: false,
+            });
+        }
+        if let Some(unselected) = result.output.get("unselected") {
+            candidates.push(ToolEvidenceCandidate {
+                content: serde_json::json!({"unselected": unselected}),
+                revision: None,
+                redacted: false,
+            });
+        }
+        candidates
     }
 }
 

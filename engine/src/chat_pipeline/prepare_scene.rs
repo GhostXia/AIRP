@@ -296,6 +296,7 @@ pub(super) fn prepare_scene_pipeline(
         system_prompt,
         prompt_trace,
         messages,
+        decision_inputs: Vec::new(),
         fsm,
         unpacker: StreamingXmlUnpacker::new(),
         engine: snapshot.engine.clone(),

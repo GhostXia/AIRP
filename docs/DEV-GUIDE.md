@@ -69,7 +69,9 @@ Rust workspace 成员只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-MCP-Se
 
 ### 3.1 干净提示词
 
-RP 角色平面只包含角色卡、世界书、Preset、Persona、state、记忆和历史。工具定义/调用/结果、规划和编排元数据走 provider 原生结构化控制平面；禁止 in-prompt ReAct 或把 orchestrator 指令拼进角色自然语言。
+RP 角色平面只包含角色卡、世界书、Preset、Persona、state、记忆、历史，以及规划器显式选择的事实证据。工具定义/参数/未选结果、规划器 transcript、调度与遥测留在结构化控制平面；禁止 in-prompt ReAct 或把 orchestrator 指令拼进角色自然语言。
+
+选中工具证据只能通过 `airp.selected-evidence.v1` 通道进入最终 provider payload：ID 必须对应本轮成功结果，内容先按敏感键递归脱敏，再按单项/总量和剩余 token 预算截断；envelope 必须保留 tool/call provenance、revision（若结果提供）、SHA-256、原始/纳入大小及 redacted/truncated 标志。不得新增任意 `meta_context` 注入口。
 
 `subagent_context_has_no_orchestrator_noise` 是神圣门禁，不得删除、改弱或用白名单掩盖污染。
 
