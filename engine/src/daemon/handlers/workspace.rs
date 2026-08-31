@@ -337,11 +337,11 @@ pub(in crate::daemon) async fn dry_run_workspace_migration_endpoint(
         Ok(payload) => payload,
         Err(rejection) => return workspace_request_rejection(rejection),
     };
-    let service = match workspace_service(&state, query.user_id.as_ref()) {
-        Ok(service) => service,
-        Err(error) => return error.into_response(),
-    };
-    match blocking(move || service.plan_v1_migration(&request.source.into())).await {
+    match blocking_migration_workspace(state.data_root.clone(), query.user_id, move |service| {
+        service.plan_v1_migration(&request.source.into())
+    })
+    .await
+    {
         Ok(plan) => Json(WorkspaceMigrationDryRunResponse {
             source: plan.source,
             source_sha256: plan.source_sha256,
@@ -369,13 +369,9 @@ pub(in crate::daemon) async fn apply_workspace_migration_endpoint(
         Ok(payload) => payload,
         Err(rejection) => return workspace_request_rejection(rejection),
     };
-    let service = match workspace_service(&state, query.user_id.as_ref()) {
-        Ok(service) => service,
-        Err(error) => return error.into_response(),
-    };
     let candidate_sha256 = request.planned_candidate_sha256.clone();
     let converter_version = request.planned_converter_version.clone();
-    match blocking(move || {
+    match blocking_migration_workspace(state.data_root.clone(), query.user_id, move |service| {
         service.apply_v1_migration(
             request.expected_revision.value(),
             &request.source.into(),
@@ -411,12 +407,8 @@ pub(in crate::daemon) async fn rollback_workspace_migration_endpoint(
         Ok(payload) => payload,
         Err(rejection) => return workspace_request_rejection(rejection),
     };
-    let service = match workspace_service(&state, query.user_id.as_ref()) {
-        Ok(service) => service,
-        Err(error) => return error.into_response(),
-    };
     let backup_id = request.backup_id.clone();
-    match blocking(move || {
+    match blocking_migration_workspace(state.data_root.clone(), query.user_id, move |service| {
         service.rollback_migration_backup(request.expected_revision.value(), &request.backup_id)
     })
     .await
@@ -438,6 +430,39 @@ fn workspace_service(
     let root =
         crate::data_dir::resolve_effective_root(&state.data_root, user_id.map(UserId::as_str))?;
     Ok(WorkspaceService::new(root))
+}
+
+/// Resolve the migration scope and run its synchronous domain operation in one
+/// blocking task. `resolve_effective_root` may initialize a user directory, so
+/// it must not run on an async worker before `spawn_blocking`.
+async fn blocking_migration_workspace<T: Send + 'static>(
+    data_root: std::path::PathBuf,
+    user_id: Option<UserId>,
+    operation: impl FnOnce(WorkspaceService) -> Result<T, AirpError> + Send + 'static,
+) -> Result<T, AirpError> {
+    blocking_migration_workspace_with_resolver(
+        data_root,
+        user_id,
+        crate::data_dir::resolve_effective_root,
+        operation,
+    )
+    .await
+}
+
+async fn blocking_migration_workspace_with_resolver<T: Send + 'static>(
+    data_root: std::path::PathBuf,
+    user_id: Option<UserId>,
+    resolver: impl FnOnce(&std::path::Path, Option<&str>) -> Result<std::path::PathBuf, AirpError>
+        + Send
+        + 'static,
+    operation: impl FnOnce(WorkspaceService) -> Result<T, AirpError> + Send + 'static,
+) -> Result<T, AirpError> {
+    blocking(move || {
+        let root = resolver(&data_root, user_id.as_ref().map(UserId::as_str))?;
+        let service = WorkspaceService::new(root);
+        operation(service)
+    })
+    .await
 }
 
 async fn blocking<T: Send + 'static>(
@@ -487,4 +512,40 @@ fn workspace_request_rejection(rejection: JsonRejection) -> Response {
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod blocking_boundary_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn migration_scope_initialization_runs_with_the_blocking_operation() {
+        let runtime_thread = std::thread::current().id();
+        let temp = tempfile::tempdir().unwrap();
+        let expected_root = temp.path().join("users/alice");
+        let observed_root = expected_root.clone();
+        let resolver_thread = Arc::new(std::sync::Mutex::new(None));
+        let resolver_observation = resolver_thread.clone();
+
+        let operation_thread = blocking_migration_workspace_with_resolver(
+            temp.path().to_path_buf(),
+            Some(UserId::new("alice").unwrap()),
+            move |root, user_id| {
+                *resolver_observation.lock().unwrap() = Some(std::thread::current().id());
+                crate::data_dir::resolve_effective_root(root, user_id)
+            },
+            move |_service| {
+                assert!(observed_root.join("characters").is_dir());
+                assert!(observed_root.join("presets").is_dir());
+                assert!(observed_root.join("scenes").is_dir());
+                Ok(std::thread::current().id())
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(resolver_thread.lock().unwrap().unwrap(), runtime_thread);
+        assert_ne!(operation_thread, runtime_thread);
+        assert!(expected_root.is_dir());
+    }
 }
