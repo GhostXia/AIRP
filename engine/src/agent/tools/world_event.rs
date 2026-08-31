@@ -181,6 +181,26 @@ impl Tool for ListWorldEventsTool {
             })?
         })
     }
+
+    fn planner_projection(&self, result: &ToolResult) -> Option<ToolPlannerProjection> {
+        let events = result.output.as_array()?.iter().map(|event| {
+            serde_json::json!({
+                "id": event.get("id"),
+                "name": event.get("name"),
+                "description": event.get("description"),
+                "triggered": event.get("triggered")
+            })
+        });
+        Some(ToolPlannerProjection {
+            content: serde_json::json!({"events": events.collect::<Vec<_>>()}),
+            revision: None,
+            redacted: false,
+        })
+    }
+
+    fn planner_result_mode(&self) -> PlannerResultMode {
+        PlannerResultMode::Projected
+    }
 }
 
 pub(super) fn register(reg: &mut ToolRegistry, state: Arc<DaemonState>) {

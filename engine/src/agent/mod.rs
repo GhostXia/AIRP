@@ -42,8 +42,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use tools::ToolRegistry;
 use tools::INTERNAL_GENERATE_TOOL;
+use tools::{ToolPlannerProjection, ToolRegistry};
 
 // ── 请求 / 事件协议 ─────────────────────────────────────────────────────────
 
@@ -105,12 +105,17 @@ pub enum AgentEvent {
     Plan { step: u32, action: PlanAction },
     /// 工具被调用。
     ToolCall {
+        run_id: String,
+        call_id: String,
         step: u32,
         tool: String,
         params: Value,
     },
     /// 工具返回。
     ToolResult {
+        run_id: String,
+        call_id: String,
+        result_id: String,
         step: u32,
         tool: String,
         output: Value,
@@ -260,7 +265,48 @@ async fn run_loop(
         {
             PlannerDecision::generate()
         } else {
-            match decide_action(state, registry, req, &observations).await {
+            let planner_observations = build_planner_observations(
+                &observations,
+                token_budget.saturating_sub(tokens_estimated),
+            );
+            if planner_observations.requested_but_over_budget {
+                return emit_done(tx, StopReason::TokenBudget, steps_taken, tokens_estimated).await;
+            }
+            tokens_estimated =
+                tokens_estimated.saturating_add(planner_observations.estimated_tokens as u64);
+            tracing::debug!(
+                agent_run_id = %run_id,
+                schema = planner_observations.envelope.schema,
+                observations = planner_observations.envelope.observations.len(),
+                estimated_tokens = planner_observations.estimated_tokens,
+                original_bytes = planner_observations.original_bytes,
+                included_bytes = planner_observations.included_bytes,
+                redacted = planner_observations.redacted,
+                truncated = planner_observations.truncated,
+                "prepared planner observation projection"
+            );
+            for observation in &planner_observations.envelope.observations {
+                tracing::debug!(
+                    agent_run_id = %run_id,
+                    call_id = %observation.source.call_id,
+                    result_id = %observation.source.result_id,
+                    source_tool = %observation.source.tool,
+                    outcome = observation.outcome,
+                    has_projection = observation.projection.is_some(),
+                    evidence_candidates = observation.evidence_candidates.len(),
+                    plane = "planner_projection",
+                    "planner observation provenance"
+                );
+            }
+            match decide_action(
+                state,
+                registry,
+                req,
+                &planner_observations.envelope,
+                &planner_observations.visible_evidence_ids,
+            )
+            .await
+            {
                 Ok(decision) => decision,
                 Err(error) => {
                     tracing::warn!(%error, "structured tool planner failed");
@@ -280,8 +326,11 @@ async fn run_loop(
 
         match action {
             PlanAction::CallTool { tool, params } => {
+                let call_id = uuid::Uuid::new_v4().to_string();
                 let _ = tx
                     .send(AgentEvent::ToolCall {
+                        run_id: run_id.to_string(),
+                        call_id: call_id.clone(),
                         step: steps_taken,
                         tool: tool.clone(),
                         params: params.clone(),
@@ -304,10 +353,10 @@ async fn run_loop(
                 };
                 match result {
                     Ok(r) => {
-                        let call_id = uuid::Uuid::new_v4().to_string();
-                        let evidence_candidates = registry
-                            .get(&tool)
-                            .map(|implementation| implementation.evidence_candidates(&r))
+                        let result_id = uuid::Uuid::new_v4().to_string();
+                        let implementation = registry.get(&tool);
+                        let evidence_candidates = implementation
+                            .map(|tool| tool.evidence_candidates(&r))
                             .unwrap_or_default()
                             .into_iter()
                             .map(|candidate| EvidenceCandidate {
@@ -317,8 +366,13 @@ async fn run_loop(
                                 redacted: candidate.redacted,
                             })
                             .collect();
+                        let planner_projection =
+                            implementation.and_then(|tool| tool.planner_projection(&r));
                         let _ = tx
                             .send(AgentEvent::ToolResult {
+                                run_id: run_id.to_string(),
+                                call_id: call_id.clone(),
+                                result_id: result_id.clone(),
                                 step: steps_taken,
                                 tool: tool.clone(),
                                 output: r.output.clone(),
@@ -327,18 +381,24 @@ async fn run_loop(
                             .await;
                         observations.push(ControlObservation {
                             call_id,
+                            result_id,
                             tool,
-                            output: r.output,
                             dry_run: r.dry_run,
                             succeeded: true,
+                            failure_code: None,
+                            planner_projection,
                             evidence_candidates,
                         });
                     }
                     Err(e) => {
                         tracing::warn!(err = %e, tool = %tool, "tool call failed");
                         let error_output = serde_json::json!({"error": e.to_string()});
+                        let result_id = uuid::Uuid::new_v4().to_string();
                         let _ = tx
                             .send(AgentEvent::ToolResult {
+                                run_id: run_id.to_string(),
+                                call_id: call_id.clone(),
+                                result_id: result_id.clone(),
                                 step: steps_taken,
                                 tool: tool.clone(),
                                 output: error_output.clone(),
@@ -346,11 +406,13 @@ async fn run_loop(
                             })
                             .await;
                         observations.push(ControlObservation {
-                            call_id: uuid::Uuid::new_v4().to_string(),
+                            call_id,
+                            result_id,
                             tool,
-                            output: error_output,
                             dry_run: true,
                             succeeded: false,
+                            failure_code: Some(e.code_str()),
+                            planner_projection: None,
                             evidence_candidates: Vec::new(),
                         });
                     }
@@ -560,13 +622,15 @@ async fn record_agent_failure(
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct ControlObservation {
     call_id: String,
+    result_id: String,
     tool: String,
-    output: Value,
     dry_run: bool,
     succeeded: bool,
+    failure_code: Option<&'static str>,
+    planner_projection: Option<ToolPlannerProjection>,
     evidence_candidates: Vec<EvidenceCandidate>,
 }
 
@@ -576,6 +640,64 @@ struct EvidenceCandidate {
     content: Value,
     revision: Option<u64>,
     redacted: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct PlannerObservationEnvelope {
+    schema: &'static str,
+    observations: Vec<PlannerObservation>,
+}
+
+#[derive(Debug, Serialize)]
+struct PlannerObservation {
+    source: PlannerObservationSource,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    projection: Option<BoundedPlannerProjection>,
+    evidence_candidates: Vec<PlannerEvidenceCandidate>,
+}
+
+#[derive(Debug, Serialize)]
+struct PlannerObservationSource {
+    tool: String,
+    call_id: String,
+    result_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BoundedPlannerProjection {
+    revision: Option<u64>,
+    sha256: String,
+    original_bytes: usize,
+    included_bytes: usize,
+    redacted: bool,
+    truncated: bool,
+    content_excerpt: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PlannerEvidenceCandidate {
+    id: String,
+    revision: Option<u64>,
+    sha256: String,
+    original_bytes: usize,
+    included_bytes: usize,
+    redacted: bool,
+    truncated: bool,
+    content_excerpt: String,
+}
+
+struct PlannerObservationPayload {
+    envelope: PlannerObservationEnvelope,
+    estimated_tokens: usize,
+    original_bytes: usize,
+    included_bytes: usize,
+    redacted: bool,
+    truncated: bool,
+    visible_evidence_ids: std::collections::HashSet<String>,
+    requested_but_over_budget: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -603,6 +725,11 @@ const MAX_SELECTED_EVIDENCE_ITEMS: usize = 8;
 const MAX_SELECTED_EVIDENCE_ITEM_BYTES: usize = 4 * 1024;
 const MAX_SELECTED_EVIDENCE_TOTAL_BYTES: usize = 8 * 1024;
 const MAX_ASSIGNMENT_FIELD_BYTES: usize = 2 * 1024;
+const MAX_PLANNER_OBSERVATIONS: usize = 32;
+const MAX_PLANNER_EVIDENCE_ITEMS: usize = 8;
+const MAX_PLANNER_EVIDENCE_ITEM_BYTES: usize = 2 * 1024;
+const MAX_PLANNER_EVIDENCE_TOTAL_BYTES: usize = 8 * 1024;
+const MAX_PLANNER_PROJECTION_ITEM_BYTES: usize = 2 * 1024;
 
 #[derive(Debug, Serialize)]
 struct SelectedEvidenceEnvelope {
@@ -628,6 +755,7 @@ struct SelectedEvidenceSource {
     kind: &'static str,
     tool: String,
     call_id: String,
+    result_id: String,
 }
 
 struct SelectedEvidencePayload {
@@ -647,13 +775,127 @@ struct ScopedAssignmentPayload {
     requested_but_over_budget: bool,
 }
 
+fn build_planner_observations(
+    observations: &[ControlObservation],
+    remaining_token_budget: u64,
+) -> PlannerObservationPayload {
+    let mut projected = Vec::new();
+    let mut original_bytes = 0usize;
+    let mut included_content_bytes = 0usize;
+    let mut included_candidates = 0usize;
+    let mut visible_evidence_ids = std::collections::HashSet::new();
+    let mut redacted = false;
+    let mut truncated = observations.len() > MAX_PLANNER_OBSERVATIONS;
+
+    for observation in observations.iter().rev().take(MAX_PLANNER_OBSERVATIONS) {
+        let projection = observation.planner_projection.as_ref().map(|projection| {
+            let full = serde_json::to_string(&projection.content).unwrap_or_default();
+            original_bytes = original_bytes.saturating_add(full.len());
+            let mut safe = projection.content.clone();
+            let item_redacted = projection.redacted || redact_sensitive_json(&mut safe);
+            let safe_full = serde_json::to_string(&safe).unwrap_or_default();
+            let remaining = MAX_PLANNER_EVIDENCE_TOTAL_BYTES.saturating_sub(included_content_bytes);
+            let item_limit = remaining.min(MAX_PLANNER_PROJECTION_ITEM_BYTES);
+            let excerpt = truncate_utf8(&safe_full, item_limit);
+            let item_truncated = excerpt.len() < safe_full.len();
+            included_content_bytes = included_content_bytes.saturating_add(excerpt.len());
+            redacted |= item_redacted;
+            truncated |= item_truncated;
+            BoundedPlannerProjection {
+                revision: projection.revision,
+                sha256: format!("{:x}", Sha256::digest(safe_full.as_bytes())),
+                original_bytes: full.len(),
+                included_bytes: excerpt.len(),
+                redacted: item_redacted,
+                truncated: item_truncated,
+                content_excerpt: excerpt,
+            }
+        });
+        let mut candidates = Vec::new();
+        for candidate in &observation.evidence_candidates {
+            if included_candidates >= MAX_PLANNER_EVIDENCE_ITEMS
+                || included_content_bytes >= MAX_PLANNER_EVIDENCE_TOTAL_BYTES
+            {
+                truncated = true;
+                break;
+            }
+            let full = serde_json::to_string(&candidate.content).unwrap_or_default();
+            original_bytes = original_bytes.saturating_add(full.len());
+            let mut safe = candidate.content.clone();
+            let item_redacted = candidate.redacted || redact_sensitive_json(&mut safe);
+            let safe_full = serde_json::to_string(&safe).unwrap_or_default();
+            let remaining = MAX_PLANNER_EVIDENCE_TOTAL_BYTES.saturating_sub(included_content_bytes);
+            let item_limit = remaining.min(MAX_PLANNER_EVIDENCE_ITEM_BYTES);
+            let excerpt = truncate_utf8(&safe_full, item_limit);
+            let item_truncated = excerpt.len() < safe_full.len();
+            included_content_bytes = included_content_bytes.saturating_add(excerpt.len());
+            included_candidates += 1;
+            visible_evidence_ids.insert(candidate.id.clone());
+            redacted |= item_redacted;
+            truncated |= item_truncated;
+            candidates.push(PlannerEvidenceCandidate {
+                id: candidate.id.clone(),
+                revision: candidate.revision,
+                sha256: format!("{:x}", Sha256::digest(safe_full.as_bytes())),
+                original_bytes: full.len(),
+                included_bytes: excerpt.len(),
+                redacted: item_redacted,
+                truncated: item_truncated,
+                content_excerpt: excerpt,
+            });
+        }
+        truncated |= observation.evidence_candidates.len() > candidates.len();
+        projected.push(PlannerObservation {
+            source: PlannerObservationSource {
+                tool: observation.tool.clone(),
+                call_id: observation.call_id.clone(),
+                result_id: observation.result_id.clone(),
+            },
+            outcome: if !observation.succeeded {
+                "failed"
+            } else if observation.dry_run {
+                "dry_run"
+            } else {
+                "succeeded"
+            },
+            failure_code: observation.failure_code,
+            projection,
+            evidence_candidates: candidates,
+        });
+    }
+    projected.reverse();
+
+    let envelope = PlannerObservationEnvelope {
+        schema: "airp.planner-observations.v1",
+        observations: projected,
+    };
+    let serialized = serde_json::to_string(&envelope).unwrap_or_default();
+    let estimated_tokens = if observations.is_empty() {
+        0
+    } else {
+        crate::volume_store::estimate_tokens(&serialized)
+    };
+    PlannerObservationPayload {
+        envelope,
+        estimated_tokens,
+        original_bytes,
+        included_bytes: serialized.len(),
+        redacted,
+        truncated,
+        visible_evidence_ids,
+        requested_but_over_budget: !observations.is_empty()
+            && estimated_tokens as u64 >= remaining_token_budget,
+    }
+}
+
 /// Provider-neutral decision boundary. Provider-specific wire decoding stays in
 /// this function; the loop only sees typed `PlanAction` and observations.
 async fn decide_action(
     state: &Arc<DaemonState>,
     registry: &ToolRegistry,
     req: &AgentRunRequest,
-    observations: &[ControlObservation],
+    planner_observations: &PlannerObservationEnvelope,
+    visible_evidence_ids: &std::collections::HashSet<String>,
 ) -> Result<PlannerDecision, AirpError> {
     if registry
         .list()
@@ -665,15 +907,21 @@ async fn decide_action(
         )));
     }
     let mut tools: Vec<Value> = registry
-        .list()
+        .planner_list()
         .into_iter()
-        .filter(|tool| registry.allowed(tool.name, &req.capabilities, req.allowed_tools.as_deref()))
-        .map(|tool| {
+        .filter(|(tool, _)| {
+            registry.allowed(tool.name, &req.capabilities, req.allowed_tools.as_deref())
+        })
+        .map(|(tool, result_mode)| {
             serde_json::json!({
                 "type": "function",
                 "function": {
                     "name": tool.name,
-                    "description": tool.description,
+                    "description": format!(
+                        "{} Planner result contract: {}",
+                        tool.description,
+                        result_mode.description()
+                    ),
                     "parameters": {"type": "object", "additionalProperties": true}
                 }
             })
@@ -720,7 +968,7 @@ async fn decide_action(
     let system = format!("You are AIRP's control-plane planner. Always call exactly one function. Call an available domain tool when more information is required. Otherwise call {INTERNAL_GENERATE_TOOL} and select only evidence candidate IDs required by the final roleplay response; use an empty array when none is required. Never write roleplay prose.");
     let user = serde_json::to_string(&serde_json::json!({
         "request": req.base.message,
-        "observations": observations,
+        "planner_observations": planner_observations,
     }))?;
     let mut request = match &engine {
         crate::adapter::BackendEngine::Direct | crate::adapter::BackendEngine::Ollama => {
@@ -809,7 +1057,7 @@ async fn decide_action(
     };
     if tool == INTERNAL_GENERATE_TOOL {
         let selection: PlannerSelection = serde_json::from_value(params)?;
-        let selected_evidence = validate_selected_evidence(selection, observations)?;
+        let selected_evidence = validate_selected_evidence(selection, visible_evidence_ids)?;
         return Ok(PlannerDecision {
             action: PlanAction::Generate,
             selected_evidence,
@@ -860,14 +1108,8 @@ fn planner_tool_call_count(engine: &crate::adapter::BackendEngine, payload: &Val
 
 fn validate_selected_evidence(
     selection: PlannerSelection,
-    observations: &[ControlObservation],
+    selectable: &std::collections::HashSet<String>,
 ) -> Result<Vec<String>, AirpError> {
-    let selectable: std::collections::HashSet<&str> = observations
-        .iter()
-        .filter(|observation| observation.succeeded)
-        .flat_map(|observation| observation.evidence_candidates.iter())
-        .map(|candidate| candidate.id.as_str())
-        .collect();
     let mut selected = Vec::new();
     for id in selection.selected_evidence {
         if selected.len() >= MAX_SELECTED_EVIDENCE_ITEMS {
@@ -875,7 +1117,7 @@ fn validate_selected_evidence(
                 "planner selected too many evidence items".to_string(),
             ));
         }
-        if !selectable.contains(id.as_str()) {
+        if !selectable.contains(&id) {
             return Err(AirpError::BadRequest(format!(
                 "planner selected unknown evidence id: {id}"
             )));
@@ -1056,6 +1298,7 @@ fn build_selected_evidence(
                 kind: "tool_result",
                 tool: observation.tool.clone(),
                 call_id: observation.call_id.clone(),
+                result_id: observation.result_id.clone(),
             },
             revision: candidate.revision,
             sha256,
@@ -1113,6 +1356,7 @@ fn inject_selected_evidence(
             evidence_id: item.evidence_id,
             source_tool: item.source.tool,
             call_id: item.source.call_id,
+            result_id: item.source.result_id,
             revision: item.revision,
             content_hash: item.sha256,
             original_bytes: item.original_bytes,
@@ -1479,10 +1723,12 @@ mod tests {
         );
         let observations = vec![ControlObservation {
             call_id: "opaque-call".to_string(),
+            result_id: "opaque-result".to_string(),
             tool: "echo".to_string(),
-            output: serde_json::json!({"raw": "control-only"}),
             dry_run: false,
             succeeded: true,
+            failure_code: None,
+            planner_projection: None,
             evidence_candidates: vec![EvidenceCandidate {
                 id: "opaque-evidence".to_string(),
                 content: serde_json::json!({"answer": "trace fact"}),
@@ -1621,10 +1867,12 @@ mod tests {
     fn provider_codecs_decode_explicit_evidence_selection() {
         let observations = vec![ControlObservation {
             call_id: "call-1".to_string(),
+            result_id: "result-1".to_string(),
             tool: "echo".to_string(),
-            output: serde_json::json!({"answer": "unique"}),
             dry_run: false,
             succeeded: true,
+            failure_code: None,
+            planner_projection: None,
             evidence_candidates: vec![EvidenceCandidate {
                 id: "evidence-1".to_string(),
                 content: serde_json::json!({"answer": "unique"}),
@@ -1632,12 +1880,13 @@ mod tests {
                 redacted: false,
             }],
         }];
+        let visible = build_planner_observations(&observations, u64::MAX).visible_evidence_ids;
         assert_eq!(
             validate_selected_evidence(
                 PlannerSelection {
                     selected_evidence: vec!["evidence-1".to_string()]
                 },
-                &observations,
+                &visible,
             )
             .unwrap(),
             vec!["evidence-1"]
@@ -1646,7 +1895,7 @@ mod tests {
             PlannerSelection {
                 selected_evidence: vec!["unknown".to_string()]
             },
-            &observations,
+            &visible,
         )
         .is_err());
     }
@@ -1655,10 +1904,12 @@ mod tests {
     fn selected_evidence_is_bounded_redacted_and_provenanced() {
         let observations = vec![ControlObservation {
             call_id: "call-7".to_string(),
+            result_id: "result-7".to_string(),
             tool: "lookup".to_string(),
-            output: serde_json::json!({"raw": "control-only"}),
             dry_run: false,
             succeeded: true,
+            failure_code: None,
+            planner_projection: None,
             evidence_candidates: vec![EvidenceCandidate {
                 id: "evidence-7".to_string(),
                 content: serde_json::json!({
@@ -1687,13 +1938,100 @@ mod tests {
     }
 
     #[test]
+    fn planner_observations_only_expose_bounded_tool_candidates() {
+        let observations = vec![ControlObservation {
+            call_id: "call-planner".to_string(),
+            result_id: "result-planner".to_string(),
+            tool: "lookup".to_string(),
+            dry_run: false,
+            succeeded: true,
+            failure_code: None,
+            planner_projection: Some(ToolPlannerProjection {
+                content: serde_json::json!({"continuation": "NEXT_STEP_SENTINEL"}),
+                revision: Some(5),
+                redacted: false,
+            }),
+            evidence_candidates: vec![EvidenceCandidate {
+                id: "candidate-planner".to_string(),
+                content: serde_json::json!({
+                    "authorization": "PLANNER_SECRET_SENTINEL",
+                    "body": "界".repeat(MAX_PLANNER_EVIDENCE_ITEM_BYTES)
+                }),
+                revision: Some(4),
+                redacted: false,
+            }],
+        }];
+
+        let payload = build_planner_observations(&observations, u64::MAX);
+        let wire = serde_json::to_string(&payload.envelope).unwrap();
+        assert!(wire.contains("airp.planner-observations.v1"));
+        assert!(wire.contains("candidate-planner"));
+        assert!(wire.contains("NEXT_STEP_SENTINEL"));
+        assert!(wire.contains("result-planner"));
+        assert!(wire.contains("[REDACTED]"));
+        assert!(!wire.contains("RAW_PARAM_SENTINEL"));
+        assert!(!wire.contains("RAW_RESULT_SENTINEL"));
+        assert!(!wire.contains("PLANNER_SECRET_SENTINEL"));
+        assert!(payload.redacted);
+        assert!(payload.truncated);
+        assert!(
+            payload.envelope.observations[0].evidence_candidates[0].included_bytes
+                <= MAX_PLANNER_EVIDENCE_ITEM_BYTES
+        );
+        let selected =
+            build_selected_evidence(&observations, &["candidate-planner".to_string()], u64::MAX);
+        assert!(!selected.serialized.unwrap().contains("NEXT_STEP_SENTINEL"));
+    }
+
+    #[test]
+    fn planner_caps_prefer_latest_results_and_hide_dropped_ids() {
+        let make_observation = |suffix: &str, candidate_count: usize| ControlObservation {
+            call_id: format!("call-{suffix}"),
+            result_id: format!("result-{suffix}"),
+            tool: "lookup".to_string(),
+            dry_run: false,
+            succeeded: true,
+            failure_code: None,
+            planner_projection: None,
+            evidence_candidates: (0..candidate_count)
+                .map(|index| EvidenceCandidate {
+                    id: format!("{suffix}-{index}"),
+                    content: serde_json::json!({"value": index}),
+                    revision: None,
+                    redacted: false,
+                })
+                .collect(),
+        };
+        let observations = vec![
+            make_observation("old", MAX_PLANNER_EVIDENCE_ITEMS),
+            make_observation("latest", 1),
+        ];
+        let payload = build_planner_observations(&observations, u64::MAX);
+        assert!(payload.visible_evidence_ids.contains("latest-0"));
+        assert_eq!(
+            payload.visible_evidence_ids.len(),
+            MAX_PLANNER_EVIDENCE_ITEMS
+        );
+        assert!(!payload.visible_evidence_ids.contains("old-7"));
+        assert!(validate_selected_evidence(
+            PlannerSelection {
+                selected_evidence: vec!["old-7".to_string()]
+            },
+            &payload.visible_evidence_ids,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn selected_evidence_fails_closed_when_input_budget_is_exhausted() {
         let observations = vec![ControlObservation {
             call_id: "call-1".to_string(),
+            result_id: "result-1".to_string(),
             tool: "echo".to_string(),
-            output: serde_json::json!({"raw": "control-only"}),
             dry_run: false,
             succeeded: true,
+            failure_code: None,
+            planner_projection: None,
             evidence_candidates: vec![EvidenceCandidate {
                 id: "evidence-1".to_string(),
                 content: serde_json::json!({"answer": "unique"}),
