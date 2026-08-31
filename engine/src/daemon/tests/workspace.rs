@@ -124,11 +124,11 @@ async fn workspace_migration_errors_are_no_store_for_every_exact_route() {
 
     let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
     let app = create_router(state);
-    let mut rate_limited = None;
+    let mut requests = tokio::task::JoinSet::new();
     for _ in 0..(RATE_LIMIT_BURST * 2) {
-        let response = app
-            .clone()
-            .oneshot(
+        let app = app.clone();
+        requests.spawn(async move {
+            app.oneshot(
                 Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
                     .header("authorization", AUTH)
                     .header("content-type", "application/json")
@@ -136,10 +136,14 @@ async fn workspace_migration_errors_are_no_store_for_every_exact_route() {
                     .unwrap(),
             )
             .await
-            .unwrap();
+            .unwrap()
+        });
+    }
+    let mut rate_limited = None;
+    while let Some(response) = requests.join_next().await {
+        let response = response.unwrap();
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
             rate_limited = Some(response);
-            break;
         }
     }
     let response = rate_limited.expect("production governor must exhaust its burst budget");
