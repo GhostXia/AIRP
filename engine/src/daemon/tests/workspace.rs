@@ -59,6 +59,98 @@ async fn request_json(
 }
 
 #[tokio::test]
+async fn workspace_migration_errors_are_no_store_for_every_exact_route() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/workspace/migrations/rollback")
+                .header("authorization", AUTH)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": "0",
+                        "backup_id": "missing-backup"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+
+    let (_, plan) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/migrations/blueprint-v1/dry-run",
+        Some(serde_json::json!({ "source": blueprint_v1_source() })),
+    )
+    .await;
+    let (status, _) = request_json(
+        app.clone(),
+        axum::http::Method::POST,
+        "/v1/ui/workspace/commands",
+        Some(serde_json::json!({
+            "expected_revision": "0",
+            "command": { "type": "reset_layout" }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let response = app
+        .oneshot(
+            Request::post("/v1/ui/workspace/migrations/blueprint-v1/apply")
+                .header("authorization", AUTH)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": "0",
+                        "source": blueprint_v1_source(),
+                        "planned_source_sha256": plan["source_sha256"],
+                        "planned_candidate_sha256": plan["candidate_sha256"],
+                        "planned_converter_version": plan["converter_version"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let app = create_router(state);
+    let mut requests = tokio::task::JoinSet::new();
+    for _ in 0..(RATE_LIMIT_BURST * 2) {
+        let app = app.clone();
+        requests.spawn(async move {
+            app.oneshot(
+                Request::post("/v1/ui/workspace/migrations/blueprint-v1/dry-run")
+                    .header("authorization", AUTH)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        });
+    }
+    let mut rate_limited = None;
+    while let Some(response) = requests.join_next().await {
+        let response = response.unwrap();
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            rate_limited = Some(response);
+        }
+    }
+    let response = rate_limited.expect("production governor must exhaust its burst budget");
+    assert_eq!(response.headers()["cache-control"], "no-store");
+}
+
+#[tokio::test]
 async fn workspace_requires_configured_and_valid_bearer() {
     let (unconfigured, _tmp) = make_state_with_key(None);
     let app = create_router(unconfigured);
