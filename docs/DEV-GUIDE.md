@@ -73,6 +73,8 @@ RP 角色平面只包含角色卡、世界书、Preset、Persona、state、记�
 
 选中工具证据只能通过 `airp.selected-evidence.v1` 通道进入最终 provider payload：ID 必须对应本轮成功结果，内容先按敏感键递归脱敏，再按单项/总量和剩余 token 预算截断；envelope 必须保留 tool/call provenance、revision（若结果提供）、SHA-256、原始/纳入大小及 redacted/truncated 标志。不得新增任意 `meta_context` 注入口。
 
+控制平面 planner 只能消费 `airp.planner-observations.v1`。工具若需要支持后续控制决策，应声明 projected planner result mode，并分别实现默认关闭的 `planner_projection` 与 generation `evidence_candidates`；不得把一个接口当作另一个接口，也不得 fallback 到 `ToolResult.output`。outcome-only readonly 工具不会进入 planner tool 广告，mutating 工具的广告会明确标识 outcome-only/projected 合同。Engine 统一做敏感键脱敏、UTF-8 安全截断、全局限额和 token 计费，并以本次实际出站的 visible evidence ID 集合校验 planner 选择。失败 projection 只含稳定错误 code；raw result/error 仅留本地事件与日志边界。
+
 `subagent_context_has_no_orchestrator_noise` 是神圣门禁，不得删除、改弱或用白名单掩盖污染。
 
 ### 3.2 有界与受控执行

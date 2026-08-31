@@ -118,7 +118,8 @@ impl Respond for PlannerMode {
                 })
             } else {
                 let planner_input: serde_json::Value = serde_json::from_str(user).unwrap();
-                let evidence_id = planner_input["observations"][0]["evidence_candidates"][0]["id"]
+                let evidence_id = planner_input["planner_observations"]["observations"][0]
+                    ["evidence_candidates"][0]["id"]
                     .as_str()
                     .unwrap();
                 serde_json::json!({
@@ -149,6 +150,125 @@ impl Respond for PlannerMode {
 }
 
 #[derive(Clone, Copy)]
+struct StateReadWritePlannerMode;
+
+impl Respond for StateReadWritePlannerMode {
+    fn respond(&self, request: &WiremockRequest) -> ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap();
+        if body["stream"] == true {
+            return ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(build_sse_body(&["State updated."]));
+        }
+        let planner_input: serde_json::Value =
+            serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+        let observations = planner_input["planner_observations"]["observations"]
+            .as_array()
+            .unwrap();
+        let (name, arguments) = match observations.len() {
+            0 => (
+                "get_character_state",
+                serde_json::json!({"character_id": "testchar"}),
+            ),
+            1 => {
+                let projection: serde_json::Value = serde_json::from_str(
+                    observations[0]["projection"]["content_excerpt"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(projection["state"]["hp"], 100);
+                (
+                    "update_character_state",
+                    serde_json::json!({
+                        "character_id": "testchar",
+                        "expected_revision": projection["revision"],
+                        "state": {"hp": 90}
+                    }),
+                )
+            }
+            2 => (
+                "__airp_generate_with_evidence_v1",
+                serde_json::json!({"selected_evidence": []}),
+            ),
+            count => panic!("unexpected planner observation count: {count}"),
+        };
+        let message = serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": format!("state-step-{}", observations.len()),
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": serde_json::to_string(&arguments).unwrap()
+                }
+            }]
+        });
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"choices": [{"message": message}]}))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WorldEventReadTriggerPlannerMode;
+
+impl Respond for WorldEventReadTriggerPlannerMode {
+    fn respond(&self, request: &WiremockRequest) -> ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap();
+        if body["stream"] == true {
+            return ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(build_sse_body(&["Event triggered."]));
+        }
+        let planner_input: serde_json::Value =
+            serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+        let observations = planner_input["planner_observations"]["observations"]
+            .as_array()
+            .unwrap();
+        let (name, arguments) = match observations.len() {
+            0 => (
+                "list_world_events",
+                serde_json::json!({"character_id": "testchar"}),
+            ),
+            1 => {
+                let projection: serde_json::Value = serde_json::from_str(
+                    observations[0]["projection"]["content_excerpt"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(projection["events"][0]["triggered"], false);
+                (
+                    "trigger_world_event",
+                    serde_json::json!({
+                        "character_id": "testchar",
+                        "event_id": projection["events"][0]["id"]
+                    }),
+                )
+            }
+            2 => (
+                "__airp_generate_with_evidence_v1",
+                serde_json::json!({"selected_evidence": []}),
+            ),
+            count => panic!("unexpected planner observation count: {count}"),
+        };
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": format!("event-step-{}", observations.len()),
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": serde_json::to_string(&arguments).unwrap()
+                    }
+                }]
+            }}]
+        }))
+    }
+}
+
+#[derive(Clone, Copy)]
 struct AnthropicPlannerMode;
 
 impl Respond for AnthropicPlannerMode {
@@ -161,7 +281,11 @@ impl Respond for AnthropicPlannerMode {
         }
         let planner_input: serde_json::Value =
             serde_json::from_str(body["messages"][0]["content"].as_str().unwrap()).unwrap();
-        let block = if planner_input["observations"].as_array().unwrap().is_empty() {
+        let block = if planner_input["planner_observations"]["observations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+        {
             serde_json::json!({
                 "type": "tool_use",
                 "id": "call-anthropic",
@@ -173,7 +297,8 @@ impl Respond for AnthropicPlannerMode {
                 }
             })
         } else {
-            let evidence_id = planner_input["observations"][0]["evidence_candidates"][0]["id"]
+            let evidence_id = planner_input["planner_observations"]["observations"][0]
+                ["evidence_candidates"][0]["id"]
                 .as_str()
                 .unwrap();
             serde_json::json!({
@@ -412,6 +537,36 @@ async fn decision_input_budget_failure_happens_before_prepare_side_effects() {
     assert!(history.messages.is_empty());
 }
 
+#[tokio::test]
+async fn planner_projection_is_charged_before_the_next_provider_call() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(PlannerMode::ToolThenGenerate)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (state, _tmp) = setup(&server.uri()).await;
+    let body = serde_json::json!({
+        "message": "must stop after the local tool result",
+        "character_id": "testchar",
+        "character_card_id": inline_card(),
+        "user_profile": {"name": "Tester", "variables": {}},
+        "max_steps": 3,
+        "token_budget": 1,
+        "capabilities": ["call:tool"],
+        "allowed_tools": ["echo"]
+    });
+    let events = run_agent_body_and_collect(state.clone(), body).await;
+    assert_eq!(events.last().unwrap()["stop_reason"], "token_budget");
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(events.iter().any(|event| event["type"] == "tool_result"));
+    let history = ChatService::new(&state.data_root)
+        .history(&CharacterId::new("testchar").unwrap(), None)
+        .unwrap();
+    assert!(history.messages.is_empty());
+}
+
 /// #30 主断言：骨架路径事件顺序 + registry 真实接线 + converged 收敛。
 #[tokio::test]
 async fn agent_run_structured_tool_event_ordering() {
@@ -437,6 +592,19 @@ async fn agent_run_structured_tool_event_ordering() {
         .find(|body| body["stream"] == true)
         .expect("final generation request");
     let generation_wire = serde_json::to_string(&generation).unwrap();
+    let planner_requests: Vec<serde_json::Value> = requests
+        .iter()
+        .map(|request| request.body_json::<serde_json::Value>().unwrap())
+        .filter(|body| body["stream"] == false)
+        .collect();
+    assert_eq!(planner_requests.len(), 2);
+    let grounded_planner_wire = serde_json::to_string(&planner_requests[1]).unwrap();
+    assert!(grounded_planner_wire.contains("airp.planner-observations.v1"));
+    assert!(grounded_planner_wire.contains("echo_complete"));
+    assert!(grounded_planner_wire.contains("UNIQUE_ANSWER_SENTINEL"));
+    assert!(grounded_planner_wire.contains("UNSELECTED_RESULT_SENTINEL"));
+    assert!(!grounded_planner_wire.contains("RAW_PARAM_SENTINEL"));
+    assert!(!grounded_planner_wire.contains("raw_param"));
     assert!(
         generation_wire.contains("test character"),
         "wire: {generation_wire}"
@@ -456,6 +624,7 @@ async fn agent_run_structured_tool_event_ordering() {
     assert!(!generation_wire.contains("steps_taken"));
     assert!(!generation_wire.contains("dry_run"));
     assert!(!generation_wire.contains("__airp_generate_with_evidence_v1"));
+    assert!(!generation_wire.contains("echo_complete"));
 
     let types: Vec<&str> = events
         .iter()
@@ -492,6 +661,10 @@ async fn agent_run_structured_tool_event_ordering() {
     assert_eq!(events[p_tool_call]["tool"], "echo");
     assert_eq!(events[p_tool_result]["tool"], "echo");
     assert_eq!(
+        events[p_tool_result]["output"]["raw_param"], "RAW_PARAM_SENTINEL",
+        "raw result remains local and observable without entering planner payload"
+    );
+    assert_eq!(
         events[p_tool_result]["output"]["answer"], "UNIQUE_ANSWER_SENTINEL",
         "echo output should round-trip probe param"
     );
@@ -509,6 +682,129 @@ async fn agent_run_structured_tool_event_ordering() {
         "converged run must finalize once"
     );
     assert!(history.messages[1].content.contains("Hello world"));
+}
+
+#[tokio::test]
+async fn real_state_read_projection_drives_revision_checked_update() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(StateReadWritePlannerMode)
+        .mount(&server)
+        .await;
+    let (state, _tmp) = setup(&server.uri()).await;
+    StateService::new(&state.data_root)
+        .write(
+            &CharacterId::new("testchar").unwrap(),
+            &serde_json::json!({"hp": 100}),
+        )
+        .unwrap();
+    let body = serde_json::json!({
+        "message": "Lower HP after reading the current state",
+        "character_id": "testchar",
+        "character_card_id": inline_card(),
+        "user_profile": {"name": "Tester", "variables": {}},
+        "max_steps": 4,
+        "capabilities": ["call:tool"],
+        "allowed_tools": ["get_character_state", "update_character_state"]
+    });
+    let events = run_agent_body_and_collect(state.clone(), body).await;
+    assert_eq!(events.last().unwrap()["stop_reason"], "converged");
+    let (_, _, current) = StateService::new(&state.data_root)
+        .read_surface_state_optional(&CharacterId::new("testchar").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(current["hp"], 90);
+
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter(|event| event["type"] == "tool_call")
+        .collect();
+    let tool_results: Vec<_> = events
+        .iter()
+        .filter(|event| event["type"] == "tool_result")
+        .collect();
+    assert_eq!(tool_calls.len(), 2);
+    assert_eq!(tool_results.len(), 2);
+    for (call, result) in tool_calls.iter().zip(tool_results.iter()) {
+        assert_eq!(call["run_id"], result["run_id"]);
+        assert_eq!(call["call_id"], result["call_id"]);
+        assert!(result["result_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+    }
+
+    let requests = server.received_requests().await.unwrap();
+    let second_planner: serde_json::Value = requests[1].body_json().unwrap();
+    let planner_input: serde_json::Value =
+        serde_json::from_str(second_planner["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        planner_input["planner_observations"]["schema"],
+        "airp.planner-observations.v1"
+    );
+    let projection: serde_json::Value = serde_json::from_str(
+        planner_input["planner_observations"]["observations"][0]["projection"]["content_excerpt"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(projection["state"]["hp"], 100);
+    assert!(projection.get("updated_at").is_none());
+}
+
+#[tokio::test]
+async fn world_event_projection_drives_list_then_trigger_chain() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(WorldEventReadTriggerPlannerMode)
+        .mount(&server)
+        .await;
+    let (state, _tmp) = setup(&server.uri()).await;
+    let character_dir = state.data_root.join("characters/testchar");
+    std::fs::write(
+        character_dir.join("world_events.json"),
+        serde_json::json!([{
+            "id": "storm",
+            "name": "Storm",
+            "description": "A storm approaches",
+            "content": "Rain lashes the windows.",
+            "triggered": false
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    let body = serde_json::json!({
+        "message": "Trigger the first available world event",
+        "character_id": "testchar",
+        "character_card_id": inline_card(),
+        "user_profile": {"name": "Tester", "variables": {}},
+        "max_steps": 4,
+        "capabilities": ["call:tool"],
+        "allowed_tools": ["list_world_events", "trigger_world_event"]
+    });
+    let events = run_agent_body_and_collect(state.clone(), body).await;
+    assert_eq!(events.last().unwrap()["stop_reason"], "converged");
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(character_dir.join("world_events.json")).unwrap())
+            .unwrap();
+    assert_eq!(persisted[0]["id"], "storm");
+    assert_eq!(persisted[0]["triggered"], true);
+    let current = std::fs::read_to_string(character_dir.join("memory/current.md")).unwrap();
+    assert!(current.contains("Rain lashes the windows."));
+
+    let requests = server.received_requests().await.unwrap();
+    let second_planner: serde_json::Value = requests[1].body_json().unwrap();
+    let planner_input: serde_json::Value =
+        serde_json::from_str(second_planner["messages"][1]["content"].as_str().unwrap()).unwrap();
+    let projection: serde_json::Value = serde_json::from_str(
+        planner_input["planner_observations"]["observations"][0]["projection"]["content_excerpt"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(projection["events"][0]["id"], "storm");
+    assert!(projection["events"][0].get("content").is_none());
 }
 
 #[tokio::test]
@@ -541,6 +837,19 @@ async fn anthropic_agent_generation_uses_top_level_grounding_blocks() {
         Some("2023-06-01")
     );
     let body: serde_json::Value = generation_request.body_json().unwrap();
+    let planner_requests: Vec<serde_json::Value> = requests
+        .iter()
+        .map(|request| request.body_json::<serde_json::Value>().unwrap())
+        .filter(|body| body["stream"] != true)
+        .collect();
+    assert_eq!(planner_requests.len(), 2);
+    let grounded_planner_wire = serde_json::to_string(&planner_requests[1]).unwrap();
+    assert!(grounded_planner_wire.contains("airp.planner-observations.v1"));
+    assert!(grounded_planner_wire.contains("echo_complete"));
+    assert!(grounded_planner_wire.contains("UNIQUE_ANSWER_SENTINEL"));
+    assert!(grounded_planner_wire.contains("UNSELECTED_RESULT_SENTINEL"));
+    assert!(!grounded_planner_wire.contains("RAW_PARAM_SENTINEL"));
+    assert!(!grounded_planner_wire.contains("raw_param"));
     assert!(body["system"].is_array());
     let wire = serde_json::to_string(&body).unwrap();
     assert!(wire.contains("ASSIGNMENT_SENTINEL"));
@@ -549,6 +858,7 @@ async fn anthropic_agent_generation_uses_top_level_grounding_blocks() {
     assert!(!wire.contains("RAW_PARAM_SENTINEL"));
     assert!(!wire.contains("UNSELECTED_RESULT_SENTINEL"));
     assert!(!wire.contains("observations"));
+    assert!(!wire.contains("echo_complete"));
     assert!(body["messages"]
         .as_array()
         .unwrap()

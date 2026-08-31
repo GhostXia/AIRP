@@ -1,5 +1,7 @@
 # AIRP 当前开发基线
 
+本次增量校准（2026-08-30，#632 candidate）：Agent control-plane planner 不再序列化 raw `ToolResult.output` 或原始错误正文；provider 只接收工具显式、默认关闭的 planner projection 和 evidence preview，经统一脱敏、Unicode 安全截断、item/byte/token 限额后编码为 `airp.planner-observations.v1`。planner-only facts 与 final generation evidence 分离，选择只接受本次 wire 可见的 opaque evidence ID，tool/call/result identity 可贯通到最终证据 provenance。工具显式声明 planner result mode；未投影的 readonly 工具不向 planner 广告，mutating 工具则明确暴露 outcome-only/projected 合同。`get_character_state → update_character_state` 与 `list_world_events → trigger_world_event` 两条真实链验证 projected read 可驱动后续操作。未显式投影的内建或插件工具结果保持 local-only。
+
 > 基线日期：2026-08-30
 > 代码基线：#577 PR 10f-2 已由 PR #624 合并；PR 11a read-only Emotion + Inventory Surface candidate（本文与实现同分支）
 > 用途：冷启动开发、审计和产品判断的第一事实入口。  
@@ -132,7 +134,7 @@ Rust workspace 只有 `engine`、`protocol`、`ui/src-tauri`。AIRP-Core/AIRPCLI
 
 ## 3. 必须保持的不变式
 
-1. **干净提示词**：RP 角色平面只含 RP 数据与规划器明确选中的有界事实证据；工具参数、未选工具结果、规划/调度/审计/遥测留在结构化控制平面。选中证据必须带来源与摘要、先脱敏、按输入 token 预算截断，并经 `airp.selected-evidence.v1` 单一通道注入。`subagent_context_has_no_orchestrator_noise` 神圣不可弱化。
+1. **干净提示词**：RP 角色平面只含 RP 数据与规划器明确选中的有界事实证据；工具参数、未选工具结果、规划/调度/审计/遥测留在结构化控制平面。控制平面 planner 同样只能看到工具显式投影并经 Engine 有界脱敏的 `airp.planner-observations.v1`，不得 fallback 到 raw result/error。选中证据必须带 tool/call/result 来源与摘要、先脱敏、按输入 token 预算截断，并经 `airp.selected-evidence.v1` 单一通道注入。`subagent_context_has_no_orchestrator_noise` 神圣不可弱化。
 2. **Engine 单一真相**：handler、UI、Agent tool 不复制持久化规则；写路径应收敛到 shared service。  
 3. **有界 Agent**：step/token/墙钟/取消/可观察事件；UI consent 不替代 Engine 授权。  
 4. **用户资产优先**：不兼容演进必须有 versioned migration、升级前备份、完整性验证、可读导出与回滚。  

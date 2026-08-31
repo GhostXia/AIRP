@@ -107,6 +107,7 @@ pub struct PromptEvidenceProvenance {
     pub evidence_id: String,
     pub source_tool: String,
     pub call_id: String,
+    pub result_id: String,
     pub revision: Option<u64>,
     pub content_hash: String,
     pub original_bytes: usize,

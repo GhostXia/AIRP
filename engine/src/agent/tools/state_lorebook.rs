@@ -84,6 +84,23 @@ impl Tool for GetCharacterStateTool {
             })
         })
     }
+
+    fn planner_projection(&self, result: &ToolResult) -> Option<ToolPlannerProjection> {
+        let revision = result.output.get("revision")?.as_u64()?;
+        let state = result.output.get("state")?.clone();
+        Some(ToolPlannerProjection {
+            content: serde_json::json!({
+                "revision": revision,
+                "state": state,
+            }),
+            revision: Some(revision),
+            redacted: false,
+        })
+    }
+
+    fn planner_result_mode(&self) -> PlannerResultMode {
+        PlannerResultMode::Projected
+    }
 }
 
 /// `update_character_state`：按 expected revision 校验并替换角色 live state。mutate。

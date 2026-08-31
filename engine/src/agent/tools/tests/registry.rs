@@ -32,6 +32,62 @@ fn tools_are_not_generation_evidence_sources_by_default() {
         dry_run: false,
     };
     assert!(ordinary_tool.evidence_candidates(&result).is_empty());
+    assert!(ordinary_tool.planner_projection(&result).is_none());
+    let planner_tools = reg.planner_list();
+    assert!(planner_tools
+        .iter()
+        .all(|(tool, _)| tool.name != "list_characters"));
+    assert!(planner_tools.iter().any(|(tool, mode)| {
+        tool.name == "get_character_state" && *mode == PlannerResultMode::Projected
+    }));
+    assert!(planner_tools.iter().any(|(tool, mode)| {
+        tool.name == "list_world_events" && *mode == PlannerResultMode::Projected
+    }));
+    assert!(reg
+        .get("echo")
+        .unwrap()
+        .planner_projection(&result)
+        .is_some());
+    let state_result = ToolResult {
+        output: serde_json::json!({
+            "revision": 7,
+            "updated_at": "must-not-be-projected",
+            "state": {"hp": 90}
+        }),
+        dry_run: false,
+    };
+    let state_projection = reg
+        .get("get_character_state")
+        .unwrap()
+        .planner_projection(&state_result)
+        .unwrap();
+    assert_eq!(state_projection.revision, Some(7));
+    assert_eq!(state_projection.content["state"]["hp"], 90);
+    assert!(state_projection.content.get("updated_at").is_none());
+
+    let events_result = ToolResult {
+        output: serde_json::json!([{
+            "id": "storm",
+            "name": "Storm",
+            "description": "A storm approaches",
+            "triggered": false,
+            "content": "must-not-be-projected",
+            "future_sensitive_field": "must-not-be-projected"
+        }]),
+        dry_run: false,
+    };
+    let events_projection = reg
+        .get("list_world_events")
+        .unwrap()
+        .planner_projection(&events_result)
+        .unwrap();
+    assert_eq!(events_projection.content["events"][0]["id"], "storm");
+    assert!(events_projection.content["events"][0]
+        .get("content")
+        .is_none());
+    assert!(events_projection.content["events"][0]
+        .get("future_sensitive_field")
+        .is_none());
 }
 
 #[test]

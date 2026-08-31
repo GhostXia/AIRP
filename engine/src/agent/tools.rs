@@ -73,6 +73,27 @@ pub enum ToolSideEffect {
     Append,
 }
 
+/// What a successful tool call makes visible to the next planner step.
+///
+/// Read-only tools are not advertised to the planner unless they opt into a
+/// projection: an outcome-only read cannot return the facts it was called to
+/// discover. Mutating tools may remain outcome-only when success/failure is
+/// sufficient for control flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlannerResultMode {
+    OutcomeOnly,
+    Projected,
+}
+
+impl PlannerResultMode {
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::OutcomeOnly => "Only success, dry-run, or a stable failure code is returned.",
+            Self::Projected => "A bounded, redacted result projection is returned.",
+        }
+    }
+}
+
 /// 工具元数据，对应 MCP `ToolAnnotations` 的子集。
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolMeta {
@@ -100,6 +121,15 @@ pub struct ToolEvidenceCandidate {
     pub redacted: bool,
 }
 
+/// Tool-owned, planner-only facts for deciding the next control-plane action.
+/// This is independent from generation evidence and receives no call params.
+#[derive(Debug, Clone)]
+pub struct ToolPlannerProjection {
+    pub content: Value,
+    pub revision: Option<u64>,
+    pub redacted: bool,
+}
+
 /// 工具 trait。`call` 是异步 boxed Future（动态分发足够，工具非热路径）。
 pub trait Tool: Send + Sync {
     fn meta(&self) -> ToolMeta;
@@ -118,6 +148,19 @@ pub trait Tool: Send + Sync {
     /// intentionally receives no raw call params.
     fn evidence_candidates(&self, _result: &ToolResult) -> Vec<ToolEvidenceCandidate> {
         Vec::new()
+    }
+
+    /// Project bounded control facts needed for a later planner step. The
+    /// default is closed: arbitrary built-in or plugin output is local-only.
+    fn planner_projection(&self, _result: &ToolResult) -> Option<ToolPlannerProjection> {
+        None
+    }
+
+    /// Declare whether successful results expose a planner projection. This is
+    /// separate from the projection method so eligibility can be decided before
+    /// a call is made. The closed default is outcome-only.
+    fn planner_result_mode(&self) -> PlannerResultMode {
+        PlannerResultMode::OutcomeOnly
     }
 }
 
@@ -159,6 +202,26 @@ impl ToolRegistry {
     pub fn list(&self) -> Vec<ToolMeta> {
         let mut tools: Vec<_> = self.tools.values().map(|t| t.meta()).collect();
         tools.sort_by_key(|tool| tool.name);
+        tools
+    }
+
+    /// Tools safe and useful at the planner boundary. Outcome-only readonly
+    /// tools are excluded because their successful result cannot answer the
+    /// read request; they remain available through the local catalog/direct
+    /// execution surfaces.
+    pub fn planner_list(&self) -> Vec<(ToolMeta, PlannerResultMode)> {
+        let mut tools: Vec<_> = self
+            .tools
+            .values()
+            .filter_map(|tool| {
+                let meta = tool.meta();
+                let mode = tool.planner_result_mode();
+                (meta.side_effect != ToolSideEffect::Readonly
+                    || mode == PlannerResultMode::Projected)
+                    .then_some((meta, mode))
+            })
+            .collect();
+        tools.sort_by_key(|(tool, _)| tool.name);
         tools
     }
 
@@ -222,6 +285,18 @@ impl Tool for EchoTool {
             });
         }
         candidates
+    }
+
+    fn planner_projection(&self, _result: &ToolResult) -> Option<ToolPlannerProjection> {
+        Some(ToolPlannerProjection {
+            content: serde_json::json!({"status": "echo_complete"}),
+            revision: None,
+            redacted: false,
+        })
+    }
+
+    fn planner_result_mode(&self) -> PlannerResultMode {
+        PlannerResultMode::Projected
     }
 }
 

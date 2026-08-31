@@ -51,6 +51,8 @@ AIRP 不把某一种“强模型 orchestrator + 若干低成本 executor”组�
 
 OpenAI-compatible 将 assignment/evidence 编为 system content blocks；Anthropic 将其编为 top-level system blocks。两者都不伪装成用户消息，也不重放 tool call transcript。普通或第三方工具默认不产生 evidence candidate，因此 raw `Value` 没有通往 generation 的通用转换。PromptAssemblyTrace 对 assignment/evidence 记录 input class、来源、hash、revision、大小和 redacted/truncated 状态，并以独立 run ID 写入 trace；trace 本身不进入模型输入。输入证据先占用 run token budget，剩余额度再下压为 provider `max_tokens`。
 
+Planner 自身也不得成为 raw result 的例外。工具可通过独立的 `planner_projection` 显式给出下一步控制决策所需、但不自动成为最终生成证据的最小事实；默认关闭，插件亦不回退到 raw output。工具另行声明 planner result mode；outcome-only readonly 工具不会向 planner 广告，因为无法暴露结果的读取不能支持后续决策，mutating 工具的广告则明确说明成功后是 outcome-only 还是 projected。Engine 只把有界、脱敏、带 tool/call/result identity、revision/hash/大小元数据的 `airp.planner-observations.v1` 发给 planner，并只接受本次 wire 实际可见的 evidence ID。失败只暴露稳定错误类别，不发送原始错误正文；较新结果优先获得全局 item/byte 配额。Planner projection 的输入 token 计入 run budget，local raw result、planner projection 与 final selected evidence 保持三个不可互换的对象。
+
 ### 2.2 用户可配置策略
 
 profile 至少可以表达：
