@@ -6,11 +6,17 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { once } from 'node:events';
+import { createConnection } from 'node:net';
 import { chromium } from 'playwright-core';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { terminateDetachedProcessGroup } from './process-group-cleanup.mjs';
+import {
+  closeOwnedBrowser,
+  hasChildExited,
+  waitForChildExit,
+  withTimeout,
+} from './browser-server-cleanup.mjs';
 
 const port = Number(process.env.AIRP_RESPONSIVE_PORT || 4174);
 const origin = `http://127.0.0.1:${port}`;
@@ -45,28 +51,6 @@ server.on('error', error => {
   serverOutput += `Vite process failed to start: ${error.message}\n`;
 });
 
-function hasChildExited(child) {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-async function waitForChildExit(child, timeoutMs) {
-  if (hasChildExited(child)) return;
-  let timeout;
-  try {
-    await Promise.race([
-      once(child, 'exit'),
-      new Promise((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`Vite process did not exit within ${timeoutMs} ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function stopServer() {
   if (!server.pid) return 'not-started';
   if (hasChildExited(server)) return 'already-exited';
@@ -91,27 +75,26 @@ async function stopServer() {
   });
 }
 
-async function closeBrowser(browser, timeoutMs = 5_000) {
-  let timeout;
-  try {
-    await Promise.race([
-      browser.close(),
-      new Promise((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`Chromium did not close within ${timeoutMs} ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
+async function assertPortReleased(timeoutMs = 2_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const listening = await new Promise(resolve => {
+      const socket = createConnection({ host: '127.0.0.1', port });
+      socket.setTimeout(250);
+      socket.once('connect', () => { socket.destroy(); resolve(true); });
+      socket.once('error', () => resolve(false));
+      socket.once('timeout', () => { socket.destroy(); resolve(false); });
+    });
+    if (!listening) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
+  throw new Error(`responsive smoke port ${port} remained open after cleanup`);
 }
 
 async function waitForServer(timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   let probeError = null;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (serverSpawnError) {
       throw new Error(`Vite process failed to start at ${origin}: ${serverSpawnError.message}`);
     }
@@ -138,15 +121,29 @@ async function waitForServer(timeoutMs = 15_000) {
   throw new Error(`Vite did not start at ${origin}: ${probeDiagnostic}\n${serverOutput}`);
 }
 
-const browser = await (async () => {
+const { browser, browserServer } = await (async () => {
+  let launchedServer = null;
   try {
     await waitForServer();
-    return await chromium.launch({ headless: true, executablePath });
+    launchedServer = await chromium.launchServer({ headless: true, executablePath });
+    const connectedBrowser = await chromium.connect(launchedServer.wsEndpoint());
+    return { browser: connectedBrowser, browserServer: launchedServer };
   } catch (error) {
+    const startupErrors = [error];
+    if (launchedServer) {
+      try {
+        await withTimeout(launchedServer.kill(), 5_000, 'Chromium startup cleanup timed out');
+      } catch (cleanupError) {
+        startupErrors.push(cleanupError);
+      }
+    }
     try {
       await stopServer();
     } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'Vite or Chromium startup and cleanup failed');
+      startupErrors.push(cleanupError);
+    }
+    if (startupErrors.length > 1) {
+      throw new AggregateError(startupErrors, 'Vite or Chromium startup and cleanup failed');
     }
     throw error;
   }
@@ -403,13 +400,15 @@ try {
   primaryError = error;
 } finally {
   try {
-    await closeBrowser(browser);
+    const outcome = await closeOwnedBrowser(browser, browserServer);
+    console.log(`Responsive smoke Chromium cleanup: ${outcome}`);
   } catch (error) {
     cleanupErrors.push(error);
   }
   try {
     const outcome = await stopServer();
     console.log(`Responsive smoke Vite cleanup: ${outcome}`);
+    await assertPortReleased();
   } catch (error) {
     cleanupErrors.push(error);
   }
