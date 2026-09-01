@@ -8,9 +8,8 @@ import { terminateDetachedProcessGroup } from './process-group-cleanup.mjs';
 const supervisorPath = fileURLToPath(new URL('./responsive-vite-supervisor.mjs', import.meta.url));
 
 async function forceTreeExit(child) {
-  if (!child.pid) return;
+  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
   if (process.platform === 'win32') {
-    if (child.exitCode !== null || child.signalCode !== null) return;
     await new Promise(resolve => {
       execFile('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, () => resolve());
     });
@@ -71,7 +70,8 @@ test('supervisor keeps the group identity until full-tree forced cleanup', {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  t.after(() => forceTreeExit(supervisor));
+  let groupCleanupCompleted = false;
+  t.after(() => groupCleanupCompleted ? undefined : forceTreeExit(supervisor));
 
   let output = '';
   await new Promise((resolve, reject) => {
@@ -95,6 +95,7 @@ test('supervisor keeps the group identity until full-tree forced cleanup', {
     killTimeoutMs: 1_000,
     hasTerminated: () => output.includes('AIRP_VITE_EXIT'),
   });
+  groupCleanupCompleted = true;
 
   assert.equal(outcome, 'terminated-tree-forced');
   assert.throws(
