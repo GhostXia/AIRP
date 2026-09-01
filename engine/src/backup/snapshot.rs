@@ -451,7 +451,7 @@ fn is_within_subtree(relative: &str, subtree_prefix: &str) -> bool {
 
 /// 列出所有 backup 的 manifest。
 ///
-/// 扫描 `data_root/backups/`，跳过 staging 目录（`.staging-*`）与非目录入口。
+/// 扫描 `data_root/backups/`，跳过所有点号前缀的 staging/pending 目录与非目录入口。
 /// 返回的 manifest 按 `created_at` 降序排序（最新在前）。
 pub(crate) fn list_backups(data_root: &Path) -> Result<Vec<BackupManifest>, AirpError> {
     let backups_root = data_root.join("backups");
