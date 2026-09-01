@@ -92,7 +92,9 @@ test('terminates a real Unix group after its leader exits', {
   });
   const pid = wrapper.pid;
   assert.ok(pid);
+  let groupCleanupCompleted = false;
   t.after(() => {
+    if (groupCleanupCompleted) return;
     try { process.kill(-pid, 'SIGKILL'); } catch (error) {
       if (error?.code !== 'ESRCH') throw error;
     }
@@ -104,6 +106,7 @@ test('terminates a real Unix group after its leader exits', {
     termTimeoutMs: 1_000,
     killTimeoutMs: 1_000,
   });
+  groupCleanupCompleted = true;
   assert.equal(outcome, 'terminated');
   assert.throws(
     () => process.kill(-pid, 0),
@@ -114,23 +117,44 @@ test('terminates a real Unix group after its leader exits', {
 test('force-clears a real Unix group with a TERM-resistant descendant', {
   skip: process.platform === 'win32',
 }, async t => {
-  const leader = spawn('/bin/sh', ['-c', "trap '' TERM; sleep 30 & child=$!; echo ready; wait $child"], {
+  const leader = spawn('/bin/sh', ['-c',
+    "trap '' TERM; /bin/sh -c \"trap '' TERM; exec sleep 30\" & child=$!; echo ready; wait $child",
+  ], {
     detached: true,
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const pid = leader.pid;
   assert.ok(pid);
+  let groupCleanupCompleted = false;
   t.after(() => {
+    if (groupCleanupCompleted) return;
     try { process.kill(-pid, 'SIGKILL'); } catch (error) {
       if (error?.code !== 'ESRCH') throw error;
     }
   });
-  await once(leader.stdout, 'data');
+  let readyTimeout;
+  let ready;
+  try {
+    ready = await Promise.race([
+      once(leader.stdout, 'data').then(([chunk]) => chunk.toString().trim()),
+      once(leader, 'error').then(([error]) => Promise.reject(error)),
+      new Promise((_, reject) => {
+        readyTimeout = setTimeout(
+          () => reject(new Error('TERM-resistant fixture did not become ready within 1000 ms')),
+          1_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(readyTimeout);
+  }
+  assert.equal(ready, 'ready');
 
   const outcome = await terminateDetachedProcessGroup(pid, {
     termTimeoutMs: 100,
     killTimeoutMs: 1_000,
   });
+  groupCleanupCompleted = true;
   assert.equal(outcome, 'forced');
   assert.throws(
     () => process.kill(-pid, 0),
