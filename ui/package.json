@@ -15,7 +15,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "build:engine-sidecar": "powershell -ExecutionPolicy Bypass -File ./build-engine-sidecar.ps1",
     "typecheck": "vue-tsc --noEmit",
-    "test": "vitest run",
+    "test": "node --test process-group-cleanup.test.mjs responsive-vite-supervisor.test.mjs && vitest run",
     "smoke:shell": "node desktop-shell-smoke.mjs --out dist/shell-smoke",
     "smoke:runtime": "node blueprint-runtime-smoke.mjs --out dist/runtime-smoke",
     "smoke:responsive": "node responsive-browser-smoke.mjs",

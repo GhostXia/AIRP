@@ -4,12 +4,13 @@
 // relying on a screenshot: the assertions cover the scroll/overflow contract
 // that is easy to regress when the app root owns no page scroll.
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { terminateDetachedProcessGroup } from './process-group-cleanup.mjs';
 
 const port = Number(process.env.AIRP_RESPONSIVE_PORT || 4174);
 const origin = `http://127.0.0.1:${port}`;
@@ -18,49 +19,123 @@ assert.ok(existsSync(executablePath), `AIRP_CHROME_PATH or Chrome executable is 
 
 const uiDir = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === 'win32';
-const serverCommand = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
-const serverArgs = isWindows
-  ? ['/d', '/s', '/c', `npm run dev -- --host 127.0.0.1 --port ${port}`]
-  : ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port)];
-const server = spawn(serverCommand, serverArgs, {
+const viteSupervisor = fileURLToPath(new URL('./responsive-vite-supervisor.mjs', import.meta.url));
+const server = spawn(process.execPath, [
+  viteSupervisor,
+  '--host', '127.0.0.1',
+  '--port', String(port),
+  '--strictPort',
+], {
   cwd: uiDir,
   env: { ...process.env, BROWSER: 'none' },
   detached: !isWindows,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverOutput = '';
+let serverSpawnError = null;
+let viteExitDiagnostic = null;
 server.stdout.on('data', chunk => { serverOutput += chunk.toString(); });
-server.stderr.on('data', chunk => { serverOutput += chunk.toString(); });
+server.stderr.on('data', chunk => {
+  serverOutput += chunk.toString();
+  const marker = serverOutput.match(/AIRP_VITE_EXIT ([^\r\n]+)/);
+  if (marker) viteExitDiagnostic = marker[1];
+});
+server.on('error', error => {
+  serverSpawnError = error;
+  serverOutput += `Vite process failed to start: ${error.message}\n`;
+});
 
-function stopServer() {
-  if (server.exitCode !== null) return;
+function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExit(child, timeoutMs) {
+  if (hasChildExited(child)) return;
+  let timeout;
+  try {
+    await Promise.race([
+      once(child, 'exit'),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Vite process did not exit within ${timeoutMs} ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function stopServer() {
+  if (!server.pid) return 'not-started';
+  if (hasChildExited(server)) return 'already-exited';
   if (process.platform === 'win32') {
+    const viteAlreadyExited = viteExitDiagnostic !== null;
     try {
-      execFileSync('taskkill', ['/pid', String(server.pid), '/t', '/f'], { stdio: 'ignore' });
-    } catch {
-      // The wrapper may have exited while Vite was shutting down.
+      await new Promise((resolve, reject) => {
+        execFile('taskkill', ['/pid', String(server.pid), '/t', '/f'], {
+          windowsHide: true,
+          timeout: 5_000,
+        }, error => error ? reject(error) : resolve());
+      });
+      await waitForChildExit(server, 2_000);
+      return viteAlreadyExited ? 'already-exited' : 'forced-tree';
+    } catch (error) {
+      if (hasChildExited(server)) return 'already-exited';
+      throw new Error(`Windows Vite process-tree cleanup failed within 7000 ms: ${error.message}`);
     }
-  } else {
-    try {
-      process.kill(-server.pid, 'SIGTERM');
-    } catch {
-      server.kill();
-    }
+  }
+  return terminateDetachedProcessGroup(server.pid, {
+    hasTerminated: () => viteExitDiagnostic !== null,
+  });
+}
+
+async function closeBrowser(browser, timeoutMs = 5_000) {
+  let timeout;
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Chromium did not close within ${timeoutMs} ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 async function waitForServer(timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
+  let probeError = null;
   while (Date.now() < deadline) {
+    if (serverSpawnError) {
+      throw new Error(`Vite process failed to start at ${origin}: ${serverSpawnError.message}`);
+    }
+    if (hasChildExited(server)) {
+      throw new Error(`Vite supervisor exited before startup at ${origin}\n${serverOutput}`);
+    }
+    if (viteExitDiagnostic) {
+      throw new Error(`Vite exited before startup at ${origin}: ${viteExitDiagnostic}\n${serverOutput}`);
+    }
     try {
       const response = await fetch(origin, { signal: AbortSignal.timeout(1_000) });
       if (response.ok) return;
-    } catch {
-      // Vite is still starting.
+    } catch (error) {
+      probeError = error;
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`Vite did not start at ${origin}\n${serverOutput}`);
+  const causeDiagnostic = probeError?.cause instanceof Error
+    ? probeError.cause.message
+    : probeError?.cause === undefined ? null : String(probeError.cause);
+  const probeDiagnostic = probeError
+    ? `${probeError.message}${causeDiagnostic ? ` (${causeDiagnostic})` : ''}`
+    : 'no successful response';
+  throw new Error(`Vite did not start at ${origin}: ${probeDiagnostic}\n${serverOutput}`);
 }
 
 const browser = await (async () => {
@@ -68,11 +143,17 @@ const browser = await (async () => {
     await waitForServer();
     return await chromium.launch({ headless: true, executablePath });
   } catch (error) {
-    stopServer();
+    try {
+      await stopServer();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Vite or Chromium startup and cleanup failed');
+    }
     throw error;
   }
 })();
 
+let primaryError = null;
+const cleanupErrors = [];
 try {
   const page = await browser.newPage({ viewport: { width: 360, height: 320 } });
   const pageErrors = [];
@@ -318,8 +399,26 @@ try {
   await page.locator('[data-widget-instance="responsive-inventory"]').getByText('不可用', { exact: true })
     .waitFor({ state: 'visible' });
   console.log(`Responsive short-viewport browser regression passed at ${origin}`);
+} catch (error) {
+  primaryError = error;
 } finally {
-  await browser.close();
-  stopServer();
-  if (server.exitCode === null) await once(server, 'exit').catch(() => {});
+  try {
+    await closeBrowser(browser);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    const outcome = await stopServer();
+    console.log(`Responsive smoke Vite cleanup: ${outcome}`);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+}
+
+if (primaryError && cleanupErrors.length > 0) {
+  throw new AggregateError([primaryError, ...cleanupErrors], 'Responsive smoke and cleanup failed');
+}
+if (primaryError) throw primaryError;
+if (cleanupErrors.length > 0) {
+  throw new AggregateError(cleanupErrors, 'Responsive smoke cleanup failed');
 }
