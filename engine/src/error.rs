@@ -72,6 +72,19 @@ pub enum AirpError {
     )]
     WorkspaceMigrationOutcomeUnknown { backup_id: String },
 
+    /// A restore failed after its recovery backup became durable, but before
+    /// the authoritative data swap started.
+    #[error("backup restore failed; verified recovery backup {backup_id} was retained")]
+    BackupRestoreFailed { backup_id: String },
+
+    /// A restore failed after entering the authoritative data swap. The
+    /// retained recovery backup is durable, but callers must inspect current
+    /// state before choosing recovery.
+    #[error(
+        "backup restore outcome is unknown; verified recovery backup {backup_id} was retained"
+    )]
+    BackupRestoreOutcomeUnknown { backup_id: String },
+
     /// 路径遍历攻击保护：用户提供的路径 canonicalize 后越出 `data_root` 子树。
     /// 映射到 HTTP 400。
     #[error("路径越出 data_root: {0:?}")]
@@ -141,6 +154,8 @@ impl AirpError {
             | AirpError::Sqlite(_)
             | AirpError::WorkspaceMigrationCommitFailed { .. }
             | AirpError::WorkspaceMigrationOutcomeUnknown { .. }
+            | AirpError::BackupRestoreFailed { .. }
+            | AirpError::BackupRestoreOutcomeUnknown { .. }
             | AirpError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -161,6 +176,8 @@ impl AirpError {
             AirpError::WorkspaceMigrationOutcomeUnknown { .. } => {
                 "workspace_migration_outcome_unknown"
             }
+            AirpError::BackupRestoreFailed { .. } => "backup_restore_failed",
+            AirpError::BackupRestoreOutcomeUnknown { .. } => "backup_restore_outcome_unknown",
             AirpError::Upstream { .. } => "upstream",
             AirpError::QuotaExceeded(_) => "quota_exceeded",
             AirpError::Io(_) => "io_error",
@@ -200,6 +217,8 @@ impl AirpError {
             AirpError::WorkspaceUnsupportedMajor { .. } => "export_or_upgrade",
             AirpError::WorkspaceMigrationCommitFailed { .. } => "retain_backup_and_inspect",
             AirpError::WorkspaceMigrationOutcomeUnknown { .. } => "refresh_before_recovery",
+            AirpError::BackupRestoreFailed { .. } => "retain_backup_and_inspect",
+            AirpError::BackupRestoreOutcomeUnknown { .. } => "refresh_before_recovery",
             AirpError::Upstream { .. } => "retry_with_backoff",
             AirpError::QuotaExceeded(_) => "wait_or_reduce_usage",
             AirpError::Io(_)
@@ -261,7 +280,9 @@ impl IntoResponse for AirpError {
                 (None, Some(*actual), Some(*supported), None)
             }
             AirpError::WorkspaceMigrationCommitFailed { backup_id }
-            | AirpError::WorkspaceMigrationOutcomeUnknown { backup_id } => {
+            | AirpError::WorkspaceMigrationOutcomeUnknown { backup_id }
+            | AirpError::BackupRestoreFailed { backup_id }
+            | AirpError::BackupRestoreOutcomeUnknown { backup_id } => {
                 (None, None, None, Some(backup_id.clone()))
             }
             _ => (None, None, None, None),
@@ -393,6 +414,44 @@ mod tests {
             value["error"]["code"],
             "workspace_migration_outcome_unknown"
         );
+        assert_eq!(value["error"]["recovery"], "refresh_before_recovery");
+        assert_eq!(
+            value["error"]["backup_id"],
+            "fedcba9876543210fedcba9876543210"
+        );
+        assert_eq!(value["error"]["message"], "internal error");
+    }
+
+    #[tokio::test]
+    async fn restore_failure_exposes_only_retained_backup_recovery_fields() {
+        use axum::body::to_bytes;
+        let resp = AirpError::BackupRestoreFailed {
+            backup_id: "0123456789abcdef0123456789abcdef".to_string(),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "backup_restore_failed");
+        assert_eq!(value["error"]["recovery"], "retain_backup_and_inspect");
+        assert_eq!(
+            value["error"]["backup_id"],
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(value["error"]["message"], "internal error");
+    }
+
+    #[tokio::test]
+    async fn restore_unknown_outcome_requires_inspection_and_exposes_backup_id() {
+        use axum::body::to_bytes;
+        let resp = AirpError::BackupRestoreOutcomeUnknown {
+            backup_id: "fedcba9876543210fedcba9876543210".to_string(),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "backup_restore_outcome_unknown");
         assert_eq!(value["error"]["recovery"], "refresh_before_recovery");
         assert_eq!(
             value["error"]["backup_id"],

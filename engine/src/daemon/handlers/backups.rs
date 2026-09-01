@@ -353,7 +353,8 @@ pub(in crate::daemon) async fn verify_backup_endpoint(
 /// `POST /v1/backups/:backup_id/restore` — 从指定 backup 恢复 data_root。
 ///
 /// 自动创建回滚 backup → staging → swap → post-verify。
-/// 失败时保留 staging + rollback backup，不清理现场，返回 Internal。
+/// 回滚备份创建后的失败通过统一错误 envelope 返回 retained backup ID 与恢复类别；
+/// 进入 swap 后的失败保守标记为 outcome unknown。
 ///
 /// **注意**：restore 会覆盖 data_root 下所有非 backup 文件。调用方（WebUI）
 /// 应在确认对话框中明确警告用户：secrets 需手动重配、建议 restore 后重启 daemon。

@@ -579,7 +579,9 @@ pub(crate) fn delete_backup(data_root: &Path, backup_id: &str) -> Result<(), Air
 ///      （如 `characters/alice/`），其他 data_root 内容不受影响
 /// 6. post-restore 校验：重新枚举恢复范围，与 manifest `files` 对比
 ///    （允许 secret 文件缺失，因为 restore 不写 secret）
-/// 7. 失败任一步：保留 staging + 回滚备份，返回 `Internal`，**不**清理现场供人工恢复
+/// 7. 回滚备份创建后的失败会返回结构化 recovery backup ID；进入 swap 前为
+///    `BackupRestoreFailed`，进入 swap 后保守归类为 `BackupRestoreOutcomeUnknown`
+///    并保留 staging + 回滚备份供恢复
 ///
 /// ## Scoped restore 不变量（v1）
 ///
@@ -594,6 +596,14 @@ pub(crate) fn delete_backup(data_root: &Path, backup_id: &str) -> Result<(), Air
 pub(crate) fn restore_backup(
     data_root: &Path,
     backup_id: &str,
+) -> Result<(String, String), AirpError> {
+    restore_backup_with_post_swap_hook(data_root, backup_id, || Ok(()))
+}
+
+fn restore_backup_with_post_swap_hook(
+    data_root: &Path,
+    backup_id: &str,
+    post_swap_hook: impl FnOnce() -> Result<(), AirpError>,
 ) -> Result<(String, String), AirpError> {
     let _guard = BACKUP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -636,9 +646,41 @@ pub(crate) fn restore_backup(
     let rollback = create_backup_locked(&rollback_opts)?;
     let rollback_id = rollback.backup_id.clone();
 
-    // 3. staging：data_root/.restore-staging-{backup_id}/
+    // Failures while preparing the private staging tree are definite: the
+    // authoritative data root has not entered the swap yet.
+    let staging_dir = prepare_restore_staging(data_root, backup_id, &backup_dir, &manifest)
+        .map_err(|error| retained_restore_error(error, &rollback_id, false))?;
+
+    // 5. 根据 scope 选择替换策略
+    let subtree_prefix = manifest.scope.subtree_prefix();
+    let apply_result = (|| {
+        if subtree_prefix.is_empty() {
+            // Full scope：替换 data_root 下所有顶层条目（除 backups/ 与 staging）
+            swap_full_data_root(data_root, &staging_dir, &rollback_id)?;
+        } else {
+            // scoped：仅替换 subtree_prefix 子树
+            swap_scoped_subtree(data_root, &staging_dir, &subtree_prefix, &rollback_id)?;
+        }
+        post_swap_hook()?;
+        sync_dir(data_root)?;
+
+        // 6. post-restore 校验：重新枚举恢复范围，与 manifest.files 对比
+        let expected_files: std::collections::HashSet<String> =
+            manifest.files.iter().map(|f| f.path.clone()).collect();
+        post_restore_verify(data_root, &manifest, &expected_files)
+    })();
+    apply_result.map_err(|error| retained_restore_error(error, &rollback_id, true))?;
+
+    Ok((backup_id.to_string(), rollback_id))
+}
+
+fn prepare_restore_staging(
+    data_root: &Path,
+    backup_id: &str,
+    backup_dir: &Path,
+    manifest: &BackupManifest,
+) -> Result<PathBuf, AirpError> {
     let staging_dir = data_root.join(format!(".restore-staging-{backup_id}"));
-    // 清理可能残留的 staging
     if staging_dir.exists() {
         fs::remove_dir_all(&staging_dir).map_err(|e| {
             AirpError::Internal(format!(
@@ -649,10 +691,8 @@ pub(crate) fn restore_backup(
     }
     fs::create_dir_all(&staging_dir)?;
 
-    // 4. 从 backup files/ 复制到 staging（逐文件，路径双重校验）
     let backup_files_root = backup_dir.join("files");
     for file in &manifest.files {
-        // 路径安全校验（双重保险：validate_approved_path + safe_resolve_for_write）
         crate::revision::tree_hash::validate_approved_path(&file.path).map_err(|e| {
             AirpError::Internal(format!(
                 "restore 拒绝：backup 含非法路径 {:?}: {e}",
@@ -671,29 +711,25 @@ pub(crate) fn restore_backup(
             fs::create_dir_all(parent)?;
         }
         let bytes = read_file_bytes(&src)?;
-        let mut f = fs::File::create(&dest)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
+        let mut file = fs::File::create(&dest)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
     }
     sync_directory_tree_bottom_up(&staging_dir)?;
+    Ok(staging_dir)
+}
 
-    // 5. 根据 scope 选择替换策略
-    let subtree_prefix = manifest.scope.subtree_prefix();
-    if subtree_prefix.is_empty() {
-        // Full scope：替换 data_root 下所有顶层条目（除 backups/ 与 staging）
-        swap_full_data_root(data_root, &staging_dir, &rollback_id)?;
+fn retained_restore_error(error: AirpError, backup_id: &str, outcome_unknown: bool) -> AirpError {
+    tracing::error!(err = %error, recovery_backup_id = %backup_id, outcome_unknown, "backup restore failed after retaining recovery backup");
+    if outcome_unknown {
+        AirpError::BackupRestoreOutcomeUnknown {
+            backup_id: backup_id.to_string(),
+        }
     } else {
-        // scoped：仅替换 subtree_prefix 子树
-        swap_scoped_subtree(data_root, &staging_dir, &subtree_prefix, &rollback_id)?;
+        AirpError::BackupRestoreFailed {
+            backup_id: backup_id.to_string(),
+        }
     }
-    sync_dir(data_root)?;
-
-    // 6. post-restore 校验：重新枚举恢复范围，与 manifest.files 对比
-    let expected_files: std::collections::HashSet<String> =
-        manifest.files.iter().map(|f| f.path.clone()).collect();
-    post_restore_verify(data_root, &manifest, &expected_files)?;
-
-    Ok((backup_id.to_string(), rollback_id))
 }
 
 /// Full scope restore：移除 data_root 下除 `backups/`、staging 与 `ui/` 外的所有
@@ -1997,6 +2033,79 @@ mod tests {
         assert_eq!(alice_card, r#"{"name":"alice"}"#);
     }
 
+    #[test]
+    fn restore_preparation_failure_returns_retained_backup_id() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("state.txt"), "captured").unwrap();
+        let created = create_backup(&make_opts(
+            dir.path(),
+            BackupSource::Manual,
+            BackupScope::Full,
+        ))
+        .unwrap();
+        fs::write(dir.path().join("state.txt"), "current").unwrap();
+
+        let staging_path = dir
+            .path()
+            .join(format!(".restore-staging-{}", created.backup_id));
+        fs::write(&staging_path, "not a directory").unwrap();
+
+        let error = restore_backup(dir.path(), &created.backup_id).unwrap_err();
+        let rollback_id = match error {
+            AirpError::BackupRestoreFailed { backup_id } => backup_id,
+            other => panic!("expected definite retained-backup failure, got {other:?}"),
+        };
+        assert_eq!(
+            fs::read_to_string(dir.path().join("state.txt")).unwrap(),
+            "current"
+        );
+        let rollback_manifest = read_backup_manifest(dir.path(), &rollback_id).unwrap();
+        assert_eq!(rollback_manifest.source, BackupSource::PreRestoreRollback);
+        rollback_manifest
+            .verify_against_disk(&dir.path().join("backups").join(rollback_id))
+            .unwrap();
+    }
+
+    #[test]
+    fn post_swap_failure_returns_outcome_unknown_with_retained_backup_id() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("state.txt"), "captured").unwrap();
+        let created = create_backup(&make_opts(
+            dir.path(),
+            BackupSource::Manual,
+            BackupScope::Full,
+        ))
+        .unwrap();
+        fs::write(dir.path().join("state.txt"), "current").unwrap();
+
+        let error = restore_backup_with_post_swap_hook(dir.path(), &created.backup_id, || {
+            Err(AirpError::Internal(
+                "injected post-swap failure with private detail".to_string(),
+            ))
+        })
+        .unwrap_err();
+        let rollback_id = match error {
+            AirpError::BackupRestoreOutcomeUnknown { backup_id } => backup_id,
+            other => panic!("expected outcome-unknown retained-backup failure, got {other:?}"),
+        };
+        assert_eq!(
+            fs::read_to_string(dir.path().join("state.txt")).unwrap(),
+            "captured"
+        );
+        let rollback_manifest = read_backup_manifest(dir.path(), &rollback_id).unwrap();
+        assert_eq!(rollback_manifest.source, BackupSource::PreRestoreRollback);
+        assert_eq!(
+            fs::read_to_string(
+                dir.path()
+                    .join("backups")
+                    .join(&rollback_id)
+                    .join("files/state.txt")
+            )
+            .unwrap(),
+            "current"
+        );
+    }
+
     /// #449: restore swap 阶段失败后必须保留 staging + rollback backup，
     /// 供人工恢复。不清理现场，data_root 不半删。
     ///
@@ -2026,15 +2135,12 @@ mod tests {
         fs::remove_dir_all(dir.path().join("characters")).unwrap();
         fs::write(dir.path().join("characters"), "not a directory").unwrap();
 
-        // restore 应失败（swap 阶段 create_dir_all 失败）。
-        // 不断言具体错误变体：`create_dir_all` 失败走 `?` 返回 `AirpError::Io`，
-        // 且 io::Error kind 因 OS 而异（Windows: AlreadyExists, Linux: NotADirectory）。
-        // 测试本意是验证 swap 失败后现场保留，错误类型不是契约。
-        let result = restore_backup(dir.path(), &created.backup_id);
-        assert!(
-            result.is_err(),
-            "restore should fail when swap cannot create parent dir"
-        );
+        // Once swap has been entered, callers receive a conservative
+        // outcome-unknown classification plus the retained recovery ID.
+        let rollback_id = match restore_backup(dir.path(), &created.backup_id).unwrap_err() {
+            AirpError::BackupRestoreOutcomeUnknown { backup_id } => backup_id,
+            other => panic!("expected outcome-unknown restore failure, got {other:?}"),
+        };
 
         // 1. staging 目录应保留（.restore-staging-{backup_id}）
         let staging_dir = dir
@@ -2047,28 +2153,12 @@ mod tests {
         );
 
         // 2. rollback backup 应存在且可读（PreRestoreRollback source）
-        //    restore_backup 返回 Err 无法直接拿 rollback_id，从 backups/ 目录中查找
         let backups_dir = dir.path().join("backups");
-        let mut found_rollback = false;
-        for entry in fs::read_dir(&backups_dir).unwrap() {
-            let entry = entry.unwrap();
-            let backup_id = entry.file_name().to_str().unwrap().to_string();
-            if backup_id == created.backup_id {
-                continue; // 跳过源 backup
-            }
-            let manifest = read_backup_manifest(dir.path(), &backup_id).unwrap();
-            if manifest.source == BackupSource::PreRestoreRollback {
-                found_rollback = true;
-                // rollback backup 完整性校验应通过
-                let backup_dir = backups_dir.join(&backup_id);
-                manifest.verify_against_disk(&backup_dir).unwrap();
-                break;
-            }
-        }
-        assert!(
-            found_rollback,
-            "rollback backup (PreRestoreRollback) should exist and pass verify_against_disk"
-        );
+        let manifest = read_backup_manifest(dir.path(), &rollback_id).unwrap();
+        assert_eq!(manifest.source, BackupSource::PreRestoreRollback);
+        manifest
+            .verify_against_disk(&backups_dir.join(&rollback_id))
+            .unwrap();
 
         // 3. data_root 不半删：characters 仍是文件（swap 未完成，alice 未恢复）
         assert!(
