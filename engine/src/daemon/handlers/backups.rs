@@ -241,6 +241,8 @@ fn validate_backup_id_segment(backup_id: &str) -> Result<(), AirpError> {
 /// `POST /v1/backups` — 创建一个 backup。
 ///
 /// 同步 IO（文件 walk + 复制 + hash）在 `spawn_blocking` 中执行。
+/// 最终 publication barrier 失败时，统一错误 envelope 返回 outcome-unknown code、
+/// backup ID 与 refresh-and-verify 恢复类别。
 pub(in crate::daemon) async fn create_backup_endpoint(
     State(state): State<Arc<DaemonState>>,
     Json(req): Json<CreateBackupRequest>,
