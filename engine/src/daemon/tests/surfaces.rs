@@ -412,6 +412,87 @@ async fn future_workspace_major_revokes_stale_surface_intent_authority() {
 }
 
 #[tokio::test]
+async fn corrupt_workspace_revokes_stale_surface_memory_replace_authority() {
+    let (state, _tmp) = make_state_with_key(Some("surface-secret"));
+    let session_id = crate::types::SessionId::new();
+    crate::data_dir::create_session_with_id(&state.data_root, "alice", &session_id).unwrap();
+    let session_dir =
+        crate::data_dir::resolve_session_dir(&state.data_root, "alice", Some(&session_id)).unwrap();
+    crate::memory::write_resident_memory(&session_dir, "before").unwrap();
+    let committed = crate::domain::WorkspaceService::new(&state.data_root)
+        .execute(0, crate::domain::WorkspaceCommand::ResetLayout)
+        .unwrap();
+    let app = create_router(state.clone());
+    let snapshot = surface_snapshot_json(app.clone(), "alice", &session_id).await;
+    let expected_hash = widget_props(&snapshot, "memory")["content_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let scope =
+        crate::ui_surface::SurfaceScope::new(&state.data_root, "alice", session_id.to_string());
+    let accepted_surface = state.ui_surfaces.lock().unwrap().current(&scope).unwrap();
+    let workspace_dir = state
+        .data_root
+        .join("ui")
+        .join("workspaces")
+        .join("default");
+    let current_revision_path = workspace_dir.join("current_revision");
+    let current_revision = std::fs::read(&current_revision_path).unwrap();
+    let workspace_path = workspace_dir
+        .join("revisions")
+        .join(committed.revision.value().to_string())
+        .join("workspace.json");
+    let mut workspace_bytes = std::fs::read(&workspace_path).unwrap();
+    workspace_bytes.push(b'\n');
+    std::fs::write(&workspace_path, workspace_bytes).unwrap();
+    assert!(crate::domain::WorkspaceService::new(&state.data_root)
+        .read()
+        .is_err());
+
+    let response = post_surface_intent(
+        app,
+        serde_json::json!({
+            "surface_id": format!("session:{session_id}"),
+            "instance_id": "memory",
+            "name": "memory.replace",
+            "params": {"content": "after", "expected_content_hash": expected_hash}
+        }),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let rejection: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rejection["error"]["code"], "internal_error");
+    assert_eq!(rejection["error"]["message"], "internal error");
+    assert_eq!(rejection["error"]["recovery"], "inspect_server_logs");
+    assert_eq!(
+        crate::memory::read_resident_memory(&session_dir).unwrap(),
+        "before"
+    );
+    assert_eq!(
+        crate::memory::resident_memory_content_hash(
+            &crate::memory::read_resident_memory(&session_dir).unwrap()
+        ),
+        expected_hash
+    );
+    assert_eq!(
+        std::fs::read(current_revision_path).unwrap(),
+        current_revision
+    );
+    assert_eq!(
+        state.ui_surfaces.lock().unwrap().current(&scope).unwrap(),
+        accepted_surface
+    );
+}
+
+#[tokio::test]
 async fn memory_replace_intent_succeeds_then_rejects_stale_and_oversized_edits() {
     let (state, _tmp) = make_state_with_key(Some("surface-secret"));
     let session_id = crate::types::SessionId::new();
