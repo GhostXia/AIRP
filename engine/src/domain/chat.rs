@@ -37,6 +37,17 @@ pub struct ChatService {
     data_root: PathBuf,
 }
 
+/// Keep the structured final-publication result visible through destructive
+/// pre-delete callers while adding resource context to definite failures.
+fn map_pre_delete_backup_error(error: AirpError, resource: &str, id: &str) -> AirpError {
+    match error {
+        outcome @ AirpError::BackupPublicationOutcomeUnknown { .. } => outcome,
+        other => AirpError::Internal(format!(
+            "pre-delete backup 失败，已拒绝删除 {resource} {id}（fail-closed）: {other}"
+        )),
+    }
+}
+
 /// #37 cursor 分页窗口（`ChatService::history_window` 返回）。
 ///
 /// `messages` / `message_ids` / `message_timestamps` 等长，按时间正序排列，
@@ -930,11 +941,8 @@ impl ChatService {
                     character_id: character_id.as_str().to_string(),
                 },
             };
-            let created = crate::backup::create_backup(&opts).map_err(|e| {
-                AirpError::Internal(format!(
-                    "pre-delete backup 失败，已拒绝删除 character {}（fail-closed）: {e}",
-                    character_id.as_str()
-                ))
+            let created = crate::backup::create_backup(&opts).map_err(|error| {
+                map_pre_delete_backup_error(error, "character", character_id.as_str())
             })?;
             Some(created.backup_id)
         } else {
@@ -1000,6 +1008,7 @@ impl ChatService {
 
         // pre-delete backup（默认开启）
         let backup_id = if !force {
+            let session_label = session_id.to_string();
             let opts = crate::backup::CreateBackupOptions {
                 data_root: self.data_root.clone(),
                 source: crate::backup::BackupSource::PreDelete,
@@ -1008,12 +1017,8 @@ impl ChatService {
                     session_id: session_id.to_string(),
                 },
             };
-            let created = crate::backup::create_backup(&opts).map_err(|e| {
-                AirpError::Internal(format!(
-                    "pre-delete backup 失败，已拒绝删除 session {}（fail-closed）: {e}",
-                    session_id
-                ))
-            })?;
+            let created = crate::backup::create_backup(&opts)
+                .map_err(|error| map_pre_delete_backup_error(error, "session", &session_label))?;
             Some(created.backup_id)
         } else {
             None
@@ -1047,6 +1052,34 @@ mod read_only_tests {
             role,
             content: content.to_string(),
         }
+    }
+
+    #[test]
+    fn pre_delete_preserves_publication_outcome_unknown_contract() {
+        let backup_id = "0123456789abcdef0123456789abcdef".to_string();
+        let mapped = map_pre_delete_backup_error(
+            AirpError::BackupPublicationOutcomeUnknown {
+                backup_id: backup_id.clone(),
+            },
+            "character",
+            "alice",
+        );
+        assert!(matches!(
+            mapped,
+            AirpError::BackupPublicationOutcomeUnknown { backup_id: id } if id == backup_id
+        ));
+
+        let ordinary = map_pre_delete_backup_error(
+            AirpError::Internal("private staging detail".to_string()),
+            "session",
+            "session-1",
+        );
+        assert!(matches!(
+            ordinary,
+            AirpError::Internal(message)
+                if message.contains("session session-1")
+                    && message.contains("private staging detail")
+        ));
     }
 
     #[test]
