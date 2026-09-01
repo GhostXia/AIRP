@@ -620,9 +620,21 @@ fn restore_backup_with_post_swap_hook(
         .iter()
         .any(|file| file.path == "ui/workspaces" || file.path.starts_with("ui/workspaces/"));
     let current_has_workspace = data_root.join("ui").join("workspaces").exists();
-    if matches!(manifest.scope, BackupScope::Full)
-        && (manifest_has_workspace || current_has_workspace)
+    if matches!(manifest.scope, BackupScope::Full) && (manifest_has_workspace != current_has_workspace)
     {
+        // Reject only the asymmetric cases where full-swap semantics would
+        // either silently drop Workspace files carried in the manifest (because
+        // swap_full_ui_preserving_workspaces refuses to rename ui/workspaces/
+        // in from staging) or erase an on-disk Workspace tree that the
+        // incoming manifest never captured. The symmetric case — both sides
+        // have Workspace assets, or neither side has them — is safe: the
+        // live ui/workspaces/ directory is preserved and any Workspace
+        // entries listed in the manifest are simply not materialised,
+        // matching the generic-full-restore contract. Notably this also
+        // lets the PreRestoreRollback full backup created from a
+        // Workspace-bearing data_root be restored later, which is the
+        // documented recovery path when a swap-stage failure surfaces a
+        // `BackupRestoreOutcomeUnknown` error.
         return Err(AirpError::BadRequest(
             "generic full restore cannot replace or remove Workspace assets; use Workspace forward-only recovery"
                 .to_string(),
@@ -808,7 +820,17 @@ fn preflight_full_restore_ui(data_root: &Path, staging_dir: &Path) -> Result<(),
             )));
         }
     }
-    if staging_dir.join("ui").join("workspaces").exists() {
+    // Preflight only needs to catch the asymmetric "staging has Workspace
+    // assets but current data root does not" scenario: if a generic full
+    // restore ever reached swapping with such an imbalance, swap would
+    // silently discard the staged ui/workspaces/ entries. The symmetric
+    // cases (both present or both absent) are handled by
+    // `swap_full_ui_preserving_workspaces` without data loss, so this
+    // mirror of the outer imbalance guard is purely a fail-fast safety
+    // net and must not reject symmetric Workspace layouts.
+    let staging_has_ws = staging_dir.join("ui").join("workspaces").exists();
+    let current_has_ws = data_root.join("ui").join("workspaces").exists();
+    if staging_has_ws && !current_has_ws {
         return Err(AirpError::BadRequest(
             "generic full restore cannot replace Workspace assets".to_string(),
         ));
@@ -852,9 +874,18 @@ fn swap_full_ui_preserving_workspaces(
                     )
                 })?;
             if name == "workspaces" {
-                return Err(AirpError::BadRequest(
-                    "generic full restore cannot replace Workspace assets".to_string(),
-                ));
+                // Workspace children inside staging/ui are intentionally
+                // skipped: the generic restore path preserves the live
+                // ui/workspaces/ directory unchanged. When the manifest
+                // and current data root both carry Workspace state the
+                // outer guard allows the swap to progress, and this
+                // skip is exactly what keeps that contract — the backup
+                // snapshot's Workspace files are not copied on top of
+                // the live forward-only Workspace store. Only the
+                // asymmetric (manifest-only) case is blocked earlier so
+                // we never silently lose Workspace payload the caller
+                // legitimately expected to land.
+                continue;
             }
             let destination = current_ui.join(name);
             fs::rename(&entry, &destination).map_err(|error| {
@@ -1034,6 +1065,17 @@ fn collect_top_level_entries(dir: &Path) -> Vec<PathBuf> {
 /// post-restore 校验：manifest 中的每个文件必须存在且 hash 匹配。额外文件不导致
 /// 失败：既有 v1 restore 合同容忍维护窗口外的并发写，本实现还必须保留
 /// `ui/workspaces/`。secret 文件本来就不在 manifest 中，也不会由 restore 写入。
+///
+/// 注意：`ui/workspaces/` 下的文件在 generic full restore 中是**故意**不被 materialize
+/// 的（swap 阶段跳过 `ui/workspaces/` rename）。如果 manifest 恰好捕获了旧的
+/// Workspace 资产（对称 Workspace 布局时，rollback backup 和用户手动 full backup
+/// 都会把它们写入 files 列表），校验时必须从期望集合里减去它们；否则
+/// post_restore_verify 会把 swap 有意跳过的合法文件当成"缺失"，把一次成功的
+/// restore 误报成 `BackupRestoreOutcomeUnknown`。
+fn is_workspace_path(path: &str) -> bool {
+    path == "ui/workspaces" || path.starts_with("ui/workspaces/")
+}
+
 fn post_restore_verify(
     data_root: &Path,
     manifest: &BackupManifest,
@@ -1042,9 +1084,19 @@ fn post_restore_verify(
     let mut actual_files: std::collections::HashSet<String> = std::collections::HashSet::new();
     collect_data_root_files_excluding_backups(data_root, data_root, &mut actual_files)?;
 
+    // 期望值扣除 swap 有意不落地的 Workspace 条目（保持 forward-only 语义）。
+    let adjusted_expected: std::collections::HashSet<String> = expected_files
+        .iter()
+        .filter(|path| !is_workspace_path(path))
+        .cloned()
+        .collect();
+
     // 期望集合 = manifest.files（restore 已写入这些文件）
     // 实际集合可能多出 secret 文件（用户在 restore 后手动重建的 secret 文件）——允许
-    let mut missing: Vec<String> = expected_files.difference(&actual_files).cloned().collect();
+    let mut missing: Vec<String> = adjusted_expected
+        .difference(&actual_files)
+        .cloned()
+        .collect();
     missing.sort();
     if !missing.is_empty() {
         return Err(AirpError::Internal(format!(
@@ -1052,8 +1104,12 @@ fn post_restore_verify(
         )));
     }
 
-    // 校验每个恢复文件的 SHA-256 仍与 manifest 一致
+    // 校验每个**非 Workspace**恢复文件的 SHA-256 仍与 manifest 一致。
+    // Workspace 条目因 swap 语义从未落地，不在此比较。
     for file in &manifest.files {
+        if is_workspace_path(&file.path) {
+            continue;
+        }
         let abs = data_root.join(&file.path);
         let bytes = fs::read(&abs)?;
         let actual_hash = crate::revision::manifest::file_sha256_hex(&bytes);
@@ -1559,6 +1615,9 @@ mod tests {
 
     #[test]
     fn generic_full_restore_cannot_replace_or_remove_workspace_assets() {
+        // Asymmetric case 1: manifest 记录 workspace 资产，但当前 data_root 已没有 workspace 目录。
+        // 允许 restore 的话 staging/ui/workspaces 会被 swap 实现静默跳过，
+        // manifest 记录的"恢复内容"实际上未被 materialize —— 必须拒绝。
         let captured = tempdir().unwrap();
         fs::create_dir_all(captured.path().join("ui/workspaces/default")).unwrap();
         fs::write(
@@ -1574,11 +1633,16 @@ mod tests {
             BackupScope::Full,
         ))
         .unwrap();
+        // 模拟当前 data_root 的 workspace 被清空（与 captured_backup.workspace 不对称）
+        fs::remove_dir_all(captured.path().join("ui/workspaces")).unwrap();
         assert!(matches!(
             restore_backup(captured.path(), &captured_backup.backup_id),
             Err(AirpError::BadRequest(message)) if message.contains("Workspace assets")
         ));
 
+        // Asymmetric case 2: manifest 不含 workspace 资产，但当前 data_root 已经创建了 workspace。
+        // 允许 restore 的话顶层 swap 会删空 ui/ 下非 workspaces 项，但不会删除 workspaces/，
+        // 但外层保护（防止 forward-only workspace store 被“误以为已回滚”）仍应拒绝。
         let current = tempdir().unwrap();
         fs::write(current.path().join("ordinary.txt"), "before").unwrap();
         let ordinary_backup = create_backup(&make_opts(
@@ -1592,6 +1656,10 @@ mod tests {
             restore_backup(current.path(), &ordinary_backup.backup_id),
             Err(AirpError::BadRequest(message)) if message.contains("Workspace assets")
         ));
+
+        // 对称 case（manifest 与 current 都有 workspace 资产，或都没有）应允许 full restore；
+        // 见 probe_full_restore_symmetric_workspace_currently_rejected 和
+        // restore_full_backup_overwrites_data_root。
     }
 
     #[test]
@@ -2168,6 +2236,137 @@ mod tests {
         assert!(
             !alice_dir.exists(),
             "alice subtree should not exist (restore did not complete)"
+        );
+    }
+
+    // ── 回归：对称 Workspace 布局下 full restore + rollback 闭环 ────────
+    //
+    // #646 修复：`restore_backup` 原先用 `manifest_has_ws || current_has_ws`
+    // 直接拒绝所有带 Workspace 的 full restore，导致：
+    //   1. 用户建了 workspace 后创建的 Manual full backup，永远不能恢复。
+    //   2. restore swap 阶段失败后，返回给用户的 PreRestoreRollback full backup
+    //      也同样被外层拒绝——文档里的唯一恢复路径实际不可用，变成用户数据
+    //      （character / session / providers）半损毁 + 无法回滚。
+    // 正确逻辑：只有 manifest / current 在 Workspace 存在性上**不对称**时
+    // 才会造成 silent drop 或非预期覆盖，需要拒绝；对称 case 由
+    // `swap_full_ui_preserving_workspaces` 安全跳过 `ui/workspaces/` 的 rename。
+
+    #[test]
+    fn full_restore_symmetric_workspace_preserves_live_workspaces_and_rollback_is_recoverable() {
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("ui/workspaces/default");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("current_revision"), "7").unwrap();
+        fs::write(workspace.join("notes.md"), "forward-only data").unwrap();
+        fs::write(dir.path().join("providers.json"), "{}").unwrap();
+        fs::write(dir.path().join("ui/console.css"), "old-sheet").unwrap();
+
+        let backup = create_backup(&make_opts(dir.path(), BackupSource::Manual, BackupScope::Full))
+            .expect("create full backup with workspace");
+        let manifest = read_backup_manifest(dir.path(), &backup.backup_id).unwrap();
+        assert!(
+            manifest
+                .files
+                .iter()
+                .any(|f| f.path.starts_with("ui/workspaces/")),
+            "前提：backup 记录了 Workspace 资产（触发对称 case 的一边）"
+        );
+
+        // 用户先改一下当前 state，再恢复。
+        fs::write(dir.path().join("providers.json"), "{\"tampered\":true}").unwrap();
+        fs::write(dir.path().join("ui/console.css"), "new-sheet").unwrap();
+        // 典型 forward-only 写入：用户在 restore 前改了 revision，还新增了 fresh.log。
+        fs::write(workspace.join("current_revision"), "8").unwrap();
+        fs::write(workspace.join("fresh.log"), "new-entry").unwrap();
+
+        // 捕获 restore 调用前的 workspace 快照。swap_full_ui_preserving_workspaces 的
+        // 合同是：**不修改** data_root/ui/workspaces/ 下任何内容。所以 restore 前后
+        // workspace 目录下的文件集合和内容必须 byte-for-byte 一致。
+        fn snapshot_workspace(
+            root: &Path,
+        ) -> std::collections::BTreeMap<String, Vec<u8>> {
+            fn rec(
+                base: &Path,
+                current: &Path,
+                out: &mut std::collections::BTreeMap<String, Vec<u8>>,
+            ) {
+                if let Ok(entries) = fs::read_dir(current) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Ok(ft) = entry.file_type() {
+                            if ft.is_dir() {
+                                rec(base, &path, out);
+                            } else if ft.is_file() {
+                                let rel = path
+                                    .strip_prefix(base)
+                                    .unwrap()
+                                    .to_string_lossy()
+                                    .to_string();
+                                out.insert(rel, fs::read(&path).unwrap());
+                            }
+                        }
+                    }
+                }
+            }
+            let mut out = std::collections::BTreeMap::new();
+            rec(root, root, &mut out);
+            out
+        }
+
+        let pre_workspace_files = snapshot_workspace(&workspace);
+
+        let (restored_from, rollback_id) = restore_backup(dir.path(), &backup.backup_id)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "对称 workspace 场景下 full restore 本应成功（swap 保留 ui/workspaces/），\
+                     但被错误拒绝: {e:?}"
+                )
+            });
+        assert_eq!(restored_from, backup.backup_id);
+        assert!(!rollback_id.is_empty());
+
+        // 1. 非 Workspace 文件被回滚到 backup 版本。
+        assert_eq!(
+            fs::read_to_string(dir.path().join("providers.json")).unwrap(),
+            "{}"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("ui/console.css")).unwrap(),
+            "old-sheet"
+        );
+        // 2. Workspace 目录**整体不变**——swap 跳过、校验也跳过、不覆盖不删除。
+        let post_workspace_files = snapshot_workspace(&workspace);
+        assert_eq!(
+            post_workspace_files, pre_workspace_files,
+            "generic full restore 不应该改动 ui/workspaces/ 下的任何文件"
+        );
+        // forward-only store 的关键行为：用户刚刚写的 revision 8 和 fresh.log 未被冲掉。
+        assert_eq!(
+            fs::read_to_string(workspace.join("current_revision")).unwrap(),
+            "8"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.join("fresh.log")).unwrap(),
+            "new-entry"
+        );
+
+        // 3. rollback backup（PreRestoreRollback, scope=Full）自身必须可再次恢复，
+        //    以实现"撤销恢复"按钮与 swap 失败后文档化的 recover 路径。
+        let (_, rollback2_id) =
+            restore_backup(dir.path(), &rollback_id).unwrap_or_else(|e| {
+                panic!(
+                    "PreRestoreRollback full backup 应可再次 restore: {e:?}；\
+                     否则用户点『撤销恢复』或 swap 失败后无法自救。"
+                )
+            });
+        assert!(!rollback2_id.is_empty());
+        assert!(list_backups(dir.path()).unwrap().len() >= 3);
+
+        // 4. 两次 restore 之后 workspace 仍然存在，未被任何一轮删除。
+        assert!(workspace.is_dir());
+        assert_eq!(
+            fs::read_to_string(workspace.join("fresh.log")).unwrap(),
+            "new-entry"
         );
     }
 }
