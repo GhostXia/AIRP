@@ -350,6 +350,17 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn sorted_json_keys(value: &serde_json::Value) -> Vec<&str> {
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
     fn sample_manifest() -> BackupManifest {
         BackupManifest {
             schema: BACKUP_MANIFEST_SCHEMA,
@@ -376,6 +387,70 @@ mod tests {
         assert_eq!(parsed.source, BackupSource::Manual);
         assert_eq!(parsed.scope, BackupScope::Full);
         assert!(parsed.secrets_excluded);
+    }
+
+    #[test]
+    fn reads_literal_manifest_v1_from_before_workspace_backups() {
+        // This hand-authored fixture matches the exact producer shape at
+        // d5abddb3^, before Workspace backup variants were added. Its values
+        // model a real old producer run over one `a.txt` file containing
+        // `hello`. Keeping it outside the current serializer prevents fields
+        // and enum tags from drifting together unnoticed.
+        let bytes = include_bytes!("../../tests/fixtures/backup/manifest-v1-pre-workspace.json");
+        let raw: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+
+        assert_eq!(
+            sorted_json_keys(&raw),
+            [
+                "backup_id",
+                "created_at",
+                "data_schema_version",
+                "engine_version",
+                "files",
+                "schema",
+                "scope",
+                "secrets_excluded",
+                "source",
+                "tree_sha256",
+            ]
+        );
+        assert_eq!(sorted_json_keys(&raw["source"]), ["kind"]);
+        assert_eq!(sorted_json_keys(&raw["scope"]), ["kind"]);
+        assert_eq!(
+            sorted_json_keys(&raw["files"][0]),
+            ["bytes", "path", "sha256"]
+        );
+
+        let parsed = BackupManifest::from_json_bytes(bytes).unwrap();
+
+        assert_eq!(parsed.schema, 1);
+        assert_eq!(parsed.backup_id, "4b56c1f9d03e4df7a8b17ce0aa002026");
+        assert_eq!(parsed.created_at, "2026-08-27T12:34:56Z");
+        assert_eq!(parsed.engine_version, "0.1.0");
+        assert_eq!(parsed.data_schema_version, 1);
+        assert_eq!(parsed.source, BackupSource::Manual);
+        assert_eq!(parsed.scope, BackupScope::Full);
+        assert_eq!(parsed.scope.subtree_prefix(), "");
+        assert!(parsed.secrets_excluded);
+        assert_eq!(parsed.files.len(), 1);
+        assert_eq!(
+            parsed.files[0],
+            ApprovedFile {
+                path: "a.txt".to_string(),
+                sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                    .to_string(),
+                bytes: 5,
+            }
+        );
+        assert_eq!(
+            parsed.tree_sha256,
+            "8528e92839279ea393bd753b385acacdd7e6259baae59d3659d1c859241caa36"
+        );
+
+        let backup_dir = tempdir().unwrap();
+        fs::create_dir(backup_dir.path().join("files")).unwrap();
+        fs::write(backup_dir.path().join("files/a.txt"), b"hello").unwrap();
+        parsed.verify_against_disk(backup_dir.path()).unwrap();
     }
 
     #[test]
