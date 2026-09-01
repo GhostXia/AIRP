@@ -114,9 +114,9 @@ test('terminates a real Unix group after its leader exits', {
 test('force-clears a real Unix group with a TERM-resistant descendant', {
   skip: process.platform === 'win32',
 }, async t => {
-  const leader = spawn('/bin/sh', ['-c', "trap '' TERM; sleep 30 & wait"], {
+  const leader = spawn('/bin/sh', ['-c', "trap '' TERM; sleep 30 & child=$!; echo ready; wait $child"], {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'ignore'],
   });
   const pid = leader.pid;
   assert.ok(pid);
@@ -125,6 +125,7 @@ test('force-clears a real Unix group with a TERM-resistant descendant', {
       if (error?.code !== 'ESRCH') throw error;
     }
   });
+  await once(leader.stdout, 'data');
 
   const outcome = await terminateDetachedProcessGroup(pid, {
     termTimeoutMs: 100,

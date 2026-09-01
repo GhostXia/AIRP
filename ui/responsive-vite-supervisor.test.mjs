@@ -76,7 +76,7 @@ test('supervisor keeps the group identity until full-tree forced cleanup', {
     const timeout = setTimeout(() => reject(new Error(`Vite did not start: ${output}`)), 5_000);
     const collect = chunk => {
       output += chunk.toString();
-      if (!output.includes('Local:')) return;
+      if (!output.includes('http://127.0.0.1:')) return;
       clearTimeout(timeout);
       resolve();
     };
