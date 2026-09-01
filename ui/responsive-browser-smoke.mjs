@@ -45,8 +45,12 @@ server.on('error', error => {
   serverOutput += `Vite process failed to start: ${error.message}\n`;
 });
 
+function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function waitForChildExit(child, timeoutMs) {
-  if (child.exitCode !== null) return;
+  if (hasChildExited(child)) return;
   let timeout;
   try {
     await Promise.race([
@@ -65,7 +69,7 @@ async function waitForChildExit(child, timeoutMs) {
 
 async function stopServer() {
   if (!server.pid) return 'not-started';
-  if (server.exitCode !== null) return 'already-exited';
+  if (hasChildExited(server)) return 'already-exited';
   if (process.platform === 'win32') {
     const viteAlreadyExited = viteExitDiagnostic !== null;
     try {
@@ -78,7 +82,7 @@ async function stopServer() {
       await waitForChildExit(server, 2_000);
       return viteAlreadyExited ? 'already-exited' : 'forced-tree';
     } catch (error) {
-      if (server.exitCode !== null) return 'already-exited';
+      if (hasChildExited(server)) return 'already-exited';
       throw new Error(`Windows Vite process-tree cleanup failed within 7000 ms: ${error.message}`);
     }
   }
@@ -106,11 +110,12 @@ async function closeBrowser(browser, timeoutMs = 5_000) {
 
 async function waitForServer(timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
+  let probeError = null;
   while (Date.now() < deadline) {
     if (serverSpawnError) {
       throw new Error(`Vite process failed to start at ${origin}: ${serverSpawnError.message}`);
     }
-    if (server.exitCode !== null) {
+    if (hasChildExited(server)) {
       throw new Error(`Vite supervisor exited before startup at ${origin}\n${serverOutput}`);
     }
     if (viteExitDiagnostic) {
@@ -119,12 +124,15 @@ async function waitForServer(timeoutMs = 15_000) {
     try {
       const response = await fetch(origin, { signal: AbortSignal.timeout(1_000) });
       if (response.ok) return;
-    } catch {
-      // Vite is still starting.
+    } catch (error) {
+      probeError = error;
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`Vite did not start at ${origin}\n${serverOutput}`);
+  const probeDiagnostic = probeError
+    ? `${probeError.message}${probeError.cause ? ` (${probeError.cause.message})` : ''}`
+    : 'no successful response';
+  throw new Error(`Vite did not start at ${origin}: ${probeDiagnostic}\n${serverOutput}`);
 }
 
 const browser = await (async () => {

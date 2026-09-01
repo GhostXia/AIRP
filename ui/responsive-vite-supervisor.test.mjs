@@ -8,7 +8,7 @@ import { terminateDetachedProcessGroup } from './process-group-cleanup.mjs';
 const supervisorPath = fileURLToPath(new URL('./responsive-vite-supervisor.mjs', import.meta.url));
 
 async function forceTreeExit(child) {
-  if (child.exitCode !== null || !child.pid) return;
+  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
   if (process.platform === 'win32') {
     await new Promise(resolve => {
       execFile('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, () => resolve());
@@ -18,7 +18,7 @@ async function forceTreeExit(child) {
       if (error?.code !== 'ESRCH') throw error;
     }
   }
-  if (child.exitCode === null) await once(child, 'exit');
+  if (child.exitCode === null && child.signalCode === null) await once(child, 'exit');
 }
 
 test('supervisor keeps its process identity after an early Vite exit', async t => {
@@ -32,7 +32,7 @@ test('supervisor keeps its process identity after an early Vite exit', async t =
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   t.after(() => {
-    if (supervisor.exitCode === null) supervisor.kill('SIGKILL');
+    if (supervisor.exitCode === null && supervisor.signalCode === null) supervisor.kill('SIGKILL');
   });
 
   let stderr = '';
@@ -54,6 +54,7 @@ test('supervisor keeps its process identity after an early Vite exit', async t =
   });
 
   assert.equal(supervisor.exitCode, null);
+  assert.equal(supervisor.signalCode, null);
   assert.match(stderr, /AIRP_VITE_EXIT code=1 signal=null/);
 });
 
