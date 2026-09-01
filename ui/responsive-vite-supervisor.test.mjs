@@ -8,8 +8,9 @@ import { terminateDetachedProcessGroup } from './process-group-cleanup.mjs';
 const supervisorPath = fileURLToPath(new URL('./responsive-vite-supervisor.mjs', import.meta.url));
 
 async function forceTreeExit(child) {
-  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
+  if (!child.pid) return;
   if (process.platform === 'win32') {
+    if (child.exitCode !== null || child.signalCode !== null) return;
     await new Promise(resolve => {
       execFile('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, () => resolve());
     });

@@ -129,8 +129,11 @@ async function waitForServer(timeoutMs = 15_000) {
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
+  const causeDiagnostic = probeError?.cause instanceof Error
+    ? probeError.cause.message
+    : probeError?.cause === undefined ? null : String(probeError.cause);
   const probeDiagnostic = probeError
-    ? `${probeError.message}${probeError.cause ? ` (${probeError.cause.message})` : ''}`
+    ? `${probeError.message}${causeDiagnostic ? ` (${causeDiagnostic})` : ''}`
     : 'no successful response';
   throw new Error(`Vite did not start at ${origin}: ${probeDiagnostic}\n${serverOutput}`);
 }
