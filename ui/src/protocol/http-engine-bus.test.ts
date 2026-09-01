@@ -314,6 +314,46 @@ describe("HttpEngineBus", () => {
     expect(requests).toBe(1);
   });
 
+  it("renews a stale bearer before the only authorized workspace mutation attempt", async () => {
+    let bearer = "stale";
+    let renewals = 0;
+    let authorizedMutationAttempts = 0;
+    const requests: Array<{ auth: string | null; body: string | null }> = [];
+    const committed = { ...workspace, revision: "43" };
+    const bus = new HttpEngineBus({
+      base: "http://engine.test",
+      bearer: () => bearer,
+      renew: async () => {
+        renewals += 1;
+        bearer = "fresh";
+        return true;
+      },
+      fetchImpl: async (_input, init) => {
+        const auth = new Headers(init?.headers).get("Authorization");
+        requests.push({
+          auth,
+          body: typeof init?.body === "string" ? init.body : null,
+        });
+        if (auth !== "Bearer fresh") return json({ message: "expired" }, 401);
+        authorizedMutationAttempts += 1;
+        return json(committed);
+      },
+    });
+    const command = {
+      expected_revision: "42",
+      command: { type: "resize_split" as const, split_id: "root", ratio_basis_points: 7000 },
+    };
+
+    await expect(bus.sendWorkspaceCommand(command)).resolves.toMatchObject({ revision: "43" });
+
+    expect(renewals).toBe(1);
+    expect(authorizedMutationAttempts).toBe(1);
+    expect(requests).toEqual([
+      { auth: "Bearer stale", body: JSON.stringify(command) },
+      { auth: "Bearer fresh", body: JSON.stringify(command) },
+    ]);
+  });
+
   it("serializes the closed workspace layout command set", async () => {
     const bodies: unknown[] = [];
     const bus = new HttpEngineBus({
