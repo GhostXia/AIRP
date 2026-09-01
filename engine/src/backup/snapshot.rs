@@ -10,8 +10,9 @@
 //! 6. 构造 manifest，写入 staging `manifest.json`
 //! 7. 全量校验 manifest vs staging
 //! 8. 自最深子目录向 staging 根逐层同步全部目录项
-//! 9. 原子 rename staging → `data_root/backups/{backup_id}/`
-//! 10. 同步 `backups/` 父目录
+//! 9. rename staging → hidden `.pending-{backup_id}`, sync stable parents, then
+//!    atomically rename pending → `data_root/backups/{backup_id}/`
+//! 10. sync `backups/` again to persist the final publication name
 //!
 //! ## 一致性限制（v1）
 //!
@@ -150,12 +151,20 @@ pub(crate) fn with_verified_backup<T>(
 /// 用于 `restore_backup` 在持锁状态下创建 rollback backup，避免 `std::sync::Mutex`
 /// 不可重入导致的死锁。
 fn create_backup_locked(opts: &CreateBackupOptions) -> Result<CreatedBackup, AirpError> {
+    create_backup_locked_with_sync(opts, &mut sync_dir)
+}
+
+fn create_backup_locked_with_sync(
+    opts: &CreateBackupOptions,
+    sync: &mut impl FnMut(&Path) -> Result<(), AirpError>,
+) -> Result<CreatedBackup, AirpError> {
     let backup_id = uuid::Uuid::new_v4().simple().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let engine_version = env!("CARGO_PKG_VERSION").to_string();
 
     let backups_root = opts.data_root.join("backups");
     let staging_dir = backups_root.join(format!(".staging-{backup_id}"));
+    let pending_dir = backups_root.join(format!(".pending-{backup_id}"));
     let backup_dir = backups_root.join(&backup_id);
     let staging_files_dir = staging_dir.join("files");
 
@@ -213,22 +222,34 @@ fn create_backup_locked(opts: &CreateBackupOptions) -> Result<CreatedBackup, Air
     // Persist every nested directory entry before publishing the staging tree.
     // Directory fsync is not recursive on Unix, so syncing only staging/ would
     // not make files/ui/workspaces/... crash-durable.
-    sync_directory_tree_bottom_up(&staging_dir)?;
+    sync_directory_tree_bottom_up_with(&staging_dir, sync)?;
 
-    // 原子 rename staging → backup_dir
-    fs::rename(&staging_dir, &backup_dir).map_err(|e| {
+    // Publish through a hidden name first. Readers skip dot-prefixed entries,
+    // so post-rename parent-barrier failures cannot expose an incompletely
+    // established backup as authoritative.
+    fs::rename(&staging_dir, &pending_dir).map_err(|e| {
         AirpError::Internal(format!(
-            "rename staging {} -> backup {} 失败: {e}",
+            "rename staging {} -> pending backup {} 失败: {e}",
             staging_dir.display(),
-            backup_dir.display()
+            pending_dir.display()
         ))
     })?;
 
-    // 同步 backups/ 父目录
-    sync_dir(&backups_root)?;
-    // `backups/` may have been created by this first backup. Persist the new
-    // directory entry in its stable data-root parent before reporting success.
-    sync_dir(&opts.data_root)?;
+    // Persist the hidden payload and, for the first backup, the `backups/`
+    // entry in data_root before making the final name visible.
+    sync(&backups_root)?;
+    sync(&opts.data_root)?;
+
+    fs::rename(&pending_dir, &backup_dir).map_err(|e| {
+        AirpError::Internal(format!(
+            "rename pending backup {} -> final backup {} 失败: {e}",
+            pending_dir.display(),
+            backup_dir.display()
+        ))
+    })?;
+    // A failure here leaves a complete, pre-synced payload under the final
+    // name, but the final name's crash durability is outcome-unknown.
+    sync(&backups_root)?;
 
     Ok(CreatedBackup {
         backup_id,
@@ -238,8 +259,15 @@ fn create_backup_locked(opts: &CreateBackupOptions) -> Result<CreatedBackup, Air
 }
 
 fn sync_directory_tree_bottom_up(root: &Path) -> Result<(), AirpError> {
+    sync_directory_tree_bottom_up_with(root, &mut sync_dir)
+}
+
+fn sync_directory_tree_bottom_up_with(
+    root: &Path,
+    sync: &mut impl FnMut(&Path) -> Result<(), AirpError>,
+) -> Result<(), AirpError> {
     for directory in collect_directory_tree_bottom_up(root)? {
-        sync_dir(&directory)?;
+        sync(&directory)?;
     }
     Ok(())
 }
@@ -1125,6 +1153,109 @@ mod tests {
         }
         assert_eq!(ordered.last(), Some(&root.path().to_path_buf()));
         assert_eq!(ordered.len(), 9);
+    }
+
+    fn write_nested_backup_source(root: &Path) {
+        fs::create_dir_all(root.join("characters/alice")).unwrap();
+        fs::write(root.join("characters/alice/card.json"), b"{}").unwrap();
+        fs::create_dir_all(root.join("ui/workspaces/default/revisions/1")).unwrap();
+        fs::write(
+            root.join("ui/workspaces/default/revisions/1/workspace.json"),
+            b"{}",
+        )
+        .unwrap();
+    }
+
+    fn backup_sync_trace_label(data_root: &Path, path: &Path) -> String {
+        if path == data_root {
+            return "$data_root".to_string();
+        }
+        let relative = path.strip_prefix(data_root).unwrap();
+        let mut parts: Vec<String> = relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if parts
+            .get(1)
+            .is_some_and(|part| part.starts_with(".staging-"))
+        {
+            parts[1] = "$staging".to_string();
+        }
+        parts.join("/")
+    }
+
+    #[test]
+    fn backup_publication_traces_real_directory_barriers_in_order() {
+        let root = tempdir().unwrap();
+        write_nested_backup_source(root.path());
+        let opts = make_opts(root.path(), BackupSource::Manual, BackupScope::Full);
+        let mut trace = Vec::new();
+
+        let created = create_backup_locked_with_sync(&opts, &mut |path| {
+            trace.push(backup_sync_trace_label(root.path(), path));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            trace,
+            [
+                "backups/$staging/files/ui/workspaces/default/revisions/1",
+                "backups/$staging/files/ui/workspaces/default/revisions",
+                "backups/$staging/files/ui/workspaces/default",
+                "backups/$staging/files/characters/alice",
+                "backups/$staging/files/ui/workspaces",
+                "backups/$staging/files/characters",
+                "backups/$staging/files/ui",
+                "backups/$staging/files",
+                "backups/$staging",
+                "backups",
+                "$data_root",
+                "backups",
+            ]
+        );
+        created
+            .manifest
+            .verify_against_disk(&created.backup_dir)
+            .unwrap();
+    }
+
+    #[test]
+    fn every_backup_directory_barrier_failure_avoids_partial_authority() {
+        const BARRIER_COUNT: usize = 12;
+        for fail_at in 0..BARRIER_COUNT {
+            let root = tempdir().unwrap();
+            write_nested_backup_source(root.path());
+            let opts = make_opts(root.path(), BackupSource::Manual, BackupScope::Full);
+            let mut call_index = 0;
+
+            let result = create_backup_locked_with_sync(&opts, &mut |_path| {
+                let current = call_index;
+                call_index += 1;
+                if current == fail_at {
+                    Err(AirpError::Internal(format!(
+                        "injected backup sync failure at barrier {fail_at}"
+                    )))
+                } else {
+                    Ok(())
+                }
+            });
+
+            assert!(result.is_err(), "barrier {fail_at} unexpectedly succeeded");
+            assert_eq!(call_index, fail_at + 1);
+            let listed = list_backups(root.path()).unwrap();
+            if fail_at + 1 < BARRIER_COUNT {
+                assert!(
+                    listed.is_empty(),
+                    "barrier {fail_at} exposed a backup before final publication"
+                );
+            } else {
+                assert_eq!(listed.len(), 1);
+                let manifest = &listed[0];
+                let backup_dir = root.path().join("backups").join(&manifest.backup_id);
+                manifest.verify_against_disk(&backup_dir).unwrap();
+            }
+        }
     }
 
     #[test]
