@@ -492,7 +492,12 @@ export class HttpEngineBus {
     return parseWorkspaceDocument(await this.requestJson(this.workspacePath(scope)));
   }
 
-  /** Sends exactly one mutation request; a 409 is surfaced as HttpFailure and is never replayed. */
+  /**
+   * Sends at most one authorized mutation attempt. A stale bearer can cause one
+   * rejected transport POST followed by one post-renewal POST; Engine
+   * authorization rejects the first before command execution. Non-401
+   * responses, including 409 conflicts, are never replayed.
+   */
   async sendWorkspaceCommand(
     request: WorkspaceCommandRequest,
     scope: WorkspaceScope = {},

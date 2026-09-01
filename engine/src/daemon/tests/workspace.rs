@@ -240,6 +240,46 @@ async fn workspace_requires_configured_and_valid_bearer() {
 }
 
 #[tokio::test]
+async fn unauthorized_workspace_command_cannot_commit_before_later_authorized_request() {
+    let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
+    let service = crate::domain::WorkspaceService::new(&state.data_root);
+    assert_eq!(service.read().unwrap().revision.value(), 0);
+    let app = create_router(state.clone());
+    let command = serde_json::json!({
+        "expected_revision": "0",
+        "command": { "type": "reset_layout" }
+    });
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/workspace/commands")
+                .header("authorization", "Bearer stale")
+                .header("content-type", "application/json")
+                .body(Body::from(command.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(service.read().unwrap().revision.value(), 0);
+
+    let authorized = app
+        .oneshot(
+            Request::post("/v1/ui/workspace/commands")
+                .header("authorization", AUTH)
+                .header("content-type", "application/json")
+                .body(Body::from(command.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(authorized.status(), StatusCode::OK);
+    assert_eq!(service.read().unwrap().revision.value(), 1);
+    assert_eq!(service.history(256).unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn workspace_command_rejects_non_string_revision_without_writing() {
     let (state, _tmp) = make_state_with_key(Some("workspace-secret"));
     let app = create_router(state);
