@@ -1,6 +1,6 @@
 AIRP dependency inventory
 =========================
-Generated: 2026-08-02T08:10:29.791Z
+Generated: 2026-09-07T14:41:24.775Z
 Repo root: .
 Total records: 697
 
@@ -740,7 +740,7 @@ npm/lightningcss-win32-x64-msvc@1.32.0  [audit-required]  license=MPL-2.0  scope
 npm/magic-string@0.30.21  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 npm/minimatch@9.0.9  [auto-pass]  license=ISC  scope=dev  tier=third-party
 npm/muggle-string@0.4.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
-npm/nanoid@3.3.16  [auto-pass]  license=MIT  scope=runtime  tier=third-party
+npm/nanoid@3.3.18  [auto-pass]  license=MIT  scope=runtime  tier=third-party
 npm/obug@2.1.3  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/path-browserify@1.0.1  [auto-pass]  license=MIT  scope=dev  tier=third-party
 npm/pathe@2.0.3  [auto-pass]  license=MIT  scope=dev  tier=third-party

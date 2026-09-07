@@ -8,7 +8,7 @@
       "path+file:///<repo>/ui/src-tauri#airp-ui@0.1.0"
     ],
     "config_version": "https://airp.local/dep-governance/audit-routing.config.json",
-    "generated_at": "2026-08-02T08:10:29.791Z",
+    "generated_at": "2026-09-07T14:41:24.775Z",
     "generator": "tools/dep-governance/discover-deps.mjs",
     "npm_lockfile_version": 3,
     "repo_root": ".",
@@ -12136,17 +12136,17 @@
       "description": null,
       "ecosystem": "npm",
       "homepage": null,
-      "integrity": "sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==",
+      "integrity": "sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==",
       "license": "MIT",
       "license_normalized": "MIT",
       "manifest_path": "ui/package.json",
       "name": "nanoid",
       "repository": null,
-      "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.16.tgz",
+      "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.18.tgz",
       "scope": "runtime",
       "source": "npm",
       "tier": "third-party",
-      "version": "3.3.16"
+      "version": "3.3.18"
     },
     {
       "audit_class": "auto-pass",

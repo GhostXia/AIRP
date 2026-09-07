@@ -17220,17 +17220,17 @@
       "version": "0.4.1"
     },
     {
-      "bom-ref": "npm:nanoid@3.3.16",
+      "bom-ref": "npm:nanoid@3.3.18",
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.16.tgz"
+          "url": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.18.tgz"
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "6f394a4f2349efe2dd188230cbc8a316922a11022f69f6a157b798ca427c0af878d8474978e0e827a814257a5026f7a3d4175d1fc3aa4d764d13f29f6d602ef1"
+          "content": "0d38383096c631691f8ba55915d36ddbf71a31b432e0ebbe3a9fe1250bc611672755fa00d5003ec7344a033c3d8c3ebe19538e798aff98872e0d276e83a17afb"
         }
       ],
       "licenses": [
@@ -17241,10 +17241,10 @@
         }
       ],
       "name": "nanoid",
-      "purl": "pkg:npm/nanoid@3.3.16",
+      "purl": "pkg:npm/nanoid@3.3.18",
       "scope": "required",
       "type": "library",
-      "version": "3.3.16"
+      "version": "3.3.18"
     },
     {
       "bom-ref": "npm:obug@2.1.3",
@@ -17914,7 +17914,7 @@
       "type": "application",
       "version": "0.1.0"
     },
-    "timestamp": "2026-08-02T08:10:29.791Z",
+    "timestamp": "2026-09-07T14:41:24.775Z",
     "tools": [
       {
         "name": "AIRP dep-governance generate-sbom.mjs",
@@ -17923,7 +17923,7 @@
       }
     ]
   },
-  "serialNumber": "urn:uuid:37432f50-a5de-4ee8-a756-0fd5d3fc5918",
+  "serialNumber": "urn:uuid:043187c5-c576-4fdc-9713-0e5da031f98a",
   "specVersion": "1.5",
   "version": 1
 }
