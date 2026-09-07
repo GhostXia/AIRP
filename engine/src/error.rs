@@ -85,6 +85,12 @@ pub enum AirpError {
     )]
     BackupRestoreOutcomeUnknown { backup_id: String },
 
+    /// Backup payload publication reached its final visible name, but the
+    /// final parent-directory durability barrier failed. Callers must refresh
+    /// and verify by the returned internal backup identifier.
+    #[error("backup publication outcome is unknown for backup {backup_id}")]
+    BackupPublicationOutcomeUnknown { backup_id: String },
+
     /// 路径遍历攻击保护：用户提供的路径 canonicalize 后越出 `data_root` 子树。
     /// 映射到 HTTP 400。
     #[error("路径越出 data_root: {0:?}")]
@@ -156,6 +162,7 @@ impl AirpError {
             | AirpError::WorkspaceMigrationOutcomeUnknown { .. }
             | AirpError::BackupRestoreFailed { .. }
             | AirpError::BackupRestoreOutcomeUnknown { .. }
+            | AirpError::BackupPublicationOutcomeUnknown { .. }
             | AirpError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -178,6 +185,9 @@ impl AirpError {
             }
             AirpError::BackupRestoreFailed { .. } => "backup_restore_failed",
             AirpError::BackupRestoreOutcomeUnknown { .. } => "backup_restore_outcome_unknown",
+            AirpError::BackupPublicationOutcomeUnknown { .. } => {
+                "backup_publication_outcome_unknown"
+            }
             AirpError::Upstream { .. } => "upstream",
             AirpError::QuotaExceeded(_) => "quota_exceeded",
             AirpError::Io(_) => "io_error",
@@ -219,6 +229,7 @@ impl AirpError {
             AirpError::WorkspaceMigrationOutcomeUnknown { .. } => "refresh_before_recovery",
             AirpError::BackupRestoreFailed { .. } => "retain_backup_and_inspect",
             AirpError::BackupRestoreOutcomeUnknown { .. } => "refresh_before_recovery",
+            AirpError::BackupPublicationOutcomeUnknown { .. } => "refresh_and_verify_backup",
             AirpError::Upstream { .. } => "retry_with_backoff",
             AirpError::QuotaExceeded(_) => "wait_or_reduce_usage",
             AirpError::Io(_)
@@ -282,7 +293,8 @@ impl IntoResponse for AirpError {
             AirpError::WorkspaceMigrationCommitFailed { backup_id }
             | AirpError::WorkspaceMigrationOutcomeUnknown { backup_id }
             | AirpError::BackupRestoreFailed { backup_id }
-            | AirpError::BackupRestoreOutcomeUnknown { backup_id } => {
+            | AirpError::BackupRestoreOutcomeUnknown { backup_id }
+            | AirpError::BackupPublicationOutcomeUnknown { backup_id } => {
                 (None, None, None, Some(backup_id.clone()))
             }
             _ => (None, None, None, None),
@@ -456,6 +468,25 @@ mod tests {
         assert_eq!(
             value["error"]["backup_id"],
             "fedcba9876543210fedcba9876543210"
+        );
+        assert_eq!(value["error"]["message"], "internal error");
+    }
+
+    #[tokio::test]
+    async fn publication_unknown_exposes_only_refresh_and_verify_fields() {
+        use axum::body::to_bytes;
+        let resp = AirpError::BackupPublicationOutcomeUnknown {
+            backup_id: "0123456789abcdef0123456789abcdef".to_string(),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "backup_publication_outcome_unknown");
+        assert_eq!(value["error"]["recovery"], "refresh_and_verify_backup");
+        assert_eq!(
+            value["error"]["backup_id"],
+            "0123456789abcdef0123456789abcdef"
         );
         assert_eq!(value["error"]["message"], "internal error");
     }

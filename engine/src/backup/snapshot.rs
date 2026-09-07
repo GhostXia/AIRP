@@ -13,6 +13,8 @@
 //! 9. rename staging → hidden `.pending-{backup_id}`, sync stable parents, then
 //!    atomically rename pending → `data_root/backups/{backup_id}/`
 //! 10. sync `backups/` again to persist the final publication name
+//!     - failure at this final barrier returns `BackupPublicationOutcomeUnknown`
+//!       with the safe backup ID; callers must refresh and verify
 //!
 //! ## 一致性限制（v1）
 //!
@@ -249,7 +251,12 @@ fn create_backup_locked_with_sync(
     })?;
     // A failure here leaves a complete, pre-synced payload under the final
     // name, but the final name's crash durability is outcome-unknown.
-    sync(&backups_root)?;
+    sync(&backups_root).map_err(|error| {
+        tracing::error!(err = %error, %backup_id, "final backup publication barrier failed");
+        AirpError::BackupPublicationOutcomeUnknown {
+            backup_id: backup_id.clone(),
+        }
+    })?;
 
     Ok(CreatedBackup {
         backup_id,
@@ -1277,17 +1284,26 @@ mod tests {
                 }
             });
 
-            assert!(result.is_err(), "barrier {fail_at} unexpectedly succeeded");
+            let error = result.expect_err(&format!("barrier {fail_at} unexpectedly succeeded"));
             assert_eq!(call_index, fail_at + 1);
             let listed = list_backups(root.path()).unwrap();
             if fail_at + 1 < BARRIER_COUNT {
+                assert!(
+                    !matches!(error, AirpError::BackupPublicationOutcomeUnknown { .. }),
+                    "barrier {fail_at} was incorrectly classified as final publication"
+                );
                 assert!(
                     listed.is_empty(),
                     "barrier {fail_at} exposed a backup before final publication"
                 );
             } else {
+                let backup_id = match error {
+                    AirpError::BackupPublicationOutcomeUnknown { backup_id } => backup_id,
+                    other => panic!("expected publication outcome unknown, got {other:?}"),
+                };
                 assert_eq!(listed.len(), 1);
                 let manifest = &listed[0];
+                assert_eq!(manifest.backup_id, backup_id);
                 let backup_dir = root.path().join("backups").join(&manifest.backup_id);
                 manifest.verify_against_disk(&backup_dir).unwrap();
             }
