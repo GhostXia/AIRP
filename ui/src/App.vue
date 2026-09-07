@@ -607,7 +607,21 @@ async function initializeBus(): Promise<void> {
       return;
     }
     const nextSessionIds = await built.listSessions(selected.characterId, selected.userId);
-    const stop = await built.connect(selected, { apply: applySurface });
+    if (disposed || attempt !== busAttempt) {
+      built.disconnect();
+      if (connectingBus === built) connectingBus = null;
+      return;
+    }
+    const stop = await built.connect(selected, {
+      apply(message) {
+        // Initial snapshots arrive before publication; SSE keeps this target
+        // afterwards. Both phases must still belong to this exact attempt/Bus.
+        if (disposed || attempt !== busAttempt || (connectingBus !== built && bus !== built)) {
+          throw new Error("Discarding a stale candidate Surface update");
+        }
+        return applySurface(message);
+      },
+    });
     if (disposed || attempt !== busAttempt) {
       stop();
       if (connectingBus === built) connectingBus = null;
