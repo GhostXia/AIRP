@@ -165,6 +165,12 @@ jobs:
         working-directory: ui
         run: npm ci
 
+      - name: Test desktop smoke cleanup
+        shell: pwsh
+        run: |
+          .\deploy\windows-webui\smoke-cleanup.test.ps1
+          .\deploy\windows-webui\smoke-desktop-ui.test.ps1
+
       - name: Build portable WebUI package
         shell: pwsh
         run: .\deploy\windows-webui\build.ps1 -IncludeDesktop
