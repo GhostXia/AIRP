@@ -250,9 +250,9 @@ for _ in $(seq 1 60); do
 done
 $compose exec -T gateway test -s /data/caddy/pki/authorities/local/root.crt
 $compose cp gateway:/data/caddy/pki/authorities/local/root.crt "$root_ca" >/dev/null
-gateway_leaf_path=$($compose exec -T gateway sh -c "find /data/caddy/certificates/local -type f -name '*.crt' | head -n 1" | tr -d '\r')
-[ -n "$gateway_leaf_path" ]
-$compose cp "gateway:$gateway_leaf_path" "$gateway_leaf" >/dev/null
+# The CA may precede leaf issuance. Wait for the verified certificate actually
+# served by the gateway instead of inspecting Caddy's internal storage layout.
+node "$deploy/gateway-certificate.mjs" "$origin" "$root_ca" "$gateway_leaf"
 chrome_spki=$(openssl x509 -in "$gateway_leaf" -pubkey -noout \
   | openssl pkey -pubin -outform der \
   | openssl dgst -sha256 -binary \
