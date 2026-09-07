@@ -1,7 +1,7 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-08-02T08:10:29.791Z",
+    "created": "2026-09-07T14:41:24.775Z",
     "creators": [
       "Tool: AIRP dep-governance generate-sbom.mjs",
       "Organization: GhostXia"
@@ -9,7 +9,7 @@
     "licenseListVersion": "3.21"
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://airp.local/spdx/AIRP-2026-08-02",
+  "documentNamespace": "https://airp.local/spdx/AIRP-2026-09-07",
   "name": "AIRP",
   "packages": [
     {
@@ -16807,19 +16807,19 @@
       "versionInfo": "0.4.1"
     },
     {
-      "SPDXID": "SPDXRef-npm-nanoid-3.3.16",
+      "SPDXID": "SPDXRef-npm-nanoid-3.3.18",
       "checksums": [
         {
           "algorithm": "SHA512",
-          "checksumValue": "6f394a4f2349efe2dd188230cbc8a316922a11022f69f6a157b798ca427c0af878d8474978e0e827a814257a5026f7a3d4175d1fc3aa4d764d13f29f6d602ef1"
+          "checksumValue": "0d38383096c631691f8ba55915d36ddbf71a31b432e0ebbe3a9fe1250bc611672755fa00d5003ec7344a033c3d8c3ebe19538e798aff98872e0d276e83a17afb"
         }
       ],
       "copyrightText": "NOASSERTION",
-      "downloadLocation": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.16.tgz",
+      "downloadLocation": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.18.tgz",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:npm/nanoid@3.3.16",
+          "referenceLocator": "pkg:npm/nanoid@3.3.18",
           "referenceType": "purl"
         }
       ],
@@ -16828,7 +16828,7 @@
       "licenseDeclared": "MIT",
       "name": "nanoid",
       "supplier": "NOASSERTION",
-      "versionInfo": "3.3.16"
+      "versionInfo": "3.3.18"
     },
     {
       "SPDXID": "SPDXRef-npm-obug-2.1.3",
@@ -20749,7 +20749,7 @@
       "spdxElementId": "SPDXRef-AIRP"
     },
     {
-      "relatedSpdxElement": "SPDXRef-npm-nanoid-3.3.16",
+      "relatedSpdxElement": "SPDXRef-npm-nanoid-3.3.18",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-AIRP"
     },

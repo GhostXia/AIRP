@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
+import { navigateInitialGet } from './production-initial-navigation.mjs';
 
 const origin = process.env.AIRP_SMOKE_ORIGIN;
 const username = process.env.AIRP_SMOKE_ADMIN_USER;
@@ -37,7 +38,8 @@ try {
   });
 
   const chatUrl = origin + '/screens/02-chat-space.html?character=' + encodeURIComponent(expected.characterId) + '&session=' + encodeURIComponent(expected.sessionId);
-  const response = await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
+  console.log('restart smoke browser version ' + browser.version());
+  const response = await navigateInitialGet(page, chatUrl, chromeSpki);
   assert.equal(response?.status(), 200);
   await page.waitForFunction(() => document.querySelector('#message-input')?.disabled === false, null, { timeout: 15_000 });
   await page.waitForFunction(message => document.querySelector('#message-flow')?.textContent?.includes(message), expected.message, { timeout: 10_000 });
