@@ -420,8 +420,10 @@ test('backup page calls backup API and renders list with secret/restore warnings
   // source / scope 标签映射（manual / pre_delete / pre_restore_rollback）
   assert.match(backupRenderer, /pre_delete/, 'must label pre_delete source');
   assert.match(backupRenderer, /pre_restore_rollback/, 'must label pre_restore_rollback source');
-  assert.match(consoleRuntime, /AIRPApi\.errorMessage/,
-    'backup task errors must use the shared structured error formatter');
+  assert.match(backupRenderer, /await task\('创建备份'/);
+  const taskHelper = consoleRuntime.slice(consoleRuntime.indexOf('async function task('), consoleRuntime.indexOf('function pathWithState('));
+  assert.match(taskHelper, /setStatus\(label \+ '失败：' \+ message\(error\), true\)/);
+  assert.match(consoleRuntime, /function message\(error\) \{ return AIRPApi\.errorMessage\(error && error\.data,/);
 });
 
 // C-P3：扩展管理 UI 接入契约测试。原 renderUnavailable('plugins') 占位已废弃，
