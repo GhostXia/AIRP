@@ -51,8 +51,19 @@
   function errorMessage(data, fallback) {
     if (typeof data === 'string' && data.trim()) return data.trim();
     if (data && typeof data === 'object') {
+      const envelope = data.error && typeof data.error === 'object' ? data.error : data;
+      if (
+        envelope.code === 'backup_publication_outcome_unknown' &&
+        envelope.recovery === 'refresh_and_verify_backup'
+      ) {
+        const backupId = typeof envelope.backup_id === 'string' && /^[0-9a-f]{32}$/.test(envelope.backup_id)
+          ? envelope.backup_id
+          : null;
+        return '备份发布结果未知' + (backupId ? '（backup id=' + backupId + '）' : '') +
+          '。请刷新备份列表并校验该备份；校验通过前不要假定创建成功。';
+      }
       for (const key of ['message', 'text', 'detail', 'error', 'hint']) {
-        if (typeof data[key] === 'string' && data[key].trim()) return data[key].trim();
+        if (typeof envelope[key] === 'string' && envelope[key].trim()) return envelope[key].trim();
       }
     }
     return fallback || '请求失败';

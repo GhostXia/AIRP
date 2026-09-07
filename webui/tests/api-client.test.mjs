@@ -160,5 +160,55 @@ test('stream transport failure is reported with unknown commit state', async () 
 
 test('errorMessage exposes only a useful public string', () => {
   assert.equal(errorMessage({ message: '失败', api_key: 'secret' }), '失败');
+  assert.equal(errorMessage({ error: { message: '嵌套失败', detail: 'private' } }), '嵌套失败');
   assert.equal(errorMessage(null, '请求失败'), '请求失败');
+});
+
+test('errorMessage renders backup publication recovery without leaking details', () => {
+  const backupId = '0123456789abcdef0123456789abcdef';
+  const rendered = errorMessage({
+    error: {
+      code: 'backup_publication_outcome_unknown',
+      message: 'internal error',
+      recovery: 'refresh_and_verify_backup',
+      backup_id: backupId,
+      detail: 'D:\\private\\backup sync failed',
+    },
+  });
+  assert.match(rendered, new RegExp(backupId));
+  assert.match(rendered, /刷新备份列表并校验/);
+  assert.doesNotMatch(rendered, /private|sync failed/);
+});
+
+test('backup HTTP failure preserves recovery guidance without replaying the request', async () => {
+  let calls = 0;
+  const backupId = '0123456789abcdef0123456789abcdef';
+  const client = createClient({
+    base: 'http://engine.test',
+    fetchImpl: async () => {
+      calls += 1;
+      return response(JSON.stringify({ error: {
+        code: 'backup_publication_outcome_unknown', recovery: 'refresh_and_verify_backup',
+        backup_id: backupId, message: 'internal error',
+      } }), { status: 500 });
+    },
+  });
+  await assert.rejects(client.request('POST', '/v1/backups', { source: 'manual', scope: { kind: 'full' } }), error => {
+    assert.ok(error instanceof AirpHttpError);
+    assert.equal(error.status, 500);
+    const displayed = errorMessage(error.data, error.message);
+    assert.ok(displayed.includes(backupId));
+    assert.match(displayed, /刷新备份列表并校验/);
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
+test('backup recovery guidance rejects malformed backup identifiers', () => {
+  const displayed = errorMessage({ error: {
+    code: 'backup_publication_outcome_unknown', recovery: 'refresh_and_verify_backup',
+    backup_id: 'D:/private/backup', message: 'internal error',
+  } });
+  assert.match(displayed, /刷新备份列表并校验/);
+  assert.doesNotMatch(displayed, /private|backup id=/);
 });
