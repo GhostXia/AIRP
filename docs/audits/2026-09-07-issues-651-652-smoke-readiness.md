@@ -37,7 +37,9 @@ Original startup/copy/mixed-failure cases also passed with no leftover fixtures.
   production script is refactored. Record this no-change decision on #651 after merge.
 - N2: fixture teardown now collects per-process failures, still attempts later
   cleanup, and preserves the body failure using the existing aggregate helper.
-  Main-agent reruns passed on both PowerShell versions after this small follow-up.
+  Main-agent and independent re-audit reruns passed on both PowerShell versions
+  after this follow-up. Process Dispose itself is not aggregated; no additional
+  action was recommended for these self-created Process objects.
 
 ## Main-agent validation
 
